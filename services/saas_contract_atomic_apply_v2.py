@@ -27,7 +27,9 @@ class SaasV2AtomicApplyError(Exception):
       V2_RPC_ERROR            — supabase.rpc() 호출 자체 실패 또는 비정상 반환 타입
       V2_PAYMENT_NOT_FOUND    — 결제 행 없음
       V2_PAYMENT_NOT_PAID     — 결제 상태 미충족
-      V2_ATOMIC_PARTIAL_STATE — 부분 적용 상태 탐지 (fail-closed)
+      V2_ATOMIC_PARTIAL_STATE — 부분 적용 상태 탐지 (fail-closed, 3 경로)
+      V2_CONTRACT_ID_MISMATCH — p_contract_row.id ≠ p_commercial_version.contract_id
+      V2_VERSION_NO_INVALID   — commercial version_no ≠ 1
       V2_UNEXPECTED_STATUS    — RPC가 반환한 알 수 없는 status 코드
     """
 

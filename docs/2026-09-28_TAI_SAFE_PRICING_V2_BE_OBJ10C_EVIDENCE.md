@@ -4,7 +4,7 @@ work_order: WO-PRICING-V2-BE-OBJ10-C
 objective: "Atomic Contract Persistence — apply_saas_v2_contract_atomic Postgres RPC"
 author: Claude Code
 date: 2026-09-28
-status: PASS
+status: PATCH1_COMPLETE
 ---
 
 # TAI Safe Pricing V2 BE-OBJ10-C Evidence
@@ -12,9 +12,12 @@ status: PASS
 ## 1. EXECUTION ANCHOR
 
 - Base commit: `001c0346` (OBJ10-B PATCH1 HEAD)
+- OBJ10-C initial commit: `ceadcd5a`
+- OBJ10-C PATCH1 commit: (see git log HEAD)
 - Branch: `docs/pricing-canonical-20260927`
 - New files: 4 (migration SQL, Python RPC adapter, tests, evidence)
-- Existing file changes: 0
+- Existing file changes (initial): 0
+- PATCH1 changes: migration SQL (3 fixes) + tests (P01-P22 추가) + evidence doc + service docstring
 
 ## 2. NEW FILES
 
@@ -64,27 +67,34 @@ SET search_path = ''
 | status | 의미 |
 |--------|------|
 | `APPLIED` | 신규 계약 원자 저장 성공 |
-| `ALREADY_APPLIED` | 멱등성 — 이미 완료 상태 (v1 commercial 존재) |
+| `ALREADY_APPLIED` | 멱등성 — commercial v1 + STANDARD tiers의 site_scopes ≥1 완전 상태 |
 | `V2_PAYMENT_NOT_FOUND` | 결제 행 없음 |
 | `V2_PAYMENT_NOT_PAID` | status_code ∉ {PAID, SUCCESS} |
-| `V2_ATOMIC_PARTIAL_STATE` | 부분 상태 탐지 — fail-closed |
+| `V2_ATOMIC_PARTIAL_STATE` | 부분 상태 탐지 — fail-closed (3 경로) |
+| `V2_CONTRACT_ID_MISMATCH` | p_contract_row.id ≠ p_commercial_version.contract_id |
+| `V2_VERSION_NO_INVALID` | version_no ≠ 1 |
 
-### 내부 단계 (11 Steps)
+### 내부 단계 (13 Steps — PATCH1 반영)
 
 ```
-Step 1: SELECT payments FOR UPDATE (concurrent lock)
-Step 2: NOT FOUND → V2_PAYMENT_NOT_FOUND 반환
-Step 3: status_code 검증 → V2_PAYMENT_NOT_PAID 반환
-Step 4: p_contract_row->>'id' → v_contract_id 추출
-Step 5: payment.contract_id IS NOT NULL 멱등성 분기
-          └ commercial_version_no=1 존재 → ALREADY_APPLIED
-          └ 없음 → V2_ATOMIC_PARTIAL_STATE
-Step 6: 반대 방향 부분 상태 탐지 (orphan contract) → V2_ATOMIC_PARTIAL_STATE
-Step 7: INSERT contracts (jsonb_populate_record)
-Step 8: UPDATE payments SET contract_id = v_contract_id
-Step 9: INSERT saas_contract_commercial_versions RETURNING id → v_commercial_id
-Step 10: JSONB array loop → INSERT saas_contract_site_scopes × N
-Step 11: RETURN APPLIED {payment_id, contract_id, commercial_version_id}
+Step 1:   SELECT payments FOR UPDATE (concurrent lock)
+Step 2:   NOT FOUND → V2_PAYMENT_NOT_FOUND 반환
+Step 3:   status_code 검증 → V2_PAYMENT_NOT_PAID 반환
+Step 4:   p_contract_row->>'id' → v_contract_id 추출
+Step 5:   payment.contract_id IS NOT NULL 멱등성 분기 [PATCH1 강화]
+            └ SELECT commercial v1 → NOT FOUND → V2_ATOMIC_PARTIAL_STATE
+            └ MANAGER/FIELD: COUNT(site_scopes) = 0 → V2_ATOMIC_PARTIAL_STATE
+            └ 완전 상태 → ALREADY_APPLIED
+Step 6:   orphan contract 탐지 → V2_ATOMIC_PARTIAL_STATE
+Step 6.5: contract_id 정합성 검증 [PATCH1 신규]
+            └ p_contract_row.id ≠ p_commercial_version.contract_id → V2_CONTRACT_ID_MISMATCH
+Step 6.6: version_no = 1 강제 [PATCH1 신규]
+            └ version_no ≠ 1 → V2_VERSION_NO_INVALID
+Step 7:   INSERT contracts (명시적 컬럼 목록) [PATCH1 수정: jsonb_populate_record → explicit]
+Step 8:   UPDATE payments SET contract_id = v_contract_id
+Step 9:   INSERT saas_contract_commercial_versions RETURNING id → v_commercial_id
+Step 10:  JSONB array loop → INSERT saas_contract_site_scopes × N
+Step 11:  RETURN APPLIED {payment_id, contract_id, commercial_version_id}
 ```
 
 ### 보안 설계
@@ -150,13 +160,26 @@ Price engine import = 0
 | 구분 | 통과 | 실패 |
 |------|------|------|
 | OBJ10-C 신규 (C01-C86) | 86 | 0 |
+| OBJ10-C PATCH1 (P01-P22) | 22 | 0 |
+| OBJ10-C 합계 (C01-C86 + P01-P22) | 108 | 0 |
 | OBJ10-B 회귀 (B01-B95) | 95 | 0 |
-| Pricing V2 회귀 | 260+ | 0 |
-| Payment 회귀 | 191 | 1 (PRE-EXISTING: gopaymethod) |
+| Pricing V2 + Payment 회귀 | 258 | 1 (PRE-EXISTING: gopaymethod) |
 
-**Pre-existing failure**: `test_payment_svc.py::test_run_inicis_prepare_success_minimal` — `gopaymethod == "Card"` 검사 실패. `git stash`로 이전 커밋에서도 동일 실패 확인. OBJ10-C 변경과 무관.
+**Pre-existing failure**: `test_payment_svc.py::test_run_inicis_prepare_success_minimal` — `gopaymethod == "Card"` 검사 실패. OBJ10-C 변경과 무관.
 
-## 8. 불변 조건 확인
+## 8. PATCH1 수정 요약
+
+GPT 독립검증(2026-09-28) 지적사항 5건에 대한 수정:
+
+| 지적사항 | 수정 내용 |
+|---------|----------|
+| ALREADY_APPLIED 완전성 미흡 | Step 5: CV 조회 후 MANAGER/FIELD site_scopes COUNT ≥1 검증 추가 |
+| contract_id 정합성 검증 없음 | Step 6.5 신규: p_contract_row.id ≠ CV.contract_id → V2_CONTRACT_ID_MISMATCH |
+| version_no=1 강제 없음 | Step 6.6 신규: version_no ≠ 1 → V2_VERSION_NO_INVALID |
+| jsonb_populate_record DB DEFAULT 미보존 | Step 7: 명시적 컬럼 목록 INSERT로 교체 |
+| SQL 실행 테스트 없음 | P01-P22: SQL 파일 구조 + 보안 가드 + 신규 오류코드 검증 |
+
+## 9. 불변 조건 확인
 
 | 조건 | 상태 |
 |------|------|

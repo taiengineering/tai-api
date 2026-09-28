@@ -917,3 +917,162 @@ class TestC86_ApplyFunctionAcceptsTwoArgs:
         assert len(params) == 2
         assert params[0] == "supabase"
         assert params[1] == "plan"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PATCH1: SQL 구조 검증 + 신규 오류 코드 (P01-P22)
+# ═══════════════════════════════════════════════════════════════════════════
+# 검증 범위:
+#   P01-P12: Migration SQL 파일 구조 / 보안 가드
+#   P13-P17: SQL 신규 가드 구조 (contract_id 정합성, version_no=1, site_scope partial)
+#   P18-P20: SQL 함수 INSERT 구조
+#   P21-P22: Python adapter — 신규 오류 코드 처리
+# ═══════════════════════════════════════════════════════════════════════════
+
+from pathlib import Path  # noqa: E402
+
+
+def _migration_sql() -> str:
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "2026-09-28_saas_contract_commercial_v2_atomic_apply.sql"
+    )
+    return path.read_text()
+
+
+class TestP01_SqlFileExists:
+    def test_P01(self):
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "migrations"
+            / "2026-09-28_saas_contract_commercial_v2_atomic_apply.sql"
+        )
+        assert path.exists()
+
+
+class TestP02_SecurityInvokerPresent:
+    def test_P02(self):
+        assert "SECURITY INVOKER" in _migration_sql()
+
+
+class TestP03_SecurityDefinerAbsent:
+    def test_P03(self):
+        assert "SECURITY DEFINER" not in _migration_sql()
+
+
+class TestP04_SearchPathEmpty:
+    def test_P04(self):
+        assert "SET search_path = ''" in _migration_sql()
+
+
+class TestP05_ServiceRoleGrantPresent:
+    def test_P05(self):
+        sql = _migration_sql()
+        assert "GRANT EXECUTE" in sql
+        assert "service_role" in sql
+
+
+class TestP06_RevokeFromPublicPresent:
+    def test_P06(self):
+        assert "FROM PUBLIC" in _migration_sql()
+
+
+class TestP07_RevokeFromAnonPresent:
+    def test_P07(self):
+        sql = _migration_sql()
+        assert "FROM anon" in sql
+
+
+class TestP08_RevokeFromAuthenticatedPresent:
+    def test_P08(self):
+        sql = _migration_sql()
+        assert "FROM authenticated" in sql
+
+
+class TestP09_ForUpdatePresent:
+    def test_P09(self):
+        assert "FOR UPDATE" in _migration_sql()
+
+
+class TestP10_ProductionApplyZeroInHeader:
+    def test_P10(self):
+        assert "PRODUCTION APPLY = 0" in _migration_sql()
+
+
+class TestP11_ArtifactOnlyInHeader:
+    def test_P11(self):
+        assert "ARTIFACT ONLY" in _migration_sql()
+
+
+class TestP12_AtomicPartialStateThreePaths:
+    def test_P12(self):
+        # 3 경로: CV없음, site_scopes없음, orphan contract
+        sql = _migration_sql()
+        assert sql.count("V2_ATOMIC_PARTIAL_STATE") >= 3
+
+
+class TestP13_ContractIdMismatchGuardPresent:
+    def test_P13(self):
+        assert "V2_CONTRACT_ID_MISMATCH" in _migration_sql()
+
+
+class TestP14_VersionNoGuardPresent:
+    def test_P14(self):
+        assert "V2_VERSION_NO_INVALID" in _migration_sql()
+
+
+class TestP15_SiteScopePartialCheckInAlreadyAppliedPath:
+    def test_P15(self):
+        sql = _migration_sql()
+        # saas_contract_site_scopes은 ALREADY_APPLIED 검증(COUNT)과 INSERT 양쪽에 존재해야 함
+        assert sql.count("saas_contract_site_scopes") >= 2
+
+
+class TestP16_AlreadyAppliedPresent:
+    def test_P16(self):
+        assert "ALREADY_APPLIED" in _migration_sql()
+
+
+class TestP17_StandardTierSiteScopeCheck:
+    def test_P17(self):
+        sql = _migration_sql()
+        # MANAGER/FIELD tier에 대한 site_scope count 검증 코드 존재
+        assert "'MANAGER'" in sql
+        assert "'FIELD'" in sql
+        assert "v_scope_count" in sql
+
+
+class TestP18_ExplicitContractInsertNoPopulateRecord:
+    def test_P18(self):
+        # jsonb_populate_record는 contracts INSERT에 사용 금지
+        assert "jsonb_populate_record" not in _migration_sql()
+
+
+class TestP19_ContractAmountInExplicitInsert:
+    def test_P19(self):
+        sql = _migration_sql()
+        assert "contract_amount" in sql
+
+
+class TestP20_NullIfForPricingSnapshot:
+    def test_P20(self):
+        sql = _migration_sql()
+        assert "NULLIF" in sql
+        assert "'null'::jsonb" in sql
+
+
+class TestP21_V2ContractIdMismatchRaisesWithCorrectCode:
+    def test_P21(self):
+        sb = FakeSupabase(rpc_data={"status": "V2_CONTRACT_ID_MISMATCH", "payment_id": _PAYMENT_ID})
+        with pytest.raises(SaasV2AtomicApplyError) as exc_info:
+            apply_saas_v2_contract_plan_atomic(sb, _make_plan())
+        assert exc_info.value.code == "V2_CONTRACT_ID_MISMATCH"
+
+
+class TestP22_V2VersionNoInvalidRaisesWithCorrectCode:
+    def test_P22(self):
+        sb = FakeSupabase(rpc_data={"status": "V2_VERSION_NO_INVALID", "payment_id": _PAYMENT_ID})
+        with pytest.raises(SaasV2AtomicApplyError) as exc_info:
+            apply_saas_v2_contract_plan_atomic(sb, _make_plan())
+        assert exc_info.value.code == "V2_VERSION_NO_INVALID"

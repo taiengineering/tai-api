@@ -223,8 +223,8 @@ REVOKE INSERT, UPDATE, DELETE ON public.saas_contract_site_scopes FROM authentic
 -- 호출자: service_role 전용.
 -- DB write: contracts 1, payments.contract_id UPDATE 1,
 --           saas_contract_commercial_versions 1, saas_contract_site_scopes N.
--- 멱등성: ALREADY_APPLIED 반환 (raise X).
--- 부분 상태: V2_ATOMIC_PARTIAL_STATE 반환 (fail-closed).
+-- 멱등성: ALREADY_APPLIED 반환 (raise X). site_scopes 포함 완전 상태 검증.
+-- 부분 상태: V2_ATOMIC_PARTIAL_STATE 반환 (fail-closed, 3 경로).
 -- ═══════════════════════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION public.apply_saas_v2_contract_atomic(
@@ -242,6 +242,9 @@ DECLARE
     v_payment_status_code  text;
     v_payment_contract_id  uuid;
     v_contract_id          uuid;
+    v_cv_id                uuid;
+    v_cv_tier              text;
+    v_scope_count          int;
     v_commercial_id        uuid;
     v_scope                jsonb;
 BEGIN
@@ -273,23 +276,44 @@ BEGIN
     v_contract_id := (p_contract_row->>'id')::uuid;
 
     -- Step 5: 멱등성 — 이미 contract_id가 연결된 결제
+    --         ALREADY_APPLIED = commercial v1 + STANDARD tiers의 site_scopes 완전 존재
     IF v_payment_contract_id IS NOT NULL THEN
-        -- 정상 완료 상태: commercial_version version_no=1 존재
-        IF EXISTS (
-            SELECT 1
-            FROM   public.saas_contract_commercial_versions
-            WHERE  contract_id = v_payment_contract_id
-              AND  version_no  = 1
-        ) THEN
+        -- commercial version v1 조회
+        SELECT id, product_tier
+        INTO   v_cv_id, v_cv_tier
+        FROM   public.saas_contract_commercial_versions
+        WHERE  contract_id = v_payment_contract_id
+          AND  version_no  = 1;
+
+        IF NOT FOUND THEN
+            -- contract_id 연결됐지만 commercial_version 없음 → 부분 상태 (fail-closed)
             RETURN jsonb_build_object(
-                'status',      'ALREADY_APPLIED',
+                'status',      'V2_ATOMIC_PARTIAL_STATE',
                 'payment_id',  p_payment_id,
                 'contract_id', v_payment_contract_id
             );
         END IF;
-        -- 부분 상태: contract_id 연결됐지만 commercial_version 없음 (fail-closed)
+
+        -- STANDARD tiers(MANAGER/FIELD): site_scopes ≥ 1 확인
+        IF v_cv_tier IN ('MANAGER', 'FIELD') THEN
+            SELECT COUNT(*)
+            INTO   v_scope_count
+            FROM   public.saas_contract_site_scopes
+            WHERE  commercial_version_id = v_cv_id;
+
+            IF v_scope_count = 0 THEN
+                -- commercial_version은 있지만 site_scopes 없음 → 부분 상태 (fail-closed)
+                RETURN jsonb_build_object(
+                    'status',      'V2_ATOMIC_PARTIAL_STATE',
+                    'payment_id',  p_payment_id,
+                    'contract_id', v_payment_contract_id
+                );
+            END IF;
+        END IF;
+
+        -- 정상 완료 상태
         RETURN jsonb_build_object(
-            'status',      'V2_ATOMIC_PARTIAL_STATE',
+            'status',      'ALREADY_APPLIED',
             'payment_id',  p_payment_id,
             'contract_id', v_payment_contract_id
         );
@@ -304,9 +328,66 @@ BEGIN
         );
     END IF;
 
-    -- Step 7: contracts 행 INSERT (JSONB → 행 자동 매핑)
-    INSERT INTO public.contracts
-    SELECT * FROM jsonb_populate_record(NULL::public.contracts, p_contract_row);
+    -- Step 6.5: contract_id 정합성 검증 — p_contract_row.id == p_commercial_version.contract_id
+    IF (p_commercial_version->>'contract_id')::uuid IS DISTINCT FROM v_contract_id THEN
+        RETURN jsonb_build_object(
+            'status',         'V2_CONTRACT_ID_MISMATCH',
+            'payment_id',     p_payment_id,
+            'contract_id',    v_contract_id,
+            'cv_contract_id', p_commercial_version->>'contract_id'
+        );
+    END IF;
+
+    -- Step 6.6: version_no = 1 강제 — 최초 적용은 반드시 v1
+    IF (p_commercial_version->>'version_no')::integer IS DISTINCT FROM 1 THEN
+        RETURN jsonb_build_object(
+            'status',     'V2_VERSION_NO_INVALID',
+            'payment_id', p_payment_id,
+            'version_no', (p_commercial_version->>'version_no')::integer
+        );
+    END IF;
+
+    -- Step 7: contracts 행 INSERT (명시적 컬럼 목록 — 누락 컬럼은 DB DEFAULT 적용)
+    INSERT INTO public.contracts (
+        id,
+        contract_no,
+        company_id,
+        status_code,
+        start_date,
+        end_date,
+        service_type,
+        contract_amount,
+        vat_amount,
+        total_amount,
+        paid_amount,
+        paid_at,
+        is_active,
+        created_at,
+        updated_at,
+        memo,
+        plan_code,
+        quote_id
+    )
+    VALUES (
+        (p_contract_row->>'id')::uuid,
+        p_contract_row->>'contract_no',
+        (p_contract_row->>'company_id')::uuid,
+        p_contract_row->>'status_code',
+        (p_contract_row->>'start_date')::date,
+        (p_contract_row->>'end_date')::date,
+        p_contract_row->>'service_type',
+        (p_contract_row->>'contract_amount')::numeric,
+        (p_contract_row->>'vat_amount')::numeric,
+        (p_contract_row->>'total_amount')::numeric,
+        (p_contract_row->>'paid_amount')::numeric,
+        (p_contract_row->>'paid_at')::timestamptz,
+        (p_contract_row->>'is_active')::boolean,
+        (p_contract_row->>'created_at')::timestamptz,
+        (p_contract_row->>'updated_at')::timestamptz,
+        p_contract_row->>'memo',
+        p_contract_row->>'plan_code',
+        (p_contract_row->>'quote_id')::uuid
+    );
 
     -- Step 8: payments.contract_id 연결
     UPDATE public.payments
