@@ -1,13 +1,18 @@
-"""Equipment source row validator.
+"""Equipment source row validator + shared reader.
 
 Authority: equipment_assets.equipment_type_code (numeric codes 001–040 + string aliases).
 validate_equipment_source_row() gates structured source rows before projection.
+load_equipment_rows_optional() is the shared diagnosis seam reader (extracted from
+the CONSTRUCTION inline reader in diagnosis_integrated_svc — READ FAILURE != EMPTY SOURCE).
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+import logging
+from typing import Any, Dict, List, Optional
 
 from services.equipment_source.canonicalizer import normalize_equipment_type_code
+
+log = logging.getLogger(__name__)
 
 # All valid equipment_type_code values recognised by the authority system.
 # Numeric codes match equipment_type_inspection_map table (001–040, zero-padded).
@@ -20,6 +25,12 @@ EQUIPMENT_AUTHORITY_CODES: frozenset = frozenset(
 
 class EquipmentSourceValidationError(ValueError):
     pass
+
+
+class EquipmentSourceLoadError(RuntimeError):
+    def __init__(self, msg: str = "", *, factory_id: str = "") -> None:
+        super().__init__(msg)
+        self.factory_id = factory_id
 
 
 def validate_equipment_source_row(
@@ -65,6 +76,43 @@ def validate_equipment_source_row(
             )
 
     return payload
+
+
+def load_equipment_rows_optional(
+    supabase, factory_id: Optional[str]
+) -> List[Dict[str, Any]]:
+    """Diagnosis seam reader — extracted from CONSTRUCTION inline reader.
+
+    No factory_id → no query (return []).
+    Query failure → EquipmentSourceLoadError (READ FAILURE != EMPTY SOURCE).
+    Callers must not treat [] and a load error the same way.
+    SELECT minimum: equipment_type_code only (numeric attributes = HOLD).
+    """
+    if not factory_id:
+        return []
+    if supabase is None:
+        raise EquipmentSourceLoadError(
+            "equipment source client missing",
+            factory_id=factory_id,
+        )
+    try:
+        res = (
+            supabase.table("equipment_assets")
+            .select("equipment_type_code")
+            .eq("factory_id", factory_id)
+            .eq("is_operating", True)
+            .execute()
+        )
+    except EquipmentSourceLoadError:
+        raise
+    except Exception as exc:
+        log.error("equipment_assets query failed factory=%s: %s", factory_id, exc)
+        raise EquipmentSourceLoadError(
+            "equipment_assets query failed",
+            factory_id=factory_id,
+        ) from exc
+    data = res.data if hasattr(res, "data") else []
+    return list(data or [])
 
 
 # STRUCTURED_SOURCE_UPGRADE_REPLAY_CANDIDATE — STATUS: SEPARATE WO / NOT IMPLEMENTED

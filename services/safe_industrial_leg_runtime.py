@@ -81,6 +81,10 @@ def run_safe_industrial_leg(supabase, factory_id: str, consumer_input) -> Dict[s
     #    source 에 값이 있으면 배선 상한 없이 build_facility 에 도달, 없으면 ABSENT/UNRESOLVED 유지.
     from services.work_source.store import load_work_rows_optional
     from services.material_source.store import load_factory_material_rows_optional
+    # WO-EQUIPMENT-A2-EXISTING-SEAM-PATCH-001: Equipment A2 seam.
+    # CONSTRUCTION inline reader 공통 seam 재사용. READ FAILURE != EMPTY SOURCE —
+    # EquipmentSourceLoadError propagates fail-closed (LEG not called on read failure).
+    from services.equipment_source.store import load_equipment_rows_optional
     step1 = build_saas_leg_step1(
         sector="INDUSTRIAL",
         source_facts=values,
@@ -91,6 +95,7 @@ def run_safe_industrial_leg(supabase, factory_id: str, consumer_input) -> Dict[s
         # into the LEG input bag. READ FAILURE != EMPTY SOURCE — MaterialSourceLoadError
         # propagates fail-closed and LEG is NOT called on material read failure.
         material_rows=load_factory_material_rows_optional(supabase, factory_id),
+        equipment_rows=load_equipment_rows_optional(supabase, factory_id),
     )
 
     # D. 공식 Runtime Delegate 1회 (direct evaluate_rtm / send_industrial_canonical_to_leg 미사용).

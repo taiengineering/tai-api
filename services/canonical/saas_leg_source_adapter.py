@@ -40,6 +40,7 @@ def build_saas_leg_step1(
     factory_id: Optional[str] = None,
     work_rows: Optional[list] = None,
     material_rows: Optional[list] = None,
+    equipment_rows: Optional[list] = None,
 ) -> DiagnoseStep1Body:
     """SaaS source facts → DiagnoseStep1Body via unified LEG input contract.
 
@@ -63,6 +64,13 @@ def build_saas_leg_step1(
         is_special_management_substance. Same merge policy as work_rows — explicit wins;
         missing != false; no free-text bind; classification_code is authority.
         WO-OBS009-MATERIAL-CANONICAL-RUNTIME-WIRING-PATCH-001.
+    equipment_rows : optional
+        equipment_assets rows from load_equipment_rows_optional() (Common Equipment Source).
+        WO-EQUIPMENT-A2-EXISTING-SEAM-PATCH-001: CONSTRUCTION inline reader 공통 seam 추출.
+        A2 projector(project_equipment_rows) → canonical boolean facts(has_press/has_conveyor/
+        has_pressure_vessel/has_emergency_gen/has_boiler). Merge policy: source_facts explicit
+        wins; absent/None filled by equipment projection; missing != false.
+        NUMERIC_PROJECTION = 0 (attributes/capacity = HOLD).
     """
     facts: Dict[str, Any] = dict(source_facts or {})
     if work_rows:
@@ -74,6 +82,12 @@ def build_saas_leg_step1(
         fc001 = project_material_fc001_facts(material_rows)
         for k, v in fc001.items():
             if k not in facts:
+                facts[k] = v
+    if equipment_rows:
+        from services.equipment_source.projector import project_equipment_rows as _proj_eq
+        _projected_eq = _proj_eq(equipment_rows)
+        for k, v in _projected_eq.items():
+            if facts.get(k) is None:
                 facts[k] = v
 
     # ── 승인된 alias 만 canonical key 로 승격 (신규 alias 0) ──
