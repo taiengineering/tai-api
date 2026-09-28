@@ -420,3 +420,112 @@ def test_EQ_REG_equipment_coexists_with_material(monkeypatch):
     assert inp.get("is_managed_hazardous_substance") is True, (
         f"EQ-REG: expected is_managed=True (Material); got {inp.get('is_managed_hazardous_substance')!r}"
     )
+
+
+# ── TEST-17: transient shared-helper invocation proof ────────────────────────
+
+def test_T17_transient_uses_shared_merge_helper(monkeypatch):
+    """TEST-17: transient material_rows routes through _merge_material_rows_into_inp (not inline logic)."""
+    _patch_svc(monkeypatch)
+
+    original = _svc._merge_material_rows_into_inp
+    calls: list = []
+
+    def wrapped(inp, rows):
+        calls.append(list(rows))
+        return original(inp, rows)
+
+    monkeypatch.setattr(_svc, "_merge_material_rows_into_inp", wrapped)
+
+    sb = _PaidMatFakeSB([])  # persistent empty
+    body = DiagnosisRunBody(
+        auth_token="tok",
+        sector="BUILDING",
+        factory_id="F1",
+        disclaimer_log_id="DL1",
+        payment_ref="PAY1",
+        worker_count=5,
+        material_rows=[{
+            "material_master_key": VINYL_KEY,
+            "handling_mode_codes": None,
+            "is_active": True,
+        }],
+    )
+    cap: dict = {}
+    def fake_step1(sb, s1b): cap["inp"] = dict(s1b.input or {}); return {"status": "success", "data": {}}
+    _run_diag(sb, body, fake_step1)
+
+    assert len(calls) >= 1, (
+        f"TEST-17: _merge_material_rows_into_inp was never called; calls={calls}"
+    )
+    vinyl_calls = [rows for rows in calls if any(r.get("material_master_key") == VINYL_KEY for r in rows)]
+    assert len(vinyl_calls) >= 1, (
+        f"TEST-17: no call contained VINYL_KEY row; calls={calls}"
+    )
+    inp = cap.get("inp", {})
+    assert inp.get("is_permit_required_hazardous_substance") is True, (
+        f"TEST-17: expected is_permit_required=True in step1.input; got {inp.get('is_permit_required_hazardous_substance')!r}"
+    )
+
+
+# ── TEST-18: persistent/transient same-fixture parity ────────────────────────
+
+_MAT_SEMANTIC_FIELDS = [
+    "is_managed_hazardous_substance",
+    "fc001_managed_indoor_handling",
+    "fc001_managed_manufacture_or_use",
+    "fc001_managed_storage_transport",
+    "fc001_managed_tank_equipment_work",
+    "fc001_permit_manufacture_or_use",
+    "fc001_permit_storage_transport",
+]
+
+
+def test_T18_persistent_transient_same_fixture_parity(monkeypatch):
+    """TEST-18: STODDARD+INDOOR_HANDLING via persistent path == same via transient path (semantic parity)."""
+    _patch_svc(monkeypatch)
+
+    # Case A — persistent only
+    sb_a = _PaidMatFakeSB([_mat_row(STODDARD_KEY, handling_mode_codes=["INDOOR_HANDLING"])])
+    inp_a = _capture_step1(sb_a, _diag_body("BUILDING"))
+
+    # Case B — transient only
+    sb_b = _PaidMatFakeSB([])
+    body_b = DiagnosisRunBody(
+        auth_token="tok",
+        sector="BUILDING",
+        factory_id="F1",
+        disclaimer_log_id="DL1",
+        payment_ref="PAY1",
+        worker_count=5,
+        material_rows=[{
+            "material_master_key": STODDARD_KEY,
+            "handling_mode_codes": ["INDOOR_HANDLING"],
+            "is_active": True,
+        }],
+    )
+    inp_b = _capture_step1(sb_b, body_b)
+
+    # Mandatory: both cases emit is_managed=True
+    assert inp_a.get("is_managed_hazardous_substance") is True, (
+        f"TEST-18 Case A: expected is_managed=True (persistent); got {inp_a.get('is_managed_hazardous_substance')!r}"
+    )
+    assert inp_b.get("is_managed_hazardous_substance") is True, (
+        f"TEST-18 Case B: expected is_managed=True (transient); got {inp_b.get('is_managed_hazardous_substance')!r}"
+    )
+    # Mandatory: both cases emit fc001_managed_indoor_handling=True
+    assert inp_a.get("fc001_managed_indoor_handling") is True, (
+        f"TEST-18 Case A: expected fc001_managed_indoor_handling=True (persistent); got {inp_a.get('fc001_managed_indoor_handling')!r}"
+    )
+    assert inp_b.get("fc001_managed_indoor_handling") is True, (
+        f"TEST-18 Case B: expected fc001_managed_indoor_handling=True (transient); got {inp_b.get('fc001_managed_indoor_handling')!r}"
+    )
+    # Parity: presence and value must be identical across all semantic fields
+    for field in _MAT_SEMANTIC_FIELDS:
+        in_a, in_b = field in inp_a, field in inp_b
+        val_a, val_b = inp_a.get(field), inp_b.get(field)
+        assert in_a == in_b and val_a == val_b, (
+            f"TEST-18 PARITY FAIL {field!r}: "
+            f"persistent={'PRESENT' if in_a else 'ABSENT'}({val_a!r}) "
+            f"!= transient={'PRESENT' if in_b else 'ABSENT'}({val_b!r})"
+        )
