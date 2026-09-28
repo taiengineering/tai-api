@@ -126,7 +126,7 @@ V3에서 FIELD 가격은 249,000 고정이지만 Resolver 호출은 유지한다
 
 **보존 이유:**
 - **FIELD price authority**: 아님 (가격은 `policy.field_base_amount`)
-- **FIELD commercial capacity limit**: 아님 (V3 FIELD에서 scale band 초과는 commercial 한도 아님 — Section 3 Commercial Fit Gate 참조)
+- **FIELD commercial scope 의미**: UNRESOLVED — Pricing V3는 FIELD 가격을 scale-independent로 확정했으나, commercial scope 관점에서 scale band가 계약 용량 기준인지는 OBJ07에서 결정
 - **Scale/band metadata**: YES — 계약 시점 규모 구간 기록. Commercial Fit Gate의 scope 비교 기반.
 
 **판정: 삭제하지 않는다.** `SaasSitePricingInput.base_band_code` 유지. Preview Service에서 resolver tier_code → `base_band_code` 전달 경로 유지.
@@ -336,25 +336,27 @@ Production V2 Commercial = 0. 기존 V2 CV가 없으므로 V2→V3 전환 문제
 **Conflict 2 — FIELD scale band (lines 380–382)**
 
 현재: scale band 변경 → SCALE_BAND_INCREASE/DECREASE (가격 변화로 분류).
-V3: FIELD 가격 = 249,000 고정 → scale band 변경은 가격 변화가 아님.
+V3: FIELD 가격 = 249,000 고정 → scale band 변경은 **가격 변화가 아님**.
 
-**확정 가능한 것:**
+**확정된 사실 (Pricing V3 근거):**
 
 ```
 FIELD scale-band 변화
-→ SCALE_BAND_INCREASE/DECREASE(가격 상승/상업 확장)로 분류하면 안 됨
-→ price_delta = 0
+→ price_delta = 0  (FIELD 가격 = 249,000 고정, scale-independent — CONFIRMED)
+→ SCALE_BAND_INCREASE/DECREASE를 가격 변화 이벤트로 발행하면 안 됨
 ```
 
-**확정하지 않는 것:**
+**미결 — commercial classification (OBJ07 결정 필요):**
 
-`FIELD_SCOPE_BAND_CHANGE` 이벤트는 현재 `schemas/saas_change_order_v2.py`의 ChangeType에 존재하지 않는다. 존재하지 않는 enum 추가는 schema/persistence/test 영향까지 포함한 별도 설계가 필요하다.
+`price_delta = 0`은 확정이다. 그러나 FIELD scale band 변화가 **commercial scope 이벤트**로 기록되어야 하는지는 별개의 질문이다.
+
+- `FIELD_SCOPE_BAND_CHANGE`는 현재 `schemas/saas_change_order_v2.py` ChangeType에 존재하지 않는다.
+- 존재하지 않는 enum 추가는 schema/persistence/test 영향을 포함한 별도 설계가 필요하다.
+- OBJ07 Commercial Fit 설계 결정 이후에만 올바른 이벤트 분류를 확정할 수 있다.
 
 **판정:**
 
-FIELD에서 scale band 변화를 어떤 이벤트로 기록할지 = OBJ07 또는 별도 scope metadata 설계에서 최소 변경 방식으로 결정. 이번 OBJ02에서는 새 enum 확정 금지.
-
-최소 패치 방향: `product_tier == "FIELD"` guard를 scale_band 비교 로직에 추가해 `price_delta = 0` 처리. 메타데이터 sync 방식은 OBJ07 결정.
+`price_delta = 0` guard 코드는 OBJ07에서 commercial scope 결정 후 함께 실행. 이번 OBJ02에서는 새 enum 확정 금지. 가격 delta와 commercial 이벤트 분류를 혼합 결정하지 않는다.
 
 **Conflict 3 — term comparison (lines 261–262)**
 
@@ -405,48 +407,25 @@ FIELD에서 scale band 변화를 어떤 이벤트로 기록할지 = OBJ07 또는
 - Step 8 (line 231–233): `actual_worker_count > cv.worker_capacity` → `WORKER_CAPACITY_EXCEEDED`
 - Step 3 (line 85–98): `product_tier == "CUSTOM"` → `CUSTOM_REVIEW_REQUIRED`
 
-**V3 FIELD 문제:** `product_tier == "FIELD"`인 계약에서 시설 규모가 증가하면 Step 7이 `SCALE_BAND_EXCEEDED` → `CHANGE_REQUIRED`를 발생시킨다. V3 FIELD 가격은 249,000 고정이므로 이것은 잘못된 판정이다.
+**설계 경계:**
 
-**V3 FIELD 설계:**
+이 게이트는 **계약 범위(scope) 게이트**이며 **가격 게이트가 아니다.** `SCALE_BAND_EXCEEDED`는 "현재 계약 band보다 큰 규모의 사업장이 실제 운영 중"임을 의미하며, 가격 상승과 별개로 commercial scope 계약 한도를 초과했음을 의미할 수 있다.
 
-```
-FIELD에서 유지:
-  SITE_OUT_OF_SCOPE        → 계약 범위 외 사업장 (유지)
-  WORKER_CAPACITY_EXCEEDED → worker 초과 (유지)
-  CUSTOM_REVIEW_REQUIRED   → CUSTOM tier (유지)
+**확정된 사실:**
+- Pricing V3: FIELD 가격 = 249,000 고정 (scale-independent)
 
-FIELD에서 제거:
-  SCALE_BAND_EXCEEDED      → FIELD는 가격이 scale-independent
-                              band 증가만으로 CHANGE_REQUIRED 발생 금지
-```
+**미결 질문 (OBJ07 결정 필요):**
+- FIELD 계약에서 scale band 증가는 commercial scope를 초과하는가?
+  - YES → `SCALE_BAND_EXCEEDED` + `CHANGE_REQUIRED` 유지 (가격 변화 없이 계약 재협의 필요)
+  - NO → `SCALE_BAND_EXCEEDED` 불발생, `FIT` 처리
+  - METADATA_ONLY → `SCALE_BAND_EXCEEDED` 미발생, 별도 이벤트 or 기록 전용
 
-**최소 패치:**
+Pricing V3 "FIELD 가격이 scale-independent"라는 사실만으로 Commercial scope 의미를 단정할 수 없다. 이 두 도메인은 분리된다.
 
-Step 7 band comparison에 `product_tier == "FIELD"` guard 추가:
-
-```python
-# FIELD는 scale band가 commercial pricing capacity 기준 아님
-if cv.product_tier == "FIELD":
-    site_results.append(SaasCommercialSiteFitResultV2(
-        ..., status="FIT", reason_code=None,
-        contracted_base_band_code=contracted_bbc,
-        required_base_band_code=site.required_base_band_code,
-        ...
-    ))
-    continue
-```
-
-`SITE_OUT_OF_SCOPE`(신규 사업장)과 `WORKER_CAPACITY_EXCEEDED`는 product_tier 분기 이전에 처리되거나 별도 Step이므로 영향 없음.
-
-| 항목 | 현재 | V3 변경 |
-|------|------|---------|
-| Step 7 band comparison | MANAGER/FIELD 공통 | FIELD guard 추가 (SCALE_BAND_EXCEEDED 발생 금지) |
-| Step 8 worker check | KEEP AS-IS | 불변 (FIELD도 worker capacity 계약) |
-| SITE_OUT_OF_SCOPE | KEEP AS-IS | 불변 |
-| CUSTOM shortcut | KEEP AS-IS | 불변 |
+**판정: REUSE-AS-IS FOR NOW.** V3 FIELD guard 코드 추가는 OBJ07에서 Commercial Fit 설계 결정 후 실행.
 
 **파일명**: KEEP `services/saas_commercial_fit_gate_v2.py`
-**Strategy**: PATCH EXISTING
+**Strategy**: REUSE-AS-IS FOR NOW — FIELD SCALE SEMANTICS DEFER to OBJ07
 
 ---
 
@@ -454,13 +433,13 @@ if cv.product_tier == "FIELD":
 
 | 항목 | 변경 |
 |------|------|
-| MANAGER band increase 기존 테스트 | KEEP (SCALE_BAND_EXCEEDED 유지 확인) |
-| FIELD band increase 신규 | ADD — SCALE_BAND_EXCEEDED 없음, status=FIT |
-| FIELD site out of scope 신규 | ADD — SITE_OUT_OF_SCOPE 유지 |
-| FIELD worker capacity exceeded 신규 | ADD — WORKER_CAPACITY_EXCEEDED 유지 |
+| MANAGER band increase 기존 테스트 | KEEP (SCALE_BAND_EXCEEDED 동작 확인) |
+| FIELD band increase | BASELINE CAPTURE — 현재 동작(`SCALE_BAND_EXCEEDED`) 기록. V3 FIELD scope semantics = OBJ07 결정 후 기대값 수정 여부 확정 |
+| FIELD site out of scope | BASELINE CAPTURE — `SITE_OUT_OF_SCOPE` 현재 동작 기록 |
+| FIELD worker capacity exceeded | BASELINE CAPTURE — `WORKER_CAPACITY_EXCEEDED` 현재 동작 기록 |
 
 **파일명**: KEEP `tests/test_saas_commercial_fit_gate_v2.py`
-**Strategy**: PATCH (기존 테스트 유지 + V3 FIELD cases 추가)
+**Strategy**: BASELINE CAPTURE (FIELD scope guard 추가 = OBJ07 결정 후)
 
 ---
 
@@ -494,8 +473,8 @@ if cv.product_tier == "FIELD":
 | **Site Scope** | REUSE-AS-IS | 변경 없음 (DDL not applied, V3 first DDL) | `saas_contract_commercial_v2.py` | PARTIAL |
 | **Storage Mapper** | PATCH | `selection.term_months→payment_months` (×2) | `saas_contract_storage_mapper_v2.py` | YES |
 | **Commercial Fit Gate Schema** | REUSE-AS-IS | 변경 없음 (새 enum 추가 = OBJ07) | `saas_commercial_fit_v2.py` | NO |
-| **Commercial Fit Gate Service** | PATCH | Step 7 FIELD guard (SCALE_BAND_EXCEEDED 발생 금지) | `saas_commercial_fit_gate_v2.py` | NO |
-| **Commercial Fit Gate Tests** | PATCH | FIELD band/scope/worker V3 cases 추가 | `test_saas_commercial_fit_gate_v2.py` | NO |
+| **Commercial Fit Gate Service** | REUSE-AS-IS FOR NOW | FIELD scale semantics = UNRESOLVED. OBJ07 결정 후 PATCH 여부 확정 | `saas_commercial_fit_gate_v2.py` | NO |
+| **Commercial Fit Gate Tests** | BASELINE CAPTURE | 현재 동작 기록. FIELD scope V3 guard = OBJ07 결정 후 추가 | `test_saas_commercial_fit_gate_v2.py` | NO |
 | **Change Order** | PATCH | Conflict 2 FIELD guard (price_delta=0, enum 추가 금지); `term_months→payment_months` = semantic patch; Conflict 1 = no change; Conflict 3 = OBJ05 | `saas_change_order_v2.py` | YES (C3) |
 | **Atomic New Contract OBJ10-C** | OBJ05 DEPENDENT | DDL not applied; V3 기준 최초 작성 | `migrations/…atomic_apply.sql` | YES |
 | **Renewal Adapter D-A** | PATCH + OBJ05 | `snap.term_months→payment_months` (×4) | `saas_renewal_v2_adapter.py` | YES |
@@ -519,7 +498,7 @@ if cv.product_tier == "FIELD":
 | **SNAPSHOT EVIDENCE** | `base_amount` (resolver 반환값) | FIELD price 계산 미사용 | scale band 당시 resolver 값 기록 |
 | **FIELD 가격 산출** | `policy.field_base_amount = 249,000` | `s.base_amount` (Composer에서 무시) | Policy 객체가 가격 권위값 |
 
-**base_band_code 보존 판정: 삭제하지 않는다.** `SaasSiteScope.base_band_code`는 V3 FIELD에서도 Commercial Fit Gate의 scale/band metadata로 사용된다. FIELD price authority나 commercial capacity limit으로는 사용되지 않는다.
+**base_band_code 보존 판정: 삭제하지 않는다.** `SaasSiteScope.base_band_code`는 V3 FIELD에서도 Commercial Fit Gate의 scale/band metadata로 사용된다. FIELD price authority로는 사용되지 않는다. FIELD commercial scope에서 band가 계약 용량 기준 역할을 하는지는 UNRESOLVED — OBJ07에서 결정.
 
 ---
 
@@ -627,9 +606,9 @@ WHERE service_type = 'SAAS' AND sector = 'INDUSTRY' AND tier_code = 'INDUSTRY_PR
 | VAT 계산 (supply × 10%) | FIELD/MANAGER 동일 |
 | CUSTOM route | `CUSTOM_REQUIRED` 변화 없음 |
 | **Commercial Fit — MANAGER band increase** | `SCALE_BAND_EXCEEDED` 유지 |
-| **Commercial Fit — FIELD band increase** | `SCALE_BAND_EXCEEDED` 없음 (status=FIT) |
-| **Commercial Fit — FIELD site out of scope** | `SITE_OUT_OF_SCOPE` 유지 |
-| **Commercial Fit — FIELD worker exceeded** | `WORKER_CAPACITY_EXCEEDED` 유지 |
+| **Commercial Fit — FIELD band increase** | BASELINE CAPTURE — 현재 동작(`SCALE_BAND_EXCEEDED`) 기록. V3 FIELD scope 기대값 = OBJ07 결정 |
+| **Commercial Fit — FIELD site out of scope** | BASELINE CAPTURE — `SITE_OUT_OF_SCOPE` 현재 동작 기록 |
+| **Commercial Fit — FIELD worker exceeded** | BASELINE CAPTURE — `WORKER_CAPACITY_EXCEEDED` 현재 동작 기록 |
 
 ---
 
@@ -754,7 +733,6 @@ V3는 V2 구현 위에 policy/semantic delta만 적용한다. 신규 `_v3` 파�
 ```
 schemas/saas_pricing_policy_v2.py           (OBJ03)
 services/saas_pricing_composer_v2.py        (OBJ03)
-services/saas_commercial_fit_gate_v2.py     (OBJ07)
 services/saas_change_order_v2.py            (OBJ07)
 services/saas_pricing_preview_v2.py         (Semantic-Integration)
 services/saas_quote_v2.py                   (Semantic-Integration)
@@ -764,7 +742,18 @@ services/saas_contract_storage_mapper_v2.py (Semantic-Integration)
 services/saas_renewal_v2_adapter.py         (Semantic-Integration)
 tests/* (SUPERSEDED values / V3 cases)
 
-= 10 services + tests
+= 9 services + tests
+```
+
+**REUSE-AS-IS FOR NOW (OBJ07 결정 대기):**
+
+```
+services/saas_commercial_fit_gate_v2.py
+tests/test_saas_commercial_fit_gate_v2.py
+
+  → FIELD scale band commercial semantics = UNRESOLVED
+  → OBJ07에서 "FIELD scale = commercial scope 한도인가?" 결정 후
+     PATCH 여부 및 guard 코드 실행
 ```
 
 **schemas (payment_months rename 포함):**
@@ -865,8 +854,11 @@ OBJ06
 
 OBJ07
 — Change Order + Commercial Fit + Renewal Integration
-  Change Order Conflict 2 FIELD guard
-  Commercial Fit Gate FIELD guard
+  DESIGN DECISION: "FIELD scale band = commercial scope 계약 한도인가?"
+  → YES: Commercial Fit Gate Step 7 FIELD guard 추가 + price_delta=0 guard (Change Order Conflict 2)
+  → NO: SCALE_BAND_EXCEEDED 불발생 + FIT 처리 + price_delta=0 (같은 결과)
+  → METADATA_ONLY: 별도 이벤트 분류 설계
+  결정 후 Commercial Fit Gate + Change Order Conflict 2 최소 패치 실행
   D-A/B1/B2/B3 OBJ05 기반 패치
 
 REFREEZE
