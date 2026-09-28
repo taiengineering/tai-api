@@ -4,13 +4,17 @@ Authority: equipment_assets.equipment_type_code (numeric codes 001–040).
 Only codes with confirmed canonical boolean targets are listed here.
 Unknown codes are silently skipped by the projector (missing != false).
 
-Mapping authority note (code_condition_resolver discrepancies):
-  "010" (비상발전기): code_condition_resolver maps "010"→has_generator
-      (name differs from has_emergency_gen used here). Canonical LEG fact name
-      is has_emergency_gen per equipment_assets practice.
-  "038" (압력용기): absent from code_condition_resolver; mapping authority is
-      equipment_type_inspection_map / equipment_assets data only.
-  "014", "023", "024": code_condition_resolver alignment not independently confirmed.
+Mapping authority note (code_condition_resolver evidence):
+  "010" (비상발전기): NAME MISMATCH
+      code_condition_resolver "010" → has_generator
+      A2 canonical fact → has_emergency_gen
+      Canonical LEG fact is has_emergency_gen per equipment_assets practice.
+  "014" (보일러):   MATCH — code_condition_resolver "014" → has_boiler
+  "023" (프레스):   MATCH — code_condition_resolver "023" → has_press
+  "024" (컨베이어): MATCH — code_condition_resolver "024" → has_conveyor
+  "038" (압력용기): NUMERIC ENTRY ABSENT from code_condition_resolver
+      string "PRESSURE_VESSEL" → has_pressure_vessel exists in resolver.
+      Numeric "038" mapping authority is equipment_type_inspection_map only.
 
 EQUIPMENT_CODE_AUTHORITY_BLOCKED codes (no exact code in existing authority):
   has_construction_machine — 건설기계: no numeric code in equipment_type_code system
