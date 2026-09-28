@@ -848,8 +848,11 @@ def test_I19_rollback_on_constraint_failure(pg):
     end_date = "2027-01-01"
     boundary = _kst_boundary(end_date)
 
-    _insert_contract(pg, cid, co, end_date=end_date)
-    _insert_payment(pg, pid, cid, qid, co)
+    _insert_contract(pg, cid, co, end_date=end_date,
+                     contract_amount=200_000, vat_amount=20_000, total_amount=220_000)
+    _insert_payment(pg, pid, cid, qid, co,
+                    supply=200_000, vat=20_000, total=220_000,
+                    paid_at="2026-12-31T15:00:00+00:00")
     old_cv_id = _insert_old_cv(pg, cid, version_no=1)
 
     # new CV with invalid tier+mode (MANAGER+CUSTOM violates chk_saas_ccv_tier_mode_combo)
@@ -862,8 +865,9 @@ def test_I19_rollback_on_constraint_failure(pg):
     except Exception:
         pass  # expected DB error
 
-    # Rollback assertions: old CV superseded_at must be NULL, new CV must not exist
     cur = pg.cursor()
+
+    # Rollback: old CV.superseded_at must be NULL
     cur.execute(
         "SELECT superseded_at FROM public.saas_contract_commercial_versions WHERE id=%s;",
         (old_cv_id,),
@@ -872,6 +876,7 @@ def test_I19_rollback_on_constraint_failure(pg):
     assert row is not None
     assert row[0] is None, "old CV.superseded_at must be NULL after rollback"
 
+    # Rollback: new CV must not exist
     cur.execute(
         "SELECT COUNT(*) FROM public.saas_contract_commercial_versions "
         "WHERE contract_id=%s AND version_no=2;",
@@ -879,11 +884,31 @@ def test_I19_rollback_on_constraint_failure(pg):
     )
     assert cur.fetchone()[0] == 0, "new CV must not exist after rollback"
 
+    # Rollback: scopes for version 2 must not exist
     cur.execute(
-        "SELECT end_date FROM public.contracts WHERE id=%s;",
+        "SELECT COUNT(*) FROM public.saas_contract_site_scopes s "
+        "JOIN public.saas_contract_commercial_versions v ON s.commercial_version_id=v.id "
+        "WHERE v.contract_id=%s AND v.version_no=2;",
         (cid,),
     )
-    assert str(cur.fetchone()[0]) == "2027-01-01", "contract end_date must be unchanged"
+    assert cur.fetchone()[0] == 0, "scopes must not exist after rollback"
+
+    # Rollback: contract end_date unchanged
+    cur.execute(
+        "SELECT end_date, paid_amount, paid_at FROM public.contracts WHERE id=%s;",
+        (cid,),
+    )
+    row = cur.fetchone()
+    assert str(row[0]) == "2027-01-01", "contract end_date must be unchanged"
+    assert row[1] is None, "paid_amount must be NULL (unchanged) after rollback"
+    assert row[2] is None, "paid_at must be NULL (unchanged) after rollback"
+
+    # Rollback: payment row unchanged
+    cur.execute(
+        "SELECT status_code FROM public.payments WHERE id=%s;",
+        (pid,),
+    )
+    assert cur.fetchone()[0] == "PAID", "payment status_code must be unchanged"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1063,7 +1088,7 @@ def test_I24_leap_year_month_arithmetic(pg):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_I25_different_payments_same_contract_fail_closed(pg):
-    """두 다른 payment가 동일 contract를 갱신하려 할 때 두 번째는 fail-closed."""
+    """두 다른 payment가 동일 contract를 갱신하려 할 때 두 번째는 V2_RENEWAL_CROSS_PAYMENT_COLLISION."""
     pid1, pid2 = _new_id(), _new_id()
     cid, qid1, qid2, co = _new_id(), _new_id(), _new_id(), _new_id()
     end_date = "2027-01-01"
@@ -1074,16 +1099,125 @@ def test_I25_different_payments_same_contract_fail_closed(pg):
     _insert_payment(pg, pid2, cid, qid2, co, term=12)
     _insert_old_cv(pg, cid, version_no=1)
 
+    scopes = [_scope()]
     new_cv1 = _new_cv_payload(cid, 2, boundary, term_months=12)
     new_cv2 = _new_cv_payload(cid, 2, boundary, term_months=12)
 
-    r1 = _rpc(pg, pid1, cid, qid1, 1, new_cv1, [_scope()])
+    r1 = _rpc(pg, pid1, cid, qid1, 1, new_cv1, scopes)
     assert r1["status"] == "APPLIED"
 
-    # Second payment tries same contract/version → fails (version 2 already exists,
-    # and old CV is no longer in PRE-APPLY state)
-    r2 = _rpc(pg, pid2, cid, qid2, 1, new_cv2, [_scope()])
-    # Either PARTIAL (old superseded mismatch) or the function returns an error
-    assert r2["status"] != "APPLIED", (
-        f"Second payment should not re-apply renewal: {r2}"
+    # Second (different) payment: renewal_payment_id on new CV = pid1, not pid2 → collision
+    r2 = _rpc(pg, pid2, cid, qid2, 1, new_cv2, scopes)
+    assert r2["status"] == "V2_RENEWAL_CROSS_PAYMENT_COLLISION", (
+        f"Expected V2_RENEWAL_CROSS_PAYMENT_COLLISION, got: {r2}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I26: BLOCKER 2 — top-level term_months != payment.period_months
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I26_top_level_term_mismatch(pg):
+    """new_cv.term_months (top-level) ≠ payment.period_months → V2_RENEWAL_TERM_MISMATCH."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    _insert_payment(pg, pid, cid, qid, co, term=12)
+    _insert_old_cv(pg, cid, version_no=1)
+
+    # snapshot.term_months = 12 (matches payment) but top-level term_months = 6
+    new_cv = _new_cv_payload(cid, 2, boundary, term_months=6)
+    new_cv["pricing_snapshot"]["term_months"] = 12  # snapshot matches payment
+    # But top-level term_months = 6 ≠ payment.period_months = 12
+
+    result = _rpc(pg, pid, cid, qid, 1, new_cv, [_scope()])
+    assert result["status"] == "V2_RENEWAL_TERM_MISMATCH", (
+        f"Expected V2_RENEWAL_TERM_MISMATCH, got: {result}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I27: BLOCKER 3 — created_by ≠ payment.user_id
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I27_created_by_mismatch(pg):
+    """new_cv.created_by ≠ payment.user_id → V2_RENEWAL_CV_CREATED_BY_MISMATCH."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    uid = _new_id()  # payment user_id
+    other_uid = _new_id()  # different UUID
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    # Insert payment WITH explicit user_id
+    cur = pg.cursor()
+    cur.execute(
+        """INSERT INTO public.payments
+           (id, status_code, product_type, payment_type, plan_code,
+            contract_id, quote_id, period_months,
+            supply_amount, vat_amount, total_amount,
+            company_id, user_id, paid_at)
+           VALUES (%s,'PAID','SAAS','RENEWAL',NULL,
+                   %s,%s,%s,
+                   200000,20000,220000,
+                   %s,%s,'2026-12-31T15:00:00+00:00');""",
+        (pid, cid, qid, 12, co, uid),
+    )
+    _insert_old_cv(pg, cid, version_no=1)
+
+    # new CV with wrong created_by (other_uid, not uid)
+    new_cv = _new_cv_payload(cid, 2, boundary, created_by=other_uid)
+
+    result = _rpc(pg, pid, cid, qid, 1, new_cv, [_scope()])
+    assert result["status"] == "V2_RENEWAL_CV_CREATED_BY_MISMATCH", (
+        f"Expected V2_RENEWAL_CV_CREATED_BY_MISMATCH, got: {result}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I28: BLOCKER 4 — FIELD + empty scopes → V2_RENEWAL_SCOPE_REQUIRED
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I28_field_empty_scopes(pg):
+    """FIELD tier + 0 scopes → V2_RENEWAL_SCOPE_REQUIRED."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    _insert_payment(pg, pid, cid, qid, co)
+    _insert_old_cv(pg, cid, version_no=1)
+
+    new_cv = _new_cv_payload(cid, 2, boundary, product_tier="FIELD")
+
+    result = _rpc(pg, pid, cid, qid, 1, new_cv, [])  # empty scopes
+    assert result["status"] == "V2_RENEWAL_SCOPE_REQUIRED", (
+        f"Expected V2_RENEWAL_SCOPE_REQUIRED, got: {result}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I29: P8 — unexpected higher version exists
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I29_unexpected_higher_version_partial(pg):
+    """version N+2가 이미 존재하는데 N+1을 insert하려 하면 V2_RENEWAL_PARTIAL_STATE."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    _insert_payment(pg, pid, cid, qid, co)
+    _insert_old_cv(pg, cid, version_no=1)
+    # Manually inject version 3 (skipping 2) → unexpected higher version
+    _insert_old_cv(pg, cid, version_no=3,
+                   effective_from=boundary, superseded_at=None)
+
+    new_cv = _new_cv_payload(cid, 2, boundary)
+
+    result = _rpc(pg, pid, cid, qid, 1, new_cv, [_scope()])
+    assert result["status"] == "V2_RENEWAL_PARTIAL_STATE", (
+        f"Expected V2_RENEWAL_PARTIAL_STATE (P8), got: {result}"
     )

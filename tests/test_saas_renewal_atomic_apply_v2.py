@@ -416,3 +416,37 @@ def test_A29_sql_partial_state_code():
 def test_A30_sql_already_applied_branch():
     """SQL: ALREADY_APPLIED 멱등성 분기 존재."""
     assert "ALREADY_APPLIED" in _SQL
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# A31-A36: PATCH1 static 검사
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_A31_sql_cross_payment_collision_code():
+    """SQL: V2_RENEWAL_CROSS_PAYMENT_COLLISION 교차결제 차단 코드 존재."""
+    assert "V2_RENEWAL_CROSS_PAYMENT_COLLISION" in _SQL
+
+
+def test_A32_sql_renewal_payment_id_column():
+    """SQL: renewal_payment_id 컬럼 ADD COLUMN 존재."""
+    assert "renewal_payment_id" in _SQL
+
+
+def test_A33_sql_term_mismatch_code():
+    """SQL: V2_RENEWAL_TERM_MISMATCH (top-level term authority) 코드 존재."""
+    assert "V2_RENEWAL_TERM_MISMATCH" in _SQL
+
+
+def test_A34_sql_created_by_mismatch_code():
+    """SQL: V2_RENEWAL_CV_CREATED_BY_MISMATCH (provenance binding) 코드 존재."""
+    assert "V2_RENEWAL_CV_CREATED_BY_MISMATCH" in _SQL
+
+
+def test_A35_sql_scope_required_code():
+    """SQL: V2_RENEWAL_SCOPE_REQUIRED (MANAGER/FIELD scope completeness) 코드 존재."""
+    assert "V2_RENEWAL_SCOPE_REQUIRED" in _SQL
+
+
+def test_A36_sql_scope_duplicate_code():
+    """SQL: V2_RENEWAL_SCOPE_DUPLICATE (중복 entity_id 차단) 코드 존재."""
+    assert "V2_RENEWAL_SCOPE_DUPLICATE" in _SQL
