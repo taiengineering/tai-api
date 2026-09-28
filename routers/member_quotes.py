@@ -13,10 +13,14 @@ from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
+from schemas.saas_quote_v2 import SaasQuoteIssueRequestV2
 from services.company_scope import require_company_id
 from services import member_quote_svc as svc
 from services import member_quote_pdf_svc as pdf_svc
+from services import saas_quote_v2 as saas_quote_v2_svc
 from services.gotenberg_svc import PdfRenderError
+from services.saas_pricing_preview_v2 import SaasPricingPreviewError
+from services.saas_quote_v2 import SaasQuoteV2Error
 
 logger = logging.getLogger("member_quotes")
 router = APIRouter(prefix="/me/quotes", tags=["member-quotes"])
@@ -121,6 +125,56 @@ def custom_request(body: CustomQuoteBody, current: dict = Depends(get_current_us
         logger.warning("[quote_manual slack] dispatch failed: %s", e)
 
     return {"status": "success", "data": row}
+
+
+_V2_CUSTOM_CODES = frozenset({"CUSTOM_QUOTE_REQUIRED", "COMPLIANCE_BASE_QUOTE_REQUIRED"})
+_V2_GATE_CODES = frozenset({"QUOTE_PRICING_NOT_READY", "QUOTE_SNAPSHOT_INVALID", "COMPANY_SNAPSHOT_REQUIRED"})
+_PREVIEW_CLIENT_CODES = frozenset({"INVALID_SELECTION", "STANDARD_SITE_REQUIRED", "DUPLICATE_SITE"})
+_PREVIEW_SERVER_CODES = frozenset({"BASE_PRICE_NOT_FOUND", "INVALID_BASE_PRICE_ROW"})
+
+
+@router.post("/v2/issue")
+def issue_v2(body: SaasQuoteIssueRequestV2, current: dict = Depends(get_current_user)):
+    """SaaS V2 자동견적 발행.
+
+    - 인증 필수 (Bearer)
+    - company_id = auth context
+    - 서버 재계산 필수 (Preview V2 경유)
+    - READY 상태만 quotes INSERT
+    """
+    supabase = get_supabase()
+    company_id = _require_member_company(current, supabase)
+    try:
+        row = saas_quote_v2_svc.issue_saas_quote_v2(
+            supabase, body, current.get("id"), company_id,
+        )
+        return {"status": "success", "data": row}
+    except SaasQuoteV2Error as exc:
+        if exc.code in _V2_CUSTOM_CODES:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "message": exc.message, "route_to_custom": True},
+            )
+        if exc.code in _V2_GATE_CODES:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "message": exc.message},
+            )
+        raise HTTPException(status_code=500, detail={"code": exc.code})
+    except SaasPricingPreviewError as exc:
+        if exc.code in _PREVIEW_CLIENT_CODES:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": exc.code, "message": exc.message},
+            )
+        if exc.code in _PREVIEW_SERVER_CODES:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": exc.code, "message": exc.message},
+            )
+        raise HTTPException(status_code=500, detail={"code": exc.code})
+    except Exception:
+        raise HTTPException(status_code=503, detail={"code": "INTERNAL_ERROR"})
 
 
 @router.get("")
