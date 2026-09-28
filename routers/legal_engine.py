@@ -17,6 +17,7 @@ from clients.leg_runtime_client import LegRuntimeError
 from services.leg_diagnosis_svc import LegDiagnosisError
 from services.work_source.merge import WorkSourceMergeConflict
 from services.work_source.store import WorkSourceLoadError
+from services.equipment_source.store import EquipmentSourceLoadError
 from services.saas_diagnosis_result_persistence import SaasPersistError, finalize_saas_leg_result
 from services.tier_payment_gate_svc import TierGateError, evaluate_saas_tier_gate
 from services.legal_context import _factory_to_context, _survey_data_to_context
@@ -146,6 +147,13 @@ async def diagnose_industrial_leg(body: SafeIndustrialLegBody, authorization: Op
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
     try:
         out = run_safe_industrial_leg(supabase, body.factory_id, body.input)
+    except EquipmentSourceLoadError as e:
+        # WO-EQUIPMENT-A2-EXISTING-SEAM-PATCH-001 PATCH1-B: Equipment read failure 503.
+        # READ FAILURE != EMPTY SOURCE — LEG must not be called on equipment read error.
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "EQUIPMENT_SOURCE_UNAVAILABLE", "message": str(e)},
+        ) from e
     except WorkSourceLoadError as e:
         raise HTTPException(
             status_code=503,

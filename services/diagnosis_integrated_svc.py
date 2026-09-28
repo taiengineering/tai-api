@@ -563,18 +563,18 @@ def run_diagnosis(
         from services.company_scope import _ensure_factory_own
         _ensure_factory_own(supabase, factory_id, current_user)
         from services.equipment_source.projector import project_equipment_rows as _proj_eq
+        # WO-EQUIPMENT-A2-EXISTING-SEAM-PATCH-001: inline reader → shared reader 교체.
+        # 동작 contract 동일 (factory_id + is_operating=True, SELECT equipment_type_code).
+        from services.equipment_source.store import (
+            EquipmentSourceLoadError as _EqLoadErr,
+            load_equipment_rows_optional as _load_eq,
+        )
         try:
-            _eq_res = (
-                supabase.table("equipment_assets")
-                .select("equipment_type_code")
-                .eq("factory_id", factory_id)
-                .eq("is_operating", True)
-                .execute()
-            )
-        except Exception as _e:
+            _eq_rows = _load_eq(supabase, factory_id)
+        except _EqLoadErr as _e:
             log.error("[equipment_materializer] source read failed factory=%s: %s", factory_id, _e)
             raise HTTPException(status_code=503, detail="설비 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")
-        for _f, _v in _proj_eq(_eq_res.data or []).items():
+        for _f, _v in _proj_eq(_eq_rows).items():
             inp.setdefault(_f, _v)
     # WO-E2E-OBS009-COMMON-WORK-SOURCE-IMPLEMENT-001:
     # stored work → projector → merge. Explicit request keys are not overwritten.

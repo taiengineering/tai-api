@@ -57,6 +57,11 @@ def patched(monkeypatch):
         "services.material_source.store.load_factory_material_rows_optional",
         lambda supabase, factory_id: [],
     )
+    # WO-EQUIPMENT-A2-EXISTING-SEAM-PATCH-001: equipment loader stubbed (empty = no A2 facts).
+    monkeypatch.setattr(
+        "services.equipment_source.store.load_equipment_rows_optional",
+        lambda supabase, factory_id: [],
+    )
     return calls
 
 # G4A-01 assembler 1회 READ
