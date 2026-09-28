@@ -393,7 +393,7 @@ Legacy SaaS runtime isolation
 | **Renewal Temporal Logic D-B1** | Code only | payment_months ↔ contract.end_date | OBJ05 DEPENDENT | YES (core) | (별도 파일) |
 | **Atomic Renewal SQL D-B2** | **NOT APPLIED** | 3-way guard. OBJ05 후 V3 기준 최초 DDL 가능 | OBJ05 DEPENDENT | YES | migration line 342 |
 | **Runtime Wiring D-B3** (`saas_renewal_runtime_v2.py`) | Code only | first_apply boundary (OBJ05) | REUSE-AS-IS; OBJ05 verify | YES (boundary) | source read |
-| **Legacy SaaS runtime** (V1 plan_code path) | **8 active contracts** | — | LEGACY PRESERVE | NO | Section 2-B |
+| **Legacy SaaS runtime** (V1 plan_code path) | **8 total / 5 active, all Legacy plan_code** | — | LEGACY PRESERVE | NO | Section 2-B |
 | **Legacy V1 Quote** (`member_quote_svc.py`, `admin_quote_svc.py`) | Active | — | UNRELATED | NO | — |
 | **Frontend-facing API** (`routers/public_pricing_v2.py`) | Code only | `payment_months` boundary | EVOLVE BOUNDARY (얇은 route) | YES | — |
 | **Tests** | Code only | V3 policy값 기준 갱신 | PATCH EXISTING + invariant REUSE-AS-IS | PARTIAL | test files |
@@ -592,9 +592,18 @@ PATCH EXISTING   = 11 (Policy, Composer, Preview Service, Quote Service,
 REUSE-AS-IS      = 3  (Price Resolver, Site Scope structure, D-B3 routing)
 EVOLVE BOUNDARY  = 5  (Pricing Schema, Preview Request, Quote Request,
                        Quote Snapshot, Frontend API boundary)
-OBJ05 DEPENDENT  = 5  (Contract Builder, OBJ10-C, D-B1, D-B2, D-B3 boundary)
+OBJ05 DEPENDENCY = CROSS-CUTTING
+                   PRIMARY STRATEGY = OBJ05 DEPENDENT:
+                     Contract Builder / OBJ10-C / D-B1 / D-B2
+                   D-B3 = REUSE-AS-IS; first_apply boundary OBJ05 verify 필요
+                   ADDITIONAL OBJ05 DEP (mixed-strategy):
+                     Pricing Schema / Preview Request / Quote Request /
+                     Quote Snapshot / Quote Service / OBJ10-A partial /
+                     OBJ10-B / Commercial Schema / Site Scope partial /
+                     Storage Mapper / Change Order C3 / Renewal D-A
+                   → Matrix OBJ05 Dep column이 SSOT. 단일 count 없음.
 DATA WO          = 1  (price_master Production)
-LEGACY PRESERVE  = 1  (Legacy SaaS runtime)
+LEGACY PRESERVE  = 1  (Legacy SaaS runtime — 8 total / 5 active)
 UNRELATED        = 2  (Legacy V1 Quote, Admin)
 
 ─────────────────────────────────────────────────
