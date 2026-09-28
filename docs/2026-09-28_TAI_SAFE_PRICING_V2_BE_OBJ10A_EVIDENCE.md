@@ -12,7 +12,7 @@ status: PASS
 ## 1. EXECUTION ANCHOR
 
 - Base commit: `de4a9a22`
-- OBJ10-A commit: `(pending — pre-commit)`
+- OBJ10-A commit: `129df126`
 - Branch: `docs/pricing-canonical-20260927`
 
 ## 2. EXISTING PAYMENT PIPELINE OBSERVED
