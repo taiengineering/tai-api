@@ -88,9 +88,10 @@ Legacy SAAS contracts   = 8 total / 5 active
 V3에서 FIELD 가격은 249,000 고정이지만 Resolver 호출은 유지한다.
 
 **유지 근거:**
-- `base_band_code` = compliance 등급 증거 (`INDUSTRY_PRO`, `INDUSTRY_BUSINESS` 등)
-- `base_amount` = Snapshot에 compliance base로 저장 (감사 증거)
-- FIELD 사업장이 어떤 규모 구간에 속하는지 법령 컨텍스트 유지
+- `base_band_code` = price_master resolver가 산출한 sector/scale band metadata (`INDUSTRY_PRO`, `INDUSTRY_BUSINESS` 등)
+- `base_amount` = Snapshot에 resolver 반환값으로 저장 (scale band 당시 값 기록)
+- Commercial Fit Gate가 `contracted_base_band_code` vs `required_base_band_code` 비교에 사용
+- FIELD 사업장이 어떤 규모 구간에 속하는지 context 유지
 
 **결론**: Resolver → `base_band_code` + `base_amount` → `SaasSitePricingInput`에 그대로 전달 → Composer FIELD 경로는 `s.base_amount` 무시, `policy.field_base_amount` 사용.
 
@@ -121,9 +122,15 @@ V3에서 FIELD 가격은 249,000 고정이지만 Resolver 호출은 유지한다
 
 ### 2-D. base_band_code 보존 판정
 
-`SaasSiteScope.base_band_code` = FIELD compliance 등급 증거. FIELD V3에서도 법령 규모 구간 정보로 유용하다.
+`SaasSiteScope.base_band_code` = price_master resolver가 산출한 scale/band metadata. FIELD V3에서도 Commercial Fit Gate의 `contracted_base_band_code`로 사용된다.
+
+**보존 이유:**
+- **FIELD price authority**: 아님 (가격은 `policy.field_base_amount`)
+- **FIELD commercial capacity limit**: 아님 (V3 FIELD에서 scale band 초과는 commercial 한도 아님 — Section 3 Commercial Fit Gate 참조)
+- **Scale/band metadata**: YES — 계약 시점 규모 구간 기록. Commercial Fit Gate의 scope 비교 기반.
 
 **판정: 삭제하지 않는다.** `SaasSitePricingInput.base_band_code` 유지. Preview Service에서 resolver tier_code → `base_band_code` 전달 경로 유지.
+법령엔진이 `base_band_code`를 법적 compliance 등급으로 소비한다는 증거는 이번 조사에서 확보되지 않음. 단정 금지.
 
 ---
 
@@ -144,6 +151,7 @@ V3에서 FIELD 가격은 249,000 고정이지만 Resolver 호출은 유지한다
 | `SaasWorkerBracketLine`, `SaasWorkerPricingSnapshot` | unchanged | KEEP AS-IS | |
 
 **파일명**: KEEP `schemas/saas_pricing_v2.py`
+**실행 시점**: Semantic-Integration (OBJ05 이후 coordinated patch). **OBJ03에서 term_months rename 금지.**
 
 ---
 
@@ -186,6 +194,7 @@ V3에서 FIELD 가격은 249,000 고정이지만 Resolver 호출은 유지한다
 | `SaasSitePricingInput.base_amount > 0` | KEEP AS-IS | KEEP AS-IS | MANAGER 필수; FIELD는 resolver 유효값 전달 |
 
 **파일명**: KEEP `services/saas_pricing_composer_v2.py`
+**OBJ03 범위**: FIELD formula 수정만. `term_months→payment_months` rename은 Semantic-Integration에서.
 **OBJ05 dep**: NO (payment_months = 할인·계산 축만)
 
 ---
@@ -327,20 +336,25 @@ Production V2 Commercial = 0. 기존 V2 CV가 없으므로 V2→V3 전환 문제
 **Conflict 2 — FIELD scale band (lines 380–382)**
 
 현재: scale band 변경 → SCALE_BAND_INCREASE/DECREASE (가격 변화로 분류).
-V3: FIELD 가격 = 249,000 고정 → scale band 변경은 가격 변화가 아닌 scope metadata 변경.
+V3: FIELD 가격 = 249,000 고정 → scale band 변경은 가격 변화가 아님.
+
+**확정 가능한 것:**
 
 ```
-V3 설계:
-if product_tier == "FIELD":
-    scale_band 변경 → price_delta = 0
-    FIELD_SCOPE_BAND_CHANGE 이벤트 (메타데이터 변경 기록)
-    SCALE_BAND_INCREASE / DECREASE 발생하지 않음
-
-MANAGER/CUSTOM 경로:
-    기존 SCALE_BAND 분류 로직 유지
+FIELD scale-band 변화
+→ SCALE_BAND_INCREASE/DECREASE(가격 상승/상업 확장)로 분류하면 안 됨
+→ price_delta = 0
 ```
 
-최소 패치: `product_tier == "FIELD"` guard를 scale_band 비교 로직에 추가.
+**확정하지 않는 것:**
+
+`FIELD_SCOPE_BAND_CHANGE` 이벤트는 현재 `schemas/saas_change_order_v2.py`의 ChangeType에 존재하지 않는다. 존재하지 않는 enum 추가는 schema/persistence/test 영향까지 포함한 별도 설계가 필요하다.
+
+**판정:**
+
+FIELD에서 scale band 변화를 어떤 이벤트로 기록할지 = OBJ07 또는 별도 scope metadata 설계에서 최소 변경 방식으로 결정. 이번 OBJ02에서는 새 enum 확정 금지.
+
+최소 패치 방향: `product_tier == "FIELD"` guard를 scale_band 비교 로직에 추가해 `price_delta = 0` 처리. 메타데이터 sync 방식은 OBJ07 결정.
 
 **Conflict 3 — term comparison (lines 261–262)**
 
@@ -362,6 +376,91 @@ MANAGER/CUSTOM 경로:
 | 나머지 구조 | KEEP AS-IS | |
 
 **파일명**: KEEP `services/saas_renewal_v2_adapter.py`
+
+---
+
+### `schemas/saas_commercial_fit_v2.py`
+
+실제 소스 확인:
+- `CommercialFitReasonCode`: `SITE_OUT_OF_SCOPE`, `SCALE_BAND_EXCEEDED`, `WORKER_CAPACITY_EXCEEDED`
+- `SiteFitStatus`: `FIT`, `SITE_OUT_OF_SCOPE`, `SCALE_BAND_EXCEEDED`
+- `CommercialFitStatus`: `FIT`, `CHANGE_REQUIRED`, `CUSTOM_REVIEW_REQUIRED`
+
+| 항목 | 현재 | V3 변경 |
+|------|------|---------|
+| `CommercialFitReasonCode` enum | 3개 값 | KEEP AS-IS — 새 enum 추가 금지 (OBJ07 결정) |
+| `SaasActualCommercialSiteV2.required_base_band_code` | scale band input | KEEP AS-IS |
+| `SaasComplianceBandCatalogEntryV2` | band sort_order catalog | KEEP AS-IS |
+| `SaasCommercialFitResultV2` | result struct | KEEP AS-IS |
+
+**파일명**: KEEP `schemas/saas_commercial_fit_v2.py`
+**Strategy**: REUSE-AS-IS (schema 변경 없음)
+
+---
+
+### `services/saas_commercial_fit_gate_v2.py`
+
+실제 소스 확인:
+- Step 7 (line 204–229): 각 actual site의 `required_sort > contracted_sort` → `SCALE_BAND_EXCEEDED`
+- Step 8 (line 231–233): `actual_worker_count > cv.worker_capacity` → `WORKER_CAPACITY_EXCEEDED`
+- Step 3 (line 85–98): `product_tier == "CUSTOM"` → `CUSTOM_REVIEW_REQUIRED`
+
+**V3 FIELD 문제:** `product_tier == "FIELD"`인 계약에서 시설 규모가 증가하면 Step 7이 `SCALE_BAND_EXCEEDED` → `CHANGE_REQUIRED`를 발생시킨다. V3 FIELD 가격은 249,000 고정이므로 이것은 잘못된 판정이다.
+
+**V3 FIELD 설계:**
+
+```
+FIELD에서 유지:
+  SITE_OUT_OF_SCOPE        → 계약 범위 외 사업장 (유지)
+  WORKER_CAPACITY_EXCEEDED → worker 초과 (유지)
+  CUSTOM_REVIEW_REQUIRED   → CUSTOM tier (유지)
+
+FIELD에서 제거:
+  SCALE_BAND_EXCEEDED      → FIELD는 가격이 scale-independent
+                              band 증가만으로 CHANGE_REQUIRED 발생 금지
+```
+
+**최소 패치:**
+
+Step 7 band comparison에 `product_tier == "FIELD"` guard 추가:
+
+```python
+# FIELD는 scale band가 commercial pricing capacity 기준 아님
+if cv.product_tier == "FIELD":
+    site_results.append(SaasCommercialSiteFitResultV2(
+        ..., status="FIT", reason_code=None,
+        contracted_base_band_code=contracted_bbc,
+        required_base_band_code=site.required_base_band_code,
+        ...
+    ))
+    continue
+```
+
+`SITE_OUT_OF_SCOPE`(신규 사업장)과 `WORKER_CAPACITY_EXCEEDED`는 product_tier 분기 이전에 처리되거나 별도 Step이므로 영향 없음.
+
+| 항목 | 현재 | V3 변경 |
+|------|------|---------|
+| Step 7 band comparison | MANAGER/FIELD 공통 | FIELD guard 추가 (SCALE_BAND_EXCEEDED 발생 금지) |
+| Step 8 worker check | KEEP AS-IS | 불변 (FIELD도 worker capacity 계약) |
+| SITE_OUT_OF_SCOPE | KEEP AS-IS | 불변 |
+| CUSTOM shortcut | KEEP AS-IS | 불변 |
+
+**파일명**: KEEP `services/saas_commercial_fit_gate_v2.py`
+**Strategy**: PATCH EXISTING
+
+---
+
+### `tests/test_saas_commercial_fit_gate_v2.py`
+
+| 항목 | 변경 |
+|------|------|
+| MANAGER band increase 기존 테스트 | KEEP (SCALE_BAND_EXCEEDED 유지 확인) |
+| FIELD band increase 신규 | ADD — SCALE_BAND_EXCEEDED 없음, status=FIT |
+| FIELD site out of scope 신규 | ADD — SITE_OUT_OF_SCOPE 유지 |
+| FIELD worker capacity exceeded 신규 | ADD — WORKER_CAPACITY_EXCEEDED 유지 |
+
+**파일명**: KEEP `tests/test_saas_commercial_fit_gate_v2.py`
+**Strategy**: PATCH (기존 테스트 유지 + V3 FIELD cases 추가)
 
 ---
 
@@ -394,7 +493,10 @@ MANAGER/CUSTOM 경로:
 | **Contract Builder** | OBJ05 DEPENDENT | `payment_months→end_date` coupling | `payment_post_process.py:101,161` | YES (core) |
 | **Site Scope** | REUSE-AS-IS | 변경 없음 (DDL not applied, V3 first DDL) | `saas_contract_commercial_v2.py` | PARTIAL |
 | **Storage Mapper** | PATCH | `selection.term_months→payment_months` (×2) | `saas_contract_storage_mapper_v2.py` | YES |
-| **Change Order** | PATCH | Conflict 2 FIELD guard; `term_months→payment_months` (non-deferred); Conflict 1 = no change; Conflict 3 = OBJ05 | `saas_change_order_v2.py` | YES (C3) |
+| **Commercial Fit Gate Schema** | REUSE-AS-IS | 변경 없음 (새 enum 추가 = OBJ07) | `saas_commercial_fit_v2.py` | NO |
+| **Commercial Fit Gate Service** | PATCH | Step 7 FIELD guard (SCALE_BAND_EXCEEDED 발생 금지) | `saas_commercial_fit_gate_v2.py` | NO |
+| **Commercial Fit Gate Tests** | PATCH | FIELD band/scope/worker V3 cases 추가 | `test_saas_commercial_fit_gate_v2.py` | NO |
+| **Change Order** | PATCH | Conflict 2 FIELD guard (price_delta=0, enum 추가 금지); `term_months→payment_months` = semantic patch; Conflict 1 = no change; Conflict 3 = OBJ05 | `saas_change_order_v2.py` | YES (C3) |
 | **Atomic New Contract OBJ10-C** | OBJ05 DEPENDENT | DDL not applied; V3 기준 최초 작성 | `migrations/…atomic_apply.sql` | YES |
 | **Renewal Adapter D-A** | PATCH + OBJ05 | `snap.term_months→payment_months` (×4) | `saas_renewal_v2_adapter.py` | YES |
 | **Temporal Logic D-B1** | OBJ05 DEPENDENT | `payment_months↔contract.end_date` | `payment_post_process.py` | YES (core) |
@@ -412,12 +514,12 @@ MANAGER/CUSTOM 경로:
 | 축 | V3 입력 | V3 미사용 (가격 목적) | 보존 이유 |
 |----|---------|-------------------|---------|
 | **PRICE 계산** | `payment_months`, `worker_capacity`, site count(len) | `sector`, `criteria_value`, `base_amount` | price = 249,000 고정 |
-| **FACILITY CONTEXT** | `entity_id`, `entity_type`, `sector`, `criteria_value` | — | 법령 컨텍스트, scope 식별 |
-| **COMPLIANCE EVIDENCE** | `base_band_code` (resolver tier_code) | — | 시설 규모 구간 감사 증거 |
-| **SNAPSHOT EVIDENCE** | `base_amount` (resolver 반환값) | — | compliance base 기록; Snapshot에 보존 |
+| **FACILITY CONTEXT** | `entity_id`, `entity_type`, `sector`, `criteria_value` | — | scope 식별, Commercial Fit Gate 입력 |
+| **SCALE/BAND METADATA** | `base_band_code` (resolver tier_code) | FIELD price authority 아님 | Commercial Fit Gate `contracted_base_band_code` 사용 |
+| **SNAPSHOT EVIDENCE** | `base_amount` (resolver 반환값) | FIELD price 계산 미사용 | scale band 당시 resolver 값 기록 |
 | **FIELD 가격 산출** | `policy.field_base_amount = 249,000` | `s.base_amount` (Composer에서 무시) | Policy 객체가 가격 권위값 |
 
-**base_band_code 보존 판정: 삭제하지 않는다.** `SaasSiteScope.base_band_code`는 V3 FIELD에서도 compliance 등급 증거로 유효하다.
+**base_band_code 보존 판정: 삭제하지 않는다.** `SaasSiteScope.base_band_code`는 V3 FIELD에서도 Commercial Fit Gate의 scale/band metadata로 사용된다. FIELD price authority나 commercial capacity limit으로는 사용되지 않는다.
 
 ---
 
@@ -520,9 +622,14 @@ WHERE service_type = 'SAAS' AND sector = 'INDUSTRY' AND tier_code = 'INDUSTRY_PR
 | FIELD worker 20/21/50/51/100/101/300/301명 | progressive 정확성 |
 | MANAGER INDUSTRY 299/300/499/500명 | 300+ = PRO, 500 = PRO (NOT CUSTOM) |
 | payment_months 1/3/6/9/12 할인 | 0/5/10/15/20% 정확성 |
-| FIELD + MANAGER 혼합 다중 사업장 | Primary 결정 sort |
+| MANAGER mixed-sector facilities | 가장 높은 정상가격 facility가 Primary |
+| FIELD mixed-sector facilities | 모두 249,000 normal → deterministic Primary + Additional 80% |
 | VAT 계산 (supply × 10%) | FIELD/MANAGER 동일 |
 | CUSTOM route | `CUSTOM_REQUIRED` 변화 없음 |
+| **Commercial Fit — MANAGER band increase** | `SCALE_BAND_EXCEEDED` 유지 |
+| **Commercial Fit — FIELD band increase** | `SCALE_BAND_EXCEEDED` 없음 (status=FIT) |
+| **Commercial Fit — FIELD site out of scope** | `SITE_OUT_OF_SCOPE` 유지 |
+| **Commercial Fit — FIELD worker exceeded** | `WORKER_CAPACITY_EXCEEDED` 유지 |
 
 ---
 
@@ -569,6 +676,71 @@ V3 canonical 순서와 동일. **REUSE-AS-IS.** `vat_rate_bps=1000` 변경 없�
 
 ---
 
+## 10-B. payment_months Rename — Atomic Execution 원칙
+
+`term_months → payment_months` rename은 부분 실행 금지.
+
+**이유:** 현재 48개 runtime hit에서 Preview / Quote / Payment / Commercial / Change Order / Renewal 전체가 `selection.term_months` / `snap.term_months` / `request.term_months`를 직접 참조한다. Pricing Schema만 먼저 rename하면 다음 Object가 완료될 때까지 repository가 불일치 상태가 된다.
+
+**실행 조건:** OBJ05에서 `payment_months ↔ contract.end_date ↔ renewal boundary` 의미가 확정된 후, consumer chain 전체를 하나의 coordinated semantic patch에서 동시에 rename.
+
+**최소 대상 (한 번에 정합화):**
+
+```
+schemas/saas_pricing_v2.py
+schemas/saas_pricing_policy_v2.py
+services/saas_pricing_composer_v2.py
+schemas/saas_pricing_preview_v2.py
+services/saas_pricing_preview_v2.py
+schemas/saas_quote_v2.py
+services/saas_quote_v2.py
+services/saas_payment_v2_adapter.py
+services/saas_payment_success_v2_adapter.py
+schemas/saas_contract_commercial_v2.py
+services/saas_contract_storage_mapper_v2.py
+services/saas_change_order_v2.py
+services/saas_renewal_v2_adapter.py
+Atomic SQL relevant fields
+Tests
+```
+
+`contract.end_date` / DB column / renewal boundary는 OBJ05 의미 결정 종속.
+
+---
+
+## 10-C. Discount Semantic Rename
+
+`payment_months != contract term`으로 정책을 분리한 이상, "term discount"라는 이름을 남기면 다음 개발자가 다시 `term = 계약기간`으로 해석할 위험이 있다. Production V2 persisted = 0이므로 clean rename 시점이다.
+
+**권장 V3 이름 (coordinated semantic patch에서 함께 실행):**
+
+| 현재 | V3 |
+|------|-----|
+| `SaasTermDiscountPolicy` | `SaasPaymentDiscountPolicy` |
+| `term_discounts` | `payment_discounts` |
+| `term_discount_rate_bps` | `payment_discount_rate_bps` |
+| `TERM_DISCOUNT_UNRESOLVED` | `PAYMENT_DISCOUNT_UNRESOLVED` |
+| `VALID_TERM_MONTHS_POLICY` | `VALID_PAYMENT_MONTHS_POLICY` |
+
+**실행 시점:** OBJ05 이후 coordinated semantic patch. payment_months rename과 동시 실행.
+
+---
+
+## 10-D. Version Bump Timing
+
+다음 version string bump는 consumer chain이 정합화되는 coordinated boundary patch에서 실행. OBJ03 pricing formula patch에서 선제 bump 금지.
+
+| Version String | 적용 시점 |
+|----------------|---------|
+| `SAAS_PRICING_V3` | coordinated semantic patch (OBJ04/Semantic-Integration) |
+| `SAAS_QUOTE_V3` | 동시 |
+| `SAAS_CONTRACT_COMMERCIAL_V3` | 동시 |
+| `TAI_SAFE_PRICING_POLICY_V3_2026_09_28` | OBJ03 (policy object 단독 변경으로 안전) |
+
+**이유:** 중간 상태에서 V3 schema version + V2 field consumer 혼합 금지.
+
+---
+
 ## 11. 필수 결론
 
 ### 1. 신규 Backend core 파일 수
@@ -580,19 +752,28 @@ V3는 V2 구현 위에 policy/semantic delta만 적용한다. 신규 `_v3` 파�
 ### 2. PATCH EXISTING 파일
 
 ```
-schemas/saas_pricing_v2.py
-schemas/saas_pricing_policy_v2.py
-services/saas_pricing_composer_v2.py
-services/saas_pricing_preview_v2.py
-services/saas_quote_v2.py (services)
-services/saas_payment_v2_adapter.py
-services/saas_payment_success_v2_adapter.py
-services/saas_contract_storage_mapper_v2.py
-services/saas_change_order_v2.py (Conflict 2 + payment_months)
-services/saas_renewal_v2_adapter.py
-tests/* (SUPERSEDED values update)
+schemas/saas_pricing_policy_v2.py           (OBJ03)
+services/saas_pricing_composer_v2.py        (OBJ03)
+services/saas_commercial_fit_gate_v2.py     (OBJ07)
+services/saas_change_order_v2.py            (OBJ07)
+services/saas_pricing_preview_v2.py         (Semantic-Integration)
+services/saas_quote_v2.py                   (Semantic-Integration)
+services/saas_payment_v2_adapter.py         (Semantic-Integration)
+services/saas_payment_success_v2_adapter.py (Semantic-Integration)
+services/saas_contract_storage_mapper_v2.py (Semantic-Integration)
+services/saas_renewal_v2_adapter.py         (Semantic-Integration)
+tests/* (SUPERSEDED values / V3 cases)
 
-= 10 파일 + tests
+= 10 services + tests
+```
+
+**schemas (payment_months rename 포함):**
+
+```
+schemas/saas_pricing_v2.py          (Semantic-Integration — NOT OBJ03)
+schemas/saas_pricing_preview_v2.py  (Semantic-Integration)
+schemas/saas_quote_v2.py            (Semantic-Integration)
+schemas/saas_contract_commercial_v2.py (Semantic-Integration + OBJ05)
 ```
 
 ### 3. EVOLVE BOUNDARY 파일
@@ -629,14 +810,70 @@ saas_renewal_runtime_v2.py (first_apply boundary verify)
 
 ### 6. OBJ03에서 실제 수정할 최소 파일 목록
 
+**OBJ03 = Pricing Formula/Policy Patch ONLY.** `term_months` rename은 OBJ03에서 제외.
+
 ```
-schemas/saas_pricing_v2.py        (SCHEMA_VERSION, payment_months rename)
-schemas/saas_pricing_policy_v2.py (field_base_amount, discounts, version)
-services/saas_pricing_composer_v2.py (FIELD formula, payment_months refs)
-tests/test_pricing_* (SUPERSEDED values update, V3 cases 추가)
+schemas/saas_pricing_policy_v2.py
+  - field_uplift_amount → field_base_amount (= 249,000)
+  - term_discounts all None → [0, 500, 1000, 1500, 2000] bps
+  - PRICING_POLICY_VERSION 갱신
+  (NOTE: SaasTermDiscountPolicy.term_months rename은 coordinated patch로 이동)
+
+services/saas_pricing_composer_v2.py
+  - FIELD formula: normal = policy.field_base_amount
+  (NOTE: term_months refs rename은 coordinated patch로 이동)
+
+tests/test_saas_pricing_policy_v2.py
+tests/test_saas_pricing_composer_v2.py
+  - SUPERSEDED policy values 갱신
+  - V3 FIELD / MANAGER / discount cases 추가
 ```
 
-OBJ03 = Pricing Core 4 파일. API/Quote/Payment는 OBJ04.
+OBJ03 commit 자체가 기존 consumer와 **일관된 runnable state**를 유지해야 한다.
+
+`schemas/saas_pricing_v2.py`의 `term_months` rename = **OBJ03 범위 아님**.
+
+### 7. 개정된 Object 실행 순서
+
+```
+OBJ03
+— Pricing Formula/Policy Minimal Patch
+  FIELD 249,000 / discounts / policy version
+  term_months naming 유지 (rename = later)
+  파일: saas_pricing_policy_v2.py / saas_pricing_composer_v2.py / tests
+
+OBJ-PM-DATA  (Owner Gate 선행)
+— Production price_master DATA WO
+  INDUSTRY_PRO criteria_max → NULL
+  INDUSTRY_CUSTOM deactivate
+
+OBJ05
+— Temporal Semantic Decision
+  payment_months ↔ contract.end_date ↔ renewal boundary
+  DB field semantic 확정
+
+Semantic-Integration  (OBJ04 대체)
+— Coordinated payment_months rename
+  모든 consumer chain 동시 정합
+  discount semantic rename (SaasPaymentDiscountPolicy 등)
+  version strings 동시 bump (SAAS_PRICING_V3 등)
+
+OBJ06
+— Commercial / Atomic Integration
+  OBJ10-A/B Semantic-Integration 기반 패치
+  Commercial DDL V3 기준 최초 작성 (OBJ05 기반)
+
+OBJ07
+— Change Order + Commercial Fit + Renewal Integration
+  Change Order Conflict 2 FIELD guard
+  Commercial Fit Gate FIELD guard
+  D-A/B1/B2/B3 OBJ05 기반 패치
+
+REFREEZE
+— full regression / V3 E2E
+```
+
+**의존성 원칙:** OBJ05 결정 전 contract semantic rename 금지. 번호보다 dependency가 우선.
 
 ---
 
