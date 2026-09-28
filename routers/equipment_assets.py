@@ -312,13 +312,28 @@ async def create_asset(body: EquipmentAssetCreate, current: dict = Depends(get_c
     if not body.asset_name.strip():
         raise HTTPException(status_code=422, detail="asset_name은 필수입니다.")
     _ensure_factory_own(supabase, body.factory_id, current)
+    # Normalize and validate equipment_type_code when provided.
+    # None / absent → stored as-is (backward compat).
+    # Known alias (PRESS, CRANE…) → persists as numeric canonical.
+    # Unknown string → 422.
+    normalized_code = None
+    if body.equipment_type_code is not None:
+        from services.equipment_source.store import (
+            validate_equipment_source_row as _validate_eq,
+            EquipmentSourceValidationError as _EqValErr,
+        )
+        try:
+            _validated = _validate_eq({"equipment_type_code": body.equipment_type_code})
+            normalized_code = _validated.get("equipment_type_code")
+        except _EqValErr as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
     fac = supabase.table("factories").select("company_id").eq("id", body.factory_id).limit(1).execute()
     company_id = (fac.data[0] if fac.data else {}).get("company_id")
     insert_data = {
         "factory_id":       body.factory_id,
         "asset_name":       body.asset_name.strip(),
         "asset_code":       body.asset_code,
-        "equipment_type_code": body.equipment_type_code,
+        "equipment_type_code": normalized_code,
         "equipment_category":  body.equipment_category,
         "description":      body.description,
         "quantity":         body.quantity or 1,
@@ -390,6 +405,17 @@ def update_asset(asset_id: str, body: EquipmentAssetUpdate, current: dict = Depe
             update_data[k] = v
     if not update_data:
         raise HTTPException(status_code=422, detail="수정할 내용이 없습니다.")
+    # Normalize and validate equipment_type_code when it is being changed.
+    if "equipment_type_code" in update_data:
+        from services.equipment_source.store import (
+            validate_equipment_source_row as _validate_eq,
+            EquipmentSourceValidationError as _EqValErr,
+        )
+        try:
+            _validated = _validate_eq({"equipment_type_code": update_data["equipment_type_code"]})
+            update_data["equipment_type_code"] = _validated.get("equipment_type_code")
+        except _EqValErr as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
     # operation_status 유효성 체크
     if "operation_status" in update_data:
         if update_data["operation_status"] not in ("ACTIVE", "BROKEN", "INACTIVE"):

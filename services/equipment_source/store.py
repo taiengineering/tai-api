@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from services.equipment_source.canonicalizer import normalize_equipment_type_code
+
 # All valid equipment_type_code values recognised by the authority system.
 # Numeric codes match equipment_type_inspection_map table (001–040, zero-padded).
 # String aliases exist for legacy structured source rows in some integrations.
@@ -39,7 +41,9 @@ def validate_equipment_source_row(
         raise EquipmentSourceValidationError(
             "equipment_type_code: must be a non-empty string"
         )
-    code = code.strip()
+
+    code = normalize_equipment_type_code(code)
+    payload = {**payload, "equipment_type_code": code}
 
     if code not in EQUIPMENT_AUTHORITY_CODES:
         raise EquipmentSourceValidationError(
