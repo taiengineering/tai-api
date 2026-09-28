@@ -1,4 +1,4 @@
-"""TAI Safe SaaS Renewal V2 Adapter — R01-R40.
+"""TAI Safe SaaS Renewal V2 Adapter — R01-R53 (PATCH1).
 
 검증 범위:
   R01-R05  Contract validation (prepare)
@@ -7,6 +7,9 @@
   R16-R20  Prepare call contract (payment_type, contract_id, plan_code)
   R21-R30  Plan builder guards (pure, DB write = 0)
   R31-R40  Structural / billing boundary guards
+  R41-R42  PATCH1: Prepare side — CONTRACT_NOT_SAAS / QUOTE_SOURCE_INVALID
+  R43-R52  PATCH1: Plan builder identity + CV + effective_at guards
+  R53      PATCH1: Plan PATCH D fields (quote_id, current_version_no)
 
 DB/네트워크 없음 — FakeSupabase + monkeypatch 전용.
 """
@@ -132,8 +135,8 @@ def _valid_quote(
     }
 
 
-def _valid_contract(company_id=_COMPANY_ID, status_code="ACTIVE"):
-    return {"id": _CONTRACT_ID, "company_id": company_id, "status_code": status_code}
+def _valid_contract(company_id=_COMPANY_ID, status_code="ACTIVE", service_type="SAAS"):
+    return {"id": _CONTRACT_ID, "company_id": company_id, "status_code": status_code, "service_type": service_type}
 
 
 def _valid_cv_row(version_no=2, contract_id=_CONTRACT_ID):
@@ -172,6 +175,7 @@ def _valid_pay(
         "company_id": company_id,
         "user_id": _USER_ID,
         "contract_id": contract_id,
+        "quote_id": _QUOTE_ID,
         "product_type": "SAAS",
         "payment_type": payment_type,
         "plan_code": plan_code,
@@ -288,7 +292,7 @@ def test_R05_valid_contract_proceeds_to_quote(monkeypatch):
     """유효 Contract + CV → Quote 조회로 진행 (QUOTE_NOT_FOUND 진입 확인)."""
     monkeypatch.setattr("services.member_quote_svc.get_member_quote", lambda *a: None)
     monkeypatch.setattr("services.saas_renewal_v2_adapter.load_sign_key", lambda: "K")
-    sb = _FakeSbForPrepare(contract=_valid_contract(), cv=_valid_cv_row(), scopes=[])
+    sb = _FakeSbForPrepare(contract=_valid_contract(), cv=_valid_cv_row())
     with pytest.raises(SaasRenewalV2AdapterError) as exc:
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
@@ -309,7 +313,7 @@ def _setup_prepare_with_quote(monkeypatch, quote):
         "services.saas_renewal_v2_adapter._run_inicis_prepare_exact",
         _fake_prepare_exact(calls),
     )
-    sb = _FakeSbForPrepare(contract=_valid_contract(), cv=_valid_cv_row(), scopes=[])
+    sb = _FakeSbForPrepare(contract=_valid_contract(), cv=_valid_cv_row())
     return sb, calls
 
 
@@ -460,7 +464,7 @@ def _setup_valid_prepare(monkeypatch):
         "services.saas_renewal_v2_adapter._run_inicis_prepare_exact",
         _fake_prepare_exact(calls),
     )
-    sb = _FakeSbForPrepare(contract=_valid_contract(), cv=_valid_cv_row(), scopes=[])
+    sb = _FakeSbForPrepare(contract=_valid_contract(), cv=_valid_cv_row())
     return sb, calls
 
 
@@ -523,7 +527,6 @@ def _valid_plan_args():
         pay=_valid_pay(),
         quote=_valid_quote(),
         current_cv=_valid_cv_row(),
-        site_scopes=[],
         requested_effective_at=_EFFECTIVE_AT,
     )
 
@@ -724,3 +727,145 @@ def test_R40_plan_commercial_bundle_contract_id_matches():
     args = _valid_plan_args()
     plan = build_saas_v2_renewal_apply_plan(**args)
     assert plan.commercial_bundle.commercial_version.contract_id == plan.contract_id
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# R41–R42: PATCH1 — Prepare side guards
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_R41_contract_not_saas_rejected(monkeypatch):
+    """contract.service_type != SAAS → CONTRACT_NOT_SAAS (PATCH A)."""
+    monkeypatch.setattr("services.member_quote_svc.get_member_quote", lambda *a: _valid_quote())
+    monkeypatch.setattr("services.saas_renewal_v2_adapter.load_sign_key", lambda: "K")
+    sb = _FakeSbForPrepare(contract=_valid_contract(service_type="CONSULTING"), cv=_valid_cv_row())
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        prepare_saas_v2_renewal_payment_from_quote(
+            sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
+            company_id=_COMPANY_ID, user_id=_USER_ID,
+        )
+    assert exc.value.code == "CONTRACT_NOT_SAAS"
+
+
+def test_R42_quote_source_invalid_on_prepare(monkeypatch):
+    """quote.source != member_auto → QUOTE_SOURCE_INVALID (PATCH A)."""
+    quote = {**_valid_quote(), "source": "admin_manual"}
+    monkeypatch.setattr("services.member_quote_svc.get_member_quote", lambda *a: quote)
+    monkeypatch.setattr("services.saas_renewal_v2_adapter.load_sign_key", lambda: "K")
+    sb = _FakeSbForPrepare(contract=_valid_contract(), cv=_valid_cv_row())
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        prepare_saas_v2_renewal_payment_from_quote(
+            sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
+            company_id=_COMPANY_ID, user_id=_USER_ID,
+        )
+    assert exc.value.code == "QUOTE_SOURCE_INVALID"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# R43–R52: PATCH1 — Plan builder identity + CV + effective_at guards
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_R43_cv_schema_invalid_rejected():
+    """current_cv.commercial_schema_version 불일치 → CURRENT_CV_SCHEMA_INVALID (PATCH B)."""
+    args = _valid_plan_args()
+    args["current_cv"] = {**_valid_cv_row(), "commercial_schema_version": "SAAS_CONTRACT_V1"}
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        build_saas_v2_renewal_apply_plan(**args)
+    assert exc.value.code == "CURRENT_CV_SCHEMA_INVALID"
+
+
+def test_R44_cv_superseded_rejected():
+    """current_cv.superseded_at IS NOT NULL → CURRENT_CV_SUPERSEDED (PATCH B)."""
+    args = _valid_plan_args()
+    args["current_cv"] = {**_valid_cv_row(), "superseded_at": "2026-09-01T00:00:00+00:00"}
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        build_saas_v2_renewal_apply_plan(**args)
+    assert exc.value.code == "CURRENT_CV_SUPERSEDED"
+
+
+def test_R45_cv_version_no_zero_rejected():
+    """current_cv.version_no = 0 → CURRENT_CV_VERSION_NO_INVALID (PATCH B)."""
+    args = _valid_plan_args()
+    args["current_cv"] = {**_valid_cv_row(), "version_no": 0}
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        build_saas_v2_renewal_apply_plan(**args)
+    assert exc.value.code == "CURRENT_CV_VERSION_NO_INVALID"
+
+
+def test_R46_contract_cv_mismatch_rejected():
+    """pay.contract_id != current_cv.contract_id → RENEWAL_CONTRACT_CV_MISMATCH (PATCH B)."""
+    args = _valid_plan_args()
+    args["current_cv"] = {**_valid_cv_row(), "contract_id": str(uuid.uuid4())}
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        build_saas_v2_renewal_apply_plan(**args)
+    assert exc.value.code == "RENEWAL_CONTRACT_CV_MISMATCH"
+
+
+def test_R47_company_mismatch_rejected():
+    """pay.company_id != quote.company_id → RENEWAL_COMPANY_MISMATCH (PATCH B)."""
+    args = _valid_plan_args()
+    args["pay"] = {**_valid_pay(), "company_id": "OTHER-CO"}
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        build_saas_v2_renewal_apply_plan(**args)
+    assert exc.value.code == "RENEWAL_COMPANY_MISMATCH"
+
+
+def test_R48_quote_id_required_rejected():
+    """pay.quote_id 없음 → RENEWAL_QUOTE_ID_REQUIRED (PATCH B)."""
+    args = _valid_plan_args()
+    pay = {**_valid_pay(), "quote_id": None}
+    args["pay"] = pay
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        build_saas_v2_renewal_apply_plan(**args)
+    assert exc.value.code == "RENEWAL_QUOTE_ID_REQUIRED"
+
+
+def test_R49_quote_id_mismatch_rejected():
+    """pay.quote_id != quote.id → RENEWAL_QUOTE_ID_MISMATCH (PATCH B)."""
+    args = _valid_plan_args()
+    args["pay"] = {**_valid_pay(), "quote_id": str(uuid.uuid4())}
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        build_saas_v2_renewal_apply_plan(**args)
+    assert exc.value.code == "RENEWAL_QUOTE_ID_MISMATCH"
+
+
+def test_R50_quote_source_invalid_in_plan_builder():
+    """plan builder: quote.source != member_auto → QUOTE_SOURCE_INVALID (PATCH B)."""
+    args = _valid_plan_args()
+    args["quote"] = {**_valid_quote(), "source": "admin_manual"}
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        build_saas_v2_renewal_apply_plan(**args)
+    assert exc.value.code == "QUOTE_SOURCE_INVALID"
+
+
+def test_R51_effective_at_naive_rejected():
+    """requested_effective_at naive datetime → RENEWAL_EFFECTIVE_AT_INVALID (PATCH C)."""
+    args = _valid_plan_args()
+    args["requested_effective_at"] = datetime(2026, 10, 1, 0, 0, 0)  # no tzinfo
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        build_saas_v2_renewal_apply_plan(**args)
+    assert exc.value.code == "RENEWAL_EFFECTIVE_AT_INVALID"
+
+
+def test_R52_effective_before_current_version_rejected():
+    """requested_effective_at < current_cv.effective_from → RENEWAL_EFFECTIVE_BEFORE_CURRENT_VERSION (PATCH C)."""
+    args = _valid_plan_args()
+    # _valid_cv_row() has effective_from="2026-04-01T00:00:00+00:00"
+    args["requested_effective_at"] = datetime(2026, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        build_saas_v2_renewal_apply_plan(**args)
+    assert exc.value.code == "RENEWAL_EFFECTIVE_BEFORE_CURRENT_VERSION"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# R53: PATCH D — SaasV2RenewalApplyPlan new fields
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_R53_plan_has_quote_id_and_current_version_no():
+    """plan.quote_id = pay.quote_id / plan.current_version_no = cv.version_no (PATCH D)."""
+    cv = _valid_cv_row(version_no=3)
+    args = _valid_plan_args()
+    args["current_cv"] = cv
+    plan = build_saas_v2_renewal_apply_plan(**args)
+    assert plan.quote_id == _QUOTE_ID
+    assert plan.current_version_no == 3
+    assert plan.next_version_no == 4

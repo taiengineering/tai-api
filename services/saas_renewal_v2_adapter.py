@@ -9,7 +9,7 @@ Billing Boundary FREEZE:
   아래 항목은 이 경계 밖이며 이 모듈에서 절대 다루지 않는다:
     - subscriptions 테이블 생성 / 조회 / 변경
     - billing_keys 테이블 생성 / 조회 / 변경
-    - 자동 반복 청구 (auto-recurring / CardBilling / BillKey)
+    - 자동 반복 청구 (auto-recurring / BillKey / CardBilling)
     - 재과금 로직 (re-billing / retry)
 
 금지:
@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from dateutil import parser as dateutil_parser
@@ -37,8 +37,6 @@ from pydantic import ValidationError
 import services.member_quote_svc as member_quote_svc
 from schemas.saas_contract_commercial_v2 import (
     COMMERCIAL_STORAGE_SCHEMA_VERSION,
-    SaasContractCommercialVersionV2,
-    SaasContractSiteScopeV2,
     SaasContractStorageBundleV2,
 )
 from schemas.saas_pricing_v2 import SaasCommercialSelection, SaasPricingSnapshotV2
@@ -54,29 +52,43 @@ from services.saas_payment_success_v2_adapter import _frozen_snapshot_to_calc_re
 class SaasRenewalV2AdapterError(Exception):
     """V2 Renewal Adapter 도메인 오류.
 
-    code values:
-      CONTRACT_NOT_FOUND                — contract_id 미존재
-      CONTRACT_NOT_OWNED                — contracts.company_id != company_id
-      CONTRACT_NOT_ACTIVE               — contracts.status_code != ACTIVE
-      CURRENT_CV_NOT_FOUND              — 현재 유효 CV 없음 (superseded_at IS NULL 행 0)
-      QUOTE_NOT_FOUND                   — quote_id 미존재
-      QUOTE_NOT_OWNED                   — quote.company_id != company_id
-      QUOTE_NOT_ISSUED                  — quote.status_code != ISSUED
-      QUOTE_NOT_SAAS                    — quote.service_type != SAAS
-      QUOTE_NOT_V2                      — items 수 != 1 또는 schema_version != SAAS_QUOTE_V2
-      QUOTE_ITEM_INVALID                — SaasQuoteSnapshotItemV2 또는 SaasPricingSnapshotV2 검증 실패
-      QUOTE_PAYMENT_SNAPSHOT_INVALID    — quote/item/snapshot 금액 3중 불일치
-      RENEWAL_PAYMENT_NOT_PAID          — status_code ∉ {PAID, SUCCESS}
-      RENEWAL_LEGACY_PLAN_CODE_FORBIDDEN — pay.plan_code != None
-      RENEWAL_PAID_AT_REQUIRED          — pay.paid_at 없음
-      RENEWAL_PAID_AT_INVALID           — paid_at 파싱 실패 또는 naive datetime
-      RENEWAL_USER_REQUIRED             — pay.user_id 없음
-      RENEWAL_USER_INVALID              — pay.user_id 유효 UUID 아님
-      RENEWAL_PAY_NOT_SAAS              — product_type != SAAS
-      RENEWAL_CONTRACT_ID_REQUIRED      — pay.contract_id 없음 (renewal은 기존 계약 필수)
-      RENEWAL_CONTRACT_ID_MISMATCH      — pay.contract_id != contract_id
-      RENEWAL_PAYMENT_TYPE_INVALID      — pay.payment_type != RENEWAL
-      RENEWAL_PERIOD_TERM_MISMATCH      — pay.period_months != snapshot.term_months
+    code values (prepare):
+      CONTRACT_NOT_FOUND                    — contract_id 미존재
+      CONTRACT_NOT_OWNED                    — contracts.company_id != company_id
+      CONTRACT_NOT_ACTIVE                   — contracts.status_code != ACTIVE
+      CONTRACT_NOT_SAAS                     — contracts.service_type != SAAS
+      CURRENT_CV_NOT_FOUND                  — superseded_at IS NULL 행 0
+      QUOTE_NOT_FOUND                       — quote_id 미존재
+      QUOTE_NOT_OWNED                       — quote.company_id != company_id
+      QUOTE_SOURCE_INVALID                  — quote.source != member_auto
+      QUOTE_NOT_ISSUED                      — quote.status_code != ISSUED
+      QUOTE_NOT_SAAS                        — quote.service_type != SAAS
+      QUOTE_NOT_V2                          — items 수 != 1 / schema_version 불일치
+      QUOTE_ITEM_INVALID                    — SaasQuoteSnapshotItemV2 검증 실패
+      QUOTE_PAYMENT_SNAPSHOT_INVALID        — quote/item/snapshot 금액 3중 불일치
+
+    code values (plan builder):
+      RENEWAL_PAYMENT_NOT_PAID              — status_code ∉ {PAID, SUCCESS}
+      RENEWAL_LEGACY_PLAN_CODE_FORBIDDEN    — pay.plan_code != None
+      RENEWAL_PAID_AT_REQUIRED              — pay.paid_at 없음
+      RENEWAL_PAID_AT_INVALID               — paid_at 파싱 실패 / naive datetime
+      RENEWAL_USER_REQUIRED                 — pay.user_id 없음
+      RENEWAL_USER_INVALID                  — pay.user_id 유효 UUID 아님
+      RENEWAL_PAY_NOT_SAAS                  — product_type != SAAS
+      RENEWAL_COMPANY_MISMATCH              — pay.company_id != quote.company_id
+      RENEWAL_CONTRACT_ID_REQUIRED          — pay.contract_id 없음
+      RENEWAL_QUOTE_ID_REQUIRED             — pay.quote_id 없음
+      RENEWAL_PAYMENT_TYPE_INVALID          — pay.payment_type != RENEWAL
+      CURRENT_CV_SCHEMA_INVALID             — commercial_schema_version 불일치 / effective_from 파싱 불가
+      CURRENT_CV_SUPERSEDED                 — current_cv.superseded_at IS NOT NULL
+      CURRENT_CV_VERSION_NO_INVALID         — current_cv.version_no < 1
+      RENEWAL_CONTRACT_CV_MISMATCH          — pay.contract_id != current_cv.contract_id
+      QUOTE_SOURCE_INVALID                  — quote.source != member_auto (plan re-check)
+      RENEWAL_QUOTE_ID_MISMATCH             — pay.quote_id != quote.id
+      RENEWAL_EFFECTIVE_AT_INVALID          — requested_effective_at naive datetime
+      RENEWAL_EFFECTIVE_BEFORE_CURRENT_VERSION — requested_effective_at < current_cv.effective_from
+      RENEWAL_PERIOD_TERM_MISMATCH          — pay.period_months != snapshot.term_months
+      AMOUNT_SNAPSHOT_MISMATCH              — pay/item/snapshot 금액 3중 불일치
     """
 
     def __init__(self, code: str, message: str = "") -> None:
@@ -96,6 +108,8 @@ class SaasV2RenewalApplyPlan:
       payment_id             — pay.id
       company_id             — pay.company_id
       contract_id            — 기존 계약 UUID (신규 생성 아님)
+      quote_id               — pay.quote_id (Frozen Snapshot 출처 견적)
+      current_version_no     — current_cv.version_no
       next_version_no        — current_cv.version_no + 1
       requested_effective_at — 갱신 적용 기준 시각 (caller 입력, Owner Gate 결정)
       commercial_bundle      — 새 CV + 새 site_scopes (version_no=next_version_no)
@@ -103,6 +117,8 @@ class SaasV2RenewalApplyPlan:
     payment_id: str
     company_id: str
     contract_id: uuid.UUID
+    quote_id: str
+    current_version_no: int
     next_version_no: int
     requested_effective_at: datetime
     commercial_bundle: SaasContractStorageBundleV2
@@ -126,19 +142,25 @@ def _parse_paid_at(paid_at_str: str) -> datetime:
     return dt
 
 
-def _fetch_current_contract_bundle(
+def _fetch_and_validate_contract(
     supabase,
     contract_id: str,
     company_id: str,
-) -> tuple[dict, dict, list]:
-    """DB에서 현재 Contract + 현재 CV + Site Scopes를 조회.
+) -> tuple[dict, dict]:
+    """DB에서 Contract + 현재 CV 조회 및 검증.
 
-    Returns: (contract_row, cv_row, scope_rows)
+    DB Read: contracts(1) + saas_contract_commercial_versions(1)
+    site_scopes는 BE-OBJ10-D-B에서 별도 조회.
+
+    saas_contract_commercial_versions에 contract_id의 superseded_at IS NULL
+    행이 최대 1건임은 migration DDL (unique partial index) 보장.
+    adapter는 DB invariant에 의존한다.
+
+    Returns: (contract_row, cv_row)
     """
-    # ── Contract 조회 ─────────────────────────────────────────────────
     ct_res = (
         supabase.table("contracts")
-        .select("id, company_id, status_code")
+        .select("id, company_id, status_code, service_type")
         .eq("id", contract_id)
         .limit(1)
         .execute()
@@ -161,8 +183,13 @@ def _fetch_current_contract_bundle(
             f"contract_id={contract_id} status_code={contract.get('status_code')}: "
             "ACTIVE 계약만 갱신할 수 있습니다.",
         )
+    if contract.get("service_type") != "SAAS":
+        raise SaasRenewalV2AdapterError(
+            "CONTRACT_NOT_SAAS",
+            f"contract_id={contract_id} service_type={contract.get('service_type')}: "
+            "SAAS 계약만 V2 갱신 대상입니다.",
+        )
 
-    # ── 현재 CV 조회 (superseded_at IS NULL) ─────────────────────────
     cv_res = (
         supabase.table("saas_contract_commercial_versions")
         .select("*")
@@ -176,55 +203,7 @@ def _fetch_current_contract_bundle(
             "CURRENT_CV_NOT_FOUND",
             f"contract_id={contract_id}: 현재 유효한 Commercial Version이 없습니다.",
         )
-    cv_row = cv_res.data[0]
-
-    # ── Site Scopes 조회 ──────────────────────────────────────────────
-    scope_res = (
-        supabase.table("saas_contract_site_scopes")
-        .select("entity_type, entity_id, sector, base_band_code")
-        .eq("commercial_version_id", cv_row["id"])
-        .execute()
-    )
-    scope_rows = scope_res.data or []
-
-    return contract, cv_row, scope_rows
-
-
-def _build_storage_bundle_from_db_rows(
-    cv_row: dict,
-    scope_rows: list,
-) -> SaasContractStorageBundleV2:
-    """DB 조회 결과를 SaasContractStorageBundleV2로 조립."""
-    site_scopes = [
-        SaasContractSiteScopeV2(
-            entity_type=r["entity_type"],
-            entity_id=r["entity_id"],
-            sector=r["sector"],
-            base_band_code=r.get("base_band_code"),
-        )
-        for r in scope_rows
-    ]
-
-    cv_kwargs: dict = {
-        "commercial_schema_version": cv_row["commercial_schema_version"],
-        "contract_id": cv_row["contract_id"],
-        "version_no": cv_row["version_no"],
-        "product_tier": cv_row["product_tier"],
-        "pricing_mode": cv_row["pricing_mode"],
-        "worker_capacity": cv_row["worker_capacity"],
-        "term_months": cv_row["term_months"],
-        "pricing_result_status": cv_row["pricing_result_status"],
-        "pricing_policy_version": cv_row.get("pricing_policy_version"),
-        "pricing_snapshot": cv_row.get("pricing_snapshot"),
-        "effective_from": cv_row["effective_from"],
-        "superseded_at": cv_row.get("superseded_at"),
-        "created_by": cv_row.get("created_by"),
-    }
-    commercial_version = SaasContractCommercialVersionV2(**cv_kwargs)
-    return SaasContractStorageBundleV2(
-        commercial_version=commercial_version,
-        site_scopes=site_scopes,
-    )
+    return contract, cv_res.data[0]
 
 
 def _validate_renewal_quote(
@@ -232,30 +211,27 @@ def _validate_renewal_quote(
     quote_id: str,
     company_id: str,
 ) -> tuple[dict, SaasQuoteSnapshotItemV2, SaasPricingSnapshotV2]:
-    """Quote 조회 → 소유권/상태/스키마/금액 검증.
+    """Quote 조회 → 소유권/source/상태/스키마/금액 검증.
 
     Returns: (quote_row, item, snap)
     """
     quote = member_quote_svc.get_member_quote(supabase, quote_id)
     if not quote:
-        raise SaasRenewalV2AdapterError(
-            "QUOTE_NOT_FOUND",
-            "견적을 찾을 수 없습니다.",
-        )
+        raise SaasRenewalV2AdapterError("QUOTE_NOT_FOUND", "견적을 찾을 수 없습니다.")
     if str(quote.get("company_id")) != str(company_id):
+        raise SaasRenewalV2AdapterError("QUOTE_NOT_OWNED", "견적 소유권이 없습니다.")
+    if quote.get("source") != "member_auto":
         raise SaasRenewalV2AdapterError(
-            "QUOTE_NOT_OWNED",
-            "견적 소유권이 없습니다.",
+            "QUOTE_SOURCE_INVALID",
+            f"source=member_auto 견적만 Renewal 결제 대상입니다: {quote.get('source')!r}",
         )
     if quote.get("status_code") != "ISSUED":
         raise SaasRenewalV2AdapterError(
-            "QUOTE_NOT_ISSUED",
-            "발행(ISSUED) 상태 견적만 결제할 수 있습니다.",
+            "QUOTE_NOT_ISSUED", "발행(ISSUED) 상태 견적만 결제할 수 있습니다."
         )
     if quote.get("service_type") != "SAAS":
         raise SaasRenewalV2AdapterError(
-            "QUOTE_NOT_SAAS",
-            "SaaS 견적만 이 경로로 결제할 수 있습니다.",
+            "QUOTE_NOT_SAAS", "SaaS 견적만 이 경로로 결제할 수 있습니다."
         )
     items = quote.get("items") or []
     if len(items) != 1:
@@ -297,7 +273,6 @@ def _validate_renewal_quote(
             "QUOTE_PAYMENT_SNAPSHOT_INVALID",
             f"total_amount 불일치: quote={q_total}, item={item.total_amount}, snap={snap.total_amount}",
         )
-
     return quote, item, snap
 
 
@@ -317,20 +292,12 @@ def prepare_saas_v2_renewal_payment_from_quote(
 ) -> dict:
     """기존 V2 Contract에 대해 Renewal Quote 기반 INICIS Prepaid 결제 준비.
 
-    DB Read:  contracts (1) · saas_contract_commercial_versions (1) ·
-              saas_contract_site_scopes (N) · quotes (1)
-    DB Write: payments (1 row, payment_type=RENEWAL, contract_id=기존)
+    DB Read:  contracts(1) + saas_contract_commercial_versions(1) + quotes(1)
+    DB Write: payments(1, payment_type=RENEWAL, contract_id=기존)
     DB Write 금지: contracts 0 · commercial_versions 0 · site_scopes 0 ·
                   subscriptions 0 · billing_keys 0
-
-    Billing Boundary FREEZE:
-      - payment_type="RENEWAL" (선불 1회, CardBilling/BillKey 아님)
-      - subscriptions 테이블 접근 없음
-      - billing_keys 테이블 접근 없음
     """
-    _contract, _cv_row, _scope_rows = _fetch_current_contract_bundle(
-        supabase, contract_id, company_id
-    )
+    _fetch_and_validate_contract(supabase, contract_id, company_id)
     _quote, item, snap = _validate_renewal_quote(supabase, quote_id, company_id)
 
     sign_key = load_sign_key()
@@ -363,26 +330,29 @@ def build_saas_v2_renewal_apply_plan(
     *,
     quote: dict,
     current_cv: dict,
-    site_scopes: list,
     requested_effective_at: datetime,
 ) -> SaasV2RenewalApplyPlan:
     """Frozen Quote V2 Snapshot → Renewal Commercial Bundle (pure, DB write = 0).
 
-    DB Read:  0 (caller가 사전 조회한 pay / quote / current_cv / site_scopes 전달)
+    DB Read:  0 (caller가 사전 조회한 pay / quote / current_cv 전달)
     DB Write: 0 (plan만 조립)
     contracts mutation:    0
     commercial_versions:   0 (BE-OBJ10-D-B에서 원자적 처리)
     subscriptions:         0
     billing_keys:          0
 
+    CHANGE_ORDER_REUSE = NOT WIRED IN D-A
+      D-A 목적은 Frozen Renewal Quote → Renewal Apply Plan 경계 확립이며
+      실제 supersede/apply + change classification은 D-B 책임.
+
     Args:
       pay                   — payments 행 (payment_type=RENEWAL, status_code∈{PAID,SUCCESS})
-      quote                 — get_member_quote 반환값
-      current_cv            — saas_contract_commercial_versions 현재 행 (superseded_at IS NULL)
-      site_scopes           — saas_contract_site_scopes 행 목록
+      quote                 — get_member_quote 반환값 (source=member_auto, ISSUED, SAAS)
+      current_cv            — saas_contract_commercial_versions 현재 행
+                              (superseded_at IS NULL — DB unique partial index 보장)
       requested_effective_at — 갱신 적용 기준 시각 (Owner Gate 결정, paid_at 아님)
     """
-    # ── Step 1: 결제 성공 상태 가드 ──────────────────────────────────
+    # ── Step 1: 결제 성공 상태 ───────────────────────────────────────
     status_code = pay.get("status_code") or ""
     if status_code not in PAID_STATUS_CODES:
         raise SaasRenewalV2AdapterError(
@@ -390,7 +360,7 @@ def build_saas_v2_renewal_apply_plan(
             f"결제 성공 상태(PAID/SUCCESS)만 처리합니다: {status_code!r}",
         )
 
-    # ── Step 2: Legacy plan_code 금지 ────────────────────────────────
+    # ── Step 2: Legacy plan_code 금지 ───────────────────────────────
     if pay.get("plan_code") is not None:
         raise SaasRenewalV2AdapterError(
             "RENEWAL_LEGACY_PLAN_CODE_FORBIDDEN",
@@ -424,7 +394,16 @@ def build_saas_v2_renewal_apply_plan(
             f"product_type=SAAS 결제만 처리합니다: {pay.get('product_type')!r}",
         )
 
-    # ── Step 8: contract_id 필수 ─────────────────────────────────────
+    # ── Step 8: pay ↔ quote company 일치 ────────────────────────────
+    pay_company = str(pay.get("company_id") or "")
+    quote_company = str(quote.get("company_id") or "")
+    if not pay_company or pay_company != quote_company:
+        raise SaasRenewalV2AdapterError(
+            "RENEWAL_COMPANY_MISMATCH",
+            f"pay.company_id={pay_company} != quote.company_id={quote_company}",
+        )
+
+    # ── Step 9: contract_id 필수 ────────────────────────────────────
     pay_contract_id = pay.get("contract_id")
     if not pay_contract_id:
         raise SaasRenewalV2AdapterError(
@@ -432,14 +411,106 @@ def build_saas_v2_renewal_apply_plan(
             "Renewal 결제는 contract_id가 필수입니다.",
         )
 
-    # ── Step 9: payment_type = RENEWAL 가드 ──────────────────────────
+    # ── Step 10: quote_id 필수 ──────────────────────────────────────
+    pay_quote_id = pay.get("quote_id")
+    if not pay_quote_id:
+        raise SaasRenewalV2AdapterError(
+            "RENEWAL_QUOTE_ID_REQUIRED",
+            "Renewal 결제는 quote_id가 필수입니다.",
+        )
+
+    # ── Step 11: payment_type = RENEWAL ─────────────────────────────
     if (pay.get("payment_type") or "").upper() != "RENEWAL":
         raise SaasRenewalV2AdapterError(
             "RENEWAL_PAYMENT_TYPE_INVALID",
             f"payment_type=RENEWAL만 처리합니다: {pay.get('payment_type')!r}",
         )
 
-    # ── Step 10: Quote 항목 추출 + 검증 ─────────────────────────────
+    # ── Step 12: current_cv 구조 검증 ───────────────────────────────
+    if current_cv.get("commercial_schema_version") != COMMERCIAL_STORAGE_SCHEMA_VERSION:
+        raise SaasRenewalV2AdapterError(
+            "CURRENT_CV_SCHEMA_INVALID",
+            f"commercial_schema_version 불일치: {current_cv.get('commercial_schema_version')!r}",
+        )
+    if current_cv.get("superseded_at") is not None:
+        raise SaasRenewalV2AdapterError(
+            "CURRENT_CV_SUPERSEDED",
+            f"current_cv.superseded_at={current_cv.get('superseded_at')}: "
+            "superseded_at IS NOT NULL — 현재 유효 Version이 아닙니다.",
+        )
+    cv_version_no = current_cv.get("version_no")
+    if not isinstance(cv_version_no, int) or cv_version_no < 1:
+        raise SaasRenewalV2AdapterError(
+            "CURRENT_CV_VERSION_NO_INVALID",
+            f"current_cv.version_no={cv_version_no}: 1 이상이어야 합니다.",
+        )
+
+    # ── Step 13: pay.contract_id ↔ current_cv.contract_id ───────────
+    if str(pay_contract_id) != str(current_cv.get("contract_id") or ""):
+        raise SaasRenewalV2AdapterError(
+            "RENEWAL_CONTRACT_CV_MISMATCH",
+            f"pay.contract_id={pay_contract_id} != current_cv.contract_id={current_cv.get('contract_id')}",
+        )
+
+    # ── Step 14: Quote 신원/상태 재검증 ─────────────────────────────
+    if quote.get("source") != "member_auto":
+        raise SaasRenewalV2AdapterError(
+            "QUOTE_SOURCE_INVALID",
+            f"source=member_auto 견적만 처리합니다: {quote.get('source')!r}",
+        )
+    if quote.get("service_type") != "SAAS":
+        raise SaasRenewalV2AdapterError(
+            "QUOTE_NOT_SAAS",
+            f"service_type=SAAS 견적만 처리합니다: {quote.get('service_type')!r}",
+        )
+    if quote.get("status_code") != "ISSUED":
+        raise SaasRenewalV2AdapterError(
+            "QUOTE_NOT_ISSUED",
+            f"ISSUED 상태 견적만 처리합니다: {quote.get('status_code')!r}",
+        )
+
+    # ── Step 15: pay.quote_id ↔ quote.id ────────────────────────────
+    if str(pay_quote_id) != str(quote.get("id") or ""):
+        raise SaasRenewalV2AdapterError(
+            "RENEWAL_QUOTE_ID_MISMATCH",
+            f"pay.quote_id={pay_quote_id} != quote.id={quote.get('id')}",
+        )
+
+    # ── Step 16: requested_effective_at timezone-aware ───────────────
+    if requested_effective_at.tzinfo is None:
+        raise SaasRenewalV2AdapterError(
+            "RENEWAL_EFFECTIVE_AT_INVALID",
+            "requested_effective_at는 timezone-aware datetime이어야 합니다.",
+        )
+
+    # ── Step 17: effective_from 파싱 + 순서 검증 ────────────────────
+    raw_eff = current_cv.get("effective_from")
+    if raw_eff is None:
+        raise SaasRenewalV2AdapterError(
+            "CURRENT_CV_SCHEMA_INVALID", "current_cv.effective_from 없음"
+        )
+    if isinstance(raw_eff, str):
+        try:
+            cv_effective_from: datetime = dateutil_parser.isoparse(raw_eff)
+        except Exception as exc:
+            raise SaasRenewalV2AdapterError(
+                "CURRENT_CV_SCHEMA_INVALID",
+                f"current_cv.effective_from 파싱 실패: {raw_eff!r}",
+            ) from exc
+    else:
+        cv_effective_from = raw_eff
+
+    if cv_effective_from.tzinfo is None:
+        cv_effective_from = cv_effective_from.replace(tzinfo=timezone.utc)
+
+    if requested_effective_at < cv_effective_from:
+        raise SaasRenewalV2AdapterError(
+            "RENEWAL_EFFECTIVE_BEFORE_CURRENT_VERSION",
+            f"requested_effective_at={requested_effective_at} < "
+            f"current_cv.effective_from={cv_effective_from}",
+        )
+
+    # ── Step 18: Quote 항목 추출 + 검증 ─────────────────────────────
     items = quote.get("items") or []
     if len(items) != 1:
         raise SaasRenewalV2AdapterError(
@@ -461,7 +532,7 @@ def build_saas_v2_renewal_apply_plan(
     except (ValidationError, Exception) as exc:
         raise SaasRenewalV2AdapterError("QUOTE_ITEM_INVALID", str(exc)) from exc
 
-    # ── Step 11: 금액 3중 정합성 ────────────────────────────────────
+    # ── Step 19: 금액 3중 정합성 ────────────────────────────────────
     p_supply = int(pay.get("supply_amount") or 0)
     p_vat = int(pay.get("vat_amount") or 0)
     p_total = int(pay.get("total_amount") or 0)
@@ -482,7 +553,7 @@ def build_saas_v2_renewal_apply_plan(
             f"total_amount 불일치: pay={p_total}, item={item.total_amount}, snap={snap.total_amount}",
         )
 
-    # ── Step 12: period_months ↔ term_months 정합성 ─────────────────
+    # ── Step 20: period_months ↔ term_months ────────────────────────
     pay_period = int(pay.get("period_months") or 0)
     if pay_period != snap.term_months:
         raise SaasRenewalV2AdapterError(
@@ -490,12 +561,11 @@ def build_saas_v2_renewal_apply_plan(
             f"pay.period_months={pay_period} != snapshot.term_months={snap.term_months}",
         )
 
-    # ── Step 13: next_version_no 계산 ───────────────────────────────
-    current_version_no = int(current_cv.get("version_no") or 0)
-    next_version_no = current_version_no + 1
+    # ── Step 21: next_version_no 계산 ───────────────────────────────
+    next_version_no = cv_version_no + 1
     contract_uuid = uuid.UUID(str(pay_contract_id))
 
-    # ── Step 14: 새 Commercial Bundle 조립 ──────────────────────────
+    # ── Step 22: 새 Commercial Bundle 조립 ──────────────────────────
     # effective_from = requested_effective_at (Owner Gate 결정, paid_at 아님)
     selection = SaasCommercialSelection(
         product_tier=snap.product_tier,
@@ -515,8 +585,10 @@ def build_saas_v2_renewal_apply_plan(
 
     return SaasV2RenewalApplyPlan(
         payment_id=str(pay.get("id") or ""),
-        company_id=str(pay.get("company_id") or ""),
+        company_id=pay_company,
         contract_id=contract_uuid,
+        quote_id=str(pay_quote_id),
+        current_version_no=cv_version_no,
         next_version_no=next_version_no,
         requested_effective_at=requested_effective_at,
         commercial_bundle=commercial_bundle,
