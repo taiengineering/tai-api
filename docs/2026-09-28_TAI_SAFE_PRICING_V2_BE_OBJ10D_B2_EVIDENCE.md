@@ -4,11 +4,11 @@
 **Date**: 2026-09-28  
 **Branch**: docs/pricing-canonical-20260927  
 **WO**: WO-PRICING-V2-BE-OBJ10D-B2-001  
-**BASE (B1 PATCH1)**: `f0885eae`  
-**B2 initial HEAD**: `2fd7ad9e`  
-**B2 PATCH1 HEAD**: `0a5632cb`  
-**B2 PATCH2 HEAD**: `0a5632cb`
-**B2 PATCH3 HEAD**: pending commit
+**BASE (B1 final)**: `047b40182f614799c7a36444ec88afaa4d6ae26b`  
+**B2 initial HEAD**: `2fd7ad9e387eb3ddd22afcd1c6b660cebaee3390`  
+**B2 PATCH1 HEAD**: `0a5632cbc54715a912e70a6df18fc90fa2a2250f`  
+**B2 PATCH2 HEAD**: `85ee50942a91fe9e3e09103afdb0fd77a2f1895a`  
+**B2 PATCH3 HEAD**: `bfc6f70135665c188bedb4d2b9c557a3f329da96`
 
 ---
 
@@ -17,8 +17,8 @@
 B2 구현 범위:
 - SQL artifact: `apply_saas_v2_renewal_atomic` PostgreSQL function
 - Python adapter: `services/saas_renewal_atomic_apply_v2.py`
-- Adapter/static tests: A01-A36 (`tests/test_saas_renewal_atomic_apply_v2.py`)
-- PostgreSQL integration tests: I01-I29 (`tests/test_saas_renewal_atomic_apply_v2_postgres.py`)
+- Adapter/static tests: A01-A42 (`tests/test_saas_renewal_atomic_apply_v2.py`)
+- PostgreSQL integration tests: I01-I36 (`tests/test_saas_renewal_atomic_apply_v2_postgres.py`)
 
 **Production mutation = 0** (ARTIFACT ONLY — SQL migration not applied)  
 **Schema artifact**: `renewal_payment_id uuid` ADD COLUMN (nullable, artifact only)  
@@ -33,8 +33,8 @@ B2 구현 범위:
 |---|---|
 | `migrations/2026-09-28_saas_contract_commercial_v2_renewal_atomic_apply.sql` | SQL artifact (ARTIFACT ONLY) |
 | `services/saas_renewal_atomic_apply_v2.py` | Python adapter (RPC → plan) |
-| `tests/test_saas_renewal_atomic_apply_v2.py` | A01-A36 adapter + SQL static |
-| `tests/test_saas_renewal_atomic_apply_v2_postgres.py` | I01-I29 PostgreSQL integration |
+| `tests/test_saas_renewal_atomic_apply_v2.py` | A01-A42 adapter + SQL static |
+| `tests/test_saas_renewal_atomic_apply_v2_postgres.py` | I01-I36 PostgreSQL integration |
 
 ---
 
@@ -45,7 +45,8 @@ B2 구현 범위:
 - `SET search_path = ''` (schema injection 방지)
 - `REVOKE EXECUTE FROM PUBLIC, anon, authenticated`
 - `GRANT EXECUTE TO service_role`
-- Column-level: `GRANT UPDATE (superseded_at, renewal_payment_id) ON saas_contract_commercial_versions TO service_role`
+- Column-level: `GRANT UPDATE (superseded_at) ON saas_contract_commercial_versions TO service_role`  
+  (`renewal_payment_id` = INSERT-only column; UPDATE grant 없음 — PATCH2에서 제거 확정)
 
 ### Lock Order (deadlock prevention)
 1. `public.payments FOR UPDATE`
@@ -265,3 +266,38 @@ Changes (SQL migration = 0, services/* = 0):
 - **OBJ10-C FREEZE = maintained**
 - **B3 (runtime wiring) = NOT in scope of B2**
 - SQL migration header: `ARTIFACT ONLY — PRODUCTION APPLY = 0 — OWNER APPROVAL REQUIRED`
+
+---
+
+## 9. B2 FREEZE STATUS
+
+```
+BE-OBJ10-D-B2                  VERIFIED / FROZEN
+
+ATOMIC SQL                      PASS
+PAYMENT IDEMPOTENCY             PASS
+CROSS-PAYMENT PROTECTION        PASS
+PAYMENT REUSE PROTECTION        PASS
+TEMPORAL BOUNDARY               PASS
+SNAPSHOT ↔ SCOPE SSOT           PASS
+ROLLBACK                        PASS
+CONCURRENCY                     PASS
+ACL TEST                        PASS
+DB CONSTRAINT INVARIANTS        PASS
+
+POSTGRES I01-I36                36/36 PASS
+FULL REGRESSION                 522/522 PASS
+skip = 0  /  xfail = 0
+
+PRODUCTION MUTATION             0
+PRODUCTION DDL                  0
+RUNTIME WIRING                  0
+
+DO NOT MODIFY
+  migrations/2026-09-28_saas_contract_commercial_v2_renewal_atomic_apply.sql
+  services/saas_renewal_atomic_apply_v2.py
+  tests/test_saas_renewal_atomic_apply_v2.py
+  tests/test_saas_renewal_atomic_apply_v2_postgres.py
+
+NEXT: B3 — payment_post_process.py V1/V2 renewal branching
+```
