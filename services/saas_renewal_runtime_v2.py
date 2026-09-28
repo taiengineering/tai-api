@@ -222,7 +222,10 @@ def _parse_dt_aware(raw, field_name: str) -> datetime:
             f"{field_name} unexpected type: {type(raw)!r}",
         )
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        raise SaasV2RenewalRuntimeError(
+            "V2_RUNTIME_TARGET_VERSION_INVALID",
+            f"{field_name} must be timezone-aware: {raw!r}",
+        )
     return dt
 
 

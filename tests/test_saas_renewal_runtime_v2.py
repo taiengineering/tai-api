@@ -700,3 +700,187 @@ class TestPaymentPostProcessRouting:
                             with pytest.raises(SaasV2RenewalRuntimeError):
                                 ppp.on_payment_success_sync(pay["id"])
         m_ext.assert_not_called()
+
+
+# ── R46-R49: RENEWAL cannot fall into new contract writer ─────────────────────
+
+class TestRenewalCannotCreateNewContract:
+    """Broken renewal inputs must not reach _create_contract_from_payment."""
+
+    def _make_sb(self, pay: dict) -> MagicMock:
+        sb = MagicMock()
+        sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [pay]
+        return sb
+
+    def _base_pay(self, **kw) -> dict:
+        base = {
+            "id":             _PID,
+            "payment_type":   "RENEWAL",
+            "product_type":   "SAAS",
+            "status_code":    "PAID",
+            "plan_code":      None,
+            "contract_id":    None,
+            "quote_id":       _QID,
+            "company_id":     _CO,
+            "user_id":        _UID,
+            "paid_at":        "2026-09-28T12:00:00+09:00",
+        }
+        base.update(kw)
+        return base
+
+    def test_r46_v2_renewal_null_contract_id_reaches_runtime_not_new_contract(self):
+        """V2 Renewal with contract_id=None → runtime invoked, new contract writer = 0."""
+        import services.payment_post_process as ppp
+
+        pay = self._base_pay(contract_id=None)
+        sb = self._make_sb(pay)
+        with patch("services.payment_post_process.get_supabase", return_value=sb):
+            with patch("services.payment_post_process._bootstrap_buyer_company_admin"):
+                with patch("services.payment_post_process._fire_automation"):
+                    with patch("services.saas_renewal_runtime_v2.apply_saas_v2_renewal_runtime",
+                               side_effect=SaasV2RenewalRuntimeError("V2_RUNTIME_CONTRACT_NOT_FOUND")) as m_v2:
+                        with patch.object(ppp, "_create_contract_from_payment") as m_new:
+                            with patch.object(ppp, "_extend_contract_for_renewal") as m_ext:
+                                with patch.object(ppp, "send_payment_notification") as m_notif:
+                                    with pytest.raises(SaasV2RenewalRuntimeError):
+                                        ppp.on_payment_success_sync(pay["id"])
+        m_v2.assert_called_once()
+        m_new.assert_not_called()
+        m_ext.assert_not_called()
+        m_notif.assert_not_called()
+
+    def test_r47_legacy_renewal_null_contract_id_fails_closed(self):
+        """Legacy Renewal with contract_id=None → all writers = 0."""
+        import services.payment_post_process as ppp
+
+        pay = self._base_pay(product_type="SAAS_INDUSTRY", plan_code="INDUSTRY_PRO", contract_id=None)
+        sb = self._make_sb(pay)
+        with patch("services.payment_post_process.get_supabase", return_value=sb):
+            with patch("services.payment_post_process._bootstrap_buyer_company_admin"):
+                with patch("services.payment_post_process._fire_automation"):
+                    with patch.object(ppp, "_extend_contract_for_renewal") as m_ext:
+                        with patch.object(ppp, "_create_contract_from_payment") as m_new:
+                            with patch.object(ppp, "send_payment_notification") as m_notif:
+                                ppp.on_payment_success_sync(pay["id"])
+        m_ext.assert_not_called()
+        m_new.assert_not_called()
+        m_notif.assert_not_called()
+
+    def test_r48_invalid_renewal_null_contract_id_fails_closed(self):
+        """INVALID Renewal with contract_id=None → all writers = 0."""
+        import services.payment_post_process as ppp
+
+        pay = self._base_pay(product_type="COMPLETELY_UNKNOWN", contract_id=None)
+        sb = self._make_sb(pay)
+        with patch("services.payment_post_process.get_supabase", return_value=sb):
+            with patch("services.payment_post_process._bootstrap_buyer_company_admin"):
+                with patch("services.payment_post_process._fire_automation"):
+                    with patch.object(ppp, "_extend_contract_for_renewal") as m_ext:
+                        with patch.object(ppp, "_create_contract_from_payment") as m_new:
+                            with patch.object(ppp, "send_payment_notification") as m_notif:
+                                ppp.on_payment_success_sync(pay["id"])
+        m_ext.assert_not_called()
+        m_new.assert_not_called()
+        m_notif.assert_not_called()
+
+    def test_r49_any_renewal_never_reaches_new_contract_writer(self):
+        """SAAS RENEWAL failure must not fall into _create_contract_from_payment."""
+        import services.payment_post_process as ppp
+
+        pay = self._base_pay(contract_id=None)
+        sb = self._make_sb(pay)
+        with patch("services.payment_post_process.get_supabase", return_value=sb):
+            with patch("services.payment_post_process._bootstrap_buyer_company_admin"):
+                with patch("services.payment_post_process._fire_automation"):
+                    with patch("services.saas_renewal_runtime_v2.apply_saas_v2_renewal_runtime",
+                               side_effect=SaasV2RenewalRuntimeError("V2_RUNTIME_CONTRACT_NOT_FOUND")):
+                        with patch.object(ppp, "_create_contract_from_payment") as m_new:
+                            with pytest.raises(SaasV2RenewalRuntimeError):
+                                ppp.on_payment_success_sync(pay["id"])
+        m_new.assert_not_called()
+
+
+# ── R50-R52: payment_svc V2 card success atomic boundary ─────────────────────
+
+class TestCardSuccessAtomicBoundary:
+    """R50-R52: V2 Renewal card success must not execute direct contract.update."""
+
+    def _payment(self, **kw) -> MagicMock:
+        base = {
+            "id":             _PID,
+            "payment_type":   "RENEWAL",
+            "product_type":   "SAAS",
+            "contract_id":    _CID,
+            "period_months":  None,
+        }
+        base.update(kw)
+        return base
+
+    def _run_card_success(self, payment: dict, post_process_side=None):
+        from services.payment_svc import process_card_success
+        sb = MagicMock()
+        sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock()
+
+        with patch("services.payment_svc.get_supabase", return_value=sb):
+            with patch("services.payment_svc.now_iso", return_value="2026-09-28T12:00:00+09:00"):
+                with patch("services.payment_svc.service_status_after_card_pay", return_value="ACTIVE"):
+                    with patch("services.payment_svc.calc_expired_at", return_value=None):
+                        with patch("services.tax_invoice_request_svc.canonical_payment_instrument", return_value="CARD"):
+                            with patch("services.payment_post_process.on_payment_success_sync",
+                                       side_effect=post_process_side) as m_ppp:
+                                process_card_success(
+                                    payment,
+                                    auth_result={"applNum": "12345", "tid": "TID"},
+                                    paymethod="Card",
+                                    order_id="oid",
+                                    goodname="test",
+                                    price="100000",
+                                    with_redirect_qs=False,
+                                )
+        return sb
+
+    def test_r50_v2_renewal_success_no_direct_contract_update(self):
+        """V2 Renewal card success: contracts.update(is_active) call = 0."""
+        payment = self._payment()
+        sb = self._run_card_success(payment)
+
+        for c in sb.table.call_args_list:
+            assert c.args[0] != "contracts", \
+                f"contracts table was accessed in V2 Renewal card success: {c}"
+
+    def test_r51_v2_renewal_post_process_failure_no_direct_contract_update(self):
+        """V2 Renewal card success + on_payment_success_sync raises: contracts.update = 0."""
+        payment = self._payment()
+        sb = self._run_card_success(
+            payment,
+            post_process_side=Exception("post-process failed"),
+        )
+
+        for c in sb.table.call_args_list:
+            assert c.args[0] != "contracts", \
+                f"contracts table was accessed after V2 post-process failure: {c}"
+
+    def test_r52_legacy_card_success_contract_update_maintained(self):
+        """Legacy (non-V2 Renewal) card success: contracts.update(is_active) still fires."""
+        payment = self._payment(payment_type="NEW_CONTRACT", product_type="SAAS_INDUSTRY",
+                                plan_code="INDUSTRY_PRO")
+        sb = self._run_card_success(payment)
+
+        contracts_calls = [c for c in sb.table.call_args_list if c.args[0] == "contracts"]
+        assert len(contracts_calls) >= 1, "Legacy card success must update contracts.is_active"
+
+
+# ── R53: Naive effective_from rejected ────────────────────────────────────────
+
+class TestNaiveEffectiveFromRejected:
+    def test_r53_naive_target_effective_from_raises(self):
+        """Naive target.effective_from → V2_RUNTIME_TARGET_VERSION_INVALID (fail closed)."""
+        target_cv_naive = {
+            **_TARGET_CV_V2,
+            "effective_from": "2026-12-01T00:00:00",  # no tz offset
+        }
+        sb = _make_sb_replay(target_rows=[target_cv_naive])
+        with pytest.raises(SaasV2RenewalRuntimeError) as exc:
+            apply_saas_v2_renewal_runtime(sb, _pay())
+        assert exc.value.code == "V2_RUNTIME_TARGET_VERSION_INVALID"
+        assert "timezone-aware" in exc.value.message

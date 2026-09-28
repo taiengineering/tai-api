@@ -452,36 +452,47 @@ def on_payment_success_sync(payment_id: str) -> None:
             logger.error("[TIER_UPGRADE] apply not applied payment=%s result=%s", payment_id, result)
         return
 
-    existing_contract_id = pay.get("contract_id")
-    if existing_contract_id:
-        if (pay.get("payment_type") or "").upper() == "RENEWAL":
-            from services.saas_renewal_runtime_v2 import (
-                classify_renewal_runtime_route,
-                apply_saas_v2_renewal_runtime,
+    # RENEWAL은 contract_id 존재 여부와 무관하게 전용 경로만 사용한다.
+    # contract_id NULL 인 malformed renewal이 신규계약 writer로 새는 것을 차단.
+    if (pay.get("payment_type") or "").upper() == "RENEWAL":
+        from services.saas_renewal_runtime_v2 import (
+            classify_renewal_runtime_route,
+            apply_saas_v2_renewal_runtime,
+        )
+        route = classify_renewal_runtime_route(pay)
+        if route == "V2":
+            result = apply_saas_v2_renewal_runtime(sb, pay)
+            status = (result or {}).get("status")
+            logger.info(
+                "[RENEWAL_RUNTIME_V2] payment=%s contract=%s status=%s",
+                payment_id, pay.get("contract_id"), status,
             )
-            route = classify_renewal_runtime_route(pay)
-            if route == "V2":
-                result = apply_saas_v2_renewal_runtime(sb, pay)
-                status = (result or {}).get("status")
-                logger.info(
-                    "[RENEWAL_RUNTIME_V2] payment=%s contract=%s status=%s",
-                    payment_id, existing_contract_id, status,
-                )
-            elif route == "LEGACY":
-                _extend_contract_for_renewal(sb, pay, existing_contract_id)
-                logger.info(
-                    "[RENEWAL_RUNTIME_LEGACY] payment=%s contract=%s",
-                    payment_id, existing_contract_id,
-                )
-            else:
+            send_payment_notification(pay, plan_code, plan_info)
+        elif route == "LEGACY":
+            legacy_contract_id = pay.get("contract_id")
+            if not legacy_contract_id:
                 logger.error(
-                    "[RENEWAL_RUNTIME_ROUTE_INVALID] payment=%s product_type=%s route=%s — no contract mutation",
-                    payment_id, pay.get("product_type"), route,
+                    "[RENEWAL_LEGACY_CONTRACT_REQUIRED] payment=%s product_type=%s — contract_id NULL, no mutation",
+                    payment_id, pay.get("product_type"),
                 )
                 return
+            _extend_contract_for_renewal(sb, pay, legacy_contract_id)
+            logger.info(
+                "[RENEWAL_RUNTIME_LEGACY] payment=%s contract=%s",
+                payment_id, legacy_contract_id,
+            )
+            send_payment_notification(pay, plan_code, plan_info)
         else:
-            _activate_existing_contract(sb, pay, existing_contract_id)
-            logger.info("Payment %s activated contract %s", payment_id, existing_contract_id)
+            logger.error(
+                "[RENEWAL_RUNTIME_ROUTE_INVALID] payment=%s product_type=%s route=%s — no contract mutation",
+                payment_id, pay.get("product_type"), route,
+            )
+        return
+
+    existing_contract_id = pay.get("contract_id")
+    if existing_contract_id:
+        _activate_existing_contract(sb, pay, existing_contract_id)
+        logger.info("Payment %s activated contract %s", payment_id, existing_contract_id)
         send_payment_notification(pay, plan_code, plan_info)
         return
 

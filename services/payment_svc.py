@@ -398,7 +398,13 @@ def process_card_success(
     except Exception as e:
         log.error("Payment post-process failed: %s", e)
 
-    if contract_id:
+    # V2 Renewal: B2 Atomic RPC가 contract mutation authority.
+    # post-process 성공/실패 모두 여기서 direct write 금지.
+    _is_v2_renewal = (
+        (payment.get("payment_type") or "").upper() == "RENEWAL"
+        and payment.get("product_type") == "SAAS"
+    )
+    if contract_id and not _is_v2_renewal:
         supabase.table("contracts").update({"is_active": True, "updated_at": now}).eq("id", contract_id).execute()
 
     if not with_redirect_qs:
