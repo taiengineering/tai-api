@@ -455,8 +455,30 @@ def on_payment_success_sync(payment_id: str) -> None:
     existing_contract_id = pay.get("contract_id")
     if existing_contract_id:
         if (pay.get("payment_type") or "").upper() == "RENEWAL":
-            _extend_contract_for_renewal(sb, pay, existing_contract_id)
-            logger.info("Payment %s renewed contract %s", payment_id, existing_contract_id)
+            from services.saas_renewal_runtime_v2 import (
+                classify_renewal_runtime_route,
+                apply_saas_v2_renewal_runtime,
+            )
+            route = classify_renewal_runtime_route(pay)
+            if route == "V2":
+                result = apply_saas_v2_renewal_runtime(sb, pay)
+                status = (result or {}).get("status")
+                logger.info(
+                    "[RENEWAL_RUNTIME_V2] payment=%s contract=%s status=%s",
+                    payment_id, existing_contract_id, status,
+                )
+            elif route == "LEGACY":
+                _extend_contract_for_renewal(sb, pay, existing_contract_id)
+                logger.info(
+                    "[RENEWAL_RUNTIME_LEGACY] payment=%s contract=%s",
+                    payment_id, existing_contract_id,
+                )
+            else:
+                logger.error(
+                    "[RENEWAL_RUNTIME_ROUTE_INVALID] payment=%s product_type=%s route=%s — no contract mutation",
+                    payment_id, pay.get("product_type"), route,
+                )
+                return
         else:
             _activate_existing_contract(sb, pay, existing_contract_id)
             logger.info("Payment %s activated contract %s", payment_id, existing_contract_id)
