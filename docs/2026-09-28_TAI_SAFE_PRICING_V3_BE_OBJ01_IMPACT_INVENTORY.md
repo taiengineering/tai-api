@@ -63,11 +63,51 @@ policy_head: 6e34a0cc42a76832c6c415e17b55195e66d20a6b
 
 ---
 
+## 2-B. Production 실측 결과 (2026-09-29 GPT READ-ONLY 독립검증)
+
+**Project**: taieng (Production Supabase)
+**Production write**: 0
+
+| 항목 | 실측 값 | 의미 |
+|------|---------|------|
+| `saas_contract_commercial_versions` 테이블 | **NOT APPLIED** | V2 Commercial DDL 미적용 |
+| `saas_contract_site_scopes` 테이블 | **NOT APPLIED** | V2 Site Scope DDL 미적용 |
+| quotes `service_type=SAAS` 총 수 | 5 | 현존 견적 (V2 미사용) |
+| quotes `SAAS_QUOTE_V2` schema | **0** | V2 Pricing 저장 견적 없음 |
+| quotes `SAAS_PRICING_V2` snapshot | **0** | V2 pricing_snapshot 없음 |
+| payments `product_type='SAAS'` | **0** | V2 SAAS Payment 없음 |
+| contracts `service_type='SAAS'` | 8 | 전부 Legacy 계약 |
+| ACTIVE SAAS contracts | 5 | 전부 Legacy plan_code 계약 |
+
+**price_master Production 실측 (VERIFIED):**
+
+| service_type | sector | tier_code | criteria_min | criteria_max | amount |
+|---|---|---|---|---|---|
+| SAAS | INDUSTRY | INDUSTRY_STARTER | 0 | 49 | 149,000 |
+| SAAS | INDUSTRY | INDUSTRY_BUSINESS | 50 | 299 | 299,000 |
+| SAAS | INDUSTRY | INDUSTRY_PRO | 300 | 499 | 499,000 |
+| SAAS | INDUSTRY | INDUSTRY_CUSTOM | 500 | NULL | 0 |
+| DIAGNOSIS | INDUSTRY | (tier) | 0 | 49 | 149,000 |
+| DIAGNOSIS | INDUSTRY | (tier) | 50 | 299 | 299,000 |
+| DIAGNOSIS | INDUSTRY | (tier) | 300 | NULL | 499,000 |
+
+**V3 충돌 VERIFIED:**
+- `SAAS INDUSTRY INDUSTRY_PRO.criteria_max = 499` → V3: 300+ (상한 없음) → CONFLICT
+- `SAAS INDUSTRY INDUSTRY_CUSTOM, amount=0` → V3: 500+ = INDUSTRY_PRO 499,000 → CONFLICT
+
+**DIAGNOSIS INDUSTRY의 Production은 300+ 무한으로 이미 설정되어 있음** (V3 MANAGER와 동일 구조).
+
+**구조적 결론:**
+
+> V2 Pricing Backend는 코드·검증은 완성됐으나 Production에 V2 commercial runtime artifact가 없다. 기존 SaaS 계약은 전부 Legacy. 이 사실로 인해 V3는 V2/V3 병렬 runtime을 유지할 필요 없이 V2 구현 베이스를 직접 minimal delta 방식으로 진화시킬 수 있다.
+
+---
+
 ## 3. 핵심 충돌 발견 — CRITICAL FINDINGS
 
-### 3-A. SAAS INDUSTRY price_master 구조 — V3 CONFLICT
+### 3-A. SAAS INDUSTRY price_master 구조 — V3 CONFLICT (VERIFIED)
 
-`tests/test_pricing_resolver_saas_boundary.py` lines 11–14 (price_master 구조 반영):
+`tests/test_pricing_resolver_saas_boundary.py` lines 11–14 (Repository fixture):
 
 ```python
 _SAAS_INDUSTRY = [
@@ -78,14 +118,16 @@ _SAAS_INDUSTRY = [
 ]
 ```
 
-**V3 충돌 2건:**
+**증거 상태**: Repository fixture와 Production 일치 **VERIFIED** (Section 2-B 실측).
+
+**V3 충돌 2건 (VERIFIED):**
 
 1. `INDUSTRY_PRO.criteria_max = 499` → V3: `300+ → INDUSTRY_PRO`이므로 criteria_max = NULL이어야 함
-2. `INDUSTRY_CUSTOM: 500+, amount=0` → V3: CUSTOM은 규모 Band 아님. 500인 이상이라도 MANAGER INDUSTRY_PRO = 499,000원
+2. `INDUSTRY_CUSTOM: 500+, amount=0` → V3: 500인 이상이라도 INDUSTRY_PRO = 499,000원
 
-현재 MANAGER INDUSTRY 500인 이상 Preview → INDUSTRY_CUSTOM row → `amount=0` → Composer에서 `base_amount=0` → validation 실패 또는 가격 오류.
+현재 MANAGER INDUSTRY 500인 이상 Preview → INDUSTRY_CUSTOM → `amount=0` → `COMPLIANCE_BASE_QUOTE_REQUIRED`. Composer 도달 불가.
 
-**증거 출처**: Repository test fixture VERIFIED (lines 11–14). Production price_master rows = **READ 0회** — production 상태 UNVERIFIED.
+**수정 방법 TBD**: INDUSTRY_PRO criteria_max → NULL + INDUSTRY_CUSTOM 처리 (deactivate or repurpose). OBJ02/OBJ03 설계 후 별도 DATA WO. Production mutation은 Owner Gate 선행.
 
 ### 3-B. FIELD 가격 계산 — V3 CONFLICT (Major)
 
@@ -114,9 +156,7 @@ field_uplift_amount=100000,
 | CONSTRUCTION <50억 | 249,000 | 349,000 ✗ | 249,000 |
 | CONSTRUCTION ≥50억 | 499,000 | 599,000 ✗ | 249,000 |
 
-V3에서 FIELD Base는 249,000 고정이므로 uplift 모델 전체가 교체 대상이다.
-
-또한: Preview 서비스가 FIELD 사업장에도 `resolve_plan("SAAS", sector, criteria_value)`를 호출한다 (`services/saas_pricing_preview_v2.py` line 90). V3에서 FIELD 가격은 Resolver 결과에 의존하지 않는다. 단, `base_band_code` (계약 scope 증거)는 여전히 필요할 수 있으므로 resolver 호출 자체를 제거하는 것과 호출 결과를 가격 계산에서 무시하는 것을 구분해야 한다.
+V3에서 FIELD Base는 249,000 고정이므로 uplift 모델이 교체 대상이다.
 
 ### 3-C. term_discounts — 전부 None (Block Condition)
 
@@ -131,8 +171,7 @@ SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
 
 Composer Step 12: None → `TERM_DISCOUNT_UNRESOLVED` 반환 → Snapshot 생성 불가.
 
-**현재 상태**: 모든 V2 Preview가 `TERM_DISCOUNT_UNRESOLVED`를 반환한다.
-V3는 할인율을 확정했으므로 Policy 객체에 실제 값을 넣어야 Quote/Payment까지 진행할 수 있다.
+V3는 할인율을 확정했으므로 Policy 객체에 실제 값 주입이 필요하다.
 
 ### 3-D. term_months — 결제/계약 의미 혼용 (Semantic Coupling)
 
@@ -154,32 +193,29 @@ V3는 할인율을 확정했으므로 Policy 객체에 실제 값을 넣어야 Q
 | `services/saas_change_order_v2.py:261,262` | `from_term_months / to_term_months` | Change Order 비교 |
 | `services/saas_contract_storage_mapper_v2.py:73,114` | `term_months=selection.term_months` | Commercial Version 조립 |
 
-**CRITICAL**: `payment_post_process.py` lines 101–105, 117–120에서 `period_months`가 `contracts.end_date`를 직접 계산한다. 이것이 V3에서 UNRESOLVED인 `payment_months ↔ contract.end_date` coupling의 실제 코드 위치다.
+**CRITICAL**: `payment_post_process.py` lines 101–105, 117–120에서 `period_months`가 `contracts.end_date`를 직접 계산한다. V3에서 UNRESOLVED인 `payment_months ↔ contract.end_date` coupling의 실제 코드 위치.
+
+**ADDITIONAL CONTEXT (Section 2-B)**: `saas_contract_commercial_versions` 테이블이 Production 미적용이므로 `term_months` DB column은 아직 Production에 없다. OBJ05에서 최종 의미 결정 후 최초 DDL에 반영 가능.
 
 ### 3-E. Change Order — V3 Semantic Conflicts (3건)
-
-Change Order는 기존에 "term_months rename 연쇄" 대상으로만 분류됐으나, 3가지 구체적 의미 충돌이 있다.
 
 **Conflict 1: policy_version Gate — V2→V3 전환 차단**
 
 `saas_change_order_v2.py` (line 227: `POLICY_VERSION_MISMATCH`):
 - `current_policy_version` ≠ `target_policy_version` → `POLICY_VERSION_MISMATCH` 반환
-- V3 정책 버전 문자열(`V3-FROZEN`)이 V2 policy 버전과 다르면 V2 policy 기반 계약의 V3 upgrade가 이 gate에서 전면 차단됨
-- **결론**: V2→V3 전환을 Change Order 경로로 허용할지 여부 확정 필요 (OBJ04/OBJ05 결정)
+- **결론**: V2→V3 전환 Change Order 경로 허용 여부 확정 필요 (OBJ05 결정)
 
 **Conflict 2: FIELD scale band → SCALE_BAND_INCREASE 오분류 가능성**
 
 `saas_change_order_v2.py` (lines 380–382: `SCALE_BAND_INCREASE`):
-- FIELD 사업장 scale 변화 시 `SCALE_BAND_INCREASE` 분류 로직이 호출됨
-- V3에서 FIELD 가격은 249,000 고정이므로 scale band 변화가 FIELD 가격 변동을 의미하지 않음
-- **결론**: FIELD에 대한 Change Order 분류 기준 패치 필요
+- V3에서 FIELD 가격 249,000 고정 → scale band 변화가 가격 변동 아님
+- **결론**: FIELD Change Order 분류 기준 패치 필요
 
 **Conflict 3: term_months semantic split — 비교 기준 ambiguity**
 
 `saas_change_order_v2.py` (lines 261–262: `current_term = cv.term_months` / `target_term = target_selection.term_months`):
-- `from_term_months / to_term_months` 비교
-- OBJ05 이후 V3 Selection이 `payment_months`를 사용하면, V2 CV의 `term_months`와 V3 Selection의 `payment_months`를 직접 비교하는 것은 apples-to-oranges
-- **결론**: OBJ05 semantic split 결정 후 Change Order 비교 로직 패치 필요
+- OBJ05 이후 V3가 `payment_months`를 사용하면 V2 CV의 `term_months`와 비교 불일치
+- **결론**: OBJ05 결정 후 최소 패치 필요
 
 ---
 
@@ -187,13 +223,13 @@ Change Order는 기존에 "term_months rename 연쇄" 대상으로만 분류됐�
 
 | 질문 | 실측 결과 |
 |------|---------|
-| **Q1. FIELD도 현재 SAAS Compliance Base resolve를 거치는가?** | YES. `services/saas_pricing_preview_v2.py:90`: `_call_resolver(supabase, site.sector, site.criteria_value)` — MANAGER/FIELD 모두 동일 경로 |
-| **Q2. FIELD 정상가격 계산 전에 base_amount가 필수인가?** | YES (현재). Composer line 204: `normal = s.base_amount + policy.field_uplift_amount`. V3에서는 불필요 (249,000 고정) |
-| **Q3. FIELD에 산업 500+를 넣으면 어떤 tier/status가 되는가?** | INDUSTRY_CUSTOM row → `amount=0` → Preview Step 207 `has_quote_required=True` → `COMPLIANCE_BASE_QUOTE_REQUIRED` 반환. Composer 도달 불가. |
-| **Q4. MANAGER 산업 500+는 현재 어떤 tier/status가 되는가?** | 동일: INDUSTRY_CUSTOM(amount=0) → `COMPLIANCE_BASE_QUOTE_REQUIRED`. V3: 499,000이어야 함 |
-| **Q5. V3 요구 300+=499,000을 위해 DIAGNOSIS range rule 재사용 가능한가?** | price_master에 DIAGNOSIS INDUSTRY rows 존재 여부 미확인(read-only). Resolver 로직 자체는 재사용 가능(서비스 코드 변경 없음). price_master DATA에서 SAAS INDUSTRY rows 수정이 필요한 경우 DDL이 아닌 데이터 변경 WO 필요. |
-| **Q6. DIAGNOSIS row를 SAAS 계약가격 SSOT로 사용하는 것과 range rule만 재사용하는 것의 구분** | 현재 SAAS용 price_master rows(`service_type=SAAS`)가 별도 존재. range rule 재사용 = SAAS rows의 criteria_max 수정. DIAGNOSIS rows 직접 사용 = 별도 service_type 조회 경로 추가 → 설계 변경 대상. 이번 단계에서 방식 확정 금지. |
-| **Q7. price_master 변경 vs 별도 V3 resolver vs policy-local band table** | 대안 3가지. 이번 단계에서 선택 금지. OBJ02/OBJ03 이후 OBJ04에서 결정. |
+| **Q1. FIELD도 현재 SAAS Compliance Base resolve를 거치는가?** | YES. `services/saas_pricing_preview_v2.py:90` |
+| **Q2. FIELD 정상가격 계산 전에 base_amount가 필수인가?** | YES (현재). V3에서는 불필요 (249,000 고정) |
+| **Q3. FIELD에 산업 500+를 넣으면 어떤 tier/status가 되는가?** | INDUSTRY_CUSTOM row → `amount=0` → `COMPLIANCE_BASE_QUOTE_REQUIRED`. Composer 도달 불가. |
+| **Q4. MANAGER 산업 500+는 현재 어떤 tier/status가 되는가?** | 동일. V3: 499,000이어야 함. CONFLICT VERIFIED. |
+| **Q5. V3 요구 300+=499,000을 위해 DIAGNOSIS range rule 재사용 가능한가?** | DIAGNOSIS Production 구조가 이미 300+ 무한 (Section 2-B). SAAS INDUSTRY rows 수정으로 동일 구조 맞출 수 있음. Resolver 로직 자체는 변경 없음. |
+| **Q6. SAAS INDUSTRY rows 수정 방향** | INDUSTRY_PRO criteria_max → NULL, INDUSTRY_CUSTOM 처리 (deactivate/repurpose). 방식 확정은 OBJ02/OBJ03 이후 DATA WO. |
+| **Q7. price_master 변경 vs 별도 V3 band table** | SAAS INDUSTRY rows 직접 수정이 가장 단순. Resolver 로직 재사용 가능. |
 
 ---
 
@@ -201,13 +237,13 @@ Change Order는 기존에 "term_months rename 연쇄" 대상으로만 분류됐�
 
 | PATH | SYMBOL | USED FOR PRICE? | USED FOR DISCOUNT? | USED FOR PAYMENT PERIOD? | USED FOR CONTRACT DATES? | PERSISTED? | V3 CONFLICT | DISPOSITION CANDIDATE |
 |------|--------|-----------------|-------------------|--------------------------|--------------------------|-----------:|-------------|----------------------|
-| `schemas/saas_pricing_v2.py:46` | `SaasCommercialSelection.term_months` | YES (multiplier) | YES | NO | NO | NO | RENAME | `payment_months` successor |
-| `schemas/saas_pricing_v2.py:175` | `SaasPricingSnapshotV2.term_months` | YES | YES | YES (→ period_months) | NO | YES (JSON) | RENAME | new schema version |
-| `schemas/saas_pricing_policy_v2.py:66` | `SaasTermDiscountPolicy.term_months` | NO | YES (key) | NO | NO | NO | RENAME | `payment_months` |
-| `schemas/saas_pricing_preview_v2.py:63` | request `term_months` | NO | YES | NO | NO | NO | RENAME | API 필드명 변경 |
-| `schemas/saas_contract_commercial_v2.py:87` | DB column `term_months` | NO | NO | YES | PARTIAL (3-way) | YES (DB) | UNVERIFIED | OBJ05 결정 |
-| `migrations/…atomic_apply.sql:32` | DDL `term_months` column | NO | NO | YES | YES (3-way guard) | YES (DDL) | UNVERIFIED | OBJ05 결정 (new migration) |
-| `migrations/…renewal_atomic.sql:342` | 3-way `snap == cv == pay.period_months` | NO | NO | YES | YES | YES | UNVERIFIED | OBJ05 결정 |
+| `schemas/saas_pricing_v2.py:46` | `SaasCommercialSelection.term_months` | YES (multiplier) | YES | NO | NO | NO | RENAME | `payment_months` (patch existing) |
+| `schemas/saas_pricing_v2.py:175` | `SaasPricingSnapshotV2.term_months` | YES | YES | YES (→ period_months) | NO | YES (JSON) | RENAME | EVOLVE schema field |
+| `schemas/saas_pricing_policy_v2.py:66` | `SaasTermDiscountPolicy.term_months` | NO | YES (key) | NO | NO | NO | RENAME | `payment_months` (patch) |
+| `schemas/saas_pricing_preview_v2.py:63` | request `term_months` | NO | YES | NO | NO | NO | RENAME | API EVOLVE BOUNDARY |
+| `schemas/saas_contract_commercial_v2.py:87` | DB column `term_months` | NO | NO | YES | PARTIAL (3-way) | YES (DB) | OBJ05 DEPENDENT | DDL not yet applied — can finalize for V3 |
+| `migrations/…atomic_apply.sql:32` | DDL `term_months` column | NO | NO | YES | YES (3-way guard) | YES (DDL) | OBJ05 DEPENDENT | Not applied — can finalize for V3 |
+| `migrations/…renewal_atomic.sql:342` | 3-way `snap == cv == pay.period_months` | NO | NO | YES | YES | YES | OBJ05 DEPENDENT | Not applied — finalize with OBJ05 |
 | `services/payment_post_process.py:101,161` | `period_months → end_date` | NO | NO | NO | **YES (직접)** | NO | **UNRESOLVED** | OBJ05 결정 필수 |
 
 ---
@@ -220,10 +256,10 @@ Change Order는 기존에 "term_months rename 연쇄" 대상으로만 분류됐�
 | Preview Resolver 호출 | `resolve_plan("SAAS", sector, value)` | 불필요 (가격), 필요 (base_band_code 확보 여부 TBD) | FIELD는 base_amount 불필요 |
 | Preview → Composer input | `base_amount` 필수 (`SaasSitePricingInput`) | **불필요** (V3: 249,000 고정) | `SaasSitePricingInput` 인터페이스 변경 필요 |
 | Composer FIELD | `normal = base_amount + field_uplift_amount` | 교체 필요: `normal = FIELD_BASE_AMOUNT` | |
-| Snapshot `base_amount` | 저장됨 (`SaasSiteScope.base_amount`) | V3에서 의미 변화 (사업장 Compliance Base → no longer price SSOT) | scope 증거 보존 필요 여부 TBD |
-| Quote | `term_months` + 금액 freeze | 동일 구조 유지 가능 (명칭 rename) | |
+| Snapshot `base_amount` | 저장됨 (`SaasSiteScope.base_amount`) | V3에서 의미 변화 | scope 증거 보존 필요 여부 TBD |
+| Quote | `term_months` + 금액 freeze | 동일 구조 유지, field name patch | |
 | Payment Prepare | `period_months = snap.term_months` | 동일 값 (결제월수) 전달 | OBJ05 결정 전 변경 없음 |
-| Contract Commercial Version | `term_months` 저장 | OBJ05 결정 후 | rename 또는 new column |
+| Contract Commercial Version | `term_months` 저장 | OBJ05 결정 후. **DDL 미적용으로 V3 기준으로 최초 적용 가능** | |
 | Renewal | `period_months = snap.term_months` | OBJ05 결정 후 | |
 
 ---
@@ -234,120 +270,133 @@ Change Order는 기존에 "term_months rename 연쇄" 대상으로만 분류됐�
 |------|---------|---------|------|
 | ≤49 | INDUSTRY_STARTER (149,000) | ≤49 = 149,000 ✓ | 없음 |
 | 50~299 | INDUSTRY_BUSINESS (299,000) | 50~299 = 299,000 ✓ | 없음 |
-| 300~499 | INDUSTRY_PRO (499,000) | 300+ = 499,000 — but criteria_max=499 ✗ | CONFLICT |
-| 500+ | INDUSTRY_CUSTOM (0) | 300+ = 499,000 (PRO) ✗ | CONFLICT |
+| 300~499 | INDUSTRY_PRO (499,000) | 300+ = 499,000 — criteria_max=499 ✗ | CONFLICT VERIFIED |
+| 500+ | INDUSTRY_CUSTOM (0) | 300+ = 499,000 (PRO) ✗ | CONFLICT VERIFIED |
 
-price_master에서 SAAS INDUSTRY rows:
-- `INDUSTRY_PRO.criteria_max`: 499 → NULL로 변경 필요
-- `INDUSTRY_CUSTOM` (500+, amount=0) row: V3에서 MANAGER 500+ = INDUSTRY_PRO. CUSTOM row 처리 방식 TBD (data UPDATE or deactivate)
+Production 실측 (Section 2-B)으로 Repository fixture와 Production이 동일함이 확인됨.
 
-이 변경은 DDL이 아닌 **price_master 데이터 변경**이다. Production mutation — 별도 WO 필요.
-
-**증거 출처**: Repository test fixture VERIFIED. Production rows = READ 0회, UNVERIFIED.
+수정 내용: `INDUSTRY_PRO criteria_max → NULL`, `INDUSTRY_CUSTOM 처리`. 방법 TBD — OBJ03 후 별도 DATA WO.
 
 ---
 
 ## 8. Snapshot / Backward Compatibility
 
-**기존 V2 Frozen Snapshot 보존 원칙**: 이미 존재하는 V2 상태의 quotes/contracts의 `pricing_snapshot`은 V3 정책 때문에 재해석하거나 변조하면 안 된다.
+**Production 실측 반영 (Section 2-B)**: `SAAS_PRICING_V2` 저장 snapshot = 0. Backward-compatible snapshot parser 병렬 구현 불필요.
+
+**권장 방향**: 현재 Pricing Snapshot Schema를 V3 semantics로 evolve한다.
 
 | 질문 | 판정 |
 |------|------|
-| V3 snapshot을 V2 schema에 넣으면 semantic ambiguity가 생기는가? | YES. V3에서 `term_months`는 `payment_months`를 의미하며 `contract_term`과 분리됨. V2 schema의 `term_months` column은 이 분리를 표현할 수 없음. |
-| 기존 V2 snapshot read compatibility 유지하면서 V3 schema successor가 필요한가? | YES. V3 Snapshot은 `schema_version: SAAS_PRICING_V3`로 별도 발행 권장. V2 `SAAS_PRICING_V2` 스냅샷은 read-only 보존. |
-| snapshot parser / quote parser / payment parser | 현재 `SaasPricingSnapshotV2.model_validate()` 사용. V3는 V3 schema validator 필요. |
-| renewal replay path | `snap.term_months`을 `effective_from` 계산에 사용. OBJ05에서 의미 분리 후 replay path 재검토 필요. |
+| Production에 V2 snapshot이 있어 read 호환성이 필요한가? | **NO** — SAAS_PRICING_V2 persisted = 0. Stored V2 compatibility 때문에 parser duplication 불필요. |
+| V3 snapshot에 V2 `term_months`를 그대로 쓸 수 있는가? | NO. V3에서 `payment_months` 의미 분리 필요. |
+| 권장 방향 | 기존 snapshot schema를 `payment_months`로 evolve. `schema_version: SAAS_PRICING_V3`. Production V2 snapshot = 0이므로 clean migration 가능. |
+| renewal replay path | `snap.term_months`을 `effective_from` 계산에 사용. OBJ05 결정 후 최소 패치. |
 
 ---
 
 ## 9. Payment / Renewal Atomicity Guard
 
-V2 invariant: `ONE PAYMENT = EXACTLY ONE CONTRACT MUTATION PATH` — 이 invariant는 V3에서도 반드시 유지된다.
+V2 invariant: `ONE PAYMENT = EXACTLY ONE CONTRACT MUTATION PATH` — V3에서도 반드시 유지.
 
-| 영역 | V3 impact | 판정 |
-|------|-----------|------|
-| new contract atomic (OBJ10-C SQL) | `term_months` column. OBJ05가 rename or new column 결정 → migration 필요 | UNVERIFIED |
-| renewal atomic (OBJ10-D-B2 SQL) | 3-way `snap.term_months == cv.term_months == pay.period_months`. V3 semantic split 후 이 3-way가 의미적으로 여전히 correct한지 검증 필요 | UNVERIFIED |
-| replay idempotency | `target.effective_from` 기준 → payment_months와 무관 | REUSE-AS-IS |
-| race recovery | max 2 atomic RPC — payment_months 변경 영향 없음 | REUSE-AS-IS |
-| atomic invariant structure | 구조 자체는 V3와 무관 | REUSE-AS-IS |
+| 영역 | Production 상태 | V3 impact | 판정 |
+|------|----------------|-----------|------|
+| new contract atomic (OBJ10-C SQL) | **NOT APPLIED** | `term_months` column. OBJ05 결정으로 V3 기준 최초 적용 가능 | OBJ05 DEPENDENT |
+| renewal atomic (OBJ10-D-B2 SQL) | **NOT APPLIED** | 3-way guard. OBJ05 결정으로 V3 기준 최초 적용 가능 | OBJ05 DEPENDENT |
+| replay idempotency | (code only) | `target.effective_from` 기준 — payment_months와 무관 | REUSE-AS-IS |
+| race recovery | (code only) | max 2 atomic RPC — payment_months 변경 영향 없음 | REUSE-AS-IS |
+| atomic invariant structure | (code only) | 구조 자체는 V3와 무관 | REUSE-AS-IS |
 
-결론: **payment_months semantic split 때문에 atomic 구조 자체는 변경 불필요. payload field(`term_months` column) rename or patch가 OBJ05에서 결정된다.**
+**결론**: V2 Atomic DDL이 Production 미적용이므로, OBJ05에서 `payment_months` 의미를 확정한 뒤 V3 기준으로 최초 Production DDL 적용이 가능하다. Backward-compatible migration 부담이 없다.
 
 ---
 
-## 10. Reuse Strategy — Classification Matrix
+## 10. Implementation Strategy — Classification Matrix
 
-### 10-A. V2 재사용 우선 원칙
+### 10-A. Architectural Principle
 
-TAI Safe Pricing V3는 V2 Backend 재구축 프로젝트가 아니다.
+**V2 Backend는 Implementation Baseline이다.** TAI Safe Pricing V3는 V2 재구축이 아니라 V2의 검증된 구조 위에서 정책/의미 delta만 최소 패치하는 프로젝트다.
 
-V2에서 이미 구현·검증된 다음 자산은 가능한 한 재사용한다:
+**보존 대상은 파일버전이 아니라 invariant다:**
 
-- 가격 산술 구조 (Primary 선정, Additional rate, worker 누진, VAT)
-- Quote 저장 / 금액 정합성 / 번호 발행
-- Payment 3중 금액 검증 / Ownership guard / fail-closed
-- Commercial Version 구조 / Site Scope
-- Atomic 신규계약 / Atomic Renewal / Replay / Race Recovery
-- `ONE PAYMENT = ONE MUTATION PATH` invariant
-- Renewal runtime routing
+```
+Pricing arithmetic (Primary, Additional, Worker, VAT)
+Frozen Quote SSOT
+Payment 3중 금액 검증
+Ownership / Status guard / fail-closed
+Atomic contract application
+Atomic renewal
+Replay / Race recovery
+ONE PAYMENT = ONE CONTRACT MUTATION PATH
+Legacy SaaS runtime isolation
+```
 
-**"V2 외부 behavior, schema compatibility, 기존 stored data, 회귀 결과를 깨지 않는다"** 는 의미에서 V2를 보존한다. 공통화를 위해 pure helper/validator/arithmetic 추출, parser dispatch 추가는 가능하다. 단: V2 regression이 동일하게 PASS해야 한다.
+**Production 실측으로 확정된 사실:**
+
+- V2 Commercial DDL (saas_contract_commercial_versions, site_scopes) = **NOT APPLIED**
+- V2 stored quotes/snapshots/payments = **0**
+- 기존 SaaS contracts = 8건, **전부 Legacy plan_code 계약**
+
+이 사실이 의미하는 것:
+
+1. V2/V3 병렬 runtime 유지 불필요
+2. Stored V2 snapshot parser 병렬 구현 불필요
+3. OBJ10-A/B V3 전용 복제 불필요
+4. Commercial DDL = OBJ05 결정 후 V3 기준 최초 적용 가능
+
+**Legacy 계약은 별도 route로 보존한다.** Legacy contracts는 V3 pricing과 무관하게 기존 경로를 유지한다.
 
 ### 10-B. Anti-Duplication Rule
 
-V3 개발에서 다음 금지 원칙을 적용한다:
-
 - 동일 VAT calculator 복제 → 금지
-- 동일 worker progressive calculator 복제 → 금지
 - 동일 Primary/Additional calculation 복제 → 금지
+- 동일 worker progressive calculator 복제 → 금지
 - 동일 amount integrity validation 복제 → 금지
-- 동일 Atomic transaction orchestration 복제 → 금지 우선
-- 동일 replay/race recovery 구현 복제 → 금지 우선
+- 동일 Atomic transaction orchestration 복제 → 금지
+- 동일 replay/race recovery 복제 → 금지
 
-필요하면 shared pure core로 추출한다.
+필요하면 shared pure helper로 추출한다.
 
-### 10-C. Reuse Strategy 분류 기준
+### 10-C. Implementation Strategy 분류 기준
 
 | 코드 | 정의 |
 |------|------|
-| **REUSE-AS-IS** | 현재 구현을 그대로 사용 가능 |
-| **REUSE-WITH-POLICY** | 공통 로직은 그대로, V3 policy 값/Strategy만 주입 |
-| **REUSE-WITH-PATCH** | 기존 구조를 일반화하거나 작은 분기 추가. V2 regression 필수 |
-| **REUSE-WITH-ADAPTER** | 핵심 로직 공유, V2/V3 입력/스냅샷 차이만 얇은 adapter로 변환 |
-| **NEW-BOUNDARY** | 의미가 달라 기존 contract를 그대로 쓰면 semantic ambiguity가 생기는 경우만 (예: payment_months API contract). Backend 전체 복제 ≠ NEW-BOUNDARY |
-| **UNVERIFIED** | OBJ05 등 선행 의미 결정 필요 |
-| **UNRELATED** | V3 SaaS와 무관 |
+| **PATCH EXISTING** | 현재 V2 코드를 V3 policy/semantic으로 최소 수정. V2 codebase 직접 사용. |
+| **REUSE-AS-IS** | 현재 구현 그대로 사용. 변경 없음. |
+| **EVOLVE BOUNDARY** | API/Snapshot 같은 의미 경계에서 field 이름/version만 evolve. Backend core 복제 아님. |
+| **OBJ05 DEPENDENT** | `payment_months ↔ contract.end_date ↔ renewal boundary` 결정 후 최소 패치. |
+| **LEGACY PRESERVE** | Legacy contract runtime. 변경 금지. |
+| **UNRELATED** | V3 SaaS와 무관. |
 
 ### 10-D. Classification Matrix
 
-| Object | Existing Asset Value | V3 Delta | Reuse Strategy | OBJ05 Dep | Evidence |
-|--------|---------------------|----------|----------------|-----------|----------|
-| **Pricing Schema** (`saas_pricing_v2.py`) | frozen snapshot structure; `term_months` in Selection + Snapshot | payment_months semantic; V3 snapshot contract | REUSE-WITH-POLICY + NEW-BOUNDARY (V3 snapshot only) | YES | lines 46,175 |
-| **Pricing Policy** (`saas_pricing_policy_v2.py`) | policy types, validator, canonical factory | FIELD fixed_base=249,000; discounts 0/500/1000/1500/2000 bps; MANAGER range 300+ | REUSE-WITH-POLICY | NO | lines 219,231-235 |
-| **Pricing Composer** (`saas_pricing_composer_v2.py`) | site ordering, Primary/Additional calc, worker progressive, VAT, snapshot construction | FIELD: `normal = 249,000` (not base+uplift) | REUSE-WITH-POLICY / REUSE-WITH-PATCH | NO | line 204 |
-| **Preview Request Schema** (`saas_pricing_preview_v2.py`) | `term_months` API input field | V3 needs `payment_months` | NEW-BOUNDARY (API contract) | YES | line 63 |
-| **Preview Service** (`saas_pricing_preview_v2.py`) | site parsing, resolver call, composer orchestration, error mapping | FIELD resolver path (가격 불필요, context TBD) | REUSE-WITH-PATCH (FIELD 분기 최소화) | NO | line 90 |
-| **Price Resolver** (`pricing_resolver_svc.py`) | `resolve_plan` logic, band lookup | FIELD 가격 의존 제거 TBD; context 용도는 별도 판단 | REUSE-AS-IS | NO | lines 47-85 |
-| **price_master DATA** (Production DB — 코드 artifact 아님) | Repo fixture VERIFIED; Production READ 0회 | INDUSTRY_PRO criteria_max + INDUSTRY_CUSTOM 처리 | UNVERIFIED (production state) | NO | test lines 11-14 |
-| **Quote Request Schema** (`saas_quote_v2.py`) | `term_months` field | V3 needs `payment_months` | NEW-BOUNDARY (API contract) | YES | line 76 |
-| **Quote Snapshot Item Schema** | V2 snapshot items with `term_months` | V3 snapshot items with `payment_months` | NEW-BOUNDARY (semantic contract) | YES | — |
-| **Quote Service** (`saas_quote_v2.py`) | ownership, server recalculation, freeze, persistence, numbering | V3 request/snapshot parsing | REUSE-WITH-ADAPTER | YES | line 74 |
-| **Payment Adapter OBJ10-A** (`saas_payment_v2_adapter.py`) | quote ownership, ISSUED status, SAAS validation, amount 3-way, INICIS prepare | V3 snapshot parsing | REUSE-WITH-ADAPTER (V2 parser + V3 parser → Shared Core) | PARTIAL | line 160 |
-| **Payment Success Adapter OBJ10-B** (`saas_payment_success_v2_adapter.py`) | paid status, ownership, amount integrity, period consistency, apply plan, fail-closed | V3 snapshot parsing; payment_months semantic | REUSE-WITH-ADAPTER + OBJ05 sub-boundary | YES | lines 284,307 |
-| **Commercial Version Schema** (`saas_contract_commercial_v2.py`) | product_tier, worker_capacity, pricing_policy_version, snapshot, effective_from, term_months | term_months field meaning | REUSE-WITH-PATCH + OBJ05 | YES | line 87 |
-| **Contract Builder** (`payment_post_process.py`) | end_date calculation, renewal extend | payment_months ↔ end_date coupling | REUSE-WITH-PATCH + OBJ05 (core blocker) | YES (core) | lines 101,161 |
-| **Site Scope** (`saas_contract_commercial_v2.py`) | entity_type, entity_id, sector structure | FIELD base_band_code meaning TBD | REUSE-AS-IS; FIELD base_band_code UNVERIFIED | PARTIAL | line 61 |
-| **Contract Storage Mapper** (`saas_contract_storage_mapper_v2.py`) | CV assembly from selection + snapshot | term_months field name | REUSE-WITH-PATCH | YES | lines 73,114 |
-| **Change Order** (`saas_change_order_v2.py`) | site diff, worker diff, product tier diff, change line gen, status framework | 3 semantic conflicts (Sec 3-E) | REUSE-WITH-PATCH | YES (Conflict 3) | lines 227,380-382,261,262 |
-| **Atomic New Contract SQL OBJ10-C** | ONE PAYMENT = ONE MUTATION invariant, all guards | term_months/payment_months payload field | REUSE-AS-IS / REUSE-WITH-PATCH + OBJ05 | YES | migration lines 32,57-58,499 |
-| **Renewal Adapter OBJ10-D-A** (`saas_renewal_v2_adapter.py`) | renewal quote validation, replay, race recovery | payment_months mapping | REUSE-WITH-ADAPTER + OBJ05 | YES | line 358 |
-| **Renewal Temporal Logic D-B1** | `end_date → effective_from` conversion | payment_months ↔ contract.end_date | REUSE-WITH-PATCH + OBJ05 | YES (core) | (별도 파일) |
-| **Atomic Renewal SQL D-B2** | 3-way invariant structure | 3-way field naming after OBJ05 | REUSE-AS-IS / REUSE-WITH-PATCH + OBJ05 | YES | migration line 342 |
-| **Runtime Wiring D-B3** (`saas_renewal_runtime_v2.py`) | V2/Legacy routing, ONE MUTATION invariant | first_apply boundary (OBJ05) | REUSE-AS-IS; first_apply OBJ05 verification | YES (boundary) | source read |
-| **Legacy V1 Quote** (`member_quote_svc.py`, `admin_quote_svc.py`) | V1 contract path | — | UNRELATED | NO | — |
-| **Frontend-facing API** (`routers/public_pricing_v2.py`) | V2 preview/quote routing | payment_months API contract | NEW-BOUNDARY + REUSE-WITH-PATCH (shared core) | YES | — |
-| **Tests** (pricing, preview, quote, payment, commercial, renewal) | V2 regression evidence | V3 policy/boundary | REUSE-AS-IS (V2 regression 유지) + V3 tests 신규 추가 | PARTIAL | test files |
+| Object | Production State | V3 Delta | Strategy | OBJ05 Dep | Evidence |
+|--------|-----------------|----------|----------|-----------|----------|
+| **Pricing Schema** (`saas_pricing_v2.py`) | Code only; 0 stored | `payment_months` rename; V3 schema_version | EVOLVE BOUNDARY | YES | lines 46,175 |
+| **Pricing Policy** (`saas_pricing_policy_v2.py`) | Code only | field_base=249,000; discounts 0/500/1000/1500/2000; policy_version | PATCH EXISTING | NO | lines 219,231-235 |
+| **Pricing Composer** (`saas_pricing_composer_v2.py`) | Code only | FIELD: `normal = 249,000` (not base+uplift) | PATCH EXISTING | NO | line 204 |
+| **Preview Request Schema** (`saas_pricing_preview_v2.py`) | Code only | `payment_months` field | EVOLVE BOUNDARY | YES | line 63 |
+| **Preview Service** (`saas_pricing_preview_v2.py`) | Code only | FIELD resolver path (가격 불필요) | PATCH EXISTING | NO | line 90 |
+| **Price Resolver** (`pricing_resolver_svc.py`) | Code only | FIELD 가격 의존 제거 TBD; resolver logic sound | REUSE-AS-IS | NO | lines 47-85 |
+| **price_master DATA** (Production DB) | **CONFLICT VERIFIED** | INDUSTRY_PRO criteria_max + INDUSTRY_CUSTOM | DATA WO (OBJ03 후) | NO | Section 2-B |
+| **Quote Request Schema** (`saas_quote_v2.py`) | Code only; 0 stored | `payment_months` field | EVOLVE BOUNDARY | YES | line 76 |
+| **Quote Snapshot Item Schema** | Code only; 0 stored | V3 schema_version; `payment_months` | EVOLVE BOUNDARY | YES | — |
+| **Quote Service** (`saas_quote_v2.py`) | Code only; 0 stored | V3 request/snapshot 처리 | PATCH EXISTING | YES | line 74 |
+| **Payment Adapter OBJ10-A** (`saas_payment_v2_adapter.py`) | Code only; 0 paid | V3 snapshot 처리 | PATCH EXISTING | PARTIAL | line 160 |
+| **Payment Success Adapter OBJ10-B** (`saas_payment_success_v2_adapter.py`) | Code only; 0 paid | V3 snapshot 처리; payment_months semantic | PATCH EXISTING + OBJ05 | YES | lines 284,307 |
+| **Commercial Version Schema** (`saas_contract_commercial_v2.py`) | **NOT APPLIED** | `term_months` field meaning | PATCH EXISTING + OBJ05 | YES | line 87 |
+| **Contract Builder** (`payment_post_process.py`) | Code only | `payment_months ↔ end_date` coupling | OBJ05 DEPENDENT | YES (core) | lines 101,161 |
+| **Site Scope** (`saas_contract_commercial_v2.py`) | **NOT APPLIED** | FIELD base_band_code V3 용도 TBD | REUSE-AS-IS (NOT YET APPLIED) | PARTIAL | line 61 |
+| **Contract Storage Mapper** (`saas_contract_storage_mapper_v2.py`) | Code only | `term_months` → `payment_months` | PATCH EXISTING | YES | lines 73,114 |
+| **Change Order** (`saas_change_order_v2.py`) | Code only | 3 semantic conflicts (Sec 3-E) | PATCH EXISTING | YES (C3) | lines 227,380-382,261,262 |
+| **Atomic New Contract SQL OBJ10-C** | **NOT APPLIED** | `term_months` payload. OBJ05 후 V3 기준 최초 DDL 가능 | OBJ05 DEPENDENT | YES | migration lines 32,57-58,499 |
+| **Renewal Adapter OBJ10-D-A** (`saas_renewal_v2_adapter.py`) | Code only | payment_months mapping | PATCH EXISTING + OBJ05 | YES | line 358 |
+| **Renewal Temporal Logic D-B1** | Code only | payment_months ↔ contract.end_date | OBJ05 DEPENDENT | YES (core) | (별도 파일) |
+| **Atomic Renewal SQL D-B2** | **NOT APPLIED** | 3-way guard. OBJ05 후 V3 기준 최초 DDL 가능 | OBJ05 DEPENDENT | YES | migration line 342 |
+| **Runtime Wiring D-B3** (`saas_renewal_runtime_v2.py`) | Code only | first_apply boundary (OBJ05) | REUSE-AS-IS; OBJ05 verify | YES (boundary) | source read |
+| **Legacy SaaS runtime** (V1 plan_code path) | **8 active contracts** | — | LEGACY PRESERVE | NO | Section 2-B |
+| **Legacy V1 Quote** (`member_quote_svc.py`, `admin_quote_svc.py`) | Active | — | UNRELATED | NO | — |
+| **Frontend-facing API** (`routers/public_pricing_v2.py`) | Code only | `payment_months` boundary | EVOLVE BOUNDARY (얇은 route) | YES | — |
+| **Tests** | Code only | V3 policy값 기준 갱신 | PATCH EXISTING + invariant REUSE-AS-IS | PARTIAL | test files |
 
 ---
 
@@ -358,189 +407,149 @@ Public Preview Request (term_months)
   ↓
 Preview Service
   ↓ resolve_plan("SAAS", sector, value) ← MANAGER/FIELD 공통 (V3 FIELD는 분기 필요)
-Price Resolver → price_master
+Price Resolver → price_master (CONFLICT VERIFIED)
   ↓
   base_band_code + base_amount → SaasSitePricingInput
   ↓
 Pricing Composer
   MANAGER: normal = base_amount
-  FIELD:   normal = base_amount + field_uplift_amount  ← V3 REUSE-WITH-PATCH
+  FIELD:   normal = base_amount + field_uplift_amount  ← PATCH EXISTING
   term_months → raw_prepaid = monthly × term_months
   term_months → discount lookup → READY/TERM_DISCOUNT_UNRESOLVED
   ↓
-SaasPricingSnapshotV2 (term_months frozen)
+SaasPricingSnapshotV2 (term_months frozen)  ← EVOLVE BOUNDARY (0 stored)
   ↓
-Quote Service (Preview 재실행 → snapshot freeze)
-  ↓ snap.term_months
-Quote Frozen Item
+Quote Service (Preview 재실행 → snapshot freeze)  ← PATCH EXISTING
   ↓
-Payment Adapter OBJ10-A
-  period_months = snap.term_months → payments row
+Payment Adapter OBJ10-A  ← PATCH EXISTING
   ↓
-Payment Success Adapter OBJ10-B
-  pay.period_months == snap.term_months (검증)
+Payment Success Adapter OBJ10-B  ← PATCH EXISTING + OBJ05
   ↓
-Contract Builder (payment_post_process)
-  end_date = start + period_months  ← OBJ05 UNRESOLVED coupling
+Contract Builder  ← OBJ05 DEPENDENT
   ↓
-Atomic Contract Apply OBJ10-C (SQL)
-  term_months column + 3-way check
+Atomic Contract Apply OBJ10-C  ← NOT APPLIED; OBJ05 후 V3 기준 DDL
   ↓
 [Contract Active]
 
 Renewal path:
-Quote → Payment
-  period_months = snap.term_months
-  ↓
-Renewal Adapter D-A
-  ↓
-Temporal Logic D-B1 (end_date → effective_from)
-  ↓
-Atomic Renewal D-B2 (3-way: snap == cv == pay.period_months)
-  ↓
-Runtime Branch D-B3 → apply_saas_v2_renewal_runtime
+  Renewal Adapter D-A  ← PATCH EXISTING + OBJ05
+  Temporal Logic D-B1  ← OBJ05 DEPENDENT
+  Atomic Renewal D-B2  ← NOT APPLIED; OBJ05 후 V3 기준 DDL
+  Runtime Branch D-B3  ← REUSE-AS-IS; OBJ05 boundary verify
 ```
 
 ---
 
 ## 12. V3 구현 방향
 
-### A. V3에서 실제로 새로운 것 (변경 최소화 원칙)
+### A. V3에서 실제로 새로운 것
 
-V3의 신규 의미는 다음이 전부다:
+1. **FIELD pricing**: fixed 249,000 (base+uplift 제거)
+2. **Payment discount**: 0 / 5 / 10 / 15 / 20%
+3. **MANAGER INDUSTRY range**: 300+ (no max)
+4. **`payment_months` semantic**: `term_months` coupling 해체
+5. **`payment_months` ↔ contract period 분리**: OBJ05 결정
+6. **API/Snapshot boundary**: `payment_months` field evolve (0 stored이므로 clean)
 
-1. **FIELD pricing policy**: fixed 249,000 (base+uplift 모델 제거)
-2. **payment discount policy**: 0 / 5 / 10 / 15 / 20%
-3. **MANAGER INDUSTRY range**: 300+ (criteria_max 제거)
-4. **payment_months semantic name**: term_months coupling 해체
-5. **payment_months와 contract period 의미 분리**: OBJ05 결정 대기
-6. **V3 API / Snapshot boundary**: payment_months 필드가 필요한 API/Snapshot만
+나머지는 기존 검증된 구현 재사용이다.
 
-나머지는 기존 자산 재사용 우선이다.
+### B. Pricing Policy + Composer (PATCH EXISTING)
 
-### B. Pricing Policy — REUSE-WITH-POLICY
-
-V2 policy 전체를 복제하지 않는다. 변경된 값만:
-
+V2 Policy 구조 재사용. 변경 값만:
 - `field_uplift_amount` → `field_base_amount = 249,000`
 - `term_discounts` all None → `[0, 500, 1000, 1500, 2000]` bps
-- `MANAGER INDUSTRY INDUSTRY_PRO.criteria_max` → NULL
 - `PRICING_POLICY_VERSION` 새 버전 문자열
 
-Shared Policy Types (`SaasTermDiscountPolicy` 등)는 그대로 재사용.
+Composer FIELD 분기: `normal = policy.field_base_amount`. 나머지 산술(Primary/Additional/Worker/VAT) 재사용.
 
-### C. Pricing Composer + Preview — REUSE-WITH-POLICY/PATCH
+**Pricing Policy ≠ price_master.** `INDUSTRY_PRO criteria_max`, `INDUSTRY_CUSTOM` 처리는 Policy 코드가 아니라 price_master DATA 변경이다.
 
-재사용 대상:
-- site canonical ordering, Primary 선정
-- Additional rate 적용, worker progressive fee
-- raw payment, discount, VAT
-- snapshot construction pattern
+### C. Snapshot Evolve (Production V2 stored = 0)
 
-V3 패치 범위:
-- FIELD: `normal = policy.field_base_amount` (not `base_amount + uplift`)
-- FIELD resolver 경로: 가격 의존 제거 (context 호출 여부 TBD)
+V2 snapshot stored = 0이므로 backward-compatible parser 병렬 구현 불필요.
 
-복제 금지: Composer 전체 + Preview 전체를 V3용으로 copy하지 않는다.
+기존 schema를 V3 semantics로 직접 evolve:
+- `term_months` → `payment_months`
+- `schema_version: SAAS_PRICING_V3`
 
-### D. Snapshot / API Boundary — NEW-BOUNDARY
+V2/V3 dual parser = 불필요. 구체 field 변경은 OBJ04.
 
-Snapshot과 Preview/Quote API는 `payment_months` 의미를 담는 새 contract이 필요하다. 이 경우만 NEW-BOUNDARY를 적용한다.
+### D. Payment (PATCH EXISTING)
 
-- `SaasPricingSnapshotV3` — payment_months 명시, `schema_version: SAAS_PRICING_V3`
-- V2 `SAAS_PRICING_V2` 스냅샷은 read-only 보존
+Production V2 payment = 0. OBJ10-A/B 별도 V3 복제 불필요.
 
-단: Snapshot boundary가 새로 생긴다고 해서 Pricing/Quote/Payment 전체를 복제하지 않는다. 공통 계산결과를 담는 새 boundary일 뿐이다.
+기존 OBJ10-A/B 검증된 구현(ownership, 3-way integrity, INICIS, fail-closed)을 기반으로 V3 snapshot/payment_months 처리 최소 패치.
 
-### E. Quote / Payment / Renewal — REUSE-WITH-ADAPTER
+### E. Commercial DDL (OBJ05 후 최초 적용)
 
-재사용 대상 (공통화):
-- Quote: ownership, recalculation, freeze, persistence, numbering
-- Payment: 3-way integrity, INICIS prepare, paid status, fail-closed
-- Renewal: replay, race recovery, atomic apply, ONE MUTATION invariant
+`saas_contract_commercial_versions`, `saas_contract_site_scopes` = Production 미적용.
 
-V3 adapter 범위:
-- V3 snapshot 파싱 (thin parser dispatch)
-- payment_months semantic mapping
+OBJ05에서 `payment_months` 의미 확정 후 V3 기준으로 최초 Production DDL 적용 가능. Backward-compatible migration 부담 없음. 단: DDL은 별도 Owner Gate 후 실행.
 
-구조 목표:
-```
-V2 Snapshot Parser ─┐
-                   ├→ Shared Core
-V3 Snapshot Parser ─┘
-```
+### F. OBJ05 필수 결정 항목
 
-V2 Adapter 전체 copy 금지. V2 regression PASS 유지 필수.
+- `payment_months`가 `contract.end_date` 계산에 직접 쓰이는가, 분리되는가
+- `term_months` DB column 최종 이름 (rename or new semantic)
+- Renewal `effective_from` 경계 (`contract.end_date` 사용 유지 여부)
+- Change Order Conflict 3 해소 (term/payment 비교 기준)
 
-### F. OBJ05 Dependent Objects — UNVERIFIED sub-boundary
+### G. Test Policy
 
-다음은 OBJ05 `payment_months ↔ contract.end_date ↔ renewal boundary` 결정 전에 구체 구현 방식 확정 금지:
+보존해야 하는 것은 **invariant regression**이다:
+- Primary/Additional/Worker/VAT 정확성
+- Amount integrity validation
+- Atomicity / Replay / Race recovery
+- Ownership / Security / Fail-closed
 
-- Commercial Version Schema `term_months` field
-- Contract Builder `end_date = start + period_months`
-- Atomic OBJ10-C payload field
-- Renewal Adapter D-A mapping
-- Temporal Logic D-B1
-- Atomic Renewal D-B2 3-way guard
-- Runtime Wiring D-B3 first_apply boundary
-- Payment Success OBJ10-B period mapping
+변경이 허용되는 것:
+- FIELD uplift behavior 테스트 → V3 fixed 기준으로 갱신
+- 500+ CUSTOM behavior → V3 PRO 기준으로 갱신
+- discount=None behavior → V3 actual rates 기준으로 갱신
 
-### G. Test Strategy
+V2 정책값을 계속 PASS시킬 필요 없음 — 이것들은 V3에서 명시적으로 SUPERSEDED됨.
 
-V2 regression tests를 버리지 않는다:
-- V2 regression = 유지 (REUSE-AS-IS)
-- Shared Core tests = 공통화된 로직 검증
-- V3 policy/boundary tests = 추가
+### H. 최소 작업 순서 (OBJ-PM-READ 완료)
 
-기존 V2 test를 V3용으로 전환해서 V2 회귀증거를 잃는 방식 금지.
-
-### H. 최소 작업 Object 순서 (REUSE-FIRST)
-
-기존 방향(Policy Successor → Composer Successor → Preview Successor → Payment Successor)처럼 Backend를 수평복제하는 흐름 금지.
+Production read가 이미 완료됐으므로 OBJ-PM-READ 제거.
 
 ```
-OBJ02   — V3 Policy Delta + Shared Core Reuse Design
-          기존 Pricing Core에서 무엇을 공통화할지 최소 설계.
-          V3 policy values only (field_base=249000, discounts, MANAGER range).
+OBJ02
+— V3 Delta Design on Existing Backend
+  정확히 결정: 어떤 class/field를 최소 변경, 어떤 helper 공유
 
-OBJ03   — Pricing Core Minimal Implementation
-          REUSE-WITH-POLICY/PATCH 기준.
-          기존 arithmetic/snapshot 패턴 재사용.
+OBJ03
+— Pricing Core Minimal Patch
+  FIELD fixed 249,000 / discounts / MANAGER range 통합
+  기존 arithmetic 재사용
 
-OBJ-PM-READ — Production price_master READ-ONLY Verify
-          실제 rows 읽기 (UNVERIFIED 해소).
-          충돌 확인 시에만 별도 Data Mutation WO 발행.
+OBJ-PM-DATA  (Owner Gate 선행)
+— Production price_master DATA WO
+  INDUSTRY_PRO criteria_max → NULL
+  INDUSTRY_CUSTOM 처리
+  (방법 OBJ03 후 최종 결정)
 
-OBJ04   — V3 Boundary Integration
-          payment_months API / V3 snapshot boundary.
-          Preview/Quote는 shared core 재사용 + FIELD 분기 PATCH.
+OBJ04
+— API / Snapshot / Quote Integration
+  EVOLVE BOUNDARY (payment_months)
+  기존 Quote/Preview core PATCH EXISTING
 
-OBJ05   — Temporal Semantics Decision
-          payment_months ↔ service period ↔ contract.end_date ↔ renewal boundary 확정.
-          Change Order 3-E Conflicts 해소.
+OBJ05
+— Temporal Semantics Decision
+  payment_months ↔ contract.end_date ↔ renewal boundary
+  Change Order 3-E Conflicts 해소
 
-OBJ06   — Payment / Contract Minimal Integration
-          기존 payment/atomic core 재사용.
-          V3 parser/adapter + payload PATCH만.
+OBJ06
+— Payment / Commercial / Atomic Integration
+  OBJ10-A/B PATCH EXISTING
+  Commercial DDL V3 기준 최초 작성
 
-OBJ07   — Change Order / Renewal Minimal Integration
-          기존 Change Order/Atomic Renewal/Runtime 최대 재사용.
-          OBJ05 boundary PATCH만.
+OBJ07
+— Change Order / Renewal Integration
+  D-A/B1/B2/B3 PATCH EXISTING (OBJ05 기반)
 
-REFREEZE — V2 regression 100% + V3 tests + 통합 E2E.
+REFREEZE
+— invariant regression + V3 E2E
 ```
-
-### I. 성공 기준 (Objective Metric)
-
-V3 성공 기준은 "신규 V3 파일 수 최대화"가 아니다:
-
-- V2 regression 100% 유지
-- V3 정책 충족
-- duplicated business logic 최소
-- shared core 최대
-- semantic boundary(Snapshot/API)만 version 분리
-- Atomic invariant 유지
-- maintenance surface 최소화
 
 ---
 
@@ -549,61 +558,68 @@ V3 성공 기준은 "신규 V3 파일 수 최대화"가 아니다:
 ```
 RUNTIME term_months HITS  = 48개 (runtime 파일 기준, V1/Admin 제외)
 FIELD PRICING CONFLICTS   = 5개 (INDUSTRY 50-299, 300-499, BUILDING 5000+, CONSTRUCTION 49억, 50억+)
-INDUSTRY_PRO RANGE        = 300~499 (V3 요구: 300+ 상한 없음)
-INDUSTRY_CUSTOM 500+      = amount=0 (V3 요구: 500+ → INDUSTRY_PRO = 499,000)
+INDUSTRY_PRO RANGE        = 300~499 (V3 요구: 300+) — CONFLICT VERIFIED (Section 2-B)
+INDUSTRY_CUSTOM 500+      = amount=0 — CONFLICT VERIFIED (Section 2-B)
 term_discount_rate_bps    = 전부 None (V3 요구: 0/500/1000/1500/2000 bps)
 CHANGE ORDER SEMANTIC CONFLICTS = 3건 (line 227, lines 380-382, lines 261-262)
 
-PRICE RESOLVER
-  FIELD current resolution  = resolve_plan("SAAS", sector, value) (MANAGER와 동일)
-  MANAGER 500+ resolution   = INDUSTRY_CUSTOM → amount=0 → COMPLIANCE_BASE_QUOTE_REQUIRED
-  V3 conflict               = FIELD 가격 계산 불필요 / MANAGER 500+ → INDUSTRY_PRO 필요
-  price_master 증거: Repository test fixture VERIFIED / Production rows READ 0회 = UNVERIFIED
+PROD V2 COMMERCIAL TABLES = NOT APPLIED
+PROD V2 QUOTES            = 0
+PROD V2 PAYMENTS          = 0
+PROD LEGACY SAAS CONTRACTS = 8 (전부 Legacy plan_code)
+PROD ACTIVE SAAS          = 5
 
 ─────────────────────────────────────────────────
-Reuse Strategy 분류 요약
+V2 Backend Role
 ─────────────────────────────────────────────────
 
-REUSE-AS-IS         = 3  (Price Resolver, Site Scope entity structure, Runtime D-B3 routing
-                          — Atomic/Replay/Race structure도 REUSE-AS-IS 해당)
-REUSE-WITH-POLICY   = 2  (Pricing Policy, Pricing Composer primary)
-REUSE-WITH-PATCH    = 6  (Preview Service, Storage Mapper, Change Order,
-                          Commercial Version, Contract Builder, D-B1 — 대부분 OBJ05 dep)
-REUSE-WITH-ADAPTER  = 4  (Quote Service, OBJ10-A, OBJ10-B, Renewal D-A)
-NEW-BOUNDARY        = 4  (Preview Request API, Quote Request API,
-                          Quote Snapshot V3, Frontend API)
-UNVERIFIED          = 2+ (price_master production, OBJ05 dependent sub-boundaries)
-UNRELATED           = 2  (Legacy V1, Admin Quote)
+IMPLEMENTATION BASELINE
+= 재구현 금지. 검증된 구조/invariant 직접 재사용.
 
-OBJ05 DEPENDENT OBJECTS = 12
-  (Commercial Schema, Contract Builder, Storage Mapper, Change Order C3,
-   OBJ10-C payload, D-A, D-B1, D-B2, D-B3 first_apply,
-   Snapshot boundary, OBJ10-B period mapping, Frontend API)
+V3 Strategy
+= MINIMAL DELTA UPGRADE
+
+Legacy runtime
+= PRESERVE (8 Legacy contracts)
+
+─────────────────────────────────────────────────
+Implementation Strategy 분류
+─────────────────────────────────────────────────
+
+PATCH EXISTING   = 11 (Policy, Composer, Preview Service, Quote Service,
+                        OBJ10-A, OBJ10-B, Storage Mapper, Change Order,
+                        Renewal D-A, Tests, Frontend API)
+REUSE-AS-IS      = 3  (Price Resolver, Site Scope structure, D-B3 routing)
+EVOLVE BOUNDARY  = 5  (Pricing Schema, Preview Request, Quote Request,
+                       Quote Snapshot, Frontend API boundary)
+OBJ05 DEPENDENT  = 5  (Contract Builder, OBJ10-C, D-B1, D-B2, D-B3 boundary)
+DATA WO          = 1  (price_master Production)
+LEGACY PRESERVE  = 1  (Legacy SaaS runtime)
+UNRELATED        = 2  (Legacy V1 Quote, Admin)
 
 ─────────────────────────────────────────────────
 
-DUPLICATION POLICY
-  동일 business logic V2/V3 복제 = 금지 우선
-  Shared Core 추출 = 우선
+V2/V3 병렬 runtime    = 불필요 (Production V2 stored = 0)
+Snapshot dual parser  = 불필요
+OBJ10-A/B 복제        = 불필요
+Backward-compatible DDL = 불필요 (DDL not yet applied)
 
-V2 REGRESSION POLICY
-  V2 regression tests 유지 필수
-  V3 tests = 신규 추가
+DUPLICATION POLICY    = 동일 business logic 복제 금지
+INVARIANT REGRESSION  = 유지 필수 (policy values 변경은 V3 기준)
 
 ─────────────────────────────────────────────────
 
 PROPOSED MINIMAL OBJECT ORDER
-  OBJ02   Policy Delta + Shared Core Design
-  OBJ03   Pricing Core REUSE-WITH-POLICY/PATCH
-  OBJ-PM-READ  price_master READ-ONLY Verify
-  OBJ04   V3 Boundary Integration
-  OBJ05   Temporal Semantics Decision
-  OBJ06   Payment / Contract Minimal Integration
-  OBJ07   Change Order / Renewal Minimal Integration
+  OBJ02   V3 Delta Design
+  OBJ03   Pricing Core Minimal Patch
+  OBJ-PM-DATA  price_master DATA WO (Owner Gate)
+  OBJ04   API / Snapshot / Quote
+  OBJ05   Temporal Semantics
+  OBJ06   Payment / Commercial / Atomic
+  OBJ07   Change Order / Renewal
   REFREEZE
 
-production reads   = 0 (Investigation)
-production DDL     = 0
+production DDL     = 0 (Investigation)
 production mutation = 0
 deploy             = 0
 PR                 = 0
@@ -619,8 +635,8 @@ BE-V3-OBJ01 = COMPLETE (REVIEW_REQUIRED)
 → GPT 독립검증 대기
 
 다음 Gate (OBJ01 GPT PASS 후):
-  BE-V3-OBJ02 — V3 Policy Delta + Shared Core Reuse Design
-  (REUSE-WITH-POLICY: field_base_amount + confirmed discounts + shared core design)
+  BE-V3-OBJ02 — V3 Delta Design on Existing Backend
+  (V2 Implementation Baseline 기준 최소 delta 설계)
 ```
 
 ---
@@ -629,64 +645,64 @@ BE-V3-OBJ01 = COMPLETE (REVIEW_REQUIRED)
 
 V1/Admin 경로 제외. V3 SaaS 런타임 기준. ✓ = 해당 용도로 사용됨.
 
-**해석 원칙**: 해당 coupling이 존재함 → shared core / adapter / patch / boundary 중 최소 변경 방식으로 해결. 각 hit가 자동으로 "새 V3 파일 필요"를 의미하지 않는다.
+**해석 원칙**: 각 hit는 해당 coupling이 존재함을 나타낸다. "새 V3 파일 필요"로 자동 연결하지 않는다. Production V2 stored = 0이므로 backward-compat 이중 구현 없이 최소 patch/evolve로 해결한다.
 
 ### A-1. Schemas
 
-| 파일 | 라인 | 심볼 / 용도 | PRICE | DISCOUNT | PAYMENT | CONTRACT DATE | RENEWAL | PERSISTED | V3 CONFLICT | Object |
+| 파일 | 라인 | 심볼 / 용도 | PRICE | DISCOUNT | PAYMENT | CONTRACT DATE | RENEWAL | PERSISTED | V3 STRATEGY | Object |
 |------|------|-----------|:-----:|:--------:|:-------:|:-------------:|:-------:|:---------:|:-----------:|--------|
-| `schemas/saas_pricing_v2.py` | 46 | `SaasCommercialSelection.term_months` — user selection | ✓ | ✓ | — | — | — | — | RENAME | Pricing Schema |
-| `schemas/saas_pricing_v2.py` | 55,57,59 | validator (`VALID_TERM_MONTHS`) | — | — | — | — | — | — | RENAME | Pricing Schema |
-| `schemas/saas_pricing_v2.py` | 175 | `SaasPricingSnapshotV2.term_months` — frozen in snapshot | ✓ | ✓ | ✓ | — | — | ✓(JSON) | NEW-BOUNDARY | Pricing Schema |
-| `schemas/saas_pricing_v2.py` | 185,187,189 | validator | — | — | — | — | — | — | NEW-BOUNDARY | Pricing Schema |
-| `schemas/saas_pricing_policy_v2.py` | 66 | `SaasTermDiscountPolicy.term_months` — discount key | — | ✓ | — | — | — | — | RENAME | Pricing Policy |
-| `schemas/saas_pricing_policy_v2.py` | 69,71,73 | validator | — | — | — | — | — | — | RENAME | Pricing Policy |
-| `schemas/saas_pricing_policy_v2.py` | 201 | input validation loop | — | ✓ | — | — | — | — | RENAME | Pricing Policy |
-| `schemas/saas_pricing_policy_v2.py` | 231-235 | canonical factory (all `None`) | — | ✓ | — | — | — | — | REPLACE values | Pricing Policy |
-| `schemas/saas_pricing_preview_v2.py` | 63 | request `term_months` — API input | — | ✓ | — | — | — | — | NEW-BOUNDARY | Preview Schema |
-| `schemas/saas_pricing_preview_v2.py` | 93 | response `term_months` | — | ✓ | — | — | — | — | NEW-BOUNDARY | Preview Schema |
-| `schemas/saas_quote_v2.py` | 76 | Quote request `term_months` | — | ✓ | — | — | — | — | NEW-BOUNDARY | Quote Schema |
-| `schemas/saas_contract_commercial_v2.py` | 87 | DB column `term_months` | — | — | ✓ | ✓ | — | ✓(DB) | UNVERIFIED | Commercial Schema |
-| `schemas/saas_contract_commercial_v2.py` | 121,123,125 | validator | — | — | ✓ | — | — | — | UNVERIFIED | Commercial Schema |
-| `schemas/saas_contract_commercial_v2.py` | 194,196 | cross-validation with snapshot | — | — | ✓ | — | — | — | UNVERIFIED | Commercial Schema |
-| `schemas/saas_change_order_v2.py` | 100,101 | `from/to_term_months` Optional fields | — | — | ✓ | — | — | — | PATCH | Change Order Schema |
+| `schemas/saas_pricing_v2.py` | 46 | `SaasCommercialSelection.term_months` — user selection | ✓ | ✓ | — | — | — | — | EVOLVE | Pricing Schema |
+| `schemas/saas_pricing_v2.py` | 55,57,59 | validator (`VALID_TERM_MONTHS`) | — | — | — | — | — | — | EVOLVE | Pricing Schema |
+| `schemas/saas_pricing_v2.py` | 175 | `SaasPricingSnapshotV2.term_months` — frozen in snapshot | ✓ | ✓ | ✓ | — | — | ✓(JSON, 0 stored) | EVOLVE | Pricing Schema |
+| `schemas/saas_pricing_v2.py` | 185,187,189 | validator | — | — | — | — | — | — | EVOLVE | Pricing Schema |
+| `schemas/saas_pricing_policy_v2.py` | 66 | `SaasTermDiscountPolicy.term_months` — discount key | — | ✓ | — | — | — | — | PATCH | Pricing Policy |
+| `schemas/saas_pricing_policy_v2.py` | 69,71,73 | validator | — | — | — | — | — | — | PATCH | Pricing Policy |
+| `schemas/saas_pricing_policy_v2.py` | 201 | input validation loop | — | ✓ | — | — | — | — | PATCH | Pricing Policy |
+| `schemas/saas_pricing_policy_v2.py` | 231-235 | canonical factory (all `None`) | — | ✓ | — | — | — | — | PATCH values | Pricing Policy |
+| `schemas/saas_pricing_preview_v2.py` | 63 | request `term_months` — API input | — | ✓ | — | — | — | — | EVOLVE | Preview Schema |
+| `schemas/saas_pricing_preview_v2.py` | 93 | response `term_months` | — | ✓ | — | — | — | — | EVOLVE | Preview Schema |
+| `schemas/saas_quote_v2.py` | 76 | Quote request `term_months` | — | ✓ | — | — | — | — | EVOLVE | Quote Schema |
+| `schemas/saas_contract_commercial_v2.py` | 87 | DB column `term_months` | — | — | ✓ | ✓ | — | ✓(DB, NOT APPLIED) | OBJ05 | Commercial Schema |
+| `schemas/saas_contract_commercial_v2.py` | 121,123,125 | validator | — | — | ✓ | — | — | — | OBJ05 | Commercial Schema |
+| `schemas/saas_contract_commercial_v2.py` | 194,196 | cross-validation with snapshot | — | — | ✓ | — | — | — | OBJ05 | Commercial Schema |
+| `schemas/saas_change_order_v2.py` | 100,101 | `from/to_term_months` Optional | — | — | ✓ | — | — | — | PATCH | Change Order Schema |
 | `schemas/saas_change_order_v2.py` | 145,146 | `current/target_term_months` | — | — | ✓ | — | — | — | PATCH | Change Order Schema |
 
 ### A-2. Services
 
-| 파일 | 라인 | 심볼 / 용도 | PRICE | DISCOUNT | PAYMENT | CONTRACT DATE | RENEWAL | PERSISTED | V3 CONFLICT | Object |
+| 파일 | 라인 | 심볼 / 용도 | PRICE | DISCOUNT | PAYMENT | CONTRACT DATE | RENEWAL | PERSISTED | V3 STRATEGY | Object |
 |------|------|-----------|:-----:|:--------:|:-------:|:-------------:|:-------:|:---------:|:-----------:|--------|
 | `services/saas_pricing_composer_v2.py` | 107 | `result.term_months` pass-through | ✓ | ✓ | — | — | — | — | PATCH | Pricing Composer |
 | `services/saas_pricing_composer_v2.py` | 178 | `SaasPricingCalculationResult(term_months=...)` | ✓ | ✓ | — | — | — | — | PATCH | Pricing Composer |
 | `services/saas_pricing_composer_v2.py` | 253 | `raw_prepaid = monthly × term_months` | ✓ | — | ✓ | — | — | — | PATCH | Pricing Composer |
 | `services/saas_pricing_composer_v2.py` | 258,262 | discount lookup by `term_months` | — | ✓ | — | — | — | — | PATCH | Pricing Composer |
-| `services/saas_pricing_composer_v2.py` | 276,312,328 | snapshot construction | ✓ | ✓ | ✓ | — | — | ✓(snap) | PATCH | Pricing Composer |
+| `services/saas_pricing_composer_v2.py` | 276,312,328 | snapshot construction | ✓ | ✓ | ✓ | — | — | ✓(snap, 0 stored) | PATCH | Pricing Composer |
 | `services/saas_pricing_preview_v2.py` | 49 | error message reference | — | — | — | — | — | — | PATCH | Preview Service |
 | `services/saas_pricing_preview_v2.py` | 150,161,173,227,249 | `SaasCommercialSelection(term_months=request.term_months)` | ✓ | ✓ | — | — | — | — | PATCH | Preview Service |
-| `services/saas_quote_v2.py` | 74,77 | snapshot vs request validation | — | ✓ | — | — | — | — | ADAPTER | Quote Service |
-| `services/saas_quote_v2.py` | 106 | `"term_months": request.term_months` (quote item) | — | ✓ | ✓ | — | — | ✓(item) | ADAPTER | Quote Service |
-| `services/saas_quote_v2.py` | 139 | `quantity=snap.term_months` | ✓ | — | ✓ | — | — | — | ADAPTER | Quote Service |
-| `services/saas_quote_v2.py` | 152 | `term_months=snap.term_months` | ✓ | ✓ | ✓ | — | — | ✓ | ADAPTER | Quote Service |
-| `services/saas_payment_v2_adapter.py` | 160 | `period_months=snap.term_months` → payments | — | — | ✓ | — | — | ✓(pay) | ADAPTER | OBJ10-A |
-| `services/saas_payment_success_v2_adapter.py` | 62 | error code docstring | — | — | — | — | — | — | ADAPTER | OBJ10-B |
-| `services/saas_payment_success_v2_adapter.py` | 120 | `SaasCommercialSelection(term_months=snap.term_months)` | ✓ | ✓ | — | — | — | — | ADAPTER | OBJ10-B |
-| `services/saas_payment_success_v2_adapter.py` | 282,284,287 | `pay.period_months == snap.term_months` 정합성 | — | — | ✓ | — | — | — | ADAPTER | OBJ10-B |
-| `services/saas_payment_success_v2_adapter.py` | 307 | `term_months=snap.term_months` → SaasCommercialSelection | ✓ | ✓ | ✓ | — | — | — | ADAPTER | OBJ10-B |
-| `services/saas_renewal_v2_adapter.py` | 99 | error code docstring | — | — | — | — | — | — | ADAPTER | D-A |
-| `services/saas_renewal_v2_adapter.py` | 358 | `period_months=snap.term_months` renewal prepare | — | — | ✓ | — | ✓ | ✓(pay) | ADAPTER | D-A |
-| `services/saas_renewal_v2_adapter.py` | 620,622,625 | `pay.period_months != snap.term_months` 검증 | — | — | ✓ | — | ✓ | — | ADAPTER | D-A |
-| `services/saas_renewal_v2_adapter.py` | 638 | `term_months=snap.term_months` → renewal bundle | ✓ | ✓ | ✓ | — | ✓ | ✓ | ADAPTER | D-A |
+| `services/saas_quote_v2.py` | 74,77 | snapshot vs request validation | — | ✓ | — | — | — | — | PATCH | Quote Service |
+| `services/saas_quote_v2.py` | 106 | `"term_months": request.term_months` (quote item) | — | ✓ | ✓ | — | — | ✓(0 stored) | PATCH | Quote Service |
+| `services/saas_quote_v2.py` | 139 | `quantity=snap.term_months` | ✓ | — | ✓ | — | — | — | PATCH | Quote Service |
+| `services/saas_quote_v2.py` | 152 | `term_months=snap.term_months` | ✓ | ✓ | ✓ | — | — | ✓ | PATCH | Quote Service |
+| `services/saas_payment_v2_adapter.py` | 160 | `period_months=snap.term_months` → payments | — | — | ✓ | — | — | ✓(0 paid) | PATCH | OBJ10-A |
+| `services/saas_payment_success_v2_adapter.py` | 62 | error code docstring | — | — | — | — | — | — | PATCH | OBJ10-B |
+| `services/saas_payment_success_v2_adapter.py` | 120 | `SaasCommercialSelection(term_months=snap.term_months)` | ✓ | ✓ | — | — | — | — | PATCH | OBJ10-B |
+| `services/saas_payment_success_v2_adapter.py` | 282,284,287 | `pay.period_months == snap.term_months` 정합성 | — | — | ✓ | — | — | — | PATCH | OBJ10-B |
+| `services/saas_payment_success_v2_adapter.py` | 307 | `term_months=snap.term_months` → SaasCommercialSelection | ✓ | ✓ | ✓ | — | — | — | PATCH+OBJ05 | OBJ10-B |
+| `services/saas_renewal_v2_adapter.py` | 99 | error code docstring | — | — | — | — | — | — | PATCH | D-A |
+| `services/saas_renewal_v2_adapter.py` | 358 | `period_months=snap.term_months` renewal prepare | — | — | ✓ | — | ✓ | ✓(0 paid) | PATCH+OBJ05 | D-A |
+| `services/saas_renewal_v2_adapter.py` | 620,622,625 | `pay.period_months != snap.term_months` 검증 | — | — | ✓ | — | ✓ | — | PATCH+OBJ05 | D-A |
+| `services/saas_renewal_v2_adapter.py` | 638 | `term_months=snap.term_months` → renewal bundle | ✓ | ✓ | ✓ | — | ✓ | ✓ | PATCH+OBJ05 | D-A |
 | `services/saas_change_order_v2.py` | 93,94 | `current_term_months = cv.term_months` | — | — | ✓ | — | — | — | PATCH | Change Order Svc |
 | `services/saas_change_order_v2.py` | 207,210,211 | selection vs snapshot validation | — | ✓ | ✓ | — | — | — | PATCH | Change Order Svc |
-| `services/saas_change_order_v2.py` | 261,262 | `current_term / target_term` comparison | — | ✓ | ✓ | — | — | — | PATCH | Change Order Svc |
+| `services/saas_change_order_v2.py` | 261,262 | `current_term / target_term` comparison | — | ✓ | ✓ | — | — | — | PATCH+OBJ05 | Change Order Svc |
 | `services/saas_change_order_v2.py` | 268,269,445,446,471,472,504,505 | `from/to_term_months` population | — | ✓ | ✓ | — | — | ✓(CO) | PATCH | Change Order Svc |
-| `services/saas_contract_storage_mapper_v2.py` | 73,114 | `term_months=selection.term_months` → CV | — | — | ✓ | ✓ | — | ✓(CV) | PATCH | Storage Mapper |
+| `services/saas_contract_storage_mapper_v2.py` | 73,114 | `term_months=selection.term_months` → CV | — | — | ✓ | ✓ | — | ✓(0 stored) | PATCH | Storage Mapper |
 
-### A-3. Migrations (Atomic Guard)
+### A-3. Migrations (Atomic Guard — NOT APPLIED)
 
-| 파일 | 라인 | 심볼 / 용도 | PAYMENT | CONTRACT DATE | RENEWAL | PERSISTED | V3 CONFLICT | Object |
+| 파일 | 라인 | 심볼 / 용도 | PAYMENT | CONTRACT DATE | RENEWAL | PERSISTED | V3 STRATEGY | Object |
 |------|------|-----------|:-------:|:-------------:|:-------:|:---------:|:-----------:|--------|
-| `migrations/…atomic_apply.sql` | 32 | DDL `term_months integer` column | — | ✓ | — | ✓(DDL) | UNVERIFIED | OBJ10-C SQL |
-| `migrations/…atomic_apply.sql` | 57-58 | `VALID_TERM_MONTHS` check constraint | ✓ | — | — | ✓(DDL) | UNVERIFIED | OBJ10-C SQL |
-| `migrations/…atomic_apply.sql` | 499 | `(cv->>'term_months')::integer` 3-way | ✓ | ✓ | — | ✓(SQL) | UNVERIFIED | OBJ10-C SQL |
-| `migrations/…renewal_atomic.sql` | 342 | 3-way: `snap == cv == pay.period_months` | ✓ | ✓ | ✓ | ✓(SQL) | UNVERIFIED | D-B2 SQL |
+| `migrations/…atomic_apply.sql` | 32 | DDL `term_months integer` column | — | ✓ | — | ✓(NOT APPLIED) | OBJ05 DEPENDENT | OBJ10-C SQL |
+| `migrations/…atomic_apply.sql` | 57-58 | `VALID_TERM_MONTHS` check constraint | ✓ | — | — | ✓(NOT APPLIED) | OBJ05 DEPENDENT | OBJ10-C SQL |
+| `migrations/…atomic_apply.sql` | 499 | `(cv->>'term_months')::integer` 3-way | ✓ | ✓ | — | ✓(NOT APPLIED) | OBJ05 DEPENDENT | OBJ10-C SQL |
+| `migrations/…renewal_atomic.sql` | 342 | 3-way: `snap == cv == pay.period_months` | ✓ | ✓ | ✓ | ✓(NOT APPLIED) | OBJ05 DEPENDENT | D-B2 SQL |
