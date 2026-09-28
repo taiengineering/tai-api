@@ -88,7 +88,8 @@ class SaasRenewalV2AdapterError(Exception):
       RENEWAL_QUOTE_ID_REQUIRED             — pay.quote_id 없음
       RENEWAL_PAYMENT_TYPE_INVALID          — pay.payment_type != RENEWAL
       CURRENT_CV_SCHEMA_INVALID             — commercial_schema_version 불일치 / effective_from 파싱 불가
-      CURRENT_CV_SUPERSEDED                 — current_cv.superseded_at IS NOT NULL
+      CURRENT_CV_SUPERSEDED                 — current_cv.superseded_at < requested_effective_at
+      RENEWAL_BOUNDARY_CONFLICT             — current_cv.superseded_at > requested_effective_at
       CURRENT_CV_VERSION_NO_INVALID         — current_cv.version_no < 1
       RENEWAL_CONTRACT_CV_MISMATCH          — pay.contract_id != current_cv.contract_id
       QUOTE_SOURCE_INVALID                  — quote.source != member_auto (plan re-check)
@@ -472,7 +473,17 @@ def build_saas_v2_renewal_apply_plan(
             "CURRENT_CV_SCHEMA_INVALID",
             f"commercial_schema_version 불일치: {current_cv.get('commercial_schema_version')!r}",
         )
-    # temporal check: requested_effective_at >= superseded_at → NON_CURRENT
+    # timezone-aware 검증을 superseded_at 비교보다 먼저 수행 (TypeError 방지)
+    if requested_effective_at.tzinfo is None:
+        raise SaasRenewalV2AdapterError(
+            "RENEWAL_EFFECTIVE_AT_INVALID",
+            "requested_effective_at는 timezone-aware datetime이어야 합니다.",
+        )
+    # transition-source 판정: superseded_at 기준 3-way
+    #   IS NULL                       → PRE-APPLY: PASS
+    #   == requested_effective_at     → POST-APPLY IDEMPOTENT REBUILD: PASS
+    #   < requested_effective_at      → CURRENT_CV_SUPERSEDED
+    #   > requested_effective_at      → RENEWAL_BOUNDARY_CONFLICT
     sup_raw = current_cv.get("superseded_at")
     if sup_raw is not None:
         try:
@@ -484,12 +495,19 @@ def build_saas_v2_renewal_apply_plan(
             ) from exc
         if sup_dt.tzinfo is None:
             sup_dt = sup_dt.replace(tzinfo=timezone.utc)
-        if requested_effective_at >= sup_dt:
+        if requested_effective_at == sup_dt:
+            pass  # idempotent rebuild: 동일 boundary B2 적용 후 재처리 허용
+        elif requested_effective_at > sup_dt:
             raise SaasRenewalV2AdapterError(
                 "CURRENT_CV_SUPERSEDED",
-                f"current_cv.superseded_at={sup_dt}: "
-                f"requested_effective_at={requested_effective_at} >= superseded_at "
-                "— 이미 supersede된 Version입니다.",
+                f"current_cv.superseded_at={sup_dt} < requested_effective_at={requested_effective_at}"
+                " — 이미 더 이른 시점에 supersede된 Version입니다.",
+            )
+        else:  # requested_effective_at < sup_dt
+            raise SaasRenewalV2AdapterError(
+                "RENEWAL_BOUNDARY_CONFLICT",
+                f"current_cv.superseded_at={sup_dt} > requested_effective_at={requested_effective_at}"
+                " — 다른 boundary로 예약된 transition source입니다.",
             )
     cv_version_no = current_cv.get("version_no")
     if not isinstance(cv_version_no, int) or cv_version_no < 1:
@@ -527,13 +545,6 @@ def build_saas_v2_renewal_apply_plan(
         raise SaasRenewalV2AdapterError(
             "RENEWAL_QUOTE_ID_MISMATCH",
             f"pay.quote_id={pay_quote_id} != quote.id={quote.get('id')}",
-        )
-
-    # ── Step 16: requested_effective_at timezone-aware ───────────────
-    if requested_effective_at.tzinfo is None:
-        raise SaasRenewalV2AdapterError(
-            "RENEWAL_EFFECTIVE_AT_INVALID",
-            "requested_effective_at는 timezone-aware datetime이어야 합니다.",
         )
 
     # ── Step 17: effective_from 파싱 + 순서 검증 ────────────────────

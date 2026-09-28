@@ -998,11 +998,41 @@ def test_RN_T5_naive_as_of_rejected(monkeypatch):
     assert exc.value.code == "RENEWAL_AS_OF_INVALID"
 
 
-def test_RN_T6_plan_builder_future_superseded_cv_allowed_before_boundary():
-    """plan builder: future superseded CV (superseded_at > requested_effective_at) → PASS."""
+def test_RN_T6_plan_builder_idempotent_rebuild_exact_boundary():
+    """plan builder: superseded_at == requested_effective_at → PASS (idempotent rebuild)."""
+    args = _valid_plan_args()
+    # superseded_at == requested_effective_at = _EFFECTIVE_AT = 2026-10-01
+    args["current_cv"] = {**_valid_cv_row(), "superseded_at": _EFFECTIVE_AT.isoformat()}
+    plan = build_saas_v2_renewal_apply_plan(**args)
+    assert isinstance(plan, SaasV2RenewalApplyPlan)
+
+
+def test_RN_T7_plan_builder_past_superseded_raises_superseded():
+    """plan builder: superseded_at < requested_effective_at → CURRENT_CV_SUPERSEDED."""
+    args = _valid_plan_args()
+    past_sup = _EFFECTIVE_AT - timedelta(days=30)  # 2026-09-01
+    args["current_cv"] = {**_valid_cv_row(), "superseded_at": past_sup.isoformat()}
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        build_saas_v2_renewal_apply_plan(**args)
+    assert exc.value.code == "CURRENT_CV_SUPERSEDED"
+
+
+def test_RN_T8_plan_builder_future_superseded_raises_boundary_conflict():
+    """plan builder: superseded_at > requested_effective_at → RENEWAL_BOUNDARY_CONFLICT."""
     args = _valid_plan_args()
     future_sup = _EFFECTIVE_AT + timedelta(days=60)  # 2026-11-30
     args["current_cv"] = {**_valid_cv_row(), "superseded_at": future_sup.isoformat()}
-    # requested_effective_at = _EFFECTIVE_AT = 2026-10-01 < 2026-11-30 → NOT NON_CURRENT
-    plan = build_saas_v2_renewal_apply_plan(**args)
-    assert isinstance(plan, SaasV2RenewalApplyPlan)
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        build_saas_v2_renewal_apply_plan(**args)
+    assert exc.value.code == "RENEWAL_BOUNDARY_CONFLICT"
+
+
+def test_RN_T9_plan_builder_naive_requested_effective_at_raises_before_sup_compare():
+    """naive requested_effective_at + aware superseded_at → RENEWAL_EFFECTIVE_AT_INVALID (no TypeError)."""
+    args = _valid_plan_args()
+    args["current_cv"] = {**_valid_cv_row(), "superseded_at": _EFFECTIVE_AT.isoformat()}
+    naive_req = datetime(2026, 10, 1, 0, 0, 0)  # no tzinfo
+    args["requested_effective_at"] = naive_req
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        build_saas_v2_renewal_apply_plan(**args)
+    assert exc.value.code == "RENEWAL_EFFECTIVE_AT_INVALID"
