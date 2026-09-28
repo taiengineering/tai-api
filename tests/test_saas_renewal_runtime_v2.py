@@ -884,3 +884,110 @@ class TestNaiveEffectiveFromRejected:
             apply_saas_v2_renewal_runtime(sb, _pay())
         assert exc.value.code == "V2_RUNTIME_TARGET_VERSION_INVALID"
         assert "timezone-aware" in exc.value.message
+
+
+# ── R54-R57: INICIS noti partial projection boundary ─────────────────────────
+
+class TestNotiPartialProjectionBoundary:
+    """R54-R57: /inicis/noti payment_type absence must not allow direct contract write."""
+
+    def _run_card_success_with_payment(self, payment: dict, post_process_side=None):
+        from services.payment_svc import process_card_success
+        sb = MagicMock()
+        with patch("services.payment_svc.get_supabase", return_value=sb):
+            with patch("services.payment_svc.now_iso", return_value="2026-09-28T12:00:00+09:00"):
+                with patch("services.payment_svc.service_status_after_card_pay", return_value="ACTIVE"):
+                    with patch("services.payment_svc.calc_expired_at", return_value=None):
+                        with patch("services.tax_invoice_request_svc.canonical_payment_instrument",
+                                   return_value="CARD"):
+                            with patch("services.payment_post_process.on_payment_success_sync",
+                                       side_effect=post_process_side):
+                                process_card_success(
+                                    payment,
+                                    auth_result={"applNum": "12345", "tid": "TID"},
+                                    paymethod="Card",
+                                    order_id="oid",
+                                    goodname="test",
+                                    price="100000",
+                                    with_redirect_qs=False,
+                                )
+        return sb
+
+    def test_r54_noti_projection_with_payment_type_v2_no_direct_write(self):
+        """Correct noti projection (payment_type included) → V2 Renewal: contracts write = 0."""
+        payment = {
+            "id":             _PID,
+            "status_code":    "SUCCESS",
+            "contract_id":    _CID,
+            "product_type":   "SAAS",
+            "payment_type":   "RENEWAL",
+            "period_months":  None,
+        }
+        sb = self._run_card_success_with_payment(payment)
+        for c in sb.table.call_args_list:
+            assert c.args[0] != "contracts", \
+                f"contracts table accessed in V2 noti path: {c}"
+
+    def test_r55_partial_caller_saas_payment_type_absent_success_no_direct_write(self):
+        """SAAS + contract_id + payment_type key ABSENT, post-process OK → contracts write = 0."""
+        payment = {
+            "id":             _PID,
+            "status_code":    "SUCCESS",
+            "contract_id":    _CID,
+            "product_type":   "SAAS",
+            # payment_type intentionally absent
+            "period_months":  None,
+        }
+        sb = self._run_card_success_with_payment(payment)
+        for c in sb.table.call_args_list:
+            assert c.args[0] != "contracts", \
+                f"contracts table accessed with missing payment_type (SAAS): {c}"
+
+    def test_r56_partial_caller_saas_payment_type_absent_failure_no_direct_write(self):
+        """SAAS + payment_type absent + post-process raises → contracts write = 0."""
+        payment = {
+            "id":             _PID,
+            "status_code":    "SUCCESS",
+            "contract_id":    _CID,
+            "product_type":   "SAAS",
+            "period_months":  None,
+        }
+        sb = self._run_card_success_with_payment(
+            payment, post_process_side=Exception("atomic failed")
+        )
+        for c in sb.table.call_args_list:
+            assert c.args[0] != "contracts", \
+                f"contracts table accessed after V2 failure with missing payment_type: {c}"
+
+    def test_r57_partial_caller_legacy_saas_type_absent_contract_update_maintained(self):
+        """SAAS_INDUSTRY + payment_type absent → legacy contracts.is_active update maintained."""
+        payment = {
+            "id":             _PID,
+            "status_code":    "SUCCESS",
+            "contract_id":    _CID,
+            "product_type":   "SAAS_INDUSTRY",
+            # payment_type absent — legacy product, must still activate
+            "period_months":  None,
+        }
+        sb = self._run_card_success_with_payment(payment)
+        contracts_calls = [c for c in sb.table.call_args_list if c.args[0] == "contracts"]
+        assert len(contracts_calls) >= 1, \
+            "Legacy SAAS_INDUSTRY must still update contracts.is_active even without payment_type"
+
+
+# ── R58: Static projection assertion ─────────────────────────────────────────
+
+class TestNotiProjectionStatic:
+    def test_r58_noti_select_includes_payment_type(self):
+        """routers/payment.py /inicis/noti SELECT must include payment_type."""
+        import pathlib
+        router_src = (
+            pathlib.Path(__file__).parent.parent / "routers" / "payment.py"
+        ).read_text()
+        # Find the inicis_noti SELECT block
+        noti_idx = router_src.find("inicis_noti")
+        assert noti_idx != -1
+        noti_block = router_src[noti_idx: noti_idx + 800]
+        assert "payment_type" in noti_block, (
+            "/inicis/noti SELECT projection must include payment_type"
+        )

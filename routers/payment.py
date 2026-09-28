@@ -407,7 +407,7 @@ async def inicis_noti(request: Request):
     sign_key     = load_sign_key()
 
     pay_res = supabase.table("payments").select(
-        "id, status_code, contract_id, product_type, period_months"
+        "id, status_code, contract_id, product_type, payment_type, period_months"
     ).eq("inicis_order_id", order_id).limit(1).execute()
     if not pay_res.data:
         return "OK"

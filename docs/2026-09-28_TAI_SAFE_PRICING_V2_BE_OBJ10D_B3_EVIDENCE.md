@@ -15,6 +15,19 @@ branch: docs/pricing-canonical-20260927
 
 ---
 
+## PATCH2 Root Cause (GPT B3 PATCH1 재검증 → 발견)
+
+### Root Cause 4: `/inicis/noti` partial projection — `payment_type` 누락
+
+`/inicis/noti` (서버 백업 noti 경로) SELECT에 `payment_type`이 빠져 있어 `payment.get("payment_type") == None`.
+`_is_v2_renewal = False`가 되어 V2 Renewal에서도 `contracts.update(is_active=True)`가 실행될 수 있었다.
+
+수정:
+1. `routers/payment.py`: `/inicis/noti` SELECT에 `payment_type` 추가.
+2. `services/payment_svc.py`: defense-in-depth — `product_type=SAAS` + `payment_type` key absent → skip direct write (partial caller 방어).
+
+---
+
 ## PATCH1 Root Causes (GPT B3 독립검증 → 발견)
 
 ### Root Cause 1: RENEWAL routing이 contract_id 존재 여부 하위에 중첩
@@ -47,8 +60,9 @@ naive `target.effective_from`을 UTC로 묵시 변환하여 잘못된 경계로 
 |------|----------|------|
 | `services/saas_renewal_runtime_v2.py` | 신규 생성 + PATCH1 | V2 Renewal Runtime 분기 로직; naive dt fail-closed |
 | `services/payment_post_process.py` | 수정 | RENEWAL top-level routing (contract_id 외부로 이동) |
-| `services/payment_svc.py` | 수정 | V2 Renewal card success: direct contract write skip |
-| `tests/test_saas_renewal_runtime_v2.py` | 신규 생성 + PATCH1 | R01-R53 unit tests |
+| `services/payment_svc.py` | 수정 | V2 Renewal: direct contract write skip; SAAS+payment_type absent 방어 |
+| `routers/payment.py` | 수정 | `/inicis/noti` SELECT에 `payment_type` 추가 |
+| `tests/test_saas_renewal_runtime_v2.py` | 신규 생성 + PATCH1 + PATCH2 | R01-R58 unit tests |
 
 ## 2. FREEZE 자산 변경 없음
 
@@ -119,7 +133,9 @@ apply_saas_v2_renewal_runtime(sb, pay):
 | R46-R49 RENEWAL cannot create new contract | 4 | 0 |
 | R50-R52 card success atomic boundary | 3 | 0 |
 | R53 naive effective_from rejected | 1 | 0 |
-| **합계** | **53** | **0** |
+| R54-R57 noti partial projection boundary | 4 | 0 |
+| R58 noti SELECT static assertion | 1 | 0 |
+| **합계** | **58** | **0** |
 
 ### B2 Regression
 
@@ -132,7 +148,7 @@ apply_saas_v2_renewal_runtime(sb, pay):
 
 | 항목 | 수량 |
 |------|------|
-| PASS | 7082 |
+| PASS | 7087 |
 | FAIL (pre-existing) | 95 |
 | SKIP | 18 |
 | **B3 신규 실패** | **0** |
