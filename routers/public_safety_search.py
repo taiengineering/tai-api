@@ -990,3 +990,62 @@ async def public_hub_law_detail(
             for a in articles
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/sitemap/csi-accidents — CSI accident sitemap list
+# Returns [{id, updated_at}] for identity_status=READY rows (paginated).
+# Used by tai-www worker to generate /sitemap_accidents_csi.xml.
+# No auth. Stable cursor pagination via content_id ORDER (CSI:uuid text sort).
+# DB: csi_accident_cases (main Supabase service_role — no anon access).
+# PATCH-B: WO-SEO-INDEX-RECOVERY-PHASE3-B-001.
+# ---------------------------------------------------------------------------
+
+_csi_sitemap_supabase = None
+
+
+def _csi_sitemap_dep():
+    global _csi_sitemap_supabase
+    if _csi_sitemap_supabase is None:
+        from db.supabase_client import get_supabase
+        _csi_sitemap_supabase = get_supabase()
+    return _csi_sitemap_supabase
+
+
+def _reset_csi_sitemap_dep():
+    global _csi_sitemap_supabase
+    _csi_sitemap_supabase = None
+
+
+@router.get("/sitemap/csi-accidents")
+def public_csi_sitemap_accidents(
+    after_id: str = "",
+    limit: int = Query(default=1000, le=2000),
+):
+    """Cursor-paginated [{id, updated_at}] for CSI accident sitemap generation.
+
+    Filter: identity_status = READY.
+    Cursor: after_id is UUID (without CSI: prefix). API prepends 'CSI:' for
+    content_id ordering before issuing gt filter.
+    has_more inferred by caller from len(response) == limit.
+    Response fields: id (UUID only), updated_at. No other fields exposed.
+    """
+    sb = _csi_sitemap_dep()
+    query = (
+        sb.table("csi_accident_cases")
+        .select("content_id,updated_at")
+        .eq("identity_status", "READY")
+        .order("content_id")
+        .limit(limit)
+    )
+    if after_id:
+        query = query.gt("content_id", "CSI:" + after_id)
+    resp = query.execute()
+    rows = list(resp.data or [])
+    result = []
+    for r in rows:
+        cid = str(r.get("content_id") or "")
+        uuid_part = cid[4:] if cid.startswith("CSI:") else cid
+        if uuid_part:
+            result.append({"id": uuid_part, "updated_at": r.get("updated_at")})
+    return result
