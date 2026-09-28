@@ -99,6 +99,7 @@ def run_safe_construction_leg(supabase, site_id: str, consumer_input) -> Dict[st
     #    construction_type synthetic 은 SaaS 에서 새로 만들지 않음 — source 있으면 전달, 없으면 ABSENT.
     from services.work_source.store import load_work_rows_optional
     from services.material_source.store import load_factory_material_rows_optional
+    from services.equipment_source.store import load_equipment_rows_optional
     step1 = build_saas_leg_step1(
         sector="CONSTRUCTION",
         source_facts=values,
@@ -108,6 +109,10 @@ def run_safe_construction_leg(supabase, site_id: str, consumer_input) -> Dict[st
         # adapter fed via factory_id. READ FAILURE != EMPTY SOURCE — MaterialSourceLoadError
         # propagates fail-closed and LEG is NOT called on material read failure.
         material_rows=load_factory_material_rows_optional(supabase, factory_id),
+        # WO-EQUIPMENT-A2-REMAINING-CONSUMER-PARITY-IMPLEMENT-001:
+        # Equipment A2 shared seam — same reader/projector as MANUFACTURING (PR #450).
+        # READ FAILURE != EMPTY SOURCE — EquipmentSourceLoadError propagates fail-closed.
+        equipment_rows=load_equipment_rows_optional(supabase, factory_id),
     )
 
     # D. 공식 Runtime Delegate 1회 (direct evaluate_rtm / master_building_legal_rules / v510 미사용).

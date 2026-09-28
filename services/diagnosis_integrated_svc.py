@@ -559,7 +559,10 @@ def run_diagnosis(
     merge_projection_after_canonical(
         inp, canonical_applicability(_available), _appendix3_proj
     )
-    if _is_construction and not is_free and factory_id:
+    # WO-EQUIPMENT-A2-REMAINING-CONSUMER-PARITY-IMPLEMENT-001:
+    # Extend persistent Equipment read from CONSTRUCTION-only to MANUFACTURING/BUILDING too.
+    # Ownership check retained for all three factory-based sectors.
+    if engine_sector in {"MANUFACTURING", "BUILDING", "CONSTRUCTION"} and not is_free and factory_id:
         from services.company_scope import _ensure_factory_own
         _ensure_factory_own(supabase, factory_id, current_user)
         from services.equipment_source.projector import project_equipment_rows as _proj_eq

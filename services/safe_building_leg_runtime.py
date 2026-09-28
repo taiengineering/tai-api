@@ -86,6 +86,7 @@ def run_safe_building_leg(supabase, factory_id: str, consumer_input) -> Dict[str
     #    derived setattr 를 적용한다. build_facility N1 32 sector-gate 는 중앙 로직 그대로.
     from services.work_source.store import load_work_rows_optional
     from services.material_source.store import load_factory_material_rows_optional
+    from services.equipment_source.store import load_equipment_rows_optional
     step1 = build_saas_leg_step1(
         sector="BUILDING",
         source_facts=values,
@@ -97,6 +98,10 @@ def run_safe_building_leg(supabase, factory_id: str, consumer_input) -> Dict[str
         # the 3 new canonical booleans are DIFFERENT keys, not aliases; no collapse.
         # READ FAILURE != EMPTY SOURCE — MaterialSourceLoadError propagates fail-closed.
         material_rows=load_factory_material_rows_optional(supabase, factory_id),
+        # WO-EQUIPMENT-A2-REMAINING-CONSUMER-PARITY-IMPLEMENT-001:
+        # Equipment A2 shared seam — same reader/projector as MANUFACTURING (PR #450).
+        # READ FAILURE != EMPTY SOURCE — EquipmentSourceLoadError propagates fail-closed.
+        equipment_rows=load_equipment_rows_optional(supabase, factory_id),
     )
 
     # E. 공식 Runtime Delegate 1회.

@@ -190,6 +190,12 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
         out = run_safe_construction_leg(supabase, body.site_id, body.input)
     except ConstructionSiteBridgeError as e:
         raise HTTPException(status_code=409, detail=str(e))    # site↔factory 미연결 fail-closed
+    except EquipmentSourceLoadError as e:
+        # WO-EQUIPMENT-A2-REMAINING-CONSUMER-PARITY-IMPLEMENT-001: Equipment read failure 503.
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "EQUIPMENT_SOURCE_UNAVAILABLE", "message": str(e)},
+        ) from e
     except WorkSourceLoadError as e:
         raise HTTPException(
             status_code=503,
@@ -217,6 +223,12 @@ async def diagnose_building_leg(body: SafeBuildingLegBody, authorization: Option
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
     try:
         out = run_safe_building_leg(supabase, body.factory_id, body.input)
+    except EquipmentSourceLoadError as e:
+        # WO-EQUIPMENT-A2-REMAINING-CONSUMER-PARITY-IMPLEMENT-001: Equipment read failure 503.
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "EQUIPMENT_SOURCE_UNAVAILABLE", "message": str(e)},
+        ) from e
     except WorkSourceLoadError as e:
         raise HTTPException(
             status_code=503,
