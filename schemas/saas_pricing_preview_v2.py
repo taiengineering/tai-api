@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any, List, Literal, Optional, Union
 from uuid import UUID
 
-from pydantic import BaseModel, StrictFloat, StrictInt, field_validator
+from pydantic import BaseModel, ConfigDict, StrictFloat, StrictInt, field_validator
 
 from schemas.saas_pricing_v2 import EntityType, PricingMode, ProductTier, SaasSector
 
@@ -31,6 +31,8 @@ PreviewStatus = Literal[
 
 class SaasPricingPreviewSiteRequestV2(BaseModel):
     """단일 사업장 Preview 요청."""
+
+    model_config = ConfigDict(extra="forbid")
 
     entity_id: UUID
     sector: SaasSector
@@ -53,6 +55,8 @@ class SaasPricingPreviewRequestV2(BaseModel):
     - sort_order / monthly_supply_amount 없음
     - policy_version 없음
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     product_tier: ProductTier
     worker_capacity: StrictInt

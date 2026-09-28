@@ -17,7 +17,8 @@ status: PASS
 ## 2. Execution Anchor
 
 - Base commit: `b6a2cdde`
-- OBJ08 commit: `(pending — pre-commit)`
+- OBJ08 commit: `7c7d99fb`
+- OBJ08 PATCH1 commit: `(pending — pre-commit)`
 - Branch: `docs/pricing-canonical-20260927`
 
 ## 3. New Files
@@ -105,7 +106,7 @@ result = pricing_resolver_svc.resolve_plan(supabase, "SAAS", sector, criteria_va
 | `_call_resolver(supabase, sector, criteria_value)` | resolve_plan 호출 + not_found 처리 |
 | `_to_int_amount(amount_raw, sector, tier_code)` | amount StrictInt 변환 |
 
-## 12. 테스트 구성 P01-P86
+## 12. 테스트 구성 P01-P97
 
 | 구간 | 내용 | 수 |
 |------|------|----|
@@ -129,6 +130,11 @@ result = pricing_resolver_svc.resolve_plan(supabase, "SAAS", sector, criteria_va
 | P75-P79 | Read-only Source Guard | 5 |
 | P80-P84 | No Commercial Side Effects | 5 |
 | P85-P86 | V1 Guard | 2 |
+| P87-P90 | Forbidden client field rejection (extra="forbid") | 4 |
+| P91-P91b | Resolver sector mismatch | 2 |
+| P92-P93 | CUSTOM worker preserved / negative rejected | 2 |
+| P94 | get_supabase failure → 503 INTERNAL_ERROR | 1 |
+| P95-P96 | Router local binding verification (P73/P74) | 2 |
 
 ## 13. 주요 테스트 수정 사항 (디버깅 결과)
 
@@ -136,16 +142,37 @@ result = pricing_resolver_svc.resolve_plan(supabase, "SAAS", sector, criteria_va
 
 1. **supabase patch 대상**: `"db.supabase_client.get_supabase"` → `"routers.public_pricing_v2.get_supabase"`
    - 원인: router가 `from db.supabase_client import get_supabase` 방식으로 import하므로 module attribute 패치가 로컬 바인딩에 반영되지 않음
+   - 적용: P53, `_router_client()` 헬퍼, P73, P74 (PATCH1에서 P73/P74 수정)
 
 2. **canonical policy patch 대상**: `"schemas.saas_pricing_policy_v2.get_canonical_pricing_policy_v2"` → `"services.saas_pricing_composer_v2.get_canonical_pricing_policy_v2"`
    - 원인: composer가 `from schemas.saas_pricing_policy_v2 import get_canonical_pricing_policy_v2`로 import하므로 동일한 이유로 module attribute 패치 무효
+   - 적용: P57-P60, P63-P67 (9건)
+
+## 13b. PATCH1 변경 사항
+
+**PATCH-A** — Request extra="forbid":
+- `SaasPricingPreviewSiteRequestV2`: `model_config = ConfigDict(extra="forbid")`
+- `SaasPricingPreviewRequestV2`: `model_config = ConfigDict(extra="forbid")`
+
+**PATCH-B** — Resolver sector cross-validation:
+- `_validate_resolver_row(data, sector)`: `data.get("sector") != sector` → INVALID_BASE_PRICE_ROW
+
+**PATCH-C** — CUSTOM worker_capacity SSOT:
+- CUSTOM shortcut: `worker_capacity=0` → `worker_capacity=request.worker_capacity`
+- Domain validation을 우회하지 않고 `SaasCommercialSelection`이 검증
+
+**PATCH-D** — Router error boundary:
+- `supabase = get_supabase()` → try 블록 내부로 이동
+- `get_supabase()` 실패도 `INTERNAL_ERROR / 503` 계약에 포함
 
 ## 14. 테스트 실행 결과
 
 ```
-OBJ08 단독:  86 PASS / 0 FAIL
-전체 회귀:  497 PASS / 0 FAIL
-  (기존 411 + OBJ08 86 = 497)
+OBJ08 단독 (초기):    86 PASS / 0 FAIL
+초기 전체 회귀:      497 PASS / 0 FAIL  (기존 411 + OBJ08 86)
+
+PATCH1 후 OBJ08 단독:  97 PASS / 0 FAIL  (P87-P96 추가 11건)
+PATCH1 후 전체 회귀:  508 PASS / 0 FAIL  (기존 411 + OBJ08 97)
 ```
 
 ## 15. Router Registry 등록 확인

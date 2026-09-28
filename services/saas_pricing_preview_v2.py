@@ -78,6 +78,11 @@ def _validate_resolver_row(data: dict, sector: str) -> None:
             "INVALID_BASE_PRICE_ROW",
             f"service_type=SAAS 아님: {data.get('service_type')}",
         )
+    if data.get("sector") != sector:
+        raise SaasPricingPreviewError(
+            "INVALID_BASE_PRICE_ROW",
+            f"sector 불일치: requested={sector}, resolved={data.get('sector')}",
+        )
 
 
 def _call_resolver(supabase, sector: str, criteria_value) -> dict:
@@ -141,7 +146,7 @@ def preview_saas_price_v2(
             selection = SaasCommercialSelection(
                 product_tier="CUSTOM",
                 pricing_mode="CUSTOM",
-                worker_capacity=0,
+                worker_capacity=request.worker_capacity,
                 term_months=request.term_months,
             )
         except ValidationError as exc:

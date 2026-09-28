@@ -44,8 +44,8 @@ def preview_pricing(request: SaasPricingPreviewRequestV2):
     - price_master READ only (pricing_resolver_svc 경유)
     - Contract / Quote / Payment 생성 없음
     """
-    supabase = get_supabase()
     try:
+        supabase = get_supabase()
         return preview_saas_price_v2(supabase, request)
     except SaasPricingPreviewError as exc:
         if exc.code in _CLIENT_ERROR_CODES:

@@ -837,7 +837,7 @@ def test_P73_raw_exception_not_exposed(monkeypatch):
         raise RuntimeError("Internal Supabase details here")
 
     monkeypatch.setattr("services.pricing_resolver_svc.resolve_plan", boom)
-    monkeypatch.setattr("db.supabase_client.get_supabase", lambda: None)
+    monkeypatch.setattr("routers.public_pricing_v2.get_supabase", lambda: None)
     client = TestClient(_make_app(), raise_server_exceptions=False)
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
@@ -855,7 +855,7 @@ def test_P74_traceback_not_exposed(monkeypatch):
         raise Exception("boom")
 
     monkeypatch.setattr("services.pricing_resolver_svc.resolve_plan", boom)
-    monkeypatch.setattr("db.supabase_client.get_supabase", lambda: None)
+    monkeypatch.setattr("routers.public_pricing_v2.get_supabase", lambda: None)
     client = TestClient(_make_app(), raise_server_exceptions=False)
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
@@ -948,3 +948,136 @@ def test_P86_v1_resolver_unchanged():
     assert "resolve_plan" in src
     assert "load_prices" in src
     assert "preview_saas_price_v2" not in src
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# P87–P96: PATCH1 — Trust Boundary Hardening
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_P87_top_level_pricing_mode_extra_rejected(monkeypatch):
+    client = _router_client(monkeypatch, lambda *a, **k: _good_resolve())
+    resp = client.post("/public/pricing/v2/preview", json={
+        "product_tier": "MANAGER",
+        "worker_capacity": 0,
+        "term_months": 1,
+        "pricing_mode": "STANDARD",
+        "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
+    })
+    assert resp.status_code == 422
+
+
+def test_P88_site_base_amount_extra_rejected(monkeypatch):
+    client = _router_client(monkeypatch, lambda *a, **k: _good_resolve())
+    resp = client.post("/public/pricing/v2/preview", json={
+        "product_tier": "MANAGER",
+        "worker_capacity": 0,
+        "term_months": 1,
+        "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10, "base_amount": 149000}],
+    })
+    assert resp.status_code == 422
+
+
+def test_P89_site_base_band_code_extra_rejected(monkeypatch):
+    client = _router_client(monkeypatch, lambda *a, **k: _good_resolve())
+    resp = client.post("/public/pricing/v2/preview", json={
+        "product_tier": "MANAGER",
+        "worker_capacity": 0,
+        "term_months": 1,
+        "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10, "base_band_code": "STANDARD"}],
+    })
+    assert resp.status_code == 422
+
+
+def test_P90_top_level_policy_version_extra_rejected(monkeypatch):
+    client = _router_client(monkeypatch, lambda *a, **k: _good_resolve())
+    resp = client.post("/public/pricing/v2/preview", json={
+        "product_tier": "MANAGER",
+        "worker_capacity": 0,
+        "term_months": 1,
+        "policy_version": "v1",
+        "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
+    })
+    assert resp.status_code == 422
+
+
+def test_P91_resolver_sector_mismatch_rejected(monkeypatch):
+    def mismatched_resolve(sb, svc, sec, val=None):
+        return {"status": "success", "data": _good_row(sector="BUILDING")}
+
+    monkeypatch.setattr("services.pricing_resolver_svc.resolve_plan", mismatched_resolve)
+    with pytest.raises(SaasPricingPreviewError) as exc:
+        preview_saas_price_v2(None, _req("MANAGER", sites=[_site_req(sector="INDUSTRY")]))
+    assert exc.value.code == "INVALID_BASE_PRICE_ROW"
+    assert "sector" in exc.value.message.lower()
+
+
+def test_P91b_resolver_sector_mismatch_503(monkeypatch):
+    def mismatched_resolve(sb, svc, sec, val=None):
+        return {"status": "success", "data": _good_row(sector="BUILDING")}
+
+    client = _router_client(monkeypatch, mismatched_resolve)
+    resp = client.post("/public/pricing/v2/preview", json={
+        "product_tier": "MANAGER",
+        "worker_capacity": 0,
+        "term_months": 1,
+        "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
+    })
+    assert resp.status_code == 503
+
+
+def test_P92_custom_worker_capacity_preserved(monkeypatch):
+    r = preview_saas_price_v2(None, _req("CUSTOM", workers=5, sites=[]))
+    assert r.worker_capacity == 5
+    assert r.status == "CUSTOM_REQUIRED"
+
+
+def test_P93_custom_negative_worker_rejected(monkeypatch):
+    monkeypatch.setattr("routers.public_pricing_v2.get_supabase", lambda: None)
+    client = TestClient(_make_app(), raise_server_exceptions=False)
+    resp = client.post("/public/pricing/v2/preview", json={
+        "product_tier": "CUSTOM",
+        "worker_capacity": -1,
+        "term_months": 1,
+        "sites": [],
+    })
+    assert resp.status_code == 422
+
+
+def test_P94_get_supabase_failure_returns_503(monkeypatch):
+    monkeypatch.setattr(
+        "routers.public_pricing_v2.get_supabase",
+        lambda: (_ for _ in ()).throw(RuntimeError("DB connection failed")),
+    )
+    client = TestClient(_make_app(), raise_server_exceptions=False)
+    resp = client.post("/public/pricing/v2/preview", json={
+        "product_tier": "MANAGER",
+        "worker_capacity": 0,
+        "term_months": 1,
+        "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
+    })
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body.get("detail", {}).get("code") == "INTERNAL_ERROR"
+
+
+def _extract_test_fn(src: str, name: str) -> str:
+    start = src.index(f"def {name}")
+    try:
+        end = src.index("\ndef test_", start + 1)
+    except ValueError:
+        end = len(src)
+    return src[start:end]
+
+
+def test_P95_p73_uses_router_local_binding():
+    src = Path(__file__).read_text()
+    snippet = _extract_test_fn(src, "test_P73_raw_exception_not_exposed")
+    assert "routers.public_pricing_v2.get_supabase" in snippet
+    assert "db.supabase_client.get_supabase" not in snippet
+
+
+def test_P96_p74_uses_router_local_binding():
+    src = Path(__file__).read_text()
+    snippet = _extract_test_fn(src, "test_P74_traceback_not_exposed")
+    assert "routers.public_pricing_v2.get_supabase" in snippet
+    assert "db.supabase_client.get_supabase" not in snippet
