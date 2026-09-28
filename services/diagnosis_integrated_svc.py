@@ -562,8 +562,7 @@ def run_diagnosis(
     if _is_construction and not is_free and factory_id:
         from services.company_scope import _ensure_factory_own
         _ensure_factory_own(supabase, factory_id, current_user)
-        _EQ_FACT = {"010": "has_emergency_gen", "014": "has_boiler", "023": "has_press",
-                    "024": "has_conveyor", "038": "has_pressure_vessel"}
+        from services.equipment_source.projector import project_equipment_rows as _proj_eq
         try:
             _eq_res = (
                 supabase.table("equipment_assets")
@@ -575,10 +574,8 @@ def run_diagnosis(
         except Exception as _e:
             log.error("[equipment_materializer] source read failed factory=%s: %s", factory_id, _e)
             raise HTTPException(status_code=503, detail="설비 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")
-        _eq_codes = {(_r.get("equipment_type_code") or "") for _r in (_eq_res.data or [])}
-        for _c, _f in _EQ_FACT.items():
-            if _c in _eq_codes:
-                inp.setdefault(_f, True)
+        for _f, _v in _proj_eq(_eq_res.data or []).items():
+            inp.setdefault(_f, _v)
     # WO-E2E-OBS009-COMMON-WORK-SOURCE-IMPLEMENT-001:
     # stored work → projector → merge. Explicit request keys are not overwritten.
     if factory_id:
@@ -669,6 +666,17 @@ def run_diagnosis(
         _fc001_facts = _proj_fc001(_mat_dicts)
         for _fk, _fv in _fc001_facts.items():
             inp.setdefault(_fk, _fv)
+    # Wave A2 — transient equipment_list rows (Paid path).
+    # Only rows with equipment_type_code are structured source; legacy rows (no code) are skipped.
+    # Additive: setdefault preserves explicit input and persistent source facts.
+    _eq_rows_for_proj = [
+        r for r in (_equipment_list_val or [])
+        if isinstance(r, dict) and r.get("equipment_type_code")
+    ]
+    if _eq_rows_for_proj:
+        from services.equipment_source.projector import project_equipment_rows as _proj_eq_t
+        for _f, _v in _proj_eq_t(_eq_rows_for_proj).items():
+            inp.setdefault(_f, _v)
     if _worker_count is not None:
         workers = _worker_count
     elif body.direct_workers is not None:

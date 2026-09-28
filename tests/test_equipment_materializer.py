@@ -20,6 +20,7 @@ class _T:
     def eq(self, *a, **k): return self
     def in_(self, *a, **k): return self
     def limit(self, *a, **k): return self
+    def order(self, *a, **k): return self  # Wave A1: work_source / material_source use .order()
     def update(self, *a, **k): return self
     def insert(self, row): self._p = row; return self
     def execute(self):
