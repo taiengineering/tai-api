@@ -2,7 +2,7 @@
 title: TAI Safe Pricing V3 — Policy Re-Canonical
 kind: policy-canonical
 status: CANDIDATE
-version: V3-PATCH1-CANDIDATE
+version: V3-PATCH2-CANDIDATE
 date: 2026-09-28
 owner_gate_approved: true
 owner_decision_date: 2026-09-28
@@ -19,7 +19,7 @@ supersedes: docs/2026-09-27_TAI_SAFE_PRICING_FINAL_CANONICAL.md (일부 항목)
 # TAI Safe Pricing V3 — Policy Re-Canonical
 
 **작업일:** 2026-09-28
-**버전:** V3-PATCH1-CANDIDATE
+**버전:** V3-PATCH2-CANDIDATE
 **이전 정본:** `docs/2026-09-27_TAI_SAFE_PRICING_FINAL_CANONICAL.md`
 **Owner Decision:** APPROVED 2026-09-28
 
@@ -92,10 +92,18 @@ payment_months ↔ renewal boundary            → UNRESOLVED
 
 위 3개 관계는 후속 Backend Impact Object (PRC-V3-BE-OBJ05)에서 정의한다.
 
-Backend에서:
+이번 정책의 핵심은 단순 rename이 아니다.
 
 ```
-term_months → payment_months 로 분리
+기존 term_months가 결제월수와 계약기간 의미를
+혼용하던 coupling을 해체한다.
+
+payment_months        = 가격/할인 기준
+contract term /
+effective period      = 별도 의미
+
+구체적인 schema / API / storage 표현은
+BE-V3-OBJ01 및 BE-V3-OBJ05에서 결정한다.
 ```
 
 할인율 (payment_months 기준, Owner Decision 확정):
@@ -473,25 +481,28 @@ Frontend 자체 가격 계산 = 0. 가격 계산은 Backend Preview만 사용.
 
 **MANAGER — A공장(산업 85명) + B건물(7,500㎡) / 12개월:**
 
+가장 높은 정상가격 시설이 Primary이며 시설 입력순서와 무관하다.
+
 ```
 관리자형
 
-A공장 · 산업 · 85명 → 50~299인 구간
-  월 정상가격             299,000원
-
 B건물 · 7,500㎡ → 5,000㎡ 초과 구간
   월 정상가격             349,000원
-  추가시설 할인 20%       -69,800원
-─────────────────────────────────
-월 이용료                 578,200원  (VAT 별도)
+  Primary (100%)          349,000원
 
-12개월 RAW             6,938,400원
-결제기간 할인 20%      -1,387,680원
+A공장 · 산업 · 85명 → 50~299인 구간
+  월 정상가격             299,000원
+  추가시설 80%            239,200원
 ─────────────────────────────────
-공급가액               5,550,720원
-VAT (10%)               555,072원
+월 이용료                 588,200원  (VAT 별도)
+
+12개월 RAW             7,058,400원
+결제기간 할인 20%      -1,411,680원
 ─────────────────────────────────
-최종 결제금액          6,105,792원  (VAT 포함)
+공급가액               5,646,720원
+VAT (10%)               564,672원
+─────────────────────────────────
+최종 결제금액          6,211,392원  (VAT 포함)
 
 [이 조건으로 견적서 발행]
 ```
