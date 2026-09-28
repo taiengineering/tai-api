@@ -28,6 +28,8 @@ class EquipmentSourceValidationError(ValueError):
 
 
 class EquipmentSourceLoadError(RuntimeError):
+    code = "EQUIPMENT_SOURCE_UNAVAILABLE"
+
     def __init__(self, msg: str = "", *, factory_id: str = "") -> None:
         super().__init__(msg)
         self.factory_id = factory_id
@@ -111,8 +113,25 @@ def load_equipment_rows_optional(
             "equipment_assets query failed",
             factory_id=factory_id,
         ) from exc
-    data = res.data if hasattr(res, "data") else []
-    return list(data or [])
+    data = res.data if hasattr(res, "data") else None
+    if data is None:
+        raise EquipmentSourceLoadError(
+            "equipment_assets response missing data",
+            factory_id=factory_id,
+        )
+    if not isinstance(data, list):
+        log.error(
+            "equipment_assets response malformed factory=%s type=%s",
+            factory_id,
+            type(data).__name__,
+        )
+        raise EquipmentSourceLoadError(
+            "equipment_assets response malformed: expected list, got {!r}".format(
+                type(data).__name__
+            ),
+            factory_id=factory_id,
+        )
+    return data
 
 
 # STRUCTURED_SOURCE_UPGRADE_REPLAY_CANDIDATE — STATUS: SEPARATE WO / NOT IMPLEMENTED

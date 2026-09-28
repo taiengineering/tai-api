@@ -134,8 +134,8 @@ def test_MFG_explicit_false_preserved(monkeypatch):
     R.run_safe_industrial_leg(fake_sb, "F1", SafeIndustrialConsumerInput(has_boiler=False))
     inp = calls["step1"].input
     # has_boiler=False from consumer override — equipment 014 must NOT overwrite
-    assert inp.get("has_boiler") is not True, (
-        f"has_boiler should stay False (consumer explicit); got {inp.get('has_boiler')!r}"
+    assert inp.get("has_boiler") is False, (
+        f"has_boiler must be exactly False (consumer explicit); got {inp.get('has_boiler')!r}"
     )
 
 
@@ -215,7 +215,7 @@ def test_SEAM_equipment_rows_merge_basic():
 
 
 def test_SEAM_source_false_wins_over_equipment():
-    """SEAM-02: source_facts의 False가 equipment True보다 우선."""
+    """SEAM-02: source_facts의 False가 equipment True보다 우선 — exactly False."""
     from services.canonical.saas_leg_source_adapter import build_saas_leg_step1
 
     step1 = build_saas_leg_step1(
@@ -224,7 +224,9 @@ def test_SEAM_source_false_wins_over_equipment():
         equipment_rows=[{"equipment_type_code": "023"}],
     )
     # has_press=False in source_facts → equipment projection must not overwrite
-    assert step1.input.get("has_press") is not True
+    assert step1.input.get("has_press") is False, (
+        f"has_press must be exactly False; got {step1.input.get('has_press')!r}"
+    )
 
 
 # ── CST: CONSTRUCTION parity 테스트 ──────────────────────────────────────────
@@ -306,3 +308,104 @@ def test_CST_read_error_raises_equipment_source_load_error():
 
     with pytest.raises(EquipmentSourceLoadError):
         load_equipment_rows_optional(_ErrorSB(), "factory-1")
+
+
+# ── PATCH1-C: fail-closed reader + HTTP 503 경로 검증 ─────────────────────────
+
+@pytest.mark.parametrize("bad_data", [{}, "invalid", 42, object()])
+def test_PATCH1_malformed_data_raises_load_error(bad_data):
+    """PATCH1-C: res.data가 list가 아닌 값(dict/str/int/obj) → EquipmentSourceLoadError."""
+    from services.equipment_source.store import load_equipment_rows_optional
+
+    class _MalformedSB:
+        def table(self, name):
+            return _MalformedQ(bad_data)
+
+    class _MalformedQ:
+        def __init__(self, data):
+            self._data = data
+
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, col, val):
+            return self
+
+        def execute(self):
+            class _R:
+                pass
+            r = _R()
+            r.data = self._data
+            return r
+
+    with pytest.raises(EquipmentSourceLoadError):
+        load_equipment_rows_optional(_MalformedSB(), "factory-x")
+
+
+def test_PATCH1_none_data_raises_load_error():
+    """PATCH1-C: res.data = None → EquipmentSourceLoadError (missing data sentinel)."""
+    from services.equipment_source.store import load_equipment_rows_optional
+
+    class _NullSB:
+        def table(self, name):
+            return _NullQ()
+
+    class _NullQ:
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, col, val):
+            return self
+
+        def execute(self):
+            class _R:
+                data = None
+            return _R()
+
+    with pytest.raises(EquipmentSourceLoadError):
+        load_equipment_rows_optional(_NullSB(), "factory-x")
+
+
+def test_PATCH1_industrial_route_equipment_error_returns_503(monkeypatch):
+    """PATCH1-C: diagnose_industrial_leg EquipmentSourceLoadError → HTTP 503, LEG call = 0."""
+    import fastapi.testclient
+    import fastapi
+
+    from services.equipment_source.store import EquipmentSourceLoadError as _EqErr
+    from routers.legal_engine import router
+
+    app = fastapi.FastAPI()
+    app.include_router(router)
+
+    leg_calls = {"n": 0}
+
+    def _raise_eq(sb, fid):
+        raise _EqErr("injected DB failure", factory_id=fid)
+
+    def _fake_tier(sb, current, *, factory_id=None, site_id=None):
+        return {"status": "FIT"}
+
+    def _fake_auth(_):
+        return {"user_id": "u1", "company_id": "c1"}
+
+    def _fake_own(sb, fid, current):
+        pass
+
+    monkeypatch.setattr("routers.legal_engine.get_supabase", lambda: object())
+    monkeypatch.setattr("routers.legal_engine.get_current_user", _fake_auth)
+    monkeypatch.setattr("routers.legal_engine._ensure_factory_own", _fake_own)
+    monkeypatch.setattr("routers.legal_engine._assert_saas_tier_fit_http", _fake_tier)
+    monkeypatch.setattr("routers.legal_engine.leg_runtime_client.is_enabled", lambda: True)
+    monkeypatch.setattr("routers.legal_engine.run_safe_industrial_leg", lambda sb, fid, inp: (_ for _ in ()).throw(_EqErr("injected", factory_id=fid)))
+
+    client = fastapi.testclient.TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/legal-engine/diagnose/industrial-leg",
+        json={"factory_id": "F1", "input": {}},
+        headers={"authorization": "Bearer fake"},
+    )
+    assert resp.status_code == 503, f"expected 503, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body.get("detail", {}).get("code") == "EQUIPMENT_SOURCE_UNAVAILABLE", (
+        f"expected EQUIPMENT_SOURCE_UNAVAILABLE in detail, got: {body}"
+    )
