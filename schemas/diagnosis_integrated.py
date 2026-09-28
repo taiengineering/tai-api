@@ -15,7 +15,7 @@ class WorkRowInput(BaseModel):
     material_ref: Optional[str] = None
     location_ref: Optional[str] = None
     attributes: Optional[Dict[str, Any]] = None
-    active: bool = True
+    active: StrictBool = True
 
 
 class MaterialRowInput(BaseModel):
@@ -26,7 +26,7 @@ class MaterialRowInput(BaseModel):
 
     material_master_key: Optional[str] = None
     handling_mode_codes: Optional[List[str]] = None
-    is_active: bool = True
+    is_active: StrictBool = True
 
 
 class DisclaimerBody(BaseModel):
