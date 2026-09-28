@@ -13,6 +13,7 @@ status: PASS
 
 - Base commit: `0f4d20b8` (OBJ10-A HEAD)
 - OBJ10-B commit: `b8f49f20`
+- OBJ10-B PATCH1 commit: `0689ddc7`
 - Branch: `docs/pricing-canonical-20260927`
 
 ## 2. EXISTING PAYMENT POST-PROCESS OBSERVED
@@ -91,20 +92,62 @@ class SaasV2ApplyPlan:
 
 DB write = 0. 원자적 저장은 BE-OBJ10-C 책임.
 
-## 8. build_saas_v2_payment_success_apply_plan STEPS
+## 8. build_saas_v2_payment_success_apply_plan STEPS (PATCH1 포함)
 
 ```
-Step 1:  pay.product_type == "SAAS" 가드
-Step 2:  pay.company_id 존재 + quote.company_id 일치
-Step 3:  quote.status_code == "ISSUED"
-Step 4:  pay.quote_id 존재 + quote.id 일치
-Step 5:  len(items) == 1 + quote_schema_version == SAAS_QUOTE_V2
-Step 6:  SaasQuoteSnapshotItemV2.model_validate(item)
-Step 7:  SaasPricingSnapshotV2.model_validate(item.pricing_snapshot)
-Step 8:  금액 3중 정합성 (pay ↔ item ↔ snapshot)
-Step 9:  pay.period_months == snapshot.term_months 정합성
-Step 10: contract_row 조립 (plan_code_override=None)
-Step 11: Commercial Bundle 조립 (Frozen Snapshot → SaasPricingCalculationResult)
+Step 1:  pay.status_code ∈ {PAID,SUCCESS}              → V2_PAYMENT_NOT_PAID
+Step 2:  pay.plan_code is None                          → V2_LEGACY_PLAN_CODE_FORBIDDEN
+Step 3:  pay.paid_at 존재                               → V2_PAID_AT_REQUIRED
+Step 4:  pay.paid_at ISO timezone-aware 파싱            → V2_PAID_AT_INVALID
+Step 5:  pay.user_id 존재                               → V2_USER_REQUIRED
+Step 6:  pay.user_id UUID 검증                          → V2_USER_INVALID
+Step 7:  pay.product_type == "SAAS"                     → PAY_NOT_SAAS_V2
+Step 8:  pay.company_id 존재 + quote.company_id 일치    → PAY_NO_COMPANY_ID / PAY_QUOTE_COMPANY_MISMATCH
+Step 9:  quote.source == "member_auto"                  → V2_QUOTE_SOURCE_INVALID
+Step 10: quote.service_type == "SAAS"                   → V2_QUOTE_SERVICE_INVALID
+Step 11: quote.status_code == "ISSUED"                  → QUOTE_NOT_ISSUED
+Step 12: pay.quote_id 존재 + quote.id 일치              → PAY_NO_QUOTE_ID / PAY_QUOTE_ID_MISMATCH
+Step 13: len(items) == 1 + quote_schema_version         → QUOTE_ITEM_COUNT_INVALID / QUOTE_NOT_V2
+Step 14: SaasQuoteSnapshotItemV2.model_validate(item)   → QUOTE_ITEM_INVALID
+Step 15: SaasPricingSnapshotV2.model_validate(snapshot) → QUOTE_SNAPSHOT_INVALID
+Step 16: 금액 3중 정합성 (pay ↔ item ↔ snapshot)       → AMOUNT_SNAPSHOT_MISMATCH
+Step 17: pay.period_months == snapshot.term_months      → PAY_PERIOD_TERM_MISMATCH
+Step 18: contract_row 조립 (plan_code_override=None)
+Step 19: Commercial Bundle 조립 (effective_from=paid_at_dt, created_by=user_uuid)
+```
+
+## 8a. PATCH1 — Payment Success Boundary
+
+| Guard | Error Code |
+|-------|-----------|
+| status_code ∉ {PAID,SUCCESS} | V2_PAYMENT_NOT_PAID |
+| plan_code is not None | V2_LEGACY_PLAN_CODE_FORBIDDEN |
+| paid_at 없음 | V2_PAID_AT_REQUIRED |
+| paid_at 파싱 실패 또는 naive | V2_PAID_AT_INVALID |
+| user_id 없음 | V2_USER_REQUIRED |
+| user_id 유효 UUID 아님 | V2_USER_INVALID |
+| source != "member_auto" | V2_QUOTE_SOURCE_INVALID |
+| service_type != "SAAS" | V2_QUOTE_SERVICE_INVALID |
+
+## 8b. PATCH1 — paid_at → effective_from
+
+```
+기존 (WRONG):
+  effective_from = datetime.combine(start, datetime.min.time())
+
+수정 후 (CORRECT):
+  paid_at_dt = _parse_paid_at(pay["paid_at"])   # timezone-aware 필수
+  effective_from = paid_at_dt                    # 결제 성공 시각
+```
+
+Contract start_date 로직 = 변화 없음.
+
+## 8c. PATCH1 — user_id → created_by
+
+```
+user_uuid = uuid.UUID(pay["user_id"])
+build_standard_contract_storage_bundle_v2(..., created_by=user_uuid)
+→ commercial_bundle.commercial_version.created_by == user_uuid
 ```
 
 ## 9. FROZEN SNAPSHOT → SaasPricingCalculationResult
@@ -209,19 +252,24 @@ BE-OBJ10-C / BE-OBJ10-D 책임.
 ## 19. TEST RESULT
 
 ```
-OBJ10-B 신규 (B01-B82): 82 PASS / 0 FAIL
+OBJ10-B 전체 (B01-B95): 95 PASS / 0 FAIL
 ```
 
 포함 내용:
 - B01-B10: `_build_contract_row_from_payment` 단위 (sentinel / plan_code / amounts / dates)
 - B11-B15: `_create_contract_from_payment` V1 회귀
-- B16-B25: `build_saas_v2_payment_success_apply_plan` 입력 검증 오류
+- B16-B25: `build_saas_v2_payment_success_apply_plan` quote/item/snapshot 검증 오류
 - B26-B30: 금액 3중 정합성 (pay ↔ item ↔ snapshot)
 - B31-B34: period_months / term_months 정합성
 - B35-B50: contract_row 필드 계약
 - B51-B60: SaasV2ApplyPlan 필드 계약
 - B61-B70: commercial_bundle 필드 계약
 - B71-B82: source guards (repricing 0 / DB write 0 / router 0)
+- B83-B86: PATCH1-A payment status (PAID/SUCCESS only)
+- B87-B88: PATCH1-B quote source (member_auto) / service (SAAS)
+- B89: PATCH1-C legacy plan_code prohibition
+- B90-B92: PATCH1-D paid_at required + parse + effective_from exact
+- B93-B95: PATCH1-E user_id required + UUID + created_by exact
 
 ## 20. PRICING REGRESSION
 
@@ -237,7 +285,7 @@ Pricing V2 회귀: 627 PASS / 0 FAIL
 
 ```
 test_saas_payment_v2_adapter.py:          43 PASS
-test_saas_payment_success_v2_adapter.py:  82 PASS
+test_saas_payment_success_v2_adapter.py:  95 PASS  (PATCH1 후)
 test_payment_svc.py:                       1 PASS / 1 FAIL (PRE-EXISTING)
 test_payment.py:                           2 PASS
 test_payment_helpers.py:                   4 PASS
@@ -247,7 +295,7 @@ test_payment_my_projection.py:             9 PASS
 test_payment_my_tax_status.py:            11 PASS
 test_payment_company_admin_bootstrap.py:  11 PASS
 
-Payment 소계: 191 PASS / 1 PRE-EXISTING FAIL
+Payment 소계: 204 PASS / 1 PRE-EXISTING FAIL
 ```
 
 PRE-EXISTING: `test_payment_svc.py::test_run_inicis_prepare_success_minimal::gopaymethod == "Card"`
@@ -282,15 +330,28 @@ FakeSupabase / dataclass 전용 검증.
 
 ## 24. FILES CHANGED
 
-Modified:
+Modified (initial commit `b8f49f20`):
 - `services/payment_post_process.py`
   - `_PLAN_CODE_UNSET = object()` sentinel 추가
   - `_build_contract_row_from_payment(pay, *, start, contract_no, plan_code_override)` 추출
   - `_create_contract_from_payment` 위임 구조로 변경 (V1 행동 변화 = 0)
 
-Created:
+Created (initial commit `b8f49f20`):
 - `services/saas_payment_success_v2_adapter.py`
 - `tests/test_saas_payment_success_v2_adapter.py`
+
+Modified (PATCH1 commit `0689ddc7`):
+- `services/saas_payment_success_v2_adapter.py`
+  - 5개 Payment Success 경계 가드 추가 (Steps 1-6, 9-10)
+  - `_parse_paid_at()` helper 추가
+  - `effective_from = paid_at_dt` (결제 성공 시각 사용)
+  - `created_by = user_uuid` mapper에 전달
+- `tests/test_saas_payment_success_v2_adapter.py`
+  - fixture `_valid_pay()` 보강 (status_code, user_id, plan_code)
+  - fixture `_valid_quote()` 보강 (source, service_type)
+  - B83-B95 (13개 신규 테스트) 추가
+
+Created:
 - `docs/2026-09-28_TAI_SAFE_PRICING_V2_BE_OBJ10B_EVIDENCE.md`
 
 ## 25. NOT_FOUND
