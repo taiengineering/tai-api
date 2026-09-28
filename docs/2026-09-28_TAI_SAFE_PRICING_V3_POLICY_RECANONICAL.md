@@ -1,25 +1,28 @@
 ---
 title: TAI Safe Pricing V3 — Policy Re-Canonical
 kind: policy-canonical
-status: CANDIDATE
-version: V3-PATCH2-CANDIDATE
+status: FROZEN
+version: V3-FROZEN
 date: 2026-09-28
 owner_gate_approved: true
 owner_decision_date: 2026-09-28
+verified_candidate_sha: abf3e50196276cc6d966fc3fcb520e3ad60d08fd
+independent_verification: PASS
+freeze_date: 2026-09-28
 supersedes: docs/2026-09-27_TAI_SAFE_PRICING_FINAL_CANONICAL.md (일부 항목)
 ---
 
-> **이 문서는 2026-09-28 Owner Decision으로 승인된 TAI Safe SaaS 가격정책 V3 정본 후보다.**
+> **이 문서는 2026-09-28 Owner Decision으로 승인된 TAI Safe SaaS 가격정책 V3 정본이다.**
+> **GPT 독립검증 PASS (verified_candidate_sha: abf3e501) 확인 후 FROZEN 승격됨.**
 > `docs/2026-09-27_TAI_SAFE_PRICING_FINAL_CANONICAL.md`(이하 "V2 정본")의 구체적으로
 > 명시된 항목만 SUPERSEDED 처리하며, 나머지는 V2 정본을 그대로 따른다.
-> **status = CANDIDATE. GPT 독립검증 PASS 후에만 FROZEN으로 승격된다.**
 
 ---
 
 # TAI Safe Pricing V3 — Policy Re-Canonical
 
 **작업일:** 2026-09-28
-**버전:** V3-PATCH2-CANDIDATE
+**버전:** V3-FROZEN
 **이전 정본:** `docs/2026-09-27_TAI_SAFE_PRICING_FINAL_CANONICAL.md`
 **Owner Decision:** APPROVED 2026-09-28
 
@@ -563,11 +566,12 @@ FE-WWW-OBJ01 commit 0060d65c → NOT FROZEN
 PR/Merge/Deploy → BLOCKED
 ```
 
-### PHASE 1 — Pricing Policy Re-Canonical (이 문서 — GPT 검증 대기)
+### PHASE 1 — Pricing Policy Re-Canonical (이 문서 — COMPLETE / FROZEN)
 
 ```
 Owner Decision 반영 완료
-GPT 독립검증 → PASS 후 FROZEN 승격
+GPT 독립검증 PASS (verified_candidate_sha: abf3e501)
+FROZEN 승격 완료
 ```
 
 ### PHASE 2 — Backend 영향도 조사 (BE-V3-OBJ01) ← 다음 단계
@@ -752,7 +756,9 @@ E14 CUSTOM
 ```
 ──────────────────────────────────────────
 PRICING V3 POLICY
-= CANDIDATE (GPT 독립검증 대기)
+= FROZEN
+= Owner Decision APPROVED 2026-09-28
+= Independent Verification PASS (abf3e501)
 
 기존 Pricing V2 Backend Frozen 자산
 = 구현 증거 보존
@@ -764,7 +770,7 @@ FE-WWW-OBJ01 (commit 0060d65c)
 = 이후 PATCH WO = SUPERSEDED
 = PR / MERGE / DEPLOY = BLOCKED
 ──────────────────────────────────────────
-다음 Gate (Policy PASS 후):
+NEXT GATE:
   BE-V3-OBJ01 Backend Impact Inventory
   = 코드 수정 없이 영향받는 Object 전수조사
   = 조사 완료 → REOPEN 범위 확정 → PHASE 3 개방
