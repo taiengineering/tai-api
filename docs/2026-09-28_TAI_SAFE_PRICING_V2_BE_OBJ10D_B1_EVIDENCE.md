@@ -3,7 +3,9 @@
 
 **Date**: 2026-09-28  
 **Branch**: docs/pricing-canonical-20260927  
-**WO**: WO-PRICING-V2-BE-OBJ10D-B1-001
+**WO**: WO-PRICING-V2-BE-OBJ10D-B1-001  
+**HEAD (B1 initial)**: `794d5559`  
+**HEAD (B1 PATCH1)**: `f0885eae` ← FREEZE READY
 
 ---
 
@@ -50,7 +52,12 @@ Error codes: `TEMPORAL_NAIVE_DATETIME` / `TEMPORAL_CURRENT_NOT_FOUND` / `TEMPORA
 - **New param**: `as_of: datetime` (required, tz-aware) on `prepare_saas_v2_renewal_payment_from_quote`
 - **New guard**: `RENEWAL_ALREADY_SCHEDULED` if future-scheduled CV exists
 - **New error**: `CURRENT_CV_AMBIGUOUS` if 2+ CVs effective at `as_of`
-- **Plan builder**: `CURRENT_CV_SUPERSEDED` now checks `requested_effective_at >= sup_dt` (temporal, not just `is not None`)
+- **Plan builder (PATCH1)**: transition-source 3-way 판정
+  - `superseded_at IS NULL` → PRE-APPLY PASS
+  - `superseded_at == requested_effective_at` → IDEMPOTENT REBUILD PASS
+  - `superseded_at < requested_effective_at` → `CURRENT_CV_SUPERSEDED`
+  - `superseded_at > requested_effective_at` → `RENEWAL_BOUNDARY_CONFLICT` (신규)
+- **PATCH1**: timezone-aware 검증을 `superseded_at` 비교 전 선행 이동 → naive+aware `TypeError` 방지
 
 ---
 
@@ -94,17 +101,24 @@ Files with CHANGE=0:
 | RN-T1–T5 | Renewal selector (pure) |
 | model / string | Duck-typing compatibility |
 
-### B1 Consumer Tests (full scope)
+### B1 Consumer Tests (PATCH1 기준 최종)
 
 | File | Tests | Result |
 |---|---|---|
 | `test_saas_commercial_version_time_v2.py` | 29 | 29 PASS |
 | `test_saas_commercial_fit_gate_v2.py` | 57 | 57 PASS |
 | `test_saas_change_order_v2.py` | 77 | 77 PASS |
-| `test_saas_renewal_v2_adapter.py` | 59 | 59 PASS |
+| `test_saas_renewal_v2_adapter.py` | 62 | 62 PASS |
 | `test_saas_contract_atomic_apply_v2.py` | 110 | 110 PASS |
 | `test_saas_pricing_preview_v2.py` | 109 | 109 PASS |
-| **TOTAL** | **441** | **441 PASS** |
+| **TOTAL** | **444** | **444 PASS** |
+
+Renewal adapter 62개 = R01-R53 (53) + RN-T1~T5 (5) + RN-T6~T9 (4, PATCH1 신규/갱신).
+
+RN-T6: `superseded_at == requested_effective_at` → PASS (idempotent rebuild)  
+RN-T7: `superseded_at < requested_effective_at` → `CURRENT_CV_SUPERSEDED`  
+RN-T8: `superseded_at > requested_effective_at` → `RENEWAL_BOUNDARY_CONFLICT`  
+RN-T9: naive `requested_effective_at` + aware `superseded_at` → `RENEWAL_EFFECTIVE_AT_INVALID` (no TypeError)
 
 ---
 
