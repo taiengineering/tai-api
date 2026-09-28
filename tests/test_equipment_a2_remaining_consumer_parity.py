@@ -1,16 +1,24 @@
 """WO-EQUIPMENT-A2-REMAINING-CONSUMER-PARITY-IMPLEMENT-001 — 잔여 consumer parity 검증.
 
 Coverage:
-  BLD-01~05  BUILDING official 5-code transport (010/014/023/024/038)
-  BLD-06     BUILDING has_boiler=False + equipment 014 → exactly False
-  BLD-07     BUILDING factories.has_boiler absent + equipment 014 → True
-  BLD-08     BUILDING router EquipmentSourceLoadError → HTTP 503 / LEG 0
-  CST-01~05  CONSTRUCTION official 5-code transport
-  CST-06     CONSTRUCTION router EquipmentSourceLoadError → HTTP 503 / LEG 0
-  PAID-01    Paid BUILDING persistent Equipment: 023 → has_press=True
-  PAID-02    Paid INDUSTRIAL persistent Equipment: 023 → has_press=True
-  PAID-03    Paid CONSTRUCTION persistent Equipment regression: 023 → has_press=True
-  CRANE-01   021 / CRANE → has_crane 미발생 (BUILDING/CONSTRUCTION 공통)
+  BLD-01~05      BUILDING official 5-code transport (010/014/023/024/038)
+  BLD-06         BUILDING has_boiler=False + equipment 014 → exactly False
+  BLD-07         BUILDING factories.has_boiler absent + equipment 014 → True
+  BLD-08         BUILDING router EquipmentSourceLoadError → HTTP 503 / LEG 0
+  CST-01~05      CONSTRUCTION official 5-code transport
+  CST-06         CONSTRUCTION router EquipmentSourceLoadError → HTTP 503 / LEG 0
+  PAID-01        Paid BUILDING persistent Equipment: 023 → has_press=True
+  PAID-02        Paid INDUSTRIAL persistent Equipment: 023 → has_press=True
+  PAID-03        Paid CONSTRUCTION persistent Equipment regression: 023 → has_press=True
+  CRANE-01       021 / CRANE → has_crane 미발생 (BUILDING/CONSTRUCTION 공통)
+  PATCH1-A-BLD   run_diagnosis BUILDING paid → gate 통과 → has_press=True
+  PATCH1-A-IND   run_diagnosis INDUSTRIAL paid → engine_sector=MANUFACTURING → has_conveyor=True
+  PATCH1-A-CST   run_diagnosis CONSTRUCTION paid → gate 통과 → has_pressure_vessel=True
+  PATCH1-A-EXF   run_diagnosis explicit has_press=False + 023 → setdefault 보존 (False 유지)
+  PATCH1-A-OWN   run_diagnosis BUILDING paid → _ensure_factory_own 1회 호출 증명
+  PATCH1-A-503   run_diagnosis equipment read fail → HTTPException 503 / step1 0호출
+  PATCH1-B-BLD   run_safe_building_leg equipment read fail → EquipmentSourceLoadError / LEG 0
+  PATCH1-B-CST   run_safe_construction_leg equipment read fail → EquipmentSourceLoadError / LEG 0
 """
 from __future__ import annotations
 
@@ -355,3 +363,211 @@ def test_CRANE_no_has_crane_in_building_or_construction(monkeypatch, code):
     assert "has_crane" not in cap_cst["step1"].input, (
         f"CONSTRUCTION code={code!r}: has_crane must not appear"
     )
+
+
+# ── PATCH1 helpers ─────────────────────────────────────────────────────────────
+
+import services.diagnosis_integrated_svc as _svc
+from schemas.diagnosis_integrated import DiagnosisRunBody
+from fastapi import HTTPException
+
+
+class _AnyQ:
+    """Any-operation fake query chain — select/insert/update all return the same rows."""
+    def __init__(self, rows): self._rows = rows
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+    def limit(self, *a, **k): return self
+    def order(self, *a, **k): return self
+    def update(self, *a, **k): return self
+    def insert(self, *a, **k): return self
+    def execute(self): return _Res(self._rows)
+
+
+class _PaidFakeSB:
+    """Fake SB for paid run_diagnosis integration tests."""
+    def __init__(self, eq_rows: list):
+        self._eq = eq_rows
+
+    def table(self, name: str):
+        if name == "diagnosis_disclaimer_log":
+            return _AnyQ([{"id": "DL1", "ci_hash": "H1", "agreed": True}])
+        if name == "equipment_assets":
+            return _AnyQ(self._eq)
+        if name == "anonymous_diagnosis_results":
+            return _AnyQ([{"id": "DIAG1", "public_token": "PT1"}])
+        return _AnyQ([])
+
+
+def _patch_svc(monkeypatch):
+    """Patch all non-equipment svc dependencies for run_diagnosis integration."""
+    monkeypatch.setattr(_svc, "resolve_auth_log",
+        lambda sb, tok: {"id": "AL1", "ci_hash": "H1", "free_count": 0, "free_limit": 3, "status": "ACTIVE"})
+    monkeypatch.setattr(_svc, "validate_explicit_construction_predicates", lambda body, sector: None)
+    monkeypatch.setattr(_svc, "validate_explicit_appendix3_classification", lambda body, sector: None)
+    monkeypatch.setattr(_svc, "prepare_available_and_projection", lambda body, avail: ({}, {}))
+    monkeypatch.setattr(_svc, "merge_projection_after_canonical", lambda inp, canon, proj: None)
+    monkeypatch.setattr(_svc, "_assert_linkable", lambda auth_row, cu: None)
+    monkeypatch.setattr(_svc, "_save_diagnosis_purchase", lambda sb, **kw: None)
+    monkeypatch.setattr(_svc, "_bind_linked_user_id", lambda sb, ar, cu, now: None)
+    monkeypatch.setattr(_svc, "collect_explicit_construction_predicates", lambda body: {})
+    monkeypatch.setattr(_svc, "persist_explicit_appendix3_source", lambda src: {})
+    monkeypatch.setattr(_svc, "sanitize_form_data_for_persist", lambda fd, src: fd)
+    monkeypatch.setattr("services.company_scope._ensure_factory_own", lambda sb, fid, cu: None)
+    monkeypatch.setattr("services.work_source.store.load_work_rows_optional", lambda sb, fid: [])
+    monkeypatch.setattr("services.canonical.materialization.canonical_applicability", lambda avail: {})
+
+
+def _diag_body(sector: str) -> DiagnosisRunBody:
+    return DiagnosisRunBody(
+        auth_token="tok",
+        sector=sector,
+        factory_id="F1",
+        disclaimer_log_id="DL1",
+        payment_ref="PAY1",
+        worker_count=5,
+    )
+
+
+def _run_diag(sb, body, fake_step1):
+    return _svc.run_diagnosis(
+        sb, body,
+        run_step1_func=fake_step1,
+        auto_tier_func=lambda s, **kw: "PAID_TIER",
+        build_partial_func=lambda r: {},
+        now_func=lambda: "2026-01-01T00:00:00",
+        paid_tier_prices={"PAID_TIER": 10000},
+        free_tier_codes=set(),
+        engine_version="v5.10",
+        current_user={"user_id": "u1"},
+    )
+
+
+# ── PATCH1-A: Paid run_diagnosis integration ──────────────────────────────────
+
+def test_PATCH1_A_BLD_run_diagnosis_has_press(monkeypatch):
+    """PATCH1-A-BLD: run_diagnosis BUILDING paid → engine_sector gate → has_press=True in step1.input."""
+    _patch_svc(monkeypatch)
+    sb = _PaidFakeSB([{"equipment_type_code": "023", "is_operating": True}])
+    cap: dict = {}
+    def fake_step1(sb, s1b): cap["inp"] = dict(s1b.input or {}); return {"status": "success", "data": {}}
+    _run_diag(sb, _diag_body("BUILDING"), fake_step1)
+    assert cap["inp"].get("has_press") is True, (
+        f"BUILDING paid: expected has_press=True via run_diagnosis gate; got {cap['inp'].get('has_press')!r}"
+    )
+
+
+def test_PATCH1_A_IND_run_diagnosis_has_conveyor(monkeypatch):
+    """PATCH1-A-IND: run_diagnosis INDUSTRIAL paid → engine_sector=MANUFACTURING → has_conveyor=True."""
+    _patch_svc(monkeypatch)
+    sb = _PaidFakeSB([{"equipment_type_code": "024", "is_operating": True}])
+    cap: dict = {}
+    def fake_step1(sb, s1b): cap["inp"] = dict(s1b.input or {}); return {"status": "success", "data": {}}
+    _run_diag(sb, _diag_body("INDUSTRIAL"), fake_step1)
+    assert cap["inp"].get("has_conveyor") is True, (
+        f"INDUSTRIAL paid (→MANUFACTURING): expected has_conveyor=True; got {cap['inp'].get('has_conveyor')!r}"
+    )
+
+
+def test_PATCH1_A_CST_run_diagnosis_has_pressure_vessel(monkeypatch):
+    """PATCH1-A-CST: run_diagnosis CONSTRUCTION paid → gate 통과 → has_pressure_vessel=True."""
+    _patch_svc(monkeypatch)
+    sb = _PaidFakeSB([{"equipment_type_code": "038", "is_operating": True}])
+    cap: dict = {}
+    def fake_step1(sb, s1b): cap["inp"] = dict(s1b.input or {}); return {"status": "success", "data": {}}
+    _run_diag(sb, _diag_body("CONSTRUCTION"), fake_step1)
+    assert cap["inp"].get("has_pressure_vessel") is True, (
+        f"CONSTRUCTION paid: expected has_pressure_vessel=True; got {cap['inp'].get('has_pressure_vessel')!r}"
+    )
+
+
+def test_PATCH1_A_explicit_false_preserved(monkeypatch):
+    """PATCH1-A-EXF: explicit has_press=False set before equipment projector → setdefault preserves False."""
+    _patch_svc(monkeypatch)
+    # Override merge_projection_after_canonical to inject explicit False into inp before equipment runs.
+    monkeypatch.setattr(_svc, "merge_projection_after_canonical",
+                        lambda inp, canon, proj: inp.update({"has_press": False}))
+    sb = _PaidFakeSB([{"equipment_type_code": "023", "is_operating": True}])
+    cap: dict = {}
+    def fake_step1(sb, s1b): cap["inp"] = dict(s1b.input or {}); return {"status": "success", "data": {}}
+    _run_diag(sb, _diag_body("BUILDING"), fake_step1)
+    assert cap["inp"].get("has_press") is False, (
+        f"explicit False + equipment 023: expected has_press=False (setdefault); got {cap['inp'].get('has_press')!r}"
+    )
+
+
+def test_PATCH1_A_ownership_check_called_once(monkeypatch):
+    """PATCH1-A-OWN: run_diagnosis BUILDING paid → _ensure_factory_own called exactly once with factory_id."""
+    _patch_svc(monkeypatch)
+    calls: list = []
+    monkeypatch.setattr("services.company_scope._ensure_factory_own",
+                        lambda sb, fid, cu: calls.append(fid))
+    sb = _PaidFakeSB([])
+    def fake_step1(sb, s1b): return {"status": "success", "data": {}}
+    _run_diag(sb, _diag_body("BUILDING"), fake_step1)
+    assert calls == ["F1"], f"expected _ensure_factory_own(['F1']); got {calls}"
+
+
+def test_PATCH1_A_equipment_read_fail_503_step1_zero(monkeypatch):
+    """PATCH1-A-503: run_diagnosis equipment read fail → HTTPException 503, run_step1_func 0 calls."""
+    _patch_svc(monkeypatch)
+
+    def _raise_eq(sb, fid):
+        raise EquipmentSourceLoadError("injected", factory_id=fid)
+    monkeypatch.setattr("services.equipment_source.store.load_equipment_rows_optional", _raise_eq)
+
+    step1_calls: list = []
+    def fake_step1(sb, s1b): step1_calls.append(1); return {"status": "success", "data": {}}
+
+    sb = _PaidFakeSB([])
+    with pytest.raises(HTTPException) as exc_info:
+        _run_diag(sb, _diag_body("BUILDING"), fake_step1)
+    assert exc_info.value.status_code == 503, (
+        f"expected 503 on equipment read fail; got {exc_info.value.status_code}"
+    )
+    assert step1_calls == [], f"run_step1_func must not be called; got {step1_calls}"
+
+
+# ── PATCH1-B: Runtime fail-closed (LEG = 0 on equipment read error) ───────────
+
+def test_PATCH1_B_BLD_runtime_read_failure_leg_zero(monkeypatch):
+    """PATCH1-B-BLD: run_safe_building_leg equipment read fail → EquipmentSourceLoadError, run_leg_diagnosis 0."""
+
+    def _raise_eq(sb, fid):
+        raise EquipmentSourceLoadError("injected", factory_id=fid)
+    monkeypatch.setattr("services.equipment_source.store.load_equipment_rows_optional", _raise_eq)
+    monkeypatch.setattr("services.work_source.store.load_work_rows_optional", lambda sb, fid: [])
+    monkeypatch.setattr(
+        "services.material_source.store.load_factory_material_rows_optional", lambda sb, fid: []
+    )
+    leg_calls: list = []
+    monkeypatch.setattr(bld_rt, "run_leg_diagnosis", lambda s1: leg_calls.append(1) or {})
+
+    sb = _FakeSBBuilding({"floor_count": 5}, [])
+    with pytest.raises(EquipmentSourceLoadError):
+        run_safe_building_leg(sb, "F1", SafeBuildingConsumerInput())
+    assert leg_calls == [], f"run_leg_diagnosis must not be called on equipment read error; got {leg_calls}"
+
+
+def test_PATCH1_B_CST_runtime_read_failure_leg_zero(monkeypatch):
+    """PATCH1-B-CST: run_safe_construction_leg equipment read fail → EquipmentSourceLoadError, run_leg_diagnosis 0."""
+    monkeypatch.setattr(
+        cst_rt,
+        "assemble_construction_marketing_contract",
+        lambda sb, sid: {"factory_id": "F1", "values": {}, "unresolved_fields": [], "provenance": {}},
+    )
+
+    def _raise_eq(sb, fid):
+        raise EquipmentSourceLoadError("injected", factory_id=fid)
+    monkeypatch.setattr("services.equipment_source.store.load_equipment_rows_optional", _raise_eq)
+    monkeypatch.setattr("services.work_source.store.load_work_rows_optional", lambda sb, fid: [])
+    monkeypatch.setattr(
+        "services.material_source.store.load_factory_material_rows_optional", lambda sb, fid: []
+    )
+    leg_calls: list = []
+    monkeypatch.setattr(cst_rt, "run_leg_diagnosis", lambda s1: leg_calls.append(1) or {})
+
+    sb = _FakeSBConstruction(_site_row(), [])
+    with pytest.raises(EquipmentSourceLoadError):
+        run_safe_construction_leg(sb, "S1", SafeConstructionConsumerInput())
+    assert leg_calls == [], f"run_leg_diagnosis must not be called on equipment read error; got {leg_calls}"
