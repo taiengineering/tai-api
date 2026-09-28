@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from typing import Optional
+from typing import Any, Dict, Optional
 from datetime import date, datetime, timezone
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
@@ -77,6 +77,7 @@ class EquipmentAssetCreate(BaseModel):
     area_id:              Optional[str] = None
     ksic_code:            Optional[str] = None
     operation_status:     Optional[str] = "ACTIVE"  # ACTIVE|BROKEN|INACTIVE
+    attributes:           Optional[Dict[str, Any]] = None  # Wave A2 numeric source capture
 
 
 class EquipmentAssetUpdate(BaseModel):
@@ -97,6 +98,7 @@ class EquipmentAssetUpdate(BaseModel):
     last_inspection_date: Optional[str] = None
     next_inspection_date: Optional[str] = None
     operation_status:     Optional[str] = None  # ★ v1.5.0 추가: ACTIVE|BROKEN|INACTIVE
+    attributes:           Optional[Dict[str, Any]] = None  # Wave A2 numeric source capture
 
 
 # ── 목록 조회 ─────────────────────────────────────────────
@@ -117,7 +119,7 @@ def get_assets(
         "install_year, manufacturer, equipment_model_id, "
         "last_inspection_date, next_inspection_date, "
         "is_legal_target, is_operating, operation_status, "
-        "location_detail, created_at",
+        "location_detail, attributes, created_at",
         count="exact"
     )
     if factory_id:
@@ -332,6 +334,7 @@ async def create_asset(body: EquipmentAssetCreate, current: dict = Depends(get_c
         "equipment_model_id": body.equipment_model_id,
         "area_id":          body.area_id,
         "ksic_code":        body.ksic_code,
+        "attributes":       body.attributes,
     }
     insert_data = {k: v for k, v in insert_data.items() if v is not None}
     res = supabase.table("equipment_assets").insert(insert_data).execute()

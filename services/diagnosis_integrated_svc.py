@@ -674,6 +674,17 @@ def run_diagnosis(
         if isinstance(r, dict) and r.get("equipment_type_code")
     ]
     if _eq_rows_for_proj:
+        from services.equipment_source.store import (
+            validate_equipment_source_row as _validate_eq,
+            EquipmentSourceValidationError as _EqValErr,
+        )
+        try:
+            _eq_rows_for_proj = [_validate_eq(r) for r in _eq_rows_for_proj]
+        except _EqValErr as _eq_exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "EQUIPMENT_ROW_INVALID", "message": str(_eq_exc)},
+            ) from _eq_exc
         from services.equipment_source.projector import project_equipment_rows as _proj_eq_t
         for _f, _v in _proj_eq_t(_eq_rows_for_proj).items():
             inp.setdefault(_f, _v)
