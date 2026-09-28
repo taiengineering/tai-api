@@ -1,4 +1,4 @@
-"""TAI Safe Pricing V2 — Renewal Atomic Apply PostgreSQL Integration Tests (I01-I25).
+"""TAI Safe Pricing V2 — Renewal Atomic Apply PostgreSQL Integration Tests (I01-I36).
 
 실제 isolated PostgreSQL에서 apply_saas_v2_renewal_atomic 함수를 실행하는 통합 테스트.
 
@@ -9,7 +9,7 @@
   - 환경변수: TEST_PG_RENEWAL_DSN 또는 기본값 localhost
 
 커버리지:
-  I01: APPLIED — MANAGER tier, 1 site_scope
+  I01: APPLIED — FIELD tier, 1 site_scope
   I02: old CV.superseded_at = boundary after apply
   I03: new CV.effective_from = boundary after apply
   I04: new CV.version_no = old.version_no + 1
@@ -27,13 +27,24 @@
   I16: contract.end_date 불일치 → V2_RENEWAL_PARTIAL_STATE
   I17: boundary mismatch → V2_RENEWAL_BOUNDARY_MISMATCH
   I18: version_no mismatch → V2_RENEWAL_VERSION_MISMATCH
-  I19: constraint 실패 → 전체 롤백 (old CV superseded_at = NULL, new CV = 0)
+  I19: constraint 실패 → 전체 롤백
   I20: 동시 2호출 동일 payment → APPLIED + ALREADY_APPLIED, end_date 1회만 연장
   I21: service_role RPC 허용
   I22: anon/authenticated RPC 차단 + superseded_at UPDATE 차단
   I23: Jan 31 + 1 month boundary
   I24: leap-year Feb 28/29 month arithmetic
-  I25: 서로 다른 payment 동시 renewal 동일 contract → 두 번째 fail-closed
+  I25: 서로 다른 payment → V2_RENEWAL_CROSS_PAYMENT_COLLISION
+  I26: top-level term_months 불일치 → V2_RENEWAL_TERM_MISMATCH
+  I27: created_by 불일치 → V2_RENEWAL_CV_CREATED_BY_MISMATCH
+  I28: FIELD + empty scopes → V2_RENEWAL_SCOPE_REQUIRED
+  I29: version N+2 존재 (P8) → V2_RENEWAL_PARTIAL_STATE
+  I30: 같은 payment로 다음 버전 갱신 시도 → V2_RENEWAL_PAYMENT_ALREADY_CONSUMED
+  I31: renewal_payment_id 직접 중복 INSERT → unique violation
+  I32: scope entity mismatch vs snapshot → V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH
+  I33: scope sector/base_band_code mismatch → V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH
+  I34: 같은 entity_id 다른 entity_type → composite uniqueness 검증
+  I35: old CV wrong schema → V2_RENEWAL_CURRENT_CV_SCHEMA_INVALID
+  I36: payment.user_id NULL → V2_RENEWAL_USER_REQUIRED
 
 Production DB 사용 절대 금지.
 """
@@ -48,6 +59,11 @@ import uuid
 
 import psycopg2
 import pytest
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+# Default user_id used across tests so payment.user_id and new_cv.created_by match.
+_DEFAULT_USER_ID = str(uuid.uuid4())
 
 # ── Connection ────────────────────────────────────────────────────────────────
 
@@ -213,6 +229,7 @@ def _insert_payment(
     supply: int = 200_000, vat: int = 20_000, total: int = 220_000,
     term: int = 12,
     paid_at: str = "2026-12-31T15:00:00+00:00",
+    user_id: str | None = _DEFAULT_USER_ID,
 ) -> None:
     cur = pg.cursor()
     cur.execute(
@@ -220,12 +237,12 @@ def _insert_payment(
            (id, status_code, product_type, payment_type, plan_code,
             contract_id, quote_id, period_months,
             supply_amount, vat_amount, total_amount,
-            company_id, paid_at)
+            company_id, user_id, paid_at)
            VALUES (%s,%s,'SAAS','RENEWAL',NULL,
                    %s,%s,%s,
                    %s,%s,%s,
-                   %s,%s);""",
-        (pid, status, cid, qid, term, supply, vat, total, company_id, paid_at),
+                   %s,%s,%s);""",
+        (pid, status, cid, qid, term, supply, vat, total, company_id, user_id, paid_at),
     )
 
 
@@ -262,6 +279,8 @@ def _insert_old_cv(
     product_tier: str = "FIELD",
     pricing_mode: str = "STANDARD",
     worker_capacity: int = 5,
+    schema_version: str = "SAAS_CONTRACT_COMMERCIAL_V2",
+    renewal_payment_id: str | None = None,
 ) -> str:
     """Returns inserted CV id."""
     cv_id = _new_id()
@@ -273,15 +292,15 @@ def _insert_old_cv(
            (id, contract_id, version_no, commercial_schema_version,
             product_tier, pricing_mode, worker_capacity, term_months,
             pricing_result_status, pricing_policy_version, pricing_snapshot,
-            effective_from, superseded_at)
-           VALUES (%s,%s,%s,'SAAS_CONTRACT_COMMERCIAL_V2',
+            effective_from, superseded_at, renewal_payment_id)
+           VALUES (%s,%s,%s,%s,
                    %s,%s,%s,%s,
                    'READY','2026.09',%s,
-                   %s,%s);""",
-        (cv_id, cid, version_no, product_tier, pricing_mode,
+                   %s,%s,%s);""",
+        (cv_id, cid, version_no, schema_version, product_tier, pricing_mode,
          worker_capacity, term_months,
          json.dumps(snap),
-         effective_from, superseded_at),
+         effective_from, superseded_at, renewal_payment_id),
     )
     return cv_id
 
@@ -294,7 +313,7 @@ def _new_cv_payload(
     pricing_mode: str = "STANDARD",
     worker_capacity: int = 5,
     supply: int = 200_000, vat: int = 20_000, total: int = 220_000,
-    created_by: str | None = None,
+    created_by: str | None = _DEFAULT_USER_ID,
 ) -> dict:
     snap = _snap(supply, vat, total, term_months, worker_capacity)
     snap["product_tier"] = product_tier
@@ -657,9 +676,10 @@ def test_I12_old_superseded_at_mismatch_partial(pg):
     _insert_payment(pg, pid, cid, qid, co)
     # Old CV has different superseded_at
     _insert_old_cv(pg, cid, version_no=1, superseded_at=other_boundary)
-    # New CV already exists with correct boundary
+    # New CV already exists with correct boundary; renewal_payment_id=pid passes BLOCKER 1
     _insert_old_cv(pg, cid, version_no=2,
-                   effective_from=boundary, superseded_at=None)
+                   effective_from=boundary, superseded_at=None,
+                   renewal_payment_id=pid)
     new_cv = _new_cv_payload(cid, 2, boundary)
 
     result = _rpc(pg, pid, cid, qid, 1, new_cv, [_scope()])
@@ -680,7 +700,8 @@ def test_I13_missing_scope_partial(pg):
     _insert_payment(pg, pid, cid, qid, co)
     _insert_old_cv(pg, cid, version_no=1, superseded_at=boundary)
     new_cv_id = _insert_old_cv(pg, cid, version_no=2,
-                                effective_from=boundary, superseded_at=None)
+                                effective_from=boundary, superseded_at=None,
+                                renewal_payment_id=pid)
 
     # Only insert 1 of 2 expected scopes
     cur = pg.cursor()
@@ -712,7 +733,8 @@ def test_I14_extra_scope_partial(pg):
     _insert_payment(pg, pid, cid, qid, co)
     _insert_old_cv(pg, cid, version_no=1, superseded_at=boundary)
     new_cv_id = _insert_old_cv(pg, cid, version_no=2,
-                                effective_from=boundary, superseded_at=None)
+                                effective_from=boundary, superseded_at=None,
+                                renewal_payment_id=pid)
 
     # Insert 2 stored scopes but incoming expects only 1
     cur = pg.cursor()
@@ -743,7 +765,8 @@ def test_I15_new_cv_payload_mismatch_partial(pg):
     _insert_old_cv(pg, cid, version_no=1, superseded_at=boundary)
     # Stored new CV with term_months=12
     _insert_old_cv(pg, cid, version_no=2,
-                   effective_from=boundary, superseded_at=None, term_months=12)
+                   effective_from=boundary, superseded_at=None, term_months=12,
+                   renewal_payment_id=pid)
 
     # Incoming new CV with different term_months → mismatch
     new_cv = _new_cv_payload(cid, 2, boundary, term_months=6)
@@ -769,7 +792,8 @@ def test_I16_contract_end_date_mismatch_partial(pg):
     _insert_contract(pg, cid, co, end_date="2027-06-01")  # wrong end_date
     _insert_payment(pg, pid, cid, qid, co)
     _insert_old_cv(pg, cid, version_no=1, superseded_at=boundary)
-    _insert_old_cv(pg, cid, version_no=2, effective_from=boundary, superseded_at=None)
+    _insert_old_cv(pg, cid, version_no=2, effective_from=boundary, superseded_at=None,
+                   renewal_payment_id=pid)
 
     # Insert 1 matching scope
     cur = pg.cursor()
@@ -1211,13 +1235,230 @@ def test_I29_unexpected_higher_version_partial(pg):
     _insert_contract(pg, cid, co, end_date=end_date)
     _insert_payment(pg, pid, cid, qid, co)
     _insert_old_cv(pg, cid, version_no=1)
-    # Manually inject version 3 (skipping 2) → unexpected higher version
+    # Manually inject version 3 (skipping 2) — closed so uq_saas_ccv_current_version is not violated
     _insert_old_cv(pg, cid, version_no=3,
-                   effective_from=boundary, superseded_at=None)
+                   effective_from="2028-01-01T00:00:00+09:00",
+                   superseded_at="2029-01-01T00:00:00+09:00")
 
     new_cv = _new_cv_payload(cid, 2, boundary)
 
     result = _rpc(pg, pid, cid, qid, 1, new_cv, [_scope()])
     assert result["status"] == "V2_RENEWAL_PARTIAL_STATE", (
         f"Expected V2_RENEWAL_PARTIAL_STATE (P8), got: {result}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I30: 같은 payment로 다음 버전 갱신 시도 → V2_RENEWAL_PAYMENT_ALREADY_CONSUMED
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I30_same_payment_already_consumed(pg):
+    """pid를 사용해 v1→v2 적용 후, 동일 pid로 v2→v3 시도 → PAYMENT_ALREADY_CONSUMED."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    _insert_payment(pg, pid, cid, qid, co, term=12)
+    _insert_old_cv(pg, cid, version_no=1)
+    new_cv2 = _new_cv_payload(cid, 2, boundary, term_months=12)
+
+    r1 = _rpc(pg, pid, cid, qid, 1, new_cv2, [_scope()])
+    assert r1["status"] == "APPLIED"
+
+    # After first renewal, contract.end_date = 2028-01-01
+    boundary2 = _kst_boundary("2028-01-01")
+    new_cv3 = _new_cv_payload(cid, 3, boundary2, term_months=12)
+
+    # Same pid, but consumed for (cid, v2); target is (cid, v3) → CONSUMED
+    r2 = _rpc(pg, pid, cid, qid, 2, new_cv3, [_scope()])
+    assert r2["status"] == "V2_RENEWAL_PAYMENT_ALREADY_CONSUMED", (
+        f"Expected V2_RENEWAL_PAYMENT_ALREADY_CONSUMED, got: {r2}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I31: renewal_payment_id 직접 중복 INSERT → unique violation (DB invariant)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I31_renewal_payment_id_unique_violation(pg):
+    """동일 renewal_payment_id로 두 번째 CV INSERT → uix_saas_ccv_renewal_payment_id 위반."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    _insert_payment(pg, pid, cid, qid, co)
+    _insert_old_cv(pg, cid, version_no=1)
+    new_cv = _new_cv_payload(cid, 2, boundary)
+
+    r1 = _rpc(pg, pid, cid, qid, 1, new_cv, [_scope()])
+    assert r1["status"] == "APPLIED"
+
+    # Second contract + old CV; try to INSERT a new CV with same pid → unique violation
+    cid2, co2 = _new_id(), _new_id()
+    _insert_contract(pg, cid2, co2, end_date=end_date)
+    _insert_old_cv(pg, cid2, version_no=1)
+
+    with pytest.raises(psycopg2.errors.UniqueViolation):
+        _insert_old_cv(pg, cid2, version_no=2,
+                       effective_from=boundary, superseded_at=None,
+                       renewal_payment_id=pid)
+
+    pg.rollback()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I32: scope entity_id ≠ snapshot → V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I32_scope_entity_mismatch_vs_snapshot(pg):
+    """scope.entity_id가 snapshot.sites의 entity_id와 다름 → SCOPE_SNAPSHOT_MISMATCH."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    sid_a = _new_id()   # snapshot entity_id
+    sid_b = _new_id()   # scope entity_id — intentionally different
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    _insert_payment(pg, pid, cid, qid, co)
+    _insert_old_cv(pg, cid, version_no=1)
+
+    snap = _snap()
+    snap["sites"][0]["entity_id"] = sid_a
+    snap["sites"][0]["sector"] = "INDUSTRY"
+    snap["sites"][0]["base_band_code"] = "B1"
+    snap["product_tier"] = "FIELD"
+
+    new_cv = _new_cv_payload(cid, 2, boundary)
+    new_cv["pricing_snapshot"] = snap
+    new_cv["product_tier"] = "FIELD"
+
+    # Scope references sid_b (not in snapshot)
+    scopes = [_scope(sid_b, "INDUSTRY", "factory", "B1")]
+
+    result = _rpc(pg, pid, cid, qid, 1, new_cv, scopes)
+    assert result["status"] == "V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH", (
+        f"Expected V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH, got: {result}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I33: scope sector 불일치 vs snapshot → V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I33_scope_sector_mismatch_vs_snapshot(pg):
+    """scope.sector가 snapshot.sites의 sector와 다름 → SCOPE_SNAPSHOT_MISMATCH."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    sid_a = _new_id()
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    _insert_payment(pg, pid, cid, qid, co)
+    _insert_old_cv(pg, cid, version_no=1)
+
+    snap = _snap()
+    snap["sites"][0]["entity_id"] = sid_a
+    snap["sites"][0]["sector"] = "INDUSTRY"
+    snap["sites"][0]["base_band_code"] = "B1"
+    snap["product_tier"] = "FIELD"
+
+    new_cv = _new_cv_payload(cid, 2, boundary)
+    new_cv["pricing_snapshot"] = snap
+    new_cv["product_tier"] = "FIELD"
+
+    # Scope: same entity_id/type but sector=BUILDING (snapshot has INDUSTRY)
+    scopes = [_scope(sid_a, "BUILDING", "factory", "B1")]
+
+    result = _rpc(pg, pid, cid, qid, 1, new_cv, scopes)
+    assert result["status"] == "V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH", (
+        f"Expected V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH, got: {result}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I34: 같은 entity_id 다른 entity_type → 중복 아님 (composite key 검증)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I34_same_entity_id_different_type_not_duplicate(pg):
+    """(factory, sid_a)와 (workplace, sid_a)는 composite key가 다름 → APPLIED."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    sid_a = _new_id()
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    _insert_payment(pg, pid, cid, qid, co, supply=400_000, vat=40_000, total=440_000)
+    _insert_old_cv(pg, cid, version_no=1)
+
+    snap = _snap(supply=400_000, vat=40_000, total=440_000)
+    snap["sites"] = [
+        {"entity_type": "factory",   "entity_id": sid_a, "sector": "INDUSTRY",
+         "base_band_code": "B1", "base_amount": 200_000, "is_primary": True,
+         "applied_rate_bps": 0, "final_site_amount": 200_000},
+        {"entity_type": "workplace", "entity_id": sid_a, "sector": "INDUSTRY",
+         "base_band_code": "B1", "base_amount": 200_000, "is_primary": False,
+         "applied_rate_bps": 0, "final_site_amount": 200_000},
+    ]
+    snap["product_tier"] = "FIELD"
+    snap["prepaid_supply_amount"] = 400_000
+    snap["vat_amount"] = 40_000
+    snap["total_amount"] = 440_000
+
+    new_cv = _new_cv_payload(cid, 2, boundary, supply=400_000, vat=40_000, total=440_000)
+    new_cv["pricing_snapshot"] = snap
+    new_cv["product_tier"] = "FIELD"
+
+    scopes = [
+        _scope(sid_a, "INDUSTRY", "factory",   "B1"),
+        _scope(sid_a, "INDUSTRY", "workplace", "B1"),
+    ]
+
+    result = _rpc(pg, pid, cid, qid, 1, new_cv, scopes)
+    assert result["status"] == "APPLIED", (
+        f"Expected APPLIED (same entity_id, different entity_type is not duplicate), got: {result}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I35: old CV wrong schema → V2_RENEWAL_CURRENT_CV_SCHEMA_INVALID
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I35_old_cv_wrong_schema(pg):
+    """old CV commercial_schema_version != SAAS_CONTRACT_COMMERCIAL_V2 → CURRENT_CV_SCHEMA_INVALID."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    _insert_payment(pg, pid, cid, qid, co)
+    # Old CV with wrong schema version (legacy V1)
+    _insert_old_cv(pg, cid, version_no=1, schema_version="SAAS_CONTRACT_V1")
+    new_cv = _new_cv_payload(cid, 2, boundary)
+
+    result = _rpc(pg, pid, cid, qid, 1, new_cv, [_scope()])
+    assert result["status"] == "V2_RENEWAL_CURRENT_CV_SCHEMA_INVALID", (
+        f"Expected V2_RENEWAL_CURRENT_CV_SCHEMA_INVALID, got: {result}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I36: payment.user_id IS NULL → V2_RENEWAL_USER_REQUIRED
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I36_payment_user_id_null(pg):
+    """payment.user_id IS NULL → V2_RENEWAL_USER_REQUIRED."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    _insert_payment(pg, pid, cid, qid, co, user_id=None)  # NULL user_id
+    _insert_old_cv(pg, cid, version_no=1)
+    new_cv = _new_cv_payload(cid, 2, boundary)
+
+    result = _rpc(pg, pid, cid, qid, 1, new_cv, [_scope()])
+    assert result["status"] == "V2_RENEWAL_USER_REQUIRED", (
+        f"Expected V2_RENEWAL_USER_REQUIRED, got: {result}"
     )

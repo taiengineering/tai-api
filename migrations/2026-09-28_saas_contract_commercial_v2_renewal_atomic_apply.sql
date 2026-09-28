@@ -2,8 +2,8 @@
 -- ARTIFACT ONLY — PRODUCTION APPLY = 0 — OWNER APPROVAL REQUIRED
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Source : WO-PRICING-V2-BE-OBJ10-D-B2 Atomic Prepaid Renewal Persistence
---          PATCH1: cross-payment idempotency + term authority + created_by +
---                  scope completeness + P8 + rollback evidence
+--          PATCH2: payment uniqueness + scope snapshot SSOT + old-CV schema +
+--                  user provenance + consumed-payment guard
 -- Date   : 2026-09-28
 -- Branch : docs/pricing-canonical-20260927
 -- Status : GPT INDEPENDENT VERIFY REQUIRED before any application
@@ -15,29 +15,49 @@
 --
 -- 전제: OBJ10-C migration이 이미 적용된 상태 (saas_contract_commercial_versions,
 --       saas_contract_site_scopes 테이블 존재).
--- 신규 변경: renewal_payment_id 컬럼 + UPDATE 권한 + apply_saas_v2_renewal_atomic 함수.
+-- 신규 변경:
+--   renewal_payment_id uuid (nullable)  ADD COLUMN
+--   FK: renewal_payment_id → payments(id)
+--   UNIQUE INDEX: (renewal_payment_id) WHERE NOT NULL  → 1 payment = 1 renewal
+--   apply_saas_v2_renewal_atomic 함수 (idempotent CREATE OR REPLACE)
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- SECTION 1: Additional ACL + Schema additions for service_role
+-- SECTION 1: Schema additions + ACL
 -- ═══════════════════════════════════════════════════════════════════════════
---
--- OBJ10-C에서는 INSERT 전용. B2에서 old CV.superseded_at UPDATE가 필요.
--- renewal_payment_id: 결제↔CV binding (payment_id unique idempotency key).
--- 최소권한 원칙: 컬럼 단위 GRANT.
 
+-- renewal_payment_id: payment↔CV binding.
+-- nullable: 신규 CV 전용 필드, 기존 legacy CV는 NULL 유지.
 ALTER TABLE public.saas_contract_commercial_versions
     ADD COLUMN IF NOT EXISTS renewal_payment_id uuid;
 
+-- FK: renewal_payment_id → payments(id). Idempotent via DO block.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.saas_contract_commercial_versions'::regclass
+          AND conname  = 'fk_saas_ccv_renewal_payment_id'
+    ) THEN
+        ALTER TABLE public.saas_contract_commercial_versions
+            ADD CONSTRAINT fk_saas_ccv_renewal_payment_id
+            FOREIGN KEY (renewal_payment_id)
+            REFERENCES public.payments(id);
+    END IF;
+END $$;
+
+-- UNIQUE INDEX: 동일 payment_id는 전체 CV table에서 최대 1건.
+-- WHERE renewal_payment_id IS NOT NULL: legacy NULL rows는 제외.
+CREATE UNIQUE INDEX IF NOT EXISTS uix_saas_ccv_renewal_payment_id
+    ON public.saas_contract_commercial_versions(renewal_payment_id)
+    WHERE renewal_payment_id IS NOT NULL;
+
+-- ACL: superseded_at UPDATE만 필요. renewal_payment_id는 INSERT 시 설정, UPDATE 불필요.
 GRANT UPDATE (superseded_at)
     ON public.saas_contract_commercial_versions
     TO service_role;
 
-GRANT UPDATE (renewal_payment_id)
-    ON public.saas_contract_commercial_versions
-    TO service_role;
-
--- contracts UPDATE: B2에서 end_date/paid_amount/paid_at/updated_at 갱신 필요
+-- contracts UPDATE: end_date/paid_amount/paid_at/updated_at
 GRANT UPDATE (end_date, status_code, is_active, paid_amount, paid_at, updated_at)
     ON public.contracts
     TO service_role;
@@ -48,18 +68,17 @@ GRANT UPDATE (end_date, status_code, is_active, paid_amount, paid_at, updated_at
 -- ═══════════════════════════════════════════════════════════════════════════
 --
 -- 역할: Prepaid Renewal 결제 성공 후 단일 트랜잭션으로 CV 전환 + 계약 연장.
--- 보안: SECURITY INVOKER (DEFINER 금지), search_path = '' (schema injection 방지).
--- 호출자: service_role 전용 (PUBLIC/anon/authenticated REVOKE).
+-- 보안: SECURITY INVOKER, search_path = ''
+-- 호출자: service_role 전용
 -- DB write:
 --   saas_contract_commercial_versions.superseded_at UPDATE 1
---   saas_contract_commercial_versions.renewal_payment_id UPDATE 0 (INSERT 시 설정)
---   saas_contract_commercial_versions INSERT 1
+--   saas_contract_commercial_versions INSERT 1 (renewal_payment_id = p_payment_id)
 --   saas_contract_site_scopes INSERT N
 --   contracts UPDATE 1
---   payments 변경 없음 (READ 전용)
--- 멱등성: renewal_payment_id 기준 payment↔CV binding → ALREADY_APPLIED.
--- 교차결제 차단: 다른 payment_id → V2_RENEWAL_CROSS_PAYMENT_COLLISION.
--- 부분 상태: V2_RENEWAL_PARTIAL_STATE fail-closed.
+--   payments: READ only (FOR UPDATE)
+-- Idempotency: renewal_payment_id = p_payment_id → same target → ALREADY_APPLIED
+-- Cross-payment: renewal_payment_id exists for different payment → V2_RENEWAL_CROSS_PAYMENT_COLLISION
+-- Global unique: renewal_payment_id UNIQUE INDEX → DB invariant
 -- ═══════════════════════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION public.apply_saas_v2_renewal_atomic(
@@ -103,7 +122,7 @@ DECLARE
     v_old_cv_schema_ver   text;
     v_old_cv_superseded   timestamptz;
 
-    -- existing new CV (idempotency)
+    -- existing new CV (idempotency check)
     v_ex_new_cv_id              uuid;
     v_ex_new_eff_from           timestamptz;
     v_ex_new_sup                timestamptz;
@@ -120,6 +139,10 @@ DECLARE
     v_ex_new_created_by         uuid;
     v_ex_new_renewal_payment_id uuid;
 
+    -- payment consumed guard
+    v_consumed_contract_id      uuid;
+    v_consumed_version_no       integer;
+
     -- computed
     v_boundary            timestamptz;
     v_new_end_date        date;
@@ -134,9 +157,10 @@ DECLARE
     v_snap_term           integer;
     v_new_cv_input_sup    text;
     v_input_scope_count   integer;
+    v_snap_sites          jsonb;
 BEGIN
 
-    -- ── Step 1: Lock payment row (deadlock 방지 lock 순서 고정: pay→contract→old CV) ──
+    -- ── Step 1: Lock payment row (deadlock 방지 lock 순서: pay→contract→old CV) ──
     SELECT status_code, product_type, payment_type, plan_code,
            contract_id, quote_id, period_months,
            supply_amount, vat_amount, total_amount,
@@ -187,6 +211,12 @@ BEGIN
             'pay_quote_id', v_pay_quote_id, 'p_quote_id', p_quote_id);
     END IF;
 
+    -- User provenance: payment.user_id must be non-null for renewal
+    IF v_pay_user_id IS NULL THEN
+        RETURN jsonb_build_object('status', 'V2_RENEWAL_USER_REQUIRED',
+            'payment_id', p_payment_id);
+    END IF;
+
     -- ── Step 2: Lock contract row ─────────────────────────────────────────────
     SELECT status_code, service_type, is_active, end_date, company_id
     INTO   v_con_status_code, v_con_service_type, v_con_is_active,
@@ -233,6 +263,34 @@ BEGIN
             'contract_id', p_contract_id, 'version_no', p_current_version_no);
     END IF;
 
+    -- Old CV must be V2 schema (transition source guard)
+    IF v_old_cv_schema_ver IS DISTINCT FROM 'SAAS_CONTRACT_COMMERCIAL_V2' THEN
+        RETURN jsonb_build_object('status', 'V2_RENEWAL_CURRENT_CV_SCHEMA_INVALID',
+            'schema_version', v_old_cv_schema_ver);
+    END IF;
+
+    -- ── Global payment consumed guard ─────────────────────────────────────────
+    -- Check if this payment_id was already used for ANY renewal across ALL versions.
+    -- The UNIQUE INDEX enforces the DB invariant; this guard gives a deterministic result.
+    SELECT contract_id, version_no
+    INTO   v_consumed_contract_id, v_consumed_version_no
+    FROM   public.saas_contract_commercial_versions
+    WHERE  renewal_payment_id = p_payment_id;
+
+    IF FOUND THEN
+        IF v_consumed_contract_id IS DISTINCT FROM p_contract_id
+           OR v_consumed_version_no IS DISTINCT FROM (p_current_version_no + 1)
+        THEN
+            -- Payment consumed for a different contract or version → hard fail
+            RETURN jsonb_build_object('status', 'V2_RENEWAL_PAYMENT_ALREADY_CONSUMED',
+                'consumed_contract_id', v_consumed_contract_id,
+                'consumed_version_no',  v_consumed_version_no,
+                'requested_contract_id', p_contract_id,
+                'requested_version_no',  p_current_version_no + 1);
+        END IF;
+        -- ELSE: consumed for same target → fall through to idempotency branch (Step 4)
+    END IF;
+
     -- ── New CV input guards ───────────────────────────────────────────────────
     IF (p_new_commercial_version->>'commercial_schema_version')
          IS DISTINCT FROM 'SAAS_CONTRACT_COMMERCIAL_V2' THEN
@@ -252,7 +310,6 @@ BEGIN
             'got', (p_new_commercial_version->>'version_no')::integer);
     END IF;
 
-    -- new CV must have superseded_at = null
     v_new_cv_input_sup := p_new_commercial_version->>'superseded_at';
     IF v_new_cv_input_sup IS NOT NULL AND v_new_cv_input_sup != 'null' THEN
         RETURN jsonb_build_object('status', 'V2_RENEWAL_CV_SUPERSEDED_AT_MUST_BE_NULL');
@@ -281,8 +338,7 @@ BEGIN
             'field', 'term_months');
     END IF;
 
-    -- BLOCKER 2: new CV top-level term_months must equal payment.period_months
-    -- (snapshot.term == payment.period is checked above; top-level term must match too)
+    -- Top-level term_months must equal payment.period_months (3-way: snap + top-level + payment)
     IF (p_new_commercial_version->>'term_months')::integer IS DISTINCT FROM v_pay_period_months THEN
         RETURN jsonb_build_object('status', 'V2_RENEWAL_TERM_MISMATCH',
             'field', 'new_cv_top_level_term_months',
@@ -290,17 +346,18 @@ BEGIN
             'got', (p_new_commercial_version->>'term_months')::integer);
     END IF;
 
-    -- BLOCKER 3: new CV.created_by must equal payment.user_id (provenance binding)
+    -- created_by must equal payment.user_id (provenance binding, both non-null enforced above)
     IF (p_new_commercial_version->>'created_by')::uuid IS DISTINCT FROM v_pay_user_id THEN
         RETURN jsonb_build_object('status', 'V2_RENEWAL_CV_CREATED_BY_MISMATCH',
             'expected', v_pay_user_id,
             'got', p_new_commercial_version->>'created_by');
     END IF;
 
-    -- BLOCKER 4: scope completeness
+    -- Scope completeness
     v_input_scope_count := jsonb_array_length(p_site_scopes);
+    v_snap_sites        := p_new_commercial_version->'pricing_snapshot'->'sites';
 
-    -- MANAGER/FIELD tiers require at least 1 scope
+    -- MANAGER/FIELD requires at least 1 scope
     IF (p_new_commercial_version->>'product_tier') IN ('MANAGER', 'FIELD')
        AND v_input_scope_count = 0
     THEN
@@ -308,12 +365,56 @@ BEGIN
             'product_tier', p_new_commercial_version->>'product_tier');
     END IF;
 
-    -- No duplicate entity_id in incoming scopes
+    -- No duplicate (entity_type, entity_id) composite key in incoming scopes
     IF v_input_scope_count > 1 AND (
-        SELECT COUNT(*) != COUNT(DISTINCT elem->>'entity_id')
+        SELECT COUNT(*) != COUNT(DISTINCT (elem->>'entity_type', elem->>'entity_id'))
         FROM   jsonb_array_elements(p_site_scopes) AS elem
     ) THEN
         RETURN jsonb_build_object('status', 'V2_RENEWAL_SCOPE_DUPLICATE');
+    END IF;
+
+    -- MANAGER/FIELD: scope set must exactly match pricing_snapshot.sites
+    -- Verifies (entity_type, entity_id, sector, base_band_code) exact-set both ways.
+    IF (p_new_commercial_version->>'product_tier') IN ('MANAGER', 'FIELD') THEN
+        -- Count must match
+        IF jsonb_array_length(v_snap_sites) IS DISTINCT FROM v_input_scope_count THEN
+            RETURN jsonb_build_object('status', 'V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH',
+                'reason', 'count_mismatch',
+                'snapshot_count', jsonb_array_length(v_snap_sites),
+                'scope_count', v_input_scope_count);
+        END IF;
+        -- Every incoming scope tuple must appear in snapshot.sites
+        IF EXISTS (
+            SELECT 1
+            FROM   jsonb_array_elements(p_site_scopes) AS sc
+            WHERE  NOT EXISTS (
+                SELECT 1
+                FROM   jsonb_array_elements(v_snap_sites) AS ss
+                WHERE  ss->>'entity_type' = sc->>'entity_type'
+                  AND  ss->>'entity_id'   = sc->>'entity_id'
+                  AND  ss->>'sector'      = sc->>'sector'
+                  AND  ss->>'base_band_code' IS NOT DISTINCT FROM sc->>'base_band_code'
+            )
+        ) THEN
+            RETURN jsonb_build_object('status', 'V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH',
+                'reason', 'scope_not_in_snapshot');
+        END IF;
+        -- Every snapshot.sites tuple must appear in incoming scopes
+        IF EXISTS (
+            SELECT 1
+            FROM   jsonb_array_elements(v_snap_sites) AS ss
+            WHERE  NOT EXISTS (
+                SELECT 1
+                FROM   jsonb_array_elements(p_site_scopes) AS sc
+                WHERE  sc->>'entity_type' = ss->>'entity_type'
+                  AND  sc->>'entity_id'   = ss->>'entity_id'
+                  AND  sc->>'sector'      = ss->>'sector'
+                  AND  sc->>'base_band_code' IS NOT DISTINCT FROM ss->>'base_band_code'
+            )
+        ) THEN
+            RETURN jsonb_build_object('status', 'V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH',
+                'reason', 'snapshot_site_not_in_scope');
+        END IF;
     END IF;
 
     -- ── Step 4: Check for existing target new version (idempotency) ───────────
@@ -335,8 +436,8 @@ BEGIN
     IF FOUND THEN
         -- ── IDEMPOTENCY BRANCH ────────────────────────────────────────────────
 
-        -- BLOCKER 1: cross-payment collision guard
-        -- existing new CV was created by a different payment → fail-closed
+        -- BLOCKER 1: cross-payment collision (consumed guard above handles same-version reuse;
+        -- this check handles different payment trying to claim same target version)
         IF v_ex_new_renewal_payment_id IS DISTINCT FROM p_payment_id THEN
             RETURN jsonb_build_object('status', 'V2_RENEWAL_CROSS_PAYMENT_COLLISION',
                 'existing_payment_id', v_ex_new_renewal_payment_id,
@@ -350,22 +451,22 @@ BEGIN
                 'reason', 'old_superseded_at_mismatch');
         END IF;
 
-        -- D: exact new CV field comparison (canonical fields only, created_at excluded)
+        -- D: exact new CV field comparison
         IF v_ex_new_schema_ver IS DISTINCT FROM 'SAAS_CONTRACT_COMMERCIAL_V2'
         OR v_ex_new_contract_id IS DISTINCT FROM p_contract_id
         OR v_ex_new_version_no  IS DISTINCT FROM (p_current_version_no + 1)
-        OR v_ex_new_tier   IS DISTINCT FROM (p_new_commercial_version->>'product_tier')
-        OR v_ex_new_mode   IS DISTINCT FROM (p_new_commercial_version->>'pricing_mode')
-        OR v_ex_new_worker_cap IS DISTINCT FROM (p_new_commercial_version->>'worker_capacity')::integer
+        OR v_ex_new_tier        IS DISTINCT FROM (p_new_commercial_version->>'product_tier')
+        OR v_ex_new_mode        IS DISTINCT FROM (p_new_commercial_version->>'pricing_mode')
+        OR v_ex_new_worker_cap  IS DISTINCT FROM (p_new_commercial_version->>'worker_capacity')::integer
         OR v_ex_new_term_months IS DISTINCT FROM (p_new_commercial_version->>'term_months')::integer
         OR v_ex_new_result_stat IS DISTINCT FROM (p_new_commercial_version->>'pricing_result_status')
-        OR v_ex_new_policy_ver IS DISTINCT FROM (p_new_commercial_version->>'pricing_policy_version')
-        OR v_ex_new_snapshot IS DISTINCT FROM
+        OR v_ex_new_policy_ver  IS DISTINCT FROM (p_new_commercial_version->>'pricing_policy_version')
+        OR v_ex_new_snapshot    IS DISTINCT FROM
                NULLIF(p_new_commercial_version->'pricing_snapshot', 'null'::jsonb)
-        OR v_ex_new_eff_from IS DISTINCT FROM
+        OR v_ex_new_eff_from    IS DISTINCT FROM
                (p_new_commercial_version->>'effective_from')::timestamptz
-        OR v_ex_new_sup IS NOT NULL  -- new CV must always be open-ended
-        OR v_ex_new_created_by IS DISTINCT FROM
+        OR v_ex_new_sup IS NOT NULL
+        OR v_ex_new_created_by  IS DISTINCT FROM
                (p_new_commercial_version->>'created_by')::uuid
         THEN
             RETURN jsonb_build_object('status', 'V2_RENEWAL_PARTIAL_STATE',
@@ -418,8 +519,7 @@ BEGIN
         );
     END IF;
 
-    -- ── P8: 예상보다 높은 version이 이미 존재하면 부분 상태 ─────────────────────
-    -- version N+1 not found above, but if N+2 or higher exists, that's partial
+    -- ── P8: version > N+1 이미 존재하면 부분 상태 ──────────────────────────────
     IF EXISTS (
         SELECT 1
         FROM   public.saas_contract_commercial_versions
@@ -438,48 +538,35 @@ BEGIN
             'reason', 'old_already_superseded_no_new_cv');
     END IF;
 
-    -- DB-derived boundary: locked contracts.end_date interpreted at Asia/Seoul midnight
-    -- v_con_end_date is a DATE, e.g. 2027-01-01
-    -- AT TIME ZONE 'Asia/Seoul' on a timestamp: 2027-01-01T00:00:00 → 2027-01-01T00:00:00+09:00
+    -- DB-derived boundary: contracts.end_date → Asia/Seoul midnight
     v_boundary := (v_con_end_date::timestamp AT TIME ZONE 'Asia/Seoul');
 
-    -- Boundary check: new CV.effective_from must == DB-derived boundary
+    -- Boundary check: new CV.effective_from must == v_boundary
     IF (p_new_commercial_version->>'effective_from')::timestamptz IS DISTINCT FROM v_boundary THEN
         RETURN jsonb_build_object('status', 'V2_RENEWAL_BOUNDARY_MISMATCH',
             'expected', v_boundary,
             'got', p_new_commercial_version->>'effective_from');
     END IF;
 
-    -- ── Write order (unique open-ended index: supersede before insert) ─────────
+    -- ── Writes ───────────────────────────────────────────────────────────────
 
-    -- Write 1: UPDATE old CV.superseded_at = boundary (AND guard superseded_at IS NULL)
+    -- Write 1: supersede old CV (AND guard: concurrent-safe)
     UPDATE public.saas_contract_commercial_versions
     SET    superseded_at = v_boundary
     WHERE  id            = v_old_cv_id
       AND  superseded_at IS NULL;
 
     IF NOT FOUND THEN
-        -- concurrent call already superseded it → partial state
         RETURN jsonb_build_object('status', 'V2_RENEWAL_PARTIAL_STATE',
             'reason', 'old_update_concurrent_conflict');
     END IF;
 
-    -- Write 2: INSERT new CV (renewal_payment_id = p_payment_id binds CV to this payment)
+    -- Write 2: INSERT new CV (renewal_payment_id = p_payment_id — unique key)
     INSERT INTO public.saas_contract_commercial_versions (
-        contract_id,
-        version_no,
-        commercial_schema_version,
-        product_tier,
-        pricing_mode,
-        worker_capacity,
-        term_months,
-        pricing_result_status,
-        pricing_policy_version,
-        pricing_snapshot,
-        effective_from,
-        superseded_at,
-        created_by,
-        renewal_payment_id
+        contract_id, version_no, commercial_schema_version,
+        product_tier, pricing_mode, worker_capacity, term_months,
+        pricing_result_status, pricing_policy_version, pricing_snapshot,
+        effective_from, superseded_at, created_by, renewal_payment_id
     ) VALUES (
         (p_new_commercial_version->>'contract_id')::uuid,
         (p_new_commercial_version->>'version_no')::integer,
@@ -502,11 +589,7 @@ BEGIN
     FOR v_scope IN SELECT * FROM jsonb_array_elements(p_site_scopes)
     LOOP
         INSERT INTO public.saas_contract_site_scopes (
-            commercial_version_id,
-            entity_type,
-            entity_id,
-            sector,
-            base_band_code
+            commercial_version_id, entity_type, entity_id, sector, base_band_code
         ) VALUES (
             v_new_cv_id,
             v_scope->>'entity_type',
@@ -516,7 +599,7 @@ BEGIN
         );
     END LOOP;
 
-    -- Write 4: UPDATE contract — end_date + compatibility fields
+    -- Write 4: extend contract
     v_new_end_date := (v_con_end_date
         + (((p_new_commercial_version->>'term_months')::integer) || ' months')::interval
     )::date;

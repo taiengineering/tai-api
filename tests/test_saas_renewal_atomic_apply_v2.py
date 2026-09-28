@@ -357,9 +357,9 @@ def test_A20_sql_search_path_empty():
 
 def test_A21_sql_payment_for_update():
     """SQL: payments FOR UPDATE (lock 순서 1번)."""
-    assert "public.payments" in _SQL
-    # FOR UPDATE must appear after payments
-    pay_idx = _SQL.index("public.payments")
+    # Search within the function body (FROM public.payments ... FOR UPDATE pattern)
+    assert "FROM   public.payments" in _SQL
+    pay_idx = _SQL.index("FROM   public.payments")
     assert "FOR UPDATE" in _SQL[pay_idx:pay_idx + 300]
 
 
@@ -450,3 +450,41 @@ def test_A35_sql_scope_required_code():
 def test_A36_sql_scope_duplicate_code():
     """SQL: V2_RENEWAL_SCOPE_DUPLICATE (중복 entity_id 차단) 코드 존재."""
     assert "V2_RENEWAL_SCOPE_DUPLICATE" in _SQL
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# A37-A42: PATCH2 static 검사
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_A37_sql_renewal_payment_id_unique_index():
+    """SQL: renewal_payment_id UNIQUE INDEX 존재 (1 payment = 1 renewal DB invariant)."""
+    assert "CREATE UNIQUE INDEX" in _SQL
+    assert "renewal_payment_id" in _SQL
+
+
+def test_A38_sql_renewal_payment_id_fk():
+    """SQL: renewal_payment_id FK REFERENCES public.payments 존재."""
+    assert "REFERENCES public.payments" in _SQL
+
+
+def test_A39_sql_payment_already_consumed_guard():
+    """SQL: V2_RENEWAL_PAYMENT_ALREADY_CONSUMED (global consumed-payment guard) 존재."""
+    assert "V2_RENEWAL_PAYMENT_ALREADY_CONSUMED" in _SQL
+
+
+def test_A40_sql_scope_snapshot_mismatch_code():
+    """SQL: V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH (scope ↔ snapshot SSOT) 존재."""
+    assert "V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH" in _SQL
+
+
+def test_A41_sql_scope_duplicate_composite_key():
+    """SQL: scope duplicate 검사에 (entity_type, entity_id) composite key 사용."""
+    dup_idx = _SQL.index("V2_RENEWAL_SCOPE_DUPLICATE")
+    context = _SQL[max(0, dup_idx - 400):dup_idx]
+    assert "entity_type" in context
+    assert "entity_id" in context
+
+
+def test_A42_sql_old_cv_schema_guard():
+    """SQL: V2_RENEWAL_CURRENT_CV_SCHEMA_INVALID (old CV schema guard) 존재."""
+    assert "V2_RENEWAL_CURRENT_CV_SCHEMA_INVALID" in _SQL
