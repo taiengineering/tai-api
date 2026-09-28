@@ -282,8 +282,27 @@ BEGIN
     v_contract_id := (p_contract_row->>'id')::uuid;
 
     -- Step 5: 멱등성 — 이미 contract_id가 연결된 결제
-    --         ALREADY_APPLIED = commercial v1 + STANDARD tiers의 site_scopes 완전 존재
+    --         ALREADY_APPLIED = identity guard + exact site_scope match (all tiers)
     IF v_payment_contract_id IS NOT NULL THEN
+        -- PATCH3 Guard 1: incoming contract_id == stored payment.contract_id
+        IF v_contract_id IS DISTINCT FROM v_payment_contract_id THEN
+            RETURN jsonb_build_object(
+                'status',         'V2_CONTRACT_ID_MISMATCH',
+                'payment_id',     p_payment_id,
+                'contract_id',    v_contract_id,
+                'cv_contract_id', v_payment_contract_id
+            );
+        END IF;
+
+        -- PATCH3 Guard 2: incoming version_no == 1
+        IF (p_commercial_version->>'version_no')::integer IS DISTINCT FROM 1 THEN
+            RETURN jsonb_build_object(
+                'status',     'V2_VERSION_NO_INVALID',
+                'payment_id', p_payment_id,
+                'version_no', (p_commercial_version->>'version_no')::integer
+            );
+        END IF;
+
         -- commercial version v1 조회
         SELECT id, product_tier
         INTO   v_cv_id, v_cv_tier
@@ -300,70 +319,68 @@ BEGIN
             );
         END IF;
 
-        -- STANDARD tiers(MANAGER/FIELD): exact site_scope 일치 검증 (PATCH2 — B1)
-        IF v_cv_tier IN ('MANAGER', 'FIELD') THEN
-            -- Check 1: stored = 0 → partial
-            SELECT COUNT(*)
-            INTO   v_scope_count
-            FROM   public.saas_contract_site_scopes
-            WHERE  commercial_version_id = v_cv_id;
+        -- scope count (모든 tier)
+        SELECT COUNT(*)
+        INTO   v_scope_count
+        FROM   public.saas_contract_site_scopes
+        WHERE  commercial_version_id = v_cv_id;
 
-            IF v_scope_count = 0 THEN
-                RETURN jsonb_build_object(
-                    'status',      'V2_ATOMIC_PARTIAL_STATE',
-                    'payment_id',  p_payment_id,
-                    'contract_id', v_payment_contract_id
-                );
-            END IF;
-
-            -- Check 2: duplicate (entity_type, entity_id) in input → partial
-            IF EXISTS (
-                SELECT 1 FROM (
-                    SELECT e->>'entity_type' AS et, e->>'entity_id' AS ei
-                    FROM   jsonb_array_elements(p_site_scopes) e
-                ) t
-                GROUP BY et, ei
-                HAVING COUNT(*) > 1
-            ) THEN
-                RETURN jsonb_build_object(
-                    'status',      'V2_ATOMIC_PARTIAL_STATE',
-                    'payment_id',  p_payment_id,
-                    'contract_id', v_payment_contract_id
-                );
-            END IF;
-
-            -- Check 3: count mismatch → partial (extra or missing)
-            IF v_scope_count != jsonb_array_length(p_site_scopes) THEN
-                RETURN jsonb_build_object(
-                    'status',      'V2_ATOMIC_PARTIAL_STATE',
-                    'payment_id',  p_payment_id,
-                    'contract_id', v_payment_contract_id
-                );
-            END IF;
-
-            -- Check 4: every expected tuple exists (NULL-safe base_band_code)
-            IF EXISTS (
-                SELECT 1
-                FROM   jsonb_array_elements(p_site_scopes) AS expected
-                WHERE  NOT EXISTS (
-                    SELECT 1
-                    FROM   public.saas_contract_site_scopes AS stored
-                    WHERE  stored.commercial_version_id = v_cv_id
-                      AND  stored.entity_type           = expected->>'entity_type'
-                      AND  stored.entity_id             = (expected->>'entity_id')::uuid
-                      AND  stored.sector                = expected->>'sector'
-                      AND  stored.base_band_code IS NOT DISTINCT FROM expected->>'base_band_code'
-                )
-            ) THEN
-                RETURN jsonb_build_object(
-                    'status',      'V2_ATOMIC_PARTIAL_STATE',
-                    'payment_id',  p_payment_id,
-                    'contract_id', v_payment_contract_id
-                );
-            END IF;
+        -- Check 1: MANAGER/FIELD만 stored=0 금지 (CUSTOM은 0 허용)
+        IF v_cv_tier IN ('MANAGER', 'FIELD') AND v_scope_count = 0 THEN
+            RETURN jsonb_build_object(
+                'status',      'V2_ATOMIC_PARTIAL_STATE',
+                'payment_id',  p_payment_id,
+                'contract_id', v_payment_contract_id
+            );
         END IF;
 
-        -- 정상 완료 상태 (site_scopes 완전 일치 확인됨)
+        -- Check 2: duplicate (entity_type, entity_id) in input (모든 tier)
+        IF EXISTS (
+            SELECT 1 FROM (
+                SELECT e->>'entity_type' AS et, e->>'entity_id' AS ei
+                FROM   jsonb_array_elements(p_site_scopes) e
+            ) t
+            GROUP BY et, ei
+            HAVING COUNT(*) > 1
+        ) THEN
+            RETURN jsonb_build_object(
+                'status',      'V2_ATOMIC_PARTIAL_STATE',
+                'payment_id',  p_payment_id,
+                'contract_id', v_payment_contract_id
+            );
+        END IF;
+
+        -- Check 3: count mismatch (모든 tier)
+        IF v_scope_count != jsonb_array_length(p_site_scopes) THEN
+            RETURN jsonb_build_object(
+                'status',      'V2_ATOMIC_PARTIAL_STATE',
+                'payment_id',  p_payment_id,
+                'contract_id', v_payment_contract_id
+            );
+        END IF;
+
+        -- Check 4: every expected tuple exists (NULL-safe base_band_code, 모든 tier, count > 0 시만)
+        IF v_scope_count > 0 AND EXISTS (
+            SELECT 1
+            FROM   jsonb_array_elements(p_site_scopes) AS expected
+            WHERE  NOT EXISTS (
+                SELECT 1
+                FROM   public.saas_contract_site_scopes AS stored
+                WHERE  stored.commercial_version_id = v_cv_id
+                  AND  stored.entity_type           = expected->>'entity_type'
+                  AND  stored.entity_id             = (expected->>'entity_id')::uuid
+                  AND  stored.sector                = expected->>'sector'
+                  AND  stored.base_band_code IS NOT DISTINCT FROM expected->>'base_band_code'
+            )
+        ) THEN
+            RETURN jsonb_build_object(
+                'status',      'V2_ATOMIC_PARTIAL_STATE',
+                'payment_id',  p_payment_id,
+                'contract_id', v_payment_contract_id
+            );
+        END IF;
+
+        -- 정상 완료 상태 (identity + scope 완전 일치 확인됨)
         RETURN jsonb_build_object(
             'status',      'ALREADY_APPLIED',
             'payment_id',  p_payment_id,

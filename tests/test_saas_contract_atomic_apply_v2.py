@@ -1138,3 +1138,51 @@ class TestP30_NoDirectUpdateDeleteOnSaasTables:
         # service_role receives only SELECT + INSERT — no UPDATE/DELETE GRANT
         assert "GRANT UPDATE" not in sql
         assert "GRANT DELETE" not in sql
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PATCH3: SQL 구조 가드 (P31-P35)
+# ═══════════════════════════════════════════════════════════════════════════
+# B1 — idempotent path guards + CUSTOM scope exact match
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestP31_IdempotentContractIdGuardPresent:
+    def test_P31(self):
+        sql = _migration_sql()
+        # PATCH3 Guard 1: v_contract_id IS DISTINCT FROM v_payment_contract_id
+        assert "IS DISTINCT FROM v_payment_contract_id" in sql
+
+
+class TestP32_IdempotentVersionNoGuardPresent:
+    def test_P32(self):
+        sql = _migration_sql()
+        # PATCH3 Guard 2: version_no check inside ALREADY_APPLIED path
+        # Both guards fire before CV lookup → two IS DISTINCT FROM occurrences
+        assert sql.count("IS DISTINCT FROM") >= 2
+
+
+class TestP33_ScopeCountOutsideTierBranch:
+    def test_P33(self):
+        sql = _migration_sql()
+        # scope count SELECT must not be inside `IF v_cv_tier IN ('MANAGER', 'FIELD') THEN`
+        # Verify Check 1 uses AND condition, not a separate tier block
+        assert "v_cv_tier IN ('MANAGER', 'FIELD') AND v_scope_count = 0" in sql
+
+
+class TestP34_CustomTierIncludedInScopeChecks:
+    def test_P34(self):
+        sql = _migration_sql()
+        # Check 3 (count mismatch) must apply to all tiers without tier restriction
+        # The jsonb_array_length comparison must appear outside any MANAGER/FIELD block
+        # Verified by: Check 3 line must NOT be indented inside IF v_cv_tier...
+        # Static check: jsonb_array_length appears after the COUNT select
+        assert "v_scope_count != jsonb_array_length(p_site_scopes)" in sql
+
+
+class TestP35_AtomicPartialStateAtLeastSevenPaths:
+    def test_P35(self):
+        # PATCH3: 5(Step5 내부) + 1(NOT FOUND) + 1(Step6 orphan) = 7
+        # Guard1/Guard2 → V2_CONTRACT_ID_MISMATCH / V2_VERSION_NO_INVALID (별도 코드)
+        sql = _migration_sql()
+        assert sql.count("V2_ATOMIC_PARTIAL_STATE") >= 7

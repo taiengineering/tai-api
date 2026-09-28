@@ -4,7 +4,7 @@ work_order: WO-PRICING-V2-BE-OBJ10-C
 objective: "Atomic Contract Persistence — apply_saas_v2_contract_atomic Postgres RPC"
 author: Claude Code
 date: 2026-09-28
-status: PATCH2_COMPLETE
+status: PATCH3_COMPLETE
 ---
 
 # TAI Safe Pricing V2 BE-OBJ10-C Evidence
@@ -167,22 +167,29 @@ Price engine import = 0
 | OBJ10-B 회귀 (B01-B95) | 95 | 0 |
 | Pricing V2 + Payment 회귀 | 258 | 1 (PRE-EXISTING: gopaymethod) |
 
-### PATCH2 (확정)
+### PATCH2 (이전)
+
+| 구분 | 통과 | 실패 | 파일 |
+|------|------|------|------|
+| C01-C86 + P01-P30 + I01-I15 | 131 | 0 | — |
+| Pricing V2 + Payment 회귀 | 518 | 1 (PRE-EXISTING: gopaymethod) | — |
+
+### PATCH3 (확정)
 
 | 구분 | 통과 | 실패 | 파일 |
 |------|------|------|------|
 | C01-C86 (어댑터/목) | 86 | 0 | test_saas_contract_atomic_apply_v2.py |
-| P01-P30 (SQL 구조 가드) | 30 | 0 | test_saas_contract_atomic_apply_v2.py |
-| I01-I15 (Postgres 통합) | 15 | 0 | test_saas_contract_atomic_apply_v2_postgres.py |
-| OBJ10-C 합계 | 131 | 0 | — |
-| Pricing V2 + Payment 회귀 | 518 | 1 (PRE-EXISTING: gopaymethod) | — |
+| P01-P35 (SQL 구조 가드) | 35 | 0 | test_saas_contract_atomic_apply_v2.py |
+| I01-I29 (Postgres 통합) | 29 | 0 | test_saas_contract_atomic_apply_v2_postgres.py |
+| OBJ10-C 합계 | 150 | 0 | — |
+| Pricing V2 + Payment 회귀 | 463 | 1 (PRE-EXISTING: gopaymethod) | — |
 
 **Pre-existing failure**: `test_payment_svc.py::test_run_inicis_prepare_success_minimal` — `gopaymethod == "Card"` 검사 실패. OBJ10-C 변경과 무관.
 
-**Test taxonomy (PATCH2 기준)**:
+**Test taxonomy (PATCH3 기준)**:
 - C01-C86: Python 어댑터 단위 테스트 (FakeSupabase, DB 없음)
-- P01-P30: Migration SQL 정적 구조 가드 (파일 읽기, 실행 없음)
-- I01-I15: 실제 PostgreSQL@16 통합 테스트 (tai_test_v2_atomic, psycopg2)
+- P01-P35: Migration SQL 정적 구조 가드 (파일 읽기, 실행 없음)
+- I01-I29: 실제 PostgreSQL@16 통합 테스트 (tai_test_v2_atomic, psycopg2)
 
 ## 8. PATCH1 수정 요약
 
@@ -226,7 +233,38 @@ REVOKE ALL PRIVILEGES ON TABLE public.saas_contract_commercial_versions
 GRANT SELECT, INSERT ON TABLE public.saas_contract_commercial_versions TO service_role;
 ```
 
-## 10. 불변 조건 확인
+## 10. PATCH3 수정 요약 (GPT 3차 독립검증 지적 B1/B2)
+
+| Blocker | 수정 내용 |
+|---------|----------|
+| B1: CUSTOM tier exact scope 미적용 | Step 5: scope COUNT + Check 2/3/4를 모든 tier로 확장 (MANAGER/FIELD AND check만 분기) |
+| B1: idempotent path contract/version guard 부재 | Step 5 진입 직후 Guard 1 (contract_id) + Guard 2 (version_no) 추가 |
+| B2: DB DEFAULT 실행 증거 없음 | I16: addon_codes={} / items=[] DB DEFAULT 검증 |
+| B2: FOR UPDATE 동시성 증거 없음 | I17: 2 connections threading → APPLIED+ALREADY_APPLIED |
+| B2: 전체 롤백 어서션 미흡 | I18: contracts/cv/payment.contract_id 모두 확인 |
+| B2: service_role positive ACL 없음 | I19: service_role EXECUTE RPC → APPLIED (BYPASSRLS 포함) |
+| B2: UPDATE/TRUNCATE/EXECUTE ACL 없음 | I20-I25: anon/authenticated 6종 denied |
+| B2: duplicate scope 실행 증거 없음 | I26: duplicate entity_id 재호출 → V2_ATOMIC_PARTIAL_STATE |
+| B2: CUSTOM scope 불일치 실행 증거 없음 | I27: CUSTOM 0→1 count mismatch → V2_ATOMIC_PARTIAL_STATE |
+| B2: idempotent guard 실행 증거 없음 | I28-I29: wrong contract_id / version_no → mismatch status |
+
+### PATCH3 Step 5 최종 구조
+
+```
+IF v_payment_contract_id IS NOT NULL THEN
+    Guard 1: v_contract_id ≠ v_payment_contract_id → V2_CONTRACT_ID_MISMATCH
+    Guard 2: version_no ≠ 1 → V2_VERSION_NO_INVALID
+    CV lookup → NOT FOUND → V2_ATOMIC_PARTIAL_STATE
+    COUNT(scope) → all tiers
+    Check 1: MANAGER/FIELD AND count=0 → V2_ATOMIC_PARTIAL_STATE
+    Check 2: duplicate input (all tiers) → V2_ATOMIC_PARTIAL_STATE
+    Check 3: count mismatch (all tiers) → V2_ATOMIC_PARTIAL_STATE
+    Check 4: tuple NOT DISTINCT FROM mismatch (all tiers, count>0) → V2_ATOMIC_PARTIAL_STATE
+    RETURN ALREADY_APPLIED
+END IF;
+```
+
+## 11. 불변 조건 확인
 
 | 조건 | 상태 |
 |------|------|

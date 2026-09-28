@@ -1,4 +1,4 @@
-"""TAI Safe SaaS Atomic Contract Apply V2 — PostgreSQL Integration Tests (I01-I15).
+"""TAI Safe SaaS Atomic Contract Apply V2 — PostgreSQL Integration Tests (I01-I29).
 
 로컬 PostgreSQL@16 (tai_test_v2_atomic) 에서 apply_saas_v2_contract_atomic 함수를
 실제 실행하는 통합 테스트.
@@ -84,6 +84,9 @@ def _bootstrap(cur: "psycopg2.extensions.cursor") -> None:
     for role in ("anon", "authenticated", "service_role"):
         cur.execute(f"GRANT {role} TO {me};")
 
+    # service_role bypasses RLS (Supabase 동작 모델링)
+    cur.execute("ALTER ROLE service_role BYPASSRLS;")
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS public.contracts (
             id               uuid        NOT NULL PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -113,6 +116,13 @@ def _bootstrap(cur: "psycopg2.extensions.cursor") -> None:
             status_code text        NOT NULL,
             contract_id uuid        REFERENCES public.contracts(id)
         );
+    """)
+
+    # DB DEFAULT preservation columns (I16)
+    cur.execute("""
+        ALTER TABLE public.contracts
+        ADD COLUMN IF NOT EXISTS addon_codes jsonb NOT NULL DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS items       jsonb NOT NULL DEFAULT '[]';
     """)
 
     cur.execute("GRANT SELECT, UPDATE ON public.payments TO service_role;")
@@ -472,3 +482,272 @@ def test_I15_acl_authenticated_denied_insert(pg):
         except Exception:
             pg.cursor().execute("RESET ROLE;")
     assert denied, "authenticated should be denied INSERT on saas_contract_site_scopes"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PATCH3 — B2 extended integration coverage (I16-I29)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I16 — DB DEFAULT preservation: addon_codes='{}' items='[]' after explicit INSERT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I16_db_default_preservation(pg):
+    """Explicit 18-col INSERT leaves addon_codes/items at DB DEFAULT (not NULL)."""
+    pid, cid, coid = _new_id(), _new_id(), _new_id()
+    _insert_payment(pg, pid)
+    result = _rpc(pg, pid, _contract_row(cid, coid), _cv_dict(cid), [_scope()])
+    assert result["status"] == "APPLIED"
+    cur = pg.cursor()
+    cur.execute("SELECT addon_codes, items FROM public.contracts WHERE id=%s;", (cid,))
+    row = cur.fetchone()
+    assert row[0] == {}, f"addon_codes DB DEFAULT should be {{}}, got {row[0]}"
+    assert row[1] == [], f"items DB DEFAULT should be [], got {row[1]}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I17 — Concurrent FOR UPDATE: 2 threads, 1 APPLIED + 1 ALREADY_APPLIED
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I17_concurrent_for_update(pg):
+    """Two concurrent calls on the same payment: FOR UPDATE serializes them."""
+    import threading
+
+    pid, cid, coid, sid = _new_id(), _new_id(), _new_id(), _new_id()
+    _insert_payment(pg, pid)
+    cv, cr = _cv_dict(cid), _contract_row(cid, coid)
+    scopes = [_scope(sid)]
+
+    results: list[str] = []
+    errors: list[str] = []
+
+    def _call() -> None:
+        conn = psycopg2.connect(_DSN)
+        conn.autocommit = True
+        try:
+            r = _rpc(conn, pid, cr, cv, scopes)
+            results.append(r["status"])
+        except Exception as exc:
+            errors.append(str(exc))
+        finally:
+            conn.close()
+
+    t1 = threading.Thread(target=_call)
+    t2 = threading.Thread(target=_call)
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    assert not errors, f"Unexpected errors: {errors}"
+    assert sorted(results) == ["ALREADY_APPLIED", "APPLIED"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I18 — Full rollback: all 4 tables confirmed empty after constraint violation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I18_full_rollback_all_tables(pg):
+    """term_months=99 → constraint violation → contracts/cv/scope=0, payment.contract_id=NULL."""
+    pid, cid, coid = _new_id(), _new_id(), _new_id()
+    _insert_payment(pg, pid)
+    cv = _cv_dict(cid)
+    cv["term_months"] = 99
+    try:
+        _rpc(pg, pid, _contract_row(cid, coid), cv, [_scope()])
+    except psycopg2.Error:
+        pass
+    cur = pg.cursor()
+    cur.execute("SELECT COUNT(*) FROM public.contracts WHERE id=%s;", (cid,))
+    assert cur.fetchone()[0] == 0, "contracts must be empty after rollback"
+    cur.execute(
+        "SELECT COUNT(*) FROM public.saas_contract_commercial_versions "
+        "WHERE contract_id=%s;", (cid,),
+    )
+    assert cur.fetchone()[0] == 0, "commercial_versions must be empty after rollback"
+    cur.execute("SELECT contract_id FROM public.payments WHERE id=%s;", (pid,))
+    assert cur.fetchone()[0] is None, "payment.contract_id must remain NULL after rollback"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I19 — ACL positive: service_role CAN INSERT into saas_contract_commercial_versions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I19_service_role_rpc_execute_allowed(pg):
+    """service_role CAN EXECUTE apply_saas_v2_contract_atomic (GRANT EXECUTE + BYPASSRLS)."""
+    pid, cid, coid, sid = _new_id(), _new_id(), _new_id(), _new_id()
+    _insert_payment(pg, pid)
+    cv, cr = _cv_dict(cid), _contract_row(cid, coid)
+    cur = pg.cursor()
+    cur.execute("SET ROLE service_role;")
+    try:
+        cur.execute(
+            "SELECT public.apply_saas_v2_contract_atomic"
+            "(%s::uuid,%s::jsonb,%s::jsonb,%s::jsonb)::text;",
+            (pid, json.dumps(cr), json.dumps(cv), json.dumps([_scope(sid)])),
+        )
+        result = json.loads(cur.fetchone()[0])
+        assert result["status"] == "APPLIED", f"service_role should get APPLIED, got {result}"
+    finally:
+        try:
+            cur.execute("RESET ROLE;")
+        except Exception:
+            pg.cursor().execute("RESET ROLE;")
+
+
+# ─── ACL helper ───────────────────────────────────────────────────────────────
+
+def _acl_denied(pg, role: str, stmt: str, params: tuple = ()) -> bool:
+    cur = pg.cursor()
+    cur.execute(f"SET ROLE {role};")
+    denied = False
+    try:
+        cur.execute(stmt, params)
+    except psycopg2.Error as exc:
+        denied = "permission denied" in str(exc).lower()
+    finally:
+        try:
+            cur.execute("RESET ROLE;")
+        except Exception:
+            pg.cursor().execute("RESET ROLE;")
+    return denied
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I20 — ACL: anon UPDATE denied on saas_contract_commercial_versions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I20_anon_update_denied(pg):
+    denied = _acl_denied(
+        pg, "anon",
+        "UPDATE public.saas_contract_commercial_versions SET version_no=1 WHERE FALSE;",
+    )
+    assert denied, "anon UPDATE should be denied"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I21 — ACL: anon TRUNCATE denied on saas_contract_commercial_versions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I21_anon_truncate_denied(pg):
+    denied = _acl_denied(
+        pg, "anon",
+        "TRUNCATE public.saas_contract_commercial_versions;",
+    )
+    assert denied, "anon TRUNCATE should be denied"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I22 — ACL: anon EXECUTE denied on apply_saas_v2_contract_atomic
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I22_anon_rpc_execute_denied(pg):
+    denied = _acl_denied(
+        pg, "anon",
+        "SELECT public.apply_saas_v2_contract_atomic(%s::uuid,%s::jsonb,%s::jsonb,%s::jsonb);",
+        (_new_id(), json.dumps({}), json.dumps({}), json.dumps([])),
+    )
+    assert denied, "anon EXECUTE on RPC should be denied"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I23 — ACL: authenticated UPDATE denied on saas_contract_site_scopes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I23_authenticated_update_denied(pg):
+    denied = _acl_denied(
+        pg, "authenticated",
+        "UPDATE public.saas_contract_site_scopes SET sector='INDUSTRY' WHERE FALSE;",
+    )
+    assert denied, "authenticated UPDATE should be denied"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I24 — ACL: authenticated TRUNCATE denied on saas_contract_site_scopes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I24_authenticated_truncate_denied(pg):
+    denied = _acl_denied(
+        pg, "authenticated",
+        "TRUNCATE public.saas_contract_site_scopes;",
+    )
+    assert denied, "authenticated TRUNCATE should be denied"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I25 — ACL: authenticated EXECUTE denied on apply_saas_v2_contract_atomic
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I25_authenticated_rpc_execute_denied(pg):
+    denied = _acl_denied(
+        pg, "authenticated",
+        "SELECT public.apply_saas_v2_contract_atomic(%s::uuid,%s::jsonb,%s::jsonb,%s::jsonb);",
+        (_new_id(), json.dumps({}), json.dumps({}), json.dumps([])),
+    )
+    assert denied, "authenticated EXECUTE on RPC should be denied"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I26 — duplicate p_site_scopes in ALREADY_APPLIED retry → V2_ATOMIC_PARTIAL_STATE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I26_duplicate_scopes_in_idempotent_retry(pg):
+    """After APPLIED, retry with duplicate (entity_type,entity_id) in scopes → partial."""
+    pid, cid, coid, sid = _new_id(), _new_id(), _new_id(), _new_id()
+    _insert_payment(pg, pid)
+    cv, cr = _cv_dict(cid), _contract_row(cid, coid)
+    r1 = _rpc(pg, pid, cr, cv, [_scope(sid)])
+    assert r1["status"] == "APPLIED"
+    # Retry with duplicate scopes (same entity_id twice)
+    result = _rpc(pg, pid, cr, cv, [_scope(sid), _scope(sid)])
+    assert result["status"] == "V2_ATOMIC_PARTIAL_STATE"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I27 — CUSTOM tier scope count mismatch → V2_ATOMIC_PARTIAL_STATE (PATCH3 B1)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I27_custom_tier_scope_count_mismatch(pg):
+    """CUSTOM tier: first apply 0 scopes, retry with 1 scope → count mismatch → partial."""
+    pid, cid, coid = _new_id(), _new_id(), _new_id()
+    _insert_payment(pg, pid)
+    cv, cr = _cv_dict(cid, "CUSTOM"), _contract_row(cid, coid)
+    r1 = _rpc(pg, pid, cr, cv, [])
+    assert r1["status"] == "APPLIED"
+    result = _rpc(pg, pid, cr, cv, [_scope()])
+    assert result["status"] == "V2_ATOMIC_PARTIAL_STATE"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I28 — idempotent retry with wrong contract_id → V2_CONTRACT_ID_MISMATCH (PATCH3 B1)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I28_idempotent_wrong_contract_id(pg):
+    """After APPLIED, retry with different contract_id → V2_CONTRACT_ID_MISMATCH."""
+    pid, cid, coid, sid = _new_id(), _new_id(), _new_id(), _new_id()
+    _insert_payment(pg, pid)
+    cv, cr = _cv_dict(cid), _contract_row(cid, coid)
+    r1 = _rpc(pg, pid, cr, cv, [_scope(sid)])
+    assert r1["status"] == "APPLIED"
+    # Retry with different contract_id
+    other_cid = _new_id()
+    result = _rpc(pg, pid, _contract_row(other_cid, coid), _cv_dict(other_cid), [_scope(sid)])
+    assert result["status"] == "V2_CONTRACT_ID_MISMATCH"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# I29 — idempotent retry with version_no=2 → V2_VERSION_NO_INVALID (PATCH3 B1)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I29_idempotent_wrong_version_no(pg):
+    """After APPLIED, retry with version_no=2 → V2_VERSION_NO_INVALID."""
+    pid, cid, coid, sid = _new_id(), _new_id(), _new_id(), _new_id()
+    _insert_payment(pg, pid)
+    cv, cr = _cv_dict(cid), _contract_row(cid, coid)
+    r1 = _rpc(pg, pid, cr, cv, [_scope(sid)])
+    assert r1["status"] == "APPLIED"
+    # Retry with version_no=2
+    cv_v2 = _cv_dict(cid, version_no=2)
+    result = _rpc(pg, pid, cr, cv_v2, [_scope(sid)])
+    assert result["status"] == "V2_VERSION_NO_INVALID"
