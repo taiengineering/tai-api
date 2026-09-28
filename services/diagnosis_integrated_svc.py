@@ -636,10 +636,21 @@ def run_diagnosis(
             project_material_canonical_facts_from_rows as _proj_mat,
             project_material_fc001_facts as _proj_fc001,
         )
-        _mat_dicts = [
+        from services.material_source.store import (
+            MaterialSourceValidationError as _MValErr,
+            validate_transient_material_row as _validate_mat,
+        )
+        _mat_dicts_raw = [
             r.model_dump(exclude_none=True) if hasattr(r, "model_dump") else dict(r)
             for r in _transient_mat_rows
         ]
+        try:
+            _mat_dicts = [_validate_mat(d) for d in _mat_dicts_raw]
+        except _MValErr as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "MATERIAL_ROW_INVALID", "message": str(exc)},
+            ) from exc
         try:
             _mat_can = _proj_mat(_mat_dicts)
             inp = _mmerge(inp, projected=_mat_can)
