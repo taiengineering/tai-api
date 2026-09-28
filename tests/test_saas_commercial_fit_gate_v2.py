@@ -679,15 +679,17 @@ def test_F39_custom_with_worker_usage_custom_review_required():
 # F40-F43: Version Time
 # ═════════════════════════════════════════════════════════════════════════════
 
-def test_F40_superseded_version_rejected():
+def test_F40_superseded_version_at_boundary_rejected():
+    """as_of == superseded_at → NON_CURRENT_COMMERCIAL_VERSION (half-open interval)."""
     eid = uuid4()
-    superseded_dt = _now() + timedelta(days=1)  # superseded_at >= effective_from OK
+    # superseded_at = _now() = as_of → boundary → NOT effective
+    superseded_dt = _now()
     bundle = _mgr_bundle(
         [_site_input(eid)],
         superseded_at=superseded_dt,
     )
     with pytest.raises(SaasCommercialFitGateError) as exc_info:
-        _eval(bundle, [_actual(eid)])
+        _eval(bundle, [_actual(eid)], as_of=_now())
     assert exc_info.value.code == "NON_CURRENT_COMMERCIAL_VERSION"
 
 
@@ -824,3 +826,47 @@ def test_F53_no_api_router():
     source = _GATE_SRC.read_text()
     for kw in ["APIRouter", "from routers", "import routers"]:
         assert kw not in source, f"API/Router 키워드 발견: {kw}"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# F54-F57: Temporal migration — CF-T1 through CF-T4
+# B1 Owner Policy: [effective_from, superseded_at)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_F54_future_superseded_before_boundary_accepted():
+    """CF-T1: superseded_at=tomorrow, as_of=today → still effective (PASS)."""
+    eid = uuid4()
+    boundary = _now() + timedelta(days=1)  # tomorrow
+    bundle = _mgr_bundle([_site_input(eid)], superseded_at=boundary)
+    result = _eval(bundle, [_actual(eid)], as_of=_now())
+    assert result.status == "FIT"
+
+
+def test_F55_superseded_past_boundary_rejected():
+    """CF-T2 extension: superseded_at=past, as_of=now → NON_CURRENT."""
+    eid = uuid4()
+    far_past = _now() - timedelta(hours=2)
+    past = _now() - timedelta(seconds=1)  # after far_past, before now
+    bundle = _mgr_bundle([_site_input(eid)], effective_from=far_past, superseded_at=past)
+    with pytest.raises(SaasCommercialFitGateError) as exc_info:
+        _eval(bundle, [_actual(eid)], as_of=_now())
+    assert exc_info.value.code == "NON_CURRENT_COMMERCIAL_VERSION"
+
+
+def test_F56_new_cv_before_effective_from_rejected():
+    """CF-T3: new CV not yet effective → COMMERCIAL_VERSION_NOT_EFFECTIVE."""
+    eid = uuid4()
+    future_eff = _now() + timedelta(hours=1)
+    bundle = _mgr_bundle([_site_input(eid)], effective_from=future_eff)
+    with pytest.raises(SaasCommercialFitGateError) as exc_info:
+        _eval(bundle, [_actual(eid)], as_of=_now())
+    assert exc_info.value.code == "COMMERCIAL_VERSION_NOT_EFFECTIVE"
+
+
+def test_F57_new_cv_exactly_at_effective_from_accepted():
+    """CF-T4: new CV effective_from == as_of → PASS."""
+    eid = uuid4()
+    boundary = _now()
+    bundle = _mgr_bundle([_site_input(eid)], effective_from=boundary)
+    result = _eval(bundle, [_actual(eid)], as_of=boundary)
+    assert result.status == "FIT"

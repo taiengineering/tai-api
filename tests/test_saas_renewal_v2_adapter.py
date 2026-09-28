@@ -1,4 +1,4 @@
-"""TAI Safe SaaS Renewal V2 Adapter — R01-R53 (PATCH1).
+"""TAI Safe SaaS Renewal V2 Adapter — R01-R53 (PATCH1) + RN-T1-T6 (B1 temporal).
 
 검증 범위:
   R01-R05  Contract validation (prepare)
@@ -10,6 +10,7 @@
   R41-R42  PATCH1: Prepare side — CONTRACT_NOT_SAAS / QUOTE_SOURCE_INVALID
   R43-R52  PATCH1: Plan builder identity + CV + effective_at guards
   R53      PATCH1: Plan PATCH D fields (quote_id, current_version_no)
+  RN-T1-T6 B1: Temporal prepare — as_of + future scheduled guard
 
 DB/네트워크 없음 — FakeSupabase + monkeypatch 전용.
 """
@@ -18,7 +19,7 @@ from __future__ import annotations
 import os
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -245,6 +246,7 @@ def test_R01_contract_not_found(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "CONTRACT_NOT_FOUND"
 
@@ -258,6 +260,7 @@ def test_R02_contract_not_owned(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "CONTRACT_NOT_OWNED"
 
@@ -271,12 +274,13 @@ def test_R03_contract_not_active(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "CONTRACT_NOT_ACTIVE"
 
 
 def test_R04_current_cv_not_found(monkeypatch):
-    """superseded_at IS NULL인 CV 없음 → CURRENT_CV_NOT_FOUND."""
+    """temporal selector: as_of 시점 effective CV 없음 → CURRENT_CV_NOT_FOUND."""
     monkeypatch.setattr("services.member_quote_svc.get_member_quote", lambda *a: _valid_quote())
     monkeypatch.setattr("services.saas_renewal_v2_adapter.load_sign_key", lambda: "K")
     sb = _FakeSbForPrepare(contract=_valid_contract(), cv=[])
@@ -284,6 +288,7 @@ def test_R04_current_cv_not_found(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "CURRENT_CV_NOT_FOUND"
 
@@ -297,6 +302,7 @@ def test_R05_valid_contract_proceeds_to_quote(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "QUOTE_NOT_FOUND"
 
@@ -325,6 +331,7 @@ def test_R06_quote_not_owned(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "QUOTE_NOT_OWNED"
 
@@ -337,6 +344,7 @@ def test_R07_quote_not_issued(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "QUOTE_NOT_ISSUED"
 
@@ -349,6 +357,7 @@ def test_R08_quote_not_saas(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "QUOTE_NOT_SAAS"
 
@@ -362,6 +371,7 @@ def test_R09_quote_wrong_schema_version(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "QUOTE_NOT_V2"
 
@@ -375,6 +385,7 @@ def test_R10_quote_malformed_item(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "QUOTE_ITEM_INVALID"
 
@@ -392,6 +403,7 @@ def test_R11_supply_quote_ne_item_rejected(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "QUOTE_PAYMENT_SNAPSHOT_INVALID"
     assert len(calls) == 0
@@ -406,6 +418,7 @@ def test_R12_vat_quote_ne_item_rejected(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "QUOTE_PAYMENT_SNAPSHOT_INVALID"
     assert len(calls) == 0
@@ -420,6 +433,7 @@ def test_R13_total_quote_ne_item_rejected(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "QUOTE_PAYMENT_SNAPSHOT_INVALID"
     assert len(calls) == 0
@@ -435,6 +449,7 @@ def test_R14_item_supply_ne_snapshot_prepaid_rejected(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "QUOTE_PAYMENT_SNAPSHOT_INVALID"
     assert len(calls) == 0
@@ -447,6 +462,7 @@ def test_R15_valid_prepare_calls_exact_once(monkeypatch):
     prepare_saas_v2_renewal_payment_from_quote(
         sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
         company_id=_COMPANY_ID, user_id=_USER_ID,
+        as_of=_EFFECTIVE_AT,
     )
     assert len(calls) == 1
 
@@ -474,6 +490,7 @@ def test_R16_payment_type_is_renewal(monkeypatch):
     prepare_saas_v2_renewal_payment_from_quote(
         sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
         company_id=_COMPANY_ID, user_id=_USER_ID,
+        as_of=_EFFECTIVE_AT,
     )
     assert calls[0]["payment_type"] == "RENEWAL"
 
@@ -484,6 +501,7 @@ def test_R17_contract_id_is_existing_contract(monkeypatch):
     prepare_saas_v2_renewal_payment_from_quote(
         sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
         company_id=_COMPANY_ID, user_id=_USER_ID,
+        as_of=_EFFECTIVE_AT,
     )
     assert calls[0]["contract_id"] == _CONTRACT_ID
 
@@ -494,6 +512,7 @@ def test_R18_plan_code_is_none(monkeypatch):
     prepare_saas_v2_renewal_payment_from_quote(
         sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
         company_id=_COMPANY_ID, user_id=_USER_ID,
+        as_of=_EFFECTIVE_AT,
     )
     assert calls[0].get("plan_code") is None
 
@@ -504,6 +523,7 @@ def test_R19_supply_amount_from_snapshot(monkeypatch):
     prepare_saas_v2_renewal_payment_from_quote(
         sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
         company_id=_COMPANY_ID, user_id=_USER_ID,
+        as_of=_EFFECTIVE_AT,
     )
     assert calls[0]["supply_amount"] == 200_000
 
@@ -514,6 +534,7 @@ def test_R20_period_months_from_snapshot(monkeypatch):
     prepare_saas_v2_renewal_payment_from_quote(
         sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
         company_id=_COMPANY_ID, user_id=_USER_ID,
+        as_of=_EFFECTIVE_AT,
     )
     assert calls[0]["period_months"] == 12
 
@@ -742,6 +763,7 @@ def test_R41_contract_not_saas_rejected(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "CONTRACT_NOT_SAAS"
 
@@ -756,6 +778,7 @@ def test_R42_quote_source_invalid_on_prepare(monkeypatch):
         prepare_saas_v2_renewal_payment_from_quote(
             sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
             company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
         )
     assert exc.value.code == "QUOTE_SOURCE_INVALID"
 
@@ -869,3 +892,117 @@ def test_R53_plan_has_quote_id_and_current_version_no():
     assert plan.quote_id == _QUOTE_ID
     assert plan.current_version_no == 3
     assert plan.next_version_no == 4
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RN-T1 to RN-T6: B1 Temporal prepare — as_of + future scheduled guard
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_FUTURE_EFFECTIVE_AT = datetime(2026, 12, 1, 0, 0, 0, tzinfo=timezone.utc)  # scheduled next renewal
+
+
+def _valid_cv_row_with_superseded(version_no=2):
+    """현재 유효 CV (superseded_at = future boundary)."""
+    row = _valid_cv_row(version_no=version_no)
+    row["superseded_at"] = _FUTURE_EFFECTIVE_AT.isoformat()
+    return row
+
+
+def _future_cv_row(version_no=3):
+    """미래 예약 갱신 CV (effective_from > current as_of)."""
+    row = _valid_cv_row(version_no=version_no)
+    row["effective_from"] = _FUTURE_EFFECTIVE_AT.isoformat()
+    row["superseded_at"] = None
+    return row
+
+
+def test_RN_T1_temporal_old_cv_selected_before_boundary(monkeypatch):
+    """as_of < boundary → old CV (superseded_at=boundary) selected → proceeds to quote."""
+    monkeypatch.setattr("services.member_quote_svc.get_member_quote", lambda *a: None)
+    monkeypatch.setattr("services.saas_renewal_v2_adapter.load_sign_key", lambda: "K")
+    # old CV: effective_from=2026-04-01, superseded_at=2026-12-01 (future)
+    sb = _FakeSbForPrepare(contract=_valid_contract(), cv=_valid_cv_row_with_superseded())
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        prepare_saas_v2_renewal_payment_from_quote(
+            sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
+            company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,  # 2026-10-01 < 2026-12-01 boundary
+        )
+    # No CURRENT_CV_NOT_FOUND — old CV is found. No future CVs. Reaches QUOTE_NOT_FOUND.
+    assert exc.value.code == "QUOTE_NOT_FOUND"
+
+
+def test_RN_T2_future_cv_only_not_selected(monkeypatch):
+    """as_of < future_cv.effective_from → future CV not selected → CURRENT_CV_NOT_FOUND."""
+    monkeypatch.setattr("services.member_quote_svc.get_member_quote", lambda *a: None)
+    monkeypatch.setattr("services.saas_renewal_v2_adapter.load_sign_key", lambda: "K")
+    # Only future CV: effective_from=2026-12-01, as_of=2026-10-01
+    sb = _FakeSbForPrepare(contract=_valid_contract(), cv=_future_cv_row())
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        prepare_saas_v2_renewal_payment_from_quote(
+            sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
+            company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
+        )
+    assert exc.value.code == "CURRENT_CV_NOT_FOUND"
+
+
+def test_RN_T3_future_scheduled_cv_blocks_renewal(monkeypatch):
+    """old CV + future CV → RENEWAL_ALREADY_SCHEDULED."""
+    monkeypatch.setattr("services.member_quote_svc.get_member_quote", lambda *a: None)
+    monkeypatch.setattr("services.saas_renewal_v2_adapter.load_sign_key", lambda: "K")
+    # Two CVs: old (current at as_of) + future (effective_from > as_of)
+    sb = _FakeSbForPrepare(
+        contract=_valid_contract(),
+        cv=[_valid_cv_row_with_superseded(), _future_cv_row()],
+    )
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        prepare_saas_v2_renewal_payment_from_quote(
+            sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
+            company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
+        )
+    assert exc.value.code == "RENEWAL_ALREADY_SCHEDULED"
+
+
+def test_RN_T4_ambiguous_temporal_rows_fail_closed(monkeypatch):
+    """두 CV 모두 as_of에 effective → CURRENT_CV_AMBIGUOUS."""
+    monkeypatch.setattr("services.member_quote_svc.get_member_quote", lambda *a: None)
+    monkeypatch.setattr("services.saas_renewal_v2_adapter.load_sign_key", lambda: "K")
+    # Two open-ended CVs both effective at as_of
+    cv1 = _valid_cv_row(version_no=1)
+    cv2 = _valid_cv_row(version_no=2)
+    cv2["effective_from"] = "2026-05-01T00:00:00+00:00"
+    sb = _FakeSbForPrepare(contract=_valid_contract(), cv=[cv1, cv2])
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        prepare_saas_v2_renewal_payment_from_quote(
+            sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
+            company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=_EFFECTIVE_AT,
+        )
+    assert exc.value.code == "CURRENT_CV_AMBIGUOUS"
+
+
+def test_RN_T5_naive_as_of_rejected(monkeypatch):
+    """as_of naive datetime → RENEWAL_AS_OF_INVALID."""
+    monkeypatch.setattr("services.member_quote_svc.get_member_quote", lambda *a: None)
+    monkeypatch.setattr("services.saas_renewal_v2_adapter.load_sign_key", lambda: "K")
+    sb = _FakeSbForPrepare(contract=_valid_contract(), cv=_valid_cv_row())
+    naive_as_of = datetime(2026, 10, 1, 0, 0, 0)  # no tzinfo
+    with pytest.raises(SaasRenewalV2AdapterError) as exc:
+        prepare_saas_v2_renewal_payment_from_quote(
+            sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
+            company_id=_COMPANY_ID, user_id=_USER_ID,
+            as_of=naive_as_of,
+        )
+    assert exc.value.code == "RENEWAL_AS_OF_INVALID"
+
+
+def test_RN_T6_plan_builder_future_superseded_cv_allowed_before_boundary():
+    """plan builder: future superseded CV (superseded_at > requested_effective_at) → PASS."""
+    args = _valid_plan_args()
+    future_sup = _EFFECTIVE_AT + timedelta(days=60)  # 2026-11-30
+    args["current_cv"] = {**_valid_cv_row(), "superseded_at": future_sup.isoformat()}
+    # requested_effective_at = _EFFECTIVE_AT = 2026-10-01 < 2026-11-30 → NOT NON_CURRENT
+    plan = build_saas_v2_renewal_apply_plan(**args)
+    assert isinstance(plan, SaasV2RenewalApplyPlan)

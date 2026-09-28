@@ -27,6 +27,7 @@ from schemas.saas_commercial_fit_v2 import (
     SaasComplianceBandCatalogEntryV2,
 )
 from schemas.saas_contract_commercial_v2 import SaasContractStorageBundleV2
+from services.saas_commercial_version_time_v2 import is_commercial_version_effective_at_v2
 
 
 # ── Gate Error ────────────────────────────────────────────────────────────────
@@ -65,20 +66,20 @@ def evaluate_saas_commercial_fit_v2(
     cv = contract_bundle.commercial_version
     as_of = actual_state.as_of
 
-    # ── Step 1: Version currency check ───────────────────────────────────────
-    if cv.superseded_at is not None:
+    # ── Step 1+2: Temporal version check ─────────────────────────────────────
+    # Interval: [effective_from, superseded_at)
+    # future superseded_at (as_of < superseded_at) = still effective.
+    if not is_commercial_version_effective_at_v2(cv, as_of):
+        if cv.effective_from > as_of:
+            raise SaasCommercialFitGateError(
+                "COMMERCIAL_VERSION_NOT_EFFECTIVE",
+                f"contract_id={cv.contract_id} version_no={cv.version_no}: "
+                f"effective_from={cv.effective_from} > as_of={as_of}",
+            )
         raise SaasCommercialFitGateError(
             "NON_CURRENT_COMMERCIAL_VERSION",
             f"contract_id={cv.contract_id} version_no={cv.version_no}: "
-            f"superseded_at={cv.superseded_at} — 현재 유효한 Version이 아닙니다.",
-        )
-
-    # ── Step 2: Effective date check ─────────────────────────────────────────
-    if cv.effective_from > as_of:
-        raise SaasCommercialFitGateError(
-            "COMMERCIAL_VERSION_NOT_EFFECTIVE",
-            f"contract_id={cv.contract_id} version_no={cv.version_no}: "
-            f"effective_from={cv.effective_from} > as_of={as_of}",
+            f"as_of={as_of} >= superseded_at={cv.superseded_at} — 이미 supersede된 Version입니다.",
         )
 
     # ── Step 3: CUSTOM → immediate result ────────────────────────────────────

@@ -30,6 +30,7 @@ from schemas.saas_change_order_v2 import (
 from schemas.saas_commercial_fit_v2 import SaasComplianceBandCatalogEntryV2
 from schemas.saas_contract_commercial_v2 import SaasContractStorageBundleV2
 from schemas.saas_pricing_v2 import SaasCommercialSelection
+from services.saas_commercial_version_time_v2 import is_commercial_version_effective_at_v2
 from services.saas_pricing_composer_v2 import SaasPricingCalculationResult
 
 
@@ -139,20 +140,21 @@ def evaluate_saas_change_order_v2(
     cv = current_bundle.commercial_version
     current_site_count = len(current_bundle.site_scopes)
 
-    # ── Step 1: Current version currency ─────────────────────────────────────
-    if cv.superseded_at is not None:
+    # ── Step 1+2: Temporal version check ─────────────────────────────────────
+    # Interval: [effective_from, superseded_at)
+    # future superseded_at 허용 — requested_effective_at 기준 판정.
+    if not is_commercial_version_effective_at_v2(cv, requested_effective_at):
+        if requested_effective_at < cv.effective_from:
+            raise SaasChangeOrderError(
+                "CHANGE_EFFECTIVE_BEFORE_CURRENT_VERSION",
+                f"requested_effective_at={requested_effective_at} < "
+                f"current effective_from={cv.effective_from}",
+            )
         raise SaasChangeOrderError(
             "NON_CURRENT_COMMERCIAL_VERSION",
             f"contract_id={cv.contract_id} version_no={cv.version_no}: "
+            f"requested_effective_at={requested_effective_at} >= "
             f"superseded_at={cv.superseded_at}",
-        )
-
-    # ── Step 2: Effective date ────────────────────────────────────────────────
-    if requested_effective_at < cv.effective_from:
-        raise SaasChangeOrderError(
-            "CHANGE_EFFECTIVE_BEFORE_CURRENT_VERSION",
-            f"requested_effective_at={requested_effective_at} < "
-            f"current effective_from={cv.effective_from}",
         )
 
     # ── Step 3: CUSTOM current → CUSTOM_QUOTE_REQUIRED ───────────────────────

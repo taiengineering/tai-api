@@ -43,6 +43,11 @@ from schemas.saas_pricing_v2 import SaasCommercialSelection, SaasPricingSnapshot
 from schemas.saas_quote_v2 import SAAS_QUOTE_SCHEMA_VERSION, SaasQuoteSnapshotItemV2
 from services.payment_post_process import PAID_STATUS_CODES
 from services.payment_svc import _run_inicis_prepare_exact, load_sign_key
+from services.saas_commercial_version_time_v2 import (
+    TemporalVersionError,
+    find_future_commercial_versions_v2,
+    select_effective_commercial_version_v2,
+)
 from services.saas_contract_storage_mapper_v2 import build_standard_contract_storage_bundle_v2
 from services.saas_payment_success_v2_adapter import _frozen_snapshot_to_calc_result
 
@@ -57,7 +62,10 @@ class SaasRenewalV2AdapterError(Exception):
       CONTRACT_NOT_OWNED                    — contracts.company_id != company_id
       CONTRACT_NOT_ACTIVE                   — contracts.status_code != ACTIVE
       CONTRACT_NOT_SAAS                     — contracts.service_type != SAAS
-      CURRENT_CV_NOT_FOUND                  — superseded_at IS NULL 행 0
+      CURRENT_CV_NOT_FOUND                  — as_of 시점 effective CV 없음
+      CURRENT_CV_AMBIGUOUS                  — as_of 시점 effective CV 2개 이상
+      RENEWAL_AS_OF_INVALID                 — as_of naive datetime
+      RENEWAL_ALREADY_SCHEDULED             — as_of 기준 미래 scheduled Renewal CV 존재
       QUOTE_NOT_FOUND                       — quote_id 미존재
       QUOTE_NOT_OWNED                       — quote.company_id != company_id
       QUOTE_SOURCE_INVALID                  — quote.source != member_auto
@@ -146,17 +154,21 @@ def _fetch_and_validate_contract(
     supabase,
     contract_id: str,
     company_id: str,
+    as_of: datetime,
 ) -> tuple[dict, dict]:
-    """DB에서 Contract + 현재 CV 조회 및 검증.
+    """DB에서 Contract + temporal current CV 조회 및 검증.
 
-    DB Read: contracts(1) + saas_contract_commercial_versions(1)
+    DB Read: contracts(1) + saas_contract_commercial_versions(N)
     site_scopes는 BE-OBJ10-D-B에서 별도 조회.
 
-    saas_contract_commercial_versions에 contract_id의 superseded_at IS NULL
-    행이 최대 1건임은 migration DDL (unique partial index) 보장.
-    adapter는 DB invariant에 의존한다.
+    Temporal current selection:
+      is_commercial_version_effective_at_v2(cv, as_of) 기준으로 선택.
+      unique partial index (superseded_at IS NULL)로 LIMIT 1 하지 않음.
 
-    Returns: (contract_row, cv_row)
+    Future renewal guard:
+      as_of 이후 effective_from인 CV 존재 → RENEWAL_ALREADY_SCHEDULED.
+
+    Returns: (contract_row, current_cv_row)
     """
     ct_res = (
         supabase.table("contracts")
@@ -194,16 +206,36 @@ def _fetch_and_validate_contract(
         supabase.table("saas_contract_commercial_versions")
         .select("*")
         .eq("contract_id", contract_id)
-        .is_("superseded_at", "null")
-        .limit(1)
         .execute()
     )
-    if not cv_res.data:
+    all_cvs = cv_res.data or []
+
+    # Temporal current selection — LIMIT 1로 숨기지 않음
+    try:
+        current_cv = select_effective_commercial_version_v2(all_cvs, as_of)
+    except TemporalVersionError as exc:
+        if exc.code == "TEMPORAL_CURRENT_NOT_FOUND":
+            raise SaasRenewalV2AdapterError(
+                "CURRENT_CV_NOT_FOUND",
+                f"contract_id={contract_id}: as_of={as_of} 시점 유효한 CV가 없습니다.",
+            ) from exc
+        if exc.code == "TEMPORAL_CURRENT_AMBIGUOUS":
+            raise SaasRenewalV2AdapterError(
+                "CURRENT_CV_AMBIGUOUS",
+                f"contract_id={contract_id}: as_of={as_of} 시점 effective CV 2건 이상 — DB invariant 위반.",
+            ) from exc
+        raise
+
+    # Future renewal guard — 미래 scheduled version = 중복 Renewal 금지
+    future_cvs = find_future_commercial_versions_v2(all_cvs, as_of)
+    if future_cvs:
         raise SaasRenewalV2AdapterError(
-            "CURRENT_CV_NOT_FOUND",
-            f"contract_id={contract_id}: 현재 유효한 Commercial Version이 없습니다.",
+            "RENEWAL_ALREADY_SCHEDULED",
+            f"contract_id={contract_id}: 미래 예약된 Renewal CV {len(future_cvs)}건 존재. "
+            "추가 Renewal 적용 불가.",
         )
-    return contract, cv_res.data[0]
+
+    return contract, current_cv
 
 
 def _validate_renewal_quote(
@@ -285,6 +317,7 @@ def prepare_saas_v2_renewal_payment_from_quote(
     quote_id: str,
     company_id: str,
     user_id: str,
+    as_of: datetime,
     proof_type: Optional[str] = None,
     buyername: Optional[str] = None,
     buyertel: Optional[str] = None,
@@ -292,12 +325,19 @@ def prepare_saas_v2_renewal_payment_from_quote(
 ) -> dict:
     """기존 V2 Contract에 대해 Renewal Quote 기반 INICIS Prepaid 결제 준비.
 
-    DB Read:  contracts(1) + saas_contract_commercial_versions(1) + quotes(1)
+    DB Read:  contracts(1) + saas_contract_commercial_versions(N) + quotes(1)
     DB Write: payments(1, payment_type=RENEWAL, contract_id=기존)
     DB Write 금지: contracts 0 · commercial_versions 0 · site_scopes 0 ·
                   subscriptions 0 · billing_keys 0
+
+    as_of: timezone-aware datetime (caller 제공, datetime.now() 직접 호출 금지)
     """
-    _fetch_and_validate_contract(supabase, contract_id, company_id)
+    if as_of.tzinfo is None:
+        raise SaasRenewalV2AdapterError(
+            "RENEWAL_AS_OF_INVALID",
+            f"as_of은 timezone-aware datetime이어야 합니다: {as_of!r}",
+        )
+    _fetch_and_validate_contract(supabase, contract_id, company_id, as_of)
     _quote, item, snap = _validate_renewal_quote(supabase, quote_id, company_id)
 
     sign_key = load_sign_key()
@@ -432,12 +472,25 @@ def build_saas_v2_renewal_apply_plan(
             "CURRENT_CV_SCHEMA_INVALID",
             f"commercial_schema_version 불일치: {current_cv.get('commercial_schema_version')!r}",
         )
-    if current_cv.get("superseded_at") is not None:
-        raise SaasRenewalV2AdapterError(
-            "CURRENT_CV_SUPERSEDED",
-            f"current_cv.superseded_at={current_cv.get('superseded_at')}: "
-            "superseded_at IS NOT NULL — 현재 유효 Version이 아닙니다.",
-        )
+    # temporal check: requested_effective_at >= superseded_at → NON_CURRENT
+    sup_raw = current_cv.get("superseded_at")
+    if sup_raw is not None:
+        try:
+            sup_dt = dateutil_parser.isoparse(str(sup_raw))
+        except (ValueError, TypeError) as exc:
+            raise SaasRenewalV2AdapterError(
+                "CURRENT_CV_SCHEMA_INVALID",
+                f"current_cv.superseded_at 파싱 실패: {sup_raw!r}",
+            ) from exc
+        if sup_dt.tzinfo is None:
+            sup_dt = sup_dt.replace(tzinfo=timezone.utc)
+        if requested_effective_at >= sup_dt:
+            raise SaasRenewalV2AdapterError(
+                "CURRENT_CV_SUPERSEDED",
+                f"current_cv.superseded_at={sup_dt}: "
+                f"requested_effective_at={requested_effective_at} >= superseded_at "
+                "— 이미 supersede된 Version입니다.",
+            )
     cv_version_no = current_cv.get("version_no")
     if not isinstance(cv_version_no, int) or cv_version_no < 1:
         raise SaasRenewalV2AdapterError(

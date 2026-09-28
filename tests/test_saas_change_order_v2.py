@@ -826,3 +826,29 @@ def test_C75_change_line_invalid_product_tier_rejected():
             from_product_tier="STARTER",
             to_product_tier="FIELD",
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# C76–C77: Temporal migration — CO-T1 through CO-T2
+# B1 Owner Policy: [effective_from, superseded_at)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_C76_future_superseded_cv_with_requested_before_boundary_accepted():
+    """CO-T1: superseded_at=boundary, requested_effective_at < boundary → PASS."""
+    s = [_site(_SITE_A)]
+    # CV: effective_now, superseded_at = _after() = 10:00
+    bundle = _cur_mgr(s, effective_from=_before(), superseded_at=_after())
+    # requested_effective_at = _now() = 09:00 < _after() = 10:00 → still effective
+    r = _eval(bundle, *_ready("MANAGER", s), at=_now())
+    assert r.status in ("RENEWAL_ONLY", "FIT", "CHANGE_REQUIRED", "CUSTOM_QUOTE_REQUIRED", "NO_CHANGE")
+
+
+def test_C77_requested_at_boundary_on_future_superseded_cv_rejected():
+    """CO-T2: superseded_at=boundary, requested == boundary → NON_CURRENT."""
+    s = [_site(_SITE_A)]
+    # CV: effective_before, superseded_at = _now() = 09:00
+    bundle = _cur_mgr(s, effective_from=_before(), superseded_at=_now())
+    # requested_effective_at = _now() = 09:00 == superseded_at → NOT effective
+    with pytest.raises(SaasChangeOrderError) as exc:
+        _eval(bundle, *_ready("MANAGER", s), at=_now())
+    assert exc.value.code == "NON_CURRENT_COMMERCIAL_VERSION"
