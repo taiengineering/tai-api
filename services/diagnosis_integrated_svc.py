@@ -686,9 +686,6 @@ def run_diagnosis(
     if _transient_mat_rows:
         from services.material_source.canonical_adapter import (
             MaterialCanonicalMergeConflict as _MConflict,
-            merge_or_raise as _mmerge,
-            project_material_canonical_facts_from_rows as _proj_mat,
-            project_material_fc001_facts as _proj_fc001,
         )
         from services.material_source.store import (
             MaterialSourceValidationError as _MValErr,
@@ -706,8 +703,7 @@ def run_diagnosis(
                 detail={"code": "MATERIAL_ROW_INVALID", "message": str(exc)},
             ) from exc
         try:
-            _mat_can = _proj_mat(_mat_dicts)
-            inp = _mmerge(inp, projected=_mat_can)
+            inp = _merge_material_rows_into_inp(inp, _mat_dicts)
         except _MConflict as exc:
             raise HTTPException(
                 status_code=409,
@@ -719,10 +715,6 @@ def run_diagnosis(
                 status_code=503,
                 detail={"code": "MATERIAL_SOURCE_UNAVAILABLE", "message": str(_mat_exc)},
             ) from _mat_exc
-        # FC-001 tri-state facts: setdefault (explicit > projected, no conflict raise for fc001).
-        _fc001_facts = _proj_fc001(_mat_dicts)
-        for _fk, _fv in _fc001_facts.items():
-            inp.setdefault(_fk, _fv)
     # Wave A2 — transient equipment_list rows (Paid path).
     # Validation gate: rows where the equipment_type_code KEY is present (even "" or whitespace)
     # must pass validate_equipment_source_row() → 422 on invalid/unknown code.

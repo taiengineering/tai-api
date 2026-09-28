@@ -186,6 +186,13 @@ def _stub_work_rows_empty(monkeypatch):
     )
 
 
+def _stub_equipment_rows_empty(monkeypatch):
+    monkeypatch.setattr(
+        "services.equipment_source.store.load_equipment_rows_optional",
+        lambda supabase, factory_id: [],
+    )
+
+
 def test_T9_industrial_runtime_receives_chemical_canonical(monkeypatch):
     import services.safe_industrial_leg_runtime as R
     from services.safe_industrial_canonical_assembler import (
@@ -214,6 +221,7 @@ def test_T9_industrial_runtime_receives_chemical_canonical(monkeypatch):
     monkeypatch.setattr(R, "assemble_industrial_marketing_contract", fake_assemble)
     monkeypatch.setattr(R, "run_leg_diagnosis", fake_run_leg)
     _stub_work_rows_empty(monkeypatch)
+    _stub_equipment_rows_empty(monkeypatch)
     _stub_material_rows(monkeypatch, [_mat_row(material_master_key=BENZENE_KEY)])
 
     R.run_safe_industrial_leg(object(), "F1", SafeIndustrialConsumerInput())
@@ -250,6 +258,7 @@ def test_T10_construction_runtime_receives_chemical_canonical(monkeypatch):
     monkeypatch.setattr(R, "assemble_construction_marketing_contract", fake_assemble)
     monkeypatch.setattr(R, "run_leg_diagnosis", fake_run_leg)
     _stub_work_rows_empty(monkeypatch)
+    _stub_equipment_rows_empty(monkeypatch)
     _stub_material_rows(monkeypatch, [_mat_row(material_master_key=VINYL_KEY)])
 
     R.run_safe_construction_leg(object(), "S1", SafeConstructionConsumerInput())
