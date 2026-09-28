@@ -416,6 +416,28 @@ def _build_unified_step1_body(
     return step1_body
 
 
+def _merge_material_rows_into_inp(inp: dict, rows: list) -> dict:
+    """Merge factory_material rows into diagnosis inp via existing canonical adapter.
+
+    Shared seam for paid persistent path (pre-validated DB rows) and transient
+    path (caller validates first). MaterialCanonicalMergeConflict and catalog/
+    projector errors propagate unchanged — callers convert to HTTP responses.
+    """
+    if not rows:
+        return inp
+    from services.material_source.canonical_adapter import (
+        merge_or_raise as _mmerge,
+        project_material_canonical_facts_from_rows as _proj_mat,
+        project_material_fc001_facts as _proj_fc001,
+    )
+    _mat_can = _proj_mat(rows)
+    inp = _mmerge(inp, projected=_mat_can)
+    _fc001 = _proj_fc001(rows)
+    for _fk, _fv in _fc001.items():
+        inp.setdefault(_fk, _fv)
+    return inp
+
+
 def run_diagnosis(
     supabase,
     body,
@@ -579,6 +601,38 @@ def run_diagnosis(
             raise HTTPException(status_code=503, detail="설비 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")
         for _f, _v in _proj_eq(_eq_rows).items():
             inp.setdefault(_f, _v)
+        # WO-MATERIAL-PAID-PERSISTENT-EXISTING-SEAM-PATCH-001:
+        # Persistent factory_materials → canonical adapter → LEG input.
+        # Same reader/canonical path as Official SaaS 3-sector (PR #445 + #451).
+        # READ FAILURE != EMPTY SOURCE — MaterialSourceLoadError propagates fail-closed.
+        from services.material_source.store import (
+            MaterialSourceLoadError as _MatLoadErr,
+            load_factory_material_rows_optional as _load_mat,
+        )
+        try:
+            _mat_rows = _load_mat(supabase, factory_id)
+        except _MatLoadErr as _me:
+            log.error("[material_materializer] source read failed factory=%s: %s", factory_id, _me)
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "MATERIAL_SOURCE_UNAVAILABLE", "message": str(_me)},
+            ) from _me
+        from services.material_source.canonical_adapter import (
+            MaterialCanonicalMergeConflict as _MatConflict,
+        )
+        try:
+            inp = _merge_material_rows_into_inp(inp, _mat_rows)
+        except _MatConflict as _mc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "MATERIAL_CANONICAL_CONFLICT", "conflicts": _mc.conflicts},
+            ) from _mc
+        except Exception as _mat_exc:
+            log.error("[material_materializer] projection failed factory=%s: %s", factory_id, _mat_exc)
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "MATERIAL_SOURCE_UNAVAILABLE", "message": str(_mat_exc)},
+            ) from _mat_exc
     # WO-E2E-OBS009-COMMON-WORK-SOURCE-IMPLEMENT-001:
     # stored work → projector → merge. Explicit request keys are not overwritten.
     if factory_id:
