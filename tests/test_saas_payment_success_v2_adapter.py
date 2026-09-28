@@ -2,13 +2,18 @@
 
 B01-B10:  _build_contract_row_from_payment unit
 B11-B15:  _create_contract_from_payment V1 regression (delegates to builder)
-B16-B25:  build_saas_v2_payment_success_apply_plan validation errors
+B16-B25:  build_saas_v2_payment_success_apply_plan — quote/item/snapshot validation errors
 B26-B30:  amount 3중 정합성
 B31-B34:  period_months / term_months 정합성
 B35-B50:  contract_row field assertions
 B51-B60:  SaasV2ApplyPlan field assertions
 B61-B70:  commercial_bundle field assertions
 B71-B82:  source guards
+B83-B86:  PATCH1-A — payment status boundary (PAID/SUCCESS only)
+B87-B88:  PATCH1-B — quote source / service boundary
+B89:      PATCH1-C — legacy plan_code prohibition
+B90-B92:  PATCH1-D — paid_at required + parse + effective_from
+B93-B95:  PATCH1-E — user_id required + UUID + created_by
 """
 from __future__ import annotations
 
@@ -39,6 +44,7 @@ COMPANY_ID = "aaaa0000-0000-0000-0000-000000000001"
 QUOTE_ID = "bbbb0000-0000-0000-0000-000000000002"
 PAYMENT_ID = "cccc0000-0000-0000-0000-000000000003"
 ENTITY_ID = "dddd0000-0000-0000-0000-000000000004"
+USER_ID = "eeee0000-0000-0000-0000-000000000005"
 
 START = date(2026, 9, 28)
 CONTRACT_NO = "CON-20260928-9999"
@@ -104,6 +110,7 @@ def _valid_quote(quote_id=QUOTE_ID, company_id=COMPANY_ID):
         "company_id": company_id,
         "status_code": "ISSUED",
         "service_type": "SAAS",
+        "source": "member_auto",
         "supply_amount": _SNAP_DICT["prepaid_supply_amount"],
         "vat_amount": _SNAP_DICT["vat_amount"],
         "total_amount": _SNAP_DICT["total_amount"],
@@ -115,6 +122,7 @@ def _valid_pay(quote_id=QUOTE_ID, company_id=COMPANY_ID, payment_id=PAYMENT_ID):
     return {
         "id": payment_id,
         "product_type": "SAAS",
+        "status_code": "SUCCESS",
         "company_id": company_id,
         "quote_id": quote_id,
         "supply_amount": _SNAP_DICT["prepaid_supply_amount"],
@@ -122,6 +130,8 @@ def _valid_pay(quote_id=QUOTE_ID, company_id=COMPANY_ID, payment_id=PAYMENT_ID):
         "total_amount": _SNAP_DICT["total_amount"],
         "period_months": _SNAP_DICT["term_months"],
         "paid_at": "2026-09-28T10:00:00+09:00",
+        "user_id": USER_ID,
+        "plan_code": None,
     }
 
 
@@ -714,3 +724,126 @@ class TestSourceGuards:
         assert calc.status == "READY"
         assert calc.snapshot == snap
         assert calc.snapshot.prepaid_supply_amount == _SNAP_DICT["prepaid_supply_amount"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# B83-B86: PATCH1-A — Payment status boundary
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestPaymentStatusBoundary:
+
+    def test_B83_pending_payment_rejected(self):
+        pay = _valid_pay()
+        pay["status_code"] = "PENDING"
+        with pytest.raises(SaasPaymentSuccessV2AdapterError) as exc:
+            _apply_plan(pay=pay)
+        assert exc.value.code == "V2_PAYMENT_NOT_PAID"
+
+    def test_B84_failed_payment_rejected(self):
+        pay = _valid_pay()
+        pay["status_code"] = "FAILED"
+        with pytest.raises(SaasPaymentSuccessV2AdapterError) as exc:
+            _apply_plan(pay=pay)
+        assert exc.value.code == "V2_PAYMENT_NOT_PAID"
+
+    def test_B85_success_status_accepted(self):
+        pay = _valid_pay()
+        pay["status_code"] = "SUCCESS"
+        plan = _apply_plan(pay=pay)
+        assert plan is not None
+
+    def test_B86_paid_status_accepted(self):
+        pay = _valid_pay()
+        pay["status_code"] = "PAID"
+        plan = _apply_plan(pay=pay)
+        assert plan is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# B87-B88: PATCH1-B — Quote source / service boundary
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestQuoteSourceServiceBoundary:
+
+    def test_B87_member_custom_source_rejected(self):
+        quote = _valid_quote()
+        quote["source"] = "member_custom"
+        with pytest.raises(SaasPaymentSuccessV2AdapterError) as exc:
+            _apply_plan(quote=quote)
+        assert exc.value.code == "V2_QUOTE_SOURCE_INVALID"
+
+    def test_B88_non_saas_service_type_rejected(self):
+        quote = _valid_quote()
+        quote["service_type"] = "DIAGNOSIS"
+        with pytest.raises(SaasPaymentSuccessV2AdapterError) as exc:
+            _apply_plan(quote=quote)
+        assert exc.value.code == "V2_QUOTE_SERVICE_INVALID"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# B89: PATCH1-C — Legacy plan_code prohibition
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestLegacyPlanCodeProhibition:
+
+    def test_B89_non_none_plan_code_rejected(self):
+        pay = _valid_pay()
+        pay["plan_code"] = "INDUSTRY_PRO"
+        with pytest.raises(SaasPaymentSuccessV2AdapterError) as exc:
+            _apply_plan(pay=pay)
+        assert exc.value.code == "V2_LEGACY_PLAN_CODE_FORBIDDEN"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# B90-B92: PATCH1-D — paid_at required + parse + effective_from
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestPaidAtBoundary:
+
+    def test_B90_missing_paid_at_rejected(self):
+        pay = _valid_pay()
+        pay.pop("paid_at")
+        with pytest.raises(SaasPaymentSuccessV2AdapterError) as exc:
+            _apply_plan(pay=pay)
+        assert exc.value.code == "V2_PAID_AT_REQUIRED"
+
+    def test_B91_malformed_paid_at_rejected(self):
+        pay = _valid_pay()
+        pay["paid_at"] = "not-a-valid-timestamp"
+        with pytest.raises(SaasPaymentSuccessV2AdapterError) as exc:
+            _apply_plan(pay=pay)
+        assert exc.value.code == "V2_PAID_AT_INVALID"
+
+    def test_B92_paid_at_becomes_commercial_effective_from(self):
+        from dateutil import parser as dp
+        paid_at_str = "2026-09-28T10:00:00+09:00"
+        pay = _valid_pay()
+        pay["paid_at"] = paid_at_str
+        plan = _apply_plan(pay=pay)
+        expected = dp.isoparse(paid_at_str)
+        assert plan.commercial_bundle.commercial_version.effective_from == expected
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# B93-B95: PATCH1-E — user_id required + UUID + created_by
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestUserIdBoundary:
+
+    def test_B93_missing_user_id_rejected(self):
+        pay = _valid_pay()
+        pay.pop("user_id")
+        with pytest.raises(SaasPaymentSuccessV2AdapterError) as exc:
+            _apply_plan(pay=pay)
+        assert exc.value.code == "V2_USER_REQUIRED"
+
+    def test_B94_invalid_uuid_user_id_rejected(self):
+        pay = _valid_pay()
+        pay["user_id"] = "not-a-uuid"
+        with pytest.raises(SaasPaymentSuccessV2AdapterError) as exc:
+            _apply_plan(pay=pay)
+        assert exc.value.code == "V2_USER_INVALID"
+
+    def test_B95_user_id_becomes_commercial_created_by(self):
+        plan = _apply_plan()
+        assert plan.commercial_bundle.commercial_version.created_by == uuid.UUID(USER_ID)
