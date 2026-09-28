@@ -501,6 +501,15 @@ def run_diagnosis(
     _process_list_val = body.process_list if body.process_list is not None else _fd.get("process_list")
     _equipment_list_val = body.equipment_list if body.equipment_list is not None else _fd.get("equipment_list")
     _ksic_list_val = body.ksic_list if body.ksic_list is not None else _fd.get("ksic_list")
+    # Wave A1 snapshot values — serialized early so snapshot is consistent with what was validated.
+    _work_rows_val = [
+        (r.model_dump(exclude_none=True) if hasattr(r, "model_dump") else dict(r))
+        for r in (getattr(body, "work_rows", None) or [])
+    ] or None
+    _material_rows_val = [
+        (r.model_dump(exclude_none=True) if hasattr(r, "model_dump") else dict(r))
+        for r in (getattr(body, "material_rows", None) or [])
+    ] or None
 
     tier_code = auto_tier_func(
         sector,
@@ -589,6 +598,66 @@ def run_diagnosis(
                 status_code=409,
                 detail={"code": "WORK_SOURCE_CONFLICT", "conflicts": exc.conflicts},
             ) from exc
+    # Wave A1 — transient work_rows from request (Paid path).
+    # Reuses validate_payload (registry semantic) + merge_or_raise (conflict policy).
+    # No factory_work_facts INSERT/UPDATE/DELETE. Same projector as persistent path.
+    _transient_work_rows = getattr(body, "work_rows", None) or []
+    if _transient_work_rows:
+        from services.work_source.merge import WorkSourceMergeConflict as _WConflict, merge_or_raise as _wmerge
+        from services.work_source.store import WorkSourceValidationError as _WValErr, validate_payload as _validate_work
+        try:
+            _validated_transient = [
+                _validate_work(
+                    r.model_dump(exclude_none=True) if hasattr(r, "model_dump") else dict(r),
+                    partial=False,
+                )
+                for r in _transient_work_rows
+            ]
+        except _WValErr as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "WORK_ROW_INVALID", "message": str(exc)},
+            ) from exc
+        try:
+            inp = _wmerge(inp, work_rows=_validated_transient)
+        except _WConflict as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "WORK_SOURCE_CONFLICT", "conflicts": exc.conflicts},
+            ) from exc
+    # Wave A1 — transient material_rows from request (Paid path).
+    # Reuses project_material_canonical_facts_from_rows + project_material_fc001_facts.
+    # classification_codes forbidden in MaterialRowInput (extra=forbid). No DB mutation.
+    _transient_mat_rows = getattr(body, "material_rows", None) or []
+    if _transient_mat_rows:
+        from services.material_source.canonical_adapter import (
+            MaterialCanonicalMergeConflict as _MConflict,
+            merge_or_raise as _mmerge,
+            project_material_canonical_facts_from_rows as _proj_mat,
+            project_material_fc001_facts as _proj_fc001,
+        )
+        _mat_dicts = [
+            r.model_dump(exclude_none=True) if hasattr(r, "model_dump") else dict(r)
+            for r in _transient_mat_rows
+        ]
+        try:
+            _mat_can = _proj_mat(_mat_dicts)
+            inp = _mmerge(inp, projected=_mat_can)
+        except _MConflict as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "MATERIAL_CANONICAL_CONFLICT", "conflicts": exc.conflicts},
+            ) from exc
+        except Exception as _mat_exc:
+            log.error("[material_transient] catalog load failed: %s", _mat_exc)
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "MATERIAL_SOURCE_UNAVAILABLE", "message": str(_mat_exc)},
+            ) from _mat_exc
+        # FC-001 tri-state facts: setdefault (explicit > projected, no conflict raise for fc001).
+        _fc001_facts = _proj_fc001(_mat_dicts)
+        for _fk, _fv in _fc001_facts.items():
+            inp.setdefault(_fk, _fv)
     if _worker_count is not None:
         workers = _worker_count
     elif body.direct_workers is not None:
@@ -700,6 +769,8 @@ def run_diagnosis(
             "process_list": _process_list_val,
             "equipment_list": _equipment_list_val,
             "ksic_list": _ksic_list_val,
+            "work_rows": _work_rows_val,
+            "material_rows": _material_rows_val,
         }.items()
         if _v is not None
     }
