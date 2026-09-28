@@ -7,7 +7,8 @@
 **BASE (B1 PATCH1)**: `f0885eae`  
 **B2 initial HEAD**: `2fd7ad9e`  
 **B2 PATCH1 HEAD**: `0a5632cb`  
-**B2 PATCH2 HEAD**: pending commit
+**B2 PATCH2 HEAD**: `0a5632cb`
+**B2 PATCH3 HEAD**: pending commit
 
 ---
 
@@ -183,15 +184,43 @@ Files with CHANGE=0:
 | `test_saas_renewal_atomic_apply_v2.py` | 42 | 42 PASS |
 | **TOTAL** | **486** | **486 PASS** |
 
+### Full Regression (B1 + B2 PATCH3)
+
+| File | Tests | Result |
+|---|---|---|
+| `test_saas_commercial_version_time_v2.py` | 29 | 29 PASS |
+| `test_saas_commercial_fit_gate_v2.py` | 57 | 57 PASS |
+| `test_saas_change_order_v2.py` | 77 | 77 PASS |
+| `test_saas_renewal_v2_adapter.py` | 62 | 62 PASS |
+| `test_saas_contract_atomic_apply_v2.py` | 110 | 110 PASS |
+| `test_saas_pricing_preview_v2.py` | 109 | 109 PASS |
+| `test_saas_renewal_atomic_apply_v2.py` | 42 | 42 PASS |
+| `test_saas_renewal_atomic_apply_v2_postgres.py` | 36 | 36 PASS |
+| **TOTAL** | **522** | **522 PASS** |
+
 ### B2 PostgreSQL Integration (I01-I36)
 
 `tests/test_saas_renewal_atomic_apply_v2_postgres.py`  
-PENDING — DB `tai_test_v2_renewal_atomic` 필요 (GPT 환경에서 실행)
+**36 PASS / 0 FAIL** — DB `tai_test_v2_renewal_atomic` (localhost:5432), PATCH3 fixture alignment
 
 PATCH1 추가: I26 (term mismatch), I27 (created_by mismatch), I28 (scope required), I29 (P8 unexpected version)  
 PATCH1 수정: I19 (rollback + scope + paid_amount + paid_at + payment 불변), I25 (→ `V2_RENEWAL_CROSS_PAYMENT_COLLISION`)  
 PATCH2 수정: I12-I16 (`renewal_payment_id=pid` on manually inserted new CV), I29 (version 3 closed, non-null superseded_at)  
 PATCH2 추가: I30 (same payment consumed), I31 (unique violation), I32 (entity mismatch), I33 (sector mismatch), I34 (composite non-dup), I35 (old CV schema), I36 (user_id NULL)
+
+**PATCH3 (Snapshot SSOT fixture alignment — TEST HARNESS ONLY)**  
+Root cause: all FIELD/MANAGER-tier positive-flow tests used `_scope()` with independent UUID while PATCH2 SSOT guard (`V2_RENEWAL_SCOPE_SNAPSHOT_MISMATCH`) requires scope entity_id/type/sector to exactly match `pricing_snapshot.sites`. Also I12-I16 idempotency fixtures lacked `snap=` / `created_by=` alignment, causing Step D to fire before intended partial-state reasons.  
+Changes (SQL migration = 0, services/* = 0):  
+- Added `_scope_from_snapshot(snap, index)` helper (derives scope dict from snapshot site)  
+- Added `created_by` parameter to `_insert_old_cv()` helper  
+- I01-I17, I19-I25, I29-I31: replaced `_scope()` with `_scope_from_snapshot(new_cv["pricing_snapshot"])`  
+- I12-I16: passed `snap=new_cv["pricing_snapshot"]` + `created_by=_DEFAULT_USER_ID` to stored-new-CV inserts  
+- I11-I16: added `reason` asserts for partial-state sub-codes  
+- I15: switched mismatch field from `term_months` (fires upfront TERM_MISMATCH guard) to `worker_capacity`  
+- I19: replaced bare `try/except` with `pytest.raises(CheckViolation)`; constraint fires as `chk_saas_ccv_manager_no_workers` (MANAGER+worker_capacity=5 violates MANAGER-no-workers constraint before tier-mode-combo); `pg.rollback()` added  
+- I29: added `reason` assert `unexpected_higher_version_exists`  
+- I34: replaced `entity_type="workplace"` (invalid; `chk_saas_css_entity_type` allows only factory/site) with `entity_type="site"`, `sector="CONSTRUCTION"`; scopes from snapshot  
+- I35: redesigned as DB constraint invariant proof — `pytest.raises(CheckViolation)` on `_insert_old_cv(schema_version="SAAS_CONTRACT_V1")`; asserts `chk_saas_ccv_schema_version`
 
 ---
 
