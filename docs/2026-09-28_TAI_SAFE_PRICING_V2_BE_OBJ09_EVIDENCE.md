@@ -12,7 +12,7 @@ status: PASS
 ## 1. EXECUTION ANCHOR
 
 - Base commit: `40d98ada`
-- OBJ09 commit: `(pending — PATCH1 pre-commit)`
+- OBJ09 PATCH1 commit: `435cee7c`
 - PATCH1 changes: PATCH-A (calc.status cross-validation) + PATCH-B (site identity/sector set validation)
 - Branch: `docs/pricing-canonical-20260927`
 
