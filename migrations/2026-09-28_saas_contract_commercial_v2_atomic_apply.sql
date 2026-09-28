@@ -204,14 +204,20 @@ ALTER TABLE public.saas_contract_site_scopes ENABLE ROW LEVEL SECURITY;
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- SECTION 2: DML Permission Lockdown
+-- SECTION 2: Service-role-only ACL (REVOKE ALL + minimal GRANT)
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- anon / authenticated는 직접 DML 금지 — service_role 경유 RPC 전용
-REVOKE INSERT, UPDATE, DELETE ON public.saas_contract_commercial_versions FROM anon;
-REVOKE INSERT, UPDATE, DELETE ON public.saas_contract_commercial_versions FROM authenticated;
-REVOKE INSERT, UPDATE, DELETE ON public.saas_contract_site_scopes FROM anon;
-REVOKE INSERT, UPDATE, DELETE ON public.saas_contract_site_scopes FROM authenticated;
+-- PUBLIC / anon / authenticated: 모든 권한 전면 박탈 (TRUNCATE 포함)
+REVOKE ALL PRIVILEGES ON TABLE public.saas_contract_commercial_versions
+    FROM PUBLIC, anon, authenticated;
+
+REVOKE ALL PRIVILEGES ON TABLE public.saas_contract_site_scopes
+    FROM PUBLIC, anon, authenticated;
+
+-- service_role: 함수 실행에 필요한 최소 권한 (SELECT + INSERT)
+-- 함수에서 UPDATE/DELETE 없음 — 최소권한 원칙 적용
+GRANT SELECT, INSERT ON TABLE public.saas_contract_commercial_versions TO service_role;
+GRANT SELECT, INSERT ON TABLE public.saas_contract_site_scopes TO service_role;
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -294,15 +300,61 @@ BEGIN
             );
         END IF;
 
-        -- STANDARD tiers(MANAGER/FIELD): site_scopes ≥ 1 확인
+        -- STANDARD tiers(MANAGER/FIELD): exact site_scope 일치 검증 (PATCH2 — B1)
         IF v_cv_tier IN ('MANAGER', 'FIELD') THEN
+            -- Check 1: stored = 0 → partial
             SELECT COUNT(*)
             INTO   v_scope_count
             FROM   public.saas_contract_site_scopes
             WHERE  commercial_version_id = v_cv_id;
 
             IF v_scope_count = 0 THEN
-                -- commercial_version은 있지만 site_scopes 없음 → 부분 상태 (fail-closed)
+                RETURN jsonb_build_object(
+                    'status',      'V2_ATOMIC_PARTIAL_STATE',
+                    'payment_id',  p_payment_id,
+                    'contract_id', v_payment_contract_id
+                );
+            END IF;
+
+            -- Check 2: duplicate (entity_type, entity_id) in input → partial
+            IF EXISTS (
+                SELECT 1 FROM (
+                    SELECT e->>'entity_type' AS et, e->>'entity_id' AS ei
+                    FROM   jsonb_array_elements(p_site_scopes) e
+                ) t
+                GROUP BY et, ei
+                HAVING COUNT(*) > 1
+            ) THEN
+                RETURN jsonb_build_object(
+                    'status',      'V2_ATOMIC_PARTIAL_STATE',
+                    'payment_id',  p_payment_id,
+                    'contract_id', v_payment_contract_id
+                );
+            END IF;
+
+            -- Check 3: count mismatch → partial (extra or missing)
+            IF v_scope_count != jsonb_array_length(p_site_scopes) THEN
+                RETURN jsonb_build_object(
+                    'status',      'V2_ATOMIC_PARTIAL_STATE',
+                    'payment_id',  p_payment_id,
+                    'contract_id', v_payment_contract_id
+                );
+            END IF;
+
+            -- Check 4: every expected tuple exists (NULL-safe base_band_code)
+            IF EXISTS (
+                SELECT 1
+                FROM   jsonb_array_elements(p_site_scopes) AS expected
+                WHERE  NOT EXISTS (
+                    SELECT 1
+                    FROM   public.saas_contract_site_scopes AS stored
+                    WHERE  stored.commercial_version_id = v_cv_id
+                      AND  stored.entity_type           = expected->>'entity_type'
+                      AND  stored.entity_id             = (expected->>'entity_id')::uuid
+                      AND  stored.sector                = expected->>'sector'
+                      AND  stored.base_band_code IS NOT DISTINCT FROM expected->>'base_band_code'
+                )
+            ) THEN
                 RETURN jsonb_build_object(
                     'status',      'V2_ATOMIC_PARTIAL_STATE',
                     'payment_id',  p_payment_id,
@@ -311,7 +363,7 @@ BEGIN
             END IF;
         END IF;
 
-        -- 정상 완료 상태
+        -- 정상 완료 상태 (site_scopes 완전 일치 확인됨)
         RETURN jsonb_build_object(
             'status',      'ALREADY_APPLIED',
             'payment_id',  p_payment_id,

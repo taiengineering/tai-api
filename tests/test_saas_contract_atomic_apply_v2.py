@@ -1076,3 +1076,65 @@ class TestP22_V2VersionNoInvalidRaisesWithCorrectCode:
         with pytest.raises(SaasV2AtomicApplyError) as exc_info:
             apply_saas_v2_contract_plan_atomic(sb, _make_plan())
         assert exc_info.value.code == "V2_VERSION_NO_INVALID"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PATCH2: SQL 구조 가드 (P23-P30)
+# ═══════════════════════════════════════════════════════════════════════════
+# B3 — ACL 강화: REVOKE ALL PRIVILEGES + 최소 GRANT
+# B1 — ALREADY_APPLIED exact match: IS NOT DISTINCT FROM + jsonb_array_length
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestP23_RevokeAllPrivilegesPresent:
+    def test_P23(self):
+        assert "REVOKE ALL PRIVILEGES" in _migration_sql()
+
+
+class TestP24_GrantSelectInsertToServiceRolePresent:
+    def test_P24(self):
+        sql = _migration_sql()
+        assert "GRANT SELECT, INSERT ON TABLE" in sql
+        assert "service_role" in sql
+
+
+class TestP25_IsNotDistinctFromPresent:
+    def test_P25(self):
+        # NULL-safe base_band_code 비교 (B1 Check 4)
+        assert "IS NOT DISTINCT FROM" in _migration_sql()
+
+
+class TestP26_JsonbArrayLengthPresent:
+    def test_P26(self):
+        # count mismatch 검증 (B1 Check 3)
+        assert "jsonb_array_length" in _migration_sql()
+
+
+class TestP27_DuplicateEntityDetectionPresent:
+    def test_P27(self):
+        sql = _migration_sql()
+        # B1 Check 2: HAVING COUNT(*) > 1 inside ALREADY_APPLIED path
+        assert "HAVING COUNT(*) > 1" in sql
+
+
+class TestP28_AtomicPartialStateAtLeastSixPaths:
+    def test_P28(self):
+        # PATCH2 B1: 4-check exact match → minimum 6 V2_ATOMIC_PARTIAL_STATE occurrences
+        # (CV없음 + Check1 + Check2 + Check3 + Check4 + orphan contract + ...)
+        sql = _migration_sql()
+        assert sql.count("V2_ATOMIC_PARTIAL_STATE") >= 6
+
+
+class TestP29_RevokeAllFromPublicAnonAuthenticated:
+    def test_P29(self):
+        sql = _migration_sql()
+        # B3: single REVOKE ALL PRIVILEGES ... FROM PUBLIC, anon, authenticated
+        assert "FROM PUBLIC, anon, authenticated" in sql
+
+
+class TestP30_NoDirectUpdateDeleteOnSaasTables:
+    def test_P30(self):
+        sql = _migration_sql()
+        # service_role receives only SELECT + INSERT — no UPDATE/DELETE GRANT
+        assert "GRANT UPDATE" not in sql
+        assert "GRANT DELETE" not in sql

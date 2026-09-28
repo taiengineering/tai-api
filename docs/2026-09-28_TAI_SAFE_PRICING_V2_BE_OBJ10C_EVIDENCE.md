@@ -4,7 +4,7 @@ work_order: WO-PRICING-V2-BE-OBJ10-C
 objective: "Atomic Contract Persistence — apply_saas_v2_contract_atomic Postgres RPC"
 author: Claude Code
 date: 2026-09-28
-status: PATCH1_COMPLETE
+status: PATCH2_COMPLETE
 ---
 
 # TAI Safe Pricing V2 BE-OBJ10-C Evidence
@@ -157,6 +157,8 @@ Price engine import = 0
 
 ## 7. 테스트 결과
 
+### PATCH1 (기존)
+
 | 구분 | 통과 | 실패 |
 |------|------|------|
 | OBJ10-C 신규 (C01-C86) | 86 | 0 |
@@ -165,7 +167,22 @@ Price engine import = 0
 | OBJ10-B 회귀 (B01-B95) | 95 | 0 |
 | Pricing V2 + Payment 회귀 | 258 | 1 (PRE-EXISTING: gopaymethod) |
 
+### PATCH2 (확정)
+
+| 구분 | 통과 | 실패 | 파일 |
+|------|------|------|------|
+| C01-C86 (어댑터/목) | 86 | 0 | test_saas_contract_atomic_apply_v2.py |
+| P01-P30 (SQL 구조 가드) | 30 | 0 | test_saas_contract_atomic_apply_v2.py |
+| I01-I15 (Postgres 통합) | 15 | 0 | test_saas_contract_atomic_apply_v2_postgres.py |
+| OBJ10-C 합계 | 131 | 0 | — |
+| Pricing V2 + Payment 회귀 | 518 | 1 (PRE-EXISTING: gopaymethod) | — |
+
 **Pre-existing failure**: `test_payment_svc.py::test_run_inicis_prepare_success_minimal` — `gopaymethod == "Card"` 검사 실패. OBJ10-C 변경과 무관.
+
+**Test taxonomy (PATCH2 기준)**:
+- C01-C86: Python 어댑터 단위 테스트 (FakeSupabase, DB 없음)
+- P01-P30: Migration SQL 정적 구조 가드 (파일 읽기, 실행 없음)
+- I01-I15: 실제 PostgreSQL@16 통합 테스트 (tai_test_v2_atomic, psycopg2)
 
 ## 8. PATCH1 수정 요약
 
@@ -179,14 +196,45 @@ GPT 독립검증(2026-09-28) 지적사항 5건에 대한 수정:
 | jsonb_populate_record DB DEFAULT 미보존 | Step 7: 명시적 컬럼 목록 INSERT로 교체 |
 | SQL 실행 테스트 없음 | P01-P22: SQL 파일 구조 + 보안 가드 + 신규 오류코드 검증 |
 
-## 9. 불변 조건 확인
+## 9. PATCH2 수정 요약 (GPT 2차 독립검증 지적 B1/B2/B3)
+
+| Blocker | 수정 내용 |
+|---------|----------|
+| B1: ALREADY_APPLIED exact match 미흡 | Step 5: 4-check 교체 (stored=0 / duplicate entity / count / IS NOT DISTINCT FROM tuple) |
+| B2: 실제 Postgres 실행 테스트 없음 | I01-I15: psycopg2 + tai_test_v2_atomic 통합 테스트 신규 |
+| B3: ACL 불완전 (TRUNCATE 미차단) | Section 2: REVOKE ALL PRIVILEGES → GRANT SELECT,INSERT to service_role 교체 |
+
+### B1 Step 5 변경 상세
+
+| Check | 검증 내용 | 상태 코드 |
+|-------|----------|----------|
+| Check 1 | stored COUNT = 0 | V2_ATOMIC_PARTIAL_STATE |
+| Check 2 | 입력 내 (entity_type, entity_id) 중복 | V2_ATOMIC_PARTIAL_STATE |
+| Check 3 | stored COUNT ≠ jsonb_array_length(입력) | V2_ATOMIC_PARTIAL_STATE |
+| Check 4 | 모든 expected tuple NOT EXISTS (NULL-safe base_band_code) | V2_ATOMIC_PARTIAL_STATE |
+
+### B3 ACL 변경 상세
+
+```sql
+-- PATCH1 (불완전 — TRUNCATE 미차단):
+REVOKE INSERT, UPDATE, DELETE ON public.saas_contract_commercial_versions FROM anon;
+REVOKE INSERT, UPDATE, DELETE ON public.saas_contract_commercial_versions FROM authenticated;
+
+-- PATCH2 (완전 — REVOKE ALL PRIVILEGES):
+REVOKE ALL PRIVILEGES ON TABLE public.saas_contract_commercial_versions
+    FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT ON TABLE public.saas_contract_commercial_versions TO service_role;
+```
+
+## 10. 불변 조건 확인
 
 | 조건 | 상태 |
 |------|------|
 | Production DB Mutation | 0 |
 | DDL 적용 | 0 (artifact only) |
 | contracts 테이블 직접 변경 | 0 |
-| 기존 파일 변경 | 0 |
+| 기존 파일 변경 | 0 (서비스/스키마/기존 라우터 변경 없음) |
 | V1 결제 처리 경로 영향 | 0 |
 | SECURITY DEFINER 사용 | 0 (INVOKER 전용) |
 | anon/authenticated 직접 write 경로 | 0 |
+| service_role UPDATE/DELETE 부여 | 0 (SELECT+INSERT 최소권한) |
