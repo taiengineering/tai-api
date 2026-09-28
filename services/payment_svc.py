@@ -150,55 +150,78 @@ def call_pay_auth(auth_token: str, auth_url: str, sign_key: str, *, mid: str = "
         raise
 
 
-def run_inicis_prepare(body: PrepareBody) -> dict:
-    """단건 INICIS 결제 준비 — DB insert + 서명 파라미터."""
-    if body.product_type in SAAS_PRODUCT_TYPES and not body.period_months:
-        raise PaymentPrepareError(400, "SaaS 상품은 period_months가 필수입니다.")
+def _run_inicis_prepare_exact(
+    supabase,
+    sign_key: str,
+    *,
+    supply_amount: int,
+    vat_amount: int,
+    total_amount: int,
+    product_type: str,
+    goodname: str,
+    user_id: str,
+    company_id: Optional[str] = None,
+    contract_id: Optional[str] = None,
+    quote_id: Optional[str] = None,
+    plan_code: Optional[str] = None,
+    period_months: Optional[int] = None,
+    payment_type: str = "CARD",
+    proof_type: Optional[str] = None,
+    buyername: Optional[str] = None,
+    buyertel: Optional[str] = None,
+    buyeremail: Optional[str] = None,
+) -> dict:
+    """공통 INICIS 준비 실행부 — 금액은 이미 서버가 결정한 값만 수신.
 
-    supabase = get_supabase()
-    sign_key = load_sign_key()
+    V1: run_inicis_prepare → add_vat → 여기 전달.
+    V2: Frozen Quote Snapshot amounts → 여기 전달.
+    가격 계산 없음.
+    """
+    if supply_amount < 0 or vat_amount < 0:
+        raise PaymentPrepareError(400, "supply_amount, vat_amount는 0 이상이어야 합니다.")
+    if total_amount <= 0:
+        raise PaymentPrepareError(400, "total_amount는 0보다 커야 합니다.")
+    if supply_amount + vat_amount != total_amount:
+        raise PaymentPrepareError(400, "supply_amount + vat_amount != total_amount")
+
     order_id = make_order_id()
     timestamp = ts_ms()
-    total_with_vat = add_vat(body.amount)
-    price_str = str(total_with_vat)
+    price_str = str(total_amount)
     m_key = sha256(sign_key)
     sig_data = f"oid={order_id}&price={price_str}&timestamp={timestamp}"
     veri_data = f"oid={order_id}&price={price_str}&signKey={sign_key}&timestamp={timestamp}"
     signature = sha256(sig_data)
     verification = sha256(veri_data)
-    log.info(f"[INICIS STEP1] oid={order_id} user={body.user_id} product={body.product_type}")
+    log.info(f"[INICIS STEP1] oid={order_id} user={user_id} product={product_type}")
 
-    supply_amount = body.amount
-    vat_amount = total_with_vat - supply_amount
     now = now_iso()
 
     row: dict = {
-        "user_id": body.user_id,
-        "product_type": body.product_type,
+        "user_id": user_id,
+        "product_type": product_type,
         "payment_method": "INICIS",
-        "payment_type": body.payment_type or "CARD",
+        "payment_type": payment_type,
         "supply_amount": supply_amount,
         "vat_amount": vat_amount,
-        "total_amount": total_with_vat,
+        "total_amount": total_amount,
         "inicis_order_id": order_id,
         "status_code": "PENDING",
         "service_status": None,
         "created_at": now,
         "updated_at": now,
     }
-    if body.company_id:
-        row["company_id"] = body.company_id
-    if body.contract_id:
-        row["contract_id"] = body.contract_id
-    if body.quote_id:
-        row["quote_id"] = body.quote_id
-    if body.plan_code:
-        row["plan_code"] = body.plan_code
-    if body.period_months:
-        row["period_months"] = body.period_months
-    # PROOF-TYPE-WRITER: 클라이언트 증빙선택(TAX_INVOICE/CASH_RECEIPT/NONE). 미지정은 NULL 유지.
-    if getattr(body, "proof_type", None):
-        row["proof_type"] = body.proof_type
+    if company_id:
+        row["company_id"] = company_id
+    if contract_id:
+        row["contract_id"] = contract_id
+    if quote_id:
+        row["quote_id"] = quote_id
+    if plan_code:
+        row["plan_code"] = plan_code
+    if period_months:
+        row["period_months"] = period_months
+    if proof_type:
+        row["proof_type"] = proof_type
 
     res = supabase.table("payments").insert(row).execute()
     if not res.data:
@@ -212,10 +235,10 @@ def run_inicis_prepare(body: PrepareBody) -> dict:
             "mKey": m_key,
             "oid": order_id,
             "price": price_str,
-            "goodname": body.goodname,
-            "buyername": body.buyername or "고객",
-            "buyertel": body.buyertel or "00000000000",
-            "buyeremail": body.buyeremail or "",
+            "goodname": goodname,
+            "buyername": buyername or "고객",
+            "buyertel": buyertel or "00000000000",
+            "buyeremail": buyeremail or "",
             "timestamp": timestamp,
             "signature": signature,
             "verification": verification,
@@ -226,6 +249,39 @@ def run_inicis_prepare(body: PrepareBody) -> dict:
             "gopaymethod": "",
         },
     }
+
+
+def run_inicis_prepare(body: PrepareBody) -> dict:
+    """단건 INICIS 결제 준비 — DB insert + 서명 파라미터."""
+    if body.product_type in SAAS_PRODUCT_TYPES and not body.period_months:
+        raise PaymentPrepareError(400, "SaaS 상품은 period_months가 필수입니다.")
+
+    supabase = get_supabase()
+    sign_key = load_sign_key()
+    total_with_vat = add_vat(body.amount)
+    supply_amount = body.amount
+    vat_amount = total_with_vat - supply_amount
+
+    return _run_inicis_prepare_exact(
+        supabase,
+        sign_key,
+        supply_amount=supply_amount,
+        vat_amount=vat_amount,
+        total_amount=total_with_vat,
+        product_type=body.product_type,
+        goodname=body.goodname,
+        user_id=body.user_id,
+        company_id=body.company_id,
+        contract_id=body.contract_id,
+        quote_id=body.quote_id,
+        plan_code=body.plan_code,
+        period_months=body.period_months,
+        payment_type=body.payment_type or "CARD",
+        proof_type=getattr(body, "proof_type", None),
+        buyername=body.buyername,
+        buyertel=body.buyertel,
+        buyeremail=body.buyeremail,
+    )
 
 
 def process_auth_failure(payment_id: str, fail_msg: str, auth_result: dict) -> None:
