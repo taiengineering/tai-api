@@ -340,6 +340,9 @@ def test_registry_is_common_only():
         "SCAFFOLD",
         "EXCAVATION",
         "ASBESTOS_WASTE_DUST_PROCESSING",
+        "GRINDING",
+        "DIVING",
+        "OBJECT_DROP",
     }
 
 

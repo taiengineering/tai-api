@@ -145,6 +145,32 @@ WORK_TYPES: Dict[str, Dict[str, Any]] = {
         },
         "optional_fields": ("equipment_ref", "location_ref"),
     },
+    # Wave A1 — FREE-only boolean targets
+    # Numeric attributes captured for audit/replay only; projection HOLD until C2 contract frozen.
+    "GRINDING": {
+        "label": "연삭 작업",
+        "subtypes": {},
+        "attributes": {
+            "wheel_diameter_cm": {"type": "number", "label": "연삭 숫돌 직경(cm)"},
+        },
+        "optional_fields": ("equipment_ref", "location_ref"),
+    },
+    "DIVING": {
+        "label": "수중작업",
+        "subtypes": {},
+        "attributes": {
+            "worker_count": {"type": "number", "label": "수중작업 근로자 수"},
+        },
+        "optional_fields": ("location_ref",),
+    },
+    "OBJECT_DROP": {
+        "label": "낙하물 위험 작업",
+        "subtypes": {},
+        "attributes": {
+            "height_m": {"type": "number", "label": "낙하위험 높이(m)"},
+        },
+        "optional_fields": ("equipment_ref", "location_ref"),
+    },
 }
 
 # Fix the accidental space in MAINTENANCE subtype label

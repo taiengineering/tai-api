@@ -1,6 +1,32 @@
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, StrictBool, StrictInt, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
+
+
+class WorkRowInput(BaseModel):
+    """Transient work row for Paid diagnosis. Reuses work_source.store.validate_payload
+    for registry-based semantic validation after schema validation. extra=forbid prevents
+    canonical LEG field injection."""
+    model_config = ConfigDict(extra="forbid")
+
+    work_type: str
+    work_subtype: Optional[str] = None
+    equipment_ref: Optional[str] = None
+    material_ref: Optional[str] = None
+    location_ref: Optional[str] = None
+    attributes: Optional[Dict[str, Any]] = None
+    active: bool = True
+
+
+class MaterialRowInput(BaseModel):
+    """Transient material row for Paid diagnosis. classification_codes is EXCLUDED —
+    legal classification is catalog-derived only via material_master_key → catalog.
+    extra=forbid prevents classification_codes injection."""
+    model_config = ConfigDict(extra="forbid")
+
+    material_master_key: Optional[str] = None
+    handling_mode_codes: Optional[List[str]] = None
+    is_active: bool = True
 
 
 class DisclaimerBody(BaseModel):
@@ -86,6 +112,12 @@ class DiagnosisRunBody(BaseModel):
     process_list: Optional[List[Dict[str, Any]]] = Field(None, description="paid STEP2 공정 row raw 구조(process_name/hazard_codes/worker_count/is_primary/future activity_type[])")
     equipment_list: Optional[List[Dict[str, Any]]] = Field(None, description="paid STEP3 설비 row raw 구조(equipment_type/asset_name/quantity/.../future usage_type[]/relation_type[])")
     ksic_list: Optional[List[str]] = Field(None, description="paid 다중 KSIC 대분류 raw 목록")
+    # Wave A1 — transient structured source rows (Paid path).
+    # work_rows: validated via work_source.store.validate_payload; projected via work_source.projector.
+    # material_rows: projected via material_source.canonical_adapter; classification_codes FORBIDDEN.
+    # Neither field mutates factory_work_facts or factory_materials (transient only).
+    work_rows: Optional[List[WorkRowInput]] = Field(None, description="Wave A1: Paid 일시적 작업 rows. work_source validate_payload + projector 경유. DB 저장 없음.")
+    material_rows: Optional[List[MaterialRowInput]] = Field(None, description="Wave A1: Paid 일시적 자재 rows. material_master_key → catalog 경유. classification_codes 금지. DB 저장 없음.")
 
     @field_validator("appendix3_item_no", mode="before")
     @classmethod
