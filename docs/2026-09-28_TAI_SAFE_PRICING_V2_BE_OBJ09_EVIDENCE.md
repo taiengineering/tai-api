@@ -12,7 +12,8 @@ status: PASS
 ## 1. EXECUTION ANCHOR
 
 - Base commit: `40d98ada`
-- OBJ09 commit: `(pending — pre-commit)`
+- OBJ09 commit: `(pending — PATCH1 pre-commit)`
+- PATCH1 changes: PATCH-A (calc.status cross-validation) + PATCH-B (site identity/sector set validation)
 - Branch: `docs/pricing-canonical-20260927`
 
 ## 2. EXISTING QUOTE V1 OBSERVED
@@ -175,14 +176,25 @@ source="member_auto" + status_code="ISSUED" → PDF eligibility 통과.
 ## 17. TEST RESULT
 
 ```
-OBJ09 단독: 90 PASS / 0 FAIL
+OBJ09 PATCH1 단독: 97 PASS / 0 FAIL  (Q01-Q90 + Q91-Q97)
 ```
+
+PATCH-A 추가 테스트:
+- Q91: preview.status=READY + calc.status=TERM_DISCOUNT_UNRESOLVED → QUOTE_SNAPSHOT_INVALID / INSERT 0
+
+PATCH-B 추가 테스트:
+- Q92: request에 snapshot 없는 site → QUOTE_SNAPSHOT_INVALID / INSERT 0
+- Q93: snapshot에 request 없는 site → QUOTE_SNAPSHOT_INVALID / INSERT 0
+- Q94: 동일 entity_id, INDUSTRY→CONSTRUCTION sector 변경 → QUOTE_SNAPSHOT_INVALID / INSERT 0
+- Q95: 동일 entity_id, INDUSTRY→BUILDING (entity_type 동일, sector 상이) → QUOTE_SNAPSHOT_INVALID / INSERT 0
+- Q96: request sites 역순 → set 비교로 순서 무관 → READY (정상 발행)
+- Q97: 단일 site 정확 일치 → READY (정상 발행)
 
 ## 18. PREVIOUS REGRESSION
 
 ```
 Pricing V2 회귀 (8 파일): 508 PASS / 0 FAIL
-OBJ09 포함 전체 Pricing: 598 PASS / 0 FAIL
+OBJ09 포함 전체 Pricing: 605 PASS / 0 FAIL  (508 + 97)
 ```
 
 ## 19. EXISTING QUOTE REGRESSION
@@ -224,6 +236,12 @@ Created:
 
 Modified:
 - `routers/member_quotes.py` (POST /v2/issue 추가)
+
+PATCH1 Modified:
+- `services/saas_quote_v2.py`
+  - PATCH-A: `calc.status != "READY"` 검증 추가 (model_validate 직후)
+  - PATCH-B: `_SECTOR_ENTITY_TYPE` import + `_validate_snapshot_against_request`에 site identity/sector set 교차검증 추가
+- `tests/test_saas_quote_v2.py`: Q91-Q97 추가 (90→97)
 
 ## 23. NOT_FOUND
 

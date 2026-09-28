@@ -31,7 +31,7 @@ from schemas.saas_quote_v2 import (
     _DISPLAY_NAMES,
 )
 from services.saas_pricing_composer_v2 import SaasPricingCalculationResult
-from services.saas_pricing_preview_v2 import preview_saas_price_v2
+from services.saas_pricing_preview_v2 import _SECTOR_ENTITY_TYPE, preview_saas_price_v2
 from services.time import now_kst
 
 
@@ -80,6 +80,13 @@ def _validate_snapshot_against_request(
         raise SaasQuoteV2Error(
             "QUOTE_SNAPSHOT_INVALID",
             f"pricing_mode=STANDARD 아님: {snap.pricing_mode}",
+        )
+    req_set = {(_SECTOR_ENTITY_TYPE[s.sector], str(s.entity_id), s.sector) for s in request.sites}
+    snap_set = {(str(site.entity_type), str(site.entity_id), str(site.sector)) for site in snap.sites}
+    if req_set != snap_set:
+        raise SaasQuoteV2Error(
+            "QUOTE_SNAPSHOT_INVALID",
+            f"site identity/sector 불일치: req={req_set}, snap={snap_set}",
         )
 
 
@@ -204,6 +211,12 @@ def issue_saas_quote_v2(
         calc = SaasPricingCalculationResult.model_validate(preview.calculation)
     except (ValidationError, Exception) as exc:
         raise SaasQuoteV2Error("QUOTE_SNAPSHOT_INVALID", str(exc)) from exc
+
+    if calc.status != "READY":
+        raise SaasQuoteV2Error(
+            "QUOTE_SNAPSHOT_INVALID",
+            f"calculation.status=READY 아님: {calc.status}",
+        )
 
     if calc.snapshot is None:
         raise SaasQuoteV2Error("QUOTE_SNAPSHOT_INVALID", "READY calculation의 snapshot이 None입니다.")

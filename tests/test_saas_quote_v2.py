@@ -1062,3 +1062,123 @@ def test_Q90_no_slack_event():
     code = _code_lines(_SVC_SRC)
     assert "send_slack" not in code
     assert "slack_dispatcher" not in code
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Q91–Q97: PATCH1 — Calculation Status + Site Identity Cross-Validation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_Q91_calc_status_not_ready_rejected(monkeypatch):
+    """preview.status=READY but calc.status=TERM_DISCOUNT_UNRESOLVED → QUOTE_SNAPSHOT_INVALID."""
+    from types import SimpleNamespace
+    calc_dict = {
+        "status": "TERM_DISCOUNT_UNRESOLVED",
+        "policy_version": "TEST",
+        "site_breakdown": None,
+        "worker_breakdown": None,
+        "monthly_supply_amount": None,
+        "raw_prepaid_supply_amount": None,
+        "term_months": 1,
+        "term_discount_rate_bps": None,
+        "snapshot": None,
+        "block_reason": None,
+    }
+    fake_preview = SimpleNamespace(status="READY", calculation=calc_dict)
+    monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: fake_preview)
+    monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
+    insert_calls = []
+    monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry",
+                        lambda *a, **k: insert_calls.append(1) or {})
+    with pytest.raises(SaasQuoteV2Error) as exc:
+        issue_saas_quote_v2(None, _issue_req(), _USER_ID, _COMPANY_ID)
+    assert exc.value.code == "QUOTE_SNAPSHOT_INVALID"
+    assert "TERM_DISCOUNT_UNRESOLVED" in exc.value.message
+    assert len(insert_calls) == 0
+
+
+def test_Q92_request_extra_site_rejected(monkeypatch):
+    """Request has site not in snapshot → QUOTE_SNAPSHOT_INVALID, INSERT 0."""
+    preview = _ready_preview(monkeypatch, sites=[_site_req(_SITE_1)])
+    monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
+    insert_calls = []
+    monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry",
+                        lambda *a, **k: insert_calls.append(1) or {})
+    req = _issue_req(sites=[_site_req(_SITE_1), _site_req(_SITE_2)])
+    with pytest.raises(SaasQuoteV2Error) as exc:
+        issue_saas_quote_v2(None, req, _USER_ID, _COMPANY_ID)
+    assert exc.value.code == "QUOTE_SNAPSHOT_INVALID"
+    assert len(insert_calls) == 0
+
+
+def test_Q93_snapshot_extra_site_rejected(monkeypatch):
+    """Snapshot has extra site not in request → QUOTE_SNAPSHOT_INVALID, INSERT 0."""
+    sites_two = [_site_req(_SITE_1), _site_req(_SITE_2)]
+    monkeypatch.setattr("services.pricing_resolver_svc.resolve_plan", _resolve_by_sector)
+    monkeypatch.setattr("services.saas_pricing_composer_v2.get_canonical_pricing_policy_v2", _test_policy)
+    from services.saas_pricing_preview_v2 import preview_saas_price_v2 as real_preview
+    preview = real_preview(None, _issue_req(sites=sites_two))
+    assert preview.status == "READY"
+    monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
+    insert_calls = []
+    monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry",
+                        lambda *a, **k: insert_calls.append(1) or {})
+    req = _issue_req(sites=[_site_req(_SITE_1)])
+    with pytest.raises(SaasQuoteV2Error) as exc:
+        issue_saas_quote_v2(None, req, _USER_ID, _COMPANY_ID)
+    assert exc.value.code == "QUOTE_SNAPSHOT_INVALID"
+    assert len(insert_calls) == 0
+
+
+def test_Q94_same_entity_id_different_sector_rejected(monkeypatch):
+    """Same entity_id but different sector (INDUSTRY vs CONSTRUCTION) → QUOTE_SNAPSHOT_INVALID."""
+    preview = _ready_preview(monkeypatch, sites=[_site_req(_SITE_1, sector="INDUSTRY")])
+    monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
+    insert_calls = []
+    monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry",
+                        lambda *a, **k: insert_calls.append(1) or {})
+    req = _issue_req(sites=[_site_req(_SITE_1, sector="CONSTRUCTION", criteria_value=5_000_000_000)])
+    with pytest.raises(SaasQuoteV2Error) as exc:
+        issue_saas_quote_v2(None, req, _USER_ID, _COMPANY_ID)
+    assert exc.value.code == "QUOTE_SNAPSHOT_INVALID"
+    assert len(insert_calls) == 0
+
+
+def test_Q95_same_entity_type_different_sector_rejected(monkeypatch):
+    """INDUSTRY→BUILDING: same entity_type family (factory) but sector differs → QUOTE_SNAPSHOT_INVALID."""
+    preview = _ready_preview(monkeypatch, sites=[_site_req(_SITE_1, sector="INDUSTRY")])
+    monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
+    insert_calls = []
+    monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry",
+                        lambda *a, **k: insert_calls.append(1) or {})
+    req = _issue_req(sites=[_site_req(_SITE_1, sector="BUILDING")])
+    with pytest.raises(SaasQuoteV2Error) as exc:
+        issue_saas_quote_v2(None, req, _USER_ID, _COMPANY_ID)
+    assert exc.value.code == "QUOTE_SNAPSHOT_INVALID"
+    assert len(insert_calls) == 0
+
+
+def test_Q96_site_order_reversed_accepted(monkeypatch):
+    """Request sites in reversed order → set comparison ignores order → READY."""
+    sites_fwd = [_site_req(_SITE_1, sector="INDUSTRY"), _site_req(_SITE_2, sector="INDUSTRY")]
+    sites_rev = [_site_req(_SITE_2, sector="INDUSTRY"), _site_req(_SITE_1, sector="INDUSTRY")]
+    monkeypatch.setattr("services.pricing_resolver_svc.resolve_plan", _resolve_by_sector)
+    monkeypatch.setattr("services.saas_pricing_composer_v2.get_canonical_pricing_policy_v2", _test_policy)
+    from services.saas_pricing_preview_v2 import preview_saas_price_v2 as real_preview
+    preview = real_preview(None, _issue_req(sites=sites_fwd))
+    assert preview.status == "READY"
+    monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
+    monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry", _fake_insert)
+    row = issue_saas_quote_v2(None, _issue_req(sites=sites_rev), _USER_ID, _COMPANY_ID)
+    assert row.get("source") == "member_auto"
+
+
+def test_Q97_exact_match_accepted(monkeypatch):
+    """Single site exact match → PATCH-B does not block issuance."""
+    _setup_ready(monkeypatch)
+    row = issue_saas_quote_v2(None, _issue_req(), _USER_ID, _COMPANY_ID)
+    assert row.get("source") == "member_auto"
