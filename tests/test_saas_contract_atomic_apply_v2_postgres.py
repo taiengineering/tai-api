@@ -1,4 +1,4 @@
-"""TAI Safe SaaS Atomic Contract Apply V2 — PostgreSQL Integration Tests (I01-I29).
+"""TAI Safe SaaS Atomic Contract Apply V2 — PostgreSQL Integration Tests (I01-I30).
 
 로컬 PostgreSQL@16 (tai_test_v2_atomic) 에서 apply_saas_v2_contract_atomic 함수를
 실제 실행하는 통합 테스트.
@@ -751,3 +751,21 @@ def test_I29_idempotent_wrong_version_no(pg):
     cv_v2 = _cv_dict(cid, version_no=2)
     result = _rpc(pg, pid, cr, cv_v2, [_scope(sid)])
     assert result["status"] == "V2_VERSION_NO_INVALID"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PATCH4 — Guard 3: idempotent CV.contract_id ≠ payment.contract_id (I30)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_I30_idempotent_cv_contract_id_mismatch(pg):
+    """contract_row.id=A matches but CV.contract_id=B → V2_CONTRACT_ID_MISMATCH."""
+    pid, cid, coid, sid = _new_id(), _new_id(), _new_id(), _new_id()
+    _insert_payment(pg, pid)
+    cv, cr = _cv_dict(cid), _contract_row(cid, coid)
+    r1 = _rpc(pg, pid, cr, cv, [_scope(sid)])
+    assert r1["status"] == "APPLIED"
+    # Retry: contract_row.id=A (correct), CV.contract_id=B (wrong)
+    other_cid = _new_id()
+    cv_wrong_cv_id = _cv_dict(other_cid)   # CV.contract_id = other_cid (B)
+    result = _rpc(pg, pid, cr, cv_wrong_cv_id, [_scope(sid)])
+    assert result["status"] == "V2_CONTRACT_ID_MISMATCH"

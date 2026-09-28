@@ -1183,6 +1183,23 @@ class TestP34_CustomTierIncludedInScopeChecks:
 class TestP35_AtomicPartialStateAtLeastSevenPaths:
     def test_P35(self):
         # PATCH3: 5(Step5 내부) + 1(NOT FOUND) + 1(Step6 orphan) = 7
-        # Guard1/Guard2 → V2_CONTRACT_ID_MISMATCH / V2_VERSION_NO_INVALID (별도 코드)
+        # Guard1/Guard2/Guard3 → 별도 오류 코드
         sql = _migration_sql()
         assert sql.count("V2_ATOMIC_PARTIAL_STATE") >= 7
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PATCH4: SQL 구조 가드 (P36)
+# ═══════════════════════════════════════════════════════════════════════════
+# B1 — idempotent path Guard 3: CV.contract_id == payment.contract_id
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestP36_IdempotentCvContractIdGuardPresent:
+    def test_P36(self):
+        sql = _migration_sql()
+        # PATCH4 Guard 3: p_commercial_version.contract_id == v_payment_contract_id
+        # 신규 적용(Step 6.5)과 대칭
+        assert "IS DISTINCT FROM v_payment_contract_id" in sql
+        # Guard 3은 Step 5 idempotent path 안에 있어야 함 (Step 6.5와 별개)
+        assert sql.count("IS DISTINCT FROM v_payment_contract_id") >= 1

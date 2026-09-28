@@ -4,7 +4,7 @@ work_order: WO-PRICING-V2-BE-OBJ10-C
 objective: "Atomic Contract Persistence — apply_saas_v2_contract_atomic Postgres RPC"
 author: Claude Code
 date: 2026-09-28
-status: PATCH3_COMPLETE
+status: PATCH4_COMPLETE
 ---
 
 # TAI Safe Pricing V2 BE-OBJ10-C Evidence
@@ -174,22 +174,28 @@ Price engine import = 0
 | C01-C86 + P01-P30 + I01-I15 | 131 | 0 | — |
 | Pricing V2 + Payment 회귀 | 518 | 1 (PRE-EXISTING: gopaymethod) | — |
 
-### PATCH3 (확정)
+### PATCH3 (이전)
+
+| 구분 | 통과 | 실패 |
+|------|------|------|
+| C01-C86 + P01-P35 + I01-I29 | 150 | 0 |
+
+### PATCH4 (확정)
 
 | 구분 | 통과 | 실패 | 파일 |
 |------|------|------|------|
 | C01-C86 (어댑터/목) | 86 | 0 | test_saas_contract_atomic_apply_v2.py |
-| P01-P35 (SQL 구조 가드) | 35 | 0 | test_saas_contract_atomic_apply_v2.py |
-| I01-I29 (Postgres 통합) | 29 | 0 | test_saas_contract_atomic_apply_v2_postgres.py |
-| OBJ10-C 합계 | 150 | 0 | — |
+| P01-P36 (SQL 구조 가드) | 36 | 0 | test_saas_contract_atomic_apply_v2.py |
+| I01-I30 (Postgres 통합) | 30 | 0 | test_saas_contract_atomic_apply_v2_postgres.py |
+| OBJ10-C 합계 | 152 | 0 | — |
 | Pricing V2 + Payment 회귀 | 463 | 1 (PRE-EXISTING: gopaymethod) | — |
 
 **Pre-existing failure**: `test_payment_svc.py::test_run_inicis_prepare_success_minimal` — `gopaymethod == "Card"` 검사 실패. OBJ10-C 변경과 무관.
 
-**Test taxonomy (PATCH3 기준)**:
+**Test taxonomy (PATCH4 기준)**:
 - C01-C86: Python 어댑터 단위 테스트 (FakeSupabase, DB 없음)
-- P01-P35: Migration SQL 정적 구조 가드 (파일 읽기, 실행 없음)
-- I01-I29: 실제 PostgreSQL@16 통합 테스트 (tai_test_v2_atomic, psycopg2)
+- P01-P36: Migration SQL 정적 구조 가드 (파일 읽기, 실행 없음)
+- I01-I30: 실제 PostgreSQL@16 통합 테스트 (tai_test_v2_atomic, psycopg2)
 
 ## 8. PATCH1 수정 요약
 
@@ -264,7 +270,17 @@ IF v_payment_contract_id IS NOT NULL THEN
 END IF;
 ```
 
-## 11. 불변 조건 확인
+## 11. PATCH4 수정 요약 (GPT 4차 독립검증 지적)
+
+| 변경 | 내용 |
+|------|------|
+| Step 5 Guard 3 추가 | idempotent retry에서 `p_commercial_version.contract_id ≠ v_payment_contract_id` → V2_CONTRACT_ID_MISMATCH |
+| I30 추가 | contract_row.id=A 정상 + CV.contract_id=B 불일치 → V2_CONTRACT_ID_MISMATCH 실제 실행 검증 |
+| P36 추가 | Guard 3 정적 구조 가드 |
+
+**Guard 3 필요성**: 기존 Guard 1은 `p_contract_row.id ≠ payment.contract_id` 검사. Step 6.5는 신규 적용 경로에서 `p_commercial_version.contract_id ≠ v_contract_id` 검사. 하지만 idempotent retry 경로에서 `p_commercial_version.contract_id ≠ payment.contract_id` 검사가 없었음. 이 hole로 `contract_row.id=A, CV.contract_id=B`인 잘못된 retry가 ALREADY_APPLIED로 통과 가능.
+
+## 12. 불변 조건 확인
 
 | 조건 | 상태 |
 |------|------|
@@ -276,3 +292,16 @@ END IF;
 | SECURITY DEFINER 사용 | 0 (INVOKER 전용) |
 | anon/authenticated 직접 write 경로 | 0 |
 | service_role UPDATE/DELETE 부여 | 0 (SELECT+INSERT 최소권한) |
+
+## Step 5 최종 Guard 구조 (PATCH4 완료)
+
+```
+IF v_payment_contract_id IS NOT NULL THEN
+    Guard 1: v_contract_id ≠ v_payment_contract_id → V2_CONTRACT_ID_MISMATCH
+    Guard 2: version_no ≠ 1 → V2_VERSION_NO_INVALID
+    Guard 3: CV.contract_id ≠ v_payment_contract_id → V2_CONTRACT_ID_MISMATCH [PATCH4]
+    CV lookup → NOT FOUND → V2_ATOMIC_PARTIAL_STATE
+    Count + 4-check exact scope match
+    RETURN ALREADY_APPLIED
+END IF;
+```

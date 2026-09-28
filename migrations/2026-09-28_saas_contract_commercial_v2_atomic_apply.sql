@@ -303,6 +303,16 @@ BEGIN
             );
         END IF;
 
+        -- PATCH4 Guard 3: p_commercial_version.contract_id == payment.contract_id
+        IF (p_commercial_version->>'contract_id')::uuid IS DISTINCT FROM v_payment_contract_id THEN
+            RETURN jsonb_build_object(
+                'status',         'V2_CONTRACT_ID_MISMATCH',
+                'payment_id',     p_payment_id,
+                'contract_id',    v_payment_contract_id,
+                'cv_contract_id', p_commercial_version->>'contract_id'
+            );
+        END IF;
+
         -- commercial version v1 조회
         SELECT id, product_tier
         INTO   v_cv_id, v_cv_tier
