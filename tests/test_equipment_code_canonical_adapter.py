@@ -198,31 +198,33 @@ def test_numeric_parity_all_5_union():
     }
 
 
-# ── F. ROUTER CREATE — alias persists as numeric ──────────────────────────────
+# ── F. VALIDATOR NORMALIZATION — alias → numeric (validator layer only) ───────
+# These tests verify that validate_equipment_source_row() returns the normalized
+# numeric code in the payload. This is the mechanism the router relies on, but
+# these tests do NOT call create_asset() or update_asset() — see
+# test_equipment_router_contract.py for actual route-level DB payload assertions.
 
-def test_router_create_press_alias_normalized():
-    """PRESS in create payload should be stored as '023'."""
-    from services.equipment_source.store import validate_equipment_source_row, EquipmentSourceValidationError
+def test_validator_press_normalizes_to_023():
     validated = validate_equipment_source_row({"equipment_type_code": "PRESS"})
     assert validated["equipment_type_code"] == "023"
 
 
-def test_router_create_conveyor_alias_normalized():
+def test_validator_conveyor_normalizes_to_024():
     validated = validate_equipment_source_row({"equipment_type_code": "CONVEYOR"})
     assert validated["equipment_type_code"] == "024"
 
 
-def test_router_create_crane_alias_normalized():
+def test_validator_crane_normalizes_to_021():
     validated = validate_equipment_source_row({"equipment_type_code": "CRANE"})
     assert validated["equipment_type_code"] == "021"
 
 
-def test_router_create_pressure_vessel_alias_normalized():
+def test_validator_pressure_vessel_normalizes_to_038():
     validated = validate_equipment_source_row({"equipment_type_code": "PRESSURE_VESSEL"})
     assert validated["equipment_type_code"] == "038"
 
 
-def test_router_create_numeric_unchanged():
+def test_validator_numeric_code_passthrough():
     validated = validate_equipment_source_row({"equipment_type_code": "023"})
     assert validated["equipment_type_code"] == "023"
 
