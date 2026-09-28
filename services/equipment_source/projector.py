@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+from services.equipment_source.canonicalizer import normalize_equipment_type_code
 from services.equipment_source.registry import EQUIPMENT_CODE_MAP
 
 
@@ -20,13 +21,15 @@ def project_equipment_row(row: Mapping[str, Any]) -> Dict[str, bool]:
 
     Skips rows where is_operating is explicitly False.
     Returns {} for unknown or absent equipment_type_code (missing, not false).
+    Uppercase aliases are normalized to numeric before registry lookup.
     """
     if row.get("is_operating") is False:
         return {}
     code = row.get("equipment_type_code")
     if not isinstance(code, str) or not code.strip():
         return {}
-    spec = EQUIPMENT_CODE_MAP.get(code.strip())
+    code = normalize_equipment_type_code(code)
+    spec = EQUIPMENT_CODE_MAP.get(code)
     if spec is None:
         return {}
     return {fact: True for fact in spec.get("boolean_facts", [])}
