@@ -1,0 +1,669 @@
+---
+title: TAI Safe Pricing V3 — BE-OBJ02 Delta Design on Existing Backend
+kind: design
+status: REVIEW_REQUIRED
+date: 2026-09-29
+branch: docs/pricing-canonical-20260927
+policy_head: 6e34a0cc42a76832c6c415e17b55195e66d20a6b
+obj01_head: 424714c616c5a18cc1b70a3f61c28c1eecd9e294
+---
+
+# TAI Safe Pricing V3 — BE-OBJ02 Delta Design on Existing Backend
+
+**WO**: WO-BE-V3-OBJ02-DELTA-DESIGN-001
+**Date**: 2026-09-29
+**Branch**: `docs/pricing-canonical-20260927`
+**Base**: `424714c616c5a18cc1b70a3f61c28c1eecd9e294` (OBJ01 FROZEN HEAD)
+**Mode**: DESIGN ONLY — NO CODE CHANGE / NO PRODUCTION MUTATION
+
+> **이 문서는 REVIEW_REQUIRED 상태다. GPT 독립검증 전 APPROVED 불가.**
+
+---
+
+## 0. 설계 전제
+
+### 0-A. 불변 원칙
+
+V2 Backend가 Implementation Baseline이다. V3는 V2를 재구축하지 않는다.
+
+다음은 변경 금지:
+
+```
+Primary 계산 (site × 100%)
+Additional 80% 계산
+Worker progressive 계산
+VAT 계산
+Quote amount integrity
+Ownership guard
+Payment amount 3-way validation
+INICIS exact amount path
+Atomic orchestration
+Replay
+Race recovery
+ONE PAYMENT = ONE CONTRACT MUTATION PATH
+```
+
+### 0-B. Production 실측 (OBJ01 기준)
+
+```
+V2 Commercial DDL       = NOT APPLIED
+V2 stored quotes        = 0
+V2 stored payments      = 0
+Legacy SAAS contracts   = 8 total / 5 active
+```
+
+이 사실로 인해:
+- V2/V3 병렬 runtime 불필요
+- Snapshot dual parser 불필요
+- Backward-compatible DDL 불필요
+- OBJ10-A/B 복제 불필요
+
+### 0-C. File naming 원칙
+
+**`_v2` 파일명 유지.** V3 Policy = 최초 Production runtime. 파일명 복사는 복잡성을 증가시킬 뿐 reuse value가 없다. 내부 version string (SCHEMA_VERSION 등)만 "V3"로 갱신한다.
+
+---
+
+## 1. V3 Delta — 고정 항목
+
+| 축 | V2 현재 코드 | V3 확정 |
+|----|------------|---------|
+| **FIELD 가격 모델** | `normal = s.base_amount + policy.field_uplift_amount` (line 204) | `normal = policy.field_base_amount` (249,000 고정) |
+| **Policy field 이름** | `field_uplift_amount = 100,000` | `field_base_amount = 249,000` (의미 변경: uplift-on-top → fixed-base) |
+| **Discount** | `term_discounts` 전부 `None` | `[0, 500, 1000, 1500, 2000]` bps |
+| **MANAGER INDUSTRY range** | `300~499=PRO, 500+=CUSTOM(0)` | `300+=PRO(499,000)` — price_master DATA WO |
+| **Semantic rename** | `term_months` | `payment_months` (할인·결제 축만) |
+| **Policy version** | `TAI_SAFE_PRICING_POLICY_2026_09_27` | `TAI_SAFE_PRICING_POLICY_V3_2026_09_28` |
+| **Schema version** | `SAAS_PRICING_V2` | `SAAS_PRICING_V3` |
+| **Quote version** | `SAAS_QUOTE_V2` | `SAAS_QUOTE_V3` |
+| **Commercial version** | `SAAS_CONTRACT_COMMERCIAL_V2` | `SAAS_CONTRACT_COMMERCIAL_V3` |
+| **OBJ05 미결** | `payment_months ↔ contract.end_date` | OBJ05 결정 전 변경 없음 |
+
+---
+
+## 2. FIELD 가격 설계 세부
+
+### 2-A. Resolver 호출 유지 이유
+
+V3에서 FIELD 가격은 249,000 고정이지만 Resolver 호출은 유지한다.
+
+**유지 근거:**
+- `base_band_code` = compliance 등급 증거 (`INDUSTRY_PRO`, `INDUSTRY_BUSINESS` 등)
+- `base_amount` = Snapshot에 compliance base로 저장 (감사 증거)
+- FIELD 사업장이 어떤 규모 구간에 속하는지 법령 컨텍스트 유지
+
+**결론**: Resolver → `base_band_code` + `base_amount` → `SaasSitePricingInput`에 그대로 전달 → Composer FIELD 경로는 `s.base_amount` 무시, `policy.field_base_amount` 사용.
+
+### 2-B. FIELD 다중 사업장 정렬
+
+모든 FIELD 사업장의 `normal = 249,000` (고정). 정렬 키:
+
+```
+-x[1] (normal_site_amount DESC)  → 모두 249,000 (동점)
+→ sector ASC
+→ base_band_code ASC
+→ entity_type ASC
+→ entity_id ASC (결정론적)
+```
+
+동점 정렬이므로 secondary key가 Primary 사업장을 결정한다. 결정론적이고 올바르다. **Composer sort 로직 변경 없음.**
+
+### 2-C. FIELD 가격 체계 (V3 확정)
+
+| 구성 | 계산 |
+|------|------|
+| Primary 사업장 | `249,000 × 100%` = 249,000원 |
+| Additional 사업장 | `249,000 × 80%` = 199,200원 |
+| Worker | 기존 progressive 재사용 (변경 없음) |
+| Prepaid | `monthly × payment_months` |
+| Discount | `payment_months` 키 조회 (V3 rate) |
+| VAT | supply × 10% (기존 재사용) |
+
+### 2-D. base_band_code 보존 판정
+
+`SaasSiteScope.base_band_code` = FIELD compliance 등급 증거. FIELD V3에서도 법령 규모 구간 정보로 유용하다.
+
+**판정: 삭제하지 않는다.** `SaasSitePricingInput.base_band_code` 유지. Preview Service에서 resolver tier_code → `base_band_code` 전달 경로 유지.
+
+---
+
+## 3. TABLE A — File Delta Matrix
+
+### `schemas/saas_pricing_v2.py`
+
+| 항목 | 현재 값 | V3 변경 | 이유 |
+|------|---------|---------|------|
+| `SCHEMA_VERSION` | `"SAAS_PRICING_V2"` | `"SAAS_PRICING_V3"` | V3 최초 production 식별 |
+| `VALID_TERM_MONTHS` | `frozenset({1,3,6,9,12})` | `VALID_PAYMENT_MONTHS` (rename) | semantic rename |
+| `SaasCommercialSelection.term_months` | `StrictInt` | `payment_months: StrictInt` | rename |
+| `SaasCommercialSelection._term_months_allowed` | validator name | `_payment_months_allowed` (rename) | follow field |
+| `SaasPricingSnapshotV2.term_months` | `StrictInt` | `payment_months: StrictInt` | rename |
+| `SaasPricingSnapshotV2._term_months_allowed` | validator name | `_payment_months_allowed` (rename) | follow field |
+| `SaasPricingSnapshotV2._schema_version_canonical` | checks `"SAAS_PRICING_V2"` | checks `"SAAS_PRICING_V3"` | version bump |
+| `SaasSiteScope` | unchanged | KEEP AS-IS | V3 FIELD base_amount = compliance evidence |
+| `SaasWorkerBracketLine`, `SaasWorkerPricingSnapshot` | unchanged | KEEP AS-IS | |
+
+**파일명**: KEEP `schemas/saas_pricing_v2.py`
+
+---
+
+### `schemas/saas_pricing_policy_v2.py`
+
+| 항목 | 현재 값 | V3 변경 | 이유 |
+|------|---------|---------|------|
+| `PRICING_POLICY_VERSION` | `"TAI_SAFE_PRICING_POLICY_2026_09_27"` | `"TAI_SAFE_PRICING_POLICY_V3_2026_09_28"` | V3 정책 |
+| `_POLICY_EFFECTIVE_FROM` | `date(2026, 9, 27)` | `date(2026, 9, 28)` | V3 확정일 |
+| `VALID_TERM_MONTHS_POLICY` | `frozenset({1,3,6,9,12})` | `VALID_PAYMENT_MONTHS_POLICY` (rename) | semantic rename |
+| `SaasTermDiscountPolicy.term_months` | `StrictInt` | `payment_months: StrictInt` | rename |
+| `SaasTermDiscountPolicy._term_months_allowed` | validator | rename + update reference | follow field |
+| `SaasPricingPolicyV2.field_uplift_amount` | `StrictInt` | `field_base_amount: StrictInt` | 의미 변경: uplift → fixed base |
+| `SaasPricingPolicyV2._field_uplift_non_negative` | `>= 0` check | `_field_base_amount_positive` (`> 0` check) | 249,000은 반드시 양수 |
+| `get_canonical_pricing_policy_v2` → `field_uplift_amount=100000` | value | `field_base_amount=249000` | V3 확정 |
+| `get_canonical_pricing_policy_v2` → `term_discounts` | all `None` | `[0, 500, 1000, 1500, 2000]` bps | V3 확정 |
+| `primary_site_rate_bps=10000` | KEEP | KEEP AS-IS | |
+| `additional_site_rate_bps=8000` | KEEP | KEEP AS-IS | |
+| `worker_brackets` | KEEP | KEEP AS-IS | |
+| `vat_rate_bps=1000` | KEEP | KEEP AS-IS | |
+| `_validate_term_discounts` canonical check | 1,3,6,9,12 | KEEP AS-IS (값은 같음) | |
+
+**파일명**: KEEP `schemas/saas_pricing_policy_v2.py`
+**핵심 원칙**: MANAGER INDUSTRY 300+ 처리는 이 Policy 객체가 아닌 `price_master` DATA 변경이다.
+
+---
+
+### `services/saas_pricing_composer_v2.py`
+
+| 항목 | 현재 코드 | V3 변경 | 이유 |
+|------|----------|---------|------|
+| `SaasPricingCalculationResult.term_months` | field | `payment_months` (rename) | semantic |
+| Step 4 MANAGER path | `normal = s.base_amount` | KEEP AS-IS | MANAGER 로직 불변 |
+| Step 4 FIELD path (line 204) | `normal = s.base_amount + policy.field_uplift_amount` | `normal = policy.field_base_amount` | V3 FIELD 고정 249,000 |
+| Step 10 (line 253) | `monthly × selection.term_months` | `monthly × selection.payment_months` | rename |
+| Step 11 discount lookup (line 258) | `td.term_months == selection.term_months` | `td.payment_months == selection.payment_months` | rename |
+| Steps 12–15 snapshot construction | `term_months=selection.term_months` (×여러 곳) | `payment_months=selection.payment_months` | rename |
+| Primary/Additional/Worker/VAT arithmetic | KEEP AS-IS | KEEP AS-IS | invariant |
+| Canonical sort (`site_normals`) | KEEP AS-IS | KEEP AS-IS | FIELD 동점 정렬도 결정론적으로 올바름 |
+| `SaasSitePricingInput.base_amount > 0` | KEEP AS-IS | KEEP AS-IS | MANAGER 필수; FIELD는 resolver 유효값 전달 |
+
+**파일명**: KEEP `services/saas_pricing_composer_v2.py`
+**OBJ05 dep**: NO (payment_months = 할인·계산 축만)
+
+---
+
+### `schemas/saas_pricing_preview_v2.py`
+
+| 항목 | 현재 | V3 변경 |
+|------|------|---------|
+| `SaasPricingPreviewRequestV2.term_months` | `StrictInt` | `payment_months: StrictInt` |
+| `SaasPricingPreviewResponseV2.term_months` | `int` | `payment_months: int` |
+| 나머지 필드 | KEEP | KEEP AS-IS |
+
+**파일명**: KEEP `schemas/saas_pricing_preview_v2.py`
+**API surface**: `payment_months` rename. Production V2 API stored = 0이므로 clean.
+
+---
+
+### `services/saas_pricing_preview_v2.py`
+
+| 항목 | 현재 | V3 변경 |
+|------|------|---------|
+| Step 3 CUSTOM: `term_months=request.term_months` | rename | `payment_months=request.payment_months` |
+| Step 4 Selection: `term_months=request.term_months` | rename | `payment_months=request.payment_months` |
+| `request.term_months` refs (lines 150–175) | rename | `request.payment_months` |
+| Step 6 FIELD resolver call | KEEP AS-IS | Resolver 호출 유지 (Section 2-A) |
+| Step 6 FIELD `amount_int > 0` check | KEEP AS-IS | After price_master fix, INDUSTRY amount 0 없음 |
+| Step 6 MANAGER resolver call | KEEP AS-IS | 불변 |
+| Response `term_months=request.term_months` | rename | `payment_months=request.payment_months` |
+
+**파일명**: KEEP `services/saas_pricing_preview_v2.py`
+**FIELD 설계 결정**: Resolver 호출 유지. Composer FIELD 경로가 `policy.field_base_amount` 사용으로 가격을 고정시킴. Preview Service는 별도 처리 불필요.
+
+---
+
+### `services/pricing_resolver_svc.py`
+
+**변경 없음.** KEEP AS-IS.
+
+`INDUSTRY_PRO criteria_max → NULL` (price_master DATA WO 후): resolver의 `hi_ok = True` (cmax=None) 경로가 300+ 자연 처리. Resolver logic 변경 0.
+
+---
+
+### `schemas/saas_quote_v2.py`
+
+| 항목 | 현재 | V3 변경 |
+|------|------|---------|
+| `SAAS_QUOTE_SCHEMA_VERSION` | `"SAAS_QUOTE_V2"` | `"SAAS_QUOTE_V3"` |
+| `SaasQuoteSnapshotItemV2.term_months` | `int` | `payment_months: int` |
+| `SaasQuoteIssueRequestV2` | inherits `SaasPricingPreviewRequestV2` | 상속으로 자동 반영 (explicit 필드 없음) |
+
+**파일명**: KEEP `schemas/saas_quote_v2.py`
+
+---
+
+### `services/saas_quote_v2.py`
+
+| 항목 | 현재 코드 | V3 변경 |
+|------|----------|---------|
+| `_validate_snapshot_against_request` (line 74–76) | `snap.term_months != request.term_months` | `snap.payment_months != request.payment_months` |
+| `_build_pricing_input` (line 107) | `"term_months": request.term_months` | `"payment_months": request.payment_months` |
+| `_build_quote_item` (line 139) | `quantity=snap.term_months` | `quantity=snap.payment_months` |
+| `_build_quote_item` (line 152) | `term_months=snap.term_months` | `payment_months=snap.payment_months` |
+| Ownership, server re-price, snapshot freeze, amount storage, numbering, issue flow | KEEP AS-IS | 불변 |
+
+**파일명**: KEEP `services/saas_quote_v2.py`
+
+---
+
+### `services/saas_payment_v2_adapter.py`
+
+| 항목 | 현재 코드 | V3 변경 |
+|------|----------|---------|
+| Line 160: `period_months=snap.term_months` | rename | `period_months=snap.payment_months` |
+| Schema version check (line 107) | `SAAS_QUOTE_SCHEMA_VERSION` 상수 사용 | 자동 갱신 (상수 변경으로) |
+| Ownership, ISSUED, SAAS, 3-way amount, INICIS prepare | KEEP AS-IS | 불변 |
+
+**파일명**: KEEP `services/saas_payment_v2_adapter.py`
+**OBJ05 dep**: PARTIAL — `period_months`는 Payment에 저장. `contract.end_date` 연산은 `payment_post_process.py`에서 OBJ05 결정 후.
+
+---
+
+### `services/saas_payment_success_v2_adapter.py`
+
+| 항목 | 현재 코드 | V3 변경 |
+|------|----------|---------|
+| Step 17 (line 284): `pay_period != snap.term_months` | rename | `pay_period != snap.payment_months` |
+| Step 19 (line 307): `term_months=snap.term_months` | rename | `payment_months=snap.payment_months` |
+| `_frozen_snapshot_to_calc_result` (line 120): `term_months=snap.term_months` | rename | `payment_months=snap.payment_months` |
+| 3-way amount integrity (Steps 16) | KEEP AS-IS | 불변 |
+| All ownership/status guards (Steps 1–15) | KEEP AS-IS | 불변 |
+
+**파일명**: KEEP `services/saas_payment_success_v2_adapter.py`
+
+**OBJ05 경계 명시:**
+
+```
+이 파일에서 결정되는 것 (OBJ05 이전 확정 가능):
+  pay.period_months == snap.payment_months  (결제월수 정합성 — PASS/FAIL 판정)
+
+이 파일에서 결정되지 않는 것 (OBJ05 DEFER):
+  payment_months → contract.end_date 계산
+  (payment_post_process.py lines 101-105, 117-120에서 처리)
+```
+
+---
+
+### `schemas/saas_contract_commercial_v2.py`
+
+| 항목 | 현재 | V3 변경 |
+|------|------|---------|
+| `COMMERCIAL_STORAGE_SCHEMA_VERSION` | `"SAAS_CONTRACT_COMMERCIAL_V2"` | `"SAAS_CONTRACT_COMMERCIAL_V3"` |
+| `SaasContractCommercialVersionV2.term_months` | `StrictInt` | `payment_months: StrictInt` (Python schema) |
+| `VALID_TERM_MONTHS` import | rename to `VALID_PAYMENT_MONTHS` | follow pricing_v2.py rename |
+| DB column 최종 이름 | `term_months` (DDL not applied) | **OBJ05 DEPENDENT** — DDL 미적용이므로 V3 기준 최초 작성 가능 |
+
+**파일명**: KEEP `schemas/saas_contract_commercial_v2.py`
+**DDL**: Production 미적용. OBJ05 `payment_months` semantics 확정 후 V3 기준 최초 DDL 작성.
+
+---
+
+### `services/saas_contract_storage_mapper_v2.py`
+
+| 항목 | 현재 | V3 변경 |
+|------|------|---------|
+| `selection.term_months` (line 73) | rename | `selection.payment_months` |
+| `selection.term_months` (line 114) | rename | `selection.payment_months` |
+| Mapping structure 전체 | KEEP AS-IS | 불변 |
+
+**파일명**: KEEP `services/saas_contract_storage_mapper_v2.py`
+
+---
+
+### `services/saas_change_order_v2.py`
+
+**Conflict 1 — policy_version gate (line 227)**
+
+Production V2 Commercial = 0. 기존 V2 CV가 없으므로 V2→V3 전환 문제 없음. V3 Change Orders는 V3 policy_version으로 발행 → V3 policy_version으로 검증 → PASS. **코드 변경 불필요.**
+
+**Conflict 2 — FIELD scale band (lines 380–382)**
+
+현재: scale band 변경 → SCALE_BAND_INCREASE/DECREASE (가격 변화로 분류).
+V3: FIELD 가격 = 249,000 고정 → scale band 변경은 가격 변화가 아닌 scope metadata 변경.
+
+```
+V3 설계:
+if product_tier == "FIELD":
+    scale_band 변경 → price_delta = 0
+    FIELD_SCOPE_BAND_CHANGE 이벤트 (메타데이터 변경 기록)
+    SCALE_BAND_INCREASE / DECREASE 발생하지 않음
+
+MANAGER/CUSTOM 경로:
+    기존 SCALE_BAND 분류 로직 유지
+```
+
+최소 패치: `product_tier == "FIELD"` guard를 scale_band 비교 로직에 추가.
+
+**Conflict 3 — term comparison (lines 261–262)**
+
+`current_term = cv.term_months` / `target_term = target_selection.term_months`
+
+**OBJ05 DEFER.** `payment_months` rename + `contract.end_date` coupling 결정 후 최소 패치.
+
+**파일명**: KEEP `services/saas_change_order_v2.py`
+
+---
+
+### `services/saas_renewal_v2_adapter.py` (D-A)
+
+| 항목 | 현재 | V3 변경 |
+|------|------|---------|
+| Line 358: `period_months=snap.term_months` | rename | `period_months=snap.payment_months` |
+| Lines 620, 622, 625: `pay.period_months != snap.term_months` | rename | `snap.payment_months` |
+| Line 638: `term_months=snap.term_months` | rename | `payment_months=snap.payment_months` |
+| 나머지 구조 | KEEP AS-IS | |
+
+**파일명**: KEEP `services/saas_renewal_v2_adapter.py`
+
+---
+
+### Temporal / Atomic (D-B1, OBJ10-C, D-B2, D-B3)
+
+| 파일 | V3 영향 | 판정 |
+|------|---------|------|
+| `payment_post_process.py` lines 101-105, 117-120 | `payment_months → contract.end_date` coupling | **OBJ05 DEPENDENT** |
+| `saas_renewal_runtime_v2.py` | first_apply boundary = `contract.end_date` | REUSE-AS-IS; OBJ05 boundary verify |
+| `migrations/…atomic_apply.sql` | `term_months` column, VALID constraint, 3-way guard | **OBJ05 DEPENDENT** — DDL not applied, write V3-fresh |
+| `migrations/…renewal_atomic.sql` | 3-way `snap == cv == pay.period_months` | **OBJ05 DEPENDENT** — DDL not applied |
+
+---
+
+## 4. TABLE B — KEEP / PATCH / EVOLVE / DEFER Matrix
+
+| Object | Strategy | Exact Symbol(s) Changed | Files | OBJ05 Dep |
+|--------|----------|------------------------|-------|-----------|
+| **Pricing Policy** | PATCH | `field_uplift_amount→field_base_amount`; `term_discounts`; `policy_version`; `term_months→payment_months` | `saas_pricing_policy_v2.py` | NO |
+| **Pricing Core Schema** | PATCH | `SCHEMA_VERSION`; `SaasCommercialSelection.term_months→payment_months`; `SaasPricingSnapshotV2.term_months→payment_months` | `saas_pricing_v2.py` | NO |
+| **Pricing Composer** | PATCH | FIELD formula (line 204); `selection.term_months→payment_months` (×8) | `saas_pricing_composer_v2.py` | NO |
+| **Price Resolver** | REUSE-AS-IS | 변경 없음 | `pricing_resolver_svc.py` | NO |
+| **Preview Request Schema** | EVOLVE | `term_months→payment_months` in Request + Response | `saas_pricing_preview_v2.py` | NO |
+| **Preview Service** | PATCH | `request.term_months→payment_months` refs; FIELD path KEEP | `saas_pricing_preview_v2.py` | NO |
+| **Quote Schema** | EVOLVE | `SAAS_QUOTE_V2→V3`; `SaasQuoteSnapshotItemV2.term_months→payment_months` | `saas_quote_v2.py` | NO |
+| **Quote Service** | PATCH | `snap/request.term_months→payment_months` (×4) | `saas_quote_v2.py` (services) | NO |
+| **OBJ10-A Payment Adapter** | PATCH | `snap.term_months→payment_months` (line 160) | `saas_payment_v2_adapter.py` | PARTIAL |
+| **OBJ10-B Payment Success Adapter** | PATCH | `snap.term_months→payment_months` (×3); guards KEEP | `saas_payment_success_v2_adapter.py` | YES (end_date) |
+| **Commercial Schema** | PATCH + OBJ05 | `COMMERCIAL_V2→V3`; Python `term_months→payment_months`; DB column OBJ05 | `saas_contract_commercial_v2.py` | YES |
+| **Contract Builder** | OBJ05 DEPENDENT | `payment_months→end_date` coupling | `payment_post_process.py:101,161` | YES (core) |
+| **Site Scope** | REUSE-AS-IS | 변경 없음 (DDL not applied, V3 first DDL) | `saas_contract_commercial_v2.py` | PARTIAL |
+| **Storage Mapper** | PATCH | `selection.term_months→payment_months` (×2) | `saas_contract_storage_mapper_v2.py` | YES |
+| **Change Order** | PATCH | Conflict 2 FIELD guard; `term_months→payment_months` (non-deferred); Conflict 1 = no change; Conflict 3 = OBJ05 | `saas_change_order_v2.py` | YES (C3) |
+| **Atomic New Contract OBJ10-C** | OBJ05 DEPENDENT | DDL not applied; V3 기준 최초 작성 | `migrations/…atomic_apply.sql` | YES |
+| **Renewal Adapter D-A** | PATCH + OBJ05 | `snap.term_months→payment_months` (×4) | `saas_renewal_v2_adapter.py` | YES |
+| **Temporal Logic D-B1** | OBJ05 DEPENDENT | `payment_months↔contract.end_date` | `payment_post_process.py` | YES (core) |
+| **Atomic Renewal D-B2** | OBJ05 DEPENDENT | DDL not applied; V3 기준 최초 작성 | `migrations/…renewal_atomic.sql` | YES |
+| **Runtime Wiring D-B3** | REUSE-AS-IS | first_apply boundary OBJ05 verify | `saas_renewal_runtime_v2.py` | YES (boundary) |
+| **Legacy SaaS runtime** | LEGACY PRESERVE | 변경 금지 | V1 경로 파일들 | NO |
+| **Tests** | PATCH + invariant REUSE | SUPERSEDED policy값 갱신; V3 cases 추가 | test files | PARTIAL |
+| **Frontend API** | EVOLVE | `payment_months` boundary (얇은 route) | `routers/public_pricing_v2.py` | NO |
+| **price_master** | DATA WO | `INDUSTRY_PRO.criteria_max→NULL`, `INDUSTRY_CUSTOM` 처리 | Production DB (Owner Gate 후) | NO |
+
+---
+
+## 5. TABLE C — FIELD 데이터 의존성
+
+| 축 | V3 입력 | V3 미사용 (가격 목적) | 보존 이유 |
+|----|---------|-------------------|---------|
+| **PRICE 계산** | `payment_months`, `worker_capacity`, site count(len) | `sector`, `criteria_value`, `base_amount` | price = 249,000 고정 |
+| **FACILITY CONTEXT** | `entity_id`, `entity_type`, `sector`, `criteria_value` | — | 법령 컨텍스트, scope 식별 |
+| **COMPLIANCE EVIDENCE** | `base_band_code` (resolver tier_code) | — | 시설 규모 구간 감사 증거 |
+| **SNAPSHOT EVIDENCE** | `base_amount` (resolver 반환값) | — | compliance base 기록; Snapshot에 보존 |
+| **FIELD 가격 산출** | `policy.field_base_amount = 249,000` | `s.base_amount` (Composer에서 무시) | Policy 객체가 가격 권위값 |
+
+**base_band_code 보존 판정: 삭제하지 않는다.** `SaasSiteScope.base_band_code`는 V3 FIELD에서도 compliance 등급 증거로 유효하다.
+
+---
+
+## 6. TABLE D — price_master 변경 대안
+
+### 현재 Production (`SAAS INDUSTRY`)
+
+| tier_code | criteria_min | criteria_max | amount |
+|-----------|-------------|-------------|--------|
+| INDUSTRY_STARTER | 0 | 49 | 149,000 |
+| INDUSTRY_BUSINESS | 50 | 299 | 299,000 |
+| INDUSTRY_PRO | 300 | **499** | 499,000 |
+| INDUSTRY_CUSTOM | 500 | NULL | **0** |
+
+### V3 목표
+
+```
+300+ → INDUSTRY_PRO (499,000), 상한 없음
+```
+
+### 대안 A (권장) — INDUSTRY_PRO criteria_max → NULL + INDUSTRY_CUSTOM deactivate
+
+```sql
+UPDATE price_master
+SET criteria_max = NULL
+WHERE service_type = 'SAAS' AND sector = 'INDUSTRY' AND tier_code = 'INDUSTRY_PRO';
+
+UPDATE price_master
+SET is_active = FALSE
+WHERE service_type = 'SAAS' AND sector = 'INDUSTRY' AND tier_code = 'INDUSTRY_CUSTOM';
+```
+
+**효과**:
+
+| tier_code | criteria_max | is_active | 결과 |
+|-----------|-------------|-----------|------|
+| INDUSTRY_STARTER | 49 | TRUE | 0~49 |
+| INDUSTRY_BUSINESS | 299 | TRUE | 50~299 |
+| INDUSTRY_PRO | **NULL** | TRUE | **300+** |
+| INDUSTRY_CUSTOM | NULL | **FALSE** | 조회 안 됨 |
+
+**평가**:
+- resolver 변경 0 (`cmax=None → hi_ok=True` 이미 구현)
+- 중복 range 없음
+- fallback ambiguity 없음
+- `INDUSTRY_CUSTOM`의 `amount=0` 제거 → `COMPLIANCE_BASE_QUOTE_REQUIRED` 발생 없음
+- `CUSTOM` product_tier (상품 선택)와 `INDUSTRY_CUSTOM` tier_code (규모 구간) 혼동 제거
+- 유지보수 최소
+
+### 대안 B — INDUSTRY_PRO criteria_max → NULL + INDUSTRY_CUSTOM amount 수정
+
+```sql
+UPDATE price_master
+SET criteria_max = NULL
+WHERE service_type = 'SAAS' AND sector = 'INDUSTRY' AND tier_code = 'INDUSTRY_PRO';
+
+-- INDUSTRY_CUSTOM 행 유지, amount 수정 (대신 range 중복 발생)
+```
+
+**문제점**: `INDUSTRY_PRO criteria_max=NULL` 이후 `INDUSTRY_CUSTOM criteria_min=500`이 overlap. Resolver가 300~499 → PRO, 500+ → CUSTOM으로 나뉠 수 있음 (resolver 로직에 따라). 중복 range 위험.
+
+**판정: 대안 A 권장.** INDUSTRY_CUSTOM deactivate가 명확하고 안전하다.
+
+**실행 시점**: OBJ03 이후 Owner Gate 승인 후 별도 DATA WO 실행. 이번 OBJ02에서는 SQL 작성 금지.
+
+---
+
+## 7. TABLE E — 테스트 영향
+
+### A. INVARIANT — 그대로 유지
+
+| 대상 | 유지 이유 |
+|------|---------|
+| Primary/Additional site 계산 | arithmetic 불변 |
+| Worker progressive 계산 | bracket 로직 불변 |
+| VAT 계산 | vat_rate_bps=1000 불변 |
+| Amount integrity 3-way | pay/item/snapshot 금액 검증 |
+| Ownership guard | quote 소유권 |
+| Atomic orchestration | ONE PAYMENT = ONE CONTRACT MUTATION |
+| Replay / Race recovery | `target.effective_from` 경계 |
+| INICIS exact amount path | 결제 금액 SSOT |
+
+### B. SUPERSEDED POLICY — V3 기준으로 값 수정
+
+| 현재 테스트 | V2 기준 | V3 수정 방향 |
+|------------|---------|------------|
+| FIELD uplift 테스트 | `normal = base_amount + 100,000` | `normal = 249,000` 고정으로 갱신 |
+| INDUSTRY 500+ CUSTOM `amount=0` | `COMPLIANCE_BASE_QUOTE_REQUIRED` | price_master fix 후 INDUSTRY_PRO 499,000 |
+| `discount_rate_bps=None` 테스트 | `TERM_DISCOUNT_UNRESOLVED` | V3 실제 rate 0/500/1000/1500/2000 bps |
+| `term_months` field 이름 테스트 | `selection.term_months` | `selection.payment_months` |
+| Policy version 문자열 | `TAI_SAFE_PRICING_POLICY_2026_09_27` | `TAI_SAFE_PRICING_POLICY_V3_2026_09_28` |
+
+### C. 신규 V3 케이스 (OBJ03 이후 추가)
+
+| 케이스 | 검증 목표 |
+|--------|---------|
+| FIELD 1 사업장 | `final_site_amount = 249,000` |
+| FIELD 2 사업장 | Primary 249,000 / Additional 199,200 |
+| FIELD 3 사업장 | Primary 249,000 / Additional × 2 (199,200 each) |
+| FIELD worker 20/21/50/51/100/101/300/301명 | progressive 정확성 |
+| MANAGER INDUSTRY 299/300/499/500명 | 300+ = PRO, 500 = PRO (NOT CUSTOM) |
+| payment_months 1/3/6/9/12 할인 | 0/5/10/15/20% 정확성 |
+| FIELD + MANAGER 혼합 다중 사업장 | Primary 결정 sort |
+| VAT 계산 (supply × 10%) | FIELD/MANAGER 동일 |
+| CUSTOM route | `CUSTOM_REQUIRED` 변화 없음 |
+
+---
+
+## 8. CUSTOM 경로 설계
+
+CUSTOM:
+- `standard_preview = 0`
+- `standard_automatic_quote = 0`
+
+현재 `CUSTOM_REQUIRED` 분기 구조를 V3에서 재사용한다. 변경 없음. `SaasCommercialSelection(product_tier="CUSTOM")` validation, Composer Step 1 shortcut, Preview Service Step 3 shortcut 모두 유지.
+
+---
+
+## 9. VAT 설계
+
+현재 Composer Step 13:
+```python
+vat_amount = prepaid_supply_amount * policy.vat_rate_bps // 10000
+total_amount = prepaid_supply_amount + vat_amount
+```
+
+```
+RAW_SUPPLY
+→ discount (payment_months 기준)
+→ prepaid_supply_amount
+→ VAT = prepaid × 10%
+→ total = prepaid + VAT
+```
+
+V3 canonical 순서와 동일. **REUSE-AS-IS.** `vat_rate_bps=1000` 변경 없음. round/truncation(integer floor) 변경 없음.
+
+---
+
+## 10. Versioning 설계
+
+| Version String | V2 현재 | V3 판정 | Production stored V2 = 0인 이유 |
+|----------------|---------|---------|--------------------------------|
+| `SCHEMA_VERSION` | `"SAAS_PRICING_V2"` | `"SAAS_PRICING_V3"` | V3가 최초 production runtime |
+| `SAAS_QUOTE_SCHEMA_VERSION` | `"SAAS_QUOTE_V2"` | `"SAAS_QUOTE_V3"` | stored quotes = 0 |
+| `COMMERCIAL_STORAGE_SCHEMA_VERSION` | `"SAAS_CONTRACT_COMMERCIAL_V2"` | `"SAAS_CONTRACT_COMMERCIAL_V3"` | DDL not applied |
+| `PRICING_POLICY_VERSION` | `"TAI_SAFE_PRICING_POLICY_2026_09_27"` | `"TAI_SAFE_PRICING_POLICY_V3_2026_09_28"` | V3 정책 확정 |
+
+**V2 runtime compatibility를 위한 dual parser 근거 없음.** Version string 변경 = clean cut.
+
+---
+
+## 11. 필수 결론
+
+### 1. 신규 Backend core 파일 수
+
+**= 0**
+
+V3는 V2 구현 위에 policy/semantic delta만 적용한다. 신규 `_v3` 파일 생성 없음.
+
+### 2. PATCH EXISTING 파일
+
+```
+schemas/saas_pricing_v2.py
+schemas/saas_pricing_policy_v2.py
+services/saas_pricing_composer_v2.py
+services/saas_pricing_preview_v2.py
+services/saas_quote_v2.py (services)
+services/saas_payment_v2_adapter.py
+services/saas_payment_success_v2_adapter.py
+services/saas_contract_storage_mapper_v2.py
+services/saas_change_order_v2.py (Conflict 2 + payment_months)
+services/saas_renewal_v2_adapter.py
+tests/* (SUPERSEDED values update)
+
+= 10 파일 + tests
+```
+
+### 3. EVOLVE BOUNDARY 파일
+
+```
+schemas/saas_pricing_preview_v2.py  (term_months→payment_months API boundary)
+schemas/saas_quote_v2.py             (SAAS_QUOTE_V3 + payment_months)
+schemas/saas_contract_commercial_v2.py (COMMERCIAL_V3 + payment_months; DB = OBJ05)
+routers/public_pricing_v2.py         (얇은 route, payment_months boundary)
+
+= 4 파일
+```
+
+### 4. OBJ05 DEFER 파일
+
+```
+payment_post_process.py  (lines 101-105, 117-120)
+saas_contract_commercial_v2.py (DB column finalization)
+migrations/…atomic_apply.sql (term_months DB column + constraint)
+migrations/…renewal_atomic.sql (3-way guard)
+saas_change_order_v2.py Conflict 3 (lines 261-262)
+saas_renewal_runtime_v2.py (first_apply boundary verify)
+
+= 6 영역
+```
+
+### 5. Production DATA mutation 필요 여부
+
+**필요 (price_master):**
+- `INDUSTRY_PRO.criteria_max = 499 → NULL`
+- `INDUSTRY_CUSTOM.is_active = FALSE`
+
+**시점**: OBJ03 이후 Owner Gate 승인 후 별도 DATA WO 실행. OBJ02에서 SQL 작성 금지.
+
+### 6. OBJ03에서 실제 수정할 최소 파일 목록
+
+```
+schemas/saas_pricing_v2.py        (SCHEMA_VERSION, payment_months rename)
+schemas/saas_pricing_policy_v2.py (field_base_amount, discounts, version)
+services/saas_pricing_composer_v2.py (FIELD formula, payment_months refs)
+tests/test_pricing_* (SUPERSEDED values update, V3 cases 추가)
+```
+
+OBJ03 = Pricing Core 4 파일. API/Quote/Payment는 OBJ04.
+
+---
+
+## 12. Gate 상태
+
+```
+BE-V3-OBJ02 = COMPLETE (REVIEW_REQUIRED)
+→ GPT 독립검증 대기
+
+다음 Gate (OBJ02 GPT PASS 후):
+  BE-V3-OBJ03 — Pricing Core Minimal Patch
+  (saas_pricing_v2.py / saas_pricing_policy_v2.py / saas_pricing_composer_v2.py)
+```
+
+---
+
+## 13. 불변 조건
+
+```
+schemas 변경:      0 (이번 WO는 설계 문서만)
+services 변경:     0
+tests 실행:        0
+migrations:        0
+production reads:  0
+production DDL:    0
+production mutation: 0
+deploy:            0
+PR:                0
+merge:             0
+```
