@@ -271,10 +271,12 @@ def _match_search(row: Dict[str, Any], needle: str) -> bool:
 def list_admin_quotes(supabase, page: int, page_size: int,
                       source: Optional[str] = None,
                       status_code: Optional[str] = None,
-                      search: Optional[str] = None) -> Dict[str, Any]:
+                      search: Optional[str] = None,
+                      company_id: Optional[str] = None) -> Dict[str, Any]:
     """관리자 견적 목록. ADMIN_SOURCES 만(survey_web 등 legacy 제외).
 
-    필터 : source · status_code · search(quote_no / company_name / contact_name 부분 매칭).
+    필터 : source · status_code · company_id · search(quote_no / company_name / contact_name 부분 매칭).
+    company_id: platform admin 검색 filter(tenant authority 아님).
     search 는 응답을 받은 뒤 Python 후속 필터(MVP + FakeSupabase 호환).
     """
     q = (
@@ -282,6 +284,8 @@ def list_admin_quotes(supabase, page: int, page_size: int,
         .select(_LIST_COLS_ADMIN, count="exact")
         .in_("source", list(ADMIN_SOURCES))
     )
+    if company_id:
+        q = q.eq("company_id", company_id)
     if source:
         q = q.eq("source", source)
     if status_code:
