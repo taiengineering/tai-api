@@ -4,7 +4,7 @@ date: 2026-09-29
 status: REVIEW_REQUIRED
 branch: docs/pricing-canonical-20260927
 goal: WO-BE-V3-OBJ05-TEMPORAL-SEMANTICS-001
-version: 1.2-PATCH2
+version: 1.3-PATCH3
 ---
 
 # TAI Safe Pricing V3 BE OBJ05 — Temporal Semantics Design
@@ -118,8 +118,11 @@ end_date   = start_date + relativedelta(months=term_months)
 effective_from = end_date at 00:00:00 KST
 ```
 
-갱신 CV가 `end_date 00:00 KST`부터 발효되므로, 이 boundary 이후로는 서비스
-이용 권한이 새 CV 기준으로 전환된다.
+갱신 CV가 `end_date 00:00 KST`부터 발효된다.
+이 시각은 **Commercial Version transition boundary** (SOURCE FACT)이다.
+
+서비스 entitlement 자체의 종료 경계가 이 시각과 동일한지는
+D-06 Owner Decision 대상이다.
 
 ### 권장 최소 모델 (PROPOSED)
 
@@ -381,16 +384,21 @@ end_date elapsed + status_code still ACTIVE (stale state)
 
 구현은 Semantic-Integration WO 범위. 이번 PATCH에서 구현하지 않는다.
 
-```
-Python/runtime 추가 guard (candidate):
-  contract_end_boundary = contract_end_date_to_effective_at_v2(contract.end_date)
-  if paid_at >= contract_end_boundary:
-      raise RENEWAL_CONTRACT_EXPIRED
+**D-06 종속**: 아래 guard의 경계(`end_date 00:00 KST`)는 D-06에서
+`end_date = exclusive boundary`를 확정한 경우에만 그대로 성립한다.
+D-06이 inclusive로 결정되면 boundary 정의를 별도로 재정의해야 한다.
 
-Atomic SQL 추가 guard (candidate):
-  IF v_pay_paid_at >= v_boundary THEN
-      RETURN jsonb_build_object('status', 'V2_RENEWAL_CONTRACT_EXPIRED', ...)
-  END IF;
+```
+IF D-06 = exclusive boundary:
+  Python/runtime 추가 guard (candidate):
+    contract_end_boundary = contract_end_date_to_effective_at_v2(contract.end_date)
+    if paid_at >= contract_end_boundary:
+        raise RENEWAL_CONTRACT_EXPIRED
+
+  Atomic SQL 추가 guard (candidate):
+    IF v_pay_paid_at >= v_boundary THEN
+        RETURN jsonb_build_object('status', 'V2_RENEWAL_CONTRACT_EXPIRED', ...)
+    END IF;
 ```
 
 Owner 선택안 (D-01 참조):
@@ -498,9 +506,12 @@ V3 column rename 범위:
 
 ## 16. Owner Decision Matrix
 
+**권장 의사결정 순서**: D-06 → D-01 → D-02 → D-03 → D-04A → D-04B → D-05
+D-01 expiry 경계 정의는 D-06 end_date semantics 확정 후 진행한다.
+
 | # | 항목 | CURRENT SOURCE FACT | OPTION | RECOMMENDATION (PROPOSED) | OWNER DECISION |
 |---|---|---|---|---|---|
-| D-01 | 만료 후 갱신 | V2: ACTIVE 필수(status_code guard). 단, end_date elapsed 자체를 독립 차단하는 temporal guard = NOT FOUND IN SOURCE | A. REACTIVATION (paid_at >= end_date → Renewal 금지, 신규 계약 flow, 소급 금지) / B. EXPIRED RENEWAL SUPPORT (별도 temporal/atomic design) | A. REACTIVATION (소급 금지) | PENDING |
+| D-01 | 만료 후 갱신 | V2: ACTIVE 필수(status_code guard). 단, end_date elapsed 자체를 독립 차단하는 temporal guard = NOT FOUND IN SOURCE | A. REACTIVATION (paid_at >= end_date → Renewal 금지, 신규 계약 flow, 소급 금지) / B. EXPIRED RENEWAL SUPPORT (별도 temporal/atomic design). ※ D-06 결정 후 경계 확정 가능 | A. REACTIVATION (소급 금지) — D-06 종속 | PENDING (D-06 선행) |
 | D-02 | 신규 CV effective_from | `paid_at_dt` (결제 타임스탬프) | A. 현행 유지 (paid_at) / B. start_date midnight KST로 통일 | A. 현행 유지 (최소 변경) | PENDING |
 | D-03 | Semantic rename 시점 | term_months 전 파일 사용 중 | A. Semantic-Integration WO 일괄 / B. defer | A. Semantic-Integration에서 일괄 | PENDING |
 | D-04A | 조기 갱신 허용 기간 | 현재 end_date 이전 어느 시점도 가능 (코드 제한 없음) | A. 제한 없음 / B. N일 전부터만 허용 | 임의 window 추가 안 함 (UI 정책 별도) | PENDING |
@@ -513,15 +524,16 @@ V3 column rename 범위:
 ## 17. 권장 최소 모델 요약 (PROPOSED — Owner 승인 전 FINAL 아님)
 
 ```
-D-01: paid_at >= end_date 00:00 KST → Renewal 금지 + REACTIVATION flow (소급 금지)
+D-06: [먼저 결정] end_date = exclusive service boundary
+      (renewal CV boundary source는 CONFIRMED;
+      service entitlement exclusivity는 Owner 승인 필요)
+D-01: [D-06 결정 후] IF D-06 = exclusive: paid_at >= end_date 00:00 KST → Renewal 금지 + REACTIVATION flow (소급 금지)
       [현재 source에 temporal guard 없음 — D-01 확정 시 Semantic-Integration에서 추가 필요]
 D-02: cv.effective_from = paid_at 유지 (최소 변경)
 D-03: Semantic-Integration WO에서 term_months → payment_months 일괄 rename
 D-04A: 별도 갱신 window 제한 없음 (UI 정책 별도 결정)
 D-04B: 미래 예약 CV 1건 한정 — RENEWAL_ALREADY_SCHEDULED 유지
 D-05: payment_months == service_extension_months (분리 불필요)
-D-06: end_date = exclusive service boundary PROPOSED (renewal CV boundary source는 CONFIRMED;
-      service entitlement 자체의 exclusivity는 Owner 승인 필요)
 ```
 
 ---
