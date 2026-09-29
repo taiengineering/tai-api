@@ -65,12 +65,14 @@ class SaasEntitlementResolutionV2:
     """Runtime DB 조회 + temporal 선택 결과.
 
     Fields:
-      contract_id           — ACTIVE SaaS 계약 id
-      commercial_version_no — as_of 시점 effective CV version_no
-      product_tier          — CV.product_tier ("MANAGER" | "FIELD" | "CUSTOM")
-      context               — Entitlement Domain Gate 입력 컨텍스트
+      contract_id             — ACTIVE SaaS 계약 id
+      commercial_version_id   — as_of 시점 effective CV row UUID (site scope FK)
+      commercial_version_no   — as_of 시점 effective CV version_no
+      product_tier            — CV.product_tier ("MANAGER" | "FIELD" | "CUSTOM")
+      context                 — Entitlement Domain Gate 입력 컨텍스트
     """
     contract_id: str
+    commercial_version_id: str
     commercial_version_no: int
     product_tier: str
     context: SaasEntitlementContextV2
@@ -190,9 +192,11 @@ def resolve_saas_entitlement_context_v2(
     # Step 4: product_tier → context (CUSTOM → fail-closed sentinel)
     context = _context_from_cv(current_cv)
     version_no = int(_get(current_cv, "version_no") or 0)
+    commercial_version_id = str(_get(current_cv, "id") or "")
 
     return SaasEntitlementResolutionV2(
         contract_id=contract_id,
+        commercial_version_id=commercial_version_id,
         commercial_version_no=version_no,
         product_tier=context.product_tier,
         context=context,

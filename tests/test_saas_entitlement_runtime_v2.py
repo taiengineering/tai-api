@@ -23,6 +23,7 @@ _AS_OF = datetime(2026, 9, 29, 12, 0, 0, tzinfo=timezone.utc)
 
 _COMPANY_ID = str(uuid4())
 _CONTRACT_ID = str(uuid4())
+_CV_ID = str(uuid4())
 
 _PAST   = "2026-09-01T00:00:00+00:00"
 _MID    = "2026-09-15T00:00:00+00:00"
@@ -89,8 +90,10 @@ def _cv(
     superseded_at=None,
     contract_id=None,
     plan_code=None,
+    cv_id=None,
 ):
     row = {
+        "id": cv_id or _CV_ID,
         "contract_id": contract_id or _CONTRACT_ID,
         "version_no": version_no,
         "product_tier": product_tier,
@@ -247,6 +250,7 @@ def test_resolution_includes_contract_id_and_version_no():
     r = resolve_saas_entitlement_context_v2(sb, _COMPANY_ID, _AS_OF)
     assert isinstance(r, SaasEntitlementResolutionV2)
     assert r.contract_id == _CONTRACT_ID
+    assert r.commercial_version_id == _CV_ID
     assert r.commercial_version_no == 3
     assert r.product_tier == "MANAGER"
 
