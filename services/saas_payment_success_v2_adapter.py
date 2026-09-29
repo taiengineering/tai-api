@@ -59,7 +59,7 @@ class SaasPaymentSuccessV2AdapterError(Exception):
       QUOTE_ITEM_INVALID           — SaasQuoteSnapshotItemV2 검증 실패
       QUOTE_SNAPSHOT_INVALID       — SaasPricingSnapshotV2 검증 실패
       AMOUNT_SNAPSHOT_MISMATCH     — pay/item/snapshot 금액 3중 불일치
-      PAY_PERIOD_TERM_MISMATCH     — pay.period_months != snapshot.term_months
+      PAY_PERIOD_TERM_MISMATCH     — pay.period_months != snapshot.payment_months
     """
 
     def __init__(self, code: str, message: str = "") -> None:

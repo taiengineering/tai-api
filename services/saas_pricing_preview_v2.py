@@ -46,7 +46,7 @@ class SaasPricingPreviewError(Exception):
     """Preview domain invariant violation.
 
     code values:
-      INVALID_SELECTION         — product_tier / worker_capacity / term_months 조합 오류
+      INVALID_SELECTION         — product_tier / worker_capacity / payment_months 조합 오류
       STANDARD_SITE_REQUIRED    — MANAGER/FIELD에 sites 없음
       DUPLICATE_SITE            — 동일 entity_id 중복
       BASE_PRICE_NOT_FOUND      — price_master 미발견
