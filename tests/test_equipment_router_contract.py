@@ -364,3 +364,58 @@ def test_T4_type_codes_catalog_db_failure_returns_503(monkeypatch):
     r = client.get("/equipment-assets/type-codes")
     assert r.status_code == 503, f"expected 503 on catalog DB failure; got {r.status_code}: {r.text}"
     assert r.json()["detail"]["code"] == "EQUIPMENT_TYPE_CATALOG_UNAVAILABLE"
+
+
+# ── T4A: data=None malformed response → 503 ──────────────────────────────────
+
+class _NoneDataQ:
+    """Returns a response with data=None — simulates malformed DB response."""
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+    def order(self, *a, **k): return self
+    def execute(self):
+        class _R:
+            data = None
+            count = 0
+        return _R()
+
+
+class _NoneDataSB:
+    def table(self, name):
+        if name == "equipment_type_inspection_map":
+            return _NoneDataQ()
+        return _CatalogFailSB().table(name)
+
+
+def test_T4A_type_codes_data_none_returns_503(monkeypatch):
+    """T4A: res.data=None → HTTP 503 / EQUIPMENT_TYPE_CATALOG_UNAVAILABLE (not empty 200)."""
+    monkeypatch.setattr(_ea_mod, "get_supabase", lambda: _NoneDataSB())
+    app = FastAPI()
+    app.include_router(_ea_mod.router)
+    app.dependency_overrides[get_current_user] = lambda: _ADMIN
+    client = TestClient(app, raise_server_exceptions=False)
+    r = client.get("/equipment-assets/type-codes")
+    assert r.status_code == 503, f"expected 503 for data=None; got {r.status_code}: {r.text}"
+    assert r.json()["detail"]["code"] == "EQUIPMENT_TYPE_CATALOG_UNAVAILABLE"
+
+
+# ── T4B: malformed row (missing type_code) → 503 ─────────────────────────────
+
+_MALFORMED_CATALOG_ROWS = [
+    {"type_code": "001", "type_name_ko": "리프트", "is_active": True},
+    {"type_name_ko": "missing_type_code_row", "is_active": True},  # no type_code key
+]
+
+_SEED_WITH_MALFORMED_CATALOG = {
+    **_SEED,
+    "equipment_type_inspection_map": _MALFORMED_CATALOG_ROWS,
+}
+
+
+def test_T4B_type_codes_malformed_row_returns_503(monkeypatch):
+    """T4B: catalog row missing type_code → HTTP 503 / EQUIPMENT_TYPE_CATALOG_UNAVAILABLE."""
+    fake = FakeSB(_SEED_WITH_MALFORMED_CATALOG)
+    client = _make_client(fake, monkeypatch)
+    r = client.get("/equipment-assets/type-codes")
+    assert r.status_code == 503, f"expected 503 for malformed row; got {r.status_code}: {r.text}"
+    assert r.json()["detail"]["code"] == "EQUIPMENT_TYPE_CATALOG_UNAVAILABLE"

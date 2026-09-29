@@ -315,10 +315,21 @@ def get_equipment_type_codes(current: dict = Depends(get_current_user)):
             status_code=503,
             detail={"code": "EQUIPMENT_TYPE_CATALOG_UNAVAILABLE", "message": str(exc)},
         ) from exc
-    items = [
-        {"equipment_type_code": r["type_code"], "label": r["type_name_ko"]}
-        for r in (res.data or [])
-    ]
+    if not isinstance(res.data, list):
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "EQUIPMENT_TYPE_CATALOG_UNAVAILABLE", "message": "malformed catalog response"},
+        )
+    try:
+        items = [
+            {"equipment_type_code": r["type_code"], "label": r["type_name_ko"]}
+            for r in res.data
+        ]
+    except (KeyError, TypeError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "EQUIPMENT_TYPE_CATALOG_UNAVAILABLE", "message": f"malformed catalog row: {exc}"},
+        ) from exc
     return {"status": "success", "data": {"items": items, "total": len(items)}}
 
 
