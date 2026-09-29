@@ -1,7 +1,7 @@
 """WO-BE-FE-QUOTE-SCOPE-01 — QSI-01 ~ QSI-14 (+ router contract).
 
 Coverage:
-  QSI-01  자사 INDUSTRY factory + 동일 employee_count → PASS
+  QSI-01  자사 DB=INDUSTRIAL factory + request=INDUSTRY + 동일 employee_count → PASS
   QSI-02  자사 BUILDING factory + 동일 building_area → PASS
   QSI-03  자사 CONSTRUCTION site + 동일 contract_amount(억원×EOK) → PASS
   QSI-04  타사 factory → FAIL / Quote INSERT 0
@@ -95,7 +95,7 @@ def _sb(*, factories=None, sites=None, companies=None, quotes=None):
     })
 
 
-def _factory(*, factory_id=None, company_id=_COMPANY_ID, sector="INDUSTRY",
+def _factory(*, factory_id=None, company_id=_COMPANY_ID, sector="INDUSTRIAL",
               employee_count=100, building_area=None):
     return {
         "id": str(factory_id or uuid4()),
@@ -121,12 +121,13 @@ def _req_site(entity_id, sector="INDUSTRY", criteria_value=100):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# QSI-01 — INDUSTRY factory 자사 + 동일 employee_count
+# QSI-01 — DB=INDUSTRIAL factory 자사 + request=INDUSTRY (Production canonical 조합)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_QSI_01_industry_own_pass():
     fid = uuid4()
-    sb = _sb(factories=[_factory(factory_id=fid, sector="INDUSTRY", employee_count=85)])
+    # DB sector = INDUSTRIAL (Production SoT), request sector = INDUSTRY (Pricing API canonical)
+    sb = _sb(factories=[_factory(factory_id=fid, sector="INDUSTRIAL", employee_count=85)])
     result = resolve_quote_site_scope_v2(sb, _COMPANY_ID, [_req_site(fid, "INDUSTRY", 85)])
     assert len(result) == 1
     assert result[0].sector == "INDUSTRY"
@@ -167,7 +168,7 @@ def test_QSI_03_construction_own_pass():
 def test_QSI_04_other_company_factory_fail():
     fid = uuid4()
     sb = _sb(factories=[_factory(factory_id=fid, company_id=_OTHER_COMPANY,
-                                   sector="INDUSTRY", employee_count=100)])
+                                   sector="INDUSTRIAL", employee_count=100)])
     with pytest.raises(QuoteSiteScopeError) as exc:
         resolve_quote_site_scope_v2(sb, _COMPANY_ID, [_req_site(fid, "INDUSTRY", 100)])
     assert exc.value.code == "QUOTE_SITE_SCOPE_INVALID"
@@ -214,7 +215,8 @@ def test_QSI_06b_nonexistent_construction_fail():
 
 def test_QSI_07_sector_mismatch_fail():
     fid = uuid4()
-    sb = _sb(factories=[_factory(factory_id=fid, sector="INDUSTRY",
+    # DB=INDUSTRIAL, request=BUILDING → normalize: INDUSTRIAL vs BUILDING → mismatch
+    sb = _sb(factories=[_factory(factory_id=fid, sector="INDUSTRIAL",
                                    employee_count=100, building_area=5000)])
     with pytest.raises(QuoteSiteScopeError) as exc:
         # request says BUILDING, but factory.sector == INDUSTRY
@@ -228,7 +230,7 @@ def test_QSI_07_sector_mismatch_fail():
 
 def test_QSI_08_industry_criteria_tamper_fail():
     fid = uuid4()
-    sb = _sb(factories=[_factory(factory_id=fid, sector="INDUSTRY", employee_count=300)])
+    sb = _sb(factories=[_factory(factory_id=fid, sector="INDUSTRIAL", employee_count=300)])
     with pytest.raises(QuoteSiteScopeError) as exc:
         resolve_quote_site_scope_v2(sb, _COMPANY_ID, [_req_site(fid, "INDUSTRY", 10)])
     assert exc.value.code == "QUOTE_SITE_DATA_CHANGED"
@@ -238,7 +240,7 @@ def test_QSI_08_industry_criteria_tamper_fail():
 def test_QSI_08_no_insert_on_criteria_tamper(monkeypatch):
     """criteria 위변조 시 Quote INSERT = 0."""
     fid = uuid4()
-    sb = _sb(factories=[_factory(factory_id=fid, sector="INDUSTRY", employee_count=300)])
+    sb = _sb(factories=[_factory(factory_id=fid, sector="INDUSTRIAL", employee_count=300)])
     insert_calls = []
     monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry",
                         lambda *a, **k: insert_calls.append(1) or {})
@@ -288,7 +290,7 @@ def test_QSI_10_construction_criteria_tamper_fail():
 
 def test_QSI_11_null_employee_count_fail():
     fid = uuid4()
-    sb = _sb(factories=[_factory(factory_id=fid, sector="INDUSTRY", employee_count=None)])
+    sb = _sb(factories=[_factory(factory_id=fid, sector="INDUSTRIAL", employee_count=None)])
     with pytest.raises(QuoteSiteScopeError) as exc:
         resolve_quote_site_scope_v2(sb, _COMPANY_ID, [_req_site(fid, "INDUSTRY", 0)])
     assert exc.value.code == "QUOTE_SITE_CRITERIA_REQUIRED"
@@ -319,7 +321,7 @@ def test_QSI_11_null_contract_amount_fail():
 def test_QSI_12_multi_own_sites_pass():
     fid1, fid2 = uuid4(), uuid4()
     sb = _sb(factories=[
-        _factory(factory_id=fid1, sector="INDUSTRY", employee_count=50),
+        _factory(factory_id=fid1, sector="INDUSTRIAL", employee_count=50),
         _factory(factory_id=fid2, sector="BUILDING", employee_count=None, building_area=3000),
     ])
     result = resolve_quote_site_scope_v2(sb, _COMPANY_ID, [
@@ -339,9 +341,9 @@ def test_QSI_13_partial_fail_no_quote():
     fid_own = uuid4()
     fid_other = uuid4()
     sb = _sb(factories=[
-        _factory(factory_id=fid_own, sector="INDUSTRY", employee_count=100),
+        _factory(factory_id=fid_own, sector="INDUSTRIAL", employee_count=100),
         _factory(factory_id=fid_other, company_id=_OTHER_COMPANY,
-                  sector="INDUSTRY", employee_count=100),
+                  sector="INDUSTRIAL", employee_count=100),
     ])
     with pytest.raises(QuoteSiteScopeError) as exc:
         resolve_quote_site_scope_v2(sb, _COMPANY_ID, [
@@ -456,7 +458,7 @@ def test_ROUTER_data_changed_returns_409(monkeypatch):
         def __init__(self):
             super().__init__()
             self.store["factories"] = [
-                {"id": str(fid), "company_id": _COMPANY_ID, "sector": "INDUSTRY",
+                {"id": str(fid), "company_id": _COMPANY_ID, "sector": "INDUSTRIAL",
                  "employee_count": 300, "building_area": None}
             ]
 

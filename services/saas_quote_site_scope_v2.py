@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import List
 
 from schemas.saas_pricing_preview_v2 import SaasPricingPreviewSiteRequestV2
+from services.legal_rules import normalize_sector_db
 
 # construction_sites.contract_amount 는 억원. pricing criteria 는 원.
 _EOK_TO_WON = 100_000_000
@@ -123,10 +124,11 @@ def resolve_quote_site_scope_v2(
                 "사업장 정보를 확인할 수 없습니다.",
             )
 
-        # 3. Sector guard — factory.sector 필드와 request sector 일치 검증
+        # 3. Sector guard — DB↔API 경계 normalize 후 비교
+        #    DB: INDUSTRIAL / API(request): INDUSTRY — normalize_sector_db 로 동일 canonical 변환
         if sector in _FACTORY_SECTORS:
-            db_sector = (row.get("sector") or "").strip().upper()
-            if db_sector != sector:
+            db_sector_raw = (row.get("sector") or "").strip()
+            if normalize_sector_db(db_sector_raw) != normalize_sector_db(sector):
                 raise QuoteSiteScopeError(
                     "QUOTE_SITE_SCOPE_INVALID",
                     "사업장 정보를 확인할 수 없습니다.",
