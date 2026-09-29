@@ -21,6 +21,7 @@ from services import saas_quote_v2 as saas_quote_v2_svc
 from services.gotenberg_svc import PdfRenderError
 from services.saas_pricing_preview_v2 import SaasPricingPreviewError
 from services.saas_quote_v2 import SaasQuoteV2Error
+from services.saas_quote_site_scope_v2 import QuoteSiteScopeError
 
 logger = logging.getLogger("member_quotes")
 router = APIRouter(prefix="/me/quotes", tags=["member-quotes"])
@@ -173,6 +174,11 @@ def issue_v2(body: SaasQuoteIssueRequestV2, current: dict = Depends(get_current_
                 detail={"code": exc.code, "message": exc.message},
             )
         raise HTTPException(status_code=500, detail={"code": exc.code})
+    except QuoteSiteScopeError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"code": exc.code, "message": exc.message},
+        )
     except Exception:
         raise HTTPException(status_code=503, detail={"code": "INTERNAL_ERROR"})
 

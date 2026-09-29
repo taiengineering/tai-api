@@ -125,6 +125,8 @@ def _setup_ready(monkeypatch, sites=None, tier="MANAGER", workers=0, term=1):
     """Returns ready_preview. All monkeypatches for service-level tests."""
     preview = _ready_preview(monkeypatch, sites=sites, tier=tier, workers=workers, term=term)
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)  # passthrough — scope tests are in test_saas_quote_site_scope_v2.py
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry", _fake_insert)
     return preview
@@ -375,6 +377,8 @@ def test_Q20_issue_calls_preview_v2(monkeypatch):
         return preview
 
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", capture_preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry", _fake_insert)
 
@@ -412,6 +416,8 @@ def test_Q24_ready_produces_insert(monkeypatch):
 def test_Q25_exactly_one_insert(monkeypatch):
     preview = _ready_preview(monkeypatch)
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     insert_calls = []
 
@@ -428,6 +434,8 @@ def test_Q26_insert_table_is_quotes(monkeypatch):
     """_insert_quote_with_unique_retry uses quotes table (verified via real FakeSupabase)."""
     preview = _ready_preview(monkeypatch)
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     sb = _fake_sb()
     from services.member_quote_svc import _insert_quote_with_unique_retry
@@ -473,6 +481,8 @@ def _mock_preview_status(monkeypatch, status: str):
         block_reason=status,
     )
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: fake)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     insert_calls = []
     monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry",
@@ -521,6 +531,8 @@ def _mock_malformed_calculation(monkeypatch, calc_override):
         block_reason=None,
     )
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: fake)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
 
 
@@ -560,6 +572,8 @@ def test_Q35_wrong_product_tier_raises_invalid(monkeypatch):
     bad_calc = preview.calculation.model_copy(update={"snapshot": bad_snap})
     bad_preview = preview.model_copy(update={"calculation": bad_calc})
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: bad_preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     with pytest.raises(SaasQuoteV2Error) as exc:
         issue_saas_quote_v2(None, _issue_req(tier="MANAGER"), _USER_ID, _COMPANY_ID)
@@ -574,6 +588,8 @@ def test_Q36_wrong_worker_raises_invalid(monkeypatch):
     bad_calc = preview.calculation.model_copy(update={"snapshot": bad_snap})
     bad_preview = preview.model_copy(update={"calculation": bad_calc})
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: bad_preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     with pytest.raises(SaasQuoteV2Error) as exc:
         issue_saas_quote_v2(None, _issue_req(workers=0), _USER_ID, _COMPANY_ID)
@@ -587,6 +603,8 @@ def test_Q37_wrong_term_raises_invalid(monkeypatch):
     bad_calc = preview.calculation.model_copy(update={"snapshot": bad_snap})
     bad_preview = preview.model_copy(update={"calculation": bad_calc})
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: bad_preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     with pytest.raises(SaasQuoteV2Error) as exc:
         issue_saas_quote_v2(None, _issue_req(term=1), _USER_ID, _COMPANY_ID)
@@ -868,6 +886,8 @@ def test_Q70_multiple_sectors_sector_none(monkeypatch):
     preview = real_preview(None, _issue_req(sites=sites))
     assert preview.status == "READY"
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry", _fake_insert)
     row = issue_saas_quote_v2(None, _issue_req(sites=sites), _USER_ID, _COMPANY_ID)
@@ -887,6 +907,8 @@ def test_Q71_sectors_canonical_sorted(monkeypatch):
     from services.saas_pricing_preview_v2 import preview_saas_price_v2 as real_preview
     preview = real_preview(None, _issue_req(sites=sites))
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry", _fake_insert)
     row = issue_saas_quote_v2(None, _issue_req(sites=sites), _USER_ID, _COMPANY_ID)
@@ -914,6 +936,8 @@ def test_Q73_company_name_captured(monkeypatch):
 def test_Q74_missing_company_name_raises(monkeypatch):
     preview = _ready_preview(monkeypatch)
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: None)
     insert_calls = []
     monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry",
@@ -1088,6 +1112,8 @@ def test_Q91_calc_status_not_ready_rejected(monkeypatch):
     }
     fake_preview = SimpleNamespace(status="READY", calculation=calc_dict)
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: fake_preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     insert_calls = []
     monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry",
@@ -1103,6 +1129,8 @@ def test_Q92_request_extra_site_rejected(monkeypatch):
     """Request has site not in snapshot → QUOTE_SNAPSHOT_INVALID, INSERT 0."""
     preview = _ready_preview(monkeypatch, sites=[_site_req(_SITE_1)])
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     insert_calls = []
     monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry",
@@ -1123,6 +1151,8 @@ def test_Q93_snapshot_extra_site_rejected(monkeypatch):
     preview = real_preview(None, _issue_req(sites=sites_two))
     assert preview.status == "READY"
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     insert_calls = []
     monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry",
@@ -1138,6 +1168,8 @@ def test_Q94_same_entity_id_different_sector_rejected(monkeypatch):
     """Same entity_id but different sector (INDUSTRY vs CONSTRUCTION) → QUOTE_SNAPSHOT_INVALID."""
     preview = _ready_preview(monkeypatch, sites=[_site_req(_SITE_1, sector="INDUSTRY")])
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     insert_calls = []
     monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry",
@@ -1153,6 +1185,8 @@ def test_Q95_same_entity_type_different_sector_rejected(monkeypatch):
     """INDUSTRY→BUILDING: same entity_type family (factory) but sector differs → QUOTE_SNAPSHOT_INVALID."""
     preview = _ready_preview(monkeypatch, sites=[_site_req(_SITE_1, sector="INDUSTRY")])
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     insert_calls = []
     monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry",
@@ -1174,6 +1208,8 @@ def test_Q96_site_order_reversed_accepted(monkeypatch):
     preview = real_preview(None, _issue_req(sites=sites_fwd))
     assert preview.status == "READY"
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: preview)
+    monkeypatch.setattr("services.saas_quote_v2.resolve_quote_site_scope_v2",
+                        lambda sb, cid, s: s)
     monkeypatch.setattr("services.member_quote_svc._company_name_snapshot", lambda *a: "테스트회사")
     monkeypatch.setattr("services.member_quote_svc._insert_quote_with_unique_retry", _fake_insert)
     row = issue_saas_quote_v2(None, _issue_req(sites=sites_rev), _USER_ID, _COMPANY_ID)
