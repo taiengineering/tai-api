@@ -2,7 +2,8 @@
 
 역할:
   Issue Request
-  → 서버 재가격계산 (Preview V2)
+  → Site Scope 검증 (소유권·섹터·가격기준 Canonicalization)
+  → 서버 재가격계산 (Preview V2, Canonical Request 사용)
   → Pricing Status Gate
   → Snapshot 검증
   → Frozen Composite Item 구성
@@ -32,6 +33,7 @@ from schemas.saas_quote_v2 import (
 )
 from services.saas_pricing_composer_v2 import SaasPricingCalculationResult
 from services.saas_pricing_preview_v2 import _SECTOR_ENTITY_TYPE, preview_saas_price_v2
+from services.saas_quote_site_scope_v2 import QuoteSiteScopeError, resolve_quote_site_scope_v2
 from services.time import now_kst
 
 
@@ -179,8 +181,12 @@ def issue_saas_quote_v2(
             "회사명을 확인할 수 없어 견적을 발행할 수 없습니다.",
         )
 
-    # ── Step 2: 서버 재가격계산 (Preview V2) ──────────────────────────
-    preview = preview_saas_price_v2(supabase, request)
+    # ── Step 1.5: Site Scope — 소유권·섹터·가격기준 Canonicalization ──
+    canonical_sites = resolve_quote_site_scope_v2(supabase, company_id, request.sites)
+    canonical_request = request.model_copy(update={"sites": canonical_sites})
+
+    # ── Step 2: 서버 재가격계산 (Canonical Request 사용) ──────────────
+    preview = preview_saas_price_v2(supabase, canonical_request)
 
     # ── Step 3: Pricing Status Gate ───────────────────────────────────
     if preview.status == "TERM_DISCOUNT_UNRESOLVED":
@@ -223,11 +229,11 @@ def issue_saas_quote_v2(
 
     snap: SaasPricingSnapshotV2 = calc.snapshot
 
-    # ── Step 6: Snapshot ↔ Request 교차검증 ──────────────────────────
-    _validate_snapshot_against_request(snap, request)
+    # ── Step 6: Snapshot ↔ Canonical Request 교차검증 ───────────────
+    _validate_snapshot_against_request(snap, canonical_request)
 
-    # ── Step 7: Frozen Composite Item 구성 ───────────────────────────
-    item = _build_quote_item(snap, request)
+    # ── Step 7: Frozen Composite Item 구성 (Canonical Request 기준) ──
+    item = _build_quote_item(snap, canonical_request)
 
     # ── Step 8: Quote Row 구성 및 INSERT ─────────────────────────────
     now = now_kst().isoformat()
