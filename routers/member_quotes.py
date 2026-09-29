@@ -1,9 +1,13 @@
-# routers/member_quotes.py — v1.0.0 (WO-MYPAGE-QUOTE-PROCESS-001 STEP 2A)
+# routers/member_quotes.py — v1.1.0
 """회원 견적 Core API — 고객 마이페이지 견적(자동/개별) 서버 계약.
 
 인증: get_current_user(Bearer). 소유권: services.company_scope.
 가격 SoT: price_master(서버 계산). 클라이언트 금액/company_id/created_by/source/status 불신.
 설문견적(/quotes/survey/*)과 분리 — 이 라우터는 source in (member_auto, member_custom) 만 다룬다.
+
+v1.1.0 (WO-BE-FE-QUOTE-CONSTRUCTION-REG-01):
+  POST /v2/construction-sites — 미계약 건설 견적용 최소 사업장 등록.
+  construction_sites INSERT only. factory/diagnosis/schedule side effect 0.
 """
 import logging
 from typing import Any, Dict, Optional
@@ -21,10 +25,12 @@ from services import saas_quote_v2 as saas_quote_v2_svc
 from services.gotenberg_svc import PdfRenderError
 from services.saas_pricing_preview_v2 import SaasPricingPreviewError
 from services.saas_quote_v2 import SaasQuoteV2Error
+from services.saas_quote_site_scope_v2 import QuoteSiteScopeError
 
 logger = logging.getLogger("member_quotes")
 router = APIRouter(prefix="/me/quotes", tags=["member-quotes"])
 _NOT_FOUND = "견적을 찾을 수 없습니다"
+_EOK_TO_WON = 100_000_000  # construction_sites.contract_amount 억원 ↔ pricing criteria 원
 
 
 class AutoQuoteBody(BaseModel):
@@ -173,8 +179,65 @@ def issue_v2(body: SaasQuoteIssueRequestV2, current: dict = Depends(get_current_
                 detail={"code": exc.code, "message": exc.message},
             )
         raise HTTPException(status_code=500, detail={"code": exc.code})
+    except QuoteSiteScopeError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"code": exc.code, "message": exc.message},
+        )
     except Exception:
         raise HTTPException(status_code=503, detail={"code": "INTERNAL_ERROR"})
+
+
+class CommercialConstructionSiteBody(BaseModel):
+    site_name: str
+    criteria_value: float  # 원 단위. 서버가 억원으로 변환해 DB 저장.
+
+
+@router.post("/v2/construction-sites")
+def register_commercial_construction_site(
+    body: CommercialConstructionSiteBody,
+    current: dict = Depends(get_current_user),
+):
+    """견적 발행용 건설현장 최소 등록.
+
+    construction_sites INSERT only.
+    factory 생성 / auto_diagnose / schedule 생성 = 0.
+    """
+    supabase = get_supabase()
+    company_id = _require_member_company(current, supabase)
+
+    if not body.site_name.strip():
+        raise HTTPException(status_code=422, detail={"code": "SITE_NAME_REQUIRED",
+                                                      "message": "현장명이 필요합니다."})
+    if body.criteria_value < 0:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_CRITERIA",
+                                                      "message": "공사금액은 0 이상이어야 합니다."})
+
+    contract_amount = body.criteria_value / _EOK_TO_WON  # 원 → 억원
+    from services.time import now_kst
+    now = now_kst().isoformat()
+    row = {
+        "company_id": company_id,
+        "site_name": body.site_name.strip(),
+        "contract_amount": contract_amount,
+        "status_code": "PLANNED",
+        "created_at": now,
+        "updated_at": now,
+    }
+    res = supabase.table("construction_sites").insert(row).execute()
+    if not res.data:
+        raise HTTPException(status_code=500, detail={"code": "SITE_INSERT_FAILED",
+                                                      "message": "건설현장 등록에 실패했습니다."})
+    inserted = res.data[0]
+    return {
+        "status": "success",
+        "data": {
+            "id": inserted["id"],
+            "site_name": inserted["site_name"],
+            "sector": "CONSTRUCTION",
+            "criteria_value": body.criteria_value,
+        },
+    }
 
 
 @router.get("")
