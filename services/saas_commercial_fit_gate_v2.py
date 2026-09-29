@@ -1,9 +1,26 @@
 """TAI Safe SaaS Commercial Fit Gate V2 — Pure Domain Gate.
 
-판정 대상:
-  1. 계약된 사업장 Scope 안인가
-  2. 현재 사업장 규모가 계약 Compliance Base Band 안인가
-  3. 현재 현장참여 인원이 계약 Worker Capacity 안인가
+판정 대상 (Product Tier별 Commercial axis):
+
+  공통 (MANAGER / FIELD):
+    - 현재 사용 사업장이 계약 Site Scope 안인가
+
+  MANAGER:
+    - 현재 사업장 규모가 계약 Compliance Base Band 안인가 (Scale Band = commercial axis)
+    - Worker Capacity = commercial fit axis 아님 (worker_capacity=0 은 sentinel)
+
+  FIELD:
+    - Compliance Base Band = classification evidence. commercial fit axis 아님.
+      (FIELD 시설가격 = 249,000원 고정 — band 변동이 price에 영향 없음)
+    - 현재 현장참여 인원이 계약 Worker Capacity 안인가 (Worker Capacity = commercial axis)
+
+  CUSTOM:
+    - standard 자동 판정 없이 CUSTOM_REVIEW_REQUIRED
+
+Invariant:
+  MANAGER = Site Scope + Scale Band
+  FIELD   = Site Scope + Worker Capacity
+  CUSTOM  = CUSTOM_REVIEW_REQUIRED
 
 금지:
   - DB I/O
