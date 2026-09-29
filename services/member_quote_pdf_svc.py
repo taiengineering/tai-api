@@ -109,7 +109,7 @@ def _quote_date_for_pdf(quote: Dict[str, Any]) -> str:
 
 def _period_label(item: Dict[str, Any]) -> str:
     if (item.get("billing_unit") or "").upper() == "MONTHLY":
-        return "{}개월".format(item.get("term_months"))
+        return "{}개월".format(item.get("quantity"))
     return "1회"
 
 

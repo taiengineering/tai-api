@@ -5,6 +5,7 @@ ROUTERS = [
     {"module": "routers.site_public", "attr": "admin_router"},
     {"module": "routers.public_admin"},
     {"module": "routers.public_pricing"},
+    {"module": "routers.public_pricing_v2"},  # WO-PRICING-V2-BE-OBJ08 Preview API
     {"module": "routers.kosha_public_materials"},  # WP-2 read-only stored material + signed GET
     {"module": "routers.kosha_public_msds"},  # WO-CHEM-SEO-PREVIEW-EXECUTE-001 — dormant unless KOSHA_MSDS_PUBLIC_MODE is set
     {"module": "routers.public_safety_search"},  # WAVE2 KOSHA Smart Search public provider

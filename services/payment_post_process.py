@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 
 PAID_STATUS_CODES = frozenset({"PAID", "SUCCESS"})
 
+# Sentinel: caller did not specify plan_code_override (V1 path uses pay.plan_code or "INDUSTRY_PRO")
+_PLAN_CODE_UNSET = object()
+
 PLAN_MAP = {
     "BUILDING_LITE": {"sector": "FACILITY", "level": 1},
     "BUILDING_BASIC": {"sector": "FACILITY", "level": 2},
@@ -136,17 +139,32 @@ def _expire_other_active_contracts(sb, company_id: str, contract_id: str) -> Non
     ).eq("company_id", company_id).neq("id", contract_id).eq("status_code", "ACTIVE").execute()
 
 
-def _create_contract_from_payment(sb, pay: dict) -> Optional[str]:
-    plan_code = (pay.get("plan_code") or "INDUSTRY_PRO").upper()
+def _build_contract_row_from_payment(
+    pay: dict,
+    *,
+    start: date,
+    contract_no: str,
+    plan_code_override: Any = _PLAN_CODE_UNSET,
+) -> dict[str, Any]:
+    """Pure contract row builder — DB I/O 없음.
+
+    plan_code_override:
+      _PLAN_CODE_UNSET (기본) → V1 경로: pay.plan_code or "INDUSTRY_PRO"
+      None                    → V2 경로: plan_code 행에 포함하지 않음
+      str                     → 해당 값 직접 사용
+    """
+    if plan_code_override is _PLAN_CODE_UNSET:
+        plan_code: Any = (pay.get("plan_code") or "INDUSTRY_PRO").upper()
+    else:
+        plan_code = plan_code_override
+
     period_months = int(pay.get("period_months") or 12)
-    start = business_today()
     end = _contract_end_date(start, period_months)
     now = now_iso()
 
-    contract_row: dict[str, Any] = {
-        "contract_no": _gen_contract_no(),
+    row: dict[str, Any] = {
+        "contract_no": contract_no,
         "company_id": pay["company_id"],
-        "plan_code": plan_code,
         "status_code": "ACTIVE",
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
@@ -161,10 +179,17 @@ def _create_contract_from_payment(sb, pay: dict) -> Optional[str]:
         "updated_at": now,
         "memo": f"자동생성 — 결제 {str(pay.get('id', ''))[:8]}",
     }
+    if plan_code is not None:
+        row["plan_code"] = plan_code
     if pay.get("quote_id"):
-        contract_row["quote_id"] = pay["quote_id"]
+        row["quote_id"] = pay["quote_id"]
+    return row
 
-    ct_res = sb.table("contracts").insert(contract_row).execute()
+
+def _create_contract_from_payment(sb, pay: dict) -> Optional[str]:
+    start = business_today()
+    row = _build_contract_row_from_payment(pay, start=start, contract_no=_gen_contract_no())
+    ct_res = sb.table("contracts").insert(row).execute()
     if not ct_res.data:
         logger.error("Failed to create contract for payment %s", pay.get("id"))
         return None
@@ -427,14 +452,47 @@ def on_payment_success_sync(payment_id: str) -> None:
             logger.error("[TIER_UPGRADE] apply not applied payment=%s result=%s", payment_id, result)
         return
 
+    # RENEWAL은 contract_id 존재 여부와 무관하게 전용 경로만 사용한다.
+    # contract_id NULL 인 malformed renewal이 신규계약 writer로 새는 것을 차단.
+    if (pay.get("payment_type") or "").upper() == "RENEWAL":
+        from services.saas_renewal_runtime_v2 import (
+            classify_renewal_runtime_route,
+            apply_saas_v2_renewal_runtime,
+        )
+        route = classify_renewal_runtime_route(pay)
+        if route == "V2":
+            result = apply_saas_v2_renewal_runtime(sb, pay)
+            status = (result or {}).get("status")
+            logger.info(
+                "[RENEWAL_RUNTIME_V2] payment=%s contract=%s status=%s",
+                payment_id, pay.get("contract_id"), status,
+            )
+            send_payment_notification(pay, plan_code, plan_info)
+        elif route == "LEGACY":
+            legacy_contract_id = pay.get("contract_id")
+            if not legacy_contract_id:
+                logger.error(
+                    "[RENEWAL_LEGACY_CONTRACT_REQUIRED] payment=%s product_type=%s — contract_id NULL, no mutation",
+                    payment_id, pay.get("product_type"),
+                )
+                return
+            _extend_contract_for_renewal(sb, pay, legacy_contract_id)
+            logger.info(
+                "[RENEWAL_RUNTIME_LEGACY] payment=%s contract=%s",
+                payment_id, legacy_contract_id,
+            )
+            send_payment_notification(pay, plan_code, plan_info)
+        else:
+            logger.error(
+                "[RENEWAL_RUNTIME_ROUTE_INVALID] payment=%s product_type=%s route=%s — no contract mutation",
+                payment_id, pay.get("product_type"), route,
+            )
+        return
+
     existing_contract_id = pay.get("contract_id")
     if existing_contract_id:
-        if (pay.get("payment_type") or "").upper() == "RENEWAL":
-            _extend_contract_for_renewal(sb, pay, existing_contract_id)
-            logger.info("Payment %s renewed contract %s", payment_id, existing_contract_id)
-        else:
-            _activate_existing_contract(sb, pay, existing_contract_id)
-            logger.info("Payment %s activated contract %s", payment_id, existing_contract_id)
+        _activate_existing_contract(sb, pay, existing_contract_id)
+        logger.info("Payment %s activated contract %s", payment_id, existing_contract_id)
         send_payment_notification(pay, plan_code, plan_info)
         return
 
