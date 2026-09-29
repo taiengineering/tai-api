@@ -54,7 +54,7 @@ def _policy(version: str = "TEST_CO_V1") -> SaasPricingPolicyV2:
     return SaasPricingPolicyV2(
         policy_version=version,
         effective_from=date(2026, 9, 28),
-        field_uplift_amount=100_000,
+        field_base_amount=249000,
         primary_site_rate_bps=10_000,
         additional_site_rate_bps=8_000,
         worker_brackets=[

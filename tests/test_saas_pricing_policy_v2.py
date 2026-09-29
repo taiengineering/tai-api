@@ -31,6 +31,16 @@ def _canonical_brackets():
 
 def _canonical_term_discounts():
     return [
+        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=0),
+        SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=500),
+        SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=1000),
+        SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=1500),
+        SaasTermDiscountPolicy(term_months=12, discount_rate_bps=2000),
+    ]
+
+
+def _unresolved_term_discounts():
+    return [
         SaasTermDiscountPolicy(term_months=m, discount_rate_bps=None)
         for m in [1, 3, 6, 9, 12]
     ]
@@ -39,8 +49,8 @@ def _canonical_term_discounts():
 def _policy_data(**overrides):
     data = dict(
         policy_version=PRICING_POLICY_VERSION,
-        effective_from=date(2026, 9, 27),
-        field_uplift_amount=100000,
+        effective_from=date(2026, 9, 28),
+        field_base_amount=249000,
         primary_site_rate_bps=10000,
         additional_site_rate_bps=8000,
         worker_brackets=_canonical_brackets(),
@@ -55,29 +65,39 @@ def _policy_data(**overrides):
 
 def test_P01_policy_version_exact():
     policy = get_canonical_pricing_policy_v2()
-    assert policy.policy_version == "TAI_SAFE_PRICING_POLICY_2026_09_27"
+    assert policy.policy_version == "TAI_SAFE_PRICING_POLICY_V3_2026_09_28"
 
 
 def test_P02_effective_from():
     policy = get_canonical_pricing_policy_v2()
-    assert policy.effective_from == date(2026, 9, 27)
+    assert policy.effective_from == date(2026, 9, 28)
 
 
-# ── P03~P05 FIELD Uplift ──────────────────────────────────────────────────────
+# ── P03~P05 FIELD Base Amount ─────────────────────────────────────────────────
 
-def test_P03_field_uplift_amount():
+def test_P03_field_base_amount():
     policy = get_canonical_pricing_policy_v2()
-    assert policy.field_uplift_amount == 100000
+    assert policy.field_base_amount == 249000
 
 
-def test_P04_field_uplift_float_rejected():
+def test_P04_field_base_float_rejected():
     with pytest.raises(ValidationError):
-        SaasPricingPolicyV2(**_policy_data(field_uplift_amount=100000.0))
+        SaasPricingPolicyV2(**_policy_data(field_base_amount=249000.0))
 
 
-def test_P05_field_uplift_bool_rejected():
+def test_P05_field_base_bool_rejected():
     with pytest.raises(ValidationError):
-        SaasPricingPolicyV2(**_policy_data(field_uplift_amount=True))
+        SaasPricingPolicyV2(**_policy_data(field_base_amount=True))
+
+
+def test_P05b_field_base_zero_rejected():
+    with pytest.raises(ValidationError):
+        SaasPricingPolicyV2(**_policy_data(field_base_amount=0))
+
+
+def test_P05c_field_base_negative_rejected():
+    with pytest.raises(ValidationError):
+        SaasPricingPolicyV2(**_policy_data(field_base_amount=-1))
 
 
 # ── P06~P10 Site Rate ─────────────────────────────────────────────────────────
@@ -245,10 +265,13 @@ def test_P29_float_term_rejected():
         SaasTermDiscountPolicy(term_months=12.0, discount_rate_bps=None)
 
 
-def test_P30_all_canonical_discount_none():
+def test_P30_canonical_discounts_v3():
+    expected = {1: 0, 3: 500, 6: 1000, 9: 1500, 12: 2000}
     policy = get_canonical_pricing_policy_v2()
     for td in policy.term_discounts:
-        assert td.discount_rate_bps is None, f"term={td.term_months} has discount {td.discount_rate_bps}"
+        assert td.discount_rate_bps == expected[td.term_months], (
+            f"term={td.term_months}: expected {expected[td.term_months]}, got {td.discount_rate_bps}"
+        )
 
 
 def test_P31_discount_none_accepted():
@@ -292,11 +315,11 @@ def test_P37_canonical_policy_immutable_and_isolated():
 
     # frozen model은 변경 시 ValidationError 발생
     with pytest.raises(ValidationError):
-        policy1.field_uplift_amount = 99999
+        policy1.field_base_amount = 99999
 
     # 두 번째 호출은 별도 instance이며 올바른 값을 유지
     assert policy1 is not policy2
-    assert policy2.field_uplift_amount == 100000
+    assert policy2.field_base_amount == 249000
 
 
 # ── PATCH-1: Canonical Collection Integrity ───────────────────────────────────

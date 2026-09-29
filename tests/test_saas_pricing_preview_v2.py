@@ -102,7 +102,7 @@ def _test_policy():
     return SaasPricingPolicyV2(
         policy_version="TEST_PREVIEW_V1",
         effective_from=date(2026, 9, 28),
-        field_uplift_amount=100_000,
+        field_base_amount=249000,
         primary_site_rate_bps=10_000,
         additional_site_rate_bps=8_000,
         worker_brackets=[
@@ -577,22 +577,24 @@ def test_P50_calculation_result_passthrough(monkeypatch):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# P51–P53: Current Canonical — TERM_DISCOUNT_UNRESOLVED
+# P51–P53: V3 Canonical → READY
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def test_P51_manager_canonical_term_discount_unresolved(monkeypatch):
+def test_P51_manager_canonical_v3_ready(monkeypatch):
     monkeypatch.setattr("services.pricing_resolver_svc.resolve_plan", lambda *a, **k: _good_resolve())
     r = preview_saas_price_v2(None, _req("MANAGER"))
-    assert r.status == "TERM_DISCOUNT_UNRESOLVED"
+    assert r.status == "READY"
+    assert r.calculation.snapshot is not None
 
 
-def test_P52_field_canonical_term_discount_unresolved(monkeypatch):
+def test_P52_field_canonical_v3_ready(monkeypatch):
     monkeypatch.setattr("services.pricing_resolver_svc.resolve_plan", lambda *a, **k: _good_resolve())
     r = preview_saas_price_v2(None, _req("FIELD", workers=10))
-    assert r.status == "TERM_DISCOUNT_UNRESOLVED"
+    assert r.status == "READY"
+    assert r.calculation.snapshot is not None
 
 
-def test_P53_term_unresolved_http_200(monkeypatch):
+def test_P53_canonical_ready_http_200(monkeypatch):
     monkeypatch.setattr("services.pricing_resolver_svc.resolve_plan", lambda *a, **k: _good_resolve())
     monkeypatch.setattr("routers.public_pricing_v2.get_supabase", lambda: None)
     client = TestClient(_make_app(), raise_server_exceptions=False)
@@ -606,11 +608,35 @@ def test_P53_term_unresolved_http_200(monkeypatch):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# P54–P56: No Fake Final Price
+# P54–P56: TERM_DISCOUNT_UNRESOLVED branch — explicit None policy
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_none_discount_policy():
+    from schemas.saas_pricing_policy_v2 import (
+        SaasPricingPolicyV2, SaasTermDiscountPolicy, SaasWorkerRateBracketPolicy,
+    )
+    return SaasPricingPolicyV2(
+        policy_version="TEST_NONE_DISCOUNT",
+        effective_from=date(2026, 9, 28),
+        field_base_amount=249000,
+        primary_site_rate_bps=10000,
+        additional_site_rate_bps=8000,
+        worker_brackets=[SaasWorkerRateBracketPolicy(range_from=1, range_to=None, unit_rate=3000)],
+        vat_rate_bps=1000,
+        term_discounts=[
+            SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
+        ],
+    )
+
 
 def test_P54_term_unresolved_snapshot_none(monkeypatch):
     monkeypatch.setattr("services.pricing_resolver_svc.resolve_plan", lambda *a, **k: _good_resolve())
+    monkeypatch.setattr("services.saas_pricing_composer_v2.get_canonical_pricing_policy_v2",
+                        _make_none_discount_policy)
     r = preview_saas_price_v2(None, _req("MANAGER"))
     assert r.status == "TERM_DISCOUNT_UNRESOLVED"
     assert r.calculation.snapshot is None
@@ -618,12 +644,16 @@ def test_P54_term_unresolved_snapshot_none(monkeypatch):
 
 def test_P55_none_discount_not_converted_to_zero(monkeypatch):
     monkeypatch.setattr("services.pricing_resolver_svc.resolve_plan", lambda *a, **k: _good_resolve())
+    monkeypatch.setattr("services.saas_pricing_composer_v2.get_canonical_pricing_policy_v2",
+                        _make_none_discount_policy)
     r = preview_saas_price_v2(None, _req("MANAGER"))
     assert r.calculation.term_discount_rate_bps is None
 
 
 def test_P56_service_does_not_create_fake_ready(monkeypatch):
     monkeypatch.setattr("services.pricing_resolver_svc.resolve_plan", lambda *a, **k: _good_resolve())
+    monkeypatch.setattr("services.saas_pricing_composer_v2.get_canonical_pricing_policy_v2",
+                        _make_none_discount_policy)
     r = preview_saas_price_v2(None, _req("MANAGER"))
     assert r.status != "READY"
 

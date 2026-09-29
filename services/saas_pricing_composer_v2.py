@@ -200,8 +200,8 @@ def calculate_saas_price_v2(
     for s in sites:
         if selection.product_tier == "MANAGER":
             normal = s.base_amount
-        else:  # FIELD: uplift는 policy에서 읽음, 하드코딩 금지
-            normal = s.base_amount + policy.field_uplift_amount
+        else:  # FIELD: base_amount 무시, policy 고정가 사용
+            normal = policy.field_base_amount
         site_normals.append((s, normal))
 
     # Step 5: Canonical sort → Primary 결정

@@ -18,8 +18,8 @@ from pydantic import BaseModel, ConfigDict, StrictInt, field_validator, model_va
 
 # ── Policy Version ─────────────────────────────────────────────────────────────
 
-PRICING_POLICY_VERSION = "TAI_SAFE_PRICING_POLICY_2026_09_27"
-_POLICY_EFFECTIVE_FROM = date(2026, 9, 27)
+PRICING_POLICY_VERSION = "TAI_SAFE_PRICING_POLICY_V3_2026_09_28"
+_POLICY_EFFECTIVE_FROM = date(2026, 9, 28)
 
 VALID_TERM_MONTHS_POLICY: frozenset[int] = frozenset({1, 3, 6, 9, 12})
 
@@ -130,7 +130,7 @@ class SaasPricingPolicyV2(BaseModel):
     effective_from: date
     effective_to: Optional[date] = None
 
-    field_uplift_amount: StrictInt
+    field_base_amount: StrictInt
 
     primary_site_rate_bps: StrictInt
     additional_site_rate_bps: StrictInt
@@ -143,11 +143,11 @@ class SaasPricingPolicyV2(BaseModel):
 
     currency: str = "KRW"
 
-    @field_validator("field_uplift_amount")
+    @field_validator("field_base_amount")
     @classmethod
-    def _field_uplift_non_negative(cls, v: int) -> int:
-        if v < 0:
-            raise ValueError("field_uplift_amount는 0 이상이어야 합니다.")
+    def _field_base_amount_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("field_base_amount는 1 이상이어야 합니다.")
         return v
 
     @field_validator("primary_site_rate_bps", "additional_site_rate_bps")
@@ -216,7 +216,7 @@ def get_canonical_pricing_policy_v2() -> SaasPricingPolicyV2:
     return SaasPricingPolicyV2(
         policy_version=PRICING_POLICY_VERSION,
         effective_from=_POLICY_EFFECTIVE_FROM,
-        field_uplift_amount=100000,
+        field_base_amount=249000,
         primary_site_rate_bps=10000,
         additional_site_rate_bps=8000,
         worker_brackets=[
@@ -228,10 +228,10 @@ def get_canonical_pricing_policy_v2() -> SaasPricingPolicyV2:
         ],
         vat_rate_bps=1000,
         term_discounts=[
-            SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
-            SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
-            SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
-            SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
-            SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
+            SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=0),
+            SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=500),
+            SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=1000),
+            SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=1500),
+            SaasTermDiscountPolicy(term_months=12, discount_rate_bps=2000),
         ],
     )

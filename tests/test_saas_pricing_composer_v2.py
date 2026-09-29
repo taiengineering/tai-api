@@ -79,8 +79,8 @@ def _resolved_policy(
     """테스트 전용 Policy. canonical term discounts 일부를 resolved로 설정."""
     return SaasPricingPolicyV2(
         policy_version="TEST_RESOLVED_POLICY",
-        effective_from=date(2026, 9, 27),
-        field_uplift_amount=100000,
+        effective_from=date(2026, 9, 28),
+        field_base_amount=249000,
         primary_site_rate_bps=10000,
         additional_site_rate_bps=8000,
         worker_brackets=[
@@ -137,7 +137,7 @@ def test_C04_field_one_site():
         _resolved_policy(),
     )
     assert result.status == "READY"
-    assert result.site_breakdown[0].normal_site_amount == 249000  # 149000 + 100000
+    assert result.site_breakdown[0].normal_site_amount == 249000  # policy.field_base_amount
     assert result.site_breakdown[0].final_site_amount == 249000   # 249000 × 10000 // 10000
 
 
@@ -184,8 +184,8 @@ def test_C07_three_site_manager():
 # ── C08 three-site FIELD ──────────────────────────────────────────────────────
 
 def test_C08_three_site_field():
-    # normals: 249000, 399000, 599000
-    # 599000×100% + 399000×80% + 249000×80% = 599000+319200+199200 = 1117400
+    # V3: all normals = 249000 (fixed)
+    # 249000×100% + 249000×80% + 249000×80% = 249000+199200+199200 = 647400
     sites = [
         _site(entity_id=_UUID_A, base_amount=149000),
         _site(entity_id=_UUID_B, base_amount=299000),
@@ -196,7 +196,7 @@ def test_C08_three_site_field():
         sites,
         _resolved_policy(),
     )
-    assert result.monthly_supply_amount == 1117400
+    assert result.monthly_supply_amount == 647400
 
 
 # ── C09 input reorder produces same result ────────────────────────────────────
@@ -310,12 +310,23 @@ def test_worker_progressive(capacity: int, expected_amount: int):
     assert result.worker_breakdown.amount == expected_amount
 
 
-# ── T01/T03/T06/T09/T12 Canonical policy → TERM_DISCOUNT_UNRESOLVED ───────────
+# ── T01/T03/T06/T09/T12 Canonical policy (V3) → READY ────────────────────────
 
-@pytest.mark.parametrize("term", [1, 3, 6, 9, 12])
-def test_canonical_term_unresolved(term: int):
+@pytest.mark.parametrize("term,expected_bps", [(1, 0), (3, 500), (6, 1000), (9, 1500), (12, 2000)])
+def test_canonical_term_ready(term: int, expected_bps: int):
     canonical = get_canonical_pricing_policy_v2()
     result = calculate_saas_price_v2(_sel(term_months=term), [_site()], canonical)
+    assert result.status == "READY"
+    assert result.snapshot is not None
+    assert result.term_discount_rate_bps == expected_bps
+
+
+# ── TERM_DISCOUNT_UNRESOLVED branch — explicit None policy ────────────────────
+
+@pytest.mark.parametrize("term", [1, 3, 6, 9, 12])
+def test_unresolved_discount_branch_explicit_none(term: int):
+    none_policy = _resolved_policy(term1_bps=None, term3_bps=None, term6_bps=None, term9_bps=None, term12_bps=None)
+    result = calculate_saas_price_v2(_sel(term_months=term), [_site()], none_policy)
     assert result.status == "TERM_DISCOUNT_UNRESOLVED"
     assert result.snapshot is None
     assert result.term_discount_rate_bps is None
@@ -344,8 +355,8 @@ def test_R02_term12_1000bps_ready():
 # ── R03 Snapshot only on READY ───────────────────────────────────────────────
 
 def test_R03_snapshot_only_on_ready():
-    canonical = get_canonical_pricing_policy_v2()
-    result_unresolved = calculate_saas_price_v2(_sel(term_months=1), [_site()], canonical)
+    none_policy = _resolved_policy(term1_bps=None, term3_bps=None, term6_bps=None, term9_bps=None, term12_bps=None)
+    result_unresolved = calculate_saas_price_v2(_sel(term_months=1), [_site()], none_policy)
     assert result_unresolved.snapshot is None
 
     result_ready = calculate_saas_price_v2(_sel(term_months=1), [_site()], _resolved_policy(term1_bps=0))
@@ -593,7 +604,7 @@ def test_K22_manager_calculation_regression():
     assert result.monthly_supply_amount == 857400
 
 
-# K23 FIELD 3-site calculation regression
+# K23 FIELD 3-site calculation regression (V3: all normals = 249000)
 def test_K23_field_calculation_regression():
     sites = [
         _site(entity_id=_UUID_A, base_amount=149000),
@@ -605,7 +616,8 @@ def test_K23_field_calculation_regression():
         sites,
         _resolved_policy(),
     )
-    assert result.monthly_supply_amount == 1117400
+    # V3: 249000 + 199200 + 199200 = 647400 (all normals fixed at 249000)
+    assert result.monthly_supply_amount == 647400
 
 
 # K24 Composer CUSTOM 분기가 product_tier를 기준으로 동작함
@@ -614,3 +626,73 @@ def test_K24_custom_branch_uses_product_tier():
     from services import saas_pricing_composer_v2
     source = inspect.getsource(saas_pricing_composer_v2.calculate_saas_price_v2)
     assert 'selection.product_tier == "CUSTOM"' in source
+
+
+# ── V3 FIELD: Base Independence ───────────────────────────────────────────────
+
+@pytest.mark.parametrize("base_amount", [149000, 249000, 299000, 499000])
+def test_V3_field_base_independence(base_amount: int):
+    """FIELD normal은 resolver base_amount에 무관하게 249000 고정."""
+    result = calculate_saas_price_v2(
+        _sel(product_tier="FIELD", worker_capacity=0),
+        [_site(base_amount=base_amount)],
+        _resolved_policy(term1_bps=0),
+    )
+    assert result.site_breakdown[0].normal_site_amount == 249000
+
+
+# ── V3 FIELD: Multi-site ──────────────────────────────────────────────────────
+
+def test_V3_field_1_site():
+    result = calculate_saas_price_v2(
+        _sel(product_tier="FIELD", worker_capacity=0),
+        [_site(entity_id=_UUID_A, base_amount=149000)],
+        _resolved_policy(term1_bps=0),
+    )
+    assert result.monthly_supply_amount == 249000
+
+
+def test_V3_field_2_sites():
+    result = calculate_saas_price_v2(
+        _sel(product_tier="FIELD", worker_capacity=0),
+        [_site(entity_id=_UUID_A, base_amount=149000), _site(entity_id=_UUID_B, base_amount=299000)],
+        _resolved_policy(term1_bps=0),
+    )
+    # Primary 249000 + Additional 199200
+    assert result.monthly_supply_amount == 448200
+
+
+def test_V3_field_3_sites():
+    result = calculate_saas_price_v2(
+        _sel(product_tier="FIELD", worker_capacity=0),
+        [
+            _site(entity_id=_UUID_A, base_amount=149000),
+            _site(entity_id=_UUID_B, base_amount=299000),
+            _site(entity_id=_UUID_C, base_amount=499000),
+        ],
+        _resolved_policy(term1_bps=0),
+    )
+    # Primary 249000 + Additional × 2 (199200 each)
+    assert result.monthly_supply_amount == 647400
+
+
+# ── V3 FIELD: Golden Example ──────────────────────────────────────────────────
+
+def test_V3_golden_field_2_sites_100_workers_6_months():
+    """FIELD 2사업장 / 작업자 100명 / 6개월 10% 할인 golden example."""
+    result = calculate_saas_price_v2(
+        _sel(product_tier="FIELD", worker_capacity=100, term_months=6),
+        [_site(entity_id=_UUID_A, base_amount=149000), _site(entity_id=_UUID_B, base_amount=299000)],
+        _resolved_policy(term6_bps=1000),
+    )
+    # monthly: 249000 + 199200 + (20×3000 + 30×2500 + 50×2000) = 448200 + 235000 = 683200
+    assert result.monthly_supply_amount == 683200
+    # raw prepaid: 683200 × 6 = 4099200
+    assert result.raw_prepaid_supply_amount == 4099200
+    # discount 10%: 4099200 × 1000 // 10000 = 409920
+    # discounted supply: 4099200 - 409920 = 3689280
+    assert result.snapshot.prepaid_supply_amount == 3689280
+    # VAT: 3689280 × 1000 // 10000 = 368928
+    # total: 3689280 + 368928 = 4058208
+    assert result.snapshot.total_amount == 4058208
+    assert result.term_discount_rate_bps == 1000

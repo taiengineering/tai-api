@@ -40,7 +40,7 @@ def _resolved_policy(policy_version: str = "TEST_POLICY_V1") -> SaasPricingPolic
     return SaasPricingPolicyV2(
         policy_version=policy_version,
         effective_from=date(2026, 9, 27),
-        field_uplift_amount=100000,
+        field_base_amount=249000,
         primary_site_rate_bps=10000,
         additional_site_rate_bps=8000,
         worker_brackets=[
@@ -699,10 +699,24 @@ def test_M01_ready_result_to_storage_bundle():
 
 def test_M02_unresolved_result_rejected():
     """TERM_DISCOUNT_UNRESOLVED 결과는 STANDARD mapper가 거부."""
-    from schemas.saas_pricing_policy_v2 import get_canonical_pricing_policy_v2
+    none_policy = SaasPricingPolicyV2(
+        policy_version="TEST_NONE_DISCOUNT",
+        effective_from=date(2026, 9, 28),
+        field_base_amount=249000,
+        primary_site_rate_bps=10000,
+        additional_site_rate_bps=8000,
+        worker_brackets=[SaasWorkerRateBracketPolicy(range_from=1, range_to=None, unit_rate=3000)],
+        vat_rate_bps=1000,
+        term_discounts=[
+            SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
+        ],
+    )
     sel = _mgr_sel()
-    # canonical policy has all term discounts = None → TERM_DISCOUNT_UNRESOLVED
-    result = calculate_saas_price_v2(sel, [_site()])
+    result = calculate_saas_price_v2(sel, [_site()], none_policy)
     assert result.status == "TERM_DISCOUNT_UNRESOLVED"
     with pytest.raises(SaasContractStorageMapperError):
         build_standard_contract_storage_bundle_v2(
