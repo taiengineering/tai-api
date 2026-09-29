@@ -1,12 +1,17 @@
 """services/saas_diagnosis_snapshot_svc.py
 
-WO-DIAGNOSIS-RESULT-SNAPSHOT-INVENTORY-SEPARATION-001.
+WO-DIAGNOSIS-RESULT-SNAPSHOT-INVENTORY-SEPARATION-001 + PATCH1.
 
 anonymous_diagnosis_results(source_type='saas') 단건 조회.
 - company_id 는 저장된 input_data.company_id 에서 읽는다 (클라이언트 공급 금지).
 - 소유권 검사는 _ensure_own_company(stored_company_id) — 클라 factory_id 기반 스코프 0.
 - 반환 필드: diagnosis_id / factory_id / sector / engine_version / created_at / full_result.
   public_token / company_id / raw input_data 미포함.
+
+저장 계약 검증(fail-closed):
+  input_data = dict, company_id = nonblank, factory_id = nonblank
+  full_result = dict, full_result.obligations_raw = list
+  위반 시 SnapshotContractError — 빈 dict로 정상 처리 금지.
 """
 from __future__ import annotations
 
@@ -18,7 +23,7 @@ class SnapshotNotFound(LookupError):
 
 
 class SnapshotContractError(ValueError):
-    """저장 row 구조 위반 — input_data.company_id 누락."""
+    """저장 row 구조 위반 — 계약 필드 누락/타입 불량."""
 
 
 def get_saas_diagnosis_snapshot(
@@ -40,7 +45,7 @@ def get_saas_diagnosis_snapshot(
         }
 
     SnapshotNotFound: row 없음 / source_type != 'saas'.
-    SnapshotContractError: input_data.company_id 누락(저장 계약 위반).
+    SnapshotContractError: 저장 계약 위반(company_id/factory_id/full_result/obligations_raw).
     """
     res = (
         supabase.table("anonymous_diagnosis_results")
@@ -57,16 +62,31 @@ def get_saas_diagnosis_snapshot(
     if row.get("source_type") != "saas":
         raise SnapshotNotFound("진단 결과를 찾을 수 없습니다.")
 
-    input_data: dict = row.get("input_data") or {}
+    # ── input_data 계약 검증 ─────────────────────────────────────────
+    input_data = row.get("input_data")
+    if not isinstance(input_data, dict):
+        raise SnapshotContractError("저장된 진단 결과의 입력 정보(input_data)를 확인할 수 없습니다.")
+
     stored_company_id: str = input_data.get("company_id") or ""
-    if not stored_company_id:
+    if not (isinstance(stored_company_id, str) and stored_company_id.strip()):
         raise SnapshotContractError("저장된 진단 결과의 회사 정보를 확인할 수 없습니다.")
 
-    full_result: dict = row.get("full_result") or {}
+    stored_factory_id: str = input_data.get("factory_id") or ""
+    if not (isinstance(stored_factory_id, str) and stored_factory_id.strip()):
+        raise SnapshotContractError("저장된 진단 결과의 사업장 정보를 확인할 수 없습니다.")
+
+    # ── full_result 계약 검증 ────────────────────────────────────────
+    full_result = row.get("full_result")
+    if not isinstance(full_result, dict):
+        raise SnapshotContractError("저장된 진단 결과(full_result) 구조가 올바르지 않습니다.")
+
+    obligations_raw = full_result.get("obligations_raw")
+    if not isinstance(obligations_raw, list):
+        raise SnapshotContractError("저장된 진단 결과(obligations_raw) 구조가 올바르지 않습니다.")
 
     return {
         "diagnosis_id": str(row.get("id") or diagnosis_id),
-        "factory_id": input_data.get("factory_id") or "",
+        "factory_id": stored_factory_id,
         "sector": input_data.get("sector") or full_result.get("sector") or None,
         "engine_version": row.get("engine_version") or full_result.get("engine_version") or None,
         "created_at": row.get("created_at") or None,

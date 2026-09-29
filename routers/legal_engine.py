@@ -341,7 +341,7 @@ def get_diagnosis_snapshot(diagnosis_id: str, authorization: Optional[str] = Hea
     Response: { status, data: { diagnosis_id, factory_id, sector, engine_version, created_at, full_result } }
     """
     supabase = get_supabase()
-    current = get_current_user(authorization, supabase)
+    current = get_current_user(authorization)
 
     try:
         snapshot = get_saas_diagnosis_snapshot(supabase, diagnosis_id=diagnosis_id)
