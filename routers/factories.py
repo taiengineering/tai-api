@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Factories 라우터 - 시설 등록/관리 v2.5.0
+TAI Factories 라우터 - 시설 등록/관리 v2.6.0
 
+v2.6.0 (2026-09-29, WO-BE-FE-QUOTE-SITE-REG-01): sector CREATE 경계 정합.
+  sector 수신 시 normalize_sector_db() → DB canonical 저장.
+  미전송 시 INDUSTRIAL(제조업 기본) 명시적 저장(DB default 의존 제거).
+  지원 외 sector 422 INVALID_SECTOR.
 v2.5.0 (2026-08-18, P13): 인증·회사 스코프 가드.
   비-ALL 은 토큰 company_id 강제. /{id} 및 중첩 자원은 시설 소유권 404.
 v2.4.0 (LEGAL-CONSTRUCTION): 건설 법령 판정 입력 필드 6개 추가
@@ -26,7 +30,9 @@ from datetime import datetime, date
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own, _forced_company_id, _is_admin, _scope
+from services.legal_rules import normalize_sector_db
 from services.time import business_today, now_kst, serialize_business_datetime
+from constants.sectors import VALID_SECTORS
 
 router = APIRouter(prefix="/factories", tags=["factories"])
 
@@ -38,6 +44,7 @@ router = APIRouter(prefix="/factories", tags=["factories"])
 class FactoryCreate(BaseModel):
     company_id:  str
     name:        str
+    sector:                 Optional[str] = None   # INDUSTRY/INDUSTRIAL/BUILDING → normalize → DB canonical
     site_type:              Optional[str] = None
     ksic_code:              Optional[str] = None
     ksic_name:              Optional[str] = None
@@ -235,6 +242,16 @@ def create_factory(req: FactoryCreate, current: dict = Depends(get_current_user)
     ).single().execute()
     if not company.data:
         raise HTTPException(status_code=404, detail="사업장(회사)을 찾을 수 없습니다")
+
+    # Sector canonicalization — DB↔API boundary (INDUSTRY → INDUSTRIAL).
+    # None 미전송은 제조업 기본(INDUSTRY 의미)으로 명시 저장. DB default 의존 금지.
+    canonical_sector = normalize_sector_db(req.sector or "INDUSTRY")
+    if canonical_sector not in VALID_SECTORS:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "INVALID_SECTOR", "message": "지원하지 않는 sector입니다."},
+        )
+
     now = now_kst()
     data = {
         **req.dict(exclude_none=True),
@@ -243,6 +260,7 @@ def create_factory(req: FactoryCreate, current: dict = Depends(get_current_user)
         "is_active":      True,
         "created_at":     now.isoformat(),
         "updated_at":     now.isoformat(),
+        "sector":         canonical_sector,  # overrides raw req.sector with DB canonical
     }
     res = supabase.table("factories").insert(data).execute()
     if not res.data:
