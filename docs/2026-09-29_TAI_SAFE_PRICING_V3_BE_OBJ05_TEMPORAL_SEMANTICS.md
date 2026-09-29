@@ -1,10 +1,11 @@
 ---
 title: TAI Safe Pricing V3 BE OBJ05 — Temporal Semantics Design
 date: 2026-09-29
-status: REVIEW_REQUIRED
+status: CLOSED
+closed_date: 2026-09-29
 branch: docs/pricing-canonical-20260927
 goal: WO-BE-V3-OBJ05-TEMPORAL-SEMANTICS-001
-version: 1.3-PATCH3
+version: 1.4-CLOSED
 ---
 
 # TAI Safe Pricing V3 BE OBJ05 — Temporal Semantics Design
@@ -14,8 +15,8 @@ version: 1.3-PATCH3
 `term_months`가 현재 구현에서 어떤 역할들을 동시에 수행하는지 사실 기반으로
 문서화하고, V3에서 Owner 결정이 필요한 의미론적 경계를 식별한다.
 
-**이 문서는 REVIEW_REQUIRED 상태이다. Owner 결정 전 어떤 항목도 FINAL로 취급
-할 수 없다.**
+**이 문서는 CLOSED 상태이다. 아래 Owner Decisions는 2026-09-29 확정됐다.**
+재열기 금지.
 
 ---
 
@@ -511,29 +512,38 @@ D-01 expiry 경계 정의는 D-06 end_date semantics 확정 후 진행한다.
 
 | # | 항목 | CURRENT SOURCE FACT | OPTION | RECOMMENDATION (PROPOSED) | OWNER DECISION |
 |---|---|---|---|---|---|
-| D-01 | 만료 후 갱신 | V2: ACTIVE 필수(status_code guard). 단, end_date elapsed 자체를 독립 차단하는 temporal guard = NOT FOUND IN SOURCE | A. REACTIVATION (paid_at >= end_date → Renewal 금지, 신규 계약 flow, 소급 금지) / B. EXPIRED RENEWAL SUPPORT (별도 temporal/atomic design). ※ D-06 결정 후 경계 확정 가능 | A. REACTIVATION (소급 금지) — D-06 종속 | PENDING (D-06 선행) |
-| D-02 | 신규 CV effective_from | `paid_at_dt` (결제 타임스탬프) | A. 현행 유지 (paid_at) / B. start_date midnight KST로 통일 | A. 현행 유지 (최소 변경) | PENDING |
-| D-03 | Semantic rename 시점 | term_months 전 파일 사용 중 | A. Semantic-Integration WO 일괄 / B. defer | A. Semantic-Integration에서 일괄 | PENDING |
-| D-04A | 조기 갱신 허용 기간 | 현재 end_date 이전 어느 시점도 가능 (코드 제한 없음) | A. 제한 없음 / B. N일 전부터만 허용 | 임의 window 추가 안 함 (UI 정책 별도) | PENDING |
-| D-04B | 미래 예약 CV 상태에서 추가 갱신 | BLOCKED (RENEWAL_ALREADY_SCHEDULED) | A. 1 pending only 유지 / B. multiple prepayments / C. 해제 후 재갱신 | A. 1 pending only 유지 | PENDING |
-| D-05 | payment_months ↔ service_months 분리 | 현재 동일 (선납 전용) | A. 동일 유지 / B. 별도 field 분리 | A. 동일 유지 (contract commitment field 없음) | PENDING |
-| D-06 | end_date semantics | renewal CV가 end_date 00:00 KST부터 발효 → exclusive boundary 암시 | A. exclusive boundary 확정 / B. inclusive final day | A. exclusive (현재 구현과 정합) | PENDING |
+| D-01 | 만료 후 갱신 | V2: ACTIVE 필수(status_code guard). 단, end_date elapsed 자체를 독립 차단하는 temporal guard = NOT FOUND IN SOURCE | A. REACTIVATION (paid_at >= end_date → Renewal 금지, 신규 계약 flow, 소급 금지) / B. EXPIRED RENEWAL SUPPORT (별도 temporal/atomic design). ※ D-06 결정 후 경계 확정 | A. REACTIVATION (소급 금지) — D-06 종속 | **A — 2026-09-29 확정** |
+| D-02 | 신규 CV effective_from | `paid_at_dt` (결제 타임스탬프) | A. 현행 유지 (paid_at) / B. start_date midnight KST로 통일 | A. 현행 유지 (최소 변경) | **A — 2026-09-29 확정** |
+| D-03 | Semantic rename 시점 | term_months 전 파일 사용 중 | A. Semantic-Integration WO 일괄 / B. defer | A. Semantic-Integration에서 일괄 | **A — 2026-09-29 확정** |
+| D-04A | 조기 갱신 허용 기간 | 현재 end_date 이전 어느 시점도 가능 (코드 제한 없음) | A. 제한 없음 / B. N일 전부터만 허용 | 임의 window 추가 안 함 (UI 정책 별도) | **A — 2026-09-29 확정** |
+| D-04B | 미래 예약 CV 상태에서 추가 갱신 | BLOCKED (RENEWAL_ALREADY_SCHEDULED) | A. 1 pending only 유지 / B. multiple prepayments / C. 해제 후 재갱신 | A. 1 pending only 유지 | **A — 2026-09-29 확정** |
+| D-05 | payment_months ↔ service_months 분리 | 현재 동일 (선납 전용) | A. 동일 유지 / B. 별도 field 분리 | A. 동일 유지 (contract commitment field 없음) | **A — 2026-09-29 확정** |
+| D-06 | end_date semantics | renewal CV가 end_date 00:00 KST부터 발효 → exclusive boundary 암시 | A. exclusive boundary 확정 / B. inclusive final day | A. exclusive (현재 구현과 정합) | **A — 2026-09-29 확정** |
 
 ---
 
-## 17. 권장 최소 모델 요약 (PROPOSED — Owner 승인 전 FINAL 아님)
+## 17. 확정 모델 (2026-09-29 Owner 승인)
 
 ```
-D-06: [먼저 결정] end_date = exclusive service boundary
-      (renewal CV boundary source는 CONFIRMED;
-      service entitlement exclusivity는 Owner 승인 필요)
-D-01: [D-06 결정 후] IF D-06 = exclusive: paid_at >= end_date 00:00 KST → Renewal 금지 + REACTIVATION flow (소급 금지)
-      [현재 source에 temporal guard 없음 — D-01 확정 시 Semantic-Integration에서 추가 필요]
-D-02: cv.effective_from = paid_at 유지 (최소 변경)
-D-03: Semantic-Integration WO에서 term_months → payment_months 일괄 rename
-D-04A: 별도 갱신 window 제한 없음 (UI 정책 별도 결정)
-D-04B: 미래 예약 CV 1건 한정 — RENEWAL_ALREADY_SCHEDULED 유지
-D-05: payment_months == service_extension_months (분리 불필요)
+D-06 A: end_date = exclusive service boundary
+        service interval = [start_date 00:00 KST, end_date 00:00 KST)
+
+D-01 A: paid_at >= end_date 00:00 KST
+        → Renewal 금지 → REACTIVATION flow (소급 금지)
+        Semantic-Integration 필수 invariant:
+          Python:  if paid_at >= contract_end_boundary → RENEWAL_CONTRACT_EXPIRED
+          SQL:     IF v_pay_paid_at >= v_boundary → V2_RENEWAL_CONTRACT_EXPIRED
+
+D-02 A: cv.effective_from = paid_at 유지
+
+D-03 A: term_months → payment_months — Semantic-Integration WO 일괄 rename
+        실행 전 git grep -n "term_months" 전수검색으로 최종 목록 확정
+
+D-04A A: 조기 갱신 코드 제한 없음 (UI 정책 별도)
+
+D-04B A: 미래 예약 CV 1건 한정 — RENEWAL_ALREADY_SCHEDULED 유지
+
+D-05 A: payment_months == service_extension_months (분리 없음)
 ```
 
 ---
