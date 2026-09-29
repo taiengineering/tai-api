@@ -583,11 +583,12 @@ def test_C47_site_plus_scale():
     assert "SCALE_BAND_INCREASE" in r.change_types
 
 
-def test_C48_scale_plus_worker():
+def test_C48_field_scale_ignored_worker_increase_change_ready():
+    """FIELD scale band = not commercial axis. band increase + worker increase → worker reason only."""
     r = _eval(_cur_field([_site(_SITE_A, "STARTER")], workers=10),
               *_ready("FIELD", [_site(_SITE_A, "BUSINESS")], workers=50))
     assert r.status == "CHANGE_READY"
-    assert "SCALE_BAND_INCREASE" in r.change_types
+    assert "SCALE_BAND_INCREASE" not in r.change_types
     assert "WORKER_CAPACITY_INCREASE" in r.change_types
 
 
@@ -826,6 +827,43 @@ def test_C75_change_line_invalid_product_tier_rejected():
             from_product_tier="STARTER",
             to_product_tier="FIELD",
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# C78–C80: V3 FIELD scale band axis separation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_C78_field_scale_increase_only_no_change():
+    """FIELD band STARTER→BUSINESS, same sites, same workers → NO_CHANGE (scale not commercial axis)."""
+    r = _eval(
+        _cur_field([_site(_SITE_A, "STARTER")], workers=10),
+        *_ready("FIELD", [_site(_SITE_A, "BUSINESS")], workers=10),
+    )
+    assert r.status == "NO_CHANGE"
+    assert "SCALE_BAND_INCREASE" not in r.change_types
+    assert r.monthly_supply_delta == 0
+
+
+def test_C79_field_scale_decrease_only_no_change():
+    """FIELD band BUSINESS→STARTER, same sites, same workers → NO_CHANGE."""
+    r = _eval(
+        _cur_field([_site(_SITE_A, "BUSINESS", 200_000)], workers=10),
+        *_ready("FIELD", [_site(_SITE_A, "STARTER")], workers=10),
+    )
+    assert r.status == "NO_CHANGE"
+    assert "SCALE_BAND_DECREASE" not in r.renewal_only_types
+    assert r.monthly_supply_delta == 0
+
+
+def test_C80_field_scale_change_plus_site_added_site_only():
+    """FIELD band increase on existing site + new site → SITE_ADDED only (no SCALE_BAND_INCREASE)."""
+    r = _eval(
+        _cur_field([_site(_SITE_A, "STARTER")], workers=10),
+        *_ready("FIELD", [_site(_SITE_A, "BUSINESS"), _site(_SITE_B, "STARTER")], workers=10),
+    )
+    assert r.status == "CHANGE_READY"
+    assert "SITE_ADDED" in r.change_types
+    assert "SCALE_BAND_INCREASE" not in r.change_types
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

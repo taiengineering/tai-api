@@ -376,30 +376,32 @@ def evaluate_saas_change_order_v2(
             )
         cur_sort = band_lookup[cur_cat]
         tgt_sort = band_lookup[tgt_cat]
-        if tgt_sort > cur_sort:
-            expansion_types.add("SCALE_BAND_INCREASE")
-            site_lines.append(SaasCommercialChangeLineV2(
-                change_type="SCALE_BAND_INCREASE",
-                entity_type=cur_s.entity_type,
-                entity_id=cur_s.entity_id,
-                sector=cur_s.sector,
-                from_base_band_code=cur_s.base_band_code,
-                to_base_band_code=tgt_s.base_band_code,
-                from_sort_order=cur_sort,
-                to_sort_order=tgt_sort,
-            ))
-        elif tgt_sort < cur_sort:
-            renewal_types.add("SCALE_BAND_DECREASE")
-            site_lines.append(SaasCommercialChangeLineV2(
-                change_type="SCALE_BAND_DECREASE",
-                entity_type=cur_s.entity_type,
-                entity_id=cur_s.entity_id,
-                sector=cur_s.sector,
-                from_base_band_code=cur_s.base_band_code,
-                to_base_band_code=tgt_s.base_band_code,
-                from_sort_order=cur_sort,
-                to_sort_order=tgt_sort,
-            ))
+        # FIELD: scale band = classification evidence only, not commercial change axis
+        if cv.product_tier != "FIELD":
+            if tgt_sort > cur_sort:
+                expansion_types.add("SCALE_BAND_INCREASE")
+                site_lines.append(SaasCommercialChangeLineV2(
+                    change_type="SCALE_BAND_INCREASE",
+                    entity_type=cur_s.entity_type,
+                    entity_id=cur_s.entity_id,
+                    sector=cur_s.sector,
+                    from_base_band_code=cur_s.base_band_code,
+                    to_base_band_code=tgt_s.base_band_code,
+                    from_sort_order=cur_sort,
+                    to_sort_order=tgt_sort,
+                ))
+            elif tgt_sort < cur_sort:
+                renewal_types.add("SCALE_BAND_DECREASE")
+                site_lines.append(SaasCommercialChangeLineV2(
+                    change_type="SCALE_BAND_DECREASE",
+                    entity_type=cur_s.entity_type,
+                    entity_id=cur_s.entity_id,
+                    sector=cur_s.sector,
+                    from_base_band_code=cur_s.base_band_code,
+                    to_base_band_code=tgt_s.base_band_code,
+                    from_sort_order=cur_sort,
+                    to_sort_order=tgt_sort,
+                ))
 
     # Build ordered change_lines: tier first → site lines → worker → term
     if tier_line:
