@@ -20,4 +20,5 @@ ROUTERS = [
     #   {"module": "routers.price_policy"},      # /price-policy — price_policy 테이블(archive)
     # {"module": "routers.connection_commission"},  # ISOLATED 2026-08-20 (unlaunched 연결수수료)
     # {"module": "routers.settlements", "prefix": "/settlements", "tags": ["정산"]},  # ISOLATED 2026-08-20 (unlaunched 매칭정산)
+    {"module": "routers.admin_commercial"}, # ADM-COMM-01-BE: Commercial READ (/admin/commercial)
 ]

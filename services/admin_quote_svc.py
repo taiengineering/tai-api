@@ -1,4 +1,4 @@
-"""관리자 견적 서비스 — STEP 2D-A.
+"""관리자 견적 서비스 — STEP 2D-A + WO-ADM-COMM-01-BE-READ-001.
 
 WO-MYPAGE-QUOTE-PROCESS-001. 소스 확장:
   admin_manual                   — 관리자 수동 발행(신규 row · ISSUED 즉시)
@@ -7,11 +7,16 @@ WO-MYPAGE-QUOTE-PROCESS-001. 소스 확장:
 권한 강제(_require_admin)는 라우터에서 선행. 여기서는 이미 인증된 admin으로 동작.
 가격 정본 = 관리자 입력 unit_amount + billing_unit + term_months/quantity + vat_rate.
 클라이언트가 준 supply/vat/total 은 신뢰 0(수신하지 않는다 — 라우터가 body에서 제외).
+
+GAP-4 (WO-ADM-COMM-01-BE-READ-001):
+  _project_commercial_v2()로 items[0] read-only projection.
+  DB 컬럼 추가 없음. pricing engine 호출 없음.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
+from schemas.saas_quote_v2 import SAAS_QUOTE_SCHEMA_VERSION
 from services import member_quote_svc as mq_svc
 from services.time import now_kst
 
@@ -196,6 +201,33 @@ def issue_custom(supabase, quote_id, service_type, sector, tier_code, display_na
     return res.data[0]
 
 
+def _project_commercial_v2(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """items[0]에서 Frozen V2 commercial 파라미터 projection. read-only.
+
+    items[0].quote_schema_version == SAAS_QUOTE_V2 인 경우만 반환.
+    그 외(admin_manual / legacy member_custom 등) = None.
+    pricing engine 호출 = 0. DB write = 0.
+    """
+    items = row.get("items")
+    if not isinstance(items, list) or not items:
+        return None
+    item0 = items[0]
+    if not isinstance(item0, dict):
+        return None
+    if item0.get("quote_schema_version") != SAAS_QUOTE_SCHEMA_VERSION:
+        return None
+    sectors: List[str] = item0.get("sectors") or []
+    return {
+        "quote_schema_version": SAAS_QUOTE_SCHEMA_VERSION,
+        "product_tier": item0.get("product_tier"),
+        "pricing_mode": item0.get("pricing_mode"),
+        "worker_capacity": item0.get("worker_capacity"),
+        "payment_months": item0.get("payment_months"),
+        "policy_version": item0.get("policy_version"),
+        "sectors": sectors,
+    }
+
+
 def _derive_dates(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """§7 : DB 컬럼 신설 없이 requested_at / issued_at 파생.
 
@@ -261,9 +293,12 @@ def list_admin_quotes(supabase, page: int, page_size: int,
     total = len(rows) if search else (res.count if res.count is not None else len(rows))
     off = max(0, (page - 1) * page_size)
     page_rows = rows[off:off + page_size]
-    items = [_derive_dates(r) for r in page_rows]
+    derived = [_derive_dates(r) for r in page_rows]
+    for r in derived:
+        if r is not None:
+            r["commercial"] = _project_commercial_v2(r)
     total_pages = (total + page_size - 1) // page_size
-    return {"items": items, "total": total, "page": page,
+    return {"items": derived, "total": total, "page": page,
             "page_size": page_size, "total_pages": total_pages}
 
 
@@ -275,4 +310,7 @@ def get_admin_quote(supabase, quote_id: str) -> Optional[Dict[str, Any]]:
     )
     if not res.data:
         return None
-    return _derive_dates(res.data[0])
+    row = _derive_dates(res.data[0])
+    if row is not None:
+        row["commercial"] = _project_commercial_v2(row)
+    return row
