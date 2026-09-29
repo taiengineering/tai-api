@@ -801,6 +801,8 @@ saas_renewal_runtime_v2.py (first_apply boundary verify)
 
 **OBJ03 = Pricing Formula/Policy Patch ONLY.** `term_months` rename은 OBJ03에서 제외.
 
+**SOURCE = 2 files**
+
 ```
 schemas/saas_pricing_policy_v2.py
   - field_uplift_amount → field_base_amount (= 249,000)
@@ -811,12 +813,64 @@ schemas/saas_pricing_policy_v2.py
 services/saas_pricing_composer_v2.py
   - FIELD formula: normal = policy.field_base_amount
   (NOTE: term_months refs rename은 coordinated patch로 이동)
-
-tests/test_saas_pricing_policy_v2.py
-tests/test_saas_pricing_composer_v2.py
-  - SUPERSEDED policy values 갱신
-  - V3 FIELD / MANAGER / discount cases 추가
 ```
+
+**TEST = 7 files** (`field_uplift_amount` 직접 생성 또는 canonical unresolved 전제를 포함하므로 OBJ03 source 변경으로 즉시 깨짐)
+
+```
+tests/test_saas_pricing_policy_v2.py
+  - field_uplift_amount → field_base_amount. 249,000 exact 검증. V3 discounts 확인.
+  - SaasTermDiscountPolicy.term_months는 rename 금지 (Semantic-Integration까지 유지)
+
+tests/test_saas_pricing_composer_v2.py
+  - test policy helper: field_uplift_amount → field_base_amount
+  - FIELD: base_amount 값과 무관하게 normal_site_amount = 249,000 검증
+  - discount 계산: 6개월 10% 등 V3 기준 산술 검증
+
+tests/test_saas_pricing_preview_v2.py
+  - test policy helper: field_uplift_amount → field_base_amount
+  - P51~P56 "canonical = TERM_DISCOUNT_UNRESOLVED" 전제 제거 → V3 canonical(READY) 기준 수정
+  - TERM_DISCOUNT_UNRESOLVED 분기 자체 검증 필요 시: explicit None-discount policy monkeypatch 사용
+
+tests/test_saas_quote_v2.py
+  - test policy helper: field_uplift_amount → field_base_amount
+  - TERM_DISCOUNT_UNRESOLVED → QUOTE_PRICING_NOT_READY branch-level invariant 유지 (삭제 금지)
+    explicit None-discount test policy로 계속 검증
+
+tests/test_saas_contract_commercial_v2.py
+  - test policy helper: field_uplift_amount → field_base_amount
+  - M02 "canonical = TERM_DISCOUNT_UNRESOLVED" 전제 제거
+    → explicit test policy with discount_rate_bps=None으로 unresolved result 생성
+
+tests/test_saas_change_order_v2.py
+  - test policy helper: field_uplift_amount → field_base_amount
+  - OBJ07 미결 FIELD scale semantics 변경 금지. fixture만 V3 Policy 구조에 정합.
+
+tests/test_saas_commercial_fit_gate_v2.py
+  - test policy helper: field_uplift_amount → field_base_amount
+  - FIELD scale commercial baseline behavior 변경 금지 (OBJ07 UNRESOLVED)
+```
+
+**TOTAL = 9 files (SOURCE 2 + TEST 7)**
+
+**Pre-implementation search guard**: OBJ03 실행 전 repo 전수 검색.
+검색어: `field_uplift_amount`, `TERM_DISCOUNT_UNRESOLVED`, `get_canonical_pricing_policy_v2`, `"term discounts = None"`.
+위 7개 test 외 runtime code에서 `field_uplift_amount` 직접 의존 발견 시 — 범위 자동 확장 금지. STOP 후 GPT 보고.
+
+**Test execution design (OBJ03 완료 후):**
+
+```bash
+pytest -q \
+  tests/test_saas_pricing_policy_v2.py \
+  tests/test_saas_pricing_composer_v2.py \
+  tests/test_saas_pricing_preview_v2.py \
+  tests/test_saas_quote_v2.py \
+  tests/test_saas_contract_commercial_v2.py \
+  tests/test_saas_change_order_v2.py \
+  tests/test_saas_commercial_fit_gate_v2.py
+```
+
+가능하면 repo-wide `pytest -q` 추가 실행. pre-existing failure는 구분하여 보고.
 
 OBJ03 commit 자체가 기존 consumer와 **일관된 runnable state**를 유지해야 한다.
 
@@ -889,17 +943,27 @@ BE-V3-OBJ02 = COMPLETE (REVIEW_REQUIRED)
 다음 Gate (OBJ02 GPT PASS 후):
   BE-V3-OBJ03 — Pricing Core Minimal Patch
 
-  코드 대상:
+  SOURCE (2):
     schemas/saas_pricing_policy_v2.py
     services/saas_pricing_composer_v2.py
+
+  TEST (7):
     tests/test_saas_pricing_policy_v2.py
     tests/test_saas_pricing_composer_v2.py
+    tests/test_saas_pricing_preview_v2.py
+    tests/test_saas_quote_v2.py
+    tests/test_saas_contract_commercial_v2.py
+    tests/test_saas_change_order_v2.py
+    tests/test_saas_commercial_fit_gate_v2.py
+
+  TOTAL = 9 files
 
   OBJ03 금지:
     schemas/saas_pricing_v2.py 변경
     term_months / payment_months rename
     SAAS_PRICING_V3 / SAAS_QUOTE_V3 version bump
     Commercial schema 변경
+    범위 자동 확장 (추가 dependency 발견 시 STOP / GPT 보고)
 ```
 
 ---
