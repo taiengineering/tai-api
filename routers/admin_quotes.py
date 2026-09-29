@@ -85,15 +85,18 @@ def list_quotes(
     source: Optional[str] = Query(None),
     status_code: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    company_id: Optional[str] = Query(None),
     current: dict = Depends(get_current_user),
 ):
     """관리자 견적 목록 — ADMIN_SOURCES (member_auto/member_custom/admin_manual) 만.
-    survey_web 등 legacy 는 미노출."""
+    survey_web 등 legacy 는 미노출.
+    company_id: platform admin 검색 filter(tenant authority 아님)."""
     supabase = get_supabase()
     _require_admin(current, supabase)
     return {
         "status": "success",
-        "data": svc.list_admin_quotes(supabase, page, page_size, source, status_code, search),
+        "data": svc.list_admin_quotes(supabase, page, page_size, source, status_code, search,
+                                      company_id=company_id),
     }
 
 
