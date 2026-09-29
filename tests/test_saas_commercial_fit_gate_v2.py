@@ -562,12 +562,13 @@ def test_F29_manager_actual_worker_0_fit():
     assert result.contracted_worker_capacity == 0
 
 
-def test_F30_manager_actual_worker_positive_exceeded():
+def test_F30_manager_actual_worker_positive_no_worker_reason():
+    """MANAGER worker axis = not applicable. actual_worker_count > 0 → FIT (no worker reason)."""
     eid = uuid4()
     bundle = _mgr_bundle([_site_input(eid)])
     result = _eval(bundle, [_actual(eid)], workers=1)
-    assert result.status == "CHANGE_REQUIRED"
-    assert "WORKER_CAPACITY_EXCEEDED" in result.reason_codes
+    assert result.status == "FIT"
+    assert "WORKER_CAPACITY_EXCEEDED" not in result.reason_codes
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -616,29 +617,29 @@ def test_F33_site_out_of_scope_and_worker_exceeded():
     assert "SCALE_BAND_EXCEEDED" not in result.reason_codes
 
 
-def test_F34_scale_exceeded_and_worker_exceeded():
+def test_F34_field_scale_ignored_worker_exceeded():
+    """FIELD scale band = not commercial axis. band increase + worker exceeded → worker reason only."""
     eid = uuid4()
     bundle = _field_bundle([_site_input(eid, bbc="STARTER")], workers=5)
     result = _eval(bundle, [_actual(eid, required_bbc="PRO")], workers=10)
     assert result.status == "CHANGE_REQUIRED"
-    assert "SCALE_BAND_EXCEEDED" in result.reason_codes
     assert "WORKER_CAPACITY_EXCEEDED" in result.reason_codes
+    assert "SCALE_BAND_EXCEEDED" not in result.reason_codes
     assert "SITE_OUT_OF_SCOPE" not in result.reason_codes
 
 
-def test_F35_all_three_violations():
+def test_F35_field_site_scope_and_worker_exceeded_no_scale():
+    """FIELD: scale band not applicable. site OOS + worker exceeded → 2 reasons (no SCALE_BAND)."""
     contracted_eid = uuid4()
     extra_eid = uuid4()
     bundle = _field_bundle([_site_input(contracted_eid, bbc="STARTER")], workers=5)
     result = _eval(bundle, [
-        _actual(contracted_eid, required_bbc="PRO"),  # scale exceeded
+        _actual(contracted_eid, required_bbc="PRO"),  # band increase — no reason for FIELD
         _actual(extra_eid),                           # out of scope
     ], workers=10)
     assert result.status == "CHANGE_REQUIRED"
-    # All three reasons present in canonical order
     assert result.reason_codes == [
         "SITE_OUT_OF_SCOPE",
-        "SCALE_BAND_EXCEEDED",
         "WORKER_CAPACITY_EXCEEDED",
     ]
 
@@ -826,6 +827,54 @@ def test_F53_no_api_router():
     source = _GATE_SRC.read_text()
     for kw in ["APIRouter", "from routers", "import routers"]:
         assert kw not in source, f"API/Router 키워드 발견: {kw}"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# F58-F61: V3 Product Tier Axis Separation
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_F58_field_band_increase_only_fit():
+    """FIELD scale band ≠ commercial axis. band increase, worker within capacity → FIT."""
+    eid = uuid4()
+    bundle = _field_bundle([_site_input(eid, bbc="STARTER")], workers=10)
+    result = _eval(bundle, [_actual(eid, required_bbc="PRO")], workers=5)
+    assert result.status == "FIT"
+    assert "SCALE_BAND_EXCEEDED" not in result.reason_codes
+    assert result.site_results[0].status == "FIT"
+
+
+def test_F59_field_site_out_of_scope_worker_in_range_no_scale_reason():
+    """FIELD: extra site (OOS) + worker within capacity → SITE_OUT_OF_SCOPE only."""
+    contracted_eid = uuid4()
+    extra_eid = uuid4()
+    bundle = _field_bundle([_site_input(contracted_eid)], workers=10)
+    result = _eval(bundle, [
+        _actual(contracted_eid),
+        _actual(extra_eid),  # out of scope
+    ], workers=5)
+    assert result.status == "CHANGE_REQUIRED"
+    assert result.reason_codes == ["SITE_OUT_OF_SCOPE"]
+    assert "SCALE_BAND_EXCEEDED" not in result.reason_codes
+
+
+def test_F60_manager_worker_positive_same_site_band_fit():
+    """MANAGER worker axis = not applicable. site fits, band fits, actual_worker > 0 → FIT."""
+    eid = uuid4()
+    bundle = _mgr_bundle([_site_input(eid, bbc="STARTER")])
+    result = _eval(bundle, [_actual(eid, required_bbc="STARTER")], workers=50)
+    assert result.status == "FIT"
+    assert result.reason_codes == []
+    assert "WORKER_CAPACITY_EXCEEDED" not in result.reason_codes
+
+
+def test_F61_manager_scale_exceeded_worker_positive_scale_reason_only():
+    """MANAGER scale exceeded + actual_worker > 0 → SCALE_BAND_EXCEEDED only, no worker reason."""
+    eid = uuid4()
+    bundle = _mgr_bundle([_site_input(eid, bbc="STARTER")])
+    result = _eval(bundle, [_actual(eid, required_bbc="PRO")], workers=20)
+    assert result.status == "CHANGE_REQUIRED"
+    assert result.reason_codes == ["SCALE_BAND_EXCEEDED"]
+    assert "WORKER_CAPACITY_EXCEEDED" not in result.reason_codes
 
 
 # ═════════════════════════════════════════════════════════════════════════════

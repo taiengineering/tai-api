@@ -202,7 +202,8 @@ def evaluate_saas_commercial_fit_v2(
         contracted_sort = band_lookup[contracted_catalog_key]
 
         # Band comparison — sort_order 기준, 금액 비교 금지
-        if required_sort <= contracted_sort:
+        # FIELD: scale band ≠ commercial pricing axis (249K 고정). evidence 보존, reason 미발행.
+        if cv.product_tier == "FIELD" or required_sort <= contracted_sort:
             site_results.append(SaasCommercialSiteFitResultV2(
                 entity_type=site.entity_type,
                 entity_id=site.entity_id,
@@ -228,8 +229,9 @@ def evaluate_saas_commercial_fit_v2(
             ))
             active_reasons.add("SCALE_BAND_EXCEEDED")
 
-    # ── Step 8: Worker capacity check (contract-wide, 1회) ───────────────────
-    if actual_state.actual_worker_count > cv.worker_capacity:
+    # ── Step 8: Worker capacity check (FIELD 전용 — contract-wide, 1회) ──────
+    # MANAGER: worker_capacity=0 은 sentinel. worker axis = commercial fit 미적용.
+    if cv.product_tier == "FIELD" and actual_state.actual_worker_count > cv.worker_capacity:
         active_reasons.add("WORKER_CAPACITY_EXCEEDED")
 
     # ── Step 9: Aggregate — canonical reason code order ──────────────────────
