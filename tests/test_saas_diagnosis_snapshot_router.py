@@ -1,6 +1,6 @@
 """tests/test_saas_diagnosis_snapshot_router.py
 
-WO-DIAGNOSIS-RESULT-SNAPSHOT-INVENTORY-SEPARATION-PATCH1.
+WO-DIAGNOSIS-RESULT-SNAPSHOT-INVENTORY-SEPARATION-PATCH1+PATCH2.
 
 Router-level tests for GET /legal-engine/diagnose/snapshot/{diagnosis_id}.
 
@@ -11,6 +11,7 @@ R04 malformed snapshot (obligations_raw absent) → 500
 R05 response public_token absent
 R06 response input_data absent
 R07 get_current_user called with 1 arg (signature regression guard)
+R08 COMPANY-role user with matching company_id → 200
 """
 import pytest
 from fastapi import FastAPI
@@ -101,6 +102,8 @@ _MALFORMED_ROW = {
 # owner = ALL-tier → _ensure_own_company bypasses company check
 _USER_OWN = {"id": "u-1", "company_id": _OWN_COMPANY_ID, "role_code": "001"}
 _USER_OTHER = {"id": "u-2", "company_id": _OTHER_COMPANY_ID, "role_code": "010"}
+# COMPANY-role user whose company_id matches the stored snapshot company_id
+_USER_COMPANY = {"id": "u-3", "company_id": _OWN_COMPANY_ID, "role_code": "010"}
 
 _SEED_VALID = {
     "anonymous_diagnosis_results": [_VALID_ROW],
@@ -200,3 +203,18 @@ def test_r07_get_current_user_signature():
     """
     with pytest.raises(TypeError):
         get_current_user("Bearer fake-token", object())  # type: ignore[call-arg]
+
+
+# ── R08 — COMPANY-role user with matching company_id → 200 ───────────────────
+
+def test_r08_company_role_matching_company(monkeypatch):
+    """A non-ALL role user whose company_id matches the snapshot's stored company_id
+    must receive 200 with the full snapshot payload — not a 404 ownership rejection.
+    """
+    fake = FakeSB(_SEED_VALID)
+    client = _make_client(fake, monkeypatch, _USER_COMPANY)
+    resp = client.get(f"/legal-engine/diagnose/snapshot/{_DIAG_ID}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["data"]["diagnosis_id"] == _DIAG_ID
