@@ -25,7 +25,7 @@ PricingMode = Literal["STANDARD", "CUSTOM"]
 SaasSector = Literal["INDUSTRY", "BUILDING", "CONSTRUCTION"]
 EntityType = Literal["factory", "site"]
 
-VALID_TERM_MONTHS: frozenset[int] = frozenset({1, 3, 6, 9, 12})
+VALID_PAYMENT_MONTHS: frozenset[int] = frozenset({1, 3, 6, 9, 12})
 
 # Sector → expected EntityType canonical mapping
 _SECTOR_ENTITY_MAP: dict[str, EntityType] = {
@@ -43,7 +43,7 @@ class SaasCommercialSelection(BaseModel):
     product_tier: ProductTier
     pricing_mode: PricingMode
     worker_capacity: StrictInt
-    term_months: StrictInt
+    payment_months: StrictInt
 
     @field_validator("worker_capacity")
     @classmethod
@@ -52,11 +52,11 @@ class SaasCommercialSelection(BaseModel):
             raise ValueError("worker_capacity는 0 이상이어야 합니다.")
         return v
 
-    @field_validator("term_months")
+    @field_validator("payment_months")
     @classmethod
-    def _term_months_allowed(cls, v: int) -> int:
-        if v not in VALID_TERM_MONTHS:
-            raise ValueError(f"term_months는 {sorted(VALID_TERM_MONTHS)} 중 하나여야 합니다.")
+    def _payment_months_allowed(cls, v: int) -> int:
+        if v not in VALID_PAYMENT_MONTHS:
+            raise ValueError(f"payment_months는 {sorted(VALID_PAYMENT_MONTHS)} 중 하나여야 합니다.")
         return v
 
     @model_validator(mode="after")
@@ -172,7 +172,7 @@ class SaasPricingSnapshotV2(BaseModel):
     sites: List[SaasSiteScope]
     worker: SaasWorkerPricingSnapshot
 
-    term_months: StrictInt
+    payment_months: StrictInt
     term_discount_rate_bps: StrictInt
 
     monthly_supply_amount: StrictInt
@@ -182,11 +182,11 @@ class SaasPricingSnapshotV2(BaseModel):
     vat_amount: StrictInt
     total_amount: StrictInt
 
-    @field_validator("term_months")
+    @field_validator("payment_months")
     @classmethod
-    def _term_months_allowed(cls, v: int) -> int:
-        if v not in VALID_TERM_MONTHS:
-            raise ValueError(f"term_months는 {sorted(VALID_TERM_MONTHS)} 중 하나여야 합니다.")
+    def _payment_months_allowed(cls, v: int) -> int:
+        if v not in VALID_PAYMENT_MONTHS:
+            raise ValueError(f"payment_months는 {sorted(VALID_PAYMENT_MONTHS)} 중 하나여야 합니다.")
         return v
 
     @field_validator(

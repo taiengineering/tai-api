@@ -60,7 +60,7 @@ class SaasPricingPreviewRequestV2(BaseModel):
 
     product_tier: ProductTier
     worker_capacity: StrictInt
-    term_months: StrictInt
+    payment_months: StrictInt
     sites: List[SaasPricingPreviewSiteRequestV2]
 
 
@@ -90,7 +90,7 @@ class SaasPricingPreviewResponseV2(BaseModel):
     product_tier: ProductTier
     pricing_mode: PricingMode
     worker_capacity: int
-    term_months: int
+    payment_months: int
     resolved_sites: List[SaasPricingPreviewResolvedSiteV2]
     calculation: Optional[Any]  # SaasPricingCalculationResult
     block_reason: Optional[str]

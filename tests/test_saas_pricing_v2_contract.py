@@ -43,7 +43,7 @@ def _snapshot(**overrides):
         pricing_mode="STANDARD",
         sites=[_site()],
         worker=_worker(),
-        term_months=1,
+        payment_months=1,
         term_discount_rate_bps=0,
         monthly_supply_amount=149000,
         prepaid_supply_amount=149000,
@@ -62,7 +62,7 @@ def test_T01_manager_valid():
         product_tier="MANAGER",
         pricing_mode="STANDARD",
         worker_capacity=0,
-        term_months=1,
+        payment_months=1,
     )
     assert sel.product_tier == "MANAGER"
 
@@ -74,7 +74,7 @@ def test_T02_field_valid():
         product_tier="FIELD",
         pricing_mode="STANDARD",
         worker_capacity=5,
-        term_months=12,
+        payment_months=12,
     )
     assert sel.product_tier == "FIELD"
 
@@ -87,7 +87,7 @@ def test_T03_custom_standard_rejected():
             product_tier="CUSTOM",
             pricing_mode="STANDARD",
             worker_capacity=0,
-            term_months=1,
+            payment_months=1,
         )
 
 
@@ -99,7 +99,7 @@ def test_T04_starter_product_tier_rejected():
             product_tier="STARTER",
             pricing_mode="STANDARD",
             worker_capacity=0,
-            term_months=1,
+            payment_months=1,
         )
 
 
@@ -111,7 +111,7 @@ def test_T05_manager_with_workers_rejected():
             product_tier="MANAGER",
             pricing_mode="STANDARD",
             worker_capacity=1,
-            term_months=1,
+            payment_months=1,
         )
 
 
@@ -122,7 +122,7 @@ def test_T06_field_worker_capacity_zero_accepted():
         product_tier="FIELD",
         pricing_mode="STANDARD",
         worker_capacity=0,
-        term_months=1,
+        payment_months=1,
     )
     assert sel.worker_capacity == 0
 
@@ -130,14 +130,14 @@ def test_T06_field_worker_capacity_zero_accepted():
 # ── T07~T11 term months accepted ─────────────────────────────────────────────
 
 @pytest.mark.parametrize("months", [1, 3, 6, 9, 12])
-def test_T07_to_T11_term_months_accepted(months):
+def test_T07_to_T11_payment_months_accepted(months):
     sel = SaasCommercialSelection(
         product_tier="MANAGER",
         pricing_mode="STANDARD",
         worker_capacity=0,
-        term_months=months,
+        payment_months=months,
     )
-    assert sel.term_months == months
+    assert sel.payment_months == months
 
 
 # ── T12 term 2 rejected ───────────────────────────────────────────────────────
@@ -148,7 +148,7 @@ def test_T12_term_2_rejected():
             product_tier="MANAGER",
             pricing_mode="STANDARD",
             worker_capacity=0,
-            term_months=2,
+            payment_months=2,
         )
 
 
@@ -256,7 +256,7 @@ def test_T24_pricing_mode_standard_accepted():
         product_tier="MANAGER",
         pricing_mode="STANDARD",
         worker_capacity=0,
-        term_months=1,
+        payment_months=1,
     )
     assert sel.pricing_mode == "STANDARD"
 
@@ -269,7 +269,7 @@ def test_T25_manager_custom_rejected():
             product_tier="MANAGER",
             pricing_mode="CUSTOM",
             worker_capacity=0,
-            term_months=1,
+            payment_months=1,
         )
 
 
@@ -344,7 +344,7 @@ def test_P07_worker_capacity_float_rejected():
             product_tier="FIELD",
             pricing_mode="STANDARD",
             worker_capacity=100.0,
-            term_months=1,
+            payment_months=1,
         )
 
 
@@ -354,29 +354,29 @@ def test_P08_worker_capacity_bool_rejected():
             product_tier="FIELD",
             pricing_mode="STANDARD",
             worker_capacity=True,
-            term_months=1,
+            payment_months=1,
         )
 
 
-# P09~P10 term_months strict
+# P09~P10 payment_months strict
 
-def test_P09_term_months_float_rejected():
+def test_P09_payment_months_float_rejected():
     with pytest.raises(ValidationError):
         SaasCommercialSelection(
             product_tier="MANAGER",
             pricing_mode="STANDARD",
             worker_capacity=0,
-            term_months=12.0,
+            payment_months=12.0,
         )
 
 
-def test_P10_term_months_bool_rejected():
+def test_P10_payment_months_bool_rejected():
     with pytest.raises(ValidationError):
         SaasCommercialSelection(
             product_tier="MANAGER",
             pricing_mode="STANDARD",
             worker_capacity=0,
-            term_months=True,
+            payment_months=True,
         )
 
 
@@ -441,7 +441,7 @@ def test_P20_total_amount_float_rejected():
 # K01 MANAGER + STANDARD accepted
 def test_K01_manager_standard_accepted():
     sel = SaasCommercialSelection(
-        product_tier="MANAGER", pricing_mode="STANDARD", worker_capacity=0, term_months=1
+        product_tier="MANAGER", pricing_mode="STANDARD", worker_capacity=0, payment_months=1
     )
     assert sel.product_tier == "MANAGER"
     assert sel.pricing_mode == "STANDARD"
@@ -450,7 +450,7 @@ def test_K01_manager_standard_accepted():
 # K02 FIELD + STANDARD accepted
 def test_K02_field_standard_accepted():
     sel = SaasCommercialSelection(
-        product_tier="FIELD", pricing_mode="STANDARD", worker_capacity=5, term_months=1
+        product_tier="FIELD", pricing_mode="STANDARD", worker_capacity=5, payment_months=1
     )
     assert sel.product_tier == "FIELD"
     assert sel.pricing_mode == "STANDARD"
@@ -459,7 +459,7 @@ def test_K02_field_standard_accepted():
 # K03 CUSTOM + CUSTOM accepted
 def test_K03_custom_custom_accepted():
     sel = SaasCommercialSelection(
-        product_tier="CUSTOM", pricing_mode="CUSTOM", worker_capacity=0, term_months=1
+        product_tier="CUSTOM", pricing_mode="CUSTOM", worker_capacity=0, payment_months=1
     )
     assert sel.product_tier == "CUSTOM"
     assert sel.pricing_mode == "CUSTOM"
@@ -469,7 +469,7 @@ def test_K03_custom_custom_accepted():
 def test_K04_manager_custom_rejected():
     with pytest.raises(ValidationError):
         SaasCommercialSelection(
-            product_tier="MANAGER", pricing_mode="CUSTOM", worker_capacity=0, term_months=1
+            product_tier="MANAGER", pricing_mode="CUSTOM", worker_capacity=0, payment_months=1
         )
 
 
@@ -477,7 +477,7 @@ def test_K04_manager_custom_rejected():
 def test_K05_field_custom_rejected():
     with pytest.raises(ValidationError):
         SaasCommercialSelection(
-            product_tier="FIELD", pricing_mode="CUSTOM", worker_capacity=5, term_months=1
+            product_tier="FIELD", pricing_mode="CUSTOM", worker_capacity=5, payment_months=1
         )
 
 
@@ -485,14 +485,14 @@ def test_K05_field_custom_rejected():
 def test_K06_custom_standard_rejected():
     with pytest.raises(ValidationError):
         SaasCommercialSelection(
-            product_tier="CUSTOM", pricing_mode="STANDARD", worker_capacity=0, term_months=1
+            product_tier="CUSTOM", pricing_mode="STANDARD", worker_capacity=0, payment_months=1
         )
 
 
 # K07 CUSTOM worker_capacity=0 accepted
 def test_K07_custom_worker_capacity_zero_accepted():
     sel = SaasCommercialSelection(
-        product_tier="CUSTOM", pricing_mode="CUSTOM", worker_capacity=0, term_months=1
+        product_tier="CUSTOM", pricing_mode="CUSTOM", worker_capacity=0, payment_months=1
     )
     assert sel.worker_capacity == 0
 
@@ -500,7 +500,7 @@ def test_K07_custom_worker_capacity_zero_accepted():
 # K08 CUSTOM worker_capacity>0 accepted
 def test_K08_custom_worker_capacity_positive_accepted():
     sel = SaasCommercialSelection(
-        product_tier="CUSTOM", pricing_mode="CUSTOM", worker_capacity=300, term_months=1
+        product_tier="CUSTOM", pricing_mode="CUSTOM", worker_capacity=300, payment_months=1
     )
     assert sel.worker_capacity == 300
 
@@ -509,7 +509,7 @@ def test_K08_custom_worker_capacity_positive_accepted():
 def test_K09_starter_still_rejected():
     with pytest.raises(ValidationError):
         SaasCommercialSelection(
-            product_tier="STARTER", pricing_mode="STANDARD", worker_capacity=0, term_months=1
+            product_tier="STARTER", pricing_mode="STANDARD", worker_capacity=0, payment_months=1
         )
 
 
@@ -517,7 +517,7 @@ def test_K09_starter_still_rejected():
 def test_K10_business_rejected():
     with pytest.raises(ValidationError):
         SaasCommercialSelection(
-            product_tier="BUSINESS", pricing_mode="STANDARD", worker_capacity=0, term_months=1
+            product_tier="BUSINESS", pricing_mode="STANDARD", worker_capacity=0, payment_months=1
         )
 
 
@@ -525,7 +525,7 @@ def test_K10_business_rejected():
 def test_K11_pro_rejected():
     with pytest.raises(ValidationError):
         SaasCommercialSelection(
-            product_tier="PRO", pricing_mode="STANDARD", worker_capacity=0, term_months=1
+            product_tier="PRO", pricing_mode="STANDARD", worker_capacity=0, payment_months=1
         )
 
 

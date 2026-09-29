@@ -90,8 +90,8 @@ def _custom_quote_proposal(
         requires_remaining_term_prepaid=False,
         current_policy_version=None,
         target_policy_version=None,
-        current_term_months=cv.term_months,
-        target_term_months=target_selection.term_months,
+        current_payment_months=cv.payment_months,
+        target_payment_months=target_selection.payment_months,
         requested_effective_at=requested_effective_at,
     )
 
@@ -204,11 +204,11 @@ def evaluate_saas_change_order_v2(
             f"selection.worker_capacity={target_selection.worker_capacity} != "
             f"snapshot.worker.capacity={target_snap.worker.capacity}",
         )
-    if target_selection.term_months != target_snap.term_months:
+    if target_selection.payment_months != target_snap.payment_months:
         raise SaasChangeOrderError(
             "TARGET_SNAPSHOT_MISMATCH",
-            f"selection.term_months={target_selection.term_months} != "
-            f"snapshot.term_months={target_snap.term_months}",
+            f"selection.payment_months={target_selection.payment_months} != "
+            f"snapshot.payment_months={target_snap.payment_months}",
         )
 
     # ── Step 8: Result monthly ↔ snapshot monthly ─────────────────────────────
@@ -258,15 +258,15 @@ def evaluate_saas_change_order_v2(
             )
 
     # Term comparison
-    current_term = cv.term_months
-    target_term = target_selection.term_months
+    current_term = cv.payment_months
+    target_term = target_selection.payment_months
     term_line: Optional[SaasCommercialChangeLineV2] = None
     if current_term != target_term:
         renewal_types.add("TERM_CHANGE")
         term_line = SaasCommercialChangeLineV2(
             change_type="TERM_CHANGE",
-            from_term_months=current_term,
-            to_term_months=target_term,
+            from_payment_months=current_term,
+            to_payment_months=target_term,
         )
 
     # Worker comparison
@@ -442,8 +442,8 @@ def evaluate_saas_change_order_v2(
             requires_remaining_term_prepaid=False,
             current_policy_version=current_policy_version,
             target_policy_version=target_policy_version,
-            current_term_months=current_term,
-            target_term_months=target_term,
+            current_payment_months=current_term,
+            target_payment_months=target_term,
             requested_effective_at=requested_effective_at,
         )
 
@@ -468,8 +468,8 @@ def evaluate_saas_change_order_v2(
             requires_remaining_term_prepaid=False,
             current_policy_version=current_policy_version,
             target_policy_version=target_policy_version,
-            current_term_months=current_term,
-            target_term_months=target_term,
+            current_payment_months=current_term,
+            target_payment_months=target_term,
             requested_effective_at=requested_effective_at,
         )
 
@@ -501,7 +501,7 @@ def evaluate_saas_change_order_v2(
         requires_remaining_term_prepaid=True,
         current_policy_version=current_policy_version,
         target_policy_version=target_policy_version,
-        current_term_months=current_term,
-        target_term_months=target_term,
+        current_payment_months=current_term,
+        target_payment_months=target_term,
         requested_effective_at=requested_effective_at,
     )

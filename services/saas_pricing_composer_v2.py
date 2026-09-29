@@ -104,7 +104,7 @@ class SaasPricingCalculationResult(BaseModel):
     monthly_supply_amount: Optional[int]
     raw_prepaid_supply_amount: Optional[int]
 
-    term_months: int
+    payment_months: int
     term_discount_rate_bps: Optional[int]  # None = TERM_DISCOUNT_UNRESOLVED
 
     snapshot: Optional[SaasPricingSnapshotV2]
@@ -175,7 +175,7 @@ def calculate_saas_price_v2(
             worker_breakdown=None,
             monthly_supply_amount=None,
             raw_prepaid_supply_amount=None,
-            term_months=selection.term_months,
+            payment_months=selection.payment_months,
             term_discount_rate_bps=None,
             snapshot=None,
             block_reason="product_tier=CUSTOM: 자동 가격 계산 불가, 별도 견적 필요",
@@ -250,16 +250,16 @@ def calculate_saas_price_v2(
     monthly_supply_amount = site_monthly_total + worker_snapshot.amount
 
     # Step 10: Raw prepaid
-    raw_prepaid_supply_amount = monthly_supply_amount * selection.term_months
+    raw_prepaid_supply_amount = monthly_supply_amount * selection.payment_months
 
     # Step 11: Term discount 조회
     matching = [
         td for td in policy.term_discounts
-        if td.term_months == selection.term_months
+        if td.payment_months == selection.payment_months
     ]
     if len(matching) != 1:
         raise SaasPricingComposerError(
-            f"term_months={selection.term_months}에 해당하는 discount가 Policy에 없거나 중복입니다. "
+            f"payment_months={selection.payment_months}에 해당하는 discount가 Policy에 없거나 중복입니다. "
             f"(found={len(matching)})"
         )
     term_discount_policy = matching[0]
@@ -273,7 +273,7 @@ def calculate_saas_price_v2(
             worker_breakdown=worker_snapshot,
             monthly_supply_amount=monthly_supply_amount,
             raw_prepaid_supply_amount=raw_prepaid_supply_amount,
-            term_months=selection.term_months,
+            payment_months=selection.payment_months,
             term_discount_rate_bps=None,
             snapshot=None,
             block_reason="term_discount_rate_bps=None: Owner 미확정, Snapshot 생성 불가",
@@ -309,7 +309,7 @@ def calculate_saas_price_v2(
         pricing_mode="STANDARD",
         sites=site_scopes,
         worker=worker_snapshot,
-        term_months=selection.term_months,
+        payment_months=selection.payment_months,
         term_discount_rate_bps=discount_rate_bps,
         monthly_supply_amount=monthly_supply_amount,
         prepaid_supply_amount=prepaid_supply_amount,
@@ -325,7 +325,7 @@ def calculate_saas_price_v2(
         worker_breakdown=worker_snapshot,
         monthly_supply_amount=monthly_supply_amount,
         raw_prepaid_supply_amount=raw_prepaid_supply_amount,
-        term_months=selection.term_months,
+        payment_months=selection.payment_months,
         term_discount_rate_bps=discount_rate_bps,
         snapshot=snapshot,
         block_reason=None,

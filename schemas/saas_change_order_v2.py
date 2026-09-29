@@ -97,8 +97,8 @@ class SaasCommercialChangeLineV2(BaseModel):
     to_sort_order: Optional[int] = None
 
     # Term change
-    from_term_months: Optional[int] = None
-    to_term_months: Optional[int] = None
+    from_payment_months: Optional[int] = None
+    to_payment_months: Optional[int] = None
 
 
 # ── Change Order Proposal ─────────────────────────────────────────────────────
@@ -142,7 +142,7 @@ class SaasChangeOrderProposalV2(BaseModel):
     current_policy_version: Optional[str]
     target_policy_version: Optional[str]
 
-    current_term_months: int
-    target_term_months: int
+    current_payment_months: int
+    target_payment_months: int
 
     requested_effective_at: datetime

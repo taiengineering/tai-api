@@ -31,17 +31,17 @@ def _canonical_brackets():
 
 def _canonical_term_discounts():
     return [
-        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=0),
-        SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=500),
-        SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=1000),
-        SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=1500),
-        SaasTermDiscountPolicy(term_months=12, discount_rate_bps=2000),
+        SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=0),
+        SaasTermDiscountPolicy(payment_months=3,  discount_rate_bps=500),
+        SaasTermDiscountPolicy(payment_months=6,  discount_rate_bps=1000),
+        SaasTermDiscountPolicy(payment_months=9,  discount_rate_bps=1500),
+        SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=2000),
     ]
 
 
 def _unresolved_term_discounts():
     return [
-        SaasTermDiscountPolicy(term_months=m, discount_rate_bps=None)
+        SaasTermDiscountPolicy(payment_months=m, discount_rate_bps=None)
         for m in [1, 3, 6, 9, 12]
     ]
 
@@ -249,45 +249,45 @@ def test_P26_vat_float_rejected():
 
 # ── P27~P33 Term Discount ────────────────────────────────────────────────────
 
-def test_P27_term_months_exactly_1_3_6_9_12():
+def test_P27_payment_months_exactly_1_3_6_9_12():
     policy = get_canonical_pricing_policy_v2()
-    months = {td.term_months for td in policy.term_discounts}
+    months = {td.payment_months for td in policy.term_discounts}
     assert months == {1, 3, 6, 9, 12}
 
 
 def test_P28_term_2_rejected():
     with pytest.raises(ValidationError):
-        SaasTermDiscountPolicy(term_months=2, discount_rate_bps=None)
+        SaasTermDiscountPolicy(payment_months=2, discount_rate_bps=None)
 
 
 def test_P29_float_term_rejected():
     with pytest.raises(ValidationError):
-        SaasTermDiscountPolicy(term_months=12.0, discount_rate_bps=None)
+        SaasTermDiscountPolicy(payment_months=12.0, discount_rate_bps=None)
 
 
 def test_P30_canonical_discounts_v3():
     expected = {1: 0, 3: 500, 6: 1000, 9: 1500, 12: 2000}
     policy = get_canonical_pricing_policy_v2()
     for td in policy.term_discounts:
-        assert td.discount_rate_bps == expected[td.term_months], (
-            f"term={td.term_months}: expected {expected[td.term_months]}, got {td.discount_rate_bps}"
+        assert td.discount_rate_bps == expected[td.payment_months], (
+            f"term={td.payment_months}: expected {expected[td.payment_months]}, got {td.discount_rate_bps}"
         )
 
 
 def test_P31_discount_none_accepted():
-    td = SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None)
+    td = SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=None)
     assert td.discount_rate_bps is None
 
 
 def test_P32_explicit_discount_structurally_accepted():
     # 구조적으로 값을 담을 수 있음 (Canonical Policy에는 없음)
-    td = SaasTermDiscountPolicy(term_months=12, discount_rate_bps=500)
+    td = SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=500)
     assert td.discount_rate_bps == 500
 
 
 def test_P33_discount_over_max_rejected():
     with pytest.raises(ValidationError):
-        SaasTermDiscountPolicy(term_months=12, discount_rate_bps=10001)
+        SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=10001)
 
 
 # ── P34~P36 No Base Price Duplication ────────────────────────────────────────
@@ -328,11 +328,11 @@ def test_P37_canonical_policy_immutable_and_isolated():
 
 def test_Q01_duplicate_term_1_rejected():
     terms = [
-        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),  # 중복
-        SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=None),  # 중복
+        SaasTermDiscountPolicy(payment_months=3,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=6,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=9,  discount_rate_bps=None),
     ]
     with pytest.raises(ValidationError):
         SaasPricingPolicyV2(**_policy_data(term_discounts=terms))
@@ -340,12 +340,12 @@ def test_Q01_duplicate_term_1_rejected():
 
 def test_Q02_duplicate_term_12_rejected():
     terms = [
-        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),  # 중복
+        SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=3,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=6,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=9,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=None),  # 중복
     ]
     with pytest.raises(ValidationError):
         SaasPricingPolicyV2(**_policy_data(term_discounts=terms))
@@ -354,12 +354,12 @@ def test_Q02_duplicate_term_12_rejected():
 def test_Q03_six_entries_same_valid_set_rejected():
     # set이 {1,3,6,9,12}여도 6개면 거부
     terms = [
-        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=3,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=6,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=9,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=None),
     ]
     with pytest.raises(ValidationError):
         SaasPricingPolicyV2(**_policy_data(term_discounts=terms))
@@ -369,11 +369,11 @@ def test_Q03_six_entries_same_valid_set_rejected():
 
 def test_Q04_term_out_of_order_rejected():
     terms = [
-        SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),  # 순서 뒤집힘
-        SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=3,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=None),  # 순서 뒤집힘
+        SaasTermDiscountPolicy(payment_months=6,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=9,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=None),
     ]
     with pytest.raises(ValidationError):
         SaasPricingPolicyV2(**_policy_data(term_discounts=terms))
@@ -381,14 +381,14 @@ def test_Q04_term_out_of_order_rejected():
 
 def test_Q05_canonical_term_order_accepted():
     terms = [
-        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
-        SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=3,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=6,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=9,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=None),
     ]
     policy = SaasPricingPolicyV2(**_policy_data(term_discounts=terms))
-    assert [td.term_months for td in policy.term_discounts] == [1, 3, 6, 9, 12]
+    assert [td.payment_months for td in policy.term_discounts] == [1, 3, 6, 9, 12]
 
 
 # Q06~Q07 Worker bracket order

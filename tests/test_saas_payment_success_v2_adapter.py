@@ -4,7 +4,7 @@ B01-B10:  _build_contract_row_from_payment unit
 B11-B15:  _create_contract_from_payment V1 regression (delegates to builder)
 B16-B25:  build_saas_v2_payment_success_apply_plan — quote/item/snapshot validation errors
 B26-B30:  amount 3중 정합성
-B31-B34:  period_months / term_months 정합성
+B31-B34:  period_months / payment_months 정합성
 B35-B50:  contract_row field assertions
 B51-B60:  SaasV2ApplyPlan field assertions
 B61-B70:  commercial_bundle field assertions
@@ -69,7 +69,7 @@ _SNAP_DICT = {
         "amount": 50000,
         "brackets": [{"range_from": 1, "range_to": None, "unit_rate": 5000, "units": 10, "amount": 50000}],
     },
-    "term_months": 12,
+    "payment_months": 12,
     "term_discount_rate_bps": 0,
     "monthly_supply_amount": 150000,
     "prepaid_supply_amount": 1800000,
@@ -96,7 +96,7 @@ _ITEM_DICT = {
     "pricing_mode": "STANDARD",
     "policy_version": "TEST-v1",
     "worker_capacity": 10,
-    "term_months": 12,
+    "payment_months": 12,
     "vat_rate": 0.1,
     "vat_rate_bps": 1000,
     "pricing_input": {},
@@ -128,7 +128,7 @@ def _valid_pay(quote_id=QUOTE_ID, company_id=COMPANY_ID, payment_id=PAYMENT_ID):
         "supply_amount": _SNAP_DICT["prepaid_supply_amount"],
         "vat_amount": _SNAP_DICT["vat_amount"],
         "total_amount": _SNAP_DICT["total_amount"],
-        "period_months": _SNAP_DICT["term_months"],
+        "period_months": _SNAP_DICT["payment_months"],
         "paid_at": "2026-09-28T10:00:00+09:00",
         "user_id": USER_ID,
         "plan_code": None,
@@ -479,7 +479,7 @@ class TestAmountCrossValidation:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# B31-B34: period_months / term_months 정합성
+# B31-B34: period_months / payment_months 정합성
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestPeriodTermConsistency:
@@ -500,14 +500,14 @@ class TestPeriodTermConsistency:
 
     def test_B33_period_equals_term_passes(self):
         pay = _valid_pay()
-        pay["period_months"] = _SNAP_DICT["term_months"]
+        pay["period_months"] = _SNAP_DICT["payment_months"]
         plan = _apply_plan(pay=pay)
         assert plan is not None
 
-    def test_B34_end_date_uses_term_months(self):
+    def test_B34_end_date_uses_payment_months(self):
         plan = _apply_plan()
         from dateutil.relativedelta import relativedelta
-        expected_end = (START + relativedelta(months=_SNAP_DICT["term_months"])).isoformat()
+        expected_end = (START + relativedelta(months=_SNAP_DICT["payment_months"])).isoformat()
         assert plan.contract_row["end_date"] == expected_end
 
 
@@ -640,8 +640,8 @@ class TestCommercialBundle:
     def test_B63_worker_capacity_from_snapshot(self):
         assert self.cv.worker_capacity == _SNAP_DICT["worker"]["capacity"]
 
-    def test_B64_term_months_from_snapshot(self):
-        assert self.cv.term_months == _SNAP_DICT["term_months"]
+    def test_B64_payment_months_from_snapshot(self):
+        assert self.cv.payment_months == _SNAP_DICT["payment_months"]
 
     def test_B65_version_no_is_one(self):
         assert self.cv.version_no == 1

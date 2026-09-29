@@ -119,7 +119,7 @@ def _make_snap():
                 )
             ],
         ),
-        term_months=12,
+        payment_months=12,
         term_discount_rate_bps=0,
         monthly_supply_amount=100000,
         prepaid_supply_amount=1200000,
@@ -139,7 +139,7 @@ def _make_bundle():
         product_tier="FIELD",
         pricing_mode="STANDARD",
         worker_capacity=5,
-        term_months=12,
+        payment_months=12,
     )
     calc = SaasPricingCalculationResult(
         status="READY",
@@ -148,7 +148,7 @@ def _make_bundle():
         worker_breakdown=snap.worker,
         monthly_supply_amount=100000,
         raw_prepaid_supply_amount=1200000,
-        term_months=12,
+        payment_months=12,
         term_discount_rate_bps=0,
         snapshot=snap,
         block_reason=None,
@@ -354,7 +354,7 @@ class TestC17_TermMonthsPresent:
         sb = FakeSupabase(rpc_data=_applied_data())
         apply_saas_v2_contract_plan_atomic(sb, _make_plan())
         cv = sb.rpc_calls[0]["params"]["p_commercial_version"]
-        assert cv.get("term_months") == 12
+        assert cv.get("payment_months") == 12
 
 
 class TestC18_PricingResultStatusPresent:

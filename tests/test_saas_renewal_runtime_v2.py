@@ -977,6 +977,111 @@ class TestNotiPartialProjectionBoundary:
 
 # ── R58: Static projection assertion ─────────────────────────────────────────
 
+# ── T1-T5: D-01 Temporal Expiration Guard ────────────────────────────────────
+
+class TestD01TemporalExpirationGuard:
+    """T1-T5: paid_at vs contract end boundary expiration guard.
+
+    D-01 rule: raise V2_RUNTIME_CONTRACT_EXPIRED if paid_at >= contract_end_boundary.
+    Replay path (target CV exists) must skip the guard entirely.
+    """
+
+    def _make_sb_with_contract(self, contract_overrides: dict | None = None) -> "MagicMock":
+        overrides = contract_overrides or {}
+        return _make_sb_first_apply(
+            contract_rows=[_contract(**overrides)],
+            cv_rows=[_SAMPLE_CV],
+        )
+
+    def _run_first_apply_with_paid_at(self, paid_at: str, end_date: str = "2027-01-01"):
+        """Run apply_saas_v2_renewal_runtime with given paid_at and contract end_date.
+
+        Uses _build_and_apply mock so no quote/plan/RPC calls happen.
+        The boundary for end_date='2027-01-01' is 2027-01-01T00:00:00+09:00.
+        """
+        from datetime import timezone
+        from services.saas_commercial_version_time_v2 import contract_end_date_to_effective_at_v2
+
+        boundary = contract_end_date_to_effective_at_v2(end_date)
+        sb = self._make_sb_with_contract({"end_date": end_date})
+
+        with patch("services.saas_commercial_version_time_v2.select_effective_commercial_version_v2",
+                   return_value=_SAMPLE_CV):
+            with patch("services.saas_commercial_version_time_v2.contract_end_date_to_effective_at_v2",
+                       return_value=boundary):
+                with patch("services.saas_renewal_runtime_v2._build_and_apply",
+                           return_value={"status": "APPLIED"}):
+                    return apply_saas_v2_renewal_runtime(sb, _pay(paid_at=paid_at))
+
+    def test_t1_paid_at_before_boundary_no_expiration(self):
+        """T1: paid_at 1 second before KST midnight boundary → no CONTRACT_EXPIRED."""
+        # end_date=2027-01-01 → boundary = 2027-01-01T00:00:00+09:00 = 2026-12-31T15:00:00+00:00
+        # paid_at = 2026-12-31T14:59:59+00:00 (1s before boundary) → accepted
+        result = self._run_first_apply_with_paid_at(
+            paid_at="2026-12-31T14:59:59+00:00",
+            end_date="2027-01-01",
+        )
+        assert result["status"] == "APPLIED"
+
+    def test_t2_paid_at_equal_boundary_raises_expired(self):
+        """T2: paid_at == contract end boundary → raises V2_RUNTIME_CONTRACT_EXPIRED."""
+        # boundary = 2027-01-01T00:00:00+09:00 = 2026-12-31T15:00:00+00:00
+        with pytest.raises(SaasV2RenewalRuntimeError) as exc:
+            self._run_first_apply_with_paid_at(
+                paid_at="2026-12-31T15:00:00+00:00",
+                end_date="2027-01-01",
+            )
+        assert exc.value.code == "V2_RUNTIME_CONTRACT_EXPIRED"
+
+    def test_t3_paid_at_after_boundary_raises_expired(self):
+        """T3: paid_at > contract end boundary → raises V2_RUNTIME_CONTRACT_EXPIRED."""
+        # boundary = 2027-01-01T00:00:00+09:00 = 2026-12-31T15:00:00+00:00
+        # paid_at = 2027-01-01T01:00:00+09:00 (1h after midnight KST) → rejected
+        with pytest.raises(SaasV2RenewalRuntimeError) as exc:
+            self._run_first_apply_with_paid_at(
+                paid_at="2027-01-01T01:00:00+09:00",
+                end_date="2027-01-01",
+            )
+        assert exc.value.code == "V2_RUNTIME_CONTRACT_EXPIRED"
+
+    def test_t4_expired_first_apply_no_cv_mutation(self):
+        """T4: expired first apply → _build_and_apply never called (0 CV mutations)."""
+        from services.saas_commercial_version_time_v2 import contract_end_date_to_effective_at_v2
+
+        end_date = "2027-01-01"
+        boundary = contract_end_date_to_effective_at_v2(end_date)
+        sb = self._make_sb_with_contract({"end_date": end_date})
+
+        with patch("services.saas_commercial_version_time_v2.select_effective_commercial_version_v2",
+                   return_value=_SAMPLE_CV):
+            with patch("services.saas_commercial_version_time_v2.contract_end_date_to_effective_at_v2",
+                       return_value=boundary):
+                with patch("services.saas_renewal_runtime_v2._build_and_apply") as m_build:
+                    with pytest.raises(SaasV2RenewalRuntimeError) as exc:
+                        apply_saas_v2_renewal_runtime(
+                            sb, _pay(paid_at="2026-12-31T15:00:00+00:00")
+                        )
+        assert exc.value.code == "V2_RUNTIME_CONTRACT_EXPIRED"
+        m_build.assert_not_called()
+
+    def test_t5_replay_path_skips_expiration_guard(self):
+        """T5: replay path (target CV exists) → expiration guard not triggered even if
+        paid_at equals boundary. Replay uses target.effective_from, not contract.end_date."""
+        # Setup replay mock (target CV found)
+        sb = _make_sb_replay()
+        # Use paid_at == boundary value — but replay path never calls contract_end_date_to_effective_at_v2
+        with patch("services.saas_renewal_runtime_v2._build_and_apply",
+                   return_value={"status": "ALREADY_APPLIED"}) as m_build:
+            result = apply_saas_v2_renewal_runtime(
+                sb, _pay(paid_at="2026-12-31T15:00:00+00:00")
+            )
+        # Must succeed — guard is only in first-apply path
+        assert result["status"] == "ALREADY_APPLIED"
+        m_build.assert_called_once()
+
+
+# ── R58: Static projection assertion ─────────────────────────────────────────
+
 class TestNotiProjectionStatic:
     def test_r58_noti_select_includes_payment_type(self):
         """routers/payment.py /inicis/noti SELECT must include payment_type."""

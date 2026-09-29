@@ -29,7 +29,7 @@ CREATE TABLE public.saas_contract_commercial_versions (
     pricing_mode                text            NOT NULL,
 
     worker_capacity             integer         NOT NULL,
-    term_months                 integer         NOT NULL,
+    payment_months              integer         NOT NULL,
 
     pricing_result_status       text            NOT NULL,
     pricing_policy_version      text            NULL,
@@ -54,8 +54,8 @@ CREATE TABLE public.saas_contract_commercial_versions (
     CONSTRAINT chk_saas_ccv_worker_capacity
         CHECK (worker_capacity >= 0),
 
-    CONSTRAINT chk_saas_ccv_term_months
-        CHECK (term_months IN (1, 3, 6, 9, 12)),
+    CONSTRAINT chk_saas_ccv_payment_months
+        CHECK (payment_months IN (1, 3, 6, 9, 12)),
 
     CONSTRAINT chk_saas_ccv_pricing_result_status
         CHECK (pricing_result_status IN ('READY', 'CUSTOM_REQUIRED')),
@@ -481,7 +481,7 @@ BEGIN
         product_tier,
         pricing_mode,
         worker_capacity,
-        term_months,
+        payment_months,
         pricing_result_status,
         pricing_policy_version,
         pricing_snapshot,
@@ -496,7 +496,7 @@ BEGIN
         p_commercial_version->>'product_tier',
         p_commercial_version->>'pricing_mode',
         (p_commercial_version->>'worker_capacity')::integer,
-        (p_commercial_version->>'term_months')::integer,
+        (p_commercial_version->>'payment_months')::integer,
         p_commercial_version->>'pricing_result_status',
         p_commercial_version->>'pricing_policy_version',
         -- JSON null('null'::jsonb) → SQL NULL で格納

@@ -132,7 +132,7 @@ DECLARE
     v_ex_new_tier               text;
     v_ex_new_mode               text;
     v_ex_new_worker_cap         integer;
-    v_ex_new_term_months        integer;
+    v_ex_new_payment_months     integer;
     v_ex_new_result_stat        text;
     v_ex_new_policy_ver         text;
     v_ex_new_snapshot           jsonb;
@@ -154,7 +154,7 @@ DECLARE
     v_snap_supply         numeric;
     v_snap_vat            numeric;
     v_snap_total          numeric;
-    v_snap_term           integer;
+    v_snap_payment_months integer;
     v_new_cv_input_sup    text;
     v_input_scope_count   integer;
     v_snap_sites          jsonb;
@@ -319,7 +319,7 @@ BEGIN
     v_snap_supply := (p_new_commercial_version->'pricing_snapshot'->>'prepaid_supply_amount')::numeric;
     v_snap_vat    := (p_new_commercial_version->'pricing_snapshot'->>'vat_amount')::numeric;
     v_snap_total  := (p_new_commercial_version->'pricing_snapshot'->>'total_amount')::numeric;
-    v_snap_term   := (p_new_commercial_version->'pricing_snapshot'->>'term_months')::integer;
+    v_snap_payment_months := (p_new_commercial_version->'pricing_snapshot'->>'payment_months')::integer;
 
     IF v_snap_supply IS DISTINCT FROM v_pay_supply_amount THEN
         RETURN jsonb_build_object('status', 'V2_RENEWAL_AMOUNT_MISMATCH',
@@ -333,17 +333,17 @@ BEGIN
         RETURN jsonb_build_object('status', 'V2_RENEWAL_AMOUNT_MISMATCH',
             'field', 'total_amount');
     END IF;
-    IF v_snap_term IS DISTINCT FROM v_pay_period_months THEN
+    IF v_snap_payment_months IS DISTINCT FROM v_pay_period_months THEN
         RETURN jsonb_build_object('status', 'V2_RENEWAL_AMOUNT_MISMATCH',
-            'field', 'term_months');
+            'field', 'payment_months');
     END IF;
 
-    -- Top-level term_months must equal payment.period_months (3-way: snap + top-level + payment)
-    IF (p_new_commercial_version->>'term_months')::integer IS DISTINCT FROM v_pay_period_months THEN
+    -- Top-level payment_months must equal payment.period_months (3-way: snap + top-level + payment)
+    IF (p_new_commercial_version->>'payment_months')::integer IS DISTINCT FROM v_pay_period_months THEN
         RETURN jsonb_build_object('status', 'V2_RENEWAL_TERM_MISMATCH',
-            'field', 'new_cv_top_level_term_months',
+            'field', 'new_cv_top_level_payment_months',
             'expected', v_pay_period_months,
-            'got', (p_new_commercial_version->>'term_months')::integer);
+            'got', (p_new_commercial_version->>'payment_months')::integer);
     END IF;
 
     -- created_by must equal payment.user_id (provenance binding, both non-null enforced above)
@@ -420,12 +420,12 @@ BEGIN
     -- ── Step 4: Check for existing target new version (idempotency) ───────────
     SELECT id,
            commercial_schema_version, contract_id, version_no,
-           product_tier, pricing_mode, worker_capacity, term_months,
+           product_tier, pricing_mode, worker_capacity, payment_months,
            pricing_result_status, pricing_policy_version, pricing_snapshot,
            effective_from, superseded_at, created_by, renewal_payment_id
     INTO   v_ex_new_cv_id,
            v_ex_new_schema_ver, v_ex_new_contract_id, v_ex_new_version_no,
-           v_ex_new_tier, v_ex_new_mode, v_ex_new_worker_cap, v_ex_new_term_months,
+           v_ex_new_tier, v_ex_new_mode, v_ex_new_worker_cap, v_ex_new_payment_months,
            v_ex_new_result_stat, v_ex_new_policy_ver, v_ex_new_snapshot,
            v_ex_new_eff_from, v_ex_new_sup, v_ex_new_created_by,
            v_ex_new_renewal_payment_id
@@ -458,7 +458,7 @@ BEGIN
         OR v_ex_new_tier        IS DISTINCT FROM (p_new_commercial_version->>'product_tier')
         OR v_ex_new_mode        IS DISTINCT FROM (p_new_commercial_version->>'pricing_mode')
         OR v_ex_new_worker_cap  IS DISTINCT FROM (p_new_commercial_version->>'worker_capacity')::integer
-        OR v_ex_new_term_months IS DISTINCT FROM (p_new_commercial_version->>'term_months')::integer
+        OR v_ex_new_payment_months IS DISTINCT FROM (p_new_commercial_version->>'payment_months')::integer
         OR v_ex_new_result_stat IS DISTINCT FROM (p_new_commercial_version->>'pricing_result_status')
         OR v_ex_new_policy_ver  IS DISTINCT FROM (p_new_commercial_version->>'pricing_policy_version')
         OR v_ex_new_snapshot    IS DISTINCT FROM
@@ -500,10 +500,10 @@ BEGIN
                 'reason', 'scope_tuple_mismatch');
         END IF;
 
-        -- F: contract.end_date == original_boundary_date + term_months
+        -- F: contract.end_date == original_boundary_date + payment_months
         v_orig_boundary_date := (v_ex_new_eff_from AT TIME ZONE 'Asia/Seoul')::date;
         v_expected_end_date  := (v_orig_boundary_date
-            + ((v_ex_new_term_months || ' months')::interval))::date;
+            + ((v_ex_new_payment_months || ' months')::interval))::date;
 
         IF v_con_end_date IS DISTINCT FROM v_expected_end_date THEN
             RETURN jsonb_build_object('status', 'V2_RENEWAL_PARTIAL_STATE',
@@ -541,6 +541,15 @@ BEGIN
     -- DB-derived boundary: contracts.end_date → Asia/Seoul midnight
     v_boundary := (v_con_end_date::timestamp AT TIME ZONE 'Asia/Seoul');
 
+    -- D-01: Temporal expiration guard — paid_at must be before contract end boundary
+    IF v_pay_paid_at >= v_boundary THEN
+        RETURN jsonb_build_object(
+            'status', 'V2_RENEWAL_CONTRACT_EXPIRED',
+            'code', 'V2_RENEWAL_CONTRACT_EXPIRED',
+            'message', 'Renewal rejected: paid_at >= contract end boundary'
+        );
+    END IF;
+
     -- Boundary check: new CV.effective_from must == v_boundary
     IF (p_new_commercial_version->>'effective_from')::timestamptz IS DISTINCT FROM v_boundary THEN
         RETURN jsonb_build_object('status', 'V2_RENEWAL_BOUNDARY_MISMATCH',
@@ -564,7 +573,7 @@ BEGIN
     -- Write 2: INSERT new CV (renewal_payment_id = p_payment_id — unique key)
     INSERT INTO public.saas_contract_commercial_versions (
         contract_id, version_no, commercial_schema_version,
-        product_tier, pricing_mode, worker_capacity, term_months,
+        product_tier, pricing_mode, worker_capacity, payment_months,
         pricing_result_status, pricing_policy_version, pricing_snapshot,
         effective_from, superseded_at, created_by, renewal_payment_id
     ) VALUES (
@@ -574,7 +583,7 @@ BEGIN
         p_new_commercial_version->>'product_tier',
         p_new_commercial_version->>'pricing_mode',
         (p_new_commercial_version->>'worker_capacity')::integer,
-        (p_new_commercial_version->>'term_months')::integer,
+        (p_new_commercial_version->>'payment_months')::integer,
         p_new_commercial_version->>'pricing_result_status',
         p_new_commercial_version->>'pricing_policy_version',
         NULLIF(p_new_commercial_version->'pricing_snapshot', 'null'::jsonb),
@@ -601,7 +610,7 @@ BEGIN
 
     -- Write 4: extend contract
     v_new_end_date := (v_con_end_date
-        + (((p_new_commercial_version->>'term_months')::integer) || ' months')::interval
+        + (((p_new_commercial_version->>'payment_months')::integer) || ' months')::interval
     )::date;
 
     UPDATE public.contracts

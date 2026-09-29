@@ -68,11 +68,11 @@ def _resolved_policy(version: str = "TEST_POLICY_V1") -> SaasPricingPolicyV2:
         ],
         vat_rate_bps=1000,
         term_discounts=[
-            SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=0),
-            SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=300),
-            SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=500),
-            SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=700),
-            SaasTermDiscountPolicy(term_months=12, discount_rate_bps=1000),
+            SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=0),
+            SaasTermDiscountPolicy(payment_months=3,  discount_rate_bps=300),
+            SaasTermDiscountPolicy(payment_months=6,  discount_rate_bps=500),
+            SaasTermDiscountPolicy(payment_months=9,  discount_rate_bps=700),
+            SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=1000),
         ],
     )
 
@@ -160,7 +160,7 @@ def _mgr_bundle(
     policy = _resolved_policy()
     sel = SaasCommercialSelection(
         product_tier="MANAGER", pricing_mode="STANDARD",
-        worker_capacity=0, term_months=1,
+        worker_capacity=0, payment_months=1,
     )
     result = calculate_saas_price_v2(sel, site_inputs, policy)
     assert result.status == "READY"
@@ -178,7 +178,7 @@ def _mgr_bundle(
             product_tier=cv.product_tier,
             pricing_mode=cv.pricing_mode,
             worker_capacity=cv.worker_capacity,
-            term_months=cv.term_months,
+            payment_months=cv.payment_months,
             pricing_result_status=cv.pricing_result_status,
             pricing_policy_version=cv.pricing_policy_version,
             pricing_snapshot=cv.pricing_snapshot,
@@ -200,7 +200,7 @@ def _field_bundle(
     policy = _resolved_policy()
     sel = SaasCommercialSelection(
         product_tier="FIELD", pricing_mode="STANDARD",
-        worker_capacity=workers, term_months=1,
+        worker_capacity=workers, payment_months=1,
     )
     result = calculate_saas_price_v2(sel, site_inputs, policy)
     assert result.status == "READY"
@@ -216,7 +216,7 @@ def _custom_bundle(
 ) -> SaasContractStorageBundleV2:
     sel = SaasCommercialSelection(
         product_tier="CUSTOM", pricing_mode="CUSTOM",
-        worker_capacity=workers, term_months=1,
+        worker_capacity=workers, payment_months=1,
     )
     return build_custom_contract_storage_bundle_v2(
         contract_id=uuid4(), version_no=1, selection=sel,

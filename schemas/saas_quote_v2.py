@@ -73,7 +73,7 @@ class SaasQuoteSnapshotItemV2(BaseModel):
     pricing_mode: str
     policy_version: str
     worker_capacity: int
-    term_months: int
+    payment_months: int
 
     # VAT 호환
     vat_rate: float

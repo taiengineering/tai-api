@@ -71,10 +71,10 @@ def _validate_snapshot_against_request(
             "QUOTE_SNAPSHOT_INVALID",
             f"worker.capacity 불일치: snap={snap.worker.capacity}, req={request.worker_capacity}",
         )
-    if snap.term_months != request.term_months:
+    if snap.payment_months != request.payment_months:
         raise SaasQuoteV2Error(
             "QUOTE_SNAPSHOT_INVALID",
-            f"term_months 불일치: snap={snap.term_months}, req={request.term_months}",
+            f"payment_months 불일치: snap={snap.payment_months}, req={request.payment_months}",
         )
     if snap.pricing_mode != "STANDARD":
         raise SaasQuoteV2Error(
@@ -103,7 +103,7 @@ def _build_pricing_input(request: SaasQuoteIssueRequestV2) -> dict:
     return {
         "product_tier": request.product_tier,
         "worker_capacity": request.worker_capacity,
-        "term_months": request.term_months,
+        "payment_months": request.payment_months,
         "sites": [
             {
                 "entity_id": str(s.entity_id),
@@ -136,7 +136,7 @@ def _build_quote_item(
         display_name=_DISPLAY_NAMES[request.product_tier],
         billing_unit="MONTHLY",
         unit_amount=snap.monthly_supply_amount,
-        quantity=snap.term_months,
+        quantity=snap.payment_months,
         supply_amount=snap.prepaid_supply_amount,
         vat_amount=snap.vat_amount,
         total_amount=snap.total_amount,
@@ -149,7 +149,7 @@ def _build_quote_item(
         pricing_mode=snap.pricing_mode,
         policy_version=snap.policy_version,
         worker_capacity=snap.worker.capacity,
-        term_months=snap.term_months,
+        payment_months=snap.payment_months,
         vat_rate=snap.vat_rate_bps / 10000,
         vat_rate_bps=snap.vat_rate_bps,
         pricing_input=pricing_input,

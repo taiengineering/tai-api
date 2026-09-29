@@ -157,7 +157,7 @@ def prepare_saas_v2_payment_from_quote(
         company_id=company_id,
         quote_id=quote_id,
         plan_code=None,
-        period_months=snap.term_months,
+        period_months=snap.payment_months,
         payment_type="CARD",
         proof_type=proof_type,
         buyername=buyername,

@@ -69,7 +69,7 @@ def _minimal_snap_dict(supply=200_000, vat=20_000, total=220_000, term=12,
             "final_site_amount": supply,
         }],
         "worker": {"capacity": worker_capacity, "amount": 0, "brackets": []},
-        "term_months": term,
+        "payment_months": term,
         "term_discount_rate_bps": 0,
         "monthly_supply_amount": supply,
         "prepaid_supply_amount": supply,
@@ -99,13 +99,13 @@ def _minimal_item_dict(supply=200_000, vat=20_000, total=220_000, term=12,
         "pricing_mode": "STANDARD",
         "policy_version": "2026.09",
         "worker_capacity": worker_capacity,
-        "term_months": term,
+        "payment_months": term,
         "vat_rate": 0.1,
         "vat_rate_bps": 1_000,
         "pricing_input": {
             "product_tier": product_tier,
             "worker_capacity": worker_capacity,
-            "term_months": term,
+            "payment_months": term,
             "sites": [{"entity_id": _SITE_ID, "sector": "INDUSTRY", "criteria_value": 50}],
         },
         "pricing_snapshot": _minimal_snap_dict(supply, vat, total, term, product_tier, worker_capacity),
@@ -149,7 +149,7 @@ def _valid_cv_row(version_no=2, contract_id=_CONTRACT_ID):
         "product_tier": "FIELD",
         "pricing_mode": "STANDARD",
         "worker_capacity": 5,
-        "term_months": 12,
+        "payment_months": 12,
         "pricing_result_status": "READY",
         "pricing_policy_version": "2026.09",
         "pricing_snapshot": _minimal_snap_dict(),
@@ -529,7 +529,7 @@ def test_R19_supply_amount_from_snapshot(monkeypatch):
 
 
 def test_R20_period_months_from_snapshot(monkeypatch):
-    """period_months = snapshot.term_months."""
+    """period_months = snapshot.payment_months."""
     sb, calls = _setup_valid_prepare(monkeypatch)
     prepare_saas_v2_renewal_payment_from_quote(
         sb, contract_id=_CONTRACT_ID, quote_id=_QUOTE_ID,
@@ -628,9 +628,9 @@ def test_R28_plan_wrong_payment_type_rejected():
 
 
 def test_R29_plan_period_term_mismatch_rejected():
-    """pay.period_months != snapshot.term_months → RENEWAL_PERIOD_TERM_MISMATCH."""
+    """pay.period_months != snapshot.payment_months → RENEWAL_PERIOD_TERM_MISMATCH."""
     args = _valid_plan_args()
-    args["pay"] = {**_valid_pay(), "period_months": 6}  # snapshot.term_months=12
+    args["pay"] = {**_valid_pay(), "period_months": 6}  # snapshot.payment_months=12
     with pytest.raises(SaasRenewalV2AdapterError) as exc:
         build_saas_v2_renewal_apply_plan(**args)
     assert exc.value.code == "RENEWAL_PERIOD_TERM_MISMATCH"

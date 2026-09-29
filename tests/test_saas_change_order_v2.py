@@ -66,11 +66,11 @@ def _policy(version: str = "TEST_CO_V1") -> SaasPricingPolicyV2:
         ],
         vat_rate_bps=1_000,
         term_discounts=[
-            SaasTermDiscountPolicy(term_months=1, discount_rate_bps=0),
-            SaasTermDiscountPolicy(term_months=3, discount_rate_bps=300),
-            SaasTermDiscountPolicy(term_months=6, discount_rate_bps=500),
-            SaasTermDiscountPolicy(term_months=9, discount_rate_bps=700),
-            SaasTermDiscountPolicy(term_months=12, discount_rate_bps=1_000),
+            SaasTermDiscountPolicy(payment_months=1, discount_rate_bps=0),
+            SaasTermDiscountPolicy(payment_months=3, discount_rate_bps=300),
+            SaasTermDiscountPolicy(payment_months=6, discount_rate_bps=500),
+            SaasTermDiscountPolicy(payment_months=9, discount_rate_bps=700),
+            SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=1_000),
         ],
     )
 
@@ -110,7 +110,7 @@ def _calc(tier, sites, workers=0, term=1, policy=None):
     sel = SaasCommercialSelection(
         product_tier=tier,
         pricing_mode="STANDARD" if tier != "CUSTOM" else "CUSTOM",
-        worker_capacity=workers, term_months=term,
+        worker_capacity=workers, payment_months=term,
     )
     return sel, calculate_saas_price_v2(sel, sites, p)
 
@@ -148,7 +148,7 @@ def _cur_field(sites, workers=10, term=1, contract_id=None, effective_from=None,
 
 
 def _cur_custom(contract_id=None):
-    sel = SaasCommercialSelection(product_tier="CUSTOM", pricing_mode="CUSTOM", worker_capacity=0, term_months=1)
+    sel = SaasCommercialSelection(product_tier="CUSTOM", pricing_mode="CUSTOM", worker_capacity=0, payment_months=1)
     return build_custom_contract_storage_bundle_v2(
         contract_id=contract_id or _CONTRACT, version_no=1, selection=sel,
         effective_from=_now(),
@@ -500,7 +500,7 @@ def test_C40_selection_term_mismatch_rejected():
     s = [_site(_SITE_A)]
     bundle = _cur_mgr(s, term=1)
     sel, result = _ready("MANAGER", s, term=1)
-    bad_snap = result.snapshot.model_copy(update={"term_months": 3})
+    bad_snap = result.snapshot.model_copy(update={"payment_months": 3})
     bad = result.model_copy(update={"snapshot": bad_snap})
     with pytest.raises(SaasChangeOrderError) as exc:
         _eval(bundle, sel, bad)
@@ -813,8 +813,8 @@ def test_C74_proposal_invalid_product_tier_rejected():
             requires_remaining_term_prepaid=False,
             current_policy_version="V1",
             target_policy_version="V1",
-            current_term_months=1,
-            target_term_months=1,
+            current_payment_months=1,
+            target_payment_months=1,
             requested_effective_at=_now(),
         )
 

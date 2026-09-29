@@ -68,6 +68,7 @@ class SaasV2RenewalRuntimeError(Exception):
       V2_RUNTIME_TEMPORAL_CURRENT_NOT_FOUND — no effective CV at paid_at
       V2_RUNTIME_TEMPORAL_CURRENT_AMBIGUOUS — multiple effective CVs at paid_at
       V2_RUNTIME_ROUTE_INVALID            — RENEWAL but unrecognized product_type
+      V2_RUNTIME_CONTRACT_EXPIRED         — paid_at >= contract end boundary
     """
 
     def __init__(self, code: str, message: str = "") -> None:
@@ -336,6 +337,16 @@ def _run_first_apply(supabase, pay: dict) -> dict:
             f"paid_at must be timezone-aware: {paid_at_str!r}",
         )
 
+    # D-01: Temporal expiration guard — paid_at must be before contract end boundary
+    contract_end_boundary = contract_end_date_to_effective_at_v2(
+        contract["end_date"]
+    )
+    if paid_at_dt >= contract_end_boundary:
+        raise SaasV2RenewalRuntimeError(
+            "V2_RUNTIME_CONTRACT_EXPIRED",
+            f"Renewal rejected: paid_at {paid_at_dt.isoformat()} >= contract end boundary {contract_end_boundary.isoformat()}",
+        )
+
     # All CVs for this contract
     all_cv_res = (
         supabase.table("saas_contract_commercial_versions")
@@ -361,8 +372,8 @@ def _run_first_apply(supabase, pay: dict) -> dict:
             ) from exc
         raise
 
-    # Boundary: contract.end_date → Asia/Seoul 00:00
-    requested_effective_at = contract_end_date_to_effective_at_v2(contract["end_date"])
+    # Boundary: contract.end_date → Asia/Seoul 00:00 (reuse D-01 computed value)
+    requested_effective_at = contract_end_boundary
     return _build_and_apply(supabase, pay, source_cv, requested_effective_at)
 
 

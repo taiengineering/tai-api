@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, StrictInt, field_validator, model_va
 PRICING_POLICY_VERSION = "TAI_SAFE_PRICING_POLICY_V3_2026_09_28"
 _POLICY_EFFECTIVE_FROM = date(2026, 9, 28)
 
-VALID_TERM_MONTHS_POLICY: frozenset[int] = frozenset({1, 3, 6, 9, 12})
+VALID_PAYMENT_MONTHS_POLICY: frozenset[int] = frozenset({1, 3, 6, 9, 12})
 
 
 # ── Worker Rate Bracket ────────────────────────────────────────────────────────
@@ -63,14 +63,14 @@ class SaasTermDiscountPolicy(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    term_months: StrictInt
+    payment_months: StrictInt
     discount_rate_bps: Optional[StrictInt]
 
-    @field_validator("term_months")
+    @field_validator("payment_months")
     @classmethod
-    def _term_months_allowed(cls, v: int) -> int:
-        if v not in VALID_TERM_MONTHS_POLICY:
-            raise ValueError(f"term_months는 {sorted(VALID_TERM_MONTHS_POLICY)} 중 하나여야 합니다.")
+    def _payment_months_allowed(cls, v: int) -> int:
+        if v not in VALID_PAYMENT_MONTHS_POLICY:
+            raise ValueError(f"payment_months는 {sorted(VALID_PAYMENT_MONTHS_POLICY)} 중 하나여야 합니다.")
         return v
 
     @field_validator("discount_rate_bps")
@@ -197,8 +197,8 @@ class SaasPricingPolicyV2(BaseModel):
                 f"term_discounts는 정확히 5개여야 합니다. (입력: {len(v)}개)"
             )
         # (2) canonical order 1,3,6,9,12 — duplicate 및 out-of-order REJECT
-        canonical_order = sorted(VALID_TERM_MONTHS_POLICY)  # [1, 3, 6, 9, 12]
-        input_months = [td.term_months for td in v]
+        canonical_order = sorted(VALID_PAYMENT_MONTHS_POLICY)  # [1, 3, 6, 9, 12]
+        input_months = [td.payment_months for td in v]
         if input_months != canonical_order:
             raise ValueError(
                 f"term_discounts는 {canonical_order} 순서여야 합니다. (입력: {input_months})"
@@ -228,10 +228,10 @@ def get_canonical_pricing_policy_v2() -> SaasPricingPolicyV2:
         ],
         vat_rate_bps=1000,
         term_discounts=[
-            SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=0),
-            SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=500),
-            SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=1000),
-            SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=1500),
-            SaasTermDiscountPolicy(term_months=12, discount_rate_bps=2000),
+            SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=0),
+            SaasTermDiscountPolicy(payment_months=3,  discount_rate_bps=500),
+            SaasTermDiscountPolicy(payment_months=6,  discount_rate_bps=1000),
+            SaasTermDiscountPolicy(payment_months=9,  discount_rate_bps=1500),
+            SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=2000),
         ],
     )

@@ -22,7 +22,7 @@ from schemas.saas_pricing_v2 import (
     PricingMode,
     SaasSector,
     SaasPricingSnapshotV2,
-    VALID_TERM_MONTHS,
+    VALID_PAYMENT_MONTHS,
 )
 
 # ── Storage Schema Version ────────────────────────────────────────────────────
@@ -84,7 +84,7 @@ class SaasContractCommercialVersionV2(BaseModel):
     pricing_mode: PricingMode
 
     worker_capacity: StrictInt
-    term_months: StrictInt
+    payment_months: StrictInt
 
     pricing_result_status: CommercialPricingResultStorageStatus
     pricing_policy_version: Optional[str] = None
@@ -118,11 +118,11 @@ class SaasContractCommercialVersionV2(BaseModel):
             raise ValueError("worker_capacity는 0 이상이어야 합니다.")
         return v
 
-    @field_validator("term_months")
+    @field_validator("payment_months")
     @classmethod
-    def _term_months_allowed(cls, v: int) -> int:
-        if v not in VALID_TERM_MONTHS:
-            raise ValueError(f"term_months는 {sorted(VALID_TERM_MONTHS)} 중 하나여야 합니다.")
+    def _payment_months_allowed(cls, v: int) -> int:
+        if v not in VALID_PAYMENT_MONTHS:
+            raise ValueError(f"payment_months는 {sorted(VALID_PAYMENT_MONTHS)} 중 하나여야 합니다.")
         return v
 
     @model_validator(mode="after")
@@ -191,9 +191,9 @@ class SaasContractCommercialVersionV2(BaseModel):
             mismatches.append(
                 f"pricing_mode: version={self.pricing_mode}, snapshot={snap.pricing_mode}"
             )
-        if snap.term_months != self.term_months:
+        if snap.payment_months != self.payment_months:
             mismatches.append(
-                f"term_months: version={self.term_months}, snapshot={snap.term_months}"
+                f"payment_months: version={self.payment_months}, snapshot={snap.payment_months}"
             )
         if snap.policy_version != self.pricing_policy_version:
             mismatches.append(

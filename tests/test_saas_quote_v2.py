@@ -52,11 +52,11 @@ def _test_policy():
         ],
         vat_rate_bps=1_000,
         term_discounts=[
-            SaasTermDiscountPolicy(term_months=1, discount_rate_bps=0),
-            SaasTermDiscountPolicy(term_months=3, discount_rate_bps=300),
-            SaasTermDiscountPolicy(term_months=6, discount_rate_bps=500),
-            SaasTermDiscountPolicy(term_months=9, discount_rate_bps=700),
-            SaasTermDiscountPolicy(term_months=12, discount_rate_bps=1_000),
+            SaasTermDiscountPolicy(payment_months=1, discount_rate_bps=0),
+            SaasTermDiscountPolicy(payment_months=3, discount_rate_bps=300),
+            SaasTermDiscountPolicy(payment_months=6, discount_rate_bps=500),
+            SaasTermDiscountPolicy(payment_months=9, discount_rate_bps=700),
+            SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=1_000),
         ],
     )
 
@@ -78,7 +78,7 @@ def _issue_req(
     return SaasQuoteIssueRequestV2(
         product_tier=tier,
         worker_capacity=workers,
-        term_months=term,
+        payment_months=term,
         sites=sites if sites is not None else [_site_req()],
         contact_name=contact_name,
     )
@@ -230,7 +230,7 @@ def test_Q03_auth_required():
     mq.get_supabase = lambda: _fake_sb()
     client = TestClient(app, raise_server_exceptions=False)
     resp = client.post("/me/quotes/v2/issue", json={
-        "product_tier": "MANAGER", "worker_capacity": 0, "term_months": 1,
+        "product_tier": "MANAGER", "worker_capacity": 0, "payment_months": 1,
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
     })
     assert resp.status_code in (401, 403, 422)
@@ -249,7 +249,7 @@ def test_Q04_existing_routes_remain():
 
 def _issue_json(**extra):
     base = {
-        "product_tier": "MANAGER", "worker_capacity": 0, "term_months": 1,
+        "product_tier": "MANAGER", "worker_capacity": 0, "payment_months": 1,
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
     }
     base.update(extra)
@@ -467,7 +467,7 @@ def _mock_preview_status(monkeypatch, status: str):
         product_tier="MANAGER",
         pricing_mode="STANDARD" if status != "CUSTOM_REQUIRED" else "CUSTOM",
         worker_capacity=0,
-        term_months=1,
+        payment_months=1,
         resolved_sites=[],
         calculation=None,
         block_reason=status,
@@ -515,7 +515,7 @@ def _mock_malformed_calculation(monkeypatch, calc_override):
         product_tier="MANAGER",
         pricing_mode="STANDARD",
         worker_capacity=0,
-        term_months=1,
+        payment_months=1,
         resolved_sites=[],
         calculation=calc_override,
         block_reason=None,
@@ -540,7 +540,7 @@ def test_Q34_none_snapshot_raises_invalid(monkeypatch):
         worker_breakdown=None,
         monthly_supply_amount=149_000,
         raw_prepaid_supply_amount=149_000,
-        term_months=1,
+        payment_months=1,
         term_discount_rate_bps=0,
         snapshot=None,
         block_reason=None,
@@ -583,7 +583,7 @@ def test_Q36_wrong_worker_raises_invalid(monkeypatch):
 def test_Q37_wrong_term_raises_invalid(monkeypatch):
     preview = _ready_preview(monkeypatch, term=1)
     snap = preview.calculation.snapshot
-    bad_snap = snap.model_copy(update={"term_months": 3})
+    bad_snap = snap.model_copy(update={"payment_months": 3})
     bad_calc = preview.calculation.model_copy(update={"snapshot": bad_snap})
     bad_preview = preview.model_copy(update={"calculation": bad_calc})
     monkeypatch.setattr("services.saas_quote_v2.preview_saas_price_v2", lambda *a, **k: bad_preview)
@@ -644,7 +644,7 @@ def test_Q44_unit_amount_equals_snapshot_monthly(monkeypatch):
     assert item["unit_amount"] == item["pricing_snapshot"]["monthly_supply_amount"]
 
 
-def test_Q45_quantity_equals_term_months(monkeypatch):
+def test_Q45_quantity_equals_payment_months(monkeypatch):
     _setup_ready(monkeypatch)
     row = issue_saas_quote_v2(None, _issue_req(term=1), _USER_ID, _COMPANY_ID)
     item = _get_item(row)
@@ -704,7 +704,7 @@ def test_Q51_top_level_total_equals_snapshot_total(monkeypatch):
 def test_Q52_no_monthly_times_term_calculation():
     code = _code_lines(_SVC_SRC)
     assert "monthly_supply_amount * " not in code
-    assert "* term_months" not in code
+    assert "* payment_months" not in code
 
 
 def test_Q53_no_vat_multiplication():
@@ -740,7 +740,7 @@ def test_Q57_pricing_snapshot_complete(monkeypatch):
     row = issue_saas_quote_v2(None, _issue_req(), _USER_ID, _COMPANY_ID)
     snap = _get_item(row)["pricing_snapshot"]
     required_keys = {"schema_version", "policy_version", "product_tier", "pricing_mode",
-                     "sites", "worker", "term_months", "term_discount_rate_bps",
+                     "sites", "worker", "payment_months", "term_discount_rate_bps",
                      "monthly_supply_amount", "prepaid_supply_amount",
                      "vat_rate_bps", "vat_amount", "total_amount"}
     assert required_keys.issubset(snap.keys())
@@ -786,7 +786,7 @@ def test_Q63_term_preserved(monkeypatch):
     _setup_ready(monkeypatch, term=1)
     row = issue_saas_quote_v2(None, _issue_req(term=1), _USER_ID, _COMPANY_ID)
     snap = _get_item(row)["pricing_snapshot"]
-    assert snap["term_months"] == 1
+    assert snap["payment_months"] == 1
 
 
 def test_Q64_monetary_totals_preserved(monkeypatch):
@@ -968,14 +968,17 @@ def test_Q78_v2_quote_passes_validate_snapshot(monkeypatch):
         pytest.fail(f"_validate_snapshot 실패: {e.code} — {e.message}")
 
 
-def test_Q79_pdf_service_not_modified():
+def test_Q79_pdf_service_quantity_renderer():
+    """_period_label은 quantity 필드를 사용해야 한다 (legacy term_months 사용 금지).
+
+    PART C (WO-BE-V3-SEMANTIC-INTEGRATION-001): V3 item(payment_months)과
+    legacy item(term_months) 양쪽 모두 quantity 필드로 렌더링.
+    """
     src = Path(__file__).parent.parent / "services" / "member_quote_pdf_svc.py"
-    import subprocess
-    result = subprocess.run(
-        ["git", "diff", "40d98ada", "--", str(src)],
-        capture_output=True, text=True, cwd=Path(__file__).parent.parent,
-    )
-    assert result.stdout.strip() == "", "member_quote_pdf_svc.py 변경 감지"
+    code = src.read_text()
+    # Must use quantity, not term_months, for period rendering
+    assert 'item.get("quantity")' in code, "_period_label이 quantity 필드를 사용해야 합니다"
+    assert 'item.get("term_months")' not in code, "_period_label에서 term_months 직접 사용 금지"
 
 
 def test_Q80_pdf_no_price_master_lookup():
@@ -1078,7 +1081,7 @@ def test_Q91_calc_status_not_ready_rejected(monkeypatch):
         "worker_breakdown": None,
         "monthly_supply_amount": None,
         "raw_prepaid_supply_amount": None,
-        "term_months": 1,
+        "payment_months": 1,
         "term_discount_rate_bps": None,
         "snapshot": None,
         "block_reason": None,

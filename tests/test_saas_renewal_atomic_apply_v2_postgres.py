@@ -14,7 +14,7 @@
   I03: new CV.effective_from = boundary after apply
   I04: new CV.version_no = old.version_no + 1
   I05: scopes exact (entity_type/entity_id/sector/base_band_code)
-  I06: contract.end_date = original_end + term_months
+  I06: contract.end_date = original_end + payment_months
   I07: contract 허용 필드 업데이트 (paid_amount, paid_at, updated_at)
   I08: contract 금지 필드 불변 (start_date, contract_no, contract_amount 등)
   I09: 동일 인수 재호출 → ALREADY_APPLIED
@@ -34,7 +34,7 @@
   I23: Jan 31 + 1 month boundary
   I24: leap-year Feb 28/29 month arithmetic
   I25: 서로 다른 payment → V2_RENEWAL_CROSS_PAYMENT_COLLISION
-  I26: top-level term_months 불일치 → V2_RENEWAL_TERM_MISMATCH
+  I26: top-level payment_months 불일치 → V2_RENEWAL_TERM_MISMATCH
   I27: created_by 불일치 → V2_RENEWAL_CV_CREATED_BY_MISMATCH
   I28: FIELD + empty scopes → V2_RENEWAL_SCOPE_REQUIRED
   I29: version N+2 존재 (P8) → V2_RENEWAL_PARTIAL_STATE
@@ -213,7 +213,7 @@ def _snap(supply: int = 200_000, vat: int = 20_000, total: int = 220_000,
             "final_site_amount": supply,
         }],
         "worker": {"capacity": worker_capacity, "amount": 0, "brackets": []},
-        "term_months": term,
+        "payment_months": term,
         "term_discount_rate_bps": 0,
         "monthly_supply_amount": supply,
         "prepaid_supply_amount": supply,
@@ -228,7 +228,7 @@ def _insert_payment(
     status: str = "PAID",
     supply: int = 200_000, vat: int = 20_000, total: int = 220_000,
     term: int = 12,
-    paid_at: str = "2026-12-31T15:00:00+00:00",
+    paid_at: str = "2026-12-31T14:59:59+00:00",  # 1s before KST midnight boundary (D-01 guard)
     user_id: str | None = _DEFAULT_USER_ID,
 ) -> None:
     cur = pg.cursor()
@@ -274,7 +274,7 @@ def _insert_old_cv(
     pg, cid: str, version_no: int = 1,
     effective_from: str = "2026-01-01T00:00:00+00:00",
     superseded_at: str | None = None,
-    term_months: int = 12,
+    payment_months: int = 12,
     snap: dict | None = None,
     product_tier: str = "FIELD",
     pricing_mode: str = "STANDARD",
@@ -291,7 +291,7 @@ def _insert_old_cv(
     cur.execute(
         """INSERT INTO public.saas_contract_commercial_versions
            (id, contract_id, version_no, commercial_schema_version,
-            product_tier, pricing_mode, worker_capacity, term_months,
+            product_tier, pricing_mode, worker_capacity, payment_months,
             pricing_result_status, pricing_policy_version, pricing_snapshot,
             effective_from, superseded_at, renewal_payment_id, created_by)
            VALUES (%s,%s,%s,%s,
@@ -299,7 +299,7 @@ def _insert_old_cv(
                    'READY','2026.09',%s,
                    %s,%s,%s,%s);""",
         (cv_id, cid, version_no, schema_version, product_tier, pricing_mode,
-         worker_capacity, term_months,
+         worker_capacity, payment_months,
          json.dumps(snap),
          effective_from, superseded_at, renewal_payment_id, created_by),
     )
@@ -309,14 +309,14 @@ def _insert_old_cv(
 def _new_cv_payload(
     cid: str, version_no: int,
     effective_from_kst: str,
-    term_months: int = 12,
+    payment_months: int = 12,
     product_tier: str = "FIELD",
     pricing_mode: str = "STANDARD",
     worker_capacity: int = 5,
     supply: int = 200_000, vat: int = 20_000, total: int = 220_000,
     created_by: str | None = _DEFAULT_USER_ID,
 ) -> dict:
-    snap = _snap(supply, vat, total, term_months, worker_capacity)
+    snap = _snap(supply, vat, total, payment_months, worker_capacity)
     snap["product_tier"] = product_tier
     snap["pricing_mode"] = pricing_mode
     return {
@@ -326,7 +326,7 @@ def _new_cv_payload(
         "product_tier": product_tier,
         "pricing_mode": pricing_mode,
         "worker_capacity": worker_capacity,
-        "term_months": term_months,
+        "payment_months": payment_months,
         "pricing_result_status": "READY",
         "pricing_policy_version": "2026.09",
         "pricing_snapshot": snap,
@@ -528,7 +528,7 @@ def test_I05_scopes_exact(pg):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# I06: contract.end_date = original_end + term_months
+# I06: contract.end_date = original_end + payment_months
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_I06_contract_end_date_extended(pg):
@@ -539,7 +539,7 @@ def test_I06_contract_end_date_extended(pg):
     _insert_contract(pg, cid, co, end_date=end_date)
     _insert_payment(pg, pid, cid, qid, co, term=12)
     _insert_old_cv(pg, cid, version_no=1)
-    new_cv = _new_cv_payload(cid, 2, boundary, term_months=12)
+    new_cv = _new_cv_payload(cid, 2, boundary, payment_months=12)
 
     _rpc(pg, pid, cid, qid, 1, new_cv, [_scope_from_snapshot(new_cv["pricing_snapshot"])])
 
@@ -562,7 +562,7 @@ def test_I07_contract_compatibility_fields_updated(pg):
     _insert_contract(pg, cid, co, end_date=end_date, total_amount=220_000)
     _insert_payment(pg, pid, cid, qid, co,
                     supply=200_000, vat=20_000, total=220_000,
-                    paid_at="2026-12-31T15:00:00+00:00")
+                    paid_at="2026-12-31T14:59:59+00:00")  # 1s before KST midnight (D-01)
     _insert_old_cv(pg, cid, version_no=1)
     new_cv = _new_cv_payload(cid, 2, boundary)
 
@@ -641,7 +641,7 @@ def test_I10_retry_does_not_extend_end_date_twice(pg):
     _insert_contract(pg, cid, co, end_date=end_date)
     _insert_payment(pg, pid, cid, qid, co, term=12)
     _insert_old_cv(pg, cid, version_no=1)
-    new_cv = _new_cv_payload(cid, 2, boundary, term_months=12)
+    new_cv = _new_cv_payload(cid, 2, boundary, payment_months=12)
     scopes = [_scope_from_snapshot(new_cv["pricing_snapshot"])]
 
     _rpc(pg, pid, cid, qid, 1, new_cv, scopes)  # 1st: APPLIED
@@ -809,7 +809,7 @@ def test_I14_extra_scope_partial(pg):
 def test_I15_new_cv_payload_mismatch_partial(pg):
     """stored new CV has worker_capacity=5; incoming has worker_capacity=7 → new_cv_mismatch.
 
-    Note: term_months mismatch cannot be used here because top-level term_months ≠
+    Note: payment_months mismatch cannot be used here because top-level payment_months ≠
     payment.period_months fires V2_RENEWAL_TERM_MISMATCH (upfront guard) before the
     idempotency branch is reached.  worker_capacity has no such upfront guard.
     """
@@ -934,7 +934,7 @@ def test_I19_rollback_on_constraint_failure(pg):
                      contract_amount=200_000, vat_amount=20_000, total_amount=220_000)
     _insert_payment(pg, pid, cid, qid, co,
                     supply=200_000, vat=20_000, total=220_000,
-                    paid_at="2026-12-31T15:00:00+00:00")
+                    paid_at="2026-12-31T14:59:59+00:00")  # before boundary (D-01)
     old_cv_id = _insert_old_cv(pg, cid, version_no=1)
 
     # new CV with invalid tier+mode combo (MANAGER+CUSTOM violates chk_saas_ccv_tier_mode_combo)
@@ -1013,7 +1013,7 @@ def test_I20_concurrent_same_payment(pg):
     _insert_contract(pg, cid, co, end_date=end_date)
     _insert_payment(pg, pid, cid, qid, co, term=12)
     _insert_old_cv(pg, cid, version_no=1)
-    new_cv = _new_cv_payload(cid, 2, boundary, term_months=12)
+    new_cv = _new_cv_payload(cid, 2, boundary, payment_months=12)
     scopes = [_scope_from_snapshot(new_cv["pricing_snapshot"])]
 
     results = []
@@ -1137,9 +1137,9 @@ def test_I23_jan31_plus_1month_boundary(pg):
     _insert_contract(pg, cid, co, end_date=end_date)
     _insert_payment(pg, pid, cid, qid, co, term=1)
     _insert_old_cv(pg, cid, version_no=1)
-    new_cv = _new_cv_payload(cid, 2, boundary, term_months=1)
+    new_cv = _new_cv_payload(cid, 2, boundary, payment_months=1)
     snap = new_cv["pricing_snapshot"]
-    snap["term_months"] = 1
+    snap["payment_months"] = 1
 
     _rpc(pg, pid, cid, qid, 1, new_cv, [_scope_from_snapshot(new_cv["pricing_snapshot"])])
 
@@ -1163,7 +1163,7 @@ def test_I24_leap_year_month_arithmetic(pg):
     _insert_contract(pg, cid, co, end_date=end_date)
     _insert_payment(pg, pid, cid, qid, co, term=12)
     _insert_old_cv(pg, cid, version_no=1)
-    new_cv = _new_cv_payload(cid, 2, boundary, term_months=12)
+    new_cv = _new_cv_payload(cid, 2, boundary, payment_months=12)
 
     _rpc(pg, pid, cid, qid, 1, new_cv, [_scope_from_snapshot(new_cv["pricing_snapshot"])])
 
@@ -1190,8 +1190,8 @@ def test_I25_different_payments_same_contract_fail_closed(pg):
     _insert_payment(pg, pid2, cid, qid2, co, term=12)
     _insert_old_cv(pg, cid, version_no=1)
 
-    new_cv1 = _new_cv_payload(cid, 2, boundary, term_months=12)
-    new_cv2 = _new_cv_payload(cid, 2, boundary, term_months=12)
+    new_cv1 = _new_cv_payload(cid, 2, boundary, payment_months=12)
+    new_cv2 = _new_cv_payload(cid, 2, boundary, payment_months=12)
     scopes1 = [_scope_from_snapshot(new_cv1["pricing_snapshot"])]
     scopes2 = [_scope_from_snapshot(new_cv2["pricing_snapshot"])]
 
@@ -1206,11 +1206,11 @@ def test_I25_different_payments_same_contract_fail_closed(pg):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# I26: BLOCKER 2 — top-level term_months != payment.period_months
+# I26: BLOCKER 2 — top-level payment_months != payment.period_months
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_I26_top_level_term_mismatch(pg):
-    """new_cv.term_months (top-level) ≠ payment.period_months → V2_RENEWAL_TERM_MISMATCH."""
+    """new_cv.payment_months (top-level) ≠ payment.period_months → V2_RENEWAL_TERM_MISMATCH."""
     pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
     end_date = "2027-01-01"
     boundary = _kst_boundary(end_date)
@@ -1219,10 +1219,10 @@ def test_I26_top_level_term_mismatch(pg):
     _insert_payment(pg, pid, cid, qid, co, term=12)
     _insert_old_cv(pg, cid, version_no=1)
 
-    # snapshot.term_months = 12 (matches payment) but top-level term_months = 6
-    new_cv = _new_cv_payload(cid, 2, boundary, term_months=6)
-    new_cv["pricing_snapshot"]["term_months"] = 12  # snapshot matches payment
-    # But top-level term_months = 6 ≠ payment.period_months = 12
+    # snapshot.payment_months = 12 (matches payment) but top-level payment_months = 6
+    new_cv = _new_cv_payload(cid, 2, boundary, payment_months=6)
+    new_cv["pricing_snapshot"]["payment_months"] = 12  # snapshot matches payment
+    # But top-level payment_months = 6 ≠ payment.period_months = 12
 
     result = _rpc(pg, pid, cid, qid, 1, new_cv, [_scope()])
     assert result["status"] == "V2_RENEWAL_TERM_MISMATCH", (
@@ -1254,7 +1254,7 @@ def test_I27_created_by_mismatch(pg):
            VALUES (%s,'PAID','SAAS','RENEWAL',NULL,
                    %s,%s,%s,
                    200000,20000,220000,
-                   %s,%s,'2026-12-31T15:00:00+00:00');""",
+                   %s,%s,'2026-12-31T14:59:59+00:00');""",
         (pid, cid, qid, 12, co, uid),
     )
     _insert_old_cv(pg, cid, version_no=1)
@@ -1330,14 +1330,14 @@ def test_I30_same_payment_already_consumed(pg):
     _insert_contract(pg, cid, co, end_date=end_date)
     _insert_payment(pg, pid, cid, qid, co, term=12)
     _insert_old_cv(pg, cid, version_no=1)
-    new_cv2 = _new_cv_payload(cid, 2, boundary, term_months=12)
+    new_cv2 = _new_cv_payload(cid, 2, boundary, payment_months=12)
 
     r1 = _rpc(pg, pid, cid, qid, 1, new_cv2, [_scope_from_snapshot(new_cv2["pricing_snapshot"])])
     assert r1["status"] == "APPLIED"
 
     # After first renewal, contract.end_date = 2028-01-01
     boundary2 = _kst_boundary("2028-01-01")
-    new_cv3 = _new_cv_payload(cid, 3, boundary2, term_months=12)
+    new_cv3 = _new_cv_payload(cid, 3, boundary2, payment_months=12)
 
     # Same pid, but consumed for (cid, v2); target is (cid, v3) → CONSUMED
     r2 = _rpc(pg, pid, cid, qid, 2, new_cv3, [_scope_from_snapshot(new_cv3["pricing_snapshot"])])
@@ -1539,4 +1539,131 @@ def test_I36_payment_user_id_null(pg):
     result = _rpc(pg, pid, cid, qid, 1, new_cv, [_scope()])
     assert result["status"] == "V2_RENEWAL_USER_REQUIRED", (
         f"Expected V2_RENEWAL_USER_REQUIRED, got: {result}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# S1-S4: D-01 Temporal Expiration Guard (SQL)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# D-01 rule (SQL): if v_pay_paid_at >= v_boundary then return V2_RENEWAL_CONTRACT_EXPIRED.
+# v_boundary = (v_con_end_date::timestamp AT TIME ZONE 'Asia/Seoul')
+# For end_date='2027-01-01': boundary = 2027-01-01T00:00:00+09:00 = 2026-12-31T15:00:00+00:00
+#
+# S1: paid_at 1s before boundary → APPLIED (guard does not fire)
+# S2: paid_at == boundary        → V2_RENEWAL_CONTRACT_EXPIRED
+# S3: paid_at > boundary         → V2_RENEWAL_CONTRACT_EXPIRED
+# S4: rejected by D-01            → 0 mutations to CV/scopes/contract
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_S1_paid_at_before_boundary_applied(pg):
+    """S1: paid_at 1 second before KST midnight boundary → APPLIED (D-01 guard does not fire)."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    # paid_at = 2026-12-31T14:59:59+00:00 = 2026-12-31T23:59:59+09:00 (1s before midnight KST)
+    _insert_payment(pg, pid, cid, qid, co, paid_at="2026-12-31T14:59:59+00:00")
+    _insert_old_cv(pg, cid, version_no=1)
+    new_cv = _new_cv_payload(cid, 2, boundary)
+    scopes = [_scope_from_snapshot(new_cv["pricing_snapshot"])]
+
+    result = _rpc(pg, pid, cid, qid, 1, new_cv, scopes)
+    assert result["status"] == "APPLIED", (
+        f"S1: paid_at 1s before boundary must yield APPLIED, got: {result}"
+    )
+
+
+def test_S2_paid_at_equal_boundary_contract_expired(pg):
+    """S2: paid_at == KST midnight boundary → V2_RENEWAL_CONTRACT_EXPIRED."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    # paid_at = 2026-12-31T15:00:00+00:00 = 2027-01-01T00:00:00+09:00 (exactly at boundary)
+    _insert_payment(pg, pid, cid, qid, co, paid_at="2026-12-31T15:00:00+00:00")
+    _insert_old_cv(pg, cid, version_no=1)
+    new_cv = _new_cv_payload(cid, 2, boundary)
+    scopes = [_scope_from_snapshot(new_cv["pricing_snapshot"])]
+
+    result = _rpc(pg, pid, cid, qid, 1, new_cv, scopes)
+    assert result["status"] == "V2_RENEWAL_CONTRACT_EXPIRED", (
+        f"S2: paid_at == boundary must yield V2_RENEWAL_CONTRACT_EXPIRED, got: {result}"
+    )
+
+
+def test_S3_paid_at_after_boundary_contract_expired(pg):
+    """S3: paid_at 1 hour after KST midnight boundary → V2_RENEWAL_CONTRACT_EXPIRED."""
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    # paid_at = 2027-01-01T01:00:00+09:00 = 2026-12-31T16:00:00+00:00 (1h after midnight KST)
+    _insert_payment(pg, pid, cid, qid, co, paid_at="2026-12-31T16:00:00+00:00")
+    _insert_old_cv(pg, cid, version_no=1)
+    new_cv = _new_cv_payload(cid, 2, boundary)
+    scopes = [_scope_from_snapshot(new_cv["pricing_snapshot"])]
+
+    result = _rpc(pg, pid, cid, qid, 1, new_cv, scopes)
+    assert result["status"] == "V2_RENEWAL_CONTRACT_EXPIRED", (
+        f"S3: paid_at after boundary must yield V2_RENEWAL_CONTRACT_EXPIRED, got: {result}"
+    )
+
+
+def test_S4_expired_rejection_zero_mutations(pg):
+    """S4: D-01 rejection → 0 mutations to CV/scopes/contract.
+
+    After a V2_RENEWAL_CONTRACT_EXPIRED rejection:
+    - saas_contract_commercial_versions row count = 1 (only old CV, no new CV)
+    - saas_contract_site_scopes row count = 0
+    - contracts.end_date unchanged
+    """
+    pid, cid, qid, co = _new_id(), _new_id(), _new_id(), _new_id()
+    end_date = "2027-01-01"
+    boundary = _kst_boundary(end_date)
+
+    _insert_contract(pg, cid, co, end_date=end_date)
+    # paid_at at boundary → rejected by D-01
+    _insert_payment(pg, pid, cid, qid, co, paid_at="2026-12-31T15:00:00+00:00")
+    _insert_old_cv(pg, cid, version_no=1)
+    new_cv = _new_cv_payload(cid, 2, boundary)
+    scopes = [_scope_from_snapshot(new_cv["pricing_snapshot"])]
+
+    result = _rpc(pg, pid, cid, qid, 1, new_cv, scopes)
+    assert result["status"] == "V2_RENEWAL_CONTRACT_EXPIRED", (
+        f"S4 setup: expected V2_RENEWAL_CONTRACT_EXPIRED, got: {result}"
+    )
+
+    cur = pg.cursor()
+
+    # CV count must remain 1 (no new CV inserted)
+    cur.execute(
+        "SELECT COUNT(*) FROM public.saas_contract_commercial_versions WHERE contract_id = %s;",
+        (cid,),
+    )
+    (cv_count,) = cur.fetchone()
+    assert cv_count == 1, f"S4: CV count must be 1 after rejection, got {cv_count}"
+
+    # Scopes must be empty (no scope rows inserted — site_scopes links via CV, not contract_id)
+    cur.execute(
+        "SELECT COUNT(*) FROM public.saas_contract_site_scopes s "
+        "JOIN public.saas_contract_commercial_versions v ON s.commercial_version_id = v.id "
+        "WHERE v.contract_id = %s;",
+        (cid,),
+    )
+    (scope_count,) = cur.fetchone()
+    assert scope_count == 0, f"S4: scope count must be 0 after rejection, got {scope_count}"
+
+    # Contract end_date must be unchanged
+    cur.execute(
+        "SELECT end_date::text FROM public.contracts WHERE id = %s;",
+        (cid,),
+    )
+    (actual_end_date,) = cur.fetchone()
+    assert actual_end_date == end_date, (
+        f"S4: contract.end_date must be unchanged after rejection, "
+        f"got {actual_end_date!r}, expected {end_date!r}"
     )

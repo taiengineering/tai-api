@@ -43,13 +43,13 @@ def _sel(
     product_tier: str = "MANAGER",
     pricing_mode: str = "STANDARD",
     worker_capacity: int = 0,
-    term_months: int = 1,
+    payment_months: int = 1,
 ) -> SaasCommercialSelection:
     return SaasCommercialSelection(
         product_tier=product_tier,
         pricing_mode=pricing_mode,
         worker_capacity=worker_capacity,
-        term_months=term_months,
+        payment_months=payment_months,
     )
 
 
@@ -92,11 +92,11 @@ def _resolved_policy(
         ],
         vat_rate_bps=1000,
         term_discounts=[
-            SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=term1_bps),
-            SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=term3_bps),
-            SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=term6_bps),
-            SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=term9_bps),
-            SaasTermDiscountPolicy(term_months=12, discount_rate_bps=term12_bps),
+            SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=term1_bps),
+            SaasTermDiscountPolicy(payment_months=3,  discount_rate_bps=term3_bps),
+            SaasTermDiscountPolicy(payment_months=6,  discount_rate_bps=term6_bps),
+            SaasTermDiscountPolicy(payment_months=9,  discount_rate_bps=term9_bps),
+            SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=term12_bps),
         ],
     )
 
@@ -315,7 +315,7 @@ def test_worker_progressive(capacity: int, expected_amount: int):
 @pytest.mark.parametrize("term,expected_bps", [(1, 0), (3, 500), (6, 1000), (9, 1500), (12, 2000)])
 def test_canonical_term_ready(term: int, expected_bps: int):
     canonical = get_canonical_pricing_policy_v2()
-    result = calculate_saas_price_v2(_sel(term_months=term), [_site()], canonical)
+    result = calculate_saas_price_v2(_sel(payment_months=term), [_site()], canonical)
     assert result.status == "READY"
     assert result.snapshot is not None
     assert result.term_discount_rate_bps == expected_bps
@@ -326,7 +326,7 @@ def test_canonical_term_ready(term: int, expected_bps: int):
 @pytest.mark.parametrize("term", [1, 3, 6, 9, 12])
 def test_unresolved_discount_branch_explicit_none(term: int):
     none_policy = _resolved_policy(term1_bps=None, term3_bps=None, term6_bps=None, term9_bps=None, term12_bps=None)
-    result = calculate_saas_price_v2(_sel(term_months=term), [_site()], none_policy)
+    result = calculate_saas_price_v2(_sel(payment_months=term), [_site()], none_policy)
     assert result.status == "TERM_DISCOUNT_UNRESOLVED"
     assert result.snapshot is None
     assert result.term_discount_rate_bps is None
@@ -336,7 +336,7 @@ def test_unresolved_discount_branch_explicit_none(term: int):
 
 def test_R01_term1_0bps_ready():
     result = calculate_saas_price_v2(
-        _sel(term_months=1), [_site(base_amount=149000)], _resolved_policy(term1_bps=0),
+        _sel(payment_months=1), [_site(base_amount=149000)], _resolved_policy(term1_bps=0),
     )
     assert result.status == "READY"
     assert result.snapshot is not None
@@ -346,7 +346,7 @@ def test_R01_term1_0bps_ready():
 
 def test_R02_term12_1000bps_ready():
     result = calculate_saas_price_v2(
-        _sel(term_months=12), [_site(base_amount=149000)], _resolved_policy(term12_bps=1000),
+        _sel(payment_months=12), [_site(base_amount=149000)], _resolved_policy(term12_bps=1000),
     )
     assert result.status == "READY"
     assert result.snapshot is not None
@@ -356,10 +356,10 @@ def test_R02_term12_1000bps_ready():
 
 def test_R03_snapshot_only_on_ready():
     none_policy = _resolved_policy(term1_bps=None, term3_bps=None, term6_bps=None, term9_bps=None, term12_bps=None)
-    result_unresolved = calculate_saas_price_v2(_sel(term_months=1), [_site()], none_policy)
+    result_unresolved = calculate_saas_price_v2(_sel(payment_months=1), [_site()], none_policy)
     assert result_unresolved.snapshot is None
 
-    result_ready = calculate_saas_price_v2(_sel(term_months=1), [_site()], _resolved_policy(term1_bps=0))
+    result_ready = calculate_saas_price_v2(_sel(payment_months=1), [_site()], _resolved_policy(term1_bps=0))
     assert result_ready.snapshot is not None
 
 
@@ -370,7 +370,7 @@ def test_R04_discount_arithmetic():
     # discount_amount = 149000*1000//10000 = 14900
     # prepaid = 149000 - 14900 = 134100
     result = calculate_saas_price_v2(
-        _sel(term_months=1),
+        _sel(payment_months=1),
         [_site(base_amount=149000)],
         _resolved_policy(term1_bps=1000),
     )
@@ -382,7 +382,7 @@ def test_R04_discount_arithmetic():
 def test_R05_vat_arithmetic():
     # prepaid=149000, vat_bps=1000 → vat = 149000*1000//10000 = 14900
     result = calculate_saas_price_v2(
-        _sel(term_months=1),
+        _sel(payment_months=1),
         [_site(base_amount=149000)],
         _resolved_policy(term1_bps=0),
     )
@@ -394,7 +394,7 @@ def test_R05_vat_arithmetic():
 def test_R06_total_arithmetic():
     # prepaid=149000, vat=14900 → total=163900
     result = calculate_saas_price_v2(
-        _sel(term_months=1),
+        _sel(payment_months=1),
         [_site(base_amount=149000)],
         _resolved_policy(term1_bps=0),
     )
@@ -422,7 +422,7 @@ def test_floor_vat():
     # prepaid=101, vat_bps=1000 → 101*1000//10000 = 10 (not 10.1 → 11)
     # base=101, primary, MANAGER → monthly=101, raw_prepaid=101, prepaid=101 (0% discount)
     result = calculate_saas_price_v2(
-        _sel(term_months=1),
+        _sel(payment_months=1),
         [_site(base_amount=101)],
         _resolved_policy(term1_bps=0),
     )
@@ -436,7 +436,7 @@ def test_floor_term_discount():
     # raw_prepaid=11, discount_bps=1000 → 11*1000//10000 = 1 (floor of 1.1)
     # prepaid = 10
     result = calculate_saas_price_v2(
-        _sel(term_months=1),
+        _sel(payment_months=1),
         [_site(base_amount=11)],
         _resolved_policy(term1_bps=1000),
     )
@@ -681,7 +681,7 @@ def test_V3_field_3_sites():
 def test_V3_golden_field_2_sites_100_workers_6_months():
     """FIELD 2사업장 / 작업자 100명 / 6개월 10% 할인 golden example."""
     result = calculate_saas_price_v2(
-        _sel(product_tier="FIELD", worker_capacity=100, term_months=6),
+        _sel(product_tier="FIELD", worker_capacity=100, payment_months=6),
         [_site(entity_id=_UUID_A, base_amount=149000), _site(entity_id=_UUID_B, base_amount=299000)],
         _resolved_policy(term6_bps=1000),
     )

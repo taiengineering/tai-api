@@ -95,7 +95,7 @@ def _minimal_snap_dict(supply=100_000, vat=10_000, total=110_000, term=1):
             "final_site_amount": supply,
         }],
         "worker": {"capacity": 0, "amount": 0, "brackets": []},
-        "term_months": term,
+        "payment_months": term,
         "term_discount_rate_bps": 0,
         "monthly_supply_amount": supply,
         "prepaid_supply_amount": supply,
@@ -124,13 +124,13 @@ def _minimal_item_dict(supply=100_000, vat=10_000, total=110_000, term=1):
         "pricing_mode": "STANDARD",
         "policy_version": "TEST",
         "worker_capacity": 0,
-        "term_months": term,
+        "payment_months": term,
         "vat_rate": 0.1,
         "vat_rate_bps": 1_000,
         "pricing_input": {
             "product_tier": "MANAGER",
             "worker_capacity": 0,
-            "term_months": term,
+            "payment_months": term,
             "sites": [{"entity_id": _SITE_ID, "sector": "INDUSTRY", "criteria_value": 10}],
         },
         "pricing_snapshot": _minimal_snap_dict(supply, vat, total, term),
@@ -558,7 +558,7 @@ def test_A35_payment_user_id_is_auth_user(monkeypatch):
 
 
 def test_A36_period_months_is_snapshot_term(monkeypatch):
-    """period_months = snapshot.term_months."""
+    """period_months = snapshot.payment_months."""
     _, calls = _setup_valid_v2(monkeypatch, term=12)
     quote = _valid_v2_quote(
         supply=100_000, vat=10_000, total=110_000,

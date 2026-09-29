@@ -184,14 +184,14 @@ def _cv_dict(
     tier: str = "MANAGER",
     version_no: int = 1,
     worker_capacity: int | None = None,
-    term_months: int = 12,
+    payment_months: int = 12,
 ) -> dict:
     if tier == "CUSTOM":
         return {
             "contract_id": cid, "version_no": version_no,
             "commercial_schema_version": "SAAS_CONTRACT_COMMERCIAL_V2",
             "product_tier": "CUSTOM", "pricing_mode": "CUSTOM",
-            "worker_capacity": 10, "term_months": term_months,
+            "worker_capacity": 10, "payment_months": payment_months,
             "pricing_result_status": "CUSTOM_REQUIRED",
             "pricing_policy_version": None, "pricing_snapshot": None,
             "effective_from": "2026-10-01T00:00:00+00:00",
@@ -202,7 +202,7 @@ def _cv_dict(
         "contract_id": cid, "version_no": version_no,
         "commercial_schema_version": "SAAS_CONTRACT_COMMERCIAL_V2",
         "product_tier": tier, "pricing_mode": "STANDARD",
-        "worker_capacity": wc, "term_months": term_months,
+        "worker_capacity": wc, "payment_months": payment_months,
         "pricing_result_status": "READY",
         "pricing_policy_version": "v1.0",
         "pricing_snapshot": {"base_price": 500000},
@@ -318,7 +318,7 @@ def test_I05_partial_state_cv_no_scope(pg):
     cur.execute(
         "INSERT INTO public.saas_contract_commercial_versions "
         "(id, contract_id, version_no, commercial_schema_version, product_tier, pricing_mode, "
-        "worker_capacity, term_months, pricing_result_status, pricing_policy_version, "
+        "worker_capacity, payment_months, pricing_result_status, pricing_policy_version, "
         "pricing_snapshot, effective_from) "
         "VALUES (%s,%s,1,'SAAS_CONTRACT_COMMERCIAL_V2','MANAGER','STANDARD',"
         "0,12,'READY','v1.0','{}','2026-10-01');",
@@ -419,11 +419,11 @@ def test_I12_already_applied_tuple_mismatch(pg):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_I13_rollback_on_constraint_violation(pg):
-    """term_months=99 (invalid) → constraint violation at Step 9 → contracts = 0."""
+    """payment_months=99 (invalid) → constraint violation at Step 9 → contracts = 0."""
     pid, cid, coid = _new_id(), _new_id(), _new_id()
     _insert_payment(pg, pid)
     cv = _cv_dict(cid)
-    cv["term_months"] = 99  # violates chk_saas_ccv_term_months
+    cv["payment_months"] = 99  # violates chk_saas_ccv_payment_months
     try:
         _rpc(pg, pid, _contract_row(cid, coid), cv, [_scope()])
     except psycopg2.Error:
@@ -445,7 +445,7 @@ def test_I14_acl_anon_denied_insert(pg):
         cur.execute(
             "INSERT INTO public.saas_contract_commercial_versions "
             "(contract_id, version_no, commercial_schema_version, product_tier, pricing_mode, "
-            "worker_capacity, term_months, pricing_result_status, effective_from) "
+            "worker_capacity, payment_months, pricing_result_status, effective_from) "
             "VALUES (%s,1,'SAAS_CONTRACT_COMMERCIAL_V2','MANAGER','STANDARD',0,12,'READY',now());",
             (_new_id(),),
         )
@@ -549,11 +549,11 @@ def test_I17_concurrent_for_update(pg):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_I18_full_rollback_all_tables(pg):
-    """term_months=99 → constraint violation → contracts/cv/scope=0, payment.contract_id=NULL."""
+    """payment_months=99 → constraint violation → contracts/cv/scope=0, payment.contract_id=NULL."""
     pid, cid, coid = _new_id(), _new_id(), _new_id()
     _insert_payment(pg, pid)
     cv = _cv_dict(cid)
-    cv["term_months"] = 99
+    cv["payment_months"] = 99
     try:
         _rpc(pg, pid, _contract_row(cid, coid), cv, [_scope()])
     except psycopg2.Error:

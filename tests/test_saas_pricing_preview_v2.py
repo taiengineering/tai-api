@@ -79,7 +79,7 @@ def _req(
     return SaasPricingPreviewRequestV2(
         product_tier=tier,
         worker_capacity=workers,
-        term_months=term,
+        payment_months=term,
         sites=sites if sites is not None else [_site_req()],
     )
 
@@ -110,11 +110,11 @@ def _test_policy():
         ],
         vat_rate_bps=1_000,
         term_discounts=[
-            SaasTermDiscountPolicy(term_months=1, discount_rate_bps=0),
-            SaasTermDiscountPolicy(term_months=3, discount_rate_bps=300),
-            SaasTermDiscountPolicy(term_months=6, discount_rate_bps=500),
-            SaasTermDiscountPolicy(term_months=9, discount_rate_bps=700),
-            SaasTermDiscountPolicy(term_months=12, discount_rate_bps=1_000),
+            SaasTermDiscountPolicy(payment_months=1, discount_rate_bps=0),
+            SaasTermDiscountPolicy(payment_months=3, discount_rate_bps=300),
+            SaasTermDiscountPolicy(payment_months=6, discount_rate_bps=500),
+            SaasTermDiscountPolicy(payment_months=9, discount_rate_bps=700),
+            SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=1_000),
         ],
     )
 
@@ -175,8 +175,8 @@ def test_P07_request_has_worker_capacity():
     assert "worker_capacity" in SaasPricingPreviewRequestV2.model_fields
 
 
-def test_P08_request_has_term_months():
-    assert "term_months" in SaasPricingPreviewRequestV2.model_fields
+def test_P08_request_has_payment_months():
+    assert "payment_months" in SaasPricingPreviewRequestV2.model_fields
 
 
 def test_P09_request_has_sites():
@@ -601,7 +601,7 @@ def test_P53_canonical_ready_http_200(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 0,
-        "term_months": 1,
+        "payment_months": 1,
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
     })
     assert resp.status_code == 200
@@ -624,11 +624,11 @@ def _make_none_discount_policy():
         worker_brackets=[SaasWorkerRateBracketPolicy(range_from=1, range_to=None, unit_rate=3000)],
         vat_rate_bps=1000,
         term_discounts=[
-            SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
-            SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
-            SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
-            SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
-            SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
+            SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(payment_months=3,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(payment_months=6,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(payment_months=9,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=None),
         ],
     )
 
@@ -803,7 +803,7 @@ def test_P68_invalid_selection_422(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 5,  # invalid for MANAGER
-        "term_months": 1,
+        "payment_months": 1,
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
     })
     assert resp.status_code == 422
@@ -814,7 +814,7 @@ def test_P69_standard_site_required_422(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 0,
-        "term_months": 1,
+        "payment_months": 1,
         "sites": [],
     })
     assert resp.status_code == 422
@@ -825,7 +825,7 @@ def test_P70_duplicate_site_422(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 0,
-        "term_months": 1,
+        "payment_months": 1,
         "sites": [
             {"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10},
             {"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10},
@@ -839,7 +839,7 @@ def test_P71_base_price_not_found_503(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 0,
-        "term_months": 1,
+        "payment_months": 1,
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
     })
     assert resp.status_code == 503
@@ -852,7 +852,7 @@ def test_P72_invalid_base_price_row_503(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 0,
-        "term_months": 1,
+        "payment_months": 1,
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
     })
     assert resp.status_code == 503
@@ -872,7 +872,7 @@ def test_P73_raw_exception_not_exposed(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 0,
-        "term_months": 1,
+        "payment_months": 1,
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
     })
     assert resp.status_code in (503, 500)
@@ -890,7 +890,7 @@ def test_P74_traceback_not_exposed(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 0,
-        "term_months": 1,
+        "payment_months": 1,
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
     })
     body = resp.text
@@ -989,7 +989,7 @@ def test_P87_top_level_pricing_mode_extra_rejected(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 0,
-        "term_months": 1,
+        "payment_months": 1,
         "pricing_mode": "STANDARD",
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
     })
@@ -1001,7 +1001,7 @@ def test_P88_site_base_amount_extra_rejected(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 0,
-        "term_months": 1,
+        "payment_months": 1,
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10, "base_amount": 149000}],
     })
     assert resp.status_code == 422
@@ -1012,7 +1012,7 @@ def test_P89_site_base_band_code_extra_rejected(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 0,
-        "term_months": 1,
+        "payment_months": 1,
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10, "base_band_code": "STANDARD"}],
     })
     assert resp.status_code == 422
@@ -1023,7 +1023,7 @@ def test_P90_top_level_policy_version_extra_rejected(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 0,
-        "term_months": 1,
+        "payment_months": 1,
         "policy_version": "v1",
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
     })
@@ -1049,7 +1049,7 @@ def test_P91b_resolver_sector_mismatch_503(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 0,
-        "term_months": 1,
+        "payment_months": 1,
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
     })
     assert resp.status_code == 503
@@ -1067,7 +1067,7 @@ def test_P93_custom_negative_worker_rejected(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "CUSTOM",
         "worker_capacity": -1,
-        "term_months": 1,
+        "payment_months": 1,
         "sites": [],
     })
     assert resp.status_code == 422
@@ -1082,7 +1082,7 @@ def test_P94_get_supabase_failure_returns_503(monkeypatch):
     resp = client.post("/public/pricing/v2/preview", json={
         "product_tier": "MANAGER",
         "worker_capacity": 0,
-        "term_months": 1,
+        "payment_months": 1,
         "sites": [{"entity_id": str(_SITE_1), "sector": "INDUSTRY", "criteria_value": 10}],
     })
     assert resp.status_code == 503

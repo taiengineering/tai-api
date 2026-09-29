@@ -96,7 +96,7 @@ class SaasRenewalV2AdapterError(Exception):
       RENEWAL_QUOTE_ID_MISMATCH             — pay.quote_id != quote.id
       RENEWAL_EFFECTIVE_AT_INVALID          — requested_effective_at naive datetime
       RENEWAL_EFFECTIVE_BEFORE_CURRENT_VERSION — requested_effective_at < current_cv.effective_from
-      RENEWAL_PERIOD_TERM_MISMATCH          — pay.period_months != snapshot.term_months
+      RENEWAL_PERIOD_TERM_MISMATCH          — pay.period_months != snapshot.payment_months
       AMOUNT_SNAPSHOT_MISMATCH              — pay/item/snapshot 금액 3중 불일치
     """
 
@@ -355,7 +355,7 @@ def prepare_saas_v2_renewal_payment_from_quote(
         contract_id=contract_id,
         quote_id=quote_id,
         plan_code=None,
-        period_months=snap.term_months,
+        period_months=snap.payment_months,
         payment_type="RENEWAL",
         proof_type=proof_type,
         buyername=buyername,
@@ -617,12 +617,12 @@ def build_saas_v2_renewal_apply_plan(
             f"total_amount 불일치: pay={p_total}, item={item.total_amount}, snap={snap.total_amount}",
         )
 
-    # ── Step 20: period_months ↔ term_months ────────────────────────
+    # ── Step 20: period_months ↔ payment_months ────────────────────────
     pay_period = int(pay.get("period_months") or 0)
-    if pay_period != snap.term_months:
+    if pay_period != snap.payment_months:
         raise SaasRenewalV2AdapterError(
             "RENEWAL_PERIOD_TERM_MISMATCH",
-            f"pay.period_months={pay_period} != snapshot.term_months={snap.term_months}",
+            f"pay.period_months={pay_period} != snapshot.payment_months={snap.payment_months}",
         )
 
     # ── Step 21: next_version_no 계산 ───────────────────────────────
@@ -635,7 +635,7 @@ def build_saas_v2_renewal_apply_plan(
         product_tier=snap.product_tier,
         pricing_mode=snap.pricing_mode,
         worker_capacity=snap.worker.capacity,
-        term_months=snap.term_months,
+        payment_months=snap.payment_months,
     )
     calc = _frozen_snapshot_to_calc_result(snap)
     commercial_bundle = build_standard_contract_storage_bundle_v2(

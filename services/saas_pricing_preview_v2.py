@@ -147,7 +147,7 @@ def preview_saas_price_v2(
                 product_tier="CUSTOM",
                 pricing_mode="CUSTOM",
                 worker_capacity=request.worker_capacity,
-                term_months=request.term_months,
+                payment_months=request.payment_months,
             )
         except ValidationError as exc:
             raise SaasPricingPreviewError("INVALID_SELECTION", str(exc)) from exc
@@ -158,7 +158,7 @@ def preview_saas_price_v2(
             product_tier="CUSTOM",
             pricing_mode="CUSTOM",
             worker_capacity=request.worker_capacity,
-            term_months=request.term_months,
+            payment_months=request.payment_months,
             resolved_sites=[],
             calculation=calc,
             block_reason=calc.block_reason,
@@ -170,7 +170,7 @@ def preview_saas_price_v2(
             product_tier=request.product_tier,
             pricing_mode="STANDARD",
             worker_capacity=request.worker_capacity,
-            term_months=request.term_months,
+            payment_months=request.payment_months,
         )
     except ValidationError as exc:
         raise SaasPricingPreviewError("INVALID_SELECTION", str(exc)) from exc
@@ -224,7 +224,7 @@ def preview_saas_price_v2(
             product_tier=request.product_tier,
             pricing_mode="STANDARD",
             worker_capacity=request.worker_capacity,
-            term_months=request.term_months,
+            payment_months=request.payment_months,
             resolved_sites=resolved_sites,
             calculation=None,
             block_reason="COMPLIANCE_BASE_QUOTE_REQUIRED",
@@ -246,7 +246,7 @@ def preview_saas_price_v2(
         product_tier=request.product_tier,
         pricing_mode="STANDARD",
         worker_capacity=request.worker_capacity,
-        term_months=request.term_months,
+        payment_months=request.payment_months,
         resolved_sites=resolved_sites,
         calculation=calc,
         block_reason=calc.block_reason,

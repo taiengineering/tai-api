@@ -52,11 +52,11 @@ def _resolved_policy(policy_version: str = "TEST_POLICY_V1") -> SaasPricingPolic
         ],
         vat_rate_bps=1000,
         term_discounts=[
-            SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=0),
-            SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=300),
-            SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=500),
-            SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=700),
-            SaasTermDiscountPolicy(term_months=12, discount_rate_bps=1000),
+            SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=0),
+            SaasTermDiscountPolicy(payment_months=3,  discount_rate_bps=300),
+            SaasTermDiscountPolicy(payment_months=6,  discount_rate_bps=500),
+            SaasTermDiscountPolicy(payment_months=9,  discount_rate_bps=700),
+            SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=1000),
         ],
     )
 
@@ -66,21 +66,21 @@ def _resolved_policy(policy_version: str = "TEST_POLICY_V1") -> SaasPricingPolic
 def _mgr_sel(term: int = 1) -> SaasCommercialSelection:
     return SaasCommercialSelection(
         product_tier="MANAGER", pricing_mode="STANDARD",
-        worker_capacity=0, term_months=term,
+        worker_capacity=0, payment_months=term,
     )
 
 
 def _field_sel(workers: int = 5, term: int = 1) -> SaasCommercialSelection:
     return SaasCommercialSelection(
         product_tier="FIELD", pricing_mode="STANDARD",
-        worker_capacity=workers, term_months=term,
+        worker_capacity=workers, payment_months=term,
     )
 
 
 def _custom_sel(workers: int = 0, term: int = 1) -> SaasCommercialSelection:
     return SaasCommercialSelection(
         product_tier="CUSTOM", pricing_mode="CUSTOM",
-        worker_capacity=workers, term_months=term,
+        worker_capacity=workers, payment_months=term,
     )
 
 
@@ -117,7 +117,7 @@ def _make_commercial_version(
     product_tier: str = "MANAGER",
     pricing_mode: str = "STANDARD",
     worker_capacity: int = 0,
-    term_months: int = 1,
+    payment_months: int = 1,
     pricing_result_status: str = "READY",
     pricing_policy_version: Optional[str] = "TEST_POLICY_V1",
     pricing_snapshot: Optional[SaasPricingSnapshotV2] = None,
@@ -133,7 +133,7 @@ def _make_commercial_version(
         product_tier=product_tier,
         pricing_mode=pricing_mode,
         worker_capacity=worker_capacity,
-        term_months=term_months,
+        payment_months=payment_months,
         pricing_result_status=pricing_result_status,
         pricing_policy_version=pricing_policy_version,
         pricing_snapshot=pricing_snapshot,
@@ -151,7 +151,7 @@ def _valid_mgr_version(term: int = 1) -> SaasContractCommercialVersionV2:
         product_tier="MANAGER",
         pricing_mode="STANDARD",
         worker_capacity=0,
-        term_months=term,
+        payment_months=term,
         pricing_policy_version=snap.policy_version,
         pricing_snapshot=snap,
     )
@@ -166,7 +166,7 @@ def _valid_field_version(workers: int = 5, term: int = 1) -> SaasContractCommerc
         product_tier="FIELD",
         pricing_mode="STANDARD",
         worker_capacity=workers,
-        term_months=term,
+        payment_months=term,
         pricing_policy_version=snap.policy_version,
         pricing_snapshot=snap,
     )
@@ -178,7 +178,7 @@ def _valid_custom_version(workers: int = 0) -> SaasContractCommercialVersionV2:
         product_tier="CUSTOM",
         pricing_mode="CUSTOM",
         worker_capacity=workers,
-        term_months=1,
+        payment_months=1,
         pricing_result_status="CUSTOM_REQUIRED",
         pricing_policy_version=None,
         pricing_snapshot=None,
@@ -214,7 +214,7 @@ def test_S04_manager_custom_rejected():
             product_tier="MANAGER",
             pricing_mode="CUSTOM",
             worker_capacity=0,
-            term_months=1,
+            payment_months=1,
             pricing_result_status="CUSTOM_REQUIRED",
             pricing_policy_version=None,
             pricing_snapshot=None,
@@ -231,7 +231,7 @@ def test_S05_field_custom_rejected():
             product_tier="FIELD",
             pricing_mode="CUSTOM",
             worker_capacity=5,
-            term_months=1,
+            payment_months=1,
             pricing_result_status="CUSTOM_REQUIRED",
             pricing_policy_version=None,
             pricing_snapshot=None,
@@ -248,7 +248,7 @@ def test_S06_custom_standard_rejected():
             product_tier="CUSTOM",
             pricing_mode="STANDARD",
             worker_capacity=0,
-            term_months=1,
+            payment_months=1,
             pricing_result_status="CUSTOM_REQUIRED",
             pricing_policy_version=None,
             pricing_snapshot=None,
@@ -297,34 +297,34 @@ def test_S10_custom_worker_non_negative_accepted():
 
 def test_S11_term_1_accepted():
     cv = _valid_mgr_version(term=1)
-    assert cv.term_months == 1
+    assert cv.payment_months == 1
 
 
 def test_S12_term_3_accepted():
     cv = _valid_mgr_version(term=3)
-    assert cv.term_months == 3
+    assert cv.payment_months == 3
 
 
 def test_S13_term_6_accepted():
     cv = _valid_mgr_version(term=6)
-    assert cv.term_months == 6
+    assert cv.payment_months == 6
 
 
 def test_S14_term_9_accepted():
     cv = _valid_mgr_version(term=9)
-    assert cv.term_months == 9
+    assert cv.payment_months == 9
 
 
 def test_S15_term_12_accepted():
     cv = _valid_mgr_version(term=12)
-    assert cv.term_months == 12
+    assert cv.payment_months == 12
 
 
 def test_S16_invalid_term_rejected():
     snap = _ready_result(_mgr_sel()).snapshot
     with pytest.raises(ValidationError):
         _make_commercial_version(
-            term_months=2,
+            payment_months=2,
             pricing_snapshot=snap,
             pricing_policy_version=snap.policy_version,
         )
@@ -334,7 +334,7 @@ def test_S17_float_term_rejected():
     snap = _ready_result(_mgr_sel()).snapshot
     with pytest.raises(ValidationError):
         _make_commercial_version(
-            term_months=1.0,  # type: ignore[arg-type]
+            payment_months=1.0,  # type: ignore[arg-type]
             pricing_snapshot=snap,
             pricing_policy_version=snap.policy_version,
         )
@@ -344,7 +344,7 @@ def test_S18_bool_term_rejected():
     snap = _ready_result(_mgr_sel()).snapshot
     with pytest.raises(ValidationError):
         _make_commercial_version(
-            term_months=True,  # type: ignore[arg-type]
+            payment_months=True,  # type: ignore[arg-type]
             pricing_snapshot=snap,
             pricing_policy_version=snap.policy_version,
         )
@@ -429,12 +429,12 @@ def test_S24_pricing_mode_mismatch_rejected():
 
 
 def test_S25_term_mismatch_rejected():
-    """snapshot.term_months ≠ version.term_months → 거부."""
+    """snapshot.payment_months ≠ version.payment_months → 거부."""
     sel_term3 = _field_sel(term=3)
     snap_term3 = _ready_result(sel_term3).snapshot
-    assert snap_term3.term_months == 3
-    with pytest.raises(ValidationError, match="term_months"):
-        # version.term_months=1 but snapshot.term_months=3
+    assert snap_term3.payment_months == 3
+    with pytest.raises(ValidationError, match="payment_months"):
+        # version.payment_months=1 but snapshot.payment_months=3
         SaasContractCommercialVersionV2(
             commercial_schema_version=COMMERCIAL_STORAGE_SCHEMA_VERSION,
             contract_id=uuid4(),
@@ -442,7 +442,7 @@ def test_S25_term_mismatch_rejected():
             product_tier="FIELD",
             pricing_mode="STANDARD",
             worker_capacity=5,
-            term_months=1,  # version says 1
+            payment_months=1,  # version says 1
             pricing_result_status="READY",
             pricing_policy_version=snap_term3.policy_version,
             pricing_snapshot=snap_term3,  # snapshot says 3
@@ -708,11 +708,11 @@ def test_M02_unresolved_result_rejected():
         worker_brackets=[SaasWorkerRateBracketPolicy(range_from=1, range_to=None, unit_rate=3000)],
         vat_rate_bps=1000,
         term_discounts=[
-            SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
-            SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
-            SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
-            SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
-            SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
+            SaasTermDiscountPolicy(payment_months=1,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(payment_months=3,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(payment_months=6,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(payment_months=9,  discount_rate_bps=None),
+            SaasTermDiscountPolicy(payment_months=12, discount_rate_bps=None),
         ],
     )
     sel = _mgr_sel()
