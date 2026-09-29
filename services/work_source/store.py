@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, Dict, List, Optional
 
 from services.time import now_kst, serialize_business_datetime
@@ -74,13 +75,38 @@ def validate_payload(payload: Dict[str, Any], *, partial: bool = False) -> Dict[
         if not isinstance(attrs, dict):
             raise WorkSourceValidationError("attributes must be an object")
         allowed_attrs = set((spec or {}).get("attributes") or {})
-        for key in attrs:
-            if any(str(key).startswith(p) for p in CANONICAL_ATTR_PREFIXES):
+        for key, val in attrs.items():
+            if spec is not None and key not in allowed_attrs:
+                if any(str(key).startswith(p) for p in CANONICAL_ATTR_PREFIXES):
+                    raise WorkSourceValidationError(
+                        "canonical LEG fields cannot be stored on work source"
+                    )
+                raise WorkSourceValidationError("unknown attribute: {}".format(key))
+            if spec is None and any(str(key).startswith(p) for p in CANONICAL_ATTR_PREFIXES):
                 raise WorkSourceValidationError(
                     "canonical LEG fields cannot be stored on work source"
                 )
-            if spec is not None and key not in allowed_attrs:
-                raise WorkSourceValidationError("unknown attribute: {}".format(key))
+            if spec is not None and val is not None:
+                attr_meta = ((spec.get("attributes") or {}).get(key) or {})
+                attr_type = attr_meta.get("type")
+                if attr_type == "boolean":
+                    if type(val) is not bool:
+                        raise WorkSourceValidationError(
+                            "attribute {!r}: expected boolean".format(key)
+                        )
+                elif attr_type == "number":
+                    if isinstance(val, bool) or not isinstance(val, (int, float)):
+                        raise WorkSourceValidationError(
+                            "attribute {!r}: expected number (int or float)".format(key)
+                        )
+                    if not math.isfinite(val):
+                        raise WorkSourceValidationError(
+                            "attribute {!r}: must be finite".format(key)
+                        )
+                    if val < 0:
+                        raise WorkSourceValidationError(
+                            "attribute {!r}: must be >= 0".format(key)
+                        )
         out["attributes"] = attrs
 
     if "active" in payload:

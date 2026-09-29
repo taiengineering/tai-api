@@ -67,7 +67,7 @@ def test_P1_dalbi_assembly_true():
         work_subtype="ASSEMBLY",
         attributes={"is_dalbi": True, "height_m": 3},
     )
-    assert project_work_row(row) == {CANON_FIELD: True}
+    assert project_work_row(row) == {"has_scaffold": True, CANON_FIELD: True}
 
 
 # =========================================================================
@@ -78,7 +78,7 @@ def test_P2_dalbi_dismantle_height_missing_true():
         work_subtype="DISMANTLE",
         attributes={"is_dalbi": True},
     )
-    assert project_work_row(row) == {CANON_FIELD: True}
+    assert project_work_row(row) == {"has_scaffold": True, CANON_FIELD: True}
 
 
 # =========================================================================
@@ -89,7 +89,7 @@ def test_P3_generic_5m_modification_true():
         work_subtype="MODIFICATION",
         attributes={"is_dalbi": False, "height_m": 5},
     )
-    assert project_work_row(row) == {CANON_FIELD: True}
+    assert project_work_row(row) == {"has_scaffold": True, CANON_FIELD: True}
 
 
 # =========================================================================
@@ -100,7 +100,7 @@ def test_P4_below_threshold_absent():
         work_subtype="ASSEMBLY",
         attributes={"is_dalbi": False, "height_m": 4.999},
     )
-    assert project_work_row(row) == {}
+    assert project_work_row(row) == {"has_scaffold": True}
 
 
 # =========================================================================
@@ -112,7 +112,7 @@ def test_P5_height_alone_without_subtype_absent():
             work_subtype=subtype,
             attributes={"is_dalbi": False, "height_m": 6},
         )
-        assert project_work_row(row) == {}, f"subtype={subtype!r} must not fire"
+        assert project_work_row(row) == {"has_scaffold": True}, f"subtype={subtype!r} must not fire"
 
 
 # =========================================================================
@@ -131,10 +131,10 @@ def test_P6_same_entity_trap_no_cross_row_combination():
         equipment_ref="scaffold-B",
     )
     # Each row alone
-    assert project_work_row(row_a) == {}
-    assert project_work_row(row_b) == {}
+    assert project_work_row(row_a) == {"has_scaffold": True}
+    assert project_work_row(row_b) == {"has_scaffold": True}
     # Union of both rows still absent (same-entity binding preserved)
-    assert project_work_rows([row_a, row_b]) == {}
+    assert project_work_rows([row_a, row_b]) == {"has_scaffold": True}
 
 
 # =========================================================================
@@ -149,7 +149,7 @@ def test_P7_existential_multi_row_positive():
         work_subtype="DISMANTLE",
         attributes={"is_dalbi": False, "height_m": 6},
     )
-    assert project_work_rows([row_bad, row_good]) == {CANON_FIELD: True}
+    assert project_work_rows([row_bad, row_good]) == {"has_scaffold": True, CANON_FIELD: True}
 
 
 # =========================================================================
@@ -173,7 +173,7 @@ def test_height_m_bool_excluded():
         work_subtype="ASSEMBLY",
         attributes={"is_dalbi": False, "height_m": True},
     )
-    assert project_work_row(row) == {}
+    assert project_work_row(row) == {"has_scaffold": True}
 
 
 def test_height_m_negative_and_missing_rejected():
@@ -182,7 +182,7 @@ def test_height_m_negative_and_missing_rejected():
             work_subtype="ASSEMBLY",
             attributes={"is_dalbi": False, "height_m": val},
         )
-        assert project_work_row(row) == {}, f"height_m={val!r} must not fire"
+        assert project_work_row(row) == {"has_scaffold": True}, f"height_m={val!r} must not fire"
 
 
 def test_dalbi_arm_survives_missing_height():
@@ -192,7 +192,7 @@ def test_dalbi_arm_survives_missing_height():
             work_subtype="ASSEMBLY",
             attributes={"is_dalbi": True, "height_m": val},
         )
-        assert project_work_row(row) == {CANON_FIELD: True}, (
+        assert project_work_row(row) == {"has_scaffold": True, CANON_FIELD: True}, (
             f"dalbi arm must fire even with height_m={val!r}"
         )
 
@@ -206,7 +206,7 @@ def test_only_three_subtypes_qualify():
             work_subtype=subtype,
             attributes={"is_dalbi": True, "height_m": 10},
         )
-        assert project_work_row(row) == {}, f"subtype={subtype!r} must not qualify"
+        assert project_work_row(row) == {"has_scaffold": True}, f"subtype={subtype!r} must not qualify"
 
 
 # =========================================================================
@@ -225,7 +225,7 @@ def test_transport_projected_fact_reaches_build_facility():
             attributes={"is_dalbi": True, "height_m": 3},
         ),
     ]
-    assert project_work_rows(rows) == {CANON_FIELD: True}
+    assert project_work_rows(rows) == {"has_scaffold": True, CANON_FIELD: True}
 
     # Merge projection into source facts, then run the existing generic
     # build_unified_leg_input → build_facility loop. No alias, no special-case.
@@ -243,7 +243,7 @@ def test_transport_absent_when_no_scaffold_row_qualifies():
         _row(work_subtype=None, attributes={"is_dalbi": True}),
         _row(work_subtype="ASSEMBLY", attributes={"is_dalbi": False, "height_m": 3}),
     ]
-    assert project_work_rows(rows) == {}
+    assert project_work_rows(rows) == {"has_scaffold": True}
     merged = merge_or_raise(explicit={}, work_rows=rows)
     assert CANON_FIELD not in merged
     step1_body = build_unified_leg_input(

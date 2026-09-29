@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from typing import Optional
+from typing import Any, Dict, Optional
 from datetime import date, datetime, timezone
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
@@ -77,6 +77,7 @@ class EquipmentAssetCreate(BaseModel):
     area_id:              Optional[str] = None
     ksic_code:            Optional[str] = None
     operation_status:     Optional[str] = "ACTIVE"  # ACTIVE|BROKEN|INACTIVE
+    attributes:           Optional[Dict[str, Any]] = None  # Wave A2 numeric source capture
 
 
 class EquipmentAssetUpdate(BaseModel):
@@ -97,6 +98,7 @@ class EquipmentAssetUpdate(BaseModel):
     last_inspection_date: Optional[str] = None
     next_inspection_date: Optional[str] = None
     operation_status:     Optional[str] = None  # ★ v1.5.0 추가: ACTIVE|BROKEN|INACTIVE
+    attributes:           Optional[Dict[str, Any]] = None  # Wave A2 numeric source capture
 
 
 # ── 목록 조회 ─────────────────────────────────────────────
@@ -117,7 +119,7 @@ def get_assets(
         "install_year, manufacturer, equipment_model_id, "
         "last_inspection_date, next_inspection_date, "
         "is_legal_target, is_operating, operation_status, "
-        "location_detail, created_at",
+        "location_detail, attributes, created_at",
         count="exact"
     )
     if factory_id:
@@ -292,6 +294,45 @@ def get_equipment_summary(factory_id: str = Query(...), current: dict = Depends(
     return {"status": "success", "data": {"total": total, "active": active, "broken": broken, "inactive": inactive}}
 
 
+# ── 설비 종류 카탈로그 ─────────────────────────────────────────
+# ⚠️ 라우트 순서: 반드시 GET /{asset_id} 보다 위에 정의.
+# Authority: equipment_type_inspection_map.type_code / type_name_ko.
+# is_active=True 행만, type_code ASC 정렬.
+# DB query 실패 → 503 / EQUIPMENT_TYPE_CATALOG_UNAVAILABLE.
+@router.get("/type-codes")
+def get_equipment_type_codes(current: dict = Depends(get_current_user)):
+    supabase = get_supabase()
+    try:
+        res = (
+            supabase.table("equipment_type_inspection_map")
+            .select("type_code, type_name_ko")
+            .eq("is_active", True)
+            .order("type_code")
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "EQUIPMENT_TYPE_CATALOG_UNAVAILABLE", "message": str(exc)},
+        ) from exc
+    if not isinstance(res.data, list):
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "EQUIPMENT_TYPE_CATALOG_UNAVAILABLE", "message": "malformed catalog response"},
+        )
+    try:
+        items = [
+            {"equipment_type_code": r["type_code"], "label": r["type_name_ko"]}
+            for r in res.data
+        ]
+    except (KeyError, TypeError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "EQUIPMENT_TYPE_CATALOG_UNAVAILABLE", "message": f"malformed catalog row: {exc}"},
+        ) from exc
+    return {"status": "success", "data": {"items": items, "total": len(items)}}
+
+
 # ── 단건 조회 ────────────────────────────────────────────────
 @router.get("/{asset_id}")
 def get_asset(asset_id: str, current: dict = Depends(get_current_user)):
@@ -310,13 +351,28 @@ async def create_asset(body: EquipmentAssetCreate, current: dict = Depends(get_c
     if not body.asset_name.strip():
         raise HTTPException(status_code=422, detail="asset_name은 필수입니다.")
     _ensure_factory_own(supabase, body.factory_id, current)
+    # Normalize and validate equipment_type_code when provided.
+    # None / absent → stored as-is (backward compat).
+    # Known alias (PRESS, CRANE…) → persists as numeric canonical.
+    # Unknown string → 422.
+    normalized_code = None
+    if body.equipment_type_code is not None:
+        from services.equipment_source.store import (
+            validate_equipment_source_row as _validate_eq,
+            EquipmentSourceValidationError as _EqValErr,
+        )
+        try:
+            _validated = _validate_eq({"equipment_type_code": body.equipment_type_code})
+            normalized_code = _validated.get("equipment_type_code")
+        except _EqValErr as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
     fac = supabase.table("factories").select("company_id").eq("id", body.factory_id).limit(1).execute()
     company_id = (fac.data[0] if fac.data else {}).get("company_id")
     insert_data = {
         "factory_id":       body.factory_id,
         "asset_name":       body.asset_name.strip(),
         "asset_code":       body.asset_code,
-        "equipment_type_code": body.equipment_type_code,
+        "equipment_type_code": normalized_code,
         "equipment_category":  body.equipment_category,
         "description":      body.description,
         "quantity":         body.quantity or 1,
@@ -332,6 +388,7 @@ async def create_asset(body: EquipmentAssetCreate, current: dict = Depends(get_c
         "equipment_model_id": body.equipment_model_id,
         "area_id":          body.area_id,
         "ksic_code":        body.ksic_code,
+        "attributes":       body.attributes,
     }
     insert_data = {k: v for k, v in insert_data.items() if v is not None}
     res = supabase.table("equipment_assets").insert(insert_data).execute()
@@ -387,6 +444,17 @@ def update_asset(asset_id: str, body: EquipmentAssetUpdate, current: dict = Depe
             update_data[k] = v
     if not update_data:
         raise HTTPException(status_code=422, detail="수정할 내용이 없습니다.")
+    # Normalize and validate equipment_type_code when it is being changed.
+    if "equipment_type_code" in update_data:
+        from services.equipment_source.store import (
+            validate_equipment_source_row as _validate_eq,
+            EquipmentSourceValidationError as _EqValErr,
+        )
+        try:
+            _validated = _validate_eq({"equipment_type_code": update_data["equipment_type_code"]})
+            update_data["equipment_type_code"] = _validated.get("equipment_type_code")
+        except _EqValErr as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
     # operation_status 유효성 체크
     if "operation_status" in update_data:
         if update_data["operation_status"] not in ("ACTIVE", "BROKEN", "INACTIVE"):

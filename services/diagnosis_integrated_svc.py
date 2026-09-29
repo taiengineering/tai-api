@@ -416,6 +416,28 @@ def _build_unified_step1_body(
     return step1_body
 
 
+def _merge_material_rows_into_inp(inp: dict, rows: list) -> dict:
+    """Merge factory_material rows into diagnosis inp via existing canonical adapter.
+
+    Shared seam for paid persistent path (pre-validated DB rows) and transient
+    path (caller validates first). MaterialCanonicalMergeConflict and catalog/
+    projector errors propagate unchanged — callers convert to HTTP responses.
+    """
+    if not rows:
+        return inp
+    from services.material_source.canonical_adapter import (
+        merge_or_raise as _mmerge,
+        project_material_canonical_facts_from_rows as _proj_mat,
+        project_material_fc001_facts as _proj_fc001,
+    )
+    _mat_can = _proj_mat(rows)
+    inp = _mmerge(inp, projected=_mat_can)
+    _fc001 = _proj_fc001(rows)
+    for _fk, _fv in _fc001.items():
+        inp.setdefault(_fk, _fv)
+    return inp
+
+
 def run_diagnosis(
     supabase,
     body,
@@ -501,6 +523,15 @@ def run_diagnosis(
     _process_list_val = body.process_list if body.process_list is not None else _fd.get("process_list")
     _equipment_list_val = body.equipment_list if body.equipment_list is not None else _fd.get("equipment_list")
     _ksic_list_val = body.ksic_list if body.ksic_list is not None else _fd.get("ksic_list")
+    # Wave A1 snapshot values — serialized early so snapshot is consistent with what was validated.
+    _work_rows_val = [
+        (r.model_dump(exclude_none=True) if hasattr(r, "model_dump") else dict(r))
+        for r in (getattr(body, "work_rows", None) or [])
+    ] or None
+    _material_rows_val = [
+        (r.model_dump(exclude_none=True) if hasattr(r, "model_dump") else dict(r))
+        for r in (getattr(body, "material_rows", None) or [])
+    ] or None
 
     tier_code = auto_tier_func(
         sector,
@@ -550,26 +581,58 @@ def run_diagnosis(
     merge_projection_after_canonical(
         inp, canonical_applicability(_available), _appendix3_proj
     )
-    if _is_construction and not is_free and factory_id:
+    # WO-EQUIPMENT-A2-REMAINING-CONSUMER-PARITY-IMPLEMENT-001:
+    # Extend persistent Equipment read from CONSTRUCTION-only to MANUFACTURING/BUILDING too.
+    # Ownership check retained for all three factory-based sectors.
+    if engine_sector in {"MANUFACTURING", "BUILDING", "CONSTRUCTION"} and not is_free and factory_id:
         from services.company_scope import _ensure_factory_own
         _ensure_factory_own(supabase, factory_id, current_user)
-        _EQ_FACT = {"010": "has_emergency_gen", "014": "has_boiler", "023": "has_press",
-                    "024": "has_conveyor", "038": "has_pressure_vessel"}
+        from services.equipment_source.projector import project_equipment_rows as _proj_eq
+        # WO-EQUIPMENT-A2-EXISTING-SEAM-PATCH-001: inline reader → shared reader 교체.
+        # 동작 contract 동일 (factory_id + is_operating=True, SELECT equipment_type_code).
+        from services.equipment_source.store import (
+            EquipmentSourceLoadError as _EqLoadErr,
+            load_equipment_rows_optional as _load_eq,
+        )
         try:
-            _eq_res = (
-                supabase.table("equipment_assets")
-                .select("equipment_type_code")
-                .eq("factory_id", factory_id)
-                .eq("is_operating", True)
-                .execute()
-            )
-        except Exception as _e:
+            _eq_rows = _load_eq(supabase, factory_id)
+        except _EqLoadErr as _e:
             log.error("[equipment_materializer] source read failed factory=%s: %s", factory_id, _e)
             raise HTTPException(status_code=503, detail="설비 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")
-        _eq_codes = {(_r.get("equipment_type_code") or "") for _r in (_eq_res.data or [])}
-        for _c, _f in _EQ_FACT.items():
-            if _c in _eq_codes:
-                inp.setdefault(_f, True)
+        for _f, _v in _proj_eq(_eq_rows).items():
+            inp.setdefault(_f, _v)
+        # WO-MATERIAL-PAID-PERSISTENT-EXISTING-SEAM-PATCH-001:
+        # Persistent factory_materials → canonical adapter → LEG input.
+        # Same reader/canonical path as Official SaaS 3-sector (PR #445 + #451).
+        # READ FAILURE != EMPTY SOURCE — MaterialSourceLoadError propagates fail-closed.
+        from services.material_source.store import (
+            MaterialSourceLoadError as _MatLoadErr,
+            load_factory_material_rows_optional as _load_mat,
+        )
+        try:
+            _mat_rows = _load_mat(supabase, factory_id)
+        except _MatLoadErr as _me:
+            log.error("[material_materializer] source read failed factory=%s: %s", factory_id, _me)
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "MATERIAL_SOURCE_UNAVAILABLE", "message": str(_me)},
+            ) from _me
+        from services.material_source.canonical_adapter import (
+            MaterialCanonicalMergeConflict as _MatConflict,
+        )
+        try:
+            inp = _merge_material_rows_into_inp(inp, _mat_rows)
+        except _MatConflict as _mc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "MATERIAL_CANONICAL_CONFLICT", "conflicts": _mc.conflicts},
+            ) from _mc
+        except Exception as _mat_exc:
+            log.error("[material_materializer] projection failed factory=%s: %s", factory_id, _mat_exc)
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "MATERIAL_SOURCE_UNAVAILABLE", "message": str(_mat_exc)},
+            ) from _mat_exc
     # WO-E2E-OBS009-COMMON-WORK-SOURCE-IMPLEMENT-001:
     # stored work → projector → merge. Explicit request keys are not overwritten.
     if factory_id:
@@ -589,6 +652,96 @@ def run_diagnosis(
                 status_code=409,
                 detail={"code": "WORK_SOURCE_CONFLICT", "conflicts": exc.conflicts},
             ) from exc
+    # Wave A1 — transient work_rows from request (Paid path).
+    # Reuses validate_payload (registry semantic) + merge_or_raise (conflict policy).
+    # No factory_work_facts INSERT/UPDATE/DELETE. Same projector as persistent path.
+    _transient_work_rows = getattr(body, "work_rows", None) or []
+    if _transient_work_rows:
+        from services.work_source.merge import WorkSourceMergeConflict as _WConflict, merge_or_raise as _wmerge
+        from services.work_source.store import WorkSourceValidationError as _WValErr, validate_payload as _validate_work
+        try:
+            _validated_transient = [
+                _validate_work(
+                    r.model_dump(exclude_none=True) if hasattr(r, "model_dump") else dict(r),
+                    partial=False,
+                )
+                for r in _transient_work_rows
+            ]
+        except _WValErr as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "WORK_ROW_INVALID", "message": str(exc)},
+            ) from exc
+        try:
+            inp = _wmerge(inp, work_rows=_validated_transient)
+        except _WConflict as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "WORK_SOURCE_CONFLICT", "conflicts": exc.conflicts},
+            ) from exc
+    # Wave A1 — transient material_rows from request (Paid path).
+    # Reuses project_material_canonical_facts_from_rows + project_material_fc001_facts.
+    # classification_codes forbidden in MaterialRowInput (extra=forbid). No DB mutation.
+    _transient_mat_rows = getattr(body, "material_rows", None) or []
+    if _transient_mat_rows:
+        from services.material_source.canonical_adapter import (
+            MaterialCanonicalMergeConflict as _MConflict,
+        )
+        from services.material_source.store import (
+            MaterialSourceValidationError as _MValErr,
+            validate_transient_material_row as _validate_mat,
+        )
+        _mat_dicts_raw = [
+            r.model_dump(exclude_none=True) if hasattr(r, "model_dump") else dict(r)
+            for r in _transient_mat_rows
+        ]
+        try:
+            _mat_dicts = [_validate_mat(d) for d in _mat_dicts_raw]
+        except _MValErr as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "MATERIAL_ROW_INVALID", "message": str(exc)},
+            ) from exc
+        try:
+            inp = _merge_material_rows_into_inp(inp, _mat_dicts)
+        except _MConflict as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "MATERIAL_CANONICAL_CONFLICT", "conflicts": exc.conflicts},
+            ) from exc
+        except Exception as _mat_exc:
+            log.error("[material_transient] catalog load failed: %s", _mat_exc)
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "MATERIAL_SOURCE_UNAVAILABLE", "message": str(_mat_exc)},
+            ) from _mat_exc
+    # Wave A2 — transient equipment_list rows (Paid path).
+    # Validation gate: rows where the equipment_type_code KEY is present (even "" or whitespace)
+    # must pass validate_equipment_source_row() → 422 on invalid/unknown code.
+    # Legacy rows (key absent or value None) bypass validation and projection entirely.
+    # Additive: setdefault preserves explicit input and persistent source facts.
+    _eq_keyed = [
+        r for r in (_equipment_list_val or [])
+        if isinstance(r, dict) and "equipment_type_code" in r and r["equipment_type_code"] is not None
+    ]
+    if _eq_keyed:
+        from services.equipment_source.store import (
+            validate_equipment_source_row as _validate_eq,
+            EquipmentSourceValidationError as _EqValErr,
+        )
+        try:
+            _eq_validated = [_validate_eq(r) for r in _eq_keyed]
+        except _EqValErr as _eq_exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "EQUIPMENT_ROW_INVALID", "message": str(_eq_exc)},
+            ) from _eq_exc
+        # Only rows whose code is non-empty (truthy) proceed to projection.
+        _eq_rows_for_proj = [r for r in _eq_validated if r.get("equipment_type_code")]
+        if _eq_rows_for_proj:
+            from services.equipment_source.projector import project_equipment_rows as _proj_eq_t
+            for _f, _v in _proj_eq_t(_eq_rows_for_proj).items():
+                inp.setdefault(_f, _v)
     if _worker_count is not None:
         workers = _worker_count
     elif body.direct_workers is not None:
@@ -700,6 +853,8 @@ def run_diagnosis(
             "process_list": _process_list_val,
             "equipment_list": _equipment_list_val,
             "ksic_list": _ksic_list_val,
+            "work_rows": _work_rows_val,
+            "material_rows": _material_rows_val,
         }.items()
         if _v is not None
     }

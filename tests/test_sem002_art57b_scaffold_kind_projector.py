@@ -92,7 +92,7 @@ def test_P1_steel_pipe_assembly_true():
         work_subtype="ASSEMBLY",
         attributes={"scaffold_kind": "STEEL_PIPE"},
     )
-    assert project_work_row(row) == {ART57B_FIELD: True}
+    assert project_work_row(row) == {"has_scaffold": True, ART57B_FIELD: True}
 
 
 # =========================================================================
@@ -103,7 +103,7 @@ def test_P2_log_assembly_true():
         work_subtype="ASSEMBLY",
         attributes={"scaffold_kind": "LOG"},
     )
-    assert project_work_row(row) == {ART57B_FIELD: True}
+    assert project_work_row(row) == {"has_scaffold": True, ART57B_FIELD: True}
 
 
 # =========================================================================
@@ -114,7 +114,7 @@ def test_P3_other_assembly_absent():
         work_subtype="ASSEMBLY",
         attributes={"scaffold_kind": "OTHER"},
     )
-    assert project_work_row(row) == {}
+    assert project_work_row(row) == {"has_scaffold": True}
 
 
 # =========================================================================
@@ -125,7 +125,7 @@ def test_P4_steel_pipe_dismantle_absent_for_art57b():
         work_subtype="DISMANTLE",
         attributes={"scaffold_kind": "STEEL_PIPE"},
     )
-    assert project_work_row(row) == {}
+    assert project_work_row(row) == {"has_scaffold": True}
 
 
 # =========================================================================
@@ -133,7 +133,7 @@ def test_P4_steel_pipe_dismantle_absent_for_art57b():
 # =========================================================================
 def test_P5_kind_missing_absent():
     row = _row(work_subtype="ASSEMBLY", attributes={})
-    assert project_work_row(row) == {}
+    assert project_work_row(row) == {"has_scaffold": True}
 
 
 # =========================================================================
@@ -150,9 +150,9 @@ def test_P6_same_entity_trap_no_cross_row_combination():
         attributes={"scaffold_kind": "OTHER"},
         equipment_ref="scaffold-B",
     )
-    assert project_work_row(row_a) == {}
-    assert project_work_row(row_b) == {}
-    assert project_work_rows([row_a, row_b]) == {}
+    assert project_work_row(row_a) == {"has_scaffold": True}
+    assert project_work_row(row_b) == {"has_scaffold": True}
+    assert project_work_rows([row_a, row_b]) == {"has_scaffold": True}
 
 
 # =========================================================================
@@ -169,6 +169,7 @@ def test_P7_dual_positive_art57a_and_art57b():
         },
     )
     assert project_work_row(row) == {
+        "has_scaffold": True,
         ART57A_FIELD: True,
         ART57B_FIELD: True,
     }
@@ -196,7 +197,7 @@ def test_P9_transport_projected_fact_reaches_build_facility():
             attributes={"scaffold_kind": "LOG"},
         ),
     ]
-    assert project_work_rows(rows) == {ART57B_FIELD: True}
+    assert project_work_rows(rows) == {"has_scaffold": True, ART57B_FIELD: True}
 
     merged = merge_or_raise(explicit={}, work_rows=rows)
     assert merged.get(ART57B_FIELD) is True
@@ -212,7 +213,7 @@ def test_P9b_transport_absent_when_no_scaffold_row_qualifies():
         _row(work_subtype="DISMANTLE", attributes={"scaffold_kind": "STEEL_PIPE"}),
         _row(work_subtype="ASSEMBLY", attributes={"scaffold_kind": "OTHER"}),
     ]
-    assert project_work_rows(rows) == {}
+    assert project_work_rows(rows) == {"has_scaffold": True}
     merged = merge_or_raise(explicit={}, work_rows=rows)
     assert ART57B_FIELD not in merged
     step1_body = build_unified_leg_input(
@@ -231,21 +232,21 @@ def test_P10_art57a_semantics_unchanged():
         work_subtype="ASSEMBLY",
         attributes={"is_dalbi": True, "height_m": 3},
     )
-    assert project_work_row(row) == {ART57A_FIELD: True}
+    assert project_work_row(row) == {"has_scaffold": True, ART57A_FIELD: True}
 
     # non-dalbi 5m modification → Art.57-A only
     row = _row(
         work_subtype="MODIFICATION",
         attributes={"is_dalbi": False, "height_m": 5},
     )
-    assert project_work_row(row) == {ART57A_FIELD: True}
+    assert project_work_row(row) == {"has_scaffold": True, ART57A_FIELD: True}
 
-    # 4.999m + assembly → both absent
+    # 4.999m + assembly → Art.57-A absent, has_scaffold still emitted
     row = _row(
         work_subtype="ASSEMBLY",
         attributes={"is_dalbi": False, "height_m": 4.999},
     )
-    assert project_work_row(row) == {}
+    assert project_work_row(row) == {"has_scaffold": True}
 
 
 # =========================================================================

@@ -28,7 +28,8 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
+from services.time.legacy_naive_utc_adapter import legacy_naive_utc_to_aware
 from typing import Optional
 
 from dateutil import parser as dateutil_parser
@@ -494,7 +495,7 @@ def build_saas_v2_renewal_apply_plan(
                 f"current_cv.superseded_at 파싱 실패: {sup_raw!r}",
             ) from exc
         if sup_dt.tzinfo is None:
-            sup_dt = sup_dt.replace(tzinfo=timezone.utc)
+            sup_dt = legacy_naive_utc_to_aware(sup_dt)
         if requested_effective_at == sup_dt:
             pass  # idempotent rebuild: 동일 boundary B2 적용 후 재처리 허용
         elif requested_effective_at > sup_dt:
@@ -565,7 +566,7 @@ def build_saas_v2_renewal_apply_plan(
         cv_effective_from = raw_eff
 
     if cv_effective_from.tzinfo is None:
-        cv_effective_from = cv_effective_from.replace(tzinfo=timezone.utc)
+        cv_effective_from = legacy_naive_utc_to_aware(cv_effective_from)
 
     if requested_effective_at < cv_effective_from:
         raise SaasRenewalV2AdapterError(

@@ -43,6 +43,12 @@ _FC001_VALID_MODES: frozenset = frozenset({
     "TANK_EQUIPMENT_WORK",
 })
 
+_TRANSIENT_MATERIAL_KEYS: frozenset = frozenset({
+    "material_master_key",
+    "handling_mode_codes",
+    "is_active",
+})
+
 
 def _blank(val: Any) -> bool:
     return val is None or (isinstance(val, str) and not val.strip())
@@ -93,23 +99,15 @@ def master_with_classifications(row: Dict[str, Any], *, authority_dir=None) -> D
     return out
 
 
-def validate_factory_payload(
-    payload: Dict[str, Any], *, partial: bool = False, authority_dir=None
-) -> Dict[str, Any]:
-    extra = set(payload) - ALLOWED_FACTORY_PAYLOAD_KEYS
-    if extra:
-        raise MaterialSourceValidationError(
-            "unsupported keys: {}".format(sorted(extra))
-        )
-    out: Dict[str, Any] = {}
-    if "material_name" in payload or not partial:
-        name = payload.get("material_name")
-        if _blank(name):
-            raise MaterialSourceValidationError("material_name required")
-        out["material_name"] = str(name).strip()
-    if "material_category_code" in payload:
-        val = payload.get("material_category_code")
-        out["material_category_code"] = None if _blank(val) else str(val)
+def _validate_material_source_fields(
+    payload: Dict[str, Any],
+    out: Dict[str, Any],
+    *,
+    authority_dir=None,
+) -> None:
+    """Shared authority: handling_mode_codes, material_master_key, is_active.
+    Mutates out in place. Called by validate_factory_payload and
+    validate_transient_material_row — do not duplicate this logic elsewhere."""
     if "handling_mode_codes" in payload:
         val = payload.get("handling_mode_codes")
         if val is None:
@@ -136,7 +134,47 @@ def validate_factory_payload(
         if payload["is_active"] is not True and payload["is_active"] is not False:
             raise MaterialSourceValidationError("is_active must be boolean")
         out["is_active"] = payload["is_active"]
-    elif not partial:
+
+
+def validate_transient_material_row(
+    payload: Dict[str, Any], *, authority_dir=None
+) -> Dict[str, Any]:
+    """Validate transient material row (Paid path).
+
+    Accepts only material_master_key, handling_mode_codes, is_active.
+    No material_name required. Rejects extra keys and invalid values so
+    invalid input cannot reach the projector and produce false FC001 facts."""
+    extra = set(payload) - _TRANSIENT_MATERIAL_KEYS
+    if extra:
+        raise MaterialSourceValidationError(
+            "unsupported keys: {}".format(sorted(extra))
+        )
+    out: Dict[str, Any] = {}
+    _validate_material_source_fields(payload, out, authority_dir=authority_dir)
+    if "is_active" not in out:
+        out["is_active"] = True
+    return out
+
+
+def validate_factory_payload(
+    payload: Dict[str, Any], *, partial: bool = False, authority_dir=None
+) -> Dict[str, Any]:
+    extra = set(payload) - ALLOWED_FACTORY_PAYLOAD_KEYS
+    if extra:
+        raise MaterialSourceValidationError(
+            "unsupported keys: {}".format(sorted(extra))
+        )
+    out: Dict[str, Any] = {}
+    if "material_name" in payload or not partial:
+        name = payload.get("material_name")
+        if _blank(name):
+            raise MaterialSourceValidationError("material_name required")
+        out["material_name"] = str(name).strip()
+    if "material_category_code" in payload:
+        val = payload.get("material_category_code")
+        out["material_category_code"] = None if _blank(val) else str(val)
+    _validate_material_source_fields(payload, out, authority_dir=authority_dir)
+    if "is_active" not in out and not partial:
         out["is_active"] = True
     return out
 

@@ -99,6 +99,21 @@ def project_work_row(row: Mapping[str, Any]) -> Dict[str, bool]:
             return {"performs_electrical_work": True}
         return {}
 
+    if work_type == "GRINDING":
+        # Wave A1. Numeric wheel_diameter_cm is captured in attributes for replay only;
+        # grinding_wheel_diameter_cm projection is HOLD until C2 contract frozen.
+        return {"has_grinding": True}
+
+    if work_type == "DIVING":
+        # Wave A1. Numeric worker_count captured for replay only; diving_worker_count
+        # projection is HOLD (sum across rows is semantically dangerous).
+        return {"has_diving": True}
+
+    if work_type == "OBJECT_DROP":
+        # Wave A1. Numeric height_m captured for replay only; object_drop_height_m
+        # projection is HOLD until C2 contract frozen.
+        return {"has_object_drop": True}
+
     if work_type == "SCAFFOLD":
         # WO-E2E-OBJ01-SEM002-ART57A-CONSUMER-INPUT-WIRING-001 (Art.57 첫 문장) +
         # WO-E2E-OBJ01-SEM002-ART57B-FASTLANE-IMPLEMENT-001    (Art.57 제2항) +
@@ -106,8 +121,10 @@ def project_work_row(row: Mapping[str, Any]) -> Dict[str, bool]:
         #   (DEEPEN G002/G004/G011: FC-015A scaffold_kind exact subtype facts).
         # Each row = one scaffold + one activity; per-row evaluation preserves
         # same-entity binding. missing != false — omit absent keys.
+        # Wave A1: has_scaffold emitted for any active SCAFFOLD row.
+        # scaffold_height_m projection is HOLD until C2 contract frozen.
         kind = attrs.get("scaffold_kind")
-        out: Dict[str, bool] = {}
+        out: Dict[str, bool] = {"has_scaffold": True}
 
         # --- Per-kind structural facts (independent of activity subtype) ---
         # WO-E2E-OBJ03-L3-55-SEMANTIC-INPUT-INTEGRATION-001 PATCH-1 Phase 3:

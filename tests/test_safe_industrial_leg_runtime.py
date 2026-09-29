@@ -57,6 +57,11 @@ def patched(monkeypatch):
         "services.material_source.store.load_factory_material_rows_optional",
         lambda supabase, factory_id: [],
     )
+    # WO-EQUIPMENT-A2-EXISTING-SEAM-PATCH-001: equipment loader stubbed (empty = no A2 facts).
+    monkeypatch.setattr(
+        "services.equipment_source.store.load_equipment_rows_optional",
+        lambda supabase, factory_id: [],
+    )
     return calls
 
 # G4A-01 assembler 1회 READ
@@ -71,18 +76,21 @@ def test_G4A02_run_leg_once(patched):
 
 # G4A-03 STEP-2C : step1.input.keys() ⊆ _LEG_INPUT_FIELDS(103), 값 있는 것만 통과.
 #   canonical29 final-cut 제거 이후 계약. TARGET_FIELDS 상한 검증은 파일 하단 STEP-2C 파리티 test 로 이관.
+#   WO-SAAS-THREE-SECTOR-LEGAL-INPUT-ALIGNMENT-IMPLEMENT-001 : has_chemical_substance 는
+#   B' mask(_SAFE_EXPLICIT_CONFIRM_FIELDS)로 초기화 → consumer override 없으면 None →
+#   alias has_chemical도 absent(None 필터).
 def test_G4A03_canonical_29(patched):
     R.run_safe_industrial_leg(object(), "F1", SafeIndustrialConsumerInput())
     inp = patched["step1"].input
     assert set(inp.keys()) <= set(_LEG_INPUT_FIELDS), (
         "step1.input.keys() 는 _LEG_INPUT_FIELDS(103) 부분집합이어야 한다"
     )
-    # 값 있는 canonical29 축 중 LEG vocab 축은 통과(worker_count 50).
+    # 값 있는 canonical29 축 중 LEG vocab 축은 통과(worker_count 50 — B' mask 대상 아님).
     # ksic_major 는 consumer canonical 유지, LEG transport surplus 로 필터 배제.
-    # has_chemical_substance 는 _LEG_INPUT_FIELDS 밖 → 필터 배제. alias 승격으로 has_chemical=True 가 대신 입장.
+    # has_chemical_substance 는 B' mask로 None → alias has_chemical absent.
     assert inp.get("worker_count") == 50
     assert "ksic_major" not in inp
-    assert inp.get("has_chemical") is True
+    assert inp.get("has_chemical") is None       # B' mask → None, consumer 미override → alias absent
     assert "has_chemical_substance" not in inp   # _LEG_INPUT_FIELDS 밖 → unified 필터 배제
 
 # G4A-11 sector=INDUSTRIAL, input에 canonical(top-level shadow 0)
@@ -93,12 +101,13 @@ def test_G4A11_sector_input(patched):
     # canonical key가 top-level 속성으로 shadow되지 않음(input에만)
     assert s1.input["worker_count"] == 50
 
-# G4A-04 None override = asset 유지 (미override) — STEP-2C 계약 : has_chemical_substance 는
-#   alias 승격(has_chemical) 로 입장. asset 값 True 는 그대로 도달.
+# G4A-04 B' mask 우선 : consumer None ≠ asset 유지. B'(_SAFE_EXPLICIT_CONFIRM_FIELDS)가
+#   assembler 값을 초기화하므로 consumer override 없으면 has_chemical_substance=None → alias absent.
+#   worker_count 는 B' mask 대상 아님 → asset 50 유지.
 def test_G4A04_none_keeps_asset(patched):
     R.run_safe_industrial_leg(object(), "F1", SafeIndustrialConsumerInput())  # 전부 None
-    assert patched["step1"].input["worker_count"] == 50  # asset 값 유지
-    assert patched["step1"].input["has_chemical"] is True  # alias 승격
+    assert patched["step1"].input["worker_count"] == 50       # asset 값 유지 (B' mask 대상 아님)
+    assert patched["step1"].input.get("has_chemical") is None  # B' mask → alias absent
 
 # G4A-05 false/0/"" override (non-null → override) — STEP-2C : has_chemical_substance False 는
 #   alias 승격(has_chemical=False) 로 입장, false 보존.
@@ -163,6 +172,54 @@ def test_G4A17_full_result(patched):
     out = R.run_safe_industrial_leg(object(), "F1", SafeIndustrialConsumerInput())
     assert "full_result" in out and out["full_result"]["sector"] == "INDUSTRIAL"
     assert out["full_result"]["engine_family"] == "LEG"
+
+
+# ===================== B' mask (USER_CONFIRM 10축) =====================
+# WO-SAAS-THREE-SECTOR-LEGAL-INPUT-ALIGNMENT-IMPLEMENT-001
+
+# A1: consumer empty → 10축 전량 unresolved, profile 필드 보존
+def test_A1_b_prime_mask_all_10_unresolved(patched):
+    out = R.run_safe_industrial_leg(object(), "F1", SafeIndustrialConsumerInput())
+    for f in R._SAFE_EXPLICIT_CONFIRM_FIELDS:
+        assert f in out["unresolved_fields"], f"B' mask 후 {f} unresolved에 있어야 함"
+    assert "worker_count" not in out["unresolved_fields"]  # profile 필드는 마스크 대상 아님
+
+# A2: explicit confirm true → B override가 B' mask를 덮음, unresolved 해소
+def test_A2_explicit_confirm_true_overrides_mask(patched):
+    ci = SafeIndustrialConsumerInput(has_safety_manager=True)
+    out = R.run_safe_industrial_leg(object(), "F1", ci)
+    assert "has_safety_manager" not in out["unresolved_fields"]
+    assert patched["step1"].input.get("has_safety_manager") is True
+
+# A3: explicit false가 factory true + B' mask를 모두 덮음 → has_chemical=False
+def test_A3_explicit_false_overrides_factory_true(patched):
+    # fake assembler has has_chemical_substance=True; B' resets to None; consumer False overrides
+    ci = SafeIndustrialConsumerInput(has_chemical_substance=False)
+    out = R.run_safe_industrial_leg(object(), "F1", ci)
+    assert "has_chemical_substance" not in out["unresolved_fields"]
+    assert patched["step1"].input.get("has_chemical") is False
+
+# A4: numeric zero(work_height_m=0) → 0으로 보존(None 아님), unresolved 해소
+def test_A4_numeric_zero_preserved(patched):
+    ci = SafeIndustrialConsumerInput(work_height_m=0)
+    out = R.run_safe_industrial_leg(object(), "F1", ci)
+    assert "work_height_m" not in out["unresolved_fields"]
+    assert patched["step1"].input.get("work_height_m") == 0
+
+# A5: profile 3(worker_count, electric_capacity, ksic_major) — B' mask 대상 아님
+def test_A5_profile_fields_not_masked(patched):
+    out = R.run_safe_industrial_leg(object(), "F1", SafeIndustrialConsumerInput())
+    assert "worker_count" not in out["unresolved_fields"]
+    assert patched["step1"].input.get("worker_count") == 50
+    profile_three = {"ksic_major", "worker_count", "electric_capacity"}
+    assert profile_three.isdisjoint(set(R._SAFE_EXPLICIT_CONFIRM_FIELDS))
+
+# A6: _SAFE_EXPLICIT_CONFIRM_FIELDS 상수 불변 조건
+def test_A6_confirm_fields_constant_invariants():
+    assert len(R._SAFE_EXPLICIT_CONFIRM_FIELDS) == 10
+    assert set(R._SAFE_EXPLICIT_CONFIRM_FIELDS) <= set(R.SAFE_UI_OVERRIDE_FIELDS)
+    profile_three = {"ksic_major", "worker_count", "electric_capacity"}
+    assert profile_three.isdisjoint(set(R._SAFE_EXPLICIT_CONFIRM_FIELDS))
 
 
 # ===================== route-level (auth-first / 503 / 502) =====================
