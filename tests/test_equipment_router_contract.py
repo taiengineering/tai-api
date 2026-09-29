@@ -35,6 +35,8 @@ class _Q:
         self._payload = None
         self._filters = []
         self._limit_n = None
+        self._sort_col = None
+        self._sort_desc = False
 
     def select(self, *a, **k):
         self._op = "select"
@@ -57,7 +59,9 @@ class _Q:
     def in_(self, col, vals):
         return self
 
-    def order(self, *a, **k):
+    def order(self, col, *a, desc=False, **k):
+        self._sort_col = col
+        self._sort_desc = desc
         return self
 
     def range(self, *a):
@@ -85,6 +89,8 @@ class _Q:
         rows = list(self._sb.tables.get(self._name, []))
         for col, val in self._filters:
             rows = [r for r in rows if r.get(col) == val]
+        if self._sort_col:
+            rows = sorted(rows, key=lambda r: r.get(self._sort_col, ""), reverse=self._sort_desc)
         if self._limit_n is not None:
             rows = rows[:self._limit_n]
         return _Resp(rows)
@@ -245,3 +251,116 @@ def test_post_explicit_none_code_key_absent(monkeypatch):
     assert r.status_code == 200, r.text
     inserted = fake.inserts[0]["row"]
     assert "equipment_type_code" not in inserted
+
+
+# ── T1-T4: GET /type-codes catalog endpoint ───────────────────────────────────
+
+# Catalog fixture: projector-mapped (010,023,038) + non-mapped (001,021,040) + inactive excluded.
+_CATALOG_ROWS = [
+    {"type_code": "001", "type_name_ko": "리프트", "is_active": True},
+    {"type_code": "010", "type_name_ko": "비상발전기", "is_active": True},
+    {"type_code": "021", "type_name_ko": "크레인", "is_active": True},
+    {"type_code": "023", "type_name_ko": "프레스", "is_active": True},
+    {"type_code": "038", "type_name_ko": "압력용기", "is_active": True},
+    {"type_code": "040", "type_name_ko": "기타", "is_active": True},
+    {"type_code": "014", "type_name_ko": "보일러", "is_active": True},
+    {"type_code": "024", "type_name_ko": "컨베이어", "is_active": True},
+    {"type_code": "999", "type_name_ko": "비활성테스트", "is_active": False},  # must be excluded
+]
+
+_SEED_WITH_CATALOG = {
+    **_SEED,
+    "equipment_type_inspection_map": _CATALOG_ROWS,
+}
+
+_FIVE_PROJECTOR_CODES = {"010", "014", "023", "024", "038"}
+
+
+def test_T1_type_codes_active_catalog_sorted(monkeypatch):
+    """T1: GET /type-codes returns active rows only, sorted by type_code ASC."""
+    fake = FakeSB(_SEED_WITH_CATALOG)
+    client = _make_client(fake, monkeypatch)
+    r = client.get("/equipment-assets/type-codes")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    items = data["data"]["items"]
+    codes = [i["equipment_type_code"] for i in items]
+    # inactive 999 must be excluded
+    assert "999" not in codes, f"inactive code 999 must not appear; got {codes}"
+    # sorted ASC
+    assert codes == sorted(codes), f"codes must be sorted ASC; got {codes}"
+    assert data["data"]["total"] == len(items)
+
+
+def test_T2_type_codes_exposes_required_fields(monkeypatch):
+    """T2: each item has equipment_type_code and label."""
+    fake = FakeSB(_SEED_WITH_CATALOG)
+    client = _make_client(fake, monkeypatch)
+    r = client.get("/equipment-assets/type-codes")
+    assert r.status_code == 200, r.text
+    items = r.json()["data"]["items"]
+    assert len(items) > 0
+    for item in items:
+        assert "equipment_type_code" in item, f"missing equipment_type_code in {item}"
+        assert "label" in item, f"missing label in {item}"
+        assert item["label"], f"label must be non-empty in {item}"
+
+
+def test_T3_type_codes_not_filtered_to_five_projector_codes(monkeypatch):
+    """T3: catalog contains codes beyond the 5 projector-mapped codes (001, 021, 040 also present)."""
+    fake = FakeSB(_SEED_WITH_CATALOG)
+    client = _make_client(fake, monkeypatch)
+    r = client.get("/equipment-assets/type-codes")
+    assert r.status_code == 200, r.text
+    codes = {i["equipment_type_code"] for i in r.json()["data"]["items"]}
+    non_projector = codes - _FIVE_PROJECTOR_CODES
+    assert len(non_projector) >= 2, (
+        f"T3: catalog must include non-projector codes; "
+        f"got codes={codes}, non_projector={non_projector}"
+    )
+    # Also confirm projector codes are present (not over-filtered either direction)
+    assert _FIVE_PROJECTOR_CODES.issubset(codes), (
+        f"T3: all 5 projector codes must be present; missing={_FIVE_PROJECTOR_CODES - codes}"
+    )
+
+
+class _RaisingQ:
+    """Fake query chain that raises on execute() — simulates DB failure."""
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+    def order(self, *a, **k): return self
+    def execute(self):
+        raise RuntimeError("simulated catalog DB failure")
+
+
+class _CatalogFailSB:
+    def table(self, name):
+        if name == "equipment_type_inspection_map":
+            return _RaisingQ()
+        # other tables fall through to empty
+        class _EmptyQ:
+            def select(self, *a, **k): return self
+            def eq(self, *a, **k): return self
+            def in_(self, *a, **k): return self
+            def order(self, *a, **k): return self
+            def range(self, *a): return self
+            def limit(self, *a): return self
+            def execute(self):
+                class _R:
+                    data = []
+                    count = 0
+                return _R()
+        return _EmptyQ()
+
+
+def test_T4_type_codes_catalog_db_failure_returns_503(monkeypatch):
+    """T4: equipment_type_inspection_map DB failure → HTTP 503 / EQUIPMENT_TYPE_CATALOG_UNAVAILABLE."""
+    monkeypatch.setattr(_ea_mod, "get_supabase", lambda: _CatalogFailSB())
+    app = FastAPI()
+    app.include_router(_ea_mod.router)
+    app.dependency_overrides[get_current_user] = lambda: _ADMIN
+    from fastapi.testclient import TestClient
+    client = TestClient(app, raise_server_exceptions=False)
+    r = client.get("/equipment-assets/type-codes")
+    assert r.status_code == 503, f"expected 503 on catalog DB failure; got {r.status_code}: {r.text}"
+    assert r.json()["detail"]["code"] == "EQUIPMENT_TYPE_CATALOG_UNAVAILABLE"

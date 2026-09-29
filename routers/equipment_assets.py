@@ -294,6 +294,34 @@ def get_equipment_summary(factory_id: str = Query(...), current: dict = Depends(
     return {"status": "success", "data": {"total": total, "active": active, "broken": broken, "inactive": inactive}}
 
 
+# ── 설비 종류 카탈로그 ─────────────────────────────────────────
+# ⚠️ 라우트 순서: 반드시 GET /{asset_id} 보다 위에 정의.
+# Authority: equipment_type_inspection_map.type_code / type_name_ko.
+# is_active=True 행만, type_code ASC 정렬.
+# DB query 실패 → 503 / EQUIPMENT_TYPE_CATALOG_UNAVAILABLE.
+@router.get("/type-codes")
+def get_equipment_type_codes(current: dict = Depends(get_current_user)):
+    supabase = get_supabase()
+    try:
+        res = (
+            supabase.table("equipment_type_inspection_map")
+            .select("type_code, type_name_ko")
+            .eq("is_active", True)
+            .order("type_code")
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "EQUIPMENT_TYPE_CATALOG_UNAVAILABLE", "message": str(exc)},
+        ) from exc
+    items = [
+        {"equipment_type_code": r["type_code"], "label": r["type_name_ko"]}
+        for r in (res.data or [])
+    ]
+    return {"status": "success", "data": {"items": items, "total": len(items)}}
+
+
 # ── 단건 조회 ────────────────────────────────────────────────
 @router.get("/{asset_id}")
 def get_asset(asset_id: str, current: dict = Depends(get_current_user)):
