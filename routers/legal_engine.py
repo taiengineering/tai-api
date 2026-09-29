@@ -19,6 +19,7 @@ from services.work_source.merge import WorkSourceMergeConflict
 from services.work_source.store import WorkSourceLoadError
 from services.equipment_source.store import EquipmentSourceLoadError
 from services.saas_diagnosis_result_persistence import SaasPersistError, finalize_saas_leg_result
+from services.saas_diagnosis_snapshot_svc import get_saas_diagnosis_snapshot, SnapshotNotFound, SnapshotContractError
 from services.company_user_svc import require_active_company_saas
 from services.saas_entitlement_runtime_v2 import SaasEntitlementRuntimeError, resolve_saas_entitlement_context_v2
 from services.saas_entitlement_gate_v2 import evaluate_saas_entitlement_v2
@@ -331,6 +332,42 @@ def diagnose_step3(body: DiagnoseStep3Body):
     if not body.factory_id:
         raise HTTPException(status_code=400, detail='factory_id 필수')
     return legal_engine_svc.run_diagnose_step3(supabase, body, ENGINE_VERSION)
+
+
+@router.get("/diagnose/snapshot/{diagnosis_id}")
+def get_diagnosis_snapshot(diagnosis_id: str, authorization: Optional[str] = Header(None)):
+    """C-10 saas snapshot 단건 조회. 소유권은 저장된 company_id 기준.
+
+    Response: { status, data: { diagnosis_id, factory_id, sector, engine_version, created_at, full_result } }
+    """
+    supabase = get_supabase()
+    current = get_current_user(authorization, supabase)
+
+    try:
+        snapshot = get_saas_diagnosis_snapshot(supabase, diagnosis_id=diagnosis_id)
+    except SnapshotNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except SnapshotContractError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    _ensure_own_company(
+        snapshot["_stored_company_id"],
+        current,
+        supabase,
+        "진단 결과를 찾을 수 없습니다.",
+    )
+
+    return {
+        "status": "success",
+        "data": {
+            "diagnosis_id": snapshot["diagnosis_id"],
+            "factory_id": snapshot["factory_id"],
+            "sector": snapshot["sector"],
+            "engine_version": snapshot["engine_version"],
+            "created_at": snapshot["created_at"],
+            "full_result": snapshot["full_result"],
+        },
+    }
 
 
 @router.get("/diagnose/{factory_id}/latest")
