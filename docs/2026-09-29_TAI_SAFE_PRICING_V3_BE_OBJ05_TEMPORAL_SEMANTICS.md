@@ -4,7 +4,7 @@ date: 2026-09-29
 status: REVIEW_REQUIRED
 branch: docs/pricing-canonical-20260927
 goal: WO-BE-V3-OBJ05-TEMPORAL-SEMANTICS-001
-version: 1.1-PATCH1
+version: 1.2-PATCH2
 ---
 
 # TAI Safe Pricing V3 BE OBJ05 — Temporal Semantics Design
@@ -153,7 +153,7 @@ term_months = 1
 
 ---
 
-## 6. Month Addition Rule (VERIFIED)
+## 6. Month Addition Rule
 
 ### 구현 현황
 
@@ -171,12 +171,12 @@ term_months = 1
 | 2026-02-28 | 1 | 2026-03-28 | 2026-03-28 |
 | 2028-02-29 | 12 | 2029-02-28 | 2029-02-28 |
 
-Python 결과: 직접 실행 확인 (VERIFIED).
-PostgreSQL 결과: 공식 문서 기반 end-of-month clamping 동작 일치 (PostgreSQL DB
-쿼리 미실행 — 이 세션에서 DB 접근 없음).
+증거 수준:
+- Python relativedelta: **직접 실행 VERIFIED** (이 세션에서 실행 확인)
+- PostgreSQL interval: **code/documentation-derived verification** (DB query NOT EXECUTED — 이 세션에서 DB 접근 없음)
 
-**판정: CONSISTENT** — 두 방식 모두 end-of-month clamping을 적용하며 동일한
-결과를 생성한다. 새 arithmetic 구현 불필요.
+**판정: CONSISTENT (SUPPORTED)** — 두 방식 모두 end-of-month clamping을 적용하며
+동일한 결과를 생성한다. 새 arithmetic 구현 불필요.
 
 ---
 
@@ -230,9 +230,10 @@ payments
 
 contracts
   start_date         = 서비스 시작일 (KST date)
-  end_date           = 서비스 exclusive 만료 경계 (KST date)
+  end_date           = renewal commercial transition boundary (KST date)
                        신규: start + term_months
                        갱신: old_end + term_months
+                       [service entitlement exclusivity = D-06 PENDING]
   paid_at            = 최근 결제 성공 타임스탬프 (갱신마다 갱신)
 
 saas_contract_commercial_versions
@@ -323,23 +324,78 @@ D-04B Owner 결정 필요.
 
 ---
 
-## 12. Late Renewal (만료 후 갱신) (CONFIRMED SOURCE FACT)
+## 12. Late Renewal (만료 후 갱신) (SOURCE FACT)
 
-V2 소스 사실:
+### 확인된 reject 조건
+
 ```
 saas_renewal_v2_adapter._fetch_and_validate_contract:
   contract.status_code != 'ACTIVE' → CONTRACT_NOT_ACTIVE
+
+saas_renewal_runtime_v2._run_first_apply:
+  contract.status_code != 'ACTIVE' → V2_RUNTIME_CONTRACT_NOT_ACTIVE
 
 saas_renewal_atomic SQL:
   v_con_status_code != 'ACTIVE' OR NOT v_con_is_active
   → V2_RENEWAL_CONTRACT_NOT_ACTIVE
 ```
 
-**결론: 만료 후 갱신은 현재 V3 Renewal 경로에서 불가.**
+### 확인되지 않은 reject 조건 (SOURCE FACT)
+
+다음 temporal guard는 **현재 source chain에서 발견되지 않았다**:
+
+1. `saas_renewal_runtime_v2._run_first_apply`:
+   - `status_code == ACTIVE` 검사 ✓
+   - `end_date` 존재(IS NOT NULL) 검사 ✓
+   - `paid_at >= contract.end_date 00:00 KST` 차단 guard → **NOT FOUND**
+
+2. `select_effective_commercial_version_v2(all_cvs, paid_at_dt)`:
+   - CV half-open interval `[effective_from, superseded_at)`만 평가
+   - `contracts.end_date`를 독립적으로 평가하지 않음
+   - 기존 CV가 `superseded_at=NULL`이면 end_date 경과와 **독립적으로** effective 판정 가능
+
+3. `build_saas_v2_renewal_apply_plan`:
+   - `paid_at < contract.end_date boundary` 요구 guard → **NOT FOUND**
+
+4. Renewal Atomic SQL:
+   - `status_code='ACTIVE'` + `is_active=true` 검사 ✓
+   - `payment.paid_at >= end_date boundary` 차단 → **NOT FOUND**
+
+### SOURCE FACT 결론
+
+```
+status_code != ACTIVE
+→ V2 Renewal reject  (CONFIRMED)
+
+end_date elapsed + status_code still ACTIVE (stale state)
+→ explicit temporal rejection guard NOT FOUND IN SOURCE
+
+구조적 가능 경로:
+  contract.end_date 경과, status_code=ACTIVE stale, CV.superseded_at=NULL
+  → new CV effective_from = past end_date midnight KST
+  → new contract.end_date = past end_date + payment_months
+  (retroactive renewal structurally not blocked by current code)
+```
+
+### D-01 → A (REACTIVATION) 확정 시 필수 invariant candidate
+
+구현은 Semantic-Integration WO 범위. 이번 PATCH에서 구현하지 않는다.
+
+```
+Python/runtime 추가 guard (candidate):
+  contract_end_boundary = contract_end_date_to_effective_at_v2(contract.end_date)
+  if paid_at >= contract_end_boundary:
+      raise RENEWAL_CONTRACT_EXPIRED
+
+Atomic SQL 추가 guard (candidate):
+  IF v_pay_paid_at >= v_boundary THEN
+      RETURN jsonb_build_object('status', 'V2_RENEWAL_CONTRACT_EXPIRED', ...)
+  END IF;
+```
 
 Owner 선택안 (D-01 참조):
-- A. REACTIVATION flow: 신규 계약 생성, 서비스 시작 = 결제일 (소급 금지)
-- B. RENEWAL 확장: 만료 계약도 허용, 별도 atomic design 필요
+- A. REACTIVATION: `paid_at >= end_date 00:00 KST` → Renewal 금지; 신규 계약 flow; 소급 금지
+- B. EXPIRED RENEWAL SUPPORT: late/grace/retroactive 허용, 별도 temporal/atomic design 필요
 
 ---
 
@@ -404,7 +460,7 @@ migrations/2026-09-28_saas_contract_commercial_v2_renewal_atomic_apply.sql
 
 ## 15. Production DDL 상태 및 전략
 
-### 현재 Production 사실 (CONFIRMED)
+### 현재 Production 사실
 
 ```
 saas_contract_commercial_versions = NOT APPLIED
@@ -412,6 +468,9 @@ saas_contract_site_scopes         = NOT APPLIED
 V2 stored quotes/payments         = 0
 V2 Legacy contracts                = 8
 ```
+
+> CARRIED-FORWARD VERIFIED EVIDENCE — 이전 OBJ 조사 시점 GPT 독립검증
+> 기록에서 인용. 이번 PATCH2에서 Production 재조회 미실행.
 
 ### Semantic-Integration 시 DDL 전략
 
@@ -441,7 +500,7 @@ V3 column rename 범위:
 
 | # | 항목 | CURRENT SOURCE FACT | OPTION | RECOMMENDATION (PROPOSED) | OWNER DECISION |
 |---|---|---|---|---|---|
-| D-01 | 만료 후 갱신 | V2: ACTIVE 필수 → 만료 계약 갱신 불가 | A. REACTIVATION (신규 계약) / B. RENEWAL 확장 (별도 atomic) | A. REACTIVATION (소급 금지) | PENDING |
+| D-01 | 만료 후 갱신 | V2: ACTIVE 필수(status_code guard). 단, end_date elapsed 자체를 독립 차단하는 temporal guard = NOT FOUND IN SOURCE | A. REACTIVATION (paid_at >= end_date → Renewal 금지, 신규 계약 flow, 소급 금지) / B. EXPIRED RENEWAL SUPPORT (별도 temporal/atomic design) | A. REACTIVATION (소급 금지) | PENDING |
 | D-02 | 신규 CV effective_from | `paid_at_dt` (결제 타임스탬프) | A. 현행 유지 (paid_at) / B. start_date midnight KST로 통일 | A. 현행 유지 (최소 변경) | PENDING |
 | D-03 | Semantic rename 시점 | term_months 전 파일 사용 중 | A. Semantic-Integration WO 일괄 / B. defer | A. Semantic-Integration에서 일괄 | PENDING |
 | D-04A | 조기 갱신 허용 기간 | 현재 end_date 이전 어느 시점도 가능 (코드 제한 없음) | A. 제한 없음 / B. N일 전부터만 허용 | 임의 window 추가 안 함 (UI 정책 별도) | PENDING |
@@ -454,13 +513,15 @@ V3 column rename 범위:
 ## 17. 권장 최소 모델 요약 (PROPOSED — Owner 승인 전 FINAL 아님)
 
 ```
-D-01: Expired → REACTIVATION (소급 연장 금지)
+D-01: paid_at >= end_date 00:00 KST → Renewal 금지 + REACTIVATION flow (소급 금지)
+      [현재 source에 temporal guard 없음 — D-01 확정 시 Semantic-Integration에서 추가 필요]
 D-02: cv.effective_from = paid_at 유지 (최소 변경)
 D-03: Semantic-Integration WO에서 term_months → payment_months 일괄 rename
 D-04A: 별도 갱신 window 제한 없음 (UI 정책 별도 결정)
 D-04B: 미래 예약 CV 1건 한정 — RENEWAL_ALREADY_SCHEDULED 유지
 D-05: payment_months == service_extension_months (분리 불필요)
-D-06: end_date = exclusive service boundary (현재 구현과 정합)
+D-06: end_date = exclusive service boundary PROPOSED (renewal CV boundary source는 CONFIRMED;
+      service entitlement 자체의 exclusivity는 Owner 승인 필요)
 ```
 
 ---
