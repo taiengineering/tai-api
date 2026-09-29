@@ -76,12 +76,16 @@ def validate_payload(payload: Dict[str, Any], *, partial: bool = False) -> Dict[
             raise WorkSourceValidationError("attributes must be an object")
         allowed_attrs = set((spec or {}).get("attributes") or {})
         for key, val in attrs.items():
-            if any(str(key).startswith(p) for p in CANONICAL_ATTR_PREFIXES):
+            if spec is not None and key not in allowed_attrs:
+                if any(str(key).startswith(p) for p in CANONICAL_ATTR_PREFIXES):
+                    raise WorkSourceValidationError(
+                        "canonical LEG fields cannot be stored on work source"
+                    )
+                raise WorkSourceValidationError("unknown attribute: {}".format(key))
+            if spec is None and any(str(key).startswith(p) for p in CANONICAL_ATTR_PREFIXES):
                 raise WorkSourceValidationError(
                     "canonical LEG fields cannot be stored on work source"
                 )
-            if spec is not None and key not in allowed_attrs:
-                raise WorkSourceValidationError("unknown attribute: {}".format(key))
             if spec is not None and val is not None:
                 attr_meta = ((spec.get("attributes") or {}).get(key) or {})
                 attr_type = attr_meta.get("type")
