@@ -432,37 +432,65 @@ async def public_material_detail(
 # GET /public/safety-search/legal/{canonical_id} — LEGAL detail
 # canonical_id = law_article.id (UUID).
 # Eligibility: law_master.is_active AND current_version_id match AND not deleted.
+#
+# DB binding: LEG_SUPABASE_URL + LEG_SUPABASE_SERVICE_ROLE_KEY (leg-prod).
+# Fails closed — no fallback to the generic SUPABASE_URL.
 # ---------------------------------------------------------------------------
 
 _legal_supabase = None
+
+_LEG_ATTACHMENT_SELECT = (
+    "id,attachment_title,attachment_no,download_status,"
+    "extraction_verdict,attachment_text"
+)
 
 
 def _legal_supabase_dep():
     global _legal_supabase
     if _legal_supabase is None:
         from supabase import create_client
-        _legal_supabase = create_client(
-            os.environ["SUPABASE_URL"],
-            os.environ["SUPABASE_SERVICE_ROLE_KEY"],
-        )
+        url = os.environ.get("LEG_SUPABASE_URL")
+        key = os.environ.get("LEG_SUPABASE_SERVICE_ROLE_KEY")
+        if not url or not key:
+            raise RuntimeError(
+                "LEG_SUPABASE_URL and LEG_SUPABASE_SERVICE_ROLE_KEY must be set. "
+                "LEGAL endpoints require a dedicated leg-prod connection."
+            )
+        _legal_supabase = create_client(url, key)
     return _legal_supabase
 
 
-def _build_legal_detail(canonical_id: str, row: dict) -> dict:
+def _fetch_attachments_for_version(client, law_version_id: str) -> list[dict]:
+    """Fetch all law_attachment rows for a law_version_id. Fail-open: returns []."""
+    try:
+        res = (
+            client.table("law_attachment")
+            .select(_LEG_ATTACHMENT_SELECT)
+            .eq("law_version_id", law_version_id)
+            .execute()
+        )
+        return list(res.data or [])
+    except Exception:
+        return []
+
+
+def _build_legal_detail(canonical_id: str, row: dict, attachments: list[dict]) -> dict:
+    from services.legal_content_projection import (
+        build_public_legal_title,
+        resolve_legal_content,
+        robots_directive_for_mode,
+    )
+
     law_name = row.get("law_name") or ""
     article_no = row.get("article_no")
     article_sub_no = row.get("article_sub_no")
     article_title = row.get("article_title")
 
-    if law_name and article_no:
-        title_parts = [law_name, f"제{article_no}조"]
-        if article_sub_no:
-            title_parts[-1] = title_parts[-1] + f"의{article_sub_no}"
-        if article_title:
-            title_parts.append(f"({article_title})")
-        title = " ".join(title_parts)
-    else:
-        title = article_title or f"law_article/{canonical_id}"
+    title_info = build_public_legal_title(row)
+    title = title_info["title"]
+    display_article_title = title_info["display_article_title"]
+
+    projection = resolve_legal_content(row.get("article_text"), attachments)
 
     return {
         "object_type": "LEGAL",
@@ -475,7 +503,14 @@ def _build_legal_detail(canonical_id: str, row: dict) -> dict:
             "article_no": article_no,
             "article_sub_no": article_sub_no,
             "article_title": article_title,
+            "display_article_title": display_article_title,
             "article_text": row.get("article_text"),
+            "content_mode": projection["content_mode"],
+            "display_text": projection["display_text"],
+            "attachments": projection["attachments"],
+            "has_unresolved_media": projection["has_unresolved_media"],
+            "unresolved_media_ids": projection["unresolved_media_ids"],
+            "robots": robots_directive_for_mode(projection["content_mode"]),
             "enforcement_date": row.get("enforcement_date"),
             "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,
         },
@@ -490,7 +525,7 @@ async def public_legal_detail(canonical_id: str):
     Eligibility: law_master.is_active AND current_version_id match AND not deleted.
     404 for non-eligible or missing.
     503 LEGAL_IDENTITY_MISMATCH if row.id != requested canonical_id.
-    503 LEGAL_DETAIL_INCOMPLETE if article_text is absent.
+    503 LEGAL_DETAIL_INCOMPLETE if content is fully unresolvable.
     """
     client = _legal_supabase_dep()
     row = get_current_legal_article_by_id(client, canonical_id)
@@ -501,11 +536,10 @@ async def public_legal_detail(canonical_id: str):
     if row_id != canonical_id:
         raise HTTPException(status_code=503, detail="LEGAL_IDENTITY_MISMATCH")
 
-    article_text = row.get("article_text")
-    if not article_text or not article_text.strip():
-        raise HTTPException(status_code=503, detail="LEGAL_DETAIL_INCOMPLETE")
+    law_version_id = row.get("law_version_id")
+    attachments = _fetch_attachments_for_version(client, law_version_id) if law_version_id else []
 
-    return _build_legal_detail(canonical_id, row)
+    return _build_legal_detail(canonical_id, row, attachments)
 
 
 # ---------------------------------------------------------------------------

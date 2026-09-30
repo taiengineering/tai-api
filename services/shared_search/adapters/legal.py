@@ -104,20 +104,12 @@ def _normalize_legal(row: dict) -> Optional[dict]:
     law_name = row.get("law_name")
     article_no = row.get("article_no")
     article_sub_no = row.get("article_sub_no")
-    article_title = row.get("article_title")
     article_text = row.get("article_text")
-    # Compose a canonical title such as "산업안전보건법 제12조" or
-    # "산업안전보건법 제12조의2 (안전보건관리책임자)". Adapter never
-    # invents Korean; it only concatenates real Domain columns.
-    if law_name and article_no:
-        title_parts = [law_name, f"제{article_no}조"]
-        if article_sub_no:
-            title_parts[-1] = title_parts[-1] + f"의{article_sub_no}"
-        if article_title:
-            title_parts.append(f"({article_title})")
-        title = " ".join(title_parts)
-    else:
-        title = article_title or f"law_article/{canonical_id}"
+    # Title and search_text both use shared legal_content_projection module
+    # so that source UI artifact text never enters the search index and
+    # the title is free of stub navigation phrases (F2 FINAL §8, shared authority).
+    from services.legal_content_projection import build_public_legal_title, search_text_for_index
+    title = build_public_legal_title(row)["title"]
     # F2 FINAL §14: real law_article columns (verified via
     # information_schema on production) are `enforcement_date` +
     # `updated_at`. `published_at` / `version_effective_at` do not
@@ -130,6 +122,7 @@ def _normalize_legal(row: dict) -> Optional[dict]:
     if ts is MISSING_TIMESTAMP:
         return None
     # source_key: NULL rather than a synthetic composite (F2 FINAL §8).
+    clean_search_text = search_text_for_index(article_text, title)
     return {
         "object_type": LegalAdapter.object_type,
         "canonical_id": str(canonical_id),
@@ -138,9 +131,7 @@ def _normalize_legal(row: dict) -> Optional[dict]:
                        if row.get("source_key") is not None else None),
         "title": title,
         "summary": None,
-        "search_text": " ".join(as_str_list([
-            title, article_text,
-        ])),
+        "search_text": clean_search_text,
         "aliases": as_str_list([article_no, article_sub_no]),
         "keywords": as_str_list([law_name]),
         "subjects": ([{"subject_type": "LEGAL_TERM",
