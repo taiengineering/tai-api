@@ -439,10 +439,15 @@ async def public_material_detail(
 
 _legal_supabase = None
 
-_LEG_ATTACHMENT_SELECT = (
-    "id,attachment_title,attachment_no,download_status,"
-    "extraction_verdict,attachment_text"
+_LEG_ATTACHMENT_META_SELECT = (
+    "id,attachment_title,attachment_no,download_status,extraction_verdict"
 )
+_LEG_ATTACHMENT_TEXT_SELECT = "id,attachment_text"
+
+# Max number of SUCCESS+CLEAN candidate texts fetched per law_version in Phase B.
+# Laws with many attachments (공정시험기준: 520) will have ATTACHMENT_INDEX determined
+# from the first ATTACHMENT_CANDIDATE_BATCH_LIMIT candidates, avoiding full-text fetch.
+ATTACHMENT_CANDIDATE_BATCH_LIMIT = 20
 
 
 def _legal_supabase_dep():
@@ -460,18 +465,72 @@ def _legal_supabase_dep():
     return _legal_supabase
 
 
-def _fetch_attachments_for_version(client, law_version_id: str) -> list[dict]:
-    """Fetch all law_attachment rows for a law_version_id. Fail-open: returns []."""
+def _fetch_attachment_metadata(client, law_version_id: str) -> list[dict]:
+    """Phase A: attachment metadata without attachment_text. Fail-open: returns []."""
     try:
         res = (
             client.table("law_attachment")
-            .select(_LEG_ATTACHMENT_SELECT)
+            .select(_LEG_ATTACHMENT_META_SELECT)
             .eq("law_version_id", law_version_id)
+            .order("attachment_no")
             .execute()
         )
         return list(res.data or [])
     except Exception:
         return []
+
+
+def _fetch_candidate_texts(client, candidate_ids: list[str]) -> dict:
+    """Phase B: bounded text fetch for SUCCESS+CLEAN candidate IDs.
+
+    Fetches at most ATTACHMENT_CANDIDATE_BATCH_LIMIT items in a single query.
+    Returns {id: attachment_text_str}.
+    """
+    if not candidate_ids:
+        return {}
+    bounded = candidate_ids[:ATTACHMENT_CANDIDATE_BATCH_LIMIT]
+    try:
+        res = (
+            client.table("law_attachment")
+            .select(_LEG_ATTACHMENT_TEXT_SELECT)
+            .in_("id", bounded)
+            .execute()
+        )
+        return {r["id"]: (r.get("attachment_text") or "") for r in (res.data or [])}
+    except Exception:
+        return {}
+
+
+def _fetch_attachments_for_version(client, law_version_id: str) -> list[dict]:
+    """Two-phase bounded attachment fetch.
+
+    Phase A: fetch metadata (no text) for all attachments of this law_version_id.
+    Phase B: fetch text for SUCCESS+CLEAN candidates, bounded to
+             ATTACHMENT_CANDIDATE_BATCH_LIMIT rows.
+
+    For ATTACHMENT_INDEX laws (공정시험기준: 520 attachments), Phase B fetches
+    text for at most 20 candidates — enough to determine ATTACHMENT_INDEX —
+    while Phase A metadata populates the full attachment list.
+    """
+    meta = _fetch_attachment_metadata(client, law_version_id)
+    candidates = [
+        a for a in meta
+        if a.get("download_status") == "SUCCESS" and a.get("extraction_verdict") == "CLEAN"
+    ]
+    if not candidates:
+        return meta
+
+    candidate_ids = [a["id"] for a in candidates]
+    text_map = _fetch_candidate_texts(client, candidate_ids)
+
+    result = []
+    for a in meta:
+        row = dict(a)
+        aid = a.get("id")
+        if aid and aid in text_map:
+            row["attachment_text"] = text_map[aid]
+        result.append(row)
+    return result
 
 
 def _build_legal_detail(canonical_id: str, row: dict, attachments: list[dict]) -> dict:
@@ -557,10 +616,22 @@ async def public_legal_sitemap_articles(
     """Cursor-paginated [{id, updated_at}] for sitemap generation.
 
     Filter: active law_master version match + is_deleted_in_version=False +
-    article_text >= 50 chars (thin content excluded per WO spec).
+    projection-aware eligibility (SOURCE_CONTENT_UNRESOLVED excluded).
+
+    ARTICLE_TEXT / INLINE_MEDIA rows are eligible when article_text >= 50 chars.
+    SOURCE_UI_STUB / RAW_SOURCE_LINK rows need attachment resolution:
+      - ≥1 substantial CLEAN attachment → ATTACHMENT_BODY/INDEX → eligible
+      - 0 substantial → SOURCE_CONTENT_UNRESOLVED → excluded
+
     Cursor: after_id (UUID exclusive lower bound, stable UUID sort).
     Returns plain list; has_more inferred from len == limit.
     """
+    from services.legal_content_projection import (
+        _classify_article_text,
+        is_sitemap_eligible_from_mode,
+        resolve_legal_content,
+    )
+
     client = _legal_supabase_dep()
 
     masters_res = client.table("law_master").select("current_version_id").eq("is_active", True).execute()
@@ -583,7 +654,7 @@ async def public_legal_sitemap_articles(
         if len(version_ids) <= CHUNK:
             q = (
                 client.table("law_article")
-                .select("id,updated_at,article_text")
+                .select("id,updated_at,article_text,law_version_id")
                 .in_("law_version_id", version_ids)
                 .eq("is_deleted_in_version", False)
                 .filter("article_text", "not.is", "null")
@@ -599,7 +670,7 @@ async def public_legal_sitemap_articles(
                 part = version_ids[i:i + CHUNK]
                 q = (
                     client.table("law_article")
-                    .select("id,updated_at,article_text")
+                    .select("id,updated_at,article_text,law_version_id")
                     .in_("law_version_id", part)
                     .eq("is_deleted_in_version", False)
                     .filter("article_text", "not.is", "null")
@@ -622,8 +693,27 @@ async def public_legal_sitemap_articles(
         if not batch:
             break
 
+        # Projection-aware eligibility filter
+        stub_rows = []
         for r in batch:
-            if len(r.get("article_text") or "") >= 50:
+            text = r.get("article_text") or ""
+            if len(text) < 50:
+                continue
+            cls = _classify_article_text(text)
+            if cls in ("ARTICLE_TEXT", "INLINE_MEDIA"):
+                collected.append({"id": r["id"], "updated_at": r.get("updated_at")})
+            elif r.get("law_version_id"):
+                # SOURCE_UI_STUB / RAW_SOURCE_LINK / EMPTY: resolve via attachments
+                stub_rows.append(r)
+
+        # Resolve stub rows (typically ~18 rows in production)
+        for r in stub_rows:
+            vid = r.get("law_version_id")
+            if not vid:
+                continue
+            attachments = _fetch_attachments_for_version(client, vid)
+            proj = resolve_legal_content(r.get("article_text"), attachments)
+            if is_sitemap_eligible_from_mode(proj["content_mode"]):
                 collected.append({"id": r["id"], "updated_at": r.get("updated_at")})
 
         if len(batch) < FETCH:
