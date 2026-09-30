@@ -1,4 +1,4 @@
-"""B01-B16 — WO-COMM-V3-RUNTIME-WIRING-001 Runtime Gate.
+"""B01-B22 — WO-COMM-V3-RUNTIME-WIRING-001 Runtime Gate.
 
 FakeSupabase + real evaluate_saas_entitlement_v2. DB 없음.
 resolve_saas_entitlement_context_v2 는 mock.
@@ -20,6 +20,13 @@ resolve_saas_entitlement_context_v2 는 mock.
              B14 current CV scope used (cv_id 확인)
   CLEAN      B15 result에 plan_code 없음
              B16 result에 price_master 접근 없음 (mock에 price_master 없음 확인)
+  STATE_INVALID
+             B17 SaasEntitlementRuntimeError(AMBIGUOUS_ACTIVE_SAAS_CONTRACT) → CommercialRuntimeStateInvalidError, router 409
+             B18 SaasEntitlementRuntimeError(CURRENT_CV_AMBIGUOUS) → CommercialRuntimeStateInvalidError, router 409
+             B19 SaasEntitlementRuntimeError(CURRENT_CV_SCHEMA_INVALID) → CommercialRuntimeStateInvalidError, router 409
+  NOT_V3     B20 SaasEntitlementRuntimeError(NO_ACTIVE_SAAS_CONTRACT) → NOT_COMMERCIAL_V3
+             B21 SaasEntitlementRuntimeError(CURRENT_CV_NOT_FOUND) → NOT_COMMERCIAL_V3
+  ENVELOPE   B22 active V3 MANAGER + scoped factory → HTTP 200, envelope {"status":"success","data":{"generation":"COMMERCIAL_V3",...}}
 """
 from __future__ import annotations
 
@@ -35,6 +42,7 @@ import pytest
 os.environ.setdefault("INTERNAL_API_SECRET", "pytest-internal-secret")
 
 from services import member_commercial_svc as svc
+from services.member_commercial_svc import CommercialRuntimeStateInvalidError
 from services.saas_entitlement_runtime_v2 import SaasEntitlementRuntimeError
 from schemas.saas_entitlement_v2 import SaasEntitlementContextV2
 
@@ -395,14 +403,14 @@ def test_b12_scope_uses_correct_cv_id():
 # ── B13: superseded CV → NOT_COMMERCIAL_V3 ────────────────────────────────────
 
 def test_b13_superseded_cv_error():
-    """B13 superseded CV (SaasEntitlementRuntimeError) → NOT_COMMERCIAL_V3."""
+    """B13 CV not found (SaasEntitlementRuntimeError CURRENT_CV_NOT_FOUND) → NOT_COMMERCIAL_V3."""
     company_id = _uid()
     factory_id = _uid()
     sb = FakeSB({})
 
     with patch(
         "services.member_commercial_svc.resolve_saas_entitlement_context_v2",
-        side_effect=SaasEntitlementRuntimeError("CURRENT_CV_AMBIGUOUS"),
+        side_effect=SaasEntitlementRuntimeError("CURRENT_CV_NOT_FOUND"),
     ):
         result = svc.get_member_runtime_gate(sb, company_id, factory_id=factory_id)
 
@@ -488,3 +496,133 @@ def test_b16_no_price_master_access():
     # price_master 쿼리가 발생하지 않았어야 함
     assert "price_master" not in sb.query_log
     assert result["can_execute"] is True
+
+
+# ── B17-B19: ambiguous/schema-invalid codes → CommercialRuntimeStateInvalidError ─
+
+def test_b17_ambiguous_active_saas_contract_raises():
+    """B17 SaasEntitlementRuntimeError(AMBIGUOUS_ACTIVE_SAAS_CONTRACT) → service raises CommercialRuntimeStateInvalidError."""
+    company_id = _uid()
+    factory_id = _uid()
+    sb = FakeSB({})
+
+    with patch(
+        "services.member_commercial_svc.resolve_saas_entitlement_context_v2",
+        side_effect=SaasEntitlementRuntimeError("AMBIGUOUS_ACTIVE_SAAS_CONTRACT"),
+    ):
+        with pytest.raises(CommercialRuntimeStateInvalidError) as exc_info:
+            svc.get_member_runtime_gate(sb, company_id, factory_id=factory_id)
+
+    assert exc_info.value.code == "AMBIGUOUS_ACTIVE_SAAS_CONTRACT"
+
+
+def test_b18_current_cv_ambiguous_raises():
+    """B18 SaasEntitlementRuntimeError(CURRENT_CV_AMBIGUOUS) → service raises CommercialRuntimeStateInvalidError."""
+    company_id = _uid()
+    factory_id = _uid()
+    sb = FakeSB({})
+
+    with patch(
+        "services.member_commercial_svc.resolve_saas_entitlement_context_v2",
+        side_effect=SaasEntitlementRuntimeError("CURRENT_CV_AMBIGUOUS"),
+    ):
+        with pytest.raises(CommercialRuntimeStateInvalidError) as exc_info:
+            svc.get_member_runtime_gate(sb, company_id, factory_id=factory_id)
+
+    assert exc_info.value.code == "CURRENT_CV_AMBIGUOUS"
+
+
+def test_b19_current_cv_schema_invalid_raises():
+    """B19 SaasEntitlementRuntimeError(CURRENT_CV_SCHEMA_INVALID) → service raises CommercialRuntimeStateInvalidError."""
+    company_id = _uid()
+    factory_id = _uid()
+    sb = FakeSB({})
+
+    with patch(
+        "services.member_commercial_svc.resolve_saas_entitlement_context_v2",
+        side_effect=SaasEntitlementRuntimeError("CURRENT_CV_SCHEMA_INVALID"),
+    ):
+        with pytest.raises(CommercialRuntimeStateInvalidError) as exc_info:
+            svc.get_member_runtime_gate(sb, company_id, factory_id=factory_id)
+
+    assert exc_info.value.code == "CURRENT_CV_SCHEMA_INVALID"
+
+
+# ── B20-B21: safe fallback codes → NOT_COMMERCIAL_V3 ─────────────────────────
+
+def test_b20_no_active_saas_contract_not_v3():
+    """B20 SaasEntitlementRuntimeError(NO_ACTIVE_SAAS_CONTRACT) → generation=NOT_COMMERCIAL_V3."""
+    company_id = _uid()
+    factory_id = _uid()
+    sb = FakeSB({})
+
+    with patch(
+        "services.member_commercial_svc.resolve_saas_entitlement_context_v2",
+        side_effect=SaasEntitlementRuntimeError("NO_ACTIVE_SAAS_CONTRACT"),
+    ):
+        result = svc.get_member_runtime_gate(sb, company_id, factory_id=factory_id)
+
+    assert result["generation"] == "NOT_COMMERCIAL_V3"
+    assert result["can_execute"] is None
+    assert result["status"] is None
+    assert result["product_tier"] is None
+    assert result["commercial_version_no"] is None
+
+
+def test_b21_current_cv_not_found_not_v3():
+    """B21 SaasEntitlementRuntimeError(CURRENT_CV_NOT_FOUND) → generation=NOT_COMMERCIAL_V3."""
+    company_id = _uid()
+    factory_id = _uid()
+    sb = FakeSB({})
+
+    with patch(
+        "services.member_commercial_svc.resolve_saas_entitlement_context_v2",
+        side_effect=SaasEntitlementRuntimeError("CURRENT_CV_NOT_FOUND"),
+    ):
+        result = svc.get_member_runtime_gate(sb, company_id, factory_id=factory_id)
+
+    assert result["generation"] == "NOT_COMMERCIAL_V3"
+    assert result["can_execute"] is None
+
+
+# ── B22: Router envelope test ─────────────────────────────────────────────────
+
+def test_b22_router_envelope_commercial_v3():
+    """B22 active V3 MANAGER + scoped factory → HTTP 200, envelope {"status":"success","data":{"generation":"COMMERCIAL_V3",...}}."""
+    from fastapi.testclient import TestClient
+    from main import app
+    from routers.auth import get_current_user
+
+    company_id = _uid()
+    contract_id = _uid()
+    cv_id = _uid()
+    factory_id = _uid()
+
+    resolution = _make_resolution(contract_id, cv_id, "MANAGER")
+    store = {
+        "saas_contract_site_scopes": [_make_scope_row(cv_id, "factory", factory_id)],
+    }
+    sb = FakeSB(store)
+
+    fake_user = {"company_id": company_id, "id": _uid()}
+
+    app.dependency_overrides[get_current_user] = lambda: fake_user
+    try:
+        with patch("routers.member_commercial.get_supabase", return_value=sb), \
+             patch(
+                 "services.member_commercial_svc.resolve_saas_entitlement_context_v2",
+                 return_value=resolution,
+             ):
+            client = TestClient(app)
+            response = client.get(
+                "/me/commercial/runtime-gate",
+                params={"factory_id": factory_id},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "success"
+    assert body["data"]["generation"] == "COMMERCIAL_V3"
+    assert body["data"]["can_execute"] is True
