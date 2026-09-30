@@ -163,11 +163,10 @@ def test_registry_builds_all_eight_adapters():
 
 
 def test_registry_adapters_yield_nothing_on_empty_supabase():
-    adapters = build_production_adapters(_empty_prod_supabase())
+    adapters = build_production_adapters(
+        _empty_prod_supabase(), legal_client=_empty_prod_supabase()
+    )
     for a in adapters:
-        # LEGAL raises AdapterBlockedSubtype when it finishes with any
-        # blocked kinds — with an empty source it has none, so it just
-        # returns an empty iterator.
         assert list(a.iter_documents()) == []
 
 
@@ -311,7 +310,7 @@ def test_precedent_binding_active_only():
     prec_adapter = next(a for a in adapters if a.domain_name == "PRECEDENT")
     docs = list(prec_adapter.iter_documents())
     assert [d["canonical_id"] for d in docs] == ["p-1"]
-    assert docs[0]["public_url"] is None      # IAP detail resolver DEFERRED
+    assert docs[0]["public_url"] == "/precedent/p-1"
 
 
 def test_material_binding_joins_catalog_details_holds():
@@ -442,7 +441,7 @@ def test_legal_binding_reads_law_master_version_article_directly():
              "enforcement_date": "2024-01-01T00:00:00+00:00"},
         ],
     })
-    adapters = build_production_adapters(sb)
+    adapters = build_production_adapters(sb, legal_client=sb)
     legal_adapter = next(a for a in adapters if a.domain_name == "LEGAL")
     docs = list(legal_adapter.iter_documents())
     canonical_ids = [d["canonical_id"] for d in docs]
@@ -481,7 +480,7 @@ def test_legal_binding_by_id_respects_current_version_gate():
              "enforcement_date": "2026-01-01T00:00:00+00:00"},
         ],
     })
-    adapters = build_production_adapters(sb)
+    adapters = build_production_adapters(sb, legal_client=sb)
     legal_adapter = next(a for a in adapters if a.domain_name == "LEGAL")
     # Current row → payload.
     assert legal_adapter.object_reindex_payload("current") is not None
@@ -562,7 +561,7 @@ def test_registry_full_rebuild_all_domains(monkeypatch):
             "enforcement_date": "2026-01-01T00:00:00+00:00",
         }],
     })
-    adapters = build_production_adapters(sb)
+    adapters = build_production_adapters(sb, legal_client=sb)
     store = MemoryStore()
     indexer = Indexer(store)
     result = indexer.full_rebuild(adapters)

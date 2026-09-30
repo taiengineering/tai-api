@@ -554,6 +554,14 @@ def _fetch_legal_attachments_batch(
     return meta_by_vid
 
 
+class LegalBindingUnavailable(RuntimeError):
+    """Raised by the fail-closed LEGAL adapter when legal_client was not supplied.
+
+    iter_documents() and object_reindex_payload() both raise this so callers
+    cannot accidentally treat a missing LEG binding as an empty or deleted set.
+    """
+
+
 def _make_legal_adapter(
     client: SupabaseClient,
     legal_client: Optional[SupabaseClient] = None,
@@ -562,8 +570,9 @@ def _make_legal_adapter(
 
     All LEGAL queries use legal_client (leg-prod) exclusively. If
     legal_client is None the adapter is fail-closed: iter_documents()
-    yields nothing and object_reindex_payload() returns None. There is
-    no generic-client fallback — callers must supply legal_client.
+    raises LegalBindingUnavailable and object_reindex_payload() raises
+    LegalBindingUnavailable. There is no generic-client fallback —
+    callers must supply legal_client.
 
     F2 FINAL §3-§10: `law_article_current` does NOT exist in
     production; the binding assembles the current-eligible set at
@@ -586,9 +595,18 @@ def _make_legal_adapter(
       - norm_cluster BLOCKED
     """
     if legal_client is None:
+        _unavail = (
+            "LEGAL_BINDING_UNAVAILABLE: LEG_SUPABASE_URL / "
+            "LEG_SUPABASE_SERVICE_ROLE_KEY not configured — "
+            "supply legal_client to build_production_adapters()"
+        )
+        def _unavailable_iter():
+            raise LegalBindingUnavailable(_unavail)
+        def _unavailable_by_id(_: str):
+            raise LegalBindingUnavailable(_unavail)
         return LegalAdapter(
-            fetch_current=lambda: iter([]),
-            fetch_by_id=lambda _: None,
+            fetch_current=_unavailable_iter,
+            fetch_by_id=_unavailable_by_id,
         )
 
     CURRENT_VERSION_CHUNK = 400   # keep any single `.in_()` small
@@ -691,7 +709,7 @@ def build_production_adapters(
     Caller responsibilities:
       - hand in a Supabase-py client (or duck-typed equivalent)
       - supply legal_client (leg-prod) to enable LEGAL content;
-        without it the LEGAL adapter is fail-closed (yields 0 documents)
+        without it the LEGAL adapter is fail-closed (raises LegalBindingUnavailable)
       - decide when to run the Indexer (this function performs zero
         I/O by itself)
     """
