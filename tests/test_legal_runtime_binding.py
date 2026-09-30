@@ -1,10 +1,11 @@
-"""RT-LEG-01~05: Runtime integration tests for LEGAL binding.
+"""RT-LEG-01~06: Runtime integration tests for LEGAL binding.
 
 RT-LEG-01: opensearch_rebuild._build_legal_supabase_client raises EnvironmentError when env missing
 RT-LEG-02: f2_census._build_legal_supabase_client raises EnvironmentError when env missing
 RT-LEG-03: process_queue() LEGAL event + no legal_client → failed=1, completed=0
 RT-LEG-04: LegalBindingUnavailable exported; iter_documents and object_reindex_payload both raise it
 RT-LEG-05: build_production_adapters with legal_client routes LEGAL queries to legal_client only
+RT-LEG-06: process_queue() LEGAL event + legal_client + KC stub → UPSERT, search_text complete
 """
 from __future__ import annotations
 
@@ -77,6 +78,10 @@ def _make_sb_with_event(domain_name="LEGAL", object_type="LEGAL", canonical_id="
         if name == "claim_search_index_events":
             result = MagicMock()
             result.data = [event]
+            rpc_obj.execute.return_value = result
+        elif name == "complete_search_index_event":
+            result = MagicMock()
+            result.data = True
             rpc_obj.execute.return_value = result
         else:
             rpc_obj.execute.return_value = MagicMock(data=None)
@@ -168,3 +173,118 @@ def test_rt_leg_05_build_production_adapters_routes_legal_to_legal_client():
         assert law_table not in called_on_app, (
             f"app_client must NOT be used for {law_table}"
         )
+
+
+# ── RT-LEG-06 ─────────────────────────────────────────────────────────────────
+
+_KC_STUB = (
+    '「전기용품 안전기준(KC 62619)」의 자세한 내용은 상단 메뉴 "<img id="40425753">'
+    '자세한 내용</img>" 버튼을 이용하십시오.'
+)
+
+
+def _make_kc_legal_client_for_rt():
+    """Mock leg-prod client with a KC stub article + 45983-char attachment.
+
+    Uses MagicMock with side_effect so the adapter's _fetch_by_id and
+    _fetch_legal_attachments_batch both see the right data.
+    """
+    masters = [
+        {"id": "m-kc", "law_name": "전기용품안전관리법",
+         "is_active": True, "current_version_id": "ver-kc"}
+    ]
+    articles = [{
+        "id": "art-kc-rt",
+        "law_id": "m-kc",
+        "law_version_id": "ver-kc",
+        "article_no": 1,
+        "article_sub_no": None,
+        "article_title": "「KC 62619」의 자세한 내용은",
+        "article_text": _KC_STUB,
+        "is_deleted_in_version": False,
+        "enforcement_date": "2023-01-01",
+        "updated_at": "2023-01-01T00:00:00",
+        "record_kind": "law_article",
+    }]
+    att_meta = [{
+        "id": "att-kc-rt",
+        "law_version_id": "ver-kc",
+        "attachment_title": "KC 62619 Ed 2.0",
+        "attachment_no": 1,
+        "download_status": "SUCCESS",
+        "extraction_verdict": "CLEAN",
+    }]
+    att_text = [{"id": "att-kc-rt", "attachment_text": "가" * 45983}]
+
+    def _chainable_q_rt(data):
+        result = MagicMock()
+        result.data = data
+        q = MagicMock()
+        for m in ("select", "eq", "in_", "neq", "order", "range", "limit", "gt"):
+            getattr(q, m).return_value = q
+        q.execute.return_value = result
+        return q
+
+    def table_side(name):
+        tbl = MagicMock()
+        if name == "law_master":
+            tbl.select.return_value = _chainable_q_rt(masters)
+        elif name == "law_article":
+            tbl.select.return_value = _chainable_q_rt(articles)
+        elif name == "law_attachment":
+            def sel_side(cols):
+                if "attachment_text" in cols:
+                    return _chainable_q_rt(att_text)
+                return _chainable_q_rt(att_meta)
+            tbl.select.side_effect = sel_side
+        else:
+            tbl.select.return_value = _chainable_q_rt([])
+        return tbl
+
+    client = MagicMock()
+    client.table.side_effect = table_side
+    return client
+
+
+def test_rt_leg_06_incremental_positive_kc_attachment():
+    """process_queue() LEGAL event + legal_client + KC stub → UPSERT with full attachment body."""
+    from opensearchpy import NotFoundError
+    from services.shared_search.incremental import process_queue
+
+    legal_client = _make_kc_legal_client_for_rt()
+    sb = _make_sb_with_event(
+        domain_name="LEGAL",
+        object_type="LEGAL",
+        canonical_id="art-kc-rt",
+    )
+
+    indexed_body: dict = {}
+
+    os_mock = MagicMock()
+    os_mock.indices.get_alias.return_value = {"tai-search-v1": {}}
+    os_mock.get.side_effect = NotFoundError(404, "not found", {})
+
+    def _index_side(**kwargs):
+        indexed_body.update(kwargs.get("body") or {})
+        return {"result": "created"}
+
+    os_mock.index.side_effect = _index_side
+
+    obs = process_queue(
+        supabase_client=sb,
+        os_client=os_mock,
+        legal_client=legal_client,
+        worker_id="test-worker-rt06",
+    )
+
+    assert obs["failed"] == 0, f"Expected 0 failures, got {obs}"
+    assert obs["completed"] == 1, f"Expected 1 completion, got {obs}"
+    os_mock.delete.assert_not_called()
+    os_mock.index.assert_called_once()
+
+    search_text = indexed_body.get("search_text", "")
+    assert len(search_text) > 1000, (
+        f"search_text must contain 45k attachment body, got {len(search_text)} chars"
+    )
+    assert "상단 메뉴" not in search_text, "stub navigation phrase must not appear in search_text"
+    assert "버튼을 이용하십시오" not in search_text, "stub button phrase must not appear in search_text"
