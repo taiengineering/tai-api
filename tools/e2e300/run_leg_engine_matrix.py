@@ -429,10 +429,13 @@ def run_case(
     case_id = manifest_case["case_id"]
     sector  = manifest_case["sector"]
 
-    # source_exact gate
-    if not manifest_case.get("source_exact"):
-        return {"status": "SKIPPED", "reason": "SOURCE_NOT_EXACT",
-                "case_id": case_id, "sector": sector}
+    # pipeline_c1_exact gate (WO-005) — preferred when present.
+    # Falls back to source_exact for legacy MFG-001 manifests.
+    _pc1e = manifest_case.get("pipeline_c1_exact")
+    c1_gate = _pc1e if _pc1e is not None else manifest_case.get("source_exact")
+    if not c1_gate:
+        reason = "PIPELINE_C1_NOT_EXACT" if _pc1e is not None else "SOURCE_NOT_EXACT"
+        return {"status": "SKIPPED", "reason": reason, "case_id": case_id, "sector": sector}
 
     # Frozen universe identity gate
     case_data = case_universe.get(case_id)

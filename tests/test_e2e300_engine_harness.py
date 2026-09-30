@@ -872,3 +872,122 @@ def test_g7_zero_cases_selected_raises():
 def test_g7b_nonzero_cases_selected_ok():
     """G7b: _check_cases_selected with 1 item does not raise."""
     _check_cases_selected([{"case_id": "MFG-001"}])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P21 — pipeline_c1_exact=false → SKIPPED (PIPELINE_C1_NOT_EXACT), LEG not called
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p21_pipeline_c1_exact_false_skipped():
+    """P21: manifest_case with pipeline_c1_exact=False → SKIPPED, seam not called."""
+    seam_calls = {"n": 0}
+    def mock_industrial(sb, fid, ci):
+        seam_calls["n"] += 1
+        return dict(_VALID_LEG_RETURN)
+
+    mc = _mc("MANUFACTURING")
+    mc["pipeline_c1_exact"] = False
+    universe = _case_universe(mc)
+    result = run_case(_mock_sb(), mc, universe, _industrial_seam=mock_industrial)
+    assert result["status"] == "SKIPPED"
+    assert result["reason"] == "PIPELINE_C1_NOT_EXACT"
+    assert seam_calls["n"] == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P22 — pipeline_c1_exact=true → correct sector seam called
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p22_pipeline_c1_exact_true_calls_correct_seam():
+    """P22: pipeline_c1_exact=True → correct sector seam called and status=OK."""
+    called = {}
+    def mock_building(sb, factory_id, consumer_input):
+        called["factory_id"] = factory_id
+        return dict({
+            "full_result": {
+                "engine_family": "LEG", "fallback_used": False, "leg_status": "LEG_COMPLETE",
+                "leg_trace_id": "trace-p22", "obligations_raw": [], "applicable_count": 0,
+            },
+            "contract_version": "SAFE_BUILDING_LEG_V1", "unresolved_fields": [],
+        })
+
+    mc = _mc("BUILDING", factory_id="fid-bld-p22")
+    mc["pipeline_c1_exact"] = True
+    universe = _case_universe(mc)
+    result = run_case(_mock_sb(), mc, universe, _building_seam=mock_building)
+    assert result["status"] == "OK"
+    assert called["factory_id"] == "fid-bld-p22"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P23 — MFG C1→C8 mock pipeline (pipeline_c1_exact=true → LEG result valid → OK)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p23_mfg_c1_c8_mock_pipeline():
+    """P23: MFG with pipeline_c1_exact=True + valid LEG result → status=OK, engine_family=LEG."""
+    def mock_industrial(sb, factory_id, consumer_input):
+        return dict(_VALID_LEG_RETURN)
+
+    mc = _mc("MANUFACTURING")
+    mc["pipeline_c1_exact"] = True
+    universe = _case_universe(mc, sector_fields={
+        "has_high_pressure_gas": False,
+        "has_chemical_substance": False,
+        "has_boiler": False,
+    })
+    result = run_case(_mock_sb(), mc, universe, _industrial_seam=mock_industrial)
+    assert result["status"] == "OK"
+    ev = result.get("execution_validation", {})
+    assert ev.get("engine_family") == "LEG"
+    assert ev.get("fallback_used") is False
+    assert ev.get("valid") is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P24 — BLD C1→C8 mock pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p24_bld_c1_c8_mock_pipeline():
+    """P24: BLD with pipeline_c1_exact=True + valid LEG result → status=OK."""
+    def mock_building(sb, factory_id, consumer_input):
+        return {
+            "full_result": {
+                "engine_family": "LEG", "fallback_used": False, "leg_status": "LEG_COMPLETE",
+                "leg_trace_id": "trace-p24", "obligations_raw": [{"norm_id": "B01"}], "applicable_count": 1,
+            },
+            "contract_version": "SAFE_BUILDING_LEG_V1", "unresolved_fields": [],
+        }
+
+    mc = _mc("BUILDING")
+    mc["pipeline_c1_exact"] = True
+    universe = _case_universe(mc)
+    result = run_case(_mock_sb(), mc, universe, _building_seam=mock_building)
+    assert result["status"] == "OK"
+    ev = result.get("execution_validation", {})
+    assert ev.get("valid") is True
+    assert ev.get("applicable_count_exact") is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P25 — CST C1→C8 mock pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p25_cst_c1_c8_mock_pipeline():
+    """P25: CST with pipeline_c1_exact=True + site_id + valid LEG result → status=OK."""
+    def mock_construction(sb, site_id, consumer_input):
+        return {
+            "full_result": {
+                "engine_family": "LEG", "fallback_used": False, "leg_status": "LEG_COMPLETE",
+                "leg_trace_id": "trace-p25", "obligations_raw": [], "applicable_count": 0,
+            },
+            "contract_version": "MKT_CST_PAID_CONTRACT_V1", "unresolved_fields": [],
+            "factory_id": "fid-cst-p25",
+        }
+
+    mc = _mc("CONSTRUCTION", factory_id="fid-cst-p25", site_id="sid-cst-p25")
+    mc["pipeline_c1_exact"] = True
+    universe = _case_universe(mc)
+    result = run_case(_mock_sb(), mc, universe, _construction_seam=mock_construction)
+    assert result["status"] == "OK"
+    ev = result.get("execution_validation", {})
+    assert ev.get("valid") is True
