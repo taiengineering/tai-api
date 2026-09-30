@@ -40,7 +40,7 @@ import logging
 import os
 import threading
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
@@ -68,7 +68,7 @@ from services.payment_helpers import (
     ts_ms as _ts_ms,
 )
 from services.payment_svc import call_pay_auth as _call_pay_auth
-from services.time import now_kst
+from services.time import TAI_TIMEZONE, now_kst
 
 log = logging.getLogger(__name__)
 
@@ -140,6 +140,31 @@ def _make_charge_moid(subscription_id: str, cycle: int) -> str:
 def _ts_yyyymmddhhmmss() -> str:
     """빌링승인 API용 timestamp — YYYYMMDDhhmmss (STEP3의 밀리초와 다름)"""
     return now_kst().strftime("%Y%m%d%H%M%S")
+
+
+def _v3_saas_expiry_and_next_billing(paid_at_iso: str):
+    """V3 SAAS 전용: KST 날짜 기반 계약 만료 + 선(先)청구 due time.
+
+    Returns:
+      (expired_at_iso, next_billing_at_iso)
+
+      expired_at      = (KST_date(paid_at) + 1개월) 00:00:00+09:00  — 계약 종료 경계
+      next_billing_at = expired_at - 1일                             — 경계 1일 전 청구 due
+
+    불변식: next_billing_at < contract end boundary
+    """
+    from dateutil import parser as _dp
+    from dateutil.relativedelta import relativedelta
+
+    paid_dt = _dp.isoparse(paid_at_iso.replace("Z", "+00:00"))
+    kst_paid = paid_dt.astimezone(TAI_TIMEZONE)
+    kst_date = kst_paid.date()
+    end_date = kst_date + relativedelta(months=1)
+    contract_end_boundary = datetime(
+        end_date.year, end_date.month, end_date.day, 0, 0, 0, tzinfo=TAI_TIMEZONE
+    )
+    next_billing_at_dt = contract_end_boundary - timedelta(days=1)
+    return contract_end_boundary.isoformat(), next_billing_at_dt.isoformat()
 
 
 def _call_billing_charge_api(
@@ -375,7 +400,8 @@ def _charge_subscription_once(
         if company_id:
             payment_row["company_id"] = company_id
 
-        # V3 SAAS cycle≥2: payment_type=RENEWAL, propagate quote_id+contract_id
+        # V3 SAAS cycle≥2: fail-closed linkage guard (B2) + RENEWAL propagation.
+        # All three checks must pass BEFORE payment INSERT and BEFORE INICIS call.
         if product_type == "SAAS" and is_recurring:
             init_res = (
                 supabase.table("payments")
@@ -386,13 +412,34 @@ def _charge_subscription_once(
                 .limit(1)
                 .execute()
             )
-            if init_res.data:
-                init_pay = init_res.data[0]
-                payment_row["payment_type"] = "RENEWAL"
-                if init_pay.get("quote_id"):
-                    payment_row["quote_id"] = init_pay["quote_id"]
-                if init_pay.get("contract_id"):
-                    payment_row["contract_id"] = init_pay["contract_id"]
+            if not init_res.data:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "V3_RECURRING_INITIAL_PAYMENT_NOT_FOUND: "
+                        "cycle>=2 requires a successful cycle=1 payment"
+                    ),
+                )
+            init_pay = init_res.data[0]
+            if not init_pay.get("quote_id"):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "V3_RECURRING_QUOTE_LINK_MISSING: "
+                        "cycle>=2 requires quote_id from initial payment"
+                    ),
+                )
+            if not init_pay.get("contract_id"):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "V3_RECURRING_CONTRACT_LINK_MISSING: "
+                        "cycle>=2 requires contract_id from initial payment"
+                    ),
+                )
+            payment_row["payment_type"] = "RENEWAL"
+            payment_row["quote_id"] = init_pay["quote_id"]
+            payment_row["contract_id"] = init_pay["contract_id"]
 
         try:
             ins = supabase.table("payments").insert(payment_row).execute()
@@ -448,8 +495,14 @@ def _charge_subscription_once(
     now2  = _now_iso()
 
     if is_ok:
-        paid_at    = now2
-        expired_at = _calc_expired_at(paid_at, 1)   # 1개월
+        paid_at = now2
+        # V3 SAAS: KST 날짜 기반 — 계약 종료 경계(expired_at)와 1일 전 청구 due(next_billing_at) 분리.
+        # Legacy: paid_at + 1개월 그대로.
+        if product_type == "SAAS":
+            expired_at, _next_billing = _v3_saas_expiry_and_next_billing(paid_at)
+        else:
+            expired_at = _calc_expired_at(paid_at, 1)
+            _next_billing = expired_at
 
         supabase.table("payments").update({
             "status_code":      "SUCCESS",
@@ -464,7 +517,7 @@ def _charge_subscription_once(
 
         supabase.table("subscriptions").update({
             "last_billed_at":      paid_at,
-            "next_billing_at":     expired_at,
+            "next_billing_at":     _next_billing,
             "failure_count":       0,
             "last_failure_at":     None,
             "last_failure_reason": None,
@@ -802,11 +855,18 @@ async def billing_return(request: Request):
     billing_key_id  = billing_key_row["id"]
 
     # ── subscription ACTIVE 전환 ───────────────────────────────────
+    # V3 SAAS: KST 날짜 기반 next_billing_at (cycle=1 charge success 시 재계산됨).
+    # Legacy: paid_at + 1개월.
+    _sub_product_type = subscription.get("product_type", "")
+    if _sub_product_type == "SAAS":
+        _, _act_next_billing = _v3_saas_expiry_and_next_billing(now)
+    else:
+        _act_next_billing = _calc_expired_at(now, 1)
     supabase.table("subscriptions").update({
         "billing_key_id":  billing_key_id,
         "status":          "ACTIVE",
         "started_at":      now,
-        "next_billing_at": _calc_expired_at(now, 1),
+        "next_billing_at": _act_next_billing,
         "updated_at":      now,
     }).eq("id", subscription_id).execute()
 
