@@ -15,6 +15,7 @@ Payment Amount SSOT: Frozen Quote V2 Snapshot (quotes.items[0].pricing_snapshot)
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from pydantic import ValidationError
@@ -22,7 +23,16 @@ from pydantic import ValidationError
 import services.member_quote_svc as member_quote_svc
 from schemas.saas_pricing_v2 import SaasPricingSnapshotV2
 from schemas.saas_quote_v2 import SAAS_QUOTE_SCHEMA_VERSION, SaasQuoteSnapshotItemV2
-from services.payment_svc import _run_inicis_prepare_exact, load_sign_key
+from services.payment_svc import (
+    _build_inicis_prepare_response_exact,
+    _run_inicis_prepare_exact,
+    load_sign_key,
+)
+
+logger = logging.getLogger(__name__)
+
+_ACTIVE_STATUSES = ("PENDING", "PAID", "SUCCESS")
+_PAID_STATUSES = ("PAID", "SUCCESS")
 
 
 # ── Domain Error ──────────────────────────────────────────────────────────────
@@ -31,19 +41,124 @@ class SaasPaymentV2AdapterError(Exception):
     """V2 Payment Adapter 도메인 오류.
 
     code values:
-      QUOTE_NOT_FOUND               — quote_id 미존재
-      QUOTE_NOT_OWNED               — company_id 불일치
-      QUOTE_NOT_ISSUED              — status_code != ISSUED
-      QUOTE_NOT_SAAS                — service_type != SAAS
-      QUOTE_NOT_V2                  — items 수 != 1 또는 schema_version != SAAS_QUOTE_V2
-      QUOTE_ITEM_INVALID            — SaasQuoteSnapshotItemV2 또는 SaasPricingSnapshotV2 검증 실패
+      QUOTE_NOT_FOUND                — quote_id 미존재
+      QUOTE_NOT_OWNED                — company_id 불일치
+      QUOTE_NOT_ISSUED               — status_code != ISSUED
+      QUOTE_NOT_SAAS                 — service_type != SAAS
+      QUOTE_NOT_V2                   — items 수 != 1 또는 schema_version != SAAS_QUOTE_V2
+      QUOTE_ITEM_INVALID             — SaasQuoteSnapshotItemV2 또는 SaasPricingSnapshotV2 검증 실패
       QUOTE_PAYMENT_SNAPSHOT_INVALID — quote/item/snapshot 금액 3중 불일치
+      QUOTE_PAYMENT_PENDING          — 다른 사용자의 PENDING 결제 존재
+      QUOTE_ALREADY_PAID             — PAID/SUCCESS 결제 이미 존재
+      QUOTE_PAYMENT_STATE_CONFLICT   — 경쟁 삽입 후 재조회 불일치
     """
 
     def __init__(self, code: str, message: str = "") -> None:
         self.code = code
         self.message = message or code
         super().__init__(self.message)
+
+
+# ── Guard Helpers ─────────────────────────────────────────────────────────────
+
+def _find_existing_v2_payment(supabase, quote_id: str) -> Optional[dict]:
+    """PENDING/PAID/SUCCESS 상태인 기존 V2 결제 행 조회 (최신 1건).
+
+    FAILED-only 상태이거나 결제 이력 없으면 None 반환.
+    """
+    res = (
+        supabase.table("payments")
+        .select("id,user_id,status_code,inicis_order_id,total_amount,product_type,goodname,buyername,buyertel,buyeremail")
+        .eq("quote_id", quote_id)
+        .eq("product_type", "SAAS")
+        .eq("payment_type", "CARD")
+        .in_("status_code", list(_ACTIVE_STATUSES))
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def _validate_pending_reuse(
+    existing: dict,
+    user_id: str,
+    sign_key: str,
+    goodname: str,
+    *,
+    buyername: Optional[str] = None,
+    buyertel: Optional[str] = None,
+    buyeremail: Optional[str] = None,
+) -> dict:
+    """PENDING 행에 대해 사용자 검증 후 재사용 응답 또는 차단 오류 반환.
+
+    같은 user_id → fresh timestamp/signature로 PENDING reuse 응답.
+    다른 user_id → QUOTE_PAYMENT_PENDING raise.
+    """
+    status = (existing.get("status_code") or "").upper()
+    if status in _PAID_STATUSES:
+        raise SaasPaymentV2AdapterError(
+            "QUOTE_ALREADY_PAID",
+            "이미 결제 완료된 견적입니다.",
+        )
+    # PENDING
+    if str(existing.get("user_id")) != str(user_id):
+        raise SaasPaymentV2AdapterError(
+            "QUOTE_PAYMENT_PENDING",
+            "이 견적에 대해 진행 중인 결제가 있습니다.",
+        )
+    # Same user → reuse
+    logger.info(
+        "[V2_ADAPTER] quote=%s user=%s PENDING reuse payment=%s",
+        existing.get("quote_id", "?"),
+        user_id,
+        existing.get("id"),
+    )
+    return _build_inicis_prepare_response_exact(
+        sign_key,
+        payment_id=str(existing["id"]),
+        order_id=str(existing["inicis_order_id"]),
+        total_amount=int(existing["total_amount"]),
+        goodname=goodname,
+        buyername=buyername,
+        buyertel=buyertel,
+        buyeremail=buyeremail,
+    )
+
+
+def _is_quote_v2_unique_violation(exc: Exception) -> bool:
+    """PostgreSQL 23505 unique violation이 uix_payments_quote_v2_initial_active 인지 판정."""
+    msg = str(exc)
+    return "23505" in msg and "uix_payments_quote_v2_initial_active" in msg
+
+
+def _handle_race_recovery(
+    supabase,
+    quote_id: str,
+    user_id: str,
+    sign_key: str,
+    goodname: str,
+    *,
+    buyername: Optional[str] = None,
+    buyertel: Optional[str] = None,
+    buyeremail: Optional[str] = None,
+) -> dict:
+    """경쟁 INSERT 실패(23505) 후 재조회 → 동일 라우팅 적용."""
+    existing = _find_existing_v2_payment(supabase, quote_id)
+    if not existing:
+        raise SaasPaymentV2AdapterError(
+            "QUOTE_PAYMENT_STATE_CONFLICT",
+            "결제 중복 감지 후 기존 결제를 확인할 수 없습니다.",
+        )
+    return _validate_pending_reuse(
+        existing,
+        user_id,
+        sign_key,
+        goodname,
+        buyername=buyername,
+        buyertel=buyertel,
+        buyeremail=buyeremail,
+    )
 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
@@ -143,24 +258,53 @@ def prepare_saas_v2_payment_from_quote(
             f"total_amount 불일치: quote={q_total}, item={item.total_amount}, snap={snap.total_amount}",
         )
 
-    # ── Step 10: INICIS Prepare Core 호출 ─────────────────────────────
     sign_key = load_sign_key()
-    return _run_inicis_prepare_exact(
-        supabase,
-        sign_key,
-        supply_amount=snap.prepaid_supply_amount,
-        vat_amount=snap.vat_amount,
-        total_amount=snap.total_amount,
-        product_type="SAAS",
-        goodname=item.display_name,
-        user_id=user_id,
-        company_id=company_id,
-        quote_id=quote_id,
-        plan_code=None,
-        period_months=snap.payment_months,
-        payment_type="CARD",
-        proof_type=proof_type,
-        buyername=buyername,
-        buyertel=buyertel,
-        buyeremail=buyeremail,
-    )
+
+    # ── Step 10: Duplicate Guard ──────────────────────────────────────
+    existing = _find_existing_v2_payment(supabase, quote_id)
+    if existing:
+        return _validate_pending_reuse(
+            existing,
+            user_id,
+            sign_key,
+            item.display_name,
+            buyername=buyername,
+            buyertel=buyertel,
+            buyeremail=buyeremail,
+        )
+
+    # ── Step 11: INICIS Prepare Core 호출 ────────────────────────────
+    try:
+        return _run_inicis_prepare_exact(
+            supabase,
+            sign_key,
+            supply_amount=snap.prepaid_supply_amount,
+            vat_amount=snap.vat_amount,
+            total_amount=snap.total_amount,
+            product_type="SAAS",
+            goodname=item.display_name,
+            user_id=user_id,
+            company_id=company_id,
+            quote_id=quote_id,
+            plan_code=None,
+            period_months=snap.payment_months,
+            payment_type="CARD",
+            proof_type=proof_type,
+            buyername=buyername,
+            buyertel=buyertel,
+            buyeremail=buyeremail,
+        )
+    except Exception as exc:
+        if _is_quote_v2_unique_violation(exc):
+            logger.info("[V2_ADAPTER] quote=%s race-INSERT 23505 → recovery", quote_id)
+            return _handle_race_recovery(
+                supabase,
+                quote_id,
+                user_id,
+                sign_key,
+                item.display_name,
+                buyername=buyername,
+                buyertel=buyertel,
+                buyeremail=buyeremail,
+            )
+        raise

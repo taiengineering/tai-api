@@ -502,6 +502,8 @@ def _setup_valid_v2(monkeypatch, supply=100_000, vat=10_000, total=110_000, term
     quote = _valid_v2_quote(supply=supply, vat=vat, total=total, term=term)
     monkeypatch.setattr("services.member_quote_svc.get_member_quote", lambda *a: quote)
     monkeypatch.setattr("services.saas_payment_v2_adapter.load_sign_key", lambda: "TEST_KEY")
+    # Guard: no existing payment → allow INSERT path
+    monkeypatch.setattr("services.saas_payment_v2_adapter._find_existing_v2_payment", lambda *a: None)
     calls = []
     monkeypatch.setattr("services.saas_payment_v2_adapter._run_inicis_prepare_exact",
                         _fake_prepare_exact(calls))

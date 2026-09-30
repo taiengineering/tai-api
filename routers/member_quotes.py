@@ -287,6 +287,8 @@ def prepare_v2_payment(
     except SaasPaymentV2AdapterError as exc:
         if exc.code in {"QUOTE_NOT_FOUND", "QUOTE_NOT_OWNED"}:
             raise HTTPException(status_code=404, detail={"code": exc.code, "message": exc.message})
+        if exc.code in {"QUOTE_PAYMENT_PENDING", "QUOTE_ALREADY_PAID", "QUOTE_PAYMENT_STATE_CONFLICT"}:
+            raise HTTPException(status_code=409, detail={"code": exc.code, "message": exc.message})
         raise HTTPException(status_code=422, detail={"code": exc.code, "message": exc.message})
     return result
 
