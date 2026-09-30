@@ -19,6 +19,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Optional
 
 from dateutil import parser as dateutil_parser
 from pydantic import ValidationError
@@ -132,6 +133,7 @@ def build_saas_v2_payment_success_apply_plan(
     quote: dict,
     start: date,
     contract_no: str,
+    contract_id_override: Optional[uuid.UUID] = None,
 ) -> SaasV2ApplyPlan:
     """Frozen Quote V2 Snapshot → Contract Row + Commercial Bundle (pure, DB write = 0).
 
@@ -140,10 +142,11 @@ def build_saas_v2_payment_success_apply_plan(
     contracts INSERT: 0 (BE-OBJ10-C에서 원자적 처리)
 
     Args:
-      pay          — payments 행 (product_type="SAAS", status_code∈{PAID,SUCCESS})
-      quote        — get_member_quote 반환값 (source=member_auto, service_type=SAAS)
-      start        — 계약 시작일 (결정성 테스트 지원)
-      contract_no  — 계약번호 (결정성 테스트 지원)
+      pay                  — payments 행 (product_type="SAAS", status_code∈{PAID,SUCCESS})
+      quote                — get_member_quote 반환값 (source=member_auto, service_type=SAAS)
+      start                — 계약 시작일 (결정성 테스트 지원)
+      contract_no          — 계약번호 (결정성 테스트 지원)
+      contract_id_override — 재사용할 UUID (Replay/Race-recovery 용). None이면 uuid4() 신규 생성.
     """
     # ── Step 1: Payment 성공 상태 가드 ───────────────────────────────────
     status_code = pay.get("status_code") or ""
@@ -288,7 +291,7 @@ def build_saas_v2_payment_success_apply_plan(
         )
 
     # ── Step 18: contract_row 조립 (plan_code=None — V2 sentinel) ────
-    contract_id = uuid.uuid4()
+    contract_id = contract_id_override if contract_id_override is not None else uuid.uuid4()
     contract_row = _build_contract_row_from_payment(
         pay,
         start=start,

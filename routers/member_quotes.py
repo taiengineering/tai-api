@@ -13,7 +13,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
@@ -238,6 +238,57 @@ def register_commercial_construction_site(
             "criteria_value": body.criteria_value,
         },
     }
+
+
+class SaasV2PaymentPrepareBody(BaseModel):
+    """POST /me/quotes/v2/{quote_id}/payment/prepare — client input 최소화."""
+    proof_type: Optional[str] = None
+    buyername: Optional[str] = None
+    buyertel: Optional[str] = None
+    buyeremail: Optional[str] = None
+
+    @field_validator("proof_type")
+    @classmethod
+    def _check_proof_type(cls, v: Optional[str]) -> Optional[str]:
+        from schemas.payment import _validate_client_proof_type
+        return _validate_client_proof_type(v)
+
+
+@router.post("/v2/{quote_id}/payment/prepare")
+def prepare_v2_payment(
+    quote_id: str,
+    body: SaasV2PaymentPrepareBody,
+    current: dict = Depends(get_current_user),
+):
+    """Frozen Quote V2 → INICIS 결제 준비.
+
+    서버 파생: user_id, company_id, amounts, product_type, plan_code, period_months.
+    금지 client field: amount, company_id, user_id, product_type, plan_code, period_months.
+    소유권: /me 자사 강제 + quote 소유권 (adapter 내부 검증).
+    타사 quote_id → 404 (소유권 은닉).
+    """
+    supabase = get_supabase()
+    company_id = _require_member_company(current, supabase)
+    from services.saas_payment_v2_adapter import (
+        SaasPaymentV2AdapterError,
+        prepare_saas_v2_payment_from_quote,
+    )
+    try:
+        result = prepare_saas_v2_payment_from_quote(
+            supabase,
+            quote_id=quote_id,
+            user_id=current["id"],
+            company_id=company_id,
+            proof_type=body.proof_type,
+            buyername=body.buyername,
+            buyertel=body.buyertel,
+            buyeremail=body.buyeremail,
+        )
+    except SaasPaymentV2AdapterError as exc:
+        if exc.code in {"QUOTE_NOT_FOUND", "QUOTE_NOT_OWNED"}:
+            raise HTTPException(status_code=404, detail={"code": exc.code, "message": exc.message})
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": exc.message})
+    return result
 
 
 @router.get("")

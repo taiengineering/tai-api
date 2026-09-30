@@ -624,14 +624,21 @@ def test_A41_no_contract_write():
 
 
 def test_A42_runtime_consumer_zero():
-    """Adapter를 routers 어디서도 import하지 않는다."""
+    """Adapter를 payment 런타임 라우터(routers/payment.py)에서 import하지 않는다.
+    member_quotes.py의 prepare 엔드포인트는 유일한 허용 소비자.
+    """
     import subprocess
     result = subprocess.run(
         ["grep", "-r", "saas_payment_v2_adapter", "routers/"],
         capture_output=True, text=True,
         cwd=Path(__file__).parent.parent,
     )
-    assert result.stdout.strip() == "", "routers에서 adapter import 감지"
+    # Filter: allow only member_quotes.py (prepare endpoint) — exclude binary .pyc
+    hits = [
+        line for line in result.stdout.splitlines()
+        if "member_quotes.py" not in line and not line.startswith("Binary")
+    ]
+    assert hits == [], f"payment 런타임 라우터에서 adapter import 감지: {hits}"
 
 
 def test_A43_public_preparebody_saas_not_added():

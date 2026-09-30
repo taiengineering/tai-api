@@ -489,6 +489,27 @@ def on_payment_success_sync(payment_id: str) -> None:
             )
         return
 
+    # INITIAL V2: product_type=SAAS (initial — not RENEWAL, not UPGRADE already handled above)
+    # Fail-closed: error → no legacy fallback
+    if pay.get("product_type") == "SAAS":
+        from services.saas_initial_payment_runtime_v2 import (
+            SaasInitialPaymentRuntimeV2Error,
+            apply_saas_v2_initial_payment_runtime,
+        )
+        try:
+            result = apply_saas_v2_initial_payment_runtime(sb, pay)
+            logger.info(
+                "[INITIAL_V2_RUNTIME] payment=%s status=%s",
+                payment_id, (result or {}).get("status"),
+            )
+        except SaasInitialPaymentRuntimeV2Error as exc:
+            logger.error(
+                "[INITIAL_V2_RUNTIME] payment=%s error=%s message=%s",
+                payment_id, exc.code, exc.message,
+            )
+        send_payment_notification(pay, plan_code, plan_info)
+        return
+
     existing_contract_id = pay.get("contract_id")
     if existing_contract_id:
         _activate_existing_contract(sb, pay, existing_contract_id)
