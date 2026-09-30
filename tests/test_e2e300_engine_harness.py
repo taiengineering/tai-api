@@ -1,18 +1,28 @@
-"""WO-E2E300-PERSISTENCE-FREE-LEG-HARNESS-004 — H1-H20 contract tests.
+"""WO-E2E300-LEG-HARNESS-CONTRACT-PATCH-004B — H1-H31 contract tests.
 
 Tests cover:
   H1-H3:   Sector dispatch (MFG/BLD/CST each calls correct seam)
-  H4-H7:   Manifest/SHA/source_exact gates
+  H4-H7:   Manifest/SHA/source_exact/identity gates
   H8-H10:  None/false/zero field preservation in consumer_input
-  H11-H13: Seam result passthrough / exception wrapping / empty obligations
-  H14-H15: Finalize not imported / DB write fence
-  H16-H17: diagnosis_id and inspection_sets absent from mainline engine_result
+  H11:     fallback_used=True → run_case FAIL
+  H12:     Seam exception wrapping; H12b INTERNAL_ERROR leg_status → FAIL
+  H13a/b:  obligations_raw non-list → FAIL; empty list + count=0 → OK
+  H14:     Finalize not imported / DB write fence (WriteBlockedBuilder)
+  H15/b/c: WriteBlockedBuilder insert/update blocked, select allowed
+  H16-H17: diagnosis_id and inspection_sets absent from engine_result.json
   H18-H19: CST site_id gate / ConstructionSiteBridgeError wrapping
-  H20:     Summary deterministic
+  H20:     Summary deterministic (execution_pass / all_pass fields)
+  H21:     Case file SHA from actual bytes mismatch → ValueError
+  H22:     Case not in frozen universe → BLOCKED
+  H23a/b/c: MFG false/false/false binding; BLD/CST empty overrides
+  H24-H28: validate_engine_result contract (valid, fallback, system-error, list, count)
+  H29:     WriteBlockedBuilder chain: select().update() blocked
+  H30:     WriteBlockedSupabase.rpc() blocked
+  H31:     Read chain .select().eq().execute() passes through
 """
+import hashlib
 import json
 import sys
-import os
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -24,13 +34,17 @@ sys.path.insert(0, str(_ROOT / "tools" / "e2e300"))
 
 from run_leg_engine_matrix import (
     CASE_SHA,
+    WriteBlockedBuilder,
     WriteBlockedSupabase,
-    WriteBlockedTable,
     build_consumer_input,
+    build_frozen_consumer_overrides,
     dispatch,
+    load_case_universe,
     load_manifest,
     run_case,
+    validate_engine_result,
     write_case_result,
+    write_execution_verdict,
     write_summary,
 )
 
@@ -39,17 +53,35 @@ from run_leg_engine_matrix import (
 # Fixtures
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Valid full_result satisfying the full LEG contract
+_VALID_FULL_RESULT = {
+    "engine_family":    "LEG",
+    "fallback_used":    False,
+    "leg_status":       "LEG_COMPLETE",
+    "leg_trace_id":     "trace-test-001",
+    "obligations_raw":  [],
+    "applicable_count": 0,
+}
+_VALID_LEG_RETURN = {
+    "full_result":       _VALID_FULL_RESULT,
+    "contract_version":  "SAFE_INDUSTRIAL_LEG_V1",
+    "unresolved_fields": [],
+}
+
+# Legacy dispatch-only mock (not validated by run_case contract)
 _MOCK_FULL_RESULT = {"obligations": [{"norm_id": "OSH-001", "level": "MANDATORY"}]}
 _MOCK_LEG_RETURN = {
-    "full_result":        _MOCK_FULL_RESULT,
-    "contract_version":   "SAFE_INDUSTRIAL_LEG_V1",
-    "unresolved_fields":  [],
+    "full_result":       _MOCK_FULL_RESULT,
+    "contract_version":  "SAFE_INDUSTRIAL_LEG_V1",
+    "unresolved_fields": [],
 }
+
 
 def _mock_sb():
     sb = MagicMock()
     sb.table.return_value = MagicMock()
     return sb
+
 
 def _mc(sector, factory_id="fid-test", site_id=None, source_exact=True):
     return {
@@ -60,11 +92,23 @@ def _mc(sector, factory_id="fid-test", site_id=None, source_exact=True):
         "source_exact": source_exact,
     }
 
+
 def _manifest(cases=None):
     return {
         "run_id":   "run-001",
         "case_sha": CASE_SHA,
         "cases":    cases or [_mc("MANUFACTURING")],
+    }
+
+
+def _case_universe(mc, sector_fields=None):
+    """Minimal frozen case_universe dict keyed by case_id."""
+    return {
+        mc["case_id"]: {
+            "case_id":       mc["case_id"],
+            "sector":        mc["sector"],
+            "sector_fields": sector_fields or {},
+        }
     }
 
 
@@ -154,11 +198,11 @@ def test_h5_manifest_file_not_found(tmp_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# H6 — source_exact=False → SKIPPED
+# H6 — source_exact=False → SKIPPED (before identity gate)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_h6_source_not_exact_skipped():
-    """H6: source_exact=False → run_case returns SKIPPED."""
+    """H6: source_exact=False → run_case returns SKIPPED before identity gate."""
     mc = _mc("MANUFACTURING", source_exact=False)
     result = run_case(_mock_sb(), mc, {})
     assert result["status"] == "SKIPPED"
@@ -166,16 +210,17 @@ def test_h6_source_not_exact_skipped():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# H7 — source_exact=True proceeds to dispatch
+# H7 — source_exact=True proceeds to dispatch and passes validation
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_h7_source_exact_true_proceeds():
-    """H7: source_exact=True → run_case calls seam and returns OK."""
+    """H7: source_exact=True with valid full_result → run_case status=OK."""
     def mock_industrial(sb, factory_id, consumer_input):
-        return dict(_MOCK_LEG_RETURN)
+        return dict(_VALID_LEG_RETURN)
 
     mc = _mc("MANUFACTURING", source_exact=True)
-    result = run_case(_mock_sb(), mc, {}, _industrial_seam=mock_industrial)
+    universe = _case_universe(mc)
+    result = run_case(_mock_sb(), mc, universe, _industrial_seam=mock_industrial)
     assert result["status"] == "OK"
 
 
@@ -218,28 +263,34 @@ def test_h10_zero_numeric_preserved_as_override():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# H11 — LEG fallback in full_result → status still OK (harness doesn't inspect content)
+# H11 — fallback_used=True in full_result → run_case FAIL
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_h11_leg_fallback_still_ok():
-    """H11: seam returns full_result with fallback marker → dispatch status=OK."""
+def test_h11_fallback_used_true_fails():
+    """H11: seam returns fallback_used=True → run_case status=FAIL with FALLBACK_USED_NOT_FALSE."""
     def mock_industrial(sb, factory_id, consumer_input):
         return {
-            "full_result":       {"obligations": [], "_fallback": "OBLIGATIONS_FALLBACK"},
-            "contract_version":  "V1",
+            "full_result": {
+                "engine_family":    "LEG",
+                "fallback_used":    True,
+                "leg_status":       "LEG_COMPLETE",
+                "leg_trace_id":     "trace-001",
+                "obligations_raw":  [],
+                "applicable_count": 0,
+            },
+            "contract_version":  "SAFE_INDUSTRIAL_LEG_V1",
             "unresolved_fields": [],
         }
 
-    from schemas.legal_engine import SafeIndustrialConsumerInput
-    ci = SafeIndustrialConsumerInput()
     mc = _mc("MANUFACTURING")
-    result = dispatch(_mock_sb(), mc, ci, _industrial_seam=mock_industrial)
-    assert result["status"] == "OK"
-    assert "_fallback" in result["full_result"]
+    universe = _case_universe(mc)
+    result = run_case(_mock_sb(), mc, universe, _industrial_seam=mock_industrial)
+    assert result["status"] == "FAIL"
+    assert any("FALLBACK_USED_NOT_FALSE" in str(e) for e in result.get("validation_errors", []))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# H12 — seam raises unexpected exception → ERROR result (not crash)
+# H12 — seam raises unexpected exception → ERROR; H12b INTERNAL_ERROR → FAIL
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_h12_seam_exception_wrapped_as_error():
@@ -248,27 +299,75 @@ def test_h12_seam_exception_wrapped_as_error():
         raise RuntimeError("network timeout")
 
     mc = _mc("MANUFACTURING")
-    result = run_case(_mock_sb(), mc, {}, _industrial_seam=mock_industrial)
+    universe = _case_universe(mc)
+    result = run_case(_mock_sb(), mc, universe, _industrial_seam=mock_industrial)
     assert result["status"] == "ERROR"
     assert "SEAM_ERROR" in result["reason"]
     assert "RuntimeError" in result["reason"]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# H13 — full_result with empty obligations → status=OK
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_h13_empty_obligations_ok():
-    """H13: full_result with obligations=[] → status=OK (harness doesn't validate LEG quality)."""
+def test_h12b_leg_status_internal_error_fails():
+    """H12b: full_result.leg_status=INTERNAL_ERROR → run_case status=FAIL."""
     def mock_industrial(sb, factory_id, consumer_input):
-        return {"full_result": {"obligations": []}, "contract_version": "V1", "unresolved_fields": []}
+        return {
+            "full_result": {
+                "engine_family":    "LEG",
+                "fallback_used":    False,
+                "leg_status":       "INTERNAL_ERROR",
+                "leg_trace_id":     "trace-001",
+                "obligations_raw":  [],
+                "applicable_count": 0,
+            },
+            "contract_version":  "SAFE_INDUSTRIAL_LEG_V1",
+            "unresolved_fields": [],
+        }
 
-    from schemas.legal_engine import SafeIndustrialConsumerInput
-    ci = SafeIndustrialConsumerInput()
     mc = _mc("MANUFACTURING")
-    result = dispatch(_mock_sb(), mc, ci, _industrial_seam=mock_industrial)
+    universe = _case_universe(mc)
+    result = run_case(_mock_sb(), mc, universe, _industrial_seam=mock_industrial)
+    assert result["status"] == "FAIL"
+    assert any("LEG_STATUS_SYSTEM_ERROR" in str(e) for e in result.get("validation_errors", []))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H13a/b — obligations_raw contract: non-list → FAIL; [] + count=0 → OK
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_h13a_obligations_raw_non_list_fails():
+    """H13a: obligations_raw=None → run_case status=FAIL with OBLIGATIONS_RAW_NOT_LIST."""
+    def mock_industrial(sb, factory_id, consumer_input):
+        return {
+            "full_result": {
+                "engine_family":    "LEG",
+                "fallback_used":    False,
+                "leg_status":       "LEG_COMPLETE",
+                "leg_trace_id":     "trace-001",
+                "obligations_raw":  None,
+                "applicable_count": 0,
+            },
+            "contract_version":  "SAFE_INDUSTRIAL_LEG_V1",
+            "unresolved_fields": [],
+        }
+
+    mc = _mc("MANUFACTURING")
+    universe = _case_universe(mc)
+    result = run_case(_mock_sb(), mc, universe, _industrial_seam=mock_industrial)
+    assert result["status"] == "FAIL"
+    assert any("OBLIGATIONS_RAW_NOT_LIST" in str(e) for e in result.get("validation_errors", []))
+
+
+def test_h13b_empty_obligations_zero_count_passes():
+    """H13b: obligations_raw=[], applicable_count=0 → shape OK → run_case status=OK."""
+    def mock_industrial(sb, factory_id, consumer_input):
+        return dict(_VALID_LEG_RETURN)
+
+    mc = _mc("MANUFACTURING")
+    universe = _case_universe(mc)
+    result = run_case(_mock_sb(), mc, universe, _industrial_seam=mock_industrial)
     assert result["status"] == "OK"
-    assert result["full_result"]["obligations"] == []
+    ev = result.get("execution_validation", {})
+    assert ev.get("obligations_raw_list") is True
+    assert ev.get("applicable_count_exact") is True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -278,7 +377,6 @@ def test_h13_empty_obligations_ok():
 def test_h14_finalize_not_imported():
     """H14: run_leg_engine_matrix must not import finalize/persist/materialize functions."""
     import run_leg_engine_matrix as harness_mod
-    module_attrs = dir(harness_mod)
     forbidden = [
         "_finalize_saas_leg_http",
         "_persist_saas_leg",
@@ -287,13 +385,13 @@ def test_h14_finalize_not_imported():
         "apply_saas_v2_initial_payment_runtime",
     ]
     for name in forbidden:
-        assert name not in module_attrs, (
+        assert name not in dir(harness_mod), (
             f"H14 FAIL: forbidden symbol {name!r} found in run_leg_engine_matrix namespace"
         )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# H15 — DB write fence blocks .insert() on WriteBlockedSupabase
+# H15 — DB write fence: WriteBlockedBuilder blocks writes
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_h15_db_write_fence_blocks_insert():
@@ -303,26 +401,26 @@ def test_h15_db_write_fence_blocks_insert():
     wrapped = WriteBlockedSupabase(inner)
 
     table_proxy = wrapped.table("payments")
-    assert isinstance(table_proxy, WriteBlockedTable)
+    assert isinstance(table_proxy, WriteBlockedBuilder)
 
     with pytest.raises(AssertionError, match="E2E300_ENGINE_MATRIX_DB_WRITE_BLOCKED"):
         table_proxy.insert({"id": "x"})
 
 
 def test_h15b_db_write_fence_blocks_update():
-    """H15b: WriteBlockedTable.update() also raises AssertionError."""
+    """H15b: WriteBlockedBuilder.update() raises AssertionError."""
     inner = MagicMock()
-    wrapped = WriteBlockedTable(inner)
+    wrapped = WriteBlockedBuilder(inner)
     with pytest.raises(AssertionError, match="E2E300_ENGINE_MATRIX_DB_WRITE_BLOCKED"):
         wrapped.update({"status": "ACTIVE"})
 
 
 def test_h15c_db_write_fence_allows_select():
-    """H15c: WriteBlockedTable.select() proxies through (read allowed)."""
+    """H15c: WriteBlockedBuilder.select() proxies through to inner (read allowed)."""
     inner = MagicMock()
-    inner.select.return_value = MagicMock()
-    wrapped = WriteBlockedTable(inner)
-    result = wrapped.select("id, name")
+    inner.select.return_value = "NOT_A_BUILDER"
+    wrapped = WriteBlockedBuilder(inner)
+    wrapped.select("id, name")
     inner.select.assert_called_once_with("id, name")
 
 
@@ -333,10 +431,11 @@ def test_h15c_db_write_fence_allows_select():
 def test_h16_diagnosis_id_absent_from_engine_result(tmp_path):
     """H16: engine_result.json written by harness must NOT contain diagnosis_id."""
     def mock_industrial(sb, factory_id, consumer_input):
-        return {"full_result": {}, "contract_version": "V1", "unresolved_fields": []}
+        return dict(_VALID_LEG_RETURN)
 
     mc = _mc("MANUFACTURING")
-    result = run_case(_mock_sb(), mc, {}, _industrial_seam=mock_industrial)
+    universe = _case_universe(mc)
+    result = run_case(_mock_sb(), mc, universe, _industrial_seam=mock_industrial)
     write_case_result(str(tmp_path), mc["case_id"], result)
 
     saved = json.loads((tmp_path / "cases" / mc["case_id"] / "engine_result.json").read_text())
@@ -352,10 +451,11 @@ def test_h16_diagnosis_id_absent_from_engine_result(tmp_path):
 def test_h17_inspection_sets_absent_from_engine_result(tmp_path):
     """H17: engine_result.json must NOT contain inspection_sets key."""
     def mock_industrial(sb, factory_id, consumer_input):
-        return {"full_result": {}, "contract_version": "V1", "unresolved_fields": []}
+        return dict(_VALID_LEG_RETURN)
 
     mc = _mc("MANUFACTURING")
-    result = run_case(_mock_sb(), mc, {}, _industrial_seam=mock_industrial)
+    universe = _case_universe(mc)
+    result = run_case(_mock_sb(), mc, universe, _industrial_seam=mock_industrial)
     write_case_result(str(tmp_path), mc["case_id"], result)
 
     saved = json.loads((tmp_path / "cases" / mc["case_id"] / "engine_result.json").read_text())
@@ -369,7 +469,7 @@ def test_h17_inspection_sets_absent_from_engine_result(tmp_path):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_h18_construction_no_site_id_blocked():
-    """H18: CONSTRUCTION with site_id=null in manifest → BLOCKED (not an error crash)."""
+    """H18: CONSTRUCTION with site_id=null in manifest → BLOCKED (not a crash)."""
     from schemas.legal_engine import SafeConstructionConsumerInput
     ci = SafeConstructionConsumerInput()
     mc = _mc("CONSTRUCTION", factory_id="fid-x", site_id=None)
@@ -400,7 +500,7 @@ def test_h19_construction_bridge_error_blocked():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# H20 — Summary output is deterministic for same input
+# H20 — Summary output is deterministic; correct field names
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_h20_summary_deterministic(tmp_path):
@@ -420,7 +520,249 @@ def test_h20_summary_deterministic(tmp_path):
     j2 = (out2 / "engine_matrix_summary.json").read_text()
     assert j1 == j2, "H20 FAIL: summary not deterministic"
 
-    assert s1["total"]   == 3
-    assert s1["ok"]      == 2
-    assert s1["blocked"] == 1
-    assert s1["all_ok"]  is False
+    assert s1["total"]          == 3
+    assert s1["execution_pass"] == 2
+    assert s1["blocked"]        == 1
+    assert s1["all_pass"]       is True   # no FAIL, no ERROR → all_pass=True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H21 — Case file SHA from actual bytes: mismatch → ValueError
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_h21_case_file_sha_actual_bytes_mismatch(tmp_path):
+    """H21: load_case_universe with tampered file → CASE_FILE_SHA_MISMATCH from actual bytes."""
+    tampered = {"cases": [{"case_id": "X-001", "sector": "MANUFACTURING"}]}
+    p = tmp_path / "case_universe.json"
+    p.write_bytes(json.dumps(tampered).encode("utf-8"))
+    with pytest.raises(ValueError, match="CASE_FILE_SHA_MISMATCH"):
+        load_case_universe(str(p))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H22 — Case not in frozen universe → BLOCKED:CASE_NOT_FOUND_IN_FROZEN_UNIVERSE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_h22_case_not_in_frozen_universe_blocked():
+    """H22: manifest references case_id absent from case_universe → BLOCKED."""
+    mc = _mc("MANUFACTURING")
+    wrong_universe = {
+        "OTHER-001": {"case_id": "OTHER-001", "sector": "MANUFACTURING", "sector_fields": {}}
+    }
+    result = run_case(_mock_sb(), mc, wrong_universe)
+    assert result["status"] == "BLOCKED"
+    assert result["reason"] == "CASE_NOT_FOUND_IN_FROZEN_UNIVERSE"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H23a/b/c — MFG false binding; BLD/CST empty overrides (no invented aliases)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_h23a_mfg_false_sector_fields_bound_explicitly():
+    """H23a: sector_fields has_*=False → overrides include all three as False."""
+    case_data = {
+        "case_id": "MFG-001",
+        "sector":  "MANUFACTURING",
+        "sector_fields": {
+            "has_high_pressure_gas":  False,
+            "has_chemical_substance": False,
+            "has_boiler":             False,
+        },
+    }
+    overrides = build_frozen_consumer_overrides(case_data, "MANUFACTURING")
+    assert overrides["has_high_pressure_gas"]  is False
+    assert overrides["has_chemical_substance"] is False
+    assert overrides["has_boiler"]             is False
+
+
+def test_h23b_bld_sector_fields_empty_overrides():
+    """H23b: BUILDING → build_frozen_consumer_overrides returns {} (no invented aliases)."""
+    case_data = {
+        "case_id": "BLD-001",
+        "sector":  "BUILDING",
+        "sector_fields": {"building_use_code": "OFFICE", "floor_area": 500},
+    }
+    overrides = build_frozen_consumer_overrides(case_data, "BUILDING")
+    assert overrides == {}
+
+
+def test_h23c_cst_sector_fields_empty_overrides():
+    """H23c: CONSTRUCTION → build_frozen_consumer_overrides returns {}."""
+    case_data = {
+        "case_id": "CST-001",
+        "sector":  "CONSTRUCTION",
+        "sector_fields": {"construction_amount": 100_000_000},
+    }
+    overrides = build_frozen_consumer_overrides(case_data, "CONSTRUCTION")
+    assert overrides == {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H24 — validate_engine_result: fully-compliant result → valid=True
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_h24_validate_engine_result_valid():
+    """H24: validate_engine_result with full LEG contract → valid=True, all fields set."""
+    result = {
+        "status": "OK",
+        "full_result": {
+            "engine_family":    "LEG",
+            "fallback_used":    False,
+            "leg_status":       "LEG_COMPLETE",
+            "leg_trace_id":     "trace-001",
+            "obligations_raw":  [{"norm_id": "N01"}],
+            "applicable_count": 1,
+        },
+    }
+    v = validate_engine_result(result, "MANUFACTURING")
+    assert v["valid"] is True
+    assert v["errors"] == []
+    assert v["engine_family"]         == "LEG"
+    assert v["fallback_used"]         is False
+    assert v["leg_trace_id_present"]  is True
+    assert v["obligations_raw_list"]  is True
+    assert v["applicable_count_exact"] is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H25 — validate_engine_result: fallback_used=True → invalid
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_h25_validate_fallback_used_true_invalid():
+    """H25: validate_engine_result with fallback_used=True → valid=False, FALLBACK_USED_NOT_FALSE."""
+    result = {
+        "full_result": {
+            "engine_family":    "LEG",
+            "fallback_used":    True,
+            "leg_status":       "LEG_COMPLETE",
+            "leg_trace_id":     "trace-001",
+            "obligations_raw":  [],
+            "applicable_count": 0,
+        },
+    }
+    v = validate_engine_result(result, "MANUFACTURING")
+    assert v["valid"] is False
+    assert any("FALLBACK_USED_NOT_FALSE" in e for e in v["errors"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H26 — validate_engine_result: INTERNAL_ERROR leg_status → invalid
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_h26_validate_internal_error_leg_status_invalid():
+    """H26: validate_engine_result with leg_status=INTERNAL_ERROR → valid=False."""
+    result = {
+        "full_result": {
+            "engine_family":    "LEG",
+            "fallback_used":    False,
+            "leg_status":       "INTERNAL_ERROR",
+            "leg_trace_id":     "trace-001",
+            "obligations_raw":  [],
+            "applicable_count": 0,
+        },
+    }
+    v = validate_engine_result(result, "MANUFACTURING")
+    assert v["valid"] is False
+    assert any("LEG_STATUS_SYSTEM_ERROR" in e for e in v["errors"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H27 — validate_engine_result: obligations_raw not a list → invalid
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_h27_validate_obligations_raw_not_list_invalid():
+    """H27: validate_engine_result with obligations_raw=dict → valid=False, OBLIGATIONS_RAW_NOT_LIST."""
+    result = {
+        "full_result": {
+            "engine_family":    "LEG",
+            "fallback_used":    False,
+            "leg_status":       "LEG_COMPLETE",
+            "leg_trace_id":     "trace-001",
+            "obligations_raw":  {"items": []},
+            "applicable_count": 0,
+        },
+    }
+    v = validate_engine_result(result, "MANUFACTURING")
+    assert v["valid"] is False
+    assert any("OBLIGATIONS_RAW_NOT_LIST" in e for e in v["errors"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H28 — validate_engine_result: applicable_count mismatch → invalid
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_h28_validate_applicable_count_mismatch_invalid():
+    """H28: applicable_count=5 but obligations_raw has 2 items → APPLICABLE_COUNT_MISMATCH."""
+    result = {
+        "full_result": {
+            "engine_family":    "LEG",
+            "fallback_used":    False,
+            "leg_status":       "LEG_COMPLETE",
+            "leg_trace_id":     "trace-001",
+            "obligations_raw":  [{"norm_id": "A"}, {"norm_id": "B"}],
+            "applicable_count": 5,
+        },
+    }
+    v = validate_engine_result(result, "MANUFACTURING")
+    assert v["valid"] is False
+    assert any("APPLICABLE_COUNT_MISMATCH" in e for e in v["errors"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H29 — WriteBlockedBuilder chain: .select().update() blocked at update
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_h29_write_blocked_builder_chain_select_update():
+    """H29: WriteBlockedBuilder.select().update() is blocked at update (chain preserved)."""
+    select_result = MagicMock(spec=["execute", "eq", "update", "limit"])
+    inner_builder = MagicMock()
+    inner_builder.select.return_value = select_result
+
+    proxy = WriteBlockedBuilder(inner_builder)
+    chained = proxy.select("*")
+    assert isinstance(chained, WriteBlockedBuilder)
+
+    with pytest.raises(AssertionError, match="E2E300_ENGINE_MATRIX_DB_WRITE_BLOCKED"):
+        chained.update({"field": "value"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H30 — WriteBlockedSupabase.rpc() → AssertionError
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_h30_rpc_blocked():
+    """H30: WriteBlockedSupabase.rpc() raises AssertionError with RPC_BLOCKED message."""
+    inner = MagicMock()
+    wrapped = WriteBlockedSupabase(inner)
+    with pytest.raises(AssertionError, match="E2E300_ENGINE_MATRIX_RPC_BLOCKED"):
+        wrapped.rpc("some_function", {"arg": 1})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H31 — Read chain .select().eq().execute() passes through (not blocked)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_h31_read_chain_passes():
+    """H31: .table().select().eq().execute() read chain returns data without blocking."""
+    execute_response = {"data": [{"id": "x"}], "error": None}
+
+    eq_obj = MagicMock()
+    eq_obj.execute.return_value = execute_response
+
+    select_obj = MagicMock()
+    select_obj.eq.return_value = eq_obj
+
+    table_obj = MagicMock()
+    table_obj.select.return_value = select_obj
+
+    inner_sb = MagicMock()
+    inner_sb.table.return_value = table_obj
+
+    wrapped_sb = WriteBlockedSupabase(inner_sb)
+    tbl = wrapped_sb.table("factories")
+    sel = tbl.select("*")
+    assert isinstance(sel, WriteBlockedBuilder)
+    eq = sel.eq("id", "x")
+    assert isinstance(eq, WriteBlockedBuilder)
+    result = eq.execute()
+    assert result == execute_response
