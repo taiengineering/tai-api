@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WO-E2E300-FROZEN300-C1-PROVISION-EXECUTION-PATCH-005A — Frozen300 C1 Full Provisioner.
+"""WO-E2E300-C1-EXACTNESS-CLOSEOUT-PATCH-005B — Frozen300 C1 Full Provisioner.
 
 Provides payload builders (no I/O), verify functions (readback-based exactness),
 and per-sector orchestrators with injectable seams for mock/test isolation.
@@ -22,6 +22,8 @@ C1 NOT-PIPELINE (baseline only, NOT current LEG C1 consumed):
 """
 from __future__ import annotations
 
+import json
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -59,6 +61,10 @@ _CST_SITE_TYPE_MAP: Dict[str, str] = {
 }
 
 _WON_PER_EOK: int = 100_000_000  # 1억원 = 100,000,000원
+
+# Reverse of _CST_SITE_TYPE_MAP: English site_type → Korean construction_type label.
+# Mirrors construction_helpers.CONSTRUCTION_TYPE_MAP (BUILDING→건축, CIVIL→토목, SPECIALTY→공통).
+_SITE_TYPE_TO_KOREAN: Dict[str, str] = {v: k for k, v in _CST_SITE_TYPE_MAP.items()}
 
 # Fields compared in verify_mfg_c1_exact (sector must be INDUSTRIAL post-normalize).
 _MFG_VERIFY_FIELDS: Tuple[str, ...] = (
@@ -223,15 +229,16 @@ def _compare_fields(
     expected: dict,
     fields: Tuple[str, ...],
 ) -> Dict[str, Any]:
-    """Compare stored vs expected for given fields. Skips None expectations."""
+    """Compare stored vs expected for given fields. None expectation must match None actual."""
     mismatches: List[str] = []
     actual: Dict[str, Any] = {k: stored.get(k) for k in fields}
     for k in fields:
         exp_v = expected.get(k)
-        if exp_v is None:
-            continue  # no expectation for this field
         act_v = actual[k]
-        if isinstance(exp_v, (int, float)):
+        if exp_v is None:
+            if act_v is not None:
+                mismatches.append(k)
+        elif isinstance(exp_v, (int, float)):
             if act_v is None or abs(float(act_v) - float(exp_v)) > 1e-9:
                 mismatches.append(k)
         else:
@@ -272,22 +279,34 @@ def verify_cst_c1_exact(
     stored_site: Optional[dict],
     stored_factory: Optional[dict],
     case_data: dict,
+    company_id: str,
 ) -> dict:
     """Compare stored site/factory against CST case expected values.
 
-    Returns {exact, expected, actual, mismatches}.
+    Full factory bridge verification: site.factory_id == factory.id,
+    company_id, name, sector=CONSTRUCTION, site_type=CONSTRUCTION,
+    employee_count, construction_type (Korean), construction_amount (WON).
     """
     sf = case_data.get("sector_fields") or {}
     expected_site_type = normalize_cst_construction_type(sf.get("construction_type", "건축"))
     won = sf.get("construction_amount")
     expected_eok = normalize_cst_amount_to_eok(won) if won is not None else None
+    expected_factory_construction_type = _SITE_TYPE_TO_KOREAN.get(expected_site_type)
 
     expected: Dict[str, Any] = {
-        "site_name":        case_data.get("factory_name"),
-        "site_type":        expected_site_type,
-        "contract_amount":  expected_eok,
-        "total_workers":    case_data.get("worker_count"),
-        "factory_bridge":   True,
+        "site_name":                    case_data.get("factory_name"),
+        "site_type":                    expected_site_type,
+        "contract_amount":              expected_eok,
+        "total_workers":                case_data.get("worker_count"),
+        "factory_bridge":               True,
+        "factory_site_factory_id_link": True,
+        "factory_sector":               "CONSTRUCTION",
+        "factory_site_type":            "CONSTRUCTION",
+        "factory_company_id":           company_id,
+        "factory_name":                 case_data.get("factory_name"),
+        "factory_employee_count":       case_data.get("worker_count"),
+        "factory_construction_type":    expected_factory_construction_type,
+        "factory_construction_amount":  won,
     }
 
     if stored_site is None:
@@ -296,13 +315,22 @@ def verify_cst_c1_exact(
 
     mismatches: List[str] = []
     actual: Dict[str, Any] = {
-        "site_name":       stored_site.get("site_name"),
-        "site_type":       stored_site.get("site_type"),
-        "contract_amount": stored_site.get("contract_amount"),
-        "total_workers":   stored_site.get("total_workers"),
-        "factory_bridge":  bool(stored_factory),
+        "site_name":                    stored_site.get("site_name"),
+        "site_type":                    stored_site.get("site_type"),
+        "contract_amount":              stored_site.get("contract_amount"),
+        "total_workers":                stored_site.get("total_workers"),
+        "factory_bridge":               bool(stored_factory),
+        "factory_site_factory_id_link": None,
+        "factory_sector":               stored_factory.get("sector")               if stored_factory else None,
+        "factory_site_type":            stored_factory.get("site_type")            if stored_factory else None,
+        "factory_company_id":           stored_factory.get("company_id")           if stored_factory else None,
+        "factory_name":                 stored_factory.get("name")                 if stored_factory else None,
+        "factory_employee_count":       stored_factory.get("employee_count")       if stored_factory else None,
+        "factory_construction_type":    stored_factory.get("construction_type")    if stored_factory else None,
+        "factory_construction_amount":  stored_factory.get("construction_amount")  if stored_factory else None,
     }
 
+    # Site checks
     if actual["site_name"] != expected["site_name"]:
         mismatches.append("site_name")
     if actual["site_type"] != expected["site_type"]:
@@ -315,13 +343,40 @@ def verify_cst_c1_exact(
         act_w = actual["total_workers"]
         if act_w is None or int(act_w) != int(expected["total_workers"]):
             mismatches.append("total_workers")
+
     if not stored_factory:
         mismatches.append("factory_bridge")
+    else:
+        site_factory_id = stored_site.get("factory_id")
+        factory_id_val = stored_factory.get("id")
+        link_ok = site_factory_id is not None and site_factory_id == factory_id_val
+        actual["factory_site_factory_id_link"] = link_ok
+        if not link_ok:
+            mismatches.append("factory_site_factory_id_link")
+        if actual["factory_sector"] != "CONSTRUCTION":
+            mismatches.append("factory_sector")
+        if actual["factory_site_type"] != "CONSTRUCTION":
+            mismatches.append("factory_site_type")
+        if actual["factory_company_id"] != company_id:
+            mismatches.append("factory_company_id")
+        if actual["factory_name"] != case_data.get("factory_name"):
+            mismatches.append("factory_name")
+        if expected["factory_employee_count"] is not None:
+            act_ec = actual["factory_employee_count"]
+            if act_ec is None or int(act_ec) != int(expected["factory_employee_count"]):
+                mismatches.append("factory_employee_count")
+        if expected_factory_construction_type:
+            if actual["factory_construction_type"] != expected_factory_construction_type:
+                mismatches.append("factory_construction_type")
+        if won is not None:
+            act_won = actual["factory_construction_amount"]
+            if act_won is None or abs(float(act_won) - float(won)) > 1e-9:
+                mismatches.append("factory_construction_amount")
 
     return {
-        "exact":     len(mismatches) == 0,
-        "expected":  expected,
-        "actual":    actual,
+        "exact":      len(mismatches) == 0,
+        "expected":   expected,
+        "actual":     actual,
         "mismatches": mismatches,
     }
 
@@ -331,56 +386,124 @@ def verify_cst_c1_exact(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _verify_process_readback(stored_rows: list, expected_processes: list) -> dict:
+    """Multiset comparison of (process_id, source) tuples."""
     count_match = len(stored_rows) == len(expected_processes)
     if not expected_processes:
         return {"exact": count_match, "count_match": count_match}
-    stored_ids = {r.get("process_id") for r in stored_rows}
-    missing = [p["process_id"] for p in expected_processes if p["process_id"] not in stored_ids]
-    exact = count_match and len(missing) == 0
-    return {"exact": exact, "count_match": count_match, "missing_process_ids": missing}
+    stored_counter: Counter = Counter(
+        (r.get("process_id"), r.get("source")) for r in stored_rows
+    )
+    expected_counter: Counter = Counter(
+        (p["process_id"], p.get("source", "DB")) for p in expected_processes
+    )
+    exact = count_match and stored_counter == expected_counter
+    result: Dict[str, Any] = {"exact": exact, "count_match": count_match}
+    missing = []
+    for key, cnt in expected_counter.items():
+        deficit = cnt - stored_counter.get(key, 0)
+        for _ in range(deficit):
+            missing.append({"process_id": key[0], "source": key[1]})
+    if missing:
+        result["missing_process_keys"] = missing
+    return result
 
 
 def _verify_work_readback(stored_rows: list, expected_works: list) -> dict:
+    """Multiset comparison of (work_type, work_subtype, json_attrs); all stored must be active."""
     count_match = len(stored_rows) == len(expected_works)
     if not expected_works:
         return {"exact": count_match, "count_match": count_match}
-    stored_types = {r.get("work_type") for r in stored_rows}
-    missing = [w["work_type"] for w in expected_works if w["work_type"] not in stored_types]
-    exact = count_match and len(missing) == 0
-    return {"exact": exact, "count_match": count_match, "missing_work_types": missing}
+
+    all_active = all(r.get("active") is True for r in stored_rows)
+
+    def _wkey(w: dict) -> tuple:
+        return (w.get("work_type"), w.get("work_subtype"),
+                json.dumps(w.get("attributes") or {}, sort_keys=True))
+
+    stored_counter: Counter = Counter(_wkey(r) for r in stored_rows)
+    expected_counter: Counter = Counter(_wkey(w) for w in expected_works)
+    exact = count_match and all_active and stored_counter == expected_counter
+
+    result: Dict[str, Any] = {"exact": exact, "count_match": count_match, "all_active": all_active}
+    if not all_active:
+        result["inactive_types"] = [r.get("work_type") for r in stored_rows if r.get("active") is not True]
+    if stored_counter != expected_counter:
+        missing = []
+        for key, cnt in expected_counter.items():
+            deficit = cnt - stored_counter.get(key, 0)
+            for _ in range(deficit):
+                missing.append({"work_type": key[0], "work_subtype": key[1]})
+        if missing:
+            result["missing_work_keys"] = missing
+    return result
 
 
 def _verify_material_readback(stored_rows: list, expected_materials: list) -> dict:
+    """Per-row check: find by master_key/name, then verify handling_mode_codes + is_active."""
     count_match = len(stored_rows) == len(expected_materials)
     if not expected_materials:
         return {"exact": count_match, "count_match": count_match}
-    stored_keys = {r.get("material_master_key") for r in stored_rows if r.get("material_master_key")}
-    stored_names = {r.get("material_name") for r in stored_rows if r.get("material_name")}
-    missing = []
+
+    per_material = []
     for m in expected_materials:
         key = m.get("material_master_key")
         name = m.get("display_name") or m.get("material_name")
-        if key and key in stored_keys:
+        found: Optional[dict] = None
+        if key:
+            found = next((r for r in stored_rows if r.get("material_master_key") == key), None)
+        if found is None and name:
+            found = next((r for r in stored_rows if r.get("material_name") == name), None)
+
+        identifier = key or name or "UNKNOWN"
+        if found is None:
+            per_material.append({"identifier": identifier, "found": False, "exact": False})
             continue
-        if name and name in stored_names:
-            continue
-        missing.append(key or name or "UNKNOWN")
-    exact = count_match and len(missing) == 0
-    return {"exact": exact, "count_match": count_match, "missing_materials": missing}
+
+        exp_handling = sorted(m.get("handling_mode_codes") or [])
+        act_handling = sorted(found.get("handling_mode_codes") or [])
+        handling_exact = exp_handling == act_handling
+        active_exact = found.get("is_active") is True
+        row_result: Dict[str, Any] = {
+            "identifier":    identifier,
+            "found":         True,
+            "handling_exact": handling_exact,
+            "active_exact":  active_exact,
+            "exact":         handling_exact and active_exact,
+        }
+        if not handling_exact:
+            row_result.update({"handling_expected": exp_handling, "handling_actual": act_handling})
+        per_material.append(row_result)
+
+    all_found = all(r["found"] for r in per_material)
+    all_exact = all(r.get("exact", False) for r in per_material)
+    return {
+        "exact":        count_match and all_found and all_exact,
+        "count_match":  count_match,
+        "per_material": per_material,
+    }
 
 
 def _verify_equipment_readback(stored_rows: list, expected_equipment: list) -> dict:
+    """Counter multiset comparison of equipment_type_code (handles duplicate codes)."""
     count_match = len(stored_rows) == len(expected_equipment)
     if not expected_equipment:
         return {"exact": count_match, "count_match": count_match}
-    stored_codes = {r.get("equipment_type_code") for r in stored_rows}
+    stored_counter: Counter = Counter(
+        r.get("equipment_type_code") for r in stored_rows if r.get("equipment_type_code")
+    )
+    expected_counter: Counter = Counter(
+        eq.get("equipment_type_code") for eq in expected_equipment if eq.get("equipment_type_code")
+    )
+    exact = count_match and stored_counter == expected_counter
+    result: Dict[str, Any] = {"exact": exact, "count_match": count_match}
     missing = []
-    for eq in expected_equipment:
-        code = eq.get("equipment_type_code")
-        if code and code not in stored_codes:
+    for code, cnt in expected_counter.items():
+        deficit = cnt - stored_counter.get(code, 0)
+        for _ in range(deficit):
             missing.append(code)
-    exact = count_match and len(missing) == 0
-    return {"exact": exact, "count_match": count_match, "missing_equipment_codes": missing}
+    if missing:
+        result["missing_equipment_codes"] = missing
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -436,7 +559,23 @@ def _default_factory_read(supabase: Any, factory_id: str) -> Optional[dict]:
 
 
 def _default_process_insert(supabase: Any, factory_id: str, payload: dict) -> dict:
+    source = payload.get("source", "DB")
     row = {**payload, "factory_id": factory_id, "is_active": True, "is_primary": False}
+    if source == "DB":
+        try:
+            res = (supabase.table("v_process_unified")
+                   .select("process_id, display_name, process_path")
+                   .eq("process_id", payload["process_id"])
+                   .limit(1).execute())
+            data = list(getattr(res, "data", None) or [])
+            if data:
+                proc = data[0]
+                if proc.get("display_name"):
+                    row["display_name"] = proc["display_name"]
+                if proc.get("process_path") and not row.get("process_path"):
+                    row["process_path"] = proc["process_path"]
+        except Exception:
+            pass  # lookup failure is non-fatal; insert proceeds with caller-supplied data
     res = supabase.table("factory_process").insert(row).execute()
     data = list(getattr(res, "data", None) or [])
     if not data:
@@ -472,7 +611,9 @@ def _default_material_read(supabase: Any, factory_id: str) -> List[dict]:
 
 
 def _default_equipment_insert(supabase: Any, factory_id: str, payload: dict) -> dict:
-    row = {k: v for k, v in payload.items() if v is not None}
+    from services.equipment_source.store import validate_equipment_source_row
+    validated = validate_equipment_source_row(payload)
+    row = {k: v for k, v in validated.items() if v is not None}
     res = supabase.table("equipment_assets").insert(row).execute()
     data = list(getattr(res, "data", None) or [])
     if not data:
@@ -727,6 +868,9 @@ def provision_cst_source(
     _factory_bridge_fn: Optional[Callable] = None,
     _site_read_fn: Optional[Callable] = None,
     _factory_read_fn: Optional[Callable] = None,
+    _work_read_fn: Optional[Callable] = None,       # 005B: common source readback
+    _material_read_fn: Optional[Callable] = None,   # 005B
+    _equipment_read_fn: Optional[Callable] = None,  # 005B
     _stale_fn: Optional[Callable] = None,
     _now_iso_fn: Optional[Callable] = None,
 ) -> dict:
@@ -735,13 +879,17 @@ def provision_cst_source(
     Source-only: POST /sites is NOT used (auto_diagnose_and_schedule side-effect).
     Instead: direct construction_sites INSERT → create_factory_for_site bridge.
 
-    pipeline_c1_exact derives from verify_cst_c1_exact(readback) — never hardcoded.
+    pipeline_c1_exact derives from all readback verifications — never hardcoded.
+    Common source (work/material/equipment) is proven empty via actual readback.
 
     Injectable seams (for tests):
       _site_insert_fn(supabase, payload, now_iso_fn) -> site_id (str)
       _factory_bridge_fn(supabase, site_row, now_iso_fn) -> factory_id (str | None)
       _site_read_fn(supabase, site_id) -> dict | None
       _factory_read_fn(supabase, factory_id) -> dict | None
+      _work_read_fn(supabase, factory_id) -> list
+      _material_read_fn(supabase, factory_id) -> list
+      _equipment_read_fn(supabase, factory_id) -> list
       _stale_fn(supabase, name, company_id) -> bool
     """
     now_iso_fn = _now_iso_fn or _default_now_iso
@@ -782,7 +930,7 @@ def provision_cst_source(
             f"CST_FACTORY_BRIDGE_FAILED: site_id={site_id} factory_id not created"
         )
 
-    # Readback site — pipeline_c1_exact cannot derive from insert success alone
+    # Readback site
     if _site_read_fn is not None:
         stored_site = _site_read_fn(supabase, site_id)
     else:
@@ -794,21 +942,49 @@ def provision_cst_source(
     if _factory_read_fn is not None:
         stored_factory = _factory_read_fn(supabase, factory_id)
     else:
-        res = supabase.table("factories").select("id").eq("id", factory_id).limit(1).execute()
+        res = supabase.table("factories").select("*").eq("id", factory_id).limit(1).execute()
         data = list(getattr(res, "data", None) or [])
         stored_factory = data[0] if data else None
 
-    # Derive pipeline_c1_exact from readback verification
-    cst_verify = verify_cst_c1_exact(stored_site, stored_factory, case_data)
-    pipeline_c1_exact = cst_verify["exact"]
+    # Full factory bridge verification (includes company_id)
+    cst_verify = verify_cst_c1_exact(stored_site, stored_factory, case_data, company_id)
+
+    # Common source readback — proven empty (or exact) via actual readback
+    work_read = _work_read_fn or _default_work_read
+    work_rows = work_read(supabase, factory_id)
+    work_verify = _verify_work_readback(work_rows, case_data.get("works") or [])
+
+    mat_read = _material_read_fn or _default_material_read
+    mat_rows = mat_read(supabase, factory_id)
+    material_verify = _verify_material_readback(mat_rows, case_data.get("materials") or [])
+
+    eq_read = _equipment_read_fn or _default_equipment_read
+    eq_rows = eq_read(supabase, factory_id)
+    equipment_verify = _verify_equipment_readback(eq_rows, case_data.get("equipment") or [])
+
+    pipeline_c1_exact = bool(
+        cst_verify["exact"]
+        and work_verify["exact"]
+        and material_verify["exact"]
+        and equipment_verify["exact"]
+    )
 
     return {
-        "site_id":             site_id,
-        "factory_id":          factory_id,
-        "contract_amount_eok": site_payload.get("contract_amount"),
-        "site_type":           site_payload.get("site_type"),
-        "pipeline_c1_exact":   pipeline_c1_exact,
-        "verify":              cst_verify,
+        "site_id":                site_id,
+        "factory_id":             factory_id,
+        "contract_amount_eok":    site_payload.get("contract_amount"),
+        "site_type":              site_payload.get("site_type"),
+        "pipeline_c1_exact":      pipeline_c1_exact,
+        "direct_source_exact":    cst_verify["exact"],
+        "work_source_exact":      work_verify["exact"],
+        "material_source_exact":  material_verify["exact"],
+        "equipment_source_exact": equipment_verify["exact"],
+        "verify": {
+            "site_factory": cst_verify,
+            "work":         work_verify,
+            "material":     material_verify,
+            "equipment":    equipment_verify,
+        },
     }
 
 
@@ -847,26 +1023,17 @@ def provision_case(
 def build_manifest_c1_entry(
     case_data: dict,
     provision_result: dict,
-    *,
-    work_source_exact: bool = False,
-    material_source_exact: bool = False,
-    equipment_source_exact: bool = False,
 ) -> dict:
     """Build manifest entry with pipeline_c1_exact + c1 sub-object.
 
-    pipeline_c1_exact = direct_source_exact AND work/material/equipment exact.
-    source_exact: legacy compat — same value as pipeline_c1_exact.
-
-    When provision_result comes from provision_mfg_c1 or provision_bld_c1, use
-    the exact flags from provision_result directly (they embed readback verifications).
+    All exactness flags derive from provision_result (orchestrator output).
+    direct_source_exact uses provision_result["direct_source_exact"] key.
     """
     sector = case_data.get("sector", "")
-    direct_source_exact = bool(provision_result.get("pipeline_c1_exact"))
-
-    # If provision_result already has per-component exactness (orchestrator path), prefer those.
-    work_exact   = provision_result.get("work_source_exact",      work_source_exact)
-    mat_exact    = provision_result.get("material_source_exact",  material_source_exact)
-    equip_exact  = provision_result.get("equipment_source_exact", equipment_source_exact)
+    direct_source_exact = bool(provision_result.get("direct_source_exact"))
+    work_exact   = bool(provision_result.get("work_source_exact"))
+    mat_exact    = bool(provision_result.get("material_source_exact"))
+    equip_exact  = bool(provision_result.get("equipment_source_exact"))
 
     non_pipeline: Dict[str, str] = {}
     if sector == "BUILDING":
@@ -948,7 +1115,7 @@ def build_c1_source_evidence(case_data: dict, provision_result: dict) -> dict:
         "factory_id":        provision_result.get("factory_id"),
         "site_id":           provision_result.get("site_id"),
         "pipeline_c1_exact": provision_result.get("pipeline_c1_exact", False),
-        "direct_source":     {"status": "PROVISIONED" if provision_result.get("pipeline_c1_exact") else "PENDING"},
+        "direct_source":     {"status": "PROVISIONED" if provision_result.get("direct_source_exact") else "PENDING"},
         "work_source":       {"status": "PROVISIONED" if provision_result.get("work_source_exact")     else "EMPTY_OR_PENDING"},
         "material_source":   {"status": "PROVISIONED" if provision_result.get("material_source_exact") else "EMPTY_OR_PENDING"},
         "equipment_source":  {"status": "PROVISIONED" if provision_result.get("equipment_source_exact") else "EMPTY_OR_PENDING"},

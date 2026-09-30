@@ -227,12 +227,15 @@ def test_p9_bld_processes_not_pipeline_required():
     payload = build_bld_factory_payload(case_data, company_id="cmp-001")
     assert "processes" not in payload
 
-    # manifest entry marks it as non-pipeline
-    provision_result = {"pipeline_c1_exact": True, "factory_id": "fid-x", "site_id": None}
-    entry = build_manifest_c1_entry(case_data, provision_result,
-                                    work_source_exact=True,
-                                    material_source_exact=True,
-                                    equipment_source_exact=True)
+    # manifest entry marks it as non-pipeline; provision_result uses orchestrator shape
+    provision_result = {
+        "direct_source_exact":    True,
+        "work_source_exact":      True,
+        "material_source_exact":  True,
+        "equipment_source_exact": True,
+        "factory_id": "fid-x", "site_id": None,
+    }
+    entry = build_manifest_c1_entry(case_data, provision_result)
     assert "baseline_non_pipeline" in entry
     for f in BLD_NOT_PIPELINE_FIELDS:
         assert entry["baseline_non_pipeline"][f] == "NOT_CURRENTLY_CONSUMED"
@@ -243,22 +246,27 @@ def test_p9_bld_processes_not_pipeline_required():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_p10_bld_common_source_exact_propagates():
-    """P10: pipeline_c1_exact = True only when work/material/equipment all exact."""
+    """P10: pipeline_c1_exact = True only when direct/work/material/equipment all exact."""
     case_data = {"case_id": "BLD-002", "sector": "BUILDING", "factory_name": "X",
                  "sector_fields": {"building_area": 100.0}}
-    provision_result = {"pipeline_c1_exact": True, "factory_id": "fid-x", "site_id": None}
 
-    entry_all = build_manifest_c1_entry(case_data, provision_result,
-                                        work_source_exact=True,
-                                        material_source_exact=True,
-                                        equipment_source_exact=True)
-    assert entry_all["pipeline_c1_exact"] is True
+    result_all = build_manifest_c1_entry(case_data, {
+        "direct_source_exact":    True,
+        "work_source_exact":      True,
+        "material_source_exact":  True,
+        "equipment_source_exact": True,
+        "factory_id": "fid-x", "site_id": None,
+    })
+    assert result_all["pipeline_c1_exact"] is True
 
-    entry_partial = build_manifest_c1_entry(case_data, provision_result,
-                                            work_source_exact=False,
-                                            material_source_exact=True,
-                                            equipment_source_exact=True)
-    assert entry_partial["pipeline_c1_exact"] is False
+    result_partial = build_manifest_c1_entry(case_data, {
+        "direct_source_exact":    True,
+        "work_source_exact":      False,  # work not exact
+        "material_source_exact":  True,
+        "equipment_source_exact": True,
+        "factory_id": "fid-x", "site_id": None,
+    })
+    assert result_partial["pipeline_c1_exact"] is False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -295,6 +303,9 @@ def test_p11_post_sites_not_used():
         _stale_fn=lambda *_a: False,
         _site_insert_fn=mock_site_insert,
         _factory_bridge_fn=mock_factory_bridge,
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
     )
     assert inserted["called"] is True
     # POST /sites was NOT called (no HTTP call made — seam replaced DB insert)
@@ -328,6 +339,9 @@ def test_p12_auto_diagnose_not_called():
         _stale_fn=lambda *_a: False,
         _site_insert_fn=lambda *_a: "sid-002",
         _factory_bridge_fn=mock_factory_bridge,
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
     )
     assert len(bridge_calls) == 1
     # No diagnosis or schedule function in bridge args
@@ -357,6 +371,9 @@ def test_p13_site_created():
         _stale_fn=lambda *_a: False,
         _site_insert_fn=lambda *_a: "sid-explicit-003",
         _factory_bridge_fn=lambda *_a: "fid-explicit-003",
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
     )
     assert result["site_id"] == "sid-explicit-003"
 
@@ -384,10 +401,19 @@ def test_p14_factory_bridge_created():
         _site_insert_fn=lambda *_a: "sid-004",
         _factory_bridge_fn=lambda *_a: "fid-bridge-004",
         _site_read_fn=lambda _sb, _sid: {
-            "id": "sid-004", "site_name": "현장4",
-            "site_type": "BUILDING", "contract_amount": 800.0, "total_workers": 60,
+            "id": "sid-004", "site_name": "현장4", "site_type": "BUILDING",
+            "contract_amount": 800.0, "total_workers": 60,
+            "factory_id": "fid-bridge-004",
         },
-        _factory_read_fn=lambda _sb, _fid: {"id": "fid-bridge-004"},
+        _factory_read_fn=lambda _sb, _fid: {
+            "id": "fid-bridge-004", "name": "현장4", "company_id": "cmp-001",
+            "sector": "CONSTRUCTION", "site_type": "CONSTRUCTION",
+            "employee_count": 60, "construction_type": "건축",
+            "construction_amount": 80_000_000_000.0,
+        },
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
     )
     assert result["factory_id"] == "fid-bridge-004"
     assert result["pipeline_c1_exact"] is True  # from verify_cst_c1_exact, not hardcoded
@@ -540,6 +566,9 @@ def test_p20_no_synthetic_work_date():
         _stale_fn=lambda *_a: False,
         _site_insert_fn=capture_site_insert,
         _factory_bridge_fn=lambda *_a: "fid-008",
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
     )
     for p in site_payloads_seen:
         assert "work_date" not in p
@@ -721,9 +750,15 @@ def test_q9_verify_cst_exact_true():
     stored_site = {
         "id": "sid-001", "site_name": "현장A", "site_type": "BUILDING",
         "contract_amount": 800.0, "total_workers": 60,
+        "factory_id": "fid-001",
     }
-    stored_factory = {"id": "fid-001"}
-    result = verify_cst_c1_exact(stored_site, stored_factory, case_data)
+    stored_factory = {
+        "id": "fid-001", "name": "현장A", "company_id": "cmp-001",
+        "sector": "CONSTRUCTION", "site_type": "CONSTRUCTION",
+        "employee_count": 60, "construction_type": "건축",
+        "construction_amount": 80_000_000_000.0,
+    }
+    result = verify_cst_c1_exact(stored_site, stored_factory, case_data, "cmp-001")
     assert result["exact"] is True
     assert result["mismatches"] == []
 
@@ -743,7 +778,7 @@ def test_q10_verify_cst_exact_false_no_factory():
         "id": "sid-002", "site_name": "현장B", "site_type": "CIVIL",
         "contract_amount": 500.0, "total_workers": 30,
     }
-    result = verify_cst_c1_exact(stored_site, None, case_data)
+    result = verify_cst_c1_exact(stored_site, None, case_data, "cmp-001")
     assert result["exact"] is False
     assert "factory_bridge" in result["mismatches"]
 
@@ -998,6 +1033,9 @@ def test_q18_provision_cst_site_readback_called():
         _factory_bridge_fn=lambda *_a: "fid-q18",
         _site_read_fn=mock_site_read,
         _factory_read_fn=lambda *_a: {"id": "fid-q18"},
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
     )
     assert len(site_reads) == 1
     assert site_reads[0] == "sid-q18"
@@ -1030,6 +1068,9 @@ def test_q19_provision_cst_factory_readback_called():
             "contract_amount": 600.0, "total_workers": 50,
         },
         _factory_read_fn=mock_factory_read,
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
     )
     assert len(factory_reads) == 1
     assert factory_reads[0] == "fid-q19"
@@ -1047,7 +1088,7 @@ def test_q20_provision_cst_pipeline_exact_from_verify_not_hardcoded():
         "sector_fields": {"construction_type": "건축", "construction_amount": 40_000_000_000},
     }
 
-    # Scenario A: readback matches → exact=True
+    # Scenario A: readback matches (full factory data) → exact=True
     result_exact = provision_cst_source(
         MagicMock(), case_data, "cmp-001",
         _stale_fn=lambda *_a: False,
@@ -1056,19 +1097,31 @@ def test_q20_provision_cst_pipeline_exact_from_verify_not_hardcoded():
         _site_read_fn=lambda *_a: {
             "id": "sid-q20", "site_name": "현장Q20", "site_type": "BUILDING",
             "contract_amount": 400.0, "total_workers": 35,
+            "factory_id": "fid-q20",
         },
-        _factory_read_fn=lambda *_a: {"id": "fid-q20"},
+        _factory_read_fn=lambda *_a: {
+            "id": "fid-q20", "name": "현장Q20", "company_id": "cmp-001",
+            "sector": "CONSTRUCTION", "site_type": "CONSTRUCTION",
+            "employee_count": 35, "construction_type": "건축",
+            "construction_amount": 40_000_000_000.0,
+        },
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
     )
     assert result_exact["pipeline_c1_exact"] is True
 
-    # Scenario B: readback returns None (simulates DB read failure) → exact=False
+    # Scenario B: site readback returns None (simulates DB read failure) → exact=False
     result_fail = provision_cst_source(
         MagicMock(), case_data, "cmp-001",
         _stale_fn=lambda *_a: False,
         _site_insert_fn=lambda *_a: "sid-q20b",
         _factory_bridge_fn=lambda *_a: "fid-q20b",
-        _site_read_fn=lambda *_a: None,       # readback failed
+        _site_read_fn=lambda *_a: None,
         _factory_read_fn=lambda *_a: {"id": "fid-q20b"},
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
     )
     assert result_fail["pipeline_c1_exact"] is False
 
@@ -1153,8 +1206,428 @@ def test_q23_provision_case_routes_cst():
                 "contract_amount": 1000.0, "total_workers": 80,
             },
             "_factory_read_fn": lambda *_a: {"id": "fid-cst-q23"},
+            "_work_read_fn": lambda *_a: [],
+            "_material_read_fn": lambda *_a: [],
+            "_equipment_read_fn": lambda *_a: [],
         },
     )
     # provision_cst_source was called: result has site_id
     assert result["site_id"] == "sid-cst-q23"
     assert result["factory_id"] == "fid-cst-q23"
+
+
+# =============================================================================
+# WO-005B — R1-R19: exactness closeout tests
+# None matching, multiset comparisons, handling_mode_codes, is_active,
+# CST factory bridge fields, manifest key fix, validation gate.
+# All mock/seam only.  PRODUCTION_WRITE = 0.  LEG_EXECUTED = 0.
+# =============================================================================
+
+from provision_frozen_c1 import (
+    _compare_fields,
+    _verify_work_readback,
+    _verify_material_readback,
+    _verify_equipment_readback,
+    _verify_process_readback,
+    _default_equipment_insert,
+)
+from services.equipment_source.store import EquipmentSourceValidationError
+
+_MFG_FIELDS_SUBSET = ("name", "company_id", "sector", "ksic_code")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R1 — _compare_fields: expected None matches actual None → no mismatch
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r1_compare_fields_none_matches_none():
+    """R1: expected=None must match actual=None (no mismatch)."""
+    stored   = {"name": "공장X", "company_id": "cmp-001", "sector": "INDUSTRIAL", "ksic_code": None}
+    expected = {"name": "공장X", "company_id": "cmp-001", "sector": "INDUSTRIAL", "ksic_code": None}
+    result = _compare_fields(stored, expected, _MFG_FIELDS_SUBSET)
+    assert result["exact"] is True
+    assert "ksic_code" not in result["mismatches"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R2 — _compare_fields: expected None, actual non-None → mismatch
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r2_compare_fields_none_expected_nonnull_actual_mismatch():
+    """R2: expected=None but actual=some_value → 'ksic_code' in mismatches."""
+    stored   = {"name": "공장Y", "company_id": "cmp-001", "sector": "INDUSTRIAL", "ksic_code": "C2511"}
+    expected = {"name": "공장Y", "company_id": "cmp-001", "sector": "INDUSTRIAL", "ksic_code": None}
+    result = _compare_fields(stored, expected, _MFG_FIELDS_SUBSET)
+    assert result["exact"] is False
+    assert "ksic_code" in result["mismatches"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R3 — _verify_work_readback: same work_type but different subtype → exact=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r3_work_readback_subtype_mismatch():
+    """R3: multiset key includes subtype — same work_type different subtype → exact=False."""
+    stored_rows = [{"work_type": "WELDING", "work_subtype": "ARC",  "attributes": {}, "active": True}]
+    expected    = [{"work_type": "WELDING", "work_subtype": "MIG",  "attributes": {}}]
+    result = _verify_work_readback(stored_rows, expected)
+    assert result["exact"] is False
+    assert result["count_match"] is True  # count is right, tuple differs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R4 — _verify_work_readback: active=False → exact=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r4_work_readback_inactive_fails():
+    """R4: stored row with active=False makes exact=False even if type/subtype match."""
+    stored_rows = [{"work_type": "GRINDING", "work_subtype": None, "attributes": {}, "active": False}]
+    expected    = [{"work_type": "GRINDING", "work_subtype": None, "attributes": {}}]
+    result = _verify_work_readback(stored_rows, expected)
+    assert result["exact"] is False
+    assert result["all_active"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R5 — _verify_material_readback: handling_mode_codes mismatch → exact=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r5_material_readback_handling_mismatch():
+    """R5: handling_mode_codes differs from expected → exact=False."""
+    stored_rows = [{
+        "material_master_key": "MK001",
+        "material_name":       "화학물질A",
+        "handling_mode_codes": ["STORE"],
+        "is_active":           True,
+    }]
+    expected = [{"material_master_key": "MK001", "handling_mode_codes": ["STORE", "TRANSPORT"]}]
+    result = _verify_material_readback(stored_rows, expected)
+    assert result["exact"] is False
+    pm = result["per_material"][0]
+    assert pm["found"] is True
+    assert pm["handling_exact"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R6 — _verify_material_readback: is_active=False → exact=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r6_material_readback_inactive_fails():
+    """R6: stored row with is_active=False → exact=False even if name/handling match."""
+    stored_rows = [{
+        "material_master_key": "MK002",
+        "material_name":       "물질B",
+        "handling_mode_codes": [],
+        "is_active":           False,
+    }]
+    expected = [{"material_master_key": "MK002", "handling_mode_codes": []}]
+    result = _verify_material_readback(stored_rows, expected)
+    assert result["exact"] is False
+    assert result["per_material"][0]["active_exact"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R7 — _verify_equipment_readback: Counter — 2 expected, 1 stored same code → exact=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r7_equipment_readback_counter_deficit():
+    """R7: expected has 2x code '040', stored has 1x — Counter catches deficit, set would not."""
+    stored_rows = [{"equipment_type_code": "040"}]
+    expected    = [{"equipment_type_code": "040"}, {"equipment_type_code": "040"}]
+    result = _verify_equipment_readback(stored_rows, expected)
+    assert result["exact"] is False
+    assert result["count_match"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R8 — _verify_equipment_readback: different codes, same count → exact=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r8_equipment_readback_wrong_code():
+    """R8: stored code '041' vs expected code '040' — Counter detects mismatch."""
+    stored_rows = [{"equipment_type_code": "041"}]
+    expected    = [{"equipment_type_code": "040"}]
+    result = _verify_equipment_readback(stored_rows, expected)
+    assert result["exact"] is False
+    assert result["count_match"] is True  # count same, code differs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R9 — _verify_process_readback: same process_id different source → exact=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r9_process_readback_source_mismatch():
+    """R9: same process_id but source=LEGACY vs expected source=DB → exact=False."""
+    stored_rows = [{"process_id": "P01", "source": "LEGACY"}]
+    expected    = [{"process_id": "P01", "source": "DB"}]
+    result = _verify_process_readback(stored_rows, expected)
+    assert result["exact"] is False
+    assert result["count_match"] is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R10 — verify_cst_c1_exact: factory_sector != CONSTRUCTION → exact=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r10_verify_cst_factory_sector_mismatch():
+    """R10: factory stored with sector=BUILDING (wrong) → 'factory_sector' in mismatches."""
+    case_data = {
+        "case_id": "CST-R10", "factory_name": "현장R10", "sector": "CONSTRUCTION",
+        "worker_count": 30,
+        "sector_fields": {"construction_type": "건축", "construction_amount": 30_000_000_000},
+    }
+    stored_site = {
+        "id": "sid-r10", "site_name": "현장R10", "site_type": "BUILDING",
+        "contract_amount": 300.0, "total_workers": 30, "factory_id": "fid-r10",
+    }
+    stored_factory = {
+        "id": "fid-r10", "name": "현장R10", "company_id": "cmp-001",
+        "sector": "BUILDING",       # wrong: should be CONSTRUCTION
+        "site_type": "CONSTRUCTION",
+        "employee_count": 30, "construction_type": "건축",
+        "construction_amount": 30_000_000_000.0,
+    }
+    result = verify_cst_c1_exact(stored_site, stored_factory, case_data, "cmp-001")
+    assert result["exact"] is False
+    assert "factory_sector" in result["mismatches"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R11 — verify_cst_c1_exact: site.factory_id != factory.id → exact=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r11_verify_cst_factory_id_link_mismatch():
+    """R11: stored_site.factory_id != stored_factory.id → 'factory_site_factory_id_link' in mismatches."""
+    case_data = {
+        "case_id": "CST-R11", "factory_name": "현장R11", "sector": "CONSTRUCTION",
+        "worker_count": 25,
+        "sector_fields": {"construction_type": "토목", "construction_amount": 20_000_000_000},
+    }
+    stored_site = {
+        "id": "sid-r11", "site_name": "현장R11", "site_type": "CIVIL",
+        "contract_amount": 200.0, "total_workers": 25,
+        "factory_id": "fid-OTHER",  # wrong link
+    }
+    stored_factory = {
+        "id": "fid-r11", "name": "현장R11", "company_id": "cmp-001",
+        "sector": "CONSTRUCTION", "site_type": "CONSTRUCTION",
+        "employee_count": 25, "construction_type": "토목",
+        "construction_amount": 20_000_000_000.0,
+    }
+    result = verify_cst_c1_exact(stored_site, stored_factory, case_data, "cmp-001")
+    assert result["exact"] is False
+    assert "factory_site_factory_id_link" in result["mismatches"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R12 — provision_cst_source returns direct_source_exact key
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r12_provision_cst_returns_direct_source_exact():
+    """R12: provision_cst_source result must include 'direct_source_exact' key."""
+    case_data = {
+        "case_id": "CST-R12", "factory_name": "현장R12", "sector": "CONSTRUCTION",
+        "worker_count": 20,
+        "sector_fields": {"construction_type": "건축", "construction_amount": 10_000_000_000},
+    }
+    result = provision_cst_source(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _site_insert_fn=lambda *_a: "sid-r12",
+        _factory_bridge_fn=lambda *_a: "fid-r12",
+        _site_read_fn=lambda *_a: {
+            "id": "sid-r12", "site_name": "현장R12", "site_type": "BUILDING",
+            "contract_amount": 100.0, "total_workers": 20, "factory_id": "fid-r12",
+        },
+        _factory_read_fn=lambda *_a: {
+            "id": "fid-r12", "name": "현장R12", "company_id": "cmp-001",
+            "sector": "CONSTRUCTION", "site_type": "CONSTRUCTION",
+            "employee_count": 20, "construction_type": "건축",
+            "construction_amount": 10_000_000_000.0,
+        },
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
+    )
+    assert "direct_source_exact" in result
+    assert "work_source_exact" in result
+    assert "material_source_exact" in result
+    assert "equipment_source_exact" in result
+    assert result["direct_source_exact"] is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R13 — provision_cst_source work_source_exact propagates in return dict
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r13_provision_cst_work_source_exact_in_result():
+    """R13: provision_cst_source returns work_source_exact from readback verify."""
+    case_data = {
+        "case_id": "CST-R13", "factory_name": "현장R13", "sector": "CONSTRUCTION",
+        "worker_count": 10,
+        "sector_fields": {"construction_type": "토목", "construction_amount": 5_000_000_000},
+    }
+    # work readback returns a row, but case has no expected works → count_match fails
+    result = provision_cst_source(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _site_insert_fn=lambda *_a: "sid-r13",
+        _factory_bridge_fn=lambda *_a: "fid-r13",
+        _site_read_fn=lambda *_a: None,      # site readback fails → direct_source_exact=False
+        _factory_read_fn=lambda *_a: None,
+        _work_read_fn=lambda *_a: [],        # no works in DB → matches empty expected
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
+    )
+    assert result["work_source_exact"] is True   # [] == [] → exact
+    assert result["direct_source_exact"] is False  # site readback failed
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R14 — provision_cst_source pipeline_c1_exact=False when work source not exact
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r14_provision_cst_pipeline_exact_false_when_work_not_exact():
+    """R14: pipeline_c1_exact=False when direct_source_exact=True but work_source_exact=False."""
+    case_data = {
+        "case_id": "CST-R14", "factory_name": "현장R14", "sector": "CONSTRUCTION",
+        "worker_count": 15,
+        "sector_fields": {"construction_type": "건축", "construction_amount": 8_000_000_000},
+        "works": [{"work_type": "EXCAVATION", "work_subtype": None, "attributes": {}}],
+    }
+    result = provision_cst_source(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _site_insert_fn=lambda *_a: "sid-r14",
+        _factory_bridge_fn=lambda *_a: "fid-r14",
+        _site_read_fn=lambda *_a: {
+            "id": "sid-r14", "site_name": "현장R14", "site_type": "BUILDING",
+            "contract_amount": 80.0, "total_workers": 15, "factory_id": "fid-r14",
+        },
+        _factory_read_fn=lambda *_a: {
+            "id": "fid-r14", "name": "현장R14", "company_id": "cmp-001",
+            "sector": "CONSTRUCTION", "site_type": "CONSTRUCTION",
+            "employee_count": 15, "construction_type": "건축",
+            "construction_amount": 8_000_000_000.0,
+        },
+        _work_read_fn=lambda *_a: [],      # expected has 1 work, readback returns 0 → not exact
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
+    )
+    assert result["direct_source_exact"] is True
+    assert result["work_source_exact"] is False
+    assert result["pipeline_c1_exact"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R15 — build_manifest_c1_entry uses direct_source_exact key, not pipeline_c1_exact
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r15_manifest_entry_uses_direct_source_exact_key():
+    """R15: build_manifest_c1_entry reads 'direct_source_exact', not 'pipeline_c1_exact'."""
+    case_data = {"case_id": "MFG-R15", "sector": "MANUFACTURING", "factory_name": "R15공장"}
+
+    # provision_result has direct_source_exact=False but pipeline_c1_exact=True
+    result = build_manifest_c1_entry(case_data, {
+        "direct_source_exact":    False,
+        "work_source_exact":      True,
+        "material_source_exact":  True,
+        "equipment_source_exact": True,
+        "pipeline_c1_exact":      True,   # misleading legacy field — should be ignored
+        "factory_id": "fid-r15", "site_id": None,
+    })
+    # direct_source_exact=False → pipeline_c1_exact in manifest must be False
+    assert result["c1"]["direct_source_exact"] is False
+    assert result["pipeline_c1_exact"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R16 — build_manifest_c1_entry does not accept external exact kwargs
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r16_manifest_entry_no_external_kwargs():
+    """R16: build_manifest_c1_entry signature takes only case_data + provision_result."""
+    import inspect
+    sig = inspect.signature(build_manifest_c1_entry)
+    params = list(sig.parameters.keys())
+    assert params == ["case_data", "provision_result"], \
+        f"unexpected params: {params}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R17 — _default_equipment_insert calls validate_equipment_source_row before INSERT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r17_default_equipment_insert_validates_before_db():
+    """R17: _default_equipment_insert raises EquipmentSourceValidationError on invalid code, not DB error."""
+    payload = {
+        "factory_id":          "fid-r17",
+        "asset_name":          "불량설비",
+        "equipment_type_code": "INVALID_CODE",
+        "quantity":            1,
+        "is_operating":        True,
+    }
+    with pytest.raises(EquipmentSourceValidationError):
+        _default_equipment_insert(MagicMock(), "fid-r17", payload)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R18 — verify_cst_c1_exact: factory_company_id mismatch → exact=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r18_verify_cst_factory_company_id_mismatch():
+    """R18: factory.company_id != provided company_id → 'factory_company_id' in mismatches."""
+    case_data = {
+        "case_id": "CST-R18", "factory_name": "현장R18", "sector": "CONSTRUCTION",
+        "worker_count": 40,
+        "sector_fields": {"construction_type": "공통", "construction_amount": 25_000_000_000},
+    }
+    stored_site = {
+        "id": "sid-r18", "site_name": "현장R18", "site_type": "SPECIALTY",
+        "contract_amount": 250.0, "total_workers": 40, "factory_id": "fid-r18",
+    }
+    stored_factory = {
+        "id": "fid-r18", "name": "현장R18",
+        "company_id": "cmp-WRONG",  # wrong company
+        "sector": "CONSTRUCTION", "site_type": "CONSTRUCTION",
+        "employee_count": 40, "construction_type": "공통",
+        "construction_amount": 25_000_000_000.0,
+    }
+    result = verify_cst_c1_exact(stored_site, stored_factory, case_data, "cmp-001")
+    assert result["exact"] is False
+    assert "factory_company_id" in result["mismatches"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R19 — provision_cst_source work readback seam is called after factory bridge
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_r19_provision_cst_work_readback_called():
+    """R19: provision_cst_source calls _work_read_fn after factory bridge (not before)."""
+    call_order = []
+
+    def mock_bridge(supabase, site_row, now_iso_fn):
+        call_order.append("bridge")
+        return "fid-r19"
+
+    def mock_work_read(supabase, factory_id):
+        call_order.append("work_read")
+        return []
+
+    case_data = {
+        "case_id": "CST-R19", "factory_name": "현장R19", "sector": "CONSTRUCTION",
+        "worker_count": 5,
+        "sector_fields": {"construction_type": "건축", "construction_amount": 1_000_000_000},
+    }
+    provision_cst_source(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _site_insert_fn=lambda *_a: "sid-r19",
+        _factory_bridge_fn=mock_bridge,
+        _work_read_fn=mock_work_read,
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
+    )
+    assert "bridge" in call_order
+    assert "work_read" in call_order
+    assert call_order.index("bridge") < call_order.index("work_read")
