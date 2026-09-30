@@ -1,9 +1,11 @@
-# routers/admin_commercial.py — WO-ADM-COMM-01-BE-READ-001
+# routers/admin_commercial.py — WO-ADM-COMM-01-BE-READ-001 + WO-ADM-CONTRACT-01
 """Admin Commercial Console — READ ONLY.
 
 /admin/commercial/versions      GET  — Commercial Version history
 /admin/commercial/site-scopes   GET  — Site Scope per CV
 /admin/commercial/entitlement-health  GET  — Commercial health per company
+/admin/commercial/payments      GET  — payments chain (public.payments, FK: quote_id/contract_id)
+/admin/commercial/contracts     GET  — contracts chain (public.contracts, FK: contract_no)
 
 인증: get_current_user. 권한: _require_admin (ALL scope 전용).
 DB write = 0. pricing engine 호출 = 0.
@@ -62,4 +64,38 @@ def get_entitlement_health(
     supabase = get_supabase()
     _require_admin(current, supabase)
     data = svc.get_entitlement_health(supabase, company_id)
+    return {"status": "success", "data": data}
+
+
+@router.get("/payments")
+def list_payments_chain(
+    company_id: str = Query(..., description="company_id required (cross-company guard)"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
+):
+    """public.payments 직접 조회. v_payments_list 사용 안 함. DB write = 0.
+
+    quote_id / contract_id FK 포함. company_id 없이는 422.
+    """
+    supabase = get_supabase()
+    _require_admin(current, supabase)
+    data = svc.list_payments_admin(supabase, company_id, page, page_size)
+    return {"status": "success", "data": data}
+
+
+@router.get("/contracts")
+def list_contracts_chain(
+    company_id: str = Query(..., description="company_id required (cross-company guard)"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
+):
+    """public.contracts 직접 조회. DB write = 0.
+
+    contract_no FK 포함. company_id 없이는 422.
+    """
+    supabase = get_supabase()
+    _require_admin(current, supabase)
+    data = svc.list_contracts_admin(supabase, company_id, page, page_size)
     return {"status": "success", "data": data}

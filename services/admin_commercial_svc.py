@@ -1,4 +1,4 @@
-"""Admin Commercial Read Service — WO-ADM-COMM-01-BE-READ-001.
+"""Admin Commercial Read Service — WO-ADM-COMM-01-BE-READ-001 + WO-ADM-CONTRACT-01.
 
 읽기 전용. DB write = 0. pricing engine 호출 = 0.
 
@@ -13,6 +13,9 @@ API-3: get_entitlement_health    — canonical resolve + future scheduled detect
   - Site Scope 생성/수정
   - Renewal 실행
   - _fetch_all_cvs (underscore private) import 금지
+
+API-4: list_payments_admin  — public.payments (company_id required, FK: quote_id/contract_id)
+API-5: list_contracts_admin — public.contracts (company_id required, FK: contract_no)
 """
 from __future__ import annotations
 
@@ -172,4 +175,85 @@ def get_entitlement_health(
         "current_cv_no": current_cv_no,
         "product_tier": product_tier,
         "future_scheduled_cv_ids": future_ids,
+    }
+
+
+# ── API-4: Payments (chain read) ──────────────────────────────────────────────
+
+_PAY_COLS = (
+    "id, company_id, quote_id, contract_id, "
+    "plan_code, product_type, payment_type, "
+    "total_amount, supply_amount, vat_amount, "
+    "status_code, service_status, "
+    "pg_method, period_months, paid_at, created_at"
+)
+
+
+def list_payments_admin(
+    supabase,
+    company_id: str,
+    page: int = 1,
+    page_size: int = 20,
+) -> Dict[str, Any]:
+    """public.payments 직접 조회. v_payments_list 사용 안 함. DB write = 0.
+
+    company_id 필수 (cross-company guard). quote_id / contract_id FK 포함.
+    """
+    off = (page - 1) * page_size
+    res = (
+        supabase.table("payments")
+        .select(_PAY_COLS, count="exact")
+        .eq("company_id", company_id)
+        .order("created_at", desc=True)
+        .range(off, off + page_size - 1)
+        .execute()
+    )
+    items = res.data or []
+    total = res.count if res.count is not None else len(items)
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size if total else 0,
+    }
+
+
+# ── API-5: Contracts (chain read) ─────────────────────────────────────────────
+
+_CONTRACT_ADM_COLS = (
+    "id, contract_no, company_id, "
+    "service_type, status_code, "
+    "start_date, end_date, "
+    "total_amount, created_at"
+)
+
+
+def list_contracts_admin(
+    supabase,
+    company_id: str,
+    page: int = 1,
+    page_size: int = 20,
+) -> Dict[str, Any]:
+    """public.contracts 직접 조회. DB write = 0.
+
+    company_id 필수 (cross-company guard). contract_no FK 포함.
+    """
+    off = (page - 1) * page_size
+    res = (
+        supabase.table("contracts")
+        .select(_CONTRACT_ADM_COLS, count="exact")
+        .eq("company_id", company_id)
+        .order("created_at", desc=True)
+        .range(off, off + page_size - 1)
+        .execute()
+    )
+    items = res.data or []
+    total = res.count if res.count is not None else len(items)
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size if total else 0,
     }
