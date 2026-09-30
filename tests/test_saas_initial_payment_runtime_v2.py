@@ -826,3 +826,239 @@ class TestRaceRecovery:
 
         assert exc_info.value.code == "V2_PAYMENT_NOT_PAID"
         assert call_count[0] == 1  # only 1 call, no retry
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# P01-P12: WO-BRIDGE-PAY-01-PATCH-001 — Atomic Authority + Failure Notification Guard
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestAtomicAuthority:
+    """P01-P05: direct contracts.update guard in process_card_success."""
+
+    def _make_mock_sb(self):
+        contract_table = MagicMock()
+        payments_table = MagicMock()
+        payments_table.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+
+        mock_sb = MagicMock()
+
+        def _table(name):
+            if name == "contracts":
+                return contract_table
+            if name == "payments":
+                return payments_table
+            return MagicMock()
+
+        mock_sb.table.side_effect = _table
+        return mock_sb, contract_table
+
+    def _run_card_success(self, payment, mock_sb):
+        with patch("services.payment_svc.get_supabase", return_value=mock_sb), \
+             patch("services.payment_post_process.on_payment_success_sync"), \
+             patch("services.tax_invoice_request_svc.canonical_payment_instrument", return_value="CARD"):
+            from services.payment_svc import process_card_success
+            process_card_success(
+                payment,
+                {"applNum": "TEST", "tid": "tid123"},
+                "card",
+                order_id="TEST-OID",
+                goodname="TAI Safe",
+                price="1980000",
+                with_redirect_qs=False,
+            )
+
+    def test_P01_saas_card_initial_no_direct_contracts_write(self):
+        """P01: product_type=SAAS, payment_type=CARD, contract_id present → contracts.update = 0."""
+        pay = {
+            "id": PAYMENT_ID, "product_type": "SAAS", "payment_type": "CARD",
+            "contract_id": str(CONTRACT_ID), "period_months": 12, "plan_code": None,
+        }
+        mock_sb, contract_table = self._make_mock_sb()
+        self._run_card_success(pay, mock_sb)
+        contract_table.update.assert_not_called()
+
+    def test_P02_saas_replay_existing_contract_no_direct_write(self):
+        """P02: product_type=SAAS, payment_type=INITIAL, contract_id present → contracts.update = 0."""
+        pay = {
+            "id": PAYMENT_ID, "product_type": "SAAS", "payment_type": "INITIAL",
+            "contract_id": str(CONTRACT_ID), "period_months": 12, "plan_code": None,
+        }
+        mock_sb, contract_table = self._make_mock_sb()
+        self._run_card_success(pay, mock_sb)
+        contract_table.update.assert_not_called()
+
+    def test_P03_saas_renewal_no_direct_write(self):
+        """P03: product_type=SAAS, payment_type=RENEWAL → contracts.update = 0."""
+        pay = {
+            "id": PAYMENT_ID, "product_type": "SAAS", "payment_type": "RENEWAL",
+            "contract_id": str(CONTRACT_ID), "period_months": 12, "plan_code": None,
+        }
+        mock_sb, contract_table = self._make_mock_sb()
+        self._run_card_success(pay, mock_sb)
+        contract_table.update.assert_not_called()
+
+    def test_P04_saas_upgrade_no_direct_write(self):
+        """P04: product_type=SAAS, payment_type=UPGRADE → contracts.update = 0."""
+        pay = {
+            "id": PAYMENT_ID, "product_type": "SAAS", "payment_type": "UPGRADE",
+            "contract_id": str(CONTRACT_ID), "period_months": 12, "plan_code": None,
+        }
+        mock_sb, contract_table = self._make_mock_sb()
+        self._run_card_success(pay, mock_sb)
+        contract_table.update.assert_not_called()
+
+    def test_P05_legacy_saas_industry_direct_write_regression(self):
+        """P05: product_type=SAAS_INDUSTRY (legacy), contract_id → contracts.update IS called."""
+        pay = {
+            "id": PAYMENT_ID, "product_type": "SAAS_INDUSTRY", "payment_type": "CARD",
+            "contract_id": str(CONTRACT_ID), "period_months": 12, "plan_code": "INDUSTRY_PRO",
+        }
+        mock_sb, contract_table = self._make_mock_sb()
+        self._run_card_success(pay, mock_sb)
+        contract_table.update.assert_called_once()
+
+
+class TestFailureNotificationGuard:
+    """P06-P07: Atomic/adapter failure → send_payment_notification = 0."""
+
+    def _make_pay_row(self, product_type="SAAS", payment_type="INITIAL", **extra):
+        base = {
+            "id": PAYMENT_ID, "product_type": product_type, "payment_type": payment_type,
+            "status_code": "SUCCESS", "company_id": COMPANY_ID, "quote_id": QUOTE_ID,
+            "supply_amount": 1800000, "vat_amount": 180000, "total_amount": 1980000,
+            "period_months": 12, "paid_at": "2026-09-28T10:00:00+09:00",
+            "user_id": USER_ID, "plan_code": None, "contract_id": None,
+        }
+        base.update(extra)
+        return base
+
+    def test_P06_atomic_failure_no_notification(self):
+        """P06: atomic failure raises SaasInitialPaymentRuntimeV2Error → send_payment_notification = 0."""
+        pay = self._make_pay_row()
+
+        with patch("services.payment_post_process.get_supabase") as mock_sb_factory, \
+             patch("services.saas_initial_payment_runtime_v2.apply_saas_v2_initial_payment_runtime",
+                   side_effect=SaasInitialPaymentRuntimeV2Error("V2_RPC_ERROR", "rpc failed")), \
+             patch("services.payment_post_process.send_payment_notification") as mock_notify:
+            mock_sb = MagicMock()
+            mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[pay])
+            mock_sb_factory.return_value = mock_sb
+            from services.payment_post_process import on_payment_success_sync
+            on_payment_success_sync(PAYMENT_ID)
+
+        mock_notify.assert_not_called()
+
+    def test_P06b_atomic_success_sends_notification(self):
+        """P06b: atomic success → send_payment_notification IS called once."""
+        pay = self._make_pay_row()
+
+        with patch("services.payment_post_process.get_supabase") as mock_sb_factory, \
+             patch("services.saas_initial_payment_runtime_v2.apply_saas_v2_initial_payment_runtime",
+                   return_value={"status": "APPLIED"}), \
+             patch("services.payment_post_process.send_payment_notification") as mock_notify:
+            mock_sb = MagicMock()
+            mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[pay])
+            mock_sb_factory.return_value = mock_sb
+            from services.payment_post_process import on_payment_success_sync
+            on_payment_success_sync(PAYMENT_ID)
+
+        mock_notify.assert_called_once()
+
+    def test_P07_adapter_error_wrapped_raises_runtime_error(self):
+        """P07: SaasPaymentSuccessV2AdapterError from _build_plan → SaasInitialPaymentRuntimeV2Error."""
+        from services.saas_payment_success_v2_adapter import SaasPaymentSuccessV2AdapterError
+
+        pay = _valid_pay()
+        quote = _valid_quote()
+        adapter_error = SaasPaymentSuccessV2AdapterError("AMOUNT_SNAPSHOT_MISMATCH", "mismatch")
+
+        with patch("services.saas_initial_payment_runtime_v2._load_quote", return_value=quote), \
+             patch("services.saas_initial_payment_runtime_v2._build_plan", side_effect=adapter_error), \
+             patch("services.saas_initial_payment_runtime_v2.business_today", return_value=date(2026, 9, 30)):
+            with pytest.raises(SaasInitialPaymentRuntimeV2Error) as exc_info:
+                apply_saas_v2_initial_payment_runtime(MagicMock(), pay)
+
+        assert exc_info.value.code == "AMOUNT_SNAPSHOT_MISMATCH"
+
+    def test_P07b_adapter_error_no_notification(self):
+        """P07b: adapter error propagated as V2Error → notification suppressed."""
+        pay = self._make_pay_row()
+
+        with patch("services.payment_post_process.get_supabase") as mock_sb_factory, \
+             patch("services.saas_initial_payment_runtime_v2.apply_saas_v2_initial_payment_runtime",
+                   side_effect=SaasInitialPaymentRuntimeV2Error("AMOUNT_SNAPSHOT_MISMATCH", "mismatch")), \
+             patch("services.payment_post_process.send_payment_notification") as mock_notify:
+            mock_sb = MagicMock()
+            mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[pay])
+            mock_sb_factory.return_value = mock_sb
+            from services.payment_post_process import on_payment_success_sync
+            on_payment_success_sync(PAYMENT_ID)
+
+        mock_notify.assert_not_called()
+
+
+class TestDefenseInDepth:
+    """P08-P09: Defense-in-depth guards in apply_saas_v2_initial_payment_runtime."""
+
+    def test_P08_renewal_blocked_by_initial_runtime(self):
+        """P08: payment_type=RENEWAL → V2_INIT_ROUTE_INVALID, atomic call = 0."""
+        pay = _valid_pay()
+        pay["payment_type"] = "RENEWAL"
+        sb = FakeSupabase()
+
+        with pytest.raises(SaasInitialPaymentRuntimeV2Error) as exc_info:
+            apply_saas_v2_initial_payment_runtime(sb, pay)
+
+        assert exc_info.value.code == "V2_INIT_ROUTE_INVALID"
+        assert len(sb.rpc_calls) == 0
+
+    def test_P08b_upgrade_blocked_by_initial_runtime(self):
+        """P08b: payment_type=UPGRADE → V2_INIT_ROUTE_INVALID, atomic call = 0."""
+        pay = _valid_pay()
+        pay["payment_type"] = "UPGRADE"
+        sb = FakeSupabase()
+
+        with pytest.raises(SaasInitialPaymentRuntimeV2Error) as exc_info:
+            apply_saas_v2_initial_payment_runtime(sb, pay)
+
+        assert exc_info.value.code == "V2_INIT_ROUTE_INVALID"
+        assert len(sb.rpc_calls) == 0
+
+    def test_P09_malformed_contract_id_fails_closed(self):
+        """P09: malformed stored contract_id → V2_INIT_CONTRACT_ID_INVALID, atomic call = 0."""
+        pay = _valid_pay()
+        pay["contract_id"] = "not-a-valid-uuid"
+        sb = FakeSupabase()
+
+        with pytest.raises(SaasInitialPaymentRuntimeV2Error) as exc_info:
+            apply_saas_v2_initial_payment_runtime(sb, pay)
+
+        assert exc_info.value.code == "V2_INIT_CONTRACT_ID_INVALID"
+        assert len(sb.rpc_calls) == 0
+
+
+class TestPrepareEndpointGuards:
+    """P10-P12: prepare endpoint schema/authority inspection."""
+
+    def test_P10_foreign_quote_requires_ownership_check(self):
+        """P10: prepare_v2_payment uses _require_member_company (404 for unowned quote)."""
+        import inspect
+        import routers.member_quotes as mq
+        src = inspect.getsource(mq.prepare_v2_payment)
+        assert "_require_member_company" in src
+
+    def test_P11_user_id_and_company_id_from_server_only(self):
+        """P11: user_id comes from current_user; company_id from _require_member_company."""
+        import inspect
+        import routers.member_quotes as mq
+        src = inspect.getsource(mq.prepare_v2_payment)
+        assert "current_user" in src
+        assert "_require_member_company" in src
+
+    def test_P12_forbidden_fields_absent_from_prepare_body(self):
+        """P12: amount/company_id/user_id/product_type/plan_code/period_months absent from schema."""
+        from routers.member_quotes import SaasV2PaymentPrepareBody
+        forbidden = {"amount", "company_id", "user_id", "product_type", "plan_code", "period_months"}
+        present = set(SaasV2PaymentPrepareBody.model_fields.keys())
+        overlap = forbidden & present
+        assert not overlap, f"Forbidden fields found in schema: {overlap}"

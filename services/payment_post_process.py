@@ -490,7 +490,7 @@ def on_payment_success_sync(payment_id: str) -> None:
         return
 
     # INITIAL V2: product_type=SAAS (initial — not RENEWAL, not UPGRADE already handled above)
-    # Fail-closed: error → no legacy fallback
+    # Fail-closed: error → no legacy fallback, no notification
     if pay.get("product_type") == "SAAS":
         from services.saas_initial_payment_runtime_v2 import (
             SaasInitialPaymentRuntimeV2Error,
@@ -502,12 +502,12 @@ def on_payment_success_sync(payment_id: str) -> None:
                 "[INITIAL_V2_RUNTIME] payment=%s status=%s",
                 payment_id, (result or {}).get("status"),
             )
+            send_payment_notification(pay, plan_code, plan_info)
         except SaasInitialPaymentRuntimeV2Error as exc:
             logger.error(
-                "[INITIAL_V2_RUNTIME] payment=%s error=%s message=%s",
+                "[INITIAL_V2_RUNTIME] payment=%s error=%s message=%s — notification suppressed",
                 payment_id, exc.code, exc.message,
             )
-        send_payment_notification(pay, plan_code, plan_info)
         return
 
     existing_contract_id = pay.get("contract_id")

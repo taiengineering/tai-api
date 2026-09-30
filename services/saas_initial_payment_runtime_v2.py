@@ -85,18 +85,33 @@ def apply_saas_v2_initial_payment_runtime(sb, pay: dict) -> dict:
             f"product_type=SAAS 초기 결제는 plan_code=None 필수: {pay.get('plan_code')!r}",
         )
 
-    quote = _load_quote(sb, pay)
+    # Defense-in-depth: RENEWAL/UPGRADE는 전용 writer 경로를 사용한다.
+    _raw_pt = (pay.get("payment_type") or "").upper()
+    if _raw_pt in {"RENEWAL", "UPGRADE"}:
+        raise SaasInitialPaymentRuntimeV2Error(
+            "V2_INIT_ROUTE_INVALID",
+            f"initial runtime은 RENEWAL/UPGRADE payment_type를 허용하지 않습니다: {_raw_pt!r}",
+        )
 
-    # Replay: use stored contract_id as override
+    # Replay: stored contract_id → same UUID override. Malformed UUID → fail-closed (no DB call).
     existing_cid: Optional[uuid.UUID] = None
     stored = pay.get("contract_id")
     if stored:
         try:
             existing_cid = uuid.UUID(str(stored))
         except (ValueError, AttributeError):
-            logger.warning("[V2_INIT] payment=%s invalid stored contract_id=%r", payment_id, stored)
+            raise SaasInitialPaymentRuntimeV2Error(
+                "V2_INIT_CONTRACT_ID_INVALID",
+                f"payment.contract_id가 유효한 UUID가 아닙니다: {stored!r}",
+            )
 
-    plan = _build_plan(sb, pay, quote, contract_id_override=existing_cid)
+    quote = _load_quote(sb, pay)
+
+    from services.saas_payment_success_v2_adapter import SaasPaymentSuccessV2AdapterError
+    try:
+        plan = _build_plan(sb, pay, quote, contract_id_override=existing_cid)
+    except SaasPaymentSuccessV2AdapterError as exc:
+        raise SaasInitialPaymentRuntimeV2Error(exc.code, exc.message) from exc
 
     # First atomic call
     try:
@@ -128,7 +143,10 @@ def apply_saas_v2_initial_payment_runtime(sb, pay: dict) -> dict:
             raise SaasInitialPaymentRuntimeV2Error(exc.code, exc.message) from exc
 
         logger.info("[V2_INIT] payment=%s race-recovery peer_contract=%s rebuild+retry", payment_id, peer_cid)
-        recovery_plan = _build_plan(sb, pay, quote, contract_id_override=peer_cid)
+        try:
+            recovery_plan = _build_plan(sb, pay, quote, contract_id_override=peer_cid)
+        except SaasPaymentSuccessV2AdapterError as exc2:
+            raise SaasInitialPaymentRuntimeV2Error(exc2.code, exc2.message) from exc2
 
         # Second (final) atomic call
         try:
