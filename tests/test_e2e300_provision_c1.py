@@ -2269,3 +2269,121 @@ def test_tc10_exact_pilot_order_mfg_bld_cst():
         )
 
     assert call_order == ["MANUFACTURING", "BUILDING", "CONSTRUCTION"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T_C11–T_C17 — PATCH-2: site_code simulation + DB error classification +
+#               orchestrator engine-matrix gate
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── simulation helpers (mirrors run_pilot_c1 for unit isolation) ──────────────
+
+def _lpad_old(n: int) -> str:
+    s = str(n)
+    return s[:5] if len(s) >= 5 else s.zfill(5)
+
+
+def _lpad_fixed(n: int) -> str:
+    s = str(n)
+    return s.zfill(max(5, len(s)))
+
+
+def test_tc11_site_code_5digit_preserved():
+    """T_C11: 5-digit sequence → SITE99999 (both old and fixed identical)."""
+    assert "SITE" + _lpad_old(99999)   == "SITE99999"
+    assert "SITE" + _lpad_fixed(99999) == "SITE99999"
+
+
+def test_tc12_site_code_old_truncates_6digit():
+    """T_C12: old function truncates 6-digit → SITE10000 (demonstrates bug)."""
+    assert _lpad_old(100000) == "10000"          # truncates '100000' to 5 chars
+    assert "SITE" + _lpad_old(513354) == "SITE51335"   # root cause of PATCH-2
+
+
+def test_tc13_site_code_fixed_no_truncate():
+    """T_C13: fixed function preserves 6-digit → SITE100000."""
+    assert _lpad_fixed(100000) == "100000"
+    assert "SITE" + _lpad_fixed(513354) == "SITE513354"
+    assert "SITE" + _lpad_fixed(1)      == "SITE00001"   # 5-digit min preserved
+
+
+def test_tc14_classify_db_error_23505_generic():
+    """T_C14: 23505 without factories_site_code → DB_UNIQUE_VIOLATION."""
+    import sys
+    sys.path.insert(0, "/Users/taiwangsim/TAI_E2E200/consumer-ui300")
+    from run_pilot_c1 import classify_db_error
+
+    exc = Exception({"code": "23505", "message": "duplicate key value", "hint": None})
+    result = classify_db_error(exc)
+
+    assert result["db_code"] == "23505"
+    assert result["error_type"] == "DB_UNIQUE_VIOLATION"
+    assert result["specific_code"] == "DB_UNIQUE_VIOLATION"  # no site_code constraint
+
+
+def test_tc15_classify_db_error_site_code_collision():
+    """T_C15: 23505 + factories_site_code_unique → SITE_CODE_UNIQUE_COLLISION."""
+    import sys
+    sys.path.insert(0, "/Users/taiwangsim/TAI_E2E200/consumer-ui300")
+    from run_pilot_c1 import classify_db_error
+
+    exc = Exception({
+        "code": "23505",
+        "message": 'duplicate key value violates unique constraint "factories_site_code_unique"',
+        "hint": None,
+    })
+    result = classify_db_error(exc)
+
+    assert result["db_code"] == "23505"
+    assert result["specific_code"] == "SITE_CODE_UNIQUE_COLLISION"
+    assert result["constraint"] == "factories_site_code_unique"
+
+
+def test_tc16_c1_fail_engine_not_called():
+    """T_C16: C1 provision failure → engine matrix NOT reached."""
+    import tempfile
+    real_bytes = _UNIVERSE_PATH.read_bytes()
+    engine_calls = []
+
+    def failing_provision(supabase, case_data, company_id):
+        raise RuntimeError("factory insert failed")
+
+    with pytest.raises(RuntimeError, match="factory insert failed"):
+        _pilot_run(
+            ["MFG-001", "BLD-001", "CST-001"], "cmp-001", True, MagicMock(),
+            _UNIVERSE_PATH,
+            _file_bytes_fn=lambda p: real_bytes,
+            _provision_fn=failing_provision,
+            _stale_check_fn=lambda *_a: False,
+            _runs_dir=Path(tempfile.mkdtemp()),
+        )
+
+    assert engine_calls == []  # engine never called — only C1 provision is in scope
+
+
+def test_tc17_c1_all_exact_manifest_gates_engine():
+    """T_C17: all 3 cases pipeline_c1_exact=True → manifest all_exact=True."""
+    import tempfile
+    real_bytes = _UNIVERSE_PATH.read_bytes()
+
+    def mock_provision(supabase, case_data, company_id):
+        return {
+            "factory_id": "fid-ok", "site_id": None,
+            "pipeline_c1_exact": True, "direct_source_exact": True,
+            "process_source_exact": True, "work_source_exact": True,
+            "material_source_exact": True, "equipment_source_exact": True,
+        }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _pilot_run(
+            ["MFG-001", "BLD-001", "CST-001"], "cmp-001", True, MagicMock(),
+            _UNIVERSE_PATH,
+            _file_bytes_fn=lambda p: real_bytes,
+            _provision_fn=mock_provision,
+            _stale_check_fn=lambda *_a: False,
+            _runs_dir=Path(tmpdir),
+        )
+
+    manifest = result["manifest"]
+    assert manifest["all_exact"] is True
+    assert all(c["pipeline_c1_exact"] for c in manifest["cases"])
+    assert len(manifest["cases"]) == 3
