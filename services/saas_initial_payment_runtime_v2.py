@@ -60,6 +60,25 @@ def _load_quote(sb, pay: dict) -> dict:
     return quote
 
 
+def _notification_meta_from_quote(quote: dict) -> dict:
+    """Frozen Quote item에서 알림용 display_name, product_tier를 추출한다.
+
+    새 DB read / repricing 없음 — 이미 검증된 quote.items[0] 재사용.
+    """
+    items = quote.get("items") or []
+    if not items:
+        return {}
+    item = items[0]
+    meta: dict = {}
+    dn = item.get("display_name")
+    pt = item.get("product_tier")
+    if dn:
+        meta["display_name"] = dn
+    if pt:
+        meta["product_tier"] = pt
+    return meta
+
+
 def _build_plan(sb, pay: dict, quote: dict, contract_id_override: Optional[uuid.UUID]):
     start: date = business_today()
     return build_saas_v2_payment_success_apply_plan(
@@ -118,7 +137,7 @@ def apply_saas_v2_initial_payment_runtime(sb, pay: dict) -> dict:
         result = apply_saas_v2_contract_plan_atomic(sb, plan)
         logger.info("[V2_INIT] payment=%s contract=%s atomic_calls=1 status=%s",
                     payment_id, plan.contract_id, result.get("status"))
-        return result
+        return {**result, **_notification_meta_from_quote(quote)}
     except SaasV2AtomicApplyError as exc:
         if exc.code != _RACE_RECOVERY_CODE:
             logger.error("[V2_INIT] payment=%s atomic_error=%s (no retry)", payment_id, exc.code)
@@ -153,7 +172,7 @@ def apply_saas_v2_initial_payment_runtime(sb, pay: dict) -> dict:
             result = apply_saas_v2_contract_plan_atomic(sb, recovery_plan)
             logger.info("[V2_INIT] payment=%s contract=%s atomic_calls=2 status=%s",
                         payment_id, recovery_plan.contract_id, result.get("status"))
-            return result
+            return {**result, **_notification_meta_from_quote(quote)}
         except SaasV2AtomicApplyError as exc2:
             logger.error("[V2_INIT] payment=%s recovery-atomic-error=%s (no third retry)", payment_id, exc2.code)
             raise SaasInitialPaymentRuntimeV2Error(exc2.code, exc2.message) from exc2

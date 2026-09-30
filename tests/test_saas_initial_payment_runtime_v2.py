@@ -1062,3 +1062,216 @@ class TestPrepareEndpointGuards:
         present = set(SaasV2PaymentPrepareBody.model_fields.keys())
         overlap = forbidden & present
         assert not overlap, f"Forbidden fields found in schema: {overlap}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Q01-Q12: WO-BRIDGE-PAY-01-PATCH-002 — V2 Customer Label Authority
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestV2LabelAuthority:
+    """Q01-Q12: INDUSTRY_PRO leakage removal + Frozen Quote label authority."""
+
+    def _make_pay_row(self, product_type="SAAS", payment_type="INITIAL", **extra):
+        base = {
+            "id": PAYMENT_ID, "product_type": product_type, "payment_type": payment_type,
+            "status_code": "SUCCESS", "company_id": COMPANY_ID, "quote_id": QUOTE_ID,
+            "supply_amount": 1800000, "vat_amount": 180000, "total_amount": 1980000,
+            "period_months": 12, "paid_at": "2026-09-28T10:00:00+09:00",
+            "user_id": USER_ID, "plan_code": None, "contract_id": None,
+        }
+        base.update(extra)
+        return base
+
+    def _run_post_process(self, pay, v2_result, mock_notify, mock_fire):
+        with patch("services.payment_post_process.get_supabase") as mock_sb_factory, \
+             patch("services.saas_initial_payment_runtime_v2.apply_saas_v2_initial_payment_runtime",
+                   return_value=v2_result), \
+             patch("services.payment_post_process.send_payment_notification", mock_notify), \
+             patch("services.payment_post_process._fire_automation", mock_fire):
+            mock_sb = MagicMock()
+            mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[pay])
+            mock_sb_factory.return_value = mock_sb
+            from services.payment_post_process import on_payment_success_sync
+            on_payment_success_sync(PAYMENT_ID)
+
+    def test_Q01_v2_automation_plan_code_not_industry_pro(self):
+        """Q01: product_type=SAAS → automation payload plan_code != INDUSTRY_PRO."""
+        pay = self._make_pay_row(product_type="SAAS", plan_code=None)
+        fire_calls = []
+        notify = MagicMock()
+
+        with patch("services.payment_post_process.get_supabase") as mock_sb_factory, \
+             patch("services.saas_initial_payment_runtime_v2.apply_saas_v2_initial_payment_runtime",
+                   return_value={"status": "APPLIED", "display_name": "TAI Safe 현장참여형"}), \
+             patch("services.payment_post_process.send_payment_notification", notify), \
+             patch("services.payment_post_process._fire_automation",
+                   side_effect=lambda *a, **kw: fire_calls.append(a)):
+            mock_sb = MagicMock()
+            mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[pay])
+            mock_sb_factory.return_value = mock_sb
+            from services.payment_post_process import on_payment_success_sync
+            on_payment_success_sync(PAYMENT_ID)
+
+        assert fire_calls, "automation must fire"
+        payload = fire_calls[0][1]  # second positional arg to _fire_automation
+        assert payload.get("plan_code") != "INDUSTRY_PRO"
+
+    def test_Q02_v2_automation_plan_code_is_none(self):
+        """Q02: product_type=SAAS, pay.plan_code=None → automation plan_code is None."""
+        pay = self._make_pay_row(product_type="SAAS", plan_code=None)
+        fire_calls = []
+        notify = MagicMock()
+
+        with patch("services.payment_post_process.get_supabase") as mock_sb_factory, \
+             patch("services.saas_initial_payment_runtime_v2.apply_saas_v2_initial_payment_runtime",
+                   return_value={"status": "APPLIED"}), \
+             patch("services.payment_post_process.send_payment_notification", notify), \
+             patch("services.payment_post_process._fire_automation",
+                   side_effect=lambda *a, **kw: fire_calls.append(a)):
+            mock_sb = MagicMock()
+            mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[pay])
+            mock_sb_factory.return_value = mock_sb
+            from services.payment_post_process import on_payment_success_sync
+            on_payment_success_sync(PAYMENT_ID)
+
+        payload = fire_calls[0][1]
+        assert payload.get("plan_code") is None
+
+    def test_Q03_v2_notification_label_from_display_name(self):
+        """Q03: result.display_name present → send_payment_notification called with display_name."""
+        pay = self._make_pay_row()
+        notify = MagicMock()
+        fire = MagicMock()
+        v2_result = {"status": "APPLIED", "display_name": "TAI Safe 현장참여형", "product_tier": "FIELD"}
+
+        self._run_post_process(pay, v2_result, notify, fire)
+
+        notify.assert_called_once()
+        label_arg = notify.call_args[0][1]
+        assert label_arg == "TAI Safe 현장참여형"
+
+    def test_Q04_v2_notification_label_falls_back_to_product_tier(self):
+        """Q04: display_name absent, product_tier present → label = product_tier."""
+        pay = self._make_pay_row()
+        notify = MagicMock()
+        fire = MagicMock()
+        v2_result = {"status": "APPLIED", "display_name": None, "product_tier": "FIELD"}
+
+        self._run_post_process(pay, v2_result, notify, fire)
+
+        label_arg = notify.call_args[0][1]
+        assert label_arg == "FIELD"
+
+    def test_Q05_v2_notification_label_final_fallback_tai_safe(self):
+        """Q05: both display_name and product_tier absent → label = 'TAI Safe'."""
+        pay = self._make_pay_row()
+        notify = MagicMock()
+        fire = MagicMock()
+        v2_result = {"status": "APPLIED"}
+
+        self._run_post_process(pay, v2_result, notify, fire)
+
+        label_arg = notify.call_args[0][1]
+        assert label_arg == "TAI Safe"
+
+    def test_Q06_v2_notification_no_industry_pro(self):
+        """Q06: V2 notification label does not contain INDUSTRY_PRO."""
+        pay = self._make_pay_row()
+        notify = MagicMock()
+        fire = MagicMock()
+        v2_result = {"status": "APPLIED", "display_name": "TAI Safe 관리자형"}
+
+        self._run_post_process(pay, v2_result, notify, fire)
+
+        label_arg = notify.call_args[0][1]
+        assert "INDUSTRY_PRO" not in label_arg
+
+    def test_Q07_v2_notification_label_uses_frozen_quote_not_plan_map(self):
+        """Q07: CUSTOM tier from Frozen Quote used as-is, no PLAN_MAP inference."""
+        pay = self._make_pay_row()
+        notify = MagicMock()
+        fire = MagicMock()
+        v2_result = {"status": "APPLIED", "product_tier": "CUSTOM"}
+
+        self._run_post_process(pay, v2_result, notify, fire)
+
+        label_arg = notify.call_args[0][1]
+        assert label_arg == "CUSTOM"
+
+    def test_Q08_legacy_saas_industry_automation_plan_code_preserved(self):
+        """Q08: product_type=SAAS_INDUSTRY → automation plan_code = INDUSTRY_PRO (legacy preserved)."""
+        pay = self._make_pay_row(product_type="SAAS_INDUSTRY", plan_code="INDUSTRY_PRO",
+                                  contract_id=str(CONTRACT_ID))
+        fire_calls = []
+
+        with patch("services.payment_post_process.get_supabase") as mock_sb_factory, \
+             patch("services.payment_post_process.send_payment_notification"), \
+             patch("services.payment_post_process._fire_automation",
+                   side_effect=lambda *a, **kw: fire_calls.append(a)):
+            mock_sb = MagicMock()
+            mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[pay])
+            mock_sb_factory.return_value = mock_sb
+            from services.payment_post_process import on_payment_success_sync
+            on_payment_success_sync(PAYMENT_ID)
+
+        payload = fire_calls[0][1]
+        assert payload.get("plan_code") == "INDUSTRY_PRO"
+
+    def test_Q09_atomic_failure_notification_zero(self):
+        """Q09: atomic failure → notification = 0 (PATCH-001 regression)."""
+        pay = self._make_pay_row()
+        notify = MagicMock()
+        fire = MagicMock()
+
+        with patch("services.payment_post_process.get_supabase") as mock_sb_factory, \
+             patch("services.saas_initial_payment_runtime_v2.apply_saas_v2_initial_payment_runtime",
+                   side_effect=SaasInitialPaymentRuntimeV2Error("V2_RPC_ERROR", "fail")), \
+             patch("services.payment_post_process.send_payment_notification", notify), \
+             patch("services.payment_post_process._fire_automation", fire):
+            mock_sb = MagicMock()
+            mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[pay])
+            mock_sb_factory.return_value = mock_sb
+            from services.payment_post_process import on_payment_success_sync
+            on_payment_success_sync(PAYMENT_ID)
+
+        notify.assert_not_called()
+
+    def test_Q10_applied_sends_notification_once(self):
+        """Q10: APPLIED → send_payment_notification called exactly once."""
+        pay = self._make_pay_row()
+        notify = MagicMock()
+        fire = MagicMock()
+        v2_result = {"status": "APPLIED", "display_name": "TAI Safe 현장참여형"}
+
+        self._run_post_process(pay, v2_result, notify, fire)
+
+        notify.assert_called_once()
+
+    def test_Q11_already_applied_sends_notification_once(self):
+        """Q11: ALREADY_APPLIED → send_payment_notification called exactly once."""
+        pay = self._make_pay_row()
+        notify = MagicMock()
+        fire = MagicMock()
+        v2_result = {"status": "ALREADY_APPLIED", "display_name": "TAI Safe 관리자형"}
+
+        self._run_post_process(pay, v2_result, notify, fire)
+
+        notify.assert_called_once()
+
+    def test_Q12_no_repricing_in_notification_meta(self):
+        """Q12: _notification_meta_from_quote uses only existing quote items (no repricing)."""
+        from services.saas_initial_payment_runtime_v2 import _notification_meta_from_quote
+
+        quote = _valid_quote()
+        meta = _notification_meta_from_quote(quote)
+
+        assert "display_name" in meta
+        assert meta["display_name"] == _ITEM_DICT["display_name"]
+        assert meta.get("product_tier") == _ITEM_DICT["product_tier"]
+
+    def test_Q12b_notification_meta_empty_quote_no_error(self):
+        """Q12b: empty items → meta = {} (no error)."""
+        from services.saas_initial_payment_runtime_v2 import _notification_meta_from_quote
+
+        assert _notification_meta_from_quote({}) == {}
+        assert _notification_meta_from_quote({"items": []}) == {}

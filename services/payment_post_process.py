@@ -421,11 +421,17 @@ def on_payment_success_sync(payment_id: str) -> None:
     plan_info = PLAN_MAP.get(plan_code, {"sector": "INDUSTRIAL", "level": 3})
 
     # [P2-4] 결제 성공 automation 이벤트 발화(모든 성공 경로 공통 지점: 카드성공·수동활성화).
+    # V2 SAAS: plan_code=None 이므로 INDUSTRY_PRO fallback을 automation payload에 주입하지 않는다.
+    _auto_plan_code = (
+        pay.get("plan_code")
+        if (pay.get("product_type") or "") == "SAAS"
+        else plan_code
+    )
     _fire_automation("payment.success", {
         "payment_id": payment_id,
         "company_id": pay.get("company_id"),
         "user_id": pay.get("user_id"),
-        "plan_code": plan_code,
+        "plan_code": _auto_plan_code,
         "product_type": pay.get("product_type"),
         "total_amount": pay.get("total_amount"),
         "status": status,
@@ -502,7 +508,12 @@ def on_payment_success_sync(payment_id: str) -> None:
                 "[INITIAL_V2_RUNTIME] payment=%s status=%s",
                 payment_id, (result or {}).get("status"),
             )
-            send_payment_notification(pay, plan_code, plan_info)
+            v2_label = (
+                result.get("display_name")
+                or result.get("product_tier")
+                or "TAI Safe"
+            )
+            send_payment_notification(pay, v2_label, {})
         except SaasInitialPaymentRuntimeV2Error as exc:
             logger.error(
                 "[INITIAL_V2_RUNTIME] payment=%s error=%s message=%s — notification suppressed",
