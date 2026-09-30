@@ -62,10 +62,6 @@ _STUB_TITLE_STANDALONE_PATTERNS = [
     re.compile(r"버튼을\s*이용해\s*주십시오"),
     re.compile(r"이용하여\s*주십시오"),
 ]
-# Title artifact patterns — context-dependent (only when article_text is SOURCE_UI_STUB)
-_STUB_TITLE_CONTEXT_PATTERNS = [
-    re.compile(r"의\s*자세한\s*내용"),
-]
 
 
 def _is_source_ui_stub(text: str) -> bool:
@@ -81,10 +77,10 @@ def _classify_article_text(text: str) -> str:
         return "EMPTY"
     if _is_source_ui_stub(text):
         return "SOURCE_UI_STUB"
-    if _RAW_DOWNLOAD_PATTERN.search(text):
-        return "RAW_SOURCE_LINK"
     if _INLINE_IMG_DETECT_PATTERN.search(text):
         return "INLINE_MEDIA"
+    if _RAW_DOWNLOAD_PATTERN.search(text):
+        return "RAW_SOURCE_LINK"
     return "ARTICLE_TEXT"
 
 
@@ -101,8 +97,7 @@ def _is_title_artifact(title: str, article_text_classification: str = None) -> b
             or bool(_RAW_DOWNLOAD_PATTERN.search(title))):
         return True
     if article_text_classification == "SOURCE_UI_STUB":
-        if any(p.search(title) for p in _STUB_TITLE_CONTEXT_PATTERNS):
-            return True
+        return True  # all article_title values on a stub article are navigation artifacts
     return False
 
 
