@@ -186,7 +186,15 @@ def get_member_commercial_contract(
         .execute()
     )
     contract = (ct_res.data or [None])[0]
-    if contract and str(_get(contract, "company_id")) != str(company_id):
+    if contract is None:
+        return {
+            "state": "ERROR",
+            "error_code": "CONTRACT_PROJECTION_NOT_FOUND",
+            "contract": None,
+            "commercial_version": None,
+            "site_scopes": [],
+        }
+    if str(_get(contract, "company_id")) != str(company_id):
         return {
             "state": "ERROR",
             "error_code": "CONTRACT_COMPANY_MISMATCH",
@@ -203,6 +211,22 @@ def get_member_commercial_contract(
         .execute()
     )
     cv = (cv_res.data or [None])[0]
+    if cv is None:
+        return {
+            "state": "ERROR",
+            "error_code": "CURRENT_CV_PROJECTION_NOT_FOUND",
+            "contract": None,
+            "commercial_version": None,
+            "site_scopes": [],
+        }
+    if str(_get(cv, "contract_id")) != str(resolution.contract_id):
+        return {
+            "state": "ERROR",
+            "error_code": "CURRENT_CV_CONTRACT_MISMATCH",
+            "contract": None,
+            "commercial_version": None,
+            "site_scopes": [],
+        }
 
     # Site Scopes — canonical CV id로만
     ss_res = (

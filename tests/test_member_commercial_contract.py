@@ -581,3 +581,73 @@ def test_be24_no_fetch_all_cvs_import():
     src = inspect.getsource(svc)
     import_lines = [ln for ln in src.splitlines() if ln.strip().startswith("import ") or ln.strip().startswith("from ")]
     assert not any("_fetch_all_cvs" in ln for ln in import_lines)
+
+
+# ── FAIL-CLOSED PROJECTION GUARDS (BE25~BE27) ─────────────────────────────────
+
+def test_be25_contract_projection_not_found():
+    """BE25 contract row missing after canonical resolve → ERROR / CONTRACT_PROJECTION_NOT_FOUND."""
+    company_id = _uid()
+    contract_id = _uid()
+    cv_id = _uid()
+    cv = _make_cv(contract_id, cv_id)
+    # contracts table is empty — projection fails
+    sb = FakeSB({
+        "contracts": [],
+        "saas_contract_commercial_versions": [cv],
+        "saas_contract_site_scopes": [],
+    })
+    resolution = _FakeResolution(contract_id, cv_id)
+    with patch("services.member_commercial_svc.resolve_saas_entitlement_context_v2",
+               return_value=resolution):
+        result = svc.get_member_commercial_contract(sb, company_id)
+    assert result["state"] == "ERROR"
+    assert result["error_code"] == "CONTRACT_PROJECTION_NOT_FOUND"
+    assert result["contract"] is None
+    assert result["commercial_version"] is None
+
+
+def test_be26_cv_projection_not_found():
+    """BE26 CV row missing after canonical resolve → ERROR / CURRENT_CV_PROJECTION_NOT_FOUND."""
+    company_id = _uid()
+    contract_id = _uid()
+    cv_id = _uid()
+    ct = _make_contract(company_id, contract_id)
+    # CV table is empty — projection fails
+    sb = FakeSB({
+        "contracts": [ct],
+        "saas_contract_commercial_versions": [],
+        "saas_contract_site_scopes": [],
+    })
+    resolution = _FakeResolution(contract_id, cv_id)
+    with patch("services.member_commercial_svc.resolve_saas_entitlement_context_v2",
+               return_value=resolution):
+        result = svc.get_member_commercial_contract(sb, company_id)
+    assert result["state"] == "ERROR"
+    assert result["error_code"] == "CURRENT_CV_PROJECTION_NOT_FOUND"
+    assert result["contract"] is None
+    assert result["commercial_version"] is None
+
+
+def test_be27_cv_contract_id_mismatch():
+    """BE27 CV.contract_id != resolution.contract_id → ERROR / CURRENT_CV_CONTRACT_MISMATCH."""
+    company_id = _uid()
+    contract_id = _uid()
+    cv_id = _uid()
+    wrong_contract_id = _uid()
+    ct = _make_contract(company_id, contract_id)
+    # CV points to a different contract_id
+    cv = _make_cv(wrong_contract_id, cv_id)
+    sb = FakeSB({
+        "contracts": [ct],
+        "saas_contract_commercial_versions": [cv],
+        "saas_contract_site_scopes": [],
+    })
+    resolution = _FakeResolution(contract_id, cv_id)
+    with patch("services.member_commercial_svc.resolve_saas_entitlement_context_v2",
+               return_value=resolution):
+        result = svc.get_member_commercial_contract(sb, company_id)
+    assert result["state"] == "ERROR"
+    assert result["error_code"] == "CURRENT_CV_CONTRACT_MISMATCH"
+    assert result["contract"] is None
+    assert result["commercial_version"] is None
