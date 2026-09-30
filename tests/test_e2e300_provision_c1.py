@@ -403,7 +403,7 @@ def test_p14_factory_bridge_created():
         _site_read_fn=lambda _sb, _sid: {
             "id": "sid-004", "site_name": "현장4", "site_type": "BUILDING",
             "contract_amount": 800.0, "total_workers": 60,
-            "factory_id": "fid-bridge-004",
+            "factory_id": "fid-bridge-004", "company_id": "cmp-001",
         },
         _factory_read_fn=lambda _sb, _fid: {
             "id": "fid-bridge-004", "name": "현장4", "company_id": "cmp-001",
@@ -750,7 +750,7 @@ def test_q9_verify_cst_exact_true():
     stored_site = {
         "id": "sid-001", "site_name": "현장A", "site_type": "BUILDING",
         "contract_amount": 800.0, "total_workers": 60,
-        "factory_id": "fid-001",
+        "factory_id": "fid-001", "company_id": "cmp-001",
     }
     stored_factory = {
         "id": "fid-001", "name": "현장A", "company_id": "cmp-001",
@@ -1097,7 +1097,7 @@ def test_q20_provision_cst_pipeline_exact_from_verify_not_hardcoded():
         _site_read_fn=lambda *_a: {
             "id": "sid-q20", "site_name": "현장Q20", "site_type": "BUILDING",
             "contract_amount": 400.0, "total_workers": 35,
-            "factory_id": "fid-q20",
+            "factory_id": "fid-q20", "company_id": "cmp-001",
         },
         _factory_read_fn=lambda *_a: {
             "id": "fid-q20", "name": "현장Q20", "company_id": "cmp-001",
@@ -1437,7 +1437,8 @@ def test_r12_provision_cst_returns_direct_source_exact():
         _factory_bridge_fn=lambda *_a: "fid-r12",
         _site_read_fn=lambda *_a: {
             "id": "sid-r12", "site_name": "현장R12", "site_type": "BUILDING",
-            "contract_amount": 100.0, "total_workers": 20, "factory_id": "fid-r12",
+            "contract_amount": 100.0, "total_workers": 20,
+            "factory_id": "fid-r12", "company_id": "cmp-001",
         },
         _factory_read_fn=lambda *_a: {
             "id": "fid-r12", "name": "현장R12", "company_id": "cmp-001",
@@ -1502,7 +1503,8 @@ def test_r14_provision_cst_pipeline_exact_false_when_work_not_exact():
         _factory_bridge_fn=lambda *_a: "fid-r14",
         _site_read_fn=lambda *_a: {
             "id": "sid-r14", "site_name": "현장R14", "site_type": "BUILDING",
-            "contract_amount": 80.0, "total_workers": 15, "factory_id": "fid-r14",
+            "contract_amount": 80.0, "total_workers": 15,
+            "factory_id": "fid-r14", "company_id": "cmp-001",
         },
         _factory_read_fn=lambda *_a: {
             "id": "fid-r14", "name": "현장R14", "company_id": "cmp-001",
@@ -1631,3 +1633,391 @@ def test_r19_provision_cst_work_readback_called():
     assert "bridge" in call_order
     assert "work_read" in call_order
     assert call_order.index("bridge") < call_order.index("work_read")
+
+
+# =============================================================================
+# WO-005C — S1-S15: process master fail-close, site_company_id gate,
+# MFG manifest process gate, BLD/CST NOT_REQUIRED, pilot runner.
+# All mock/seam only.  PRODUCTION_WRITE = 0.  LEG_EXECUTED = 0.
+# =============================================================================
+
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).parent.parent / "tools" / "e2e300"))
+
+from provision_frozen_c1 import (
+    ProcessMasterUnavailableError,
+    ProcessMasterNotFoundError,
+    _default_process_insert,
+)
+from run_c1_provision import (
+    run as _pilot_run,
+    PilotCaseNotAllowedError,
+    StalePrefightError,
+    PILOT_ALLOWED_CASES,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S1 — _default_process_insert raises ProcessMasterUnavailableError on query failure
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s1_process_master_unavailable_on_query_failure():
+    """S1: v_process_unified query raises → ProcessMasterUnavailableError (not silent pass)."""
+    mock_sb = MagicMock()
+    mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.side_effect = \
+        RuntimeError("DB connection failed")
+    with pytest.raises(ProcessMasterUnavailableError) as exc_info:
+        _default_process_insert(mock_sb, "fid-001", {"process_id": "P01", "source": "DB"})
+    assert "PROCESS_MASTER_UNAVAILABLE" in str(exc_info.value)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S2 — _default_process_insert raises ProcessMasterUnavailableError on malformed response
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s2_process_master_unavailable_on_malformed_response():
+    """S2: v_process_unified response.data not a list → ProcessMasterUnavailableError."""
+    mock_res = MagicMock()
+    mock_res.data = "not-a-list"
+    mock_sb = MagicMock()
+    mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = mock_res
+    with pytest.raises(ProcessMasterUnavailableError):
+        _default_process_insert(mock_sb, "fid-001", {"process_id": "P02", "source": "DB"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S3 — _default_process_insert raises ProcessMasterNotFoundError when process_id absent
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s3_process_master_not_found():
+    """S3: v_process_unified returns empty list → ProcessMasterNotFoundError."""
+    mock_res = MagicMock()
+    mock_res.data = []
+    mock_sb = MagicMock()
+    mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = mock_res
+    with pytest.raises(ProcessMasterNotFoundError) as exc_info:
+        _default_process_insert(mock_sb, "fid-001", {"process_id": "P-MISSING", "source": "DB"})
+    assert "PROCESS_MASTER_NOT_FOUND" in str(exc_info.value)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S4 — _default_process_insert copies process_lv1-lv4 and process_path from master
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s4_process_master_copies_lv_fields():
+    """S4: _default_process_insert copies non-None lv1-lv4 and process_path to INSERT payload."""
+    select_res = MagicMock()
+    select_res.data = [{
+        "process_id":   "P03",
+        "process_lv1":  "제조",
+        "process_lv2":  "기계",
+        "process_lv3":  None,
+        "process_lv4":  None,
+        "process_path": "제조/기계",
+    }]
+
+    insert_res = MagicMock()
+    insert_res.data = [{"id": "r1", "process_id": "P03", "factory_id": "fid-s4"}]
+
+    inserted: dict = {}
+
+    def mock_insert(row):
+        inserted.update(row)
+        m = MagicMock()
+        m.execute.return_value = insert_res
+        return m
+
+    def table_router(name):
+        t = MagicMock()
+        if name == "v_process_unified":
+            t.select.return_value.eq.return_value.limit.return_value.execute.return_value = select_res
+        elif name == "factory_process":
+            t.insert = mock_insert
+        return t
+
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = table_router
+
+    _default_process_insert(mock_sb, "fid-s4", {"process_id": "P03", "source": "DB"})
+    assert inserted.get("process_lv1") == "제조"
+    assert inserted.get("process_lv2") == "기계"
+    assert "process_lv3" not in inserted  # None not copied
+    assert "process_lv4" not in inserted
+    assert inserted.get("process_path") == "제조/기계"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S5 — _default_process_insert does NOT copy display_name
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s5_process_master_no_display_name():
+    """S5: _default_process_insert must not copy display_name — column not in SELECT contract."""
+    select_res = MagicMock()
+    select_res.data = [{
+        "process_id":   "P04",
+        "process_lv1":  "lv1",
+        "process_lv2":  None,
+        "process_lv3":  None,
+        "process_lv4":  None,
+        "process_path": "lv1",
+        "display_name": "MUST_NOT_APPEAR",  # would not be returned by real SELECT, but guard anyway
+    }]
+
+    insert_res = MagicMock()
+    insert_res.data = [{"id": "r2"}]
+
+    inserted: dict = {}
+
+    def mock_insert(row):
+        inserted.update(row)
+        m = MagicMock()
+        m.execute.return_value = insert_res
+        return m
+
+    def table_router(name):
+        t = MagicMock()
+        if name == "v_process_unified":
+            t.select.return_value.eq.return_value.limit.return_value.execute.return_value = select_res
+        elif name == "factory_process":
+            t.insert = mock_insert
+        return t
+
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = table_router
+
+    _default_process_insert(mock_sb, "fid-s5", {"process_id": "P04", "source": "DB"})
+    assert "display_name" not in inserted
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S6 — verify_cst_c1_exact: site_company_id mismatch → exact=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s6_verify_cst_site_company_id_mismatch():
+    """S6: stored_site.company_id != company_id → 'site_company_id' in mismatches."""
+    case_data = {
+        "case_id": "CST-S6", "factory_name": "현장S6", "sector": "CONSTRUCTION",
+        "worker_count": 30,
+        "sector_fields": {"construction_type": "건축", "construction_amount": 20_000_000_000},
+    }
+    stored_site = {
+        "id": "sid-s6", "site_name": "현장S6", "site_type": "BUILDING",
+        "contract_amount": 200.0, "total_workers": 30,
+        "factory_id": "fid-s6", "company_id": "cmp-WRONG",  # wrong
+    }
+    stored_factory = {
+        "id": "fid-s6", "name": "현장S6", "company_id": "cmp-001",
+        "sector": "CONSTRUCTION", "site_type": "CONSTRUCTION",
+        "employee_count": 30, "construction_type": "건축",
+        "construction_amount": 20_000_000_000.0,
+    }
+    result = verify_cst_c1_exact(stored_site, stored_factory, case_data, "cmp-001")
+    assert result["exact"] is False
+    assert "site_company_id" in result["mismatches"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S7 — verify_cst_c1_exact: site_company_id match → no 'site_company_id' mismatch
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s7_verify_cst_site_company_id_match():
+    """S7: stored_site.company_id == company_id → no 'site_company_id' in mismatches."""
+    case_data = {
+        "case_id": "CST-S7", "factory_name": "현장S7", "sector": "CONSTRUCTION",
+        "worker_count": 20,
+        "sector_fields": {"construction_type": "토목", "construction_amount": 15_000_000_000},
+    }
+    stored_site = {
+        "id": "sid-s7", "site_name": "현장S7", "site_type": "CIVIL",
+        "contract_amount": 150.0, "total_workers": 20,
+        "factory_id": "fid-s7", "company_id": "cmp-001",
+    }
+    stored_factory = {
+        "id": "fid-s7", "name": "현장S7", "company_id": "cmp-001",
+        "sector": "CONSTRUCTION", "site_type": "CONSTRUCTION",
+        "employee_count": 20, "construction_type": "토목",
+        "construction_amount": 15_000_000_000.0,
+    }
+    result = verify_cst_c1_exact(stored_site, stored_factory, case_data, "cmp-001")
+    assert "site_company_id" not in result["mismatches"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S8 — build_manifest_c1_entry MFG: process_source_exact=False → pipeline_c1_exact=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s8_manifest_mfg_process_not_exact_blocks_pipeline():
+    """S8: MFG manifest — process_source_exact=False → pipeline_c1_exact=False."""
+    case_data = {"case_id": "MFG-S8", "sector": "MANUFACTURING", "factory_name": "S8공장"}
+    result = build_manifest_c1_entry(case_data, {
+        "direct_source_exact":    True,
+        "process_source_exact":   False,  # MFG process not exact
+        "work_source_exact":      True,
+        "material_source_exact":  True,
+        "equipment_source_exact": True,
+        "factory_id": "fid-s8", "site_id": None,
+    })
+    assert result["pipeline_c1_exact"] is False
+    assert result["c1"]["process_source_exact"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S9 — build_manifest_c1_entry MFG: all exact → pipeline_c1_exact=True
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s9_manifest_mfg_all_exact_pipeline_true():
+    """S9: MFG manifest — process_source_exact=True + all others exact → pipeline_c1_exact=True."""
+    case_data = {"case_id": "MFG-S9", "sector": "MANUFACTURING", "factory_name": "S9공장"}
+    result = build_manifest_c1_entry(case_data, {
+        "direct_source_exact":    True,
+        "process_source_exact":   True,
+        "work_source_exact":      True,
+        "material_source_exact":  True,
+        "equipment_source_exact": True,
+        "factory_id": "fid-s9", "site_id": None,
+    })
+    assert result["pipeline_c1_exact"] is True
+    assert result["c1"]["process_source_exact"] is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S10 — build_manifest_c1_entry BLD: c1 has process_source_status=NOT_REQUIRED
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s10_manifest_bld_process_not_required():
+    """S10: BLD manifest — c1['process_source_status'] == 'NOT_REQUIRED' (no process gate)."""
+    case_data = {"case_id": "BLD-S10", "sector": "BUILDING", "factory_name": "S10빌딩",
+                 "sector_fields": {"building_area": 100.0}}
+    result = build_manifest_c1_entry(case_data, {
+        "direct_source_exact":    True,
+        "work_source_exact":      True,
+        "material_source_exact":  True,
+        "equipment_source_exact": True,
+        "factory_id": "fid-s10", "site_id": None,
+    })
+    assert result["c1"].get("process_source_status") == "NOT_REQUIRED"
+    assert "process_source_exact" not in result["c1"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S11 — build_manifest_c1_entry CST: c1 has process_source_status=NOT_REQUIRED
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s11_manifest_cst_process_not_required():
+    """S11: CST manifest — c1['process_source_status'] == 'NOT_REQUIRED'."""
+    case_data = {"case_id": "CST-S11", "sector": "CONSTRUCTION", "factory_name": "S11현장",
+                 "sector_fields": {}}
+    result = build_manifest_c1_entry(case_data, {
+        "direct_source_exact":    True,
+        "work_source_exact":      True,
+        "material_source_exact":  True,
+        "equipment_source_exact": True,
+        "factory_id": None, "site_id": "sid-s11",
+    })
+    assert result["c1"].get("process_source_status") == "NOT_REQUIRED"
+    assert "process_source_exact" not in result["c1"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S12 — pilot runner raises PilotCaseNotAllowedError for non-pilot case
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s12_pilot_case_not_allowed():
+    """S12: run() raises PilotCaseNotAllowedError when case_id is not in PILOT_ALLOWED_CASES."""
+    with pytest.raises(PilotCaseNotAllowedError) as exc_info:
+        _pilot_run(
+            ["MFG-002"], "cmp-001", True, MagicMock(),
+            _cases_fn=lambda: {"MFG-002": {
+                "case_id": "MFG-002", "factory_name": "비허용공장",
+                "sector": "MANUFACTURING", "sector_fields": {}, "worker_count": 10,
+            }},
+            _stale_check_fn=lambda *_a: False,
+        )
+    assert "PILOT_CASE_NOT_ALLOWED" in str(exc_info.value)
+    assert "MFG-002" in str(exc_info.value)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S13 — pilot runner returns DRY_RUN_ONLY when execute=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s13_dry_run_only_without_execute():
+    """S13: run(execute=False) returns DRY_RUN_ONLY without touching DB or filesystem."""
+    result = _pilot_run(
+        ["MFG-001"], "cmp-001", False, MagicMock(),
+        _cases_fn=lambda: {},
+    )
+    assert result["status"] == "DRY_RUN_ONLY"
+    assert result["case_ids"] == ["MFG-001"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S14 — pilot runner raises StalePrefightError when stale check fires
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s14_stale_preflight_blocks_all():
+    """S14: run() raises StalePrefightError (all-or-none) when any case is stale."""
+    cases = {
+        "MFG-001": {
+            "case_id": "MFG-001", "factory_name": "기존공장",
+            "sector": "MANUFACTURING", "sector_fields": {}, "worker_count": 10,
+        }
+    }
+    with pytest.raises(StalePrefightError) as exc_info:
+        _pilot_run(
+            ["MFG-001"], "cmp-001", True, MagicMock(),
+            _cases_fn=lambda: cases,
+            _stale_check_fn=lambda *_a: True,  # always stale
+        )
+    assert "STALE_PREFLIGHT_BLOCKED" in str(exc_info.value)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S15 — pilot runner returns PROVISIONED with manifest for 3-sector pilot
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s15_run_provisions_3_sector_pilot():
+    """S15: run() provisions MFG-001/BLD-001/CST-001 sequentially; returns PROVISIONED manifest."""
+    import tempfile
+    provisioned: list = []
+
+    def mock_provision(supabase, case_data, company_id):
+        provisioned.append(case_data["case_id"])
+        return {
+            "factory_id":             "fid-x",
+            "site_id":                None,
+            "pipeline_c1_exact":      True,
+            "direct_source_exact":    True,
+            "process_source_exact":   True,
+            "work_source_exact":      True,
+            "material_source_exact":  True,
+            "equipment_source_exact": True,
+        }
+
+    cases = {
+        "MFG-001": {"case_id": "MFG-001", "factory_name": "MFG공장",
+                    "sector": "MANUFACTURING", "sector_fields": {}, "worker_count": 10},
+        "BLD-001": {"case_id": "BLD-001", "factory_name": "BLD빌딩",
+                    "sector": "BUILDING", "sector_fields": {"building_area": 100.0}, "worker_count": 10},
+        "CST-001": {"case_id": "CST-001", "factory_name": "CST현장",
+                    "sector": "CONSTRUCTION",
+                    "sector_fields": {"construction_type": "건축", "construction_amount": 10_000_000_000},
+                    "worker_count": 10},
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _pilot_run(
+            ["MFG-001", "BLD-001", "CST-001"], "cmp-001", True, MagicMock(),
+            _provision_fn=mock_provision,
+            _stale_check_fn=lambda *_a: False,
+            _cases_fn=lambda: cases,
+            _runs_dir=Path(tmpdir),
+        )
+
+    assert result["status"] == "PROVISIONED"
+    assert len(provisioned) == 3
+    assert set(provisioned) == {"MFG-001", "BLD-001", "CST-001"}
+    # MFG provisioned before CST (sector order)
+    assert provisioned.index("MFG-001") < provisioned.index("CST-001")
+    assert result["manifest"]["all_exact"] is True
+    assert len(result["manifest"]["entries"]) == 3

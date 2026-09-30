@@ -88,6 +88,16 @@ class StaleE2ECaseError(RuntimeError):
     code = "STALE_E2E_CASE_FOUND"
 
 
+class ProcessMasterUnavailableError(RuntimeError):
+    """v_process_unified query failed or response malformed — fail-closed."""
+    code = "PROCESS_MASTER_UNAVAILABLE"
+
+
+class ProcessMasterNotFoundError(RuntimeError):
+    """process_id not found in v_process_unified — INSERT forbidden."""
+    code = "PROCESS_MASTER_NOT_FOUND"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Amount normalization — once, no magnitude inference
 # ─────────────────────────────────────────────────────────────────────────────
@@ -296,6 +306,7 @@ def verify_cst_c1_exact(
     expected: Dict[str, Any] = {
         "site_name":                    case_data.get("factory_name"),
         "site_type":                    expected_site_type,
+        "site_company_id":              company_id,
         "contract_amount":              expected_eok,
         "total_workers":                case_data.get("worker_count"),
         "factory_bridge":               True,
@@ -317,6 +328,7 @@ def verify_cst_c1_exact(
     actual: Dict[str, Any] = {
         "site_name":                    stored_site.get("site_name"),
         "site_type":                    stored_site.get("site_type"),
+        "site_company_id":              stored_site.get("company_id"),
         "contract_amount":              stored_site.get("contract_amount"),
         "total_workers":                stored_site.get("total_workers"),
         "factory_bridge":               bool(stored_factory),
@@ -335,6 +347,8 @@ def verify_cst_c1_exact(
         mismatches.append("site_name")
     if actual["site_type"] != expected["site_type"]:
         mismatches.append("site_type")
+    if actual["site_company_id"] != company_id:
+        mismatches.append("site_company_id")
     if expected_eok is not None:
         act_eok = actual["contract_amount"]
         if act_eok is None or abs(float(act_eok) - float(expected_eok)) > 1e-6:
@@ -562,25 +576,36 @@ def _default_process_insert(supabase: Any, factory_id: str, payload: dict) -> di
     source = payload.get("source", "DB")
     row = {**payload, "factory_id": factory_id, "is_active": True, "is_primary": False}
     if source == "DB":
+        process_id = payload["process_id"]
         try:
             res = (supabase.table("v_process_unified")
-                   .select("process_id, display_name, process_path")
-                   .eq("process_id", payload["process_id"])
+                   .select("process_id, process_lv1, process_lv2, process_lv3, process_lv4, process_path")
+                   .eq("process_id", process_id)
                    .limit(1).execute())
-            data = list(getattr(res, "data", None) or [])
-            if data:
-                proc = data[0]
-                if proc.get("display_name"):
-                    row["display_name"] = proc["display_name"]
-                if proc.get("process_path") and not row.get("process_path"):
-                    row["process_path"] = proc["process_path"]
-        except Exception:
-            pass  # lookup failure is non-fatal; insert proceeds with caller-supplied data
-    res = supabase.table("factory_process").insert(row).execute()
-    data = list(getattr(res, "data", None) or [])
-    if not data:
+        except Exception as exc:
+            raise ProcessMasterUnavailableError(
+                f"PROCESS_MASTER_UNAVAILABLE: v_process_unified query failed for process_id={process_id!r}"
+            ) from exc
+        master_data = getattr(res, "data", None)
+        if not isinstance(master_data, list):
+            raise ProcessMasterUnavailableError(
+                f"PROCESS_MASTER_UNAVAILABLE: v_process_unified response malformed for process_id={process_id!r}"
+            )
+        if not master_data:
+            raise ProcessMasterNotFoundError(
+                f"PROCESS_MASTER_NOT_FOUND: process_id={process_id!r} not in v_process_unified"
+            )
+        proc = master_data[0]
+        for lv in ("process_lv1", "process_lv2", "process_lv3", "process_lv4"):
+            if proc.get(lv) is not None:
+                row[lv] = proc[lv]
+        if proc.get("process_path") and not row.get("process_path"):
+            row["process_path"] = proc["process_path"]
+    ins_res = supabase.table("factory_process").insert(row).execute()
+    ins_data = list(getattr(ins_res, "data", None) or [])
+    if not ins_data:
         raise RuntimeError("factory_process insert returned no row")
-    return data[0]
+    return ins_data[0]
 
 
 def _default_process_read(supabase: Any, factory_id: str) -> List[dict]:
@@ -1043,12 +1068,31 @@ def build_manifest_c1_entry(
         for f in CST_NOT_PIPELINE_FIELDS:
             non_pipeline[f] = "NOT_CURRENTLY_CONSUMED"
 
-    pipeline_c1_exact = bool(
-        direct_source_exact
-        and work_exact
-        and mat_exact
-        and equip_exact
-    )
+    c1: Dict[str, Any] = {
+        "direct_source_exact":    direct_source_exact,
+        "work_source_exact":      work_exact,
+        "material_source_exact":  mat_exact,
+        "equipment_source_exact": equip_exact,
+    }
+
+    if sector == "MANUFACTURING":
+        process_exact = bool(provision_result.get("process_source_exact"))
+        c1["process_source_exact"] = process_exact
+        pipeline_c1_exact = bool(
+            direct_source_exact
+            and process_exact
+            and work_exact
+            and mat_exact
+            and equip_exact
+        )
+    else:
+        c1["process_source_status"] = "NOT_REQUIRED"
+        pipeline_c1_exact = bool(
+            direct_source_exact
+            and work_exact
+            and mat_exact
+            and equip_exact
+        )
 
     entry: Dict[str, Any] = {
         "case_id":           case_data["case_id"],
@@ -1057,12 +1101,7 @@ def build_manifest_c1_entry(
         "site_id":           provision_result.get("site_id"),
         "pipeline_c1_exact": pipeline_c1_exact,
         "source_exact":      pipeline_c1_exact,  # legacy compat
-        "c1": {
-            "direct_source_exact":    direct_source_exact,
-            "work_source_exact":      work_exact,
-            "material_source_exact":  mat_exact,
-            "equipment_source_exact": equip_exact,
-        },
+        "c1":                c1,
     }
     if non_pipeline:
         entry["baseline_non_pipeline"] = non_pipeline
