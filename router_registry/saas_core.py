@@ -41,4 +41,6 @@ ROUTERS = [
     {"module": "routers.member_company"},
     # WP-A (WO-SAFE-COMPANY-ACCESS-001): 회사 사용자 관리 · 초대 (/me/company/*, /user-invites/*)
     {"module": "routers.company_users"},
+    # WO-FE-SAFE-01: 현재 SaaS 이용계약 + CV + Site Scope (GET /me/commercial/contract)
+    {"module": "routers.member_commercial"},
 ]
