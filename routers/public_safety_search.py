@@ -62,13 +62,13 @@ _TYPE_MAP: dict[str, list[str]] = {
 
 # Section order for /sections endpoint (§12 fixed presentation order)
 _SECTION_TYPES: list[tuple[str, str]] = [
-    ("guide",     "GUIDE"),
-    ("material",  "SAFETY_MATERIAL"),
-    ("accident",  "CSI_ACCIDENT"),
-    ("chem",      "CHEM"),
     ("knowledge", "KNOWLEDGE"),
-    ("precedent", "PRECEDENT"),
+    ("guide",     "GUIDE"),
     ("law",       "LEGAL"),
+    ("accident",  "CSI_ACCIDENT"),
+    ("material",  "SAFETY_MATERIAL"),
+    ("chem",      "CHEM"),
+    ("precedent", "PRECEDENT"),
 ]
 
 
