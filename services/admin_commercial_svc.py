@@ -189,27 +189,101 @@ _PAY_COLS = (
 )
 
 
+def _annotate_payments_with_refs(
+    supabase,
+    company_id: str,
+    items: List[Dict],
+) -> None:
+    """Batch lookup quotes + contracts for payment ref annotations. N+1=0.
+
+    additive fields: quote_no, contract_no, quote_ref_ok, contract_ref_ok.
+    cross-company FK → ref_ok=False (projection=0).
+    null FK → ref_ok=None, no=None.
+    """
+    quote_ids = list({str(r["quote_id"]) for r in items if r.get("quote_id")})
+    contract_ids = list({str(r["contract_id"]) for r in items if r.get("contract_id")})
+
+    quote_map: Dict[str, Any] = {}
+    if quote_ids:
+        qres = (
+            supabase.table("quotes")
+            .select("id, quote_no, company_id")
+            .in_("id", quote_ids)
+            .execute()
+        )
+        for q in (qres.data or []):
+            quote_map[str(_get(q, "id"))] = q
+
+    contract_map: Dict[str, Any] = {}
+    if contract_ids:
+        cres = (
+            supabase.table("contracts")
+            .select("id, contract_no, company_id")
+            .in_("id", contract_ids)
+            .execute()
+        )
+        for c in (cres.data or []):
+            contract_map[str(_get(c, "id"))] = c
+
+    for r in items:
+        qid = r.get("quote_id")
+        if qid is None:
+            r["quote_no"] = None
+            r["quote_ref_ok"] = None
+        else:
+            q = quote_map.get(str(qid))
+            if q is None or str(_get(q, "company_id")) != str(company_id):
+                r["quote_no"] = None
+                r["quote_ref_ok"] = False
+            else:
+                r["quote_no"] = _get(q, "quote_no")
+                r["quote_ref_ok"] = True
+
+        cid = r.get("contract_id")
+        if cid is None:
+            r["contract_no"] = None
+            r["contract_ref_ok"] = None
+        else:
+            c = contract_map.get(str(cid))
+            if c is None or str(_get(c, "company_id")) != str(company_id):
+                r["contract_no"] = None
+                r["contract_ref_ok"] = False
+            else:
+                r["contract_no"] = _get(c, "contract_no")
+                r["contract_ref_ok"] = True
+
+
 def list_payments_admin(
     supabase,
     company_id: str,
     page: int = 1,
     page_size: int = 20,
+    quote_id: Optional[str] = None,
+    contract_id: Optional[str] = None,
+    status_code: Optional[str] = None,
 ) -> Dict[str, Any]:
     """public.payments 직접 조회. v_payments_list 사용 안 함. DB write = 0.
 
-    company_id 필수 (cross-company guard). quote_id / contract_id FK 포함.
+    company_id 필수 (cross-company guard).
+    quote_id / contract_id / status_code optional filter.
+    quote_no / contract_no / quote_ref_ok / contract_ref_ok batch projection.
     """
     off = (page - 1) * page_size
-    res = (
+    q = (
         supabase.table("payments")
         .select(_PAY_COLS, count="exact")
         .eq("company_id", company_id)
-        .order("created_at", desc=True)
-        .range(off, off + page_size - 1)
-        .execute()
     )
+    if quote_id:
+        q = q.eq("quote_id", quote_id)
+    if contract_id:
+        q = q.eq("contract_id", contract_id)
+    if status_code:
+        q = q.eq("status_code", status_code)
+    res = q.order("created_at", desc=True).range(off, off + page_size - 1).execute()
     items = res.data or []
     total = res.count if res.count is not None else len(items)
+    _annotate_payments_with_refs(supabase, company_id, items)
     return {
         "items": items,
         "total": total,
@@ -222,11 +296,51 @@ def list_payments_admin(
 # ── API-5: Contracts (chain read) ─────────────────────────────────────────────
 
 _CONTRACT_ADM_COLS = (
-    "id, contract_no, company_id, "
+    "id, contract_no, company_id, quote_id, "
     "service_type, status_code, "
     "start_date, end_date, "
-    "total_amount, created_at"
+    "contract_amount, vat_amount, total_amount, "
+    "paid_amount, paid_at, "
+    "is_active, created_at"
 )
+
+
+def _annotate_contracts_with_refs(
+    supabase,
+    company_id: str,
+    items: List[Dict],
+) -> None:
+    """Batch lookup quotes for contract FK annotations. N+1=0.
+
+    additive: quote_no, quote_ref_ok.
+    cross-company FK → ref_ok=False. null FK → ref_ok=None.
+    """
+    quote_ids = list({str(r["quote_id"]) for r in items if r.get("quote_id")})
+
+    quote_map: Dict[str, Any] = {}
+    if quote_ids:
+        qres = (
+            supabase.table("quotes")
+            .select("id, quote_no, company_id")
+            .in_("id", quote_ids)
+            .execute()
+        )
+        for q in (qres.data or []):
+            quote_map[str(_get(q, "id"))] = q
+
+    for r in items:
+        qid = r.get("quote_id")
+        if qid is None:
+            r["quote_no"] = None
+            r["quote_ref_ok"] = None
+        else:
+            q = quote_map.get(str(qid))
+            if q is None or str(_get(q, "company_id")) != str(company_id):
+                r["quote_no"] = None
+                r["quote_ref_ok"] = False
+            else:
+                r["quote_no"] = _get(q, "quote_no")
+                r["quote_ref_ok"] = True
 
 
 def list_contracts_admin(
@@ -234,22 +348,32 @@ def list_contracts_admin(
     company_id: str,
     page: int = 1,
     page_size: int = 20,
+    quote_id: Optional[str] = None,
+    contract_id: Optional[str] = None,
+    status_code: Optional[str] = None,
 ) -> Dict[str, Any]:
     """public.contracts 직접 조회. DB write = 0.
 
-    company_id 필수 (cross-company guard). contract_no FK 포함.
+    company_id 필수 (cross-company guard).
+    quote_id / contract_id / status_code optional filter.
+    quote_no / quote_ref_ok batch projection.
     """
     off = (page - 1) * page_size
-    res = (
+    q = (
         supabase.table("contracts")
         .select(_CONTRACT_ADM_COLS, count="exact")
         .eq("company_id", company_id)
-        .order("created_at", desc=True)
-        .range(off, off + page_size - 1)
-        .execute()
     )
+    if quote_id:
+        q = q.eq("quote_id", quote_id)
+    if contract_id:
+        q = q.eq("id", contract_id)
+    if status_code:
+        q = q.eq("status_code", status_code)
+    res = q.order("created_at", desc=True).range(off, off + page_size - 1).execute()
     items = res.data or []
     total = res.count if res.count is not None else len(items)
+    _annotate_contracts_with_refs(supabase, company_id, items)
     return {
         "items": items,
         "total": total,

@@ -70,32 +70,46 @@ def get_entitlement_health(
 @router.get("/payments")
 def list_payments_chain(
     company_id: str = Query(..., description="company_id required (cross-company guard)"),
+    quote_id: Optional[str] = Query(None),
+    contract_id: Optional[str] = Query(None),
+    status_code: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current: dict = Depends(get_current_user),
 ):
     """public.payments 직접 조회. v_payments_list 사용 안 함. DB write = 0.
 
-    quote_id / contract_id FK 포함. company_id 없이는 422.
+    FK filter: quote_id / contract_id / status_code optional.
+    batch projection: quote_no / contract_no / quote_ref_ok / contract_ref_ok.
     """
     supabase = get_supabase()
     _require_admin(current, supabase)
-    data = svc.list_payments_admin(supabase, company_id, page, page_size)
+    data = svc.list_payments_admin(
+        supabase, company_id, page, page_size,
+        quote_id=quote_id, contract_id=contract_id, status_code=status_code,
+    )
     return {"status": "success", "data": data}
 
 
 @router.get("/contracts")
 def list_contracts_chain(
     company_id: str = Query(..., description="company_id required (cross-company guard)"),
+    quote_id: Optional[str] = Query(None),
+    contract_id: Optional[str] = Query(None),
+    status_code: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current: dict = Depends(get_current_user),
 ):
     """public.contracts 직접 조회. DB write = 0.
 
-    contract_no FK 포함. company_id 없이는 422.
+    FK filter: quote_id / contract_id / status_code optional.
+    batch projection: quote_no / quote_ref_ok.
     """
     supabase = get_supabase()
     _require_admin(current, supabase)
-    data = svc.list_contracts_admin(supabase, company_id, page, page_size)
+    data = svc.list_contracts_admin(
+        supabase, company_id, page, page_size,
+        quote_id=quote_id, contract_id=contract_id, status_code=status_code,
+    )
     return {"status": "success", "data": data}
