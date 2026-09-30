@@ -29,6 +29,12 @@ from services.saas_entitlement_runtime_v2 import (
 )
 from services.time import now_kst
 
+
+class CommercialRuntimeStateInvalidError(Exception):
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
 _CONTRACT_COLS = (
     "id, contract_no, company_id, quote_id, "
     "service_type, status_code, is_active, "
@@ -303,11 +309,13 @@ def get_member_runtime_gate(
     # ── V3 contract + CV resolution ───────────────────────────────────────────
     try:
         resolution = resolve_saas_entitlement_context_v2(supabase, company_id, as_of)
-    except SaasEntitlementRuntimeError:
-        return {
-            **_NOT_V3_RESULT_BASE,
-            "target": {"entity_type": entity_type, "entity_id": entity_id},
-        }
+    except SaasEntitlementRuntimeError as exc:
+        if exc.code in {"NO_ACTIVE_SAAS_CONTRACT", "CURRENT_CV_NOT_FOUND"}:
+            return {
+                **_NOT_V3_RESULT_BASE,
+                "target": {"entity_type": entity_type, "entity_id": entity_id},
+            }
+        raise CommercialRuntimeStateInvalidError(exc.code)
 
     # ── COMPLIANCE_CORE entitlement ───────────────────────────────────────────
     decision = evaluate_saas_entitlement_v2(resolution.context, "COMPLIANCE_CORE")

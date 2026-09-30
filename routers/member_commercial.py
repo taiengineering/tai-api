@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services import member_commercial_svc as svc
+from services.member_commercial_svc import CommercialRuntimeStateInvalidError
 
 router = APIRouter(prefix="/me", tags=["회원 이용계약"])
 
@@ -52,6 +53,11 @@ def get_runtime_gate(
             company_id,
             factory_id=factory_id,
             site_id=site_id,
+        )
+    except CommercialRuntimeStateInvalidError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "COMMERCIAL_RUNTIME_STATE_INVALID", "reason": exc.code},
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
