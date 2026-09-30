@@ -596,8 +596,8 @@ def _make_legal_adapter(
     """
     if legal_client is None:
         _unavail = (
-            "LEGAL_BINDING_UNAVAILABLE: LEG_SUPABASE_URL / "
-            "LEG_SUPABASE_SERVICE_ROLE_KEY not configured — "
+            "LEGAL_BINDING_UNAVAILABLE: LEG_DB_URL / "
+            "LEG_DB_KEY not configured — "
             "supply legal_client to build_production_adapters()"
         )
         def _unavailable_iter():

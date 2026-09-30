@@ -35,8 +35,8 @@ Env vars:
     TAI_OPENSEARCH_URL
     SUPABASE_URL
     SUPABASE_SERVICE_ROLE_KEY  (or SUPABASE_KEY)
-    LEG_SUPABASE_URL
-    LEG_SUPABASE_SERVICE_ROLE_KEY
+    LEG_DB_URL
+    LEG_DB_KEY
 """
 from __future__ import annotations
 
@@ -87,12 +87,12 @@ def _build_legal_supabase_client():
     Hard-fails on missing env vars — rebuild must never silently skip LEGAL.
     """
     from supabase import create_client
-    url = os.environ.get("LEG_SUPABASE_URL")
-    key = os.environ.get("LEG_SUPABASE_SERVICE_ROLE_KEY")
+    url = os.environ.get("LEG_DB_URL")
+    key = os.environ.get("LEG_DB_KEY")
     if not url or not key:
         raise EnvironmentError(
-            "LEGAL_BINDING_UNAVAILABLE: LEG_SUPABASE_URL and "
-            "LEG_SUPABASE_SERVICE_ROLE_KEY must be set — "
+            "LEGAL_BINDING_UNAVAILABLE: LEG_DB_URL and "
+            "LEG_DB_KEY must be set — "
             "cannot run rebuild without LEG production client"
         )
     return create_client(url, key)

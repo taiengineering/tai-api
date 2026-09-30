@@ -17,8 +17,8 @@ from unittest.mock import MagicMock, patch
 
 def test_rt_leg_01_rebuild_missing_leg_env_raises(monkeypatch):
     """opensearch_rebuild._build_legal_supabase_client raises EnvironmentError when LEG env absent."""
-    monkeypatch.delenv("LEG_SUPABASE_URL", raising=False)
-    monkeypatch.delenv("LEG_SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.delenv("LEG_DB_URL", raising=False)
+    monkeypatch.delenv("LEG_DB_KEY", raising=False)
 
     from tools.shared_search.opensearch_rebuild import _build_legal_supabase_client
     with pytest.raises(EnvironmentError, match="LEGAL_BINDING_UNAVAILABLE"):
@@ -26,9 +26,9 @@ def test_rt_leg_01_rebuild_missing_leg_env_raises(monkeypatch):
 
 
 def test_rt_leg_01b_rebuild_partial_leg_env_raises(monkeypatch):
-    """Only LEG_SUPABASE_URL set (key missing) → EnvironmentError."""
-    monkeypatch.setenv("LEG_SUPABASE_URL", "https://fake.supabase.co")
-    monkeypatch.delenv("LEG_SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    """Only LEG_DB_URL set (key missing) → EnvironmentError."""
+    monkeypatch.setenv("LEG_DB_URL", "https://fake.supabase.co")
+    monkeypatch.delenv("LEG_DB_KEY", raising=False)
 
     from tools.shared_search.opensearch_rebuild import _build_legal_supabase_client
     with pytest.raises(EnvironmentError, match="LEGAL_BINDING_UNAVAILABLE"):
@@ -39,8 +39,8 @@ def test_rt_leg_01b_rebuild_partial_leg_env_raises(monkeypatch):
 
 def test_rt_leg_02_census_missing_leg_env_raises(monkeypatch):
     """f2_census._build_legal_supabase_client raises EnvironmentError when LEG env absent."""
-    monkeypatch.delenv("LEG_SUPABASE_URL", raising=False)
-    monkeypatch.delenv("LEG_SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.delenv("LEG_DB_URL", raising=False)
+    monkeypatch.delenv("LEG_DB_KEY", raising=False)
 
     from tools.shared_search.f2_census import _build_legal_supabase_client
     with pytest.raises(EnvironmentError, match="LEGAL_BINDING_UNAVAILABLE"):
