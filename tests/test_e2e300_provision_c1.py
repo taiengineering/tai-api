@@ -2309,7 +2309,9 @@ def test_tc13_site_code_fixed_no_truncate():
 def test_tc14_classify_db_error_23505_generic():
     """T_C14: 23505 without factories_site_code → DB_UNIQUE_VIOLATION."""
     import sys
-    sys.path.insert(0, "/Users/taiwangsim/TAI_E2E200/consumer-ui300")
+    _e2e200 = str(Path(__file__).parent.parent.parent / "TAI_E2E200" / "consumer-ui300")
+    if _e2e200 not in sys.path:
+        sys.path.insert(0, _e2e200)
     from run_pilot_c1 import classify_db_error
 
     exc = Exception({"code": "23505", "message": "duplicate key value", "hint": None})
@@ -2323,7 +2325,9 @@ def test_tc14_classify_db_error_23505_generic():
 def test_tc15_classify_db_error_site_code_collision():
     """T_C15: 23505 + factories_site_code_unique → SITE_CODE_UNIQUE_COLLISION."""
     import sys
-    sys.path.insert(0, "/Users/taiwangsim/TAI_E2E200/consumer-ui300")
+    _e2e200 = str(Path(__file__).parent.parent.parent / "TAI_E2E200" / "consumer-ui300")
+    if _e2e200 not in sys.path:
+        sys.path.insert(0, _e2e200)
     from run_pilot_c1 import classify_db_error
 
     exc = Exception({
