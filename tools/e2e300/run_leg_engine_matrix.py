@@ -137,7 +137,20 @@ def load_manifest(manifest_path: str) -> dict:
             f"MANIFEST_CASE_SHA_MISMATCH: "
             f"expected={CASE_SHA[:12]}…  got={str(stored_sha)[:12]}…"
         )
+    seen_ids: set = set()
+    for c in manifest.get("cases", []):
+        cid = c.get("case_id")
+        if cid in seen_ids:
+            raise ValueError(f"MANIFEST_DUPLICATE_CASE_ID: {cid!r}")
+        seen_ids.add(cid)
     return manifest
+
+
+def _check_cases_selected(cases: list, filter_desc: str = "") -> None:
+    """Fail-close when zero cases are selected after manifest + filter."""
+    if not cases:
+        suffix = f": {filter_desc}" if filter_desc else ""
+        raise ValueError(f"NO_CASES_SELECTED{suffix}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -427,6 +440,13 @@ def run_case(
         return {"status": "BLOCKED", "reason": "CASE_NOT_FOUND_IN_FROZEN_UNIVERSE",
                 "case_id": case_id, "sector": sector}
 
+    # Sector identity gate — manifest sector must match frozen universe sector
+    universe_sector = case_data.get("sector")
+    if universe_sector and universe_sector != sector:
+        return {"status": "ERROR",
+                "reason": f"CASE_SECTOR_MISMATCH:manifest={sector!r},universe={universe_sector!r}",
+                "case_id": case_id, "sector": sector}
+
     # Consumer input build
     try:
         consumer_input = build_consumer_input(case_data, sector)
@@ -541,7 +561,14 @@ def write_summary(output_dir: str, results: List[dict]) -> dict:
         "fallback_used_count": fallback_used_count,
         "system_error_count":  system_error_count,
         "semantic_status":    "NOT_EVALUATED",
-        "all_pass":           execution_fail == 0 and error == 0,
+        "all_pass": (
+            total > 0
+            and execution_pass == total
+            and execution_fail == 0
+            and blocked == 0
+            and skipped == 0
+            and error == 0
+        ),
         "results": [
             {
                 "case_id": r.get("case_id"),
@@ -586,6 +613,13 @@ def main() -> None:
         cases = [c for c in cases if c["case_id"] == args.case_id]
     if args.sector:
         cases = [c for c in cases if c["sector"] == args.sector]
+
+    try:
+        filter_desc = " ".join(filter(None, [args.case_id, args.sector]))
+        _check_cases_selected(cases, filter_desc)
+    except ValueError as exc:
+        print(f"[E2E300] ERROR: {exc}")
+        sys.exit(1)
 
     results: List[dict] = []
     for mc in cases:

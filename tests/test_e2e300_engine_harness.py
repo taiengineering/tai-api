@@ -36,6 +36,7 @@ from run_leg_engine_matrix import (
     CASE_SHA,
     WriteBlockedBuilder,
     WriteBlockedSupabase,
+    _check_cases_selected,
     build_consumer_input,
     build_frozen_consumer_overrides,
     dispatch,
@@ -523,7 +524,7 @@ def test_h20_summary_deterministic(tmp_path):
     assert s1["total"]          == 3
     assert s1["execution_pass"] == 2
     assert s1["blocked"]        == 1
-    assert s1["all_pass"]       is True   # no FAIL, no ERROR → all_pass=True
+    assert s1["all_pass"]       is False  # BLOCKED > 0 → all_pass=False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -766,3 +767,108 @@ def test_h31_read_chain_passes():
     assert isinstance(eq, WriteBlockedBuilder)
     result = eq.execute()
     assert result == execute_response
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G1 — blocked=1 → all_pass=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_g1_blocked_cases_not_all_pass(tmp_path):
+    """G1: BLOCKED > 0 → all_pass=False even if no FAIL/ERROR."""
+    results = [{"case_id": "MFG-001", "sector": "MANUFACTURING", "status": "BLOCKED", "reason": "SITE_ID_REQUIRED"}]
+    s = write_summary(str(tmp_path), results)
+    assert s["all_pass"] is False
+    assert s["blocked"] == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G2 — skipped=1 → all_pass=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_g2_skipped_cases_not_all_pass(tmp_path):
+    """G2: SKIPPED > 0 → all_pass=False (source_exact=False cannot silently pass)."""
+    results = [{"case_id": "MFG-001", "sector": "MANUFACTURING", "status": "SKIPPED", "reason": "SOURCE_NOT_EXACT"}]
+    s = write_summary(str(tmp_path), results)
+    assert s["all_pass"] is False
+    assert s["skipped"] == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G3 — total=0 → all_pass=False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_g3_zero_total_not_all_pass(tmp_path):
+    """G3: write_summary with empty results → all_pass=False (total=0 is not success)."""
+    s = write_summary(str(tmp_path), [])
+    assert s["all_pass"] is False
+    assert s["total"] == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G4 — OK 1/1 → all_pass=True
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_g4_all_ok_all_pass(tmp_path):
+    """G4: single OK result with no FAIL/BLOCKED/SKIPPED/ERROR → all_pass=True."""
+    results = [{"case_id": "MFG-001", "sector": "MANUFACTURING", "status": "OK", "reason": None}]
+    s = write_summary(str(tmp_path), results)
+    assert s["all_pass"] is True
+    assert s["execution_pass"] == 1
+    assert s["total"] == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G5 — manifest sector != frozen sector → ERROR, LEG seam not called
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_g5_manifest_sector_mismatch_no_seam_call():
+    """G5: manifest says BUILDING but frozen universe says MANUFACTURING → ERROR, seam=0 calls."""
+    seam_called = {"count": 0}
+    def mock_industrial(sb, factory_id, consumer_input):
+        seam_called["count"] += 1
+        return dict(_VALID_LEG_RETURN)
+
+    mc = _mc("BUILDING", factory_id="fid-x")
+    mc["case_id"] = "BLD-001"
+    # Frozen universe says MANUFACTURING for this case_id
+    universe = {"BLD-001": {"case_id": "BLD-001", "sector": "MANUFACTURING", "sector_fields": {}}}
+
+    result = run_case(_mock_sb(), mc, universe, _industrial_seam=mock_industrial)
+    assert result["status"] == "ERROR"
+    assert "CASE_SECTOR_MISMATCH" in result["reason"]
+    assert seam_called["count"] == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G6 — duplicate manifest case_id → load_manifest raises ValueError
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_g6_manifest_duplicate_case_id(tmp_path):
+    """G6: provision_manifest.json with duplicate case_id → MANIFEST_DUPLICATE_CASE_ID."""
+    manifest = {
+        "run_id":   "run-001",
+        "case_sha": CASE_SHA,
+        "cases": [
+            {"case_id": "MFG-001", "sector": "MANUFACTURING", "factory_id": "f1", "source_exact": True},
+            {"case_id": "MFG-001", "sector": "MANUFACTURING", "factory_id": "f2", "source_exact": True},
+        ],
+    }
+    p = tmp_path / "manifest.json"
+    p.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="MANIFEST_DUPLICATE_CASE_ID"):
+        load_manifest(str(p))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G7 — zero cases selected → _check_cases_selected raises ValueError
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_g7_zero_cases_selected_raises():
+    """G7: _check_cases_selected([]) raises ValueError with NO_CASES_SELECTED."""
+    with pytest.raises(ValueError, match="NO_CASES_SELECTED"):
+        _check_cases_selected([])
+
+
+def test_g7b_nonzero_cases_selected_ok():
+    """G7b: _check_cases_selected with 1 item does not raise."""
+    _check_cases_selected([{"case_id": "MFG-001"}])
