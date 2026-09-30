@@ -150,6 +150,53 @@ def call_pay_auth(auth_token: str, auth_url: str, sign_key: str, *, mid: str = "
         raise
 
 
+def _build_inicis_prepare_response_exact(
+    sign_key: str,
+    payment_id: str,
+    order_id: str,
+    total_amount: int,
+    goodname: str,
+    *,
+    buyername: Optional[str] = None,
+    buyertel: Optional[str] = None,
+    buyeremail: Optional[str] = None,
+) -> dict:
+    """Pure INICIS prepare response — DB write = 0. timestamp fresh each call.
+
+    기존 payment row 재사용(PENDING reuse) 또는 신규 INSERT 후 동일 형태 반환에 사용.
+    V1 output shape 변화 = 0.
+    """
+    ts = ts_ms()
+    price_str = str(total_amount)
+    m_key = sha256(sign_key)
+    sig_data = f"oid={order_id}&price={price_str}&timestamp={ts}"
+    veri_data = f"oid={order_id}&price={price_str}&signKey={sign_key}&timestamp={ts}"
+    signature = sha256(sig_data)
+    verification = sha256(veri_data)
+    return {
+        "status": "success",
+        "data": {
+            "payment_id": payment_id,
+            "mid": INICIS_MID,
+            "mKey": m_key,
+            "oid": order_id,
+            "price": price_str,
+            "goodname": goodname,
+            "buyername": buyername or "고객",
+            "buyertel": buyertel or "00000000000",
+            "buyeremail": buyeremail or "",
+            "timestamp": ts,
+            "signature": signature,
+            "verification": verification,
+            "use_chkfake": "Y",
+            "returnUrl": DEFAULT_RETURN_URL,
+            "closeUrl": DEFAULT_CLOSE_URL,
+            "charset": "UTF-8",
+            "gopaymethod": "",
+        },
+    }
+
+
 def _run_inicis_prepare_exact(
     supabase,
     sign_key: str,
@@ -185,13 +232,6 @@ def _run_inicis_prepare_exact(
         raise PaymentPrepareError(400, "supply_amount + vat_amount != total_amount")
 
     order_id = make_order_id()
-    timestamp = ts_ms()
-    price_str = str(total_amount)
-    m_key = sha256(sign_key)
-    sig_data = f"oid={order_id}&price={price_str}&timestamp={timestamp}"
-    veri_data = f"oid={order_id}&price={price_str}&signKey={sign_key}&timestamp={timestamp}"
-    signature = sha256(sig_data)
-    verification = sha256(veri_data)
     log.info(f"[INICIS STEP1] oid={order_id} user={user_id} product={product_type}")
 
     now = now_iso()
@@ -227,28 +267,16 @@ def _run_inicis_prepare_exact(
     if not res.data:
         raise PaymentPrepareError(500, "결제 레코드 생성 실패")
 
-    return {
-        "status": "success",
-        "data": {
-            "payment_id": res.data[0]["id"],
-            "mid": INICIS_MID,
-            "mKey": m_key,
-            "oid": order_id,
-            "price": price_str,
-            "goodname": goodname,
-            "buyername": buyername or "고객",
-            "buyertel": buyertel or "00000000000",
-            "buyeremail": buyeremail or "",
-            "timestamp": timestamp,
-            "signature": signature,
-            "verification": verification,
-            "use_chkfake": "Y",
-            "returnUrl": DEFAULT_RETURN_URL,
-            "closeUrl": DEFAULT_CLOSE_URL,
-            "charset": "UTF-8",
-            "gopaymethod": "",
-        },
-    }
+    return _build_inicis_prepare_response_exact(
+        sign_key,
+        payment_id=str(res.data[0]["id"]),
+        order_id=order_id,
+        total_amount=total_amount,
+        goodname=goodname,
+        buyername=buyername,
+        buyertel=buyertel,
+        buyeremail=buyeremail,
+    )
 
 
 def run_inicis_prepare(body: PrepareBody) -> dict:
