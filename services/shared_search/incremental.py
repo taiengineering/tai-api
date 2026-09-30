@@ -87,6 +87,30 @@ def _rebuild_active(supabase: Any) -> bool:
 # Requeue / fail helpers
 # ---------------------------------------------------------------------------
 
+def _try_build_legal_client() -> Optional[Any]:
+    """Try to build the LEG production Supabase client from env vars.
+
+    Returns None (not EnvironmentError) so process_queue can degrade
+    gracefully: LEGAL events are failed-safely rather than crashing.
+    Only attempted once per batch, when LEGAL events are detected.
+    """
+    import os
+    url = os.environ.get("LEG_SUPABASE_URL")
+    key = os.environ.get("LEG_SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        logger.warning(
+            "LEG_SUPABASE_URL / LEG_SUPABASE_SERVICE_ROLE_KEY not set — "
+            "LEGAL events in this batch will fail safely"
+        )
+        return None
+    try:
+        from supabase import create_client
+        return create_client(url, key)
+    except Exception as exc:
+        logger.warning("Failed to build LEG client: %s", exc)
+        return None
+
+
 def _fail_event(supabase: Any, event_id: int, reason: str,
                 worker_id: str, attempt_no: int) -> None:
     """Mark an event as permanently failed."""
@@ -113,6 +137,7 @@ def sync_object(
     supabase_client: Any,
     os_client: Any,
     adapter_map: Optional[dict] = None,
+    legal_client: Optional[Any] = None,
 ) -> dict:
     """Sync a single canonical object to OpenSearch.
 
@@ -144,7 +169,7 @@ def sync_object(
     # Adapter lookup
     if adapter_map is None:
         from services.shared_search.production_bindings import build_production_adapters
-        adapters = build_production_adapters(supabase_client)
+        adapters = build_production_adapters(supabase_client, legal_client=legal_client)
         adapter_map = {a.domain_name: a for a in adapters}
 
     adapter = adapter_map.get(domain_name)
@@ -224,6 +249,7 @@ def bulk_sync_published_domain(
     os_client: Any,
     supabase_client: Any,
     adapter_map: Optional[dict] = None,
+    legal_client: Optional[Any] = None,
     db_canonical_ids: set,
     mget_batch_size: int = 500,
     chunk_size: int = 500,
@@ -291,7 +317,7 @@ def bulk_sync_published_domain(
     # --- adapter lookup ---
     if adapter_map is None:
         from services.shared_search.production_bindings import build_production_adapters
-        adapter_map = {a.domain_name: a for a in build_production_adapters(supabase_client)}
+        adapter_map = {a.domain_name: a for a in build_production_adapters(supabase_client, legal_client=legal_client)}
 
     adapter = adapter_map.get(domain_name)
     if adapter is None:
@@ -448,6 +474,7 @@ def process_queue(
     os_client: Any = None,
     worker_id: Optional[str] = None,
     batch_size: int = 50,
+    legal_client: Optional[Any] = None,
 ) -> dict:
     """Drain one batch of events from the outbox.
 
@@ -497,10 +524,18 @@ def process_queue(
     if not events:
         return obs
 
+    # Lazy-build LEG client when batch contains LEGAL events and no
+    # explicit legal_client was supplied.  Per-batch, not per-event.
+    effective_legal_client = legal_client
+    if effective_legal_client is None:
+        has_legal = any(e.get("domain_name") == "LEGAL" for e in events)
+        if has_legal:
+            effective_legal_client = _try_build_legal_client()
+
     # Build adapter map once per batch
     try:
         from services.shared_search import production_bindings as _pb
-        adapters = _pb.build_production_adapters(sb)
+        adapters = _pb.build_production_adapters(sb, legal_client=effective_legal_client)
         adapter_map = {a.domain_name: a for a in adapters}
     except Exception as exc:
         logger.error("build_production_adapters failed: %s", exc)
