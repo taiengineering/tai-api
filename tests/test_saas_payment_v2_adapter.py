@@ -78,7 +78,7 @@ def _capturing_sb():
     return sb
 
 
-def _minimal_snap_dict(supply=100_000, vat=10_000, total=110_000, term=1):
+def _minimal_snap_dict(supply=100_000, vat=10_000, total=110_000, term=3):
     return {
         "schema_version": "SAAS_PRICING_V2",
         "policy_version": "TEST",
@@ -105,7 +105,7 @@ def _minimal_snap_dict(supply=100_000, vat=10_000, total=110_000, term=1):
     }
 
 
-def _minimal_item_dict(supply=100_000, vat=10_000, total=110_000, term=1):
+def _minimal_item_dict(supply=100_000, vat=10_000, total=110_000, term=3):
     return {
         "quote_schema_version": "SAAS_QUOTE_V2",
         "display_name": "TAI Safe 관리자형",
@@ -145,7 +145,7 @@ def _valid_v2_quote(
     supply=100_000,
     vat=10_000,
     total=110_000,
-    term=1,
+    term=3,
     items=None,
 ):
     return {
@@ -498,7 +498,7 @@ def test_A28_quote_total_ne_snapshot_total_rejected(monkeypatch):
 # A29–A38: Valid V2 Prepare — Field Contract Tests
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _setup_valid_v2(monkeypatch, supply=100_000, vat=10_000, total=110_000, term=1):
+def _setup_valid_v2(monkeypatch, supply=100_000, vat=10_000, total=110_000, term=3):
     quote = _valid_v2_quote(supply=supply, vat=vat, total=total, term=term)
     monkeypatch.setattr("services.member_quote_svc.get_member_quote", lambda *a: quote)
     monkeypatch.setattr("services.saas_payment_v2_adapter.load_sign_key", lambda: "TEST_KEY")
@@ -617,12 +617,10 @@ def test_A40_no_pricing_engine_import():
 
 
 def test_A41_no_contract_write():
-    """Adapter 소스에 contracts/subscriptions write 없음."""
+    """Adapter 소스에 contracts write 없음. (subscriptions은 V3 recurring prepare에서 허용)"""
     code = _adapter_code_lines()
     assert '"contracts"' not in code
     assert "'contracts'" not in code
-    assert '"subscriptions"' not in code
-    assert "'subscriptions'" not in code
 
 
 def test_A42_runtime_consumer_zero():
