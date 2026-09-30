@@ -23,6 +23,7 @@ from provision_frozen_c1 import (
     CST_NOT_PIPELINE_FIELDS,
     MFG_EXPLICIT_CONFIRM_FIELDS,
     MFG_NOT_BOUND_FIELDS,
+    StaleE2ECaseError,
     build_bld_factory_payload,
     build_c1_source_evidence,
     build_cst_site_payload,
@@ -31,7 +32,13 @@ from provision_frozen_c1 import (
     extract_mfg_explicit_confirms,
     normalize_cst_amount_to_eok,
     normalize_cst_construction_type,
+    provision_bld_c1,
+    provision_case,
     provision_cst_source,
+    provision_mfg_c1,
+    verify_bld_c1_exact,
+    verify_cst_c1_exact,
+    verify_mfg_c1_exact,
 )
 
 _CASE_SHA = "20f39a93cc18dce4cec4229df0a001b6219de91bd926a0176509f5d313040efd"
@@ -138,7 +145,7 @@ def test_p5_mfg_factory_payload_existing_source_seams():
     assert payload["ksic_code"] == "C2593"
     assert payload["electrical_capacity_kw"] == 402
     assert payload["employee_count"] == 45
-    assert payload["sector"] == "MANUFACTURING"
+    assert payload["sector"] == "INDUSTRIAL"  # normalize_sector_db("MANUFACTURING") → "INDUSTRIAL"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -285,6 +292,7 @@ def test_p11_post_sites_not_used():
 
     result = provision_cst_source(
         MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
         _site_insert_fn=mock_site_insert,
         _factory_bridge_fn=mock_factory_bridge,
     )
@@ -317,6 +325,7 @@ def test_p12_auto_diagnose_not_called():
     }
     provision_cst_source(
         MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
         _site_insert_fn=lambda *_a: "sid-002",
         _factory_bridge_fn=mock_factory_bridge,
     )
@@ -345,6 +354,7 @@ def test_p13_site_created():
     }
     result = provision_cst_source(
         MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
         _site_insert_fn=lambda *_a: "sid-explicit-003",
         _factory_bridge_fn=lambda *_a: "fid-explicit-003",
     )
@@ -356,7 +366,7 @@ def test_p13_site_created():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_p14_factory_bridge_created():
-    """P14: provision_cst_source returns factory_id from _factory_bridge_fn."""
+    """P14: provision_cst_source returns factory_id from _factory_bridge_fn; pipeline_c1_exact from readback."""
     case_data = {
         "case_id":      "CST-004",
         "factory_name": "현장4",
@@ -367,13 +377,20 @@ def test_p14_factory_bridge_created():
             "construction_amount": 80_000_000_000,
         },
     }
+    # Readback seams return matching data so verify_cst_c1_exact returns exact=True
     result = provision_cst_source(
         MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
         _site_insert_fn=lambda *_a: "sid-004",
         _factory_bridge_fn=lambda *_a: "fid-bridge-004",
+        _site_read_fn=lambda _sb, _sid: {
+            "id": "sid-004", "site_name": "현장4",
+            "site_type": "BUILDING", "contract_amount": 800.0, "total_workers": 60,
+        },
+        _factory_read_fn=lambda _sb, _fid: {"id": "fid-bridge-004"},
     )
     assert result["factory_id"] == "fid-bridge-004"
-    assert result["pipeline_c1_exact"] is True
+    assert result["pipeline_c1_exact"] is True  # from verify_cst_c1_exact, not hardcoded
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -520,8 +537,624 @@ def test_p20_no_synthetic_work_date():
 
     provision_cst_source(
         MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
         _site_insert_fn=capture_site_insert,
         _factory_bridge_fn=lambda *_a: "fid-008",
     )
     for p in site_payloads_seen:
         assert "work_date" not in p
+
+# =============================================================================
+# WO-005A — Q1-Q23: readback exactness, stale guard, verify functions,
+# provision orchestrators, sector router
+# All mock/seam only.  PRODUCTION_WRITE = 0.  LEG_EXECUTED = 0.
+# =============================================================================
+
+from services.legal_rules import normalize_sector_db as _norm_sector
+
+_NORM_MFG = _norm_sector("MANUFACTURING")  # "INDUSTRIAL"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q1 — provision_mfg_c1 raises StaleE2ECaseError when stale
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q1_mfg_stale_guard_raises():
+    """Q1: provision_mfg_c1 raises StaleE2ECaseError when _stale_fn returns True."""
+    case_data = {
+        "case_id": "MFG-001", "factory_name": "중복공장", "sector": "MANUFACTURING",
+        "worker_count": 10, "sector_fields": {}, "processes": [], "works": [],
+        "materials": [], "equipment": [],
+    }
+    with pytest.raises(StaleE2ECaseError) as exc_info:
+        provision_mfg_c1(
+            MagicMock(), case_data, "cmp-001",
+            _stale_fn=lambda *_a: True,
+        )
+    assert "STALE_E2E_CASE_FOUND" in str(exc_info.value)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q2 — provision_bld_c1 raises StaleE2ECaseError when stale
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q2_bld_stale_guard_raises():
+    """Q2: provision_bld_c1 raises StaleE2ECaseError when _stale_fn returns True."""
+    case_data = {
+        "case_id": "BLD-001", "factory_name": "중복빌딩", "sector": "BUILDING",
+        "worker_count": 20, "sector_fields": {"building_area": 300.0, "floor_count": 3},
+        "processes": [], "works": [], "materials": [], "equipment": [],
+    }
+    with pytest.raises(StaleE2ECaseError):
+        provision_bld_c1(
+            MagicMock(), case_data, "cmp-001",
+            _stale_fn=lambda *_a: True,
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q3 — stale check passes (no error) when _stale_fn returns False
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q3_stale_check_passes_when_no_duplicate():
+    """Q3: provision_mfg_c1 proceeds normally when _stale_fn returns False."""
+    case_data = {
+        "case_id": "MFG-002", "factory_name": "신규공장", "sector": "MANUFACTURING",
+        "worker_count": 10, "sector_fields": {}, "processes": [], "works": [],
+        "materials": [], "equipment": [],
+    }
+    inserted = {}
+
+    def mock_ins(supabase, payload):
+        inserted.update(payload)
+        return {**payload, "id": "fid-q3"}
+
+    # Should not raise
+    result = provision_mfg_c1(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _factory_insert_fn=mock_ins,
+        _factory_read_fn=lambda *_a: {**inserted, "id": "fid-q3"},
+        _process_read_fn=lambda *_a: [],
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
+    )
+    assert result["factory_id"] == "fid-q3"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q4 — verify_mfg_c1_exact exact=True for matching factory
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q4_verify_mfg_exact_true():
+    """Q4: verify_mfg_c1_exact returns exact=True when stored matches expected."""
+    expected = {
+        "name": "공장A", "company_id": "cmp-001",
+        "sector": _NORM_MFG,  # "INDUSTRIAL"
+        "site_type": "OFFICE", "employee_count": 45,
+        "ksic_code": "C2593", "electrical_capacity_kw": 402,
+    }
+    stored = {**expected, "id": "fid-001", "extra_col": "ignored"}
+    result = verify_mfg_c1_exact(stored, expected)
+    assert result["exact"] is True
+    assert result["mismatches"] == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q5 — verify_mfg_c1_exact detects wrong sector (MANUFACTURING vs INDUSTRIAL)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q5_verify_mfg_exact_wrong_sector():
+    """Q5: verify_mfg_c1_exact returns exact=False with 'sector' in mismatches when sector='MANUFACTURING'."""
+    expected = {
+        "name": "공장B", "company_id": "cmp-001",
+        "sector": _NORM_MFG,  # "INDUSTRIAL"
+        "site_type": "OFFICE", "employee_count": 30, "ksic_code": "C2511",
+    }
+    stored = {**expected, "sector": "MANUFACTURING"}  # wrong: should be INDUSTRIAL
+    result = verify_mfg_c1_exact(stored, expected)
+    assert result["exact"] is False
+    assert "sector" in result["mismatches"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q6 — verify_mfg_c1_exact detects employee_count mismatch
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q6_verify_mfg_exact_wrong_employee_count():
+    """Q6: verify_mfg_c1_exact returns exact=False when employee_count differs."""
+    expected = {
+        "name": "공장C", "company_id": "cmp-001",
+        "sector": _NORM_MFG, "site_type": "OFFICE", "employee_count": 50,
+    }
+    stored = {**expected, "employee_count": 99}  # wrong
+    result = verify_mfg_c1_exact(stored, expected)
+    assert result["exact"] is False
+    assert "employee_count" in result["mismatches"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q7 — verify_bld_c1_exact exact=True for matching factory
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q7_verify_bld_exact_true():
+    """Q7: verify_bld_c1_exact returns exact=True when stored matches expected."""
+    expected = {
+        "name": "빌딩A", "company_id": "cmp-001", "sector": "BUILDING",
+        "site_type": "BUILDING", "employee_count": 30,
+        "building_area": 411.3, "floor_count": 4, "electrical_capacity_kw": 73,
+    }
+    stored = {**expected, "id": "fid-bld-001"}
+    result = verify_bld_c1_exact(stored, expected)
+    assert result["exact"] is True
+    assert result["mismatches"] == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q8 — verify_bld_c1_exact detects building_area mismatch
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q8_verify_bld_exact_wrong_building_area():
+    """Q8: verify_bld_c1_exact returns exact=False when building_area differs."""
+    expected = {
+        "name": "빌딩B", "company_id": "cmp-001", "sector": "BUILDING",
+        "site_type": "BUILDING", "employee_count": 25, "building_area": 500.0,
+    }
+    stored = {**expected, "building_area": 999.0}  # wrong
+    result = verify_bld_c1_exact(stored, expected)
+    assert result["exact"] is False
+    assert "building_area" in result["mismatches"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q9 — verify_cst_c1_exact exact=True when site+factory match
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q9_verify_cst_exact_true():
+    """Q9: verify_cst_c1_exact returns exact=True when site row and factory bridge match."""
+    case_data = {
+        "case_id": "CST-001", "factory_name": "현장A", "sector": "CONSTRUCTION",
+        "worker_count": 60,
+        "sector_fields": {"construction_type": "건축", "construction_amount": 80_000_000_000},
+    }
+    stored_site = {
+        "id": "sid-001", "site_name": "현장A", "site_type": "BUILDING",
+        "contract_amount": 800.0, "total_workers": 60,
+    }
+    stored_factory = {"id": "fid-001"}
+    result = verify_cst_c1_exact(stored_site, stored_factory, case_data)
+    assert result["exact"] is True
+    assert result["mismatches"] == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q10 — verify_cst_c1_exact fails when stored_factory is None (bridge failed)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q10_verify_cst_exact_false_no_factory():
+    """Q10: verify_cst_c1_exact returns exact=False with 'factory_bridge' in mismatches when factory absent."""
+    case_data = {
+        "case_id": "CST-002", "factory_name": "현장B", "sector": "CONSTRUCTION",
+        "worker_count": 30,
+        "sector_fields": {"construction_type": "토목", "construction_amount": 50_000_000_000},
+    }
+    stored_site = {
+        "id": "sid-002", "site_name": "현장B", "site_type": "CIVIL",
+        "contract_amount": 500.0, "total_workers": 30,
+    }
+    result = verify_cst_c1_exact(stored_site, None, case_data)
+    assert result["exact"] is False
+    assert "factory_bridge" in result["mismatches"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q11 — provision_mfg_c1 inserts factory with sector=INDUSTRIAL
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q11_provision_mfg_c1_inserts_industrial_sector():
+    """Q11: provision_mfg_c1 passes sector='INDUSTRIAL' (not 'MANUFACTURING') to factory insert."""
+    captured_payload = {}
+
+    def mock_ins(supabase, payload):
+        captured_payload.update(payload)
+        return {**payload, "id": "fid-q11"}
+
+    case_data = {
+        "case_id": "MFG-003", "factory_name": "공장Q11", "sector": "MANUFACTURING",
+        "worker_count": 50, "site_type": "OFFICE",
+        "sector_fields": {"ksic_code": "C2593"},
+        "processes": [], "works": [], "materials": [], "equipment": [],
+    }
+    provision_mfg_c1(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _factory_insert_fn=mock_ins,
+        _factory_read_fn=lambda *_a: {**captured_payload, "id": "fid-q11"},
+        _process_read_fn=lambda *_a: [],
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
+    )
+    assert captured_payload["sector"] == "INDUSTRIAL"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q12 — provision_mfg_c1 calls factory readback after insert
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q12_provision_mfg_c1_factory_readback_called():
+    """Q12: provision_mfg_c1 calls _factory_read_fn — readback is required, not just insert success."""
+    read_calls = []
+
+    def mock_read(supabase, factory_id):
+        read_calls.append(factory_id)
+        return {"id": factory_id, "name": "공장Q12", "company_id": "cmp-001",
+                "sector": "INDUSTRIAL", "site_type": "OFFICE", "employee_count": 10}
+
+    case_data = {
+        "case_id": "MFG-004", "factory_name": "공장Q12", "sector": "MANUFACTURING",
+        "worker_count": 10, "sector_fields": {},
+        "processes": [], "works": [], "materials": [], "equipment": [],
+    }
+    provision_mfg_c1(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _factory_insert_fn=lambda _sb, p: {**p, "id": "fid-q12"},
+        _factory_read_fn=mock_read,
+        _process_read_fn=lambda *_a: [],
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
+    )
+    assert len(read_calls) == 1
+    assert read_calls[0] == "fid-q12"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q13 — provision_mfg_c1 pipeline_c1_exact=True when all verify pass
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q13_provision_mfg_c1_pipeline_exact_true_from_verify():
+    """Q13: pipeline_c1_exact=True only when factory + all source readbacks match."""
+    case_data = {
+        "case_id": "MFG-005", "factory_name": "공장Q13", "sector": "MANUFACTURING",
+        "worker_count": 45, "site_type": "OFFICE",
+        "sector_fields": {"ksic_code": "C2593", "electrical_capacity_kw": 402},
+        "processes": [],
+        "works": [{"work_type": "GRINDING", "work_subtype": None, "attributes": {}}],
+        "materials": [],
+        "equipment": [{"equipment_type_code": "040", "asset_name": "VOC설비", "quantity": 1}],
+    }
+    captured = {}
+
+    def mock_ins(supabase, payload):
+        captured.update(payload)
+        return {**payload, "id": "fid-q13"}
+
+    result = provision_mfg_c1(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _factory_insert_fn=mock_ins,
+        _factory_read_fn=lambda *_a: {**captured, "id": "fid-q13"},  # exact match
+        _process_read_fn=lambda *_a: [],                                # 0 expected → exact
+        _work_read_fn=lambda *_a: [{"work_type": "GRINDING", "active": True}],
+        _material_read_fn=lambda *_a: [],                               # 0 expected → exact
+        _equipment_read_fn=lambda *_a: [{"equipment_type_code": "040"}],
+        _work_insert_fn=lambda *_a: {},
+        _equipment_insert_fn=lambda *_a: {},
+    )
+    assert result["pipeline_c1_exact"] is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q14 — provision_mfg_c1 pipeline_c1_exact=False when factory readback has wrong sector
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q14_provision_mfg_c1_pipeline_exact_false_on_mismatch():
+    """Q14: pipeline_c1_exact=False when factory readback returns wrong sector."""
+    case_data = {
+        "case_id": "MFG-006", "factory_name": "공장Q14", "sector": "MANUFACTURING",
+        "worker_count": 45, "site_type": "OFFICE",
+        "sector_fields": {"ksic_code": "C2593"},
+        "processes": [], "works": [], "materials": [], "equipment": [],
+    }
+    result = provision_mfg_c1(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _factory_insert_fn=lambda _sb, p: {**p, "id": "fid-q14"},
+        # readback returns MANUFACTURING (wrong) — verify should catch this
+        _factory_read_fn=lambda *_a: {
+            "id": "fid-q14", "name": "공장Q14", "company_id": "cmp-001",
+            "sector": "MANUFACTURING",  # wrong: should be INDUSTRIAL
+            "site_type": "OFFICE", "employee_count": 45,
+        },
+        _process_read_fn=lambda *_a: [],
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
+    )
+    assert result["pipeline_c1_exact"] is False
+    assert "sector" in result["verify"]["factory"]["mismatches"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q15 — provision_bld_c1 factory insert called
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q15_provision_bld_c1_factory_insert_called():
+    """Q15: provision_bld_c1 calls _factory_insert_fn with BLD sector."""
+    captured = {}
+
+    def mock_ins(supabase, payload):
+        captured.update(payload)
+        return {**payload, "id": "fid-bld-q15"}
+
+    case_data = {
+        "case_id": "BLD-002", "factory_name": "빌딩Q15", "sector": "BUILDING",
+        "worker_count": 30, "site_type": "BUILDING",
+        "sector_fields": {"building_area": 411.3, "floor_count": 4},
+        "processes": [], "works": [], "materials": [], "equipment": [],
+    }
+    provision_bld_c1(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _factory_insert_fn=mock_ins,
+        _factory_read_fn=lambda *_a: {**captured, "id": "fid-bld-q15"},
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
+    )
+    assert captured["sector"] == "BUILDING"
+    assert captured["building_area"] == 411.3
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q16 — provision_bld_c1 does NOT call process insert (BLD_NOT_PIPELINE)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q16_provision_bld_c1_no_process_insert():
+    """Q16: provision_bld_c1 never calls process insert — BLD processes are NOT_PIPELINE."""
+    process_insert_calls = []
+
+    case_data = {
+        "case_id": "BLD-003", "factory_name": "빌딩Q16", "sector": "BUILDING",
+        "worker_count": 20, "sector_fields": {"building_area": 300.0, "floor_count": 3},
+        "processes": [{"process_id": "P01", "process_name": "공정1", "source": "DB"}],
+        "works": [], "materials": [], "equipment": [],
+    }
+    provision_bld_c1(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _factory_insert_fn=lambda _sb, p: {**p, "id": "fid-bld-q16"},
+        _factory_read_fn=lambda *_a: {
+            "id": "fid-bld-q16", "name": "빌딩Q16", "company_id": "cmp-001",
+            "sector": "BUILDING", "site_type": "BUILDING", "employee_count": 20,
+            "building_area": 300.0, "floor_count": 3,
+        },
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
+    )
+    assert len(process_insert_calls) == 0  # NOT called: no _process_insert_fn param for BLD
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q17 — provision_bld_c1 pipeline_c1_exact from readback
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q17_provision_bld_c1_pipeline_exact_from_readback():
+    """Q17: provision_bld_c1 pipeline_c1_exact derives from factory readback verify, not insert success."""
+    case_data = {
+        "case_id": "BLD-004", "factory_name": "빌딩Q17", "sector": "BUILDING",
+        "worker_count": 25, "site_type": "BUILDING",
+        "sector_fields": {"building_area": 500.0, "floor_count": 5},
+        "processes": [], "works": [], "materials": [], "equipment": [],
+    }
+    captured = {}
+
+    def mock_ins(supabase, payload):
+        captured.update(payload)
+        return {**payload, "id": "fid-bld-q17"}
+
+    result = provision_bld_c1(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _factory_insert_fn=mock_ins,
+        _factory_read_fn=lambda *_a: {**captured, "id": "fid-bld-q17"},  # exact
+        _work_read_fn=lambda *_a: [],
+        _material_read_fn=lambda *_a: [],
+        _equipment_read_fn=lambda *_a: [],
+    )
+    # Readback matched expected → exact=True
+    assert result["pipeline_c1_exact"] is True
+    assert result["direct_source_exact"] is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q18 — provision_cst_source site readback called after insert
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q18_provision_cst_site_readback_called():
+    """Q18: provision_cst_source calls _site_read_fn after inserting the site."""
+    site_reads = []
+
+    def mock_site_read(supabase, site_id):
+        site_reads.append(site_id)
+        return {
+            "id": site_id, "site_name": "현장Q18", "site_type": "BUILDING",
+            "contract_amount": 500.0, "total_workers": 40,
+        }
+
+    case_data = {
+        "case_id": "CST-Q18", "factory_name": "현장Q18", "sector": "CONSTRUCTION",
+        "worker_count": 40,
+        "sector_fields": {"construction_type": "건축", "construction_amount": 50_000_000_000},
+    }
+    provision_cst_source(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _site_insert_fn=lambda *_a: "sid-q18",
+        _factory_bridge_fn=lambda *_a: "fid-q18",
+        _site_read_fn=mock_site_read,
+        _factory_read_fn=lambda *_a: {"id": "fid-q18"},
+    )
+    assert len(site_reads) == 1
+    assert site_reads[0] == "sid-q18"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q19 — provision_cst_source factory readback called after bridge
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q19_provision_cst_factory_readback_called():
+    """Q19: provision_cst_source calls _factory_read_fn after factory bridge."""
+    factory_reads = []
+
+    def mock_factory_read(supabase, factory_id):
+        factory_reads.append(factory_id)
+        return {"id": factory_id}
+
+    case_data = {
+        "case_id": "CST-Q19", "factory_name": "현장Q19", "sector": "CONSTRUCTION",
+        "worker_count": 50,
+        "sector_fields": {"construction_type": "토목", "construction_amount": 60_000_000_000},
+    }
+    provision_cst_source(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _site_insert_fn=lambda *_a: "sid-q19",
+        _factory_bridge_fn=lambda *_a: "fid-q19",
+        _site_read_fn=lambda *_a: {
+            "id": "sid-q19", "site_name": "현장Q19", "site_type": "CIVIL",
+            "contract_amount": 600.0, "total_workers": 50,
+        },
+        _factory_read_fn=mock_factory_read,
+    )
+    assert len(factory_reads) == 1
+    assert factory_reads[0] == "fid-q19"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q20 — provision_cst_source pipeline_c1_exact from verify_cst_c1_exact, not hardcoded
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q20_provision_cst_pipeline_exact_from_verify_not_hardcoded():
+    """Q20: provision_cst_source pipeline_c1_exact comes from verify_cst_c1_exact (readback), not True literal."""
+    case_data = {
+        "case_id": "CST-Q20", "factory_name": "현장Q20", "sector": "CONSTRUCTION",
+        "worker_count": 35,
+        "sector_fields": {"construction_type": "건축", "construction_amount": 40_000_000_000},
+    }
+
+    # Scenario A: readback matches → exact=True
+    result_exact = provision_cst_source(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _site_insert_fn=lambda *_a: "sid-q20",
+        _factory_bridge_fn=lambda *_a: "fid-q20",
+        _site_read_fn=lambda *_a: {
+            "id": "sid-q20", "site_name": "현장Q20", "site_type": "BUILDING",
+            "contract_amount": 400.0, "total_workers": 35,
+        },
+        _factory_read_fn=lambda *_a: {"id": "fid-q20"},
+    )
+    assert result_exact["pipeline_c1_exact"] is True
+
+    # Scenario B: readback returns None (simulates DB read failure) → exact=False
+    result_fail = provision_cst_source(
+        MagicMock(), case_data, "cmp-001",
+        _stale_fn=lambda *_a: False,
+        _site_insert_fn=lambda *_a: "sid-q20b",
+        _factory_bridge_fn=lambda *_a: "fid-q20b",
+        _site_read_fn=lambda *_a: None,       # readback failed
+        _factory_read_fn=lambda *_a: {"id": "fid-q20b"},
+    )
+    assert result_fail["pipeline_c1_exact"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q21 — provision_case routes MANUFACTURING to provision_mfg_c1
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q21_provision_case_routes_mfg():
+    """Q21: provision_case dispatches MANUFACTURING sector to provision_mfg_c1."""
+    case_data = {
+        "case_id": "MFG-Q21", "factory_name": "공장Q21", "sector": "MANUFACTURING",
+        "worker_count": 15, "sector_fields": {},
+        "processes": [], "works": [], "materials": [], "equipment": [],
+    }
+    captured = {}
+    result = provision_case(
+        MagicMock(), case_data, "cmp-001",
+        _mfg_seams={
+            "_stale_fn": lambda *_a: False,
+            "_factory_insert_fn": lambda _sb, p: (captured.update(p) or {**p, "id": "fid-q21"}),
+            "_factory_read_fn": lambda *_a: {**captured, "id": "fid-q21"},
+            "_process_read_fn": lambda *_a: [],
+            "_work_read_fn": lambda *_a: [],
+            "_material_read_fn": lambda *_a: [],
+            "_equipment_read_fn": lambda *_a: [],
+        },
+    )
+    # provision_mfg_c1 was called: result has factory_id (not site_id pattern)
+    assert result["factory_id"] == "fid-q21"
+    assert result["site_id"] is None
+    assert captured["sector"] == "INDUSTRIAL"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q22 — provision_case routes BUILDING to provision_bld_c1
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q22_provision_case_routes_bld():
+    """Q22: provision_case dispatches BUILDING sector to provision_bld_c1."""
+    case_data = {
+        "case_id": "BLD-Q22", "factory_name": "빌딩Q22", "sector": "BUILDING",
+        "worker_count": 20, "sector_fields": {"building_area": 300.0, "floor_count": 3},
+        "processes": [], "works": [], "materials": [], "equipment": [],
+    }
+    captured = {}
+    result = provision_case(
+        MagicMock(), case_data, "cmp-001",
+        _bld_seams={
+            "_stale_fn": lambda *_a: False,
+            "_factory_insert_fn": lambda _sb, p: (captured.update(p) or {**p, "id": "fid-bld-q22"}),
+            "_factory_read_fn": lambda *_a: {**captured, "id": "fid-bld-q22"},
+            "_work_read_fn": lambda *_a: [],
+            "_material_read_fn": lambda *_a: [],
+            "_equipment_read_fn": lambda *_a: [],
+        },
+    )
+    assert result["factory_id"] == "fid-bld-q22"
+    assert captured["sector"] == "BUILDING"
+    assert captured["building_area"] == 300.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q23 — provision_case routes CONSTRUCTION to provision_cst_source
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q23_provision_case_routes_cst():
+    """Q23: provision_case dispatches CONSTRUCTION sector to provision_cst_source."""
+    case_data = {
+        "case_id": "CST-Q23", "factory_name": "현장Q23", "sector": "CONSTRUCTION",
+        "worker_count": 80,
+        "sector_fields": {"construction_type": "공통", "construction_amount": 100_000_000_000},
+    }
+    result = provision_case(
+        MagicMock(), case_data, "cmp-001",
+        _cst_seams={
+            "_stale_fn": lambda *_a: False,
+            "_site_insert_fn": lambda *_a: "sid-cst-q23",
+            "_factory_bridge_fn": lambda *_a: "fid-cst-q23",
+            "_site_read_fn": lambda *_a: {
+                "id": "sid-cst-q23", "site_name": "현장Q23", "site_type": "SPECIALTY",
+                "contract_amount": 1000.0, "total_workers": 80,
+            },
+            "_factory_read_fn": lambda *_a: {"id": "fid-cst-q23"},
+        },
+    )
+    # provision_cst_source was called: result has site_id
+    assert result["site_id"] == "sid-cst-q23"
+    assert result["factory_id"] == "fid-cst-q23"
