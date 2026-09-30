@@ -20,6 +20,14 @@ Legal Engine remains the sole applicability authority. This adapter
 never sets `legal_applicable` / `is_required` / any applicability
 field — the writer's `FORBIDDEN_DOCUMENT_KEYS` guard rejects those
 by construction.
+
+Search text uses full projection resolution when `fetch_attachments_batch`
+is supplied:
+  ARTICLE_TEXT   → title + article_text
+  ATTACHMENT_BODY → title + resolved attachment body
+  ATTACHMENT_INDEX → title + attachment titles
+  INLINE_MEDIA   → title + img-stripped prose
+  SOURCE_CONTENT_UNRESOLVED → title only
 """
 from __future__ import annotations
 
@@ -34,6 +42,7 @@ from services.shared_search.adapters.base import AdapterBlockedSubtype
 
 
 Fetcher = Callable[[], Iterable[dict]]
+AttachmentBatchFetcher = Callable[[list[str]], dict[str, list[dict]]]
 
 
 SUPPORTED_SUBTYPES = frozenset({"law_article"})
@@ -49,16 +58,43 @@ class LegalAdapter:
         *,
         fetch_current: Fetcher,
         fetch_by_id: Optional[Callable[[str], Optional[dict]]] = None,
+        fetch_attachments_batch: Optional[AttachmentBatchFetcher] = None,
     ):
         # Production binding supplies rows already filtered to
         # "currently published" (per §29 join predicate). Each row
         # carries `record_kind` so the adapter can select subtype.
         self._fetch_current = fetch_current
         self._fetch_by_id = fetch_by_id or (lambda _id: None)
+        # Optional: Callable[list[version_id], dict[version_id, list[attachment_dict]]]
+        # When supplied, iter_documents does a two-pass: identifies stub rows, batch-fetches
+        # attachments, and uses full projection for search_text.
+        self._fetch_attachments_batch = fetch_attachments_batch
         self._blocked_seen: set[str] = set()
 
     def iter_documents(self) -> Iterator[dict]:
-        for row in self._fetch_current():
+        from services.legal_content_projection import _classify_article_text
+
+        rows = list(self._fetch_current())  # buffer for two-pass
+
+        # Pass 1: identify law_version_ids of stub rows for batch attachment fetch
+        attachment_map: dict[str, list[dict]] = {}
+        if self._fetch_attachments_batch:
+            stub_version_ids: set[str] = set()
+            for row in rows:
+                kind = (row.get("record_kind") or "").strip()
+                if kind not in SUPPORTED_SUBTYPES:
+                    continue
+                text = row.get("article_text") or ""
+                cls = _classify_article_text(text)
+                if cls in ("SOURCE_UI_STUB", "RAW_SOURCE_LINK", "EMPTY"):
+                    vid = row.get("law_version_id")
+                    if vid:
+                        stub_version_ids.add(vid)
+            if stub_version_ids:
+                attachment_map = self._fetch_attachments_batch(list(stub_version_ids))
+
+        # Pass 2: yield documents with resolved projections
+        for row in rows:
             kind = (row.get("record_kind") or "").strip()
             if kind in BLOCKED_SUBTYPES:
                 self._blocked_seen.add(kind)
@@ -66,9 +102,12 @@ class LegalAdapter:
             if kind not in SUPPORTED_SUBTYPES:
                 self._blocked_seen.add(kind or "UNKNOWN")
                 continue
-            payload = _normalize_legal(row)
+            vid = row.get("law_version_id")
+            attachments = attachment_map.get(vid, []) if vid else []
+            payload = _normalize_legal(row, attachments=attachments)
             if payload is not None:
                 yield payload
+
         if self._blocked_seen:
             raise AdapterBlockedSubtype(
                 f"LEGAL subtypes blocked: {sorted(self._blocked_seen)}"
@@ -84,20 +123,20 @@ class LegalAdapter:
         kind = (row.get("record_kind") or "").strip()
         if kind not in SUPPORTED_SUBTYPES:
             return None
-        return _normalize_legal(row)
+        attachments: list[dict] = []
+        if self._fetch_attachments_batch:
+            vid = row.get("law_version_id")
+            if vid:
+                att_map = self._fetch_attachments_batch([vid])
+                attachments = att_map.get(vid, [])
+        return _normalize_legal(row, attachments=attachments)
 
 
-def _normalize_legal(row: dict) -> Optional[dict]:
+def _normalize_legal(row: dict, attachments: list[dict] = None) -> Optional[dict]:
     kind = (row.get("record_kind") or "").strip()
     if kind != "law_article":
         return None
-    # F2 FINAL §7: canonical_id MUST be the Domain PK
-    # (`law_article.id`). `article_internal_key` has ~7,642 distinct
-    # values across ~35,412 current-eligible articles and
-    # `law_id + article_internal_key` still collides (~33,482 distinct)
-    # — so neither is a valid canonical identity. Cross-version
-    # semantic continuity is Legal Domain governance, not something
-    # Search invents.
+    # F2 FINAL §7: canonical_id MUST be the Domain PK (`law_article.id`).
     canonical_id = row.get("id")
     if not canonical_id:
         return None
@@ -105,24 +144,27 @@ def _normalize_legal(row: dict) -> Optional[dict]:
     article_no = row.get("article_no")
     article_sub_no = row.get("article_sub_no")
     article_text = row.get("article_text")
-    # Title and search_text both use shared legal_content_projection module
-    # so that source UI artifact text never enters the search index and
-    # the title is free of stub navigation phrases (F2 FINAL §8, shared authority).
-    from services.legal_content_projection import build_public_legal_title, search_text_for_index
+
+    from services.legal_content_projection import (
+        build_public_legal_title,
+        resolve_legal_content,
+        search_text_from_projection,
+    )
+
     title = build_public_legal_title(row)["title"]
-    # F2 FINAL §14: real law_article columns (verified via
-    # information_schema on production) are `enforcement_date` +
-    # `updated_at`. `published_at` / `version_effective_at` do not
-    # exist. Adapter never invents timestamps — if both are absent
-    # the row is skipped.
+
+    # Resolve content projection (includes attachment body for ATTACHMENT_BODY rows)
+    projection = resolve_legal_content(article_text, attachments or [])
+    clean_search_text = search_text_from_projection(projection, title)
+
+    # F2 FINAL §14: real columns are `enforcement_date` + `updated_at`.
     ts = first_present_iso(
         row.get("enforcement_date"),
         row.get("updated_at"),
     )
     if ts is MISSING_TIMESTAMP:
         return None
-    # source_key: NULL rather than a synthetic composite (F2 FINAL §8).
-    clean_search_text = search_text_for_index(article_text, title)
+
     return {
         "object_type": LegalAdapter.object_type,
         "canonical_id": str(canonical_id),

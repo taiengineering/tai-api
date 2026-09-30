@@ -1,8 +1,9 @@
 """S01-S09: LEGAL sitemap list endpoint tests.
+S10-S11: Projection-aware sitemap eligibility (PATCH-002).
 WO-SEO-LEGAL-ARTICLE-INDEX.
 
 GET /public/safety-search/sitemap/legal-articles
-Cursor pagination (after_id). 50-char thin content filter.
+Cursor pagination (after_id). Projection-aware content filter.
 No real DB / network. _legal_supabase_dep mocked throughout.
 """
 from __future__ import annotations
@@ -14,6 +15,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import routers.public_safety_search as pss_mod
+
+KC_STUB = (
+    '「전기용품 안전기준(KC 62619)」의 자세한 내용은 상단 메뉴 "<img id="40425753">'
+    '자세한 내용</img>" 버튼을 이용하십시오.'
+)
 
 
 def _make_app() -> FastAPI:
@@ -27,8 +33,17 @@ def client() -> TestClient:
     return TestClient(_make_app())
 
 
-def _mock_supabase(masters_data: list[dict], articles_data: list[dict]) -> MagicMock:
-    """Mock Supabase client. articles_data is returned for every law_article query."""
+def _mock_supabase(
+    masters_data: list[dict],
+    articles_data: list[dict],
+    attachments_data: list[dict] = None,
+) -> MagicMock:
+    """Mock Supabase client.
+
+    articles_data is returned for every law_article query.
+    attachments_data is returned for every law_attachment query (optional).
+    """
+    _att_data = attachments_data or []
 
     def _make_q(execute_data):
         result = MagicMock()
@@ -43,6 +58,8 @@ def _mock_supabase(masters_data: list[dict], articles_data: list[dict]) -> Magic
         tbl = MagicMock()
         if name == "law_master":
             tbl.select.return_value = _make_q(masters_data)
+        elif name == "law_attachment":
+            tbl.select.return_value = _make_q(_att_data)
         else:
             tbl.select.return_value = _make_q(articles_data)
         return tbl
@@ -155,9 +172,9 @@ def test_s08_none_version_id_masters_skipped(client):
 def test_s09_exactly_50_chars_is_included(client):
     masters = [{"current_version_id": "ver-ggg"}]
     articles = [
-        {"id": "art-49", "updated_at": "2026-09-01T00:00:00", "article_text": "가" * 49},
-        {"id": "art-50", "updated_at": "2026-09-01T00:00:00", "article_text": "가" * 50},
-        {"id": "art-51", "updated_at": "2026-09-01T00:00:00", "article_text": "가" * 51},
+        {"id": "art-49", "updated_at": "2026-09-01T00:00:00", "article_text": "가" * 49, "law_version_id": "ver-ggg"},
+        {"id": "art-50", "updated_at": "2026-09-01T00:00:00", "article_text": "가" * 50, "law_version_id": "ver-ggg"},
+        {"id": "art-51", "updated_at": "2026-09-01T00:00:00", "article_text": "가" * 51, "law_version_id": "ver-ggg"},
     ]
     sb = _mock_supabase(masters, articles)
     with patch.object(pss_mod, "_legal_supabase_dep", return_value=sb):
@@ -166,3 +183,70 @@ def test_s09_exactly_50_chars_is_included(client):
     assert "art-49" not in ids
     assert "art-50" in ids
     assert "art-51" in ids
+
+
+# S10 — SOURCE_UI_STUB with no substantial CLEAN attachment → excluded
+def test_s10_stub_unresolved_excluded_from_sitemap(client):
+    """Projection-aware: SOURCE_CONTENT_UNRESOLVED must not appear in sitemap."""
+    masters = [{"current_version_id": "ver-stub-unresolved"}]
+    articles = [
+        {
+            "id": "art-stub-unresolved",
+            "updated_at": "2026-09-01T00:00:00",
+            "article_text": KC_STUB,
+            "law_version_id": "ver-stub-unresolved",
+        }
+    ]
+    # No CLEAN attachments → SOURCE_CONTENT_UNRESOLVED
+    attachments = [
+        {
+            "id": "att-failed", "attachment_title": "실패파일",
+            "attachment_no": 1, "download_status": "FAILED",
+            "extraction_verdict": None,
+        }
+    ]
+    sb = _mock_supabase(masters, articles, attachments)
+    with patch.object(pss_mod, "_legal_supabase_dep", return_value=sb):
+        r = client.get("/public/safety-search/sitemap/legal-articles")
+    assert r.status_code == 200
+    ids = [row["id"] for row in r.json()]
+    assert "art-stub-unresolved" not in ids, (
+        "SOURCE_CONTENT_UNRESOLVED stub must be excluded from sitemap"
+    )
+
+
+# S11 — SOURCE_UI_STUB + KC real-shape (45983+227) → ATTACHMENT_BODY → included
+def test_s11_stub_resolved_attachment_body_included_in_sitemap(client):
+    """Projection-aware: stub resolved to ATTACHMENT_BODY must appear in sitemap."""
+    masters = [{"current_version_id": "ver-stub-resolved"}]
+    articles = [
+        {
+            "id": "art-stub-resolved",
+            "updated_at": "2026-09-10T00:00:00",
+            "article_text": KC_STUB,
+            "law_version_id": "ver-stub-resolved",
+        }
+    ]
+    # KC real-shape: 1 substantial (45983) + 1 non-substantial (227)
+    attachments = [
+        {
+            "id": "att-body", "attachment_title": "KC 62619 Ed 2.0",
+            "attachment_no": 1, "download_status": "SUCCESS",
+            "extraction_verdict": "CLEAN",
+            "attachment_text": "가" * 45983,
+        },
+        {
+            "id": "att-reason", "attachment_title": "개정이유서",
+            "attachment_no": 2, "download_status": "SUCCESS",
+            "extraction_verdict": "CLEAN",
+            "attachment_text": "나" * 227,
+        },
+    ]
+    sb = _mock_supabase(masters, articles, attachments)
+    with patch.object(pss_mod, "_legal_supabase_dep", return_value=sb):
+        r = client.get("/public/safety-search/sitemap/legal-articles")
+    assert r.status_code == 200
+    ids = [row["id"] for row in r.json()]
+    assert "art-stub-resolved" in ids, (
+        "Stub resolved to ATTACHMENT_BODY must be included in sitemap"
+    )
