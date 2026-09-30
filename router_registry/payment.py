@@ -21,4 +21,5 @@ ROUTERS = [
     # {"module": "routers.connection_commission"},  # ISOLATED 2026-08-20 (unlaunched 연결수수료)
     # {"module": "routers.settlements", "prefix": "/settlements", "tags": ["정산"]},  # ISOLATED 2026-08-20 (unlaunched 매칭정산)
     {"module": "routers.admin_commercial"}, # ADM-COMM-01-BE: Commercial READ (/admin/commercial)
+    {"module": "routers.saas_change_order_preview"},  # WO-005: POST /me/saas/change-orders/preview (preview only, DB write=0)
 ]
