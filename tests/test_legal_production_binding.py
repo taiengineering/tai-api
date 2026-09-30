@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from services.shared_search.production_bindings import (
+    LegalBindingUnavailable,
     _fetch_legal_attachments_batch,
     _make_legal_adapter,
     build_production_adapters,
@@ -169,14 +172,13 @@ def test_bind_leg_02b_kc_stub_search_text_includes_attachment_body():
 
 # ── BIND-LEG-03 ──────────────────────────────────────────────────────────────
 
-def test_bind_leg_03_no_legal_client_yields_zero_documents():
-    """Without legal_client, adapter is fail-closed: yields 0 documents."""
+def test_bind_leg_03_no_legal_client_raises_unavailable():
+    """Without legal_client, iter_documents() raises LegalBindingUnavailable."""
     app_client = _make_empty_client()
 
     adapter = _make_legal_adapter(app_client)  # legal_client omitted
-    docs = list(adapter.iter_documents())
-
-    assert docs == [], "Fail-closed: no legal_client → 0 documents"
+    with pytest.raises(LegalBindingUnavailable):
+        list(adapter.iter_documents())
 
 
 def test_bind_leg_03b_no_legal_client_does_not_query_app_client_for_law_data():
@@ -184,7 +186,10 @@ def test_bind_leg_03b_no_legal_client_does_not_query_app_client_for_law_data():
     app_client = _make_empty_client()
 
     adapter = _make_legal_adapter(app_client)
-    list(adapter.iter_documents())
+    try:
+        list(adapter.iter_documents())
+    except LegalBindingUnavailable:
+        pass
 
     called_on_app = {call.args[0] for call in app_client.table.call_args_list}
     for law_table in ("law_master", "law_article", "law_attachment"):

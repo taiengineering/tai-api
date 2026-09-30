@@ -40,6 +40,23 @@ def _build_supabase_client():
     return create_client(url, key)
 
 
+def _build_legal_supabase_client():
+    """LEG production Supabase client (leg-prod project, wrfcedzgdrfupenzqhur).
+
+    Hard-fails on missing env vars — census must never silently skip LEGAL.
+    """
+    from supabase import create_client
+    url = os.environ.get("LEG_SUPABASE_URL")
+    key = os.environ.get("LEG_SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        raise EnvironmentError(
+            "LEGAL_BINDING_UNAVAILABLE: LEG_SUPABASE_URL and "
+            "LEG_SUPABASE_SERVICE_ROLE_KEY must be set — "
+            "cannot run census without LEG production client"
+        )
+    return create_client(url, key)
+
+
 def main(argv: list | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--json", action="store_true",
@@ -47,7 +64,8 @@ def main(argv: list | None = None) -> int:
     args = parser.parse_args(argv)
 
     client = _build_supabase_client()
-    adapters = build_production_adapters(client)
+    legal_client = _build_legal_supabase_client()
+    adapters = build_production_adapters(client, legal_client=legal_client)
     results = [run_census(a).to_dict() for a in adapters]
 
     if args.json:
