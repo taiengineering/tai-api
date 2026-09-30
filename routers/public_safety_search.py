@@ -433,7 +433,7 @@ async def public_material_detail(
 # canonical_id = law_article.id (UUID).
 # Eligibility: law_master.is_active AND current_version_id match AND not deleted.
 #
-# DB binding: LEG_DB_URL + LEG_DB_KEY (leg-prod).
+# DB binding: LEG_SUPABASE_URL + LEG_SUPABASE_SERVICE_ROLE_KEY (leg-prod).
 # Fails closed — no fallback to the generic SUPABASE_URL.
 # ---------------------------------------------------------------------------
 
@@ -454,11 +454,11 @@ def _legal_supabase_dep():
     global _legal_supabase
     if _legal_supabase is None:
         from supabase import create_client
-        url = os.environ.get("LEG_DB_URL")
-        key = os.environ.get("LEG_DB_KEY")
+        url = os.environ.get("LEG_SUPABASE_URL")
+        key = os.environ.get("LEG_SUPABASE_SERVICE_ROLE_KEY")
         if not url or not key:
             raise RuntimeError(
-                "LEG_DB_URL and LEG_DB_KEY must be set. "
+                "LEG_SUPABASE_URL and LEG_SUPABASE_SERVICE_ROLE_KEY must be set. "
                 "LEGAL endpoints require a dedicated leg-prod connection."
             )
         _legal_supabase = create_client(url, key)

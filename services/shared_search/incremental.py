@@ -95,11 +95,11 @@ def _try_build_legal_client() -> Optional[Any]:
     Only attempted once per batch, when LEGAL events are detected.
     """
     import os
-    url = os.environ.get("LEG_DB_URL")
-    key = os.environ.get("LEG_DB_KEY")
+    url = os.environ.get("LEG_SUPABASE_URL")
+    key = os.environ.get("LEG_SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
         logger.warning(
-            "LEG_DB_URL / LEG_DB_KEY not set — "
+            "LEG_SUPABASE_URL / LEG_SUPABASE_SERVICE_ROLE_KEY not set — "
             "LEGAL events in this batch will fail safely"
         )
         return None

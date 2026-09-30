@@ -5,7 +5,7 @@ A09: SOURCE_UI_STUB stub text must NOT appear in response display_text
 A10: SOURCE_CONTENT_UNRESOLVED when no CLEAN attachment
 A11: ATTACHMENT_BODY when exactly one CLEAN attachment
 A12: ATTACHMENT_INDEX when multiple CLEAN attachments
-A13: LEG_DB_URL missing → 500 (fail-closed)
+A13: LEG_SUPABASE_URL missing → 500 (fail-closed)
 A14: identity mismatch → 503
 A15: normal article_text identity preserved
 
@@ -285,7 +285,7 @@ def test_a13_missing_leg_env_raises(client):
     with patch.dict(os.environ, {}, clear=False):
         env_backup = {
             k: os.environ.pop(k)
-            for k in ("LEG_DB_URL", "LEG_DB_KEY")
+            for k in ("LEG_SUPABASE_URL", "LEG_SUPABASE_SERVICE_ROLE_KEY")
             if k in os.environ
         }
         try:
