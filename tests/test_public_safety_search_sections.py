@@ -22,7 +22,7 @@ from services.shared_search.retrieval import MemorySearchReader
 # Helpers
 # ---------------------------------------------------------------------------
 
-_SECTION_ORDER = ["guide", "material", "accident", "chem", "knowledge", "precedent", "law"]
+_SECTION_ORDER = ["knowledge", "guide", "law", "accident", "material", "chem", "precedent"]
 _SECTION_OBJECT_TYPES = {
     "guide":     "GUIDE",
     "material":  "SAFETY_MATERIAL",
