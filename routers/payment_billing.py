@@ -318,42 +318,94 @@ def _charge_subscription_once(
     iniapi_key = _load_billing_iniapi_key()
     client_ip  = _load_client_ip()
 
-    # 1) payments PENDING INSERT (UNIQUE 제약으로 중복방지)
-    payment_row: Dict[str, Any] = {
-        "user_id":         user_id,
-        "product_type":    product_type,
-        "payment_method":  "INICIS",
-        "payment_type":    "CARD",
-        "pg_method":       "CardBilling",
-        "proof_type":      "CARD_RECEIPT",
-        "supply_amount":   supply,
-        "vat_amount":      vat,
-        "total_amount":    amount,
-        "inicis_order_id": moid,
-        "status_code":     "PENDING",
-        "service_status":  None,
-        "subscription_id": subscription_id,
-        "billing_key_id":  billing_key_id,
-        "charge_cycle":    charge_cycle,
-        "is_recurring":    is_recurring,
-        "plan_code":       plan_code,
-        "period_months":   1,
-        "created_at":      now,
-        "updated_at":      now,
-    }
-    if company_id:
-        payment_row["company_id"] = company_id
+    # 1) payment 레코드 준비
+    #    V3 SAAS cycle=1: prepare 단계의 PENDING 예약을 재사용한다 (INSERT 없음).
+    #    V3 SAAS cycle≥2: payment_type=RENEWAL, 초기 결제에서 quote_id/contract_id 전파.
+    #    Legacy: 기존 INSERT 경로.
+    payment_id: str
 
-    try:
-        ins = supabase.table("payments").insert(payment_row).execute()
-    except Exception as e:
-        # UNIQUE 위반(이미 같은 subscription_id + cycle 존재) 등
-        log.error(f"[BILLING] payments INSERT 실패 sub={subscription_id} cycle={charge_cycle}: {e}")
-        raise HTTPException(status_code=409, detail=f"결제 레코드 생성 실패 (중복 가능): {e}")
+    if product_type == "SAAS" and charge_cycle == 1:
+        pre_res = (
+            supabase.table("payments")
+            .select("id")
+            .eq("subscription_id", subscription_id)
+            .eq("charge_cycle", 1)
+            .eq("product_type", "SAAS")
+            .eq("status_code", "PENDING")
+            .limit(1)
+            .execute()
+        )
+        if not pre_res.data:
+            log.error(
+                f"[BILLING] V3 SAAS cycle=1 pre-payment not found sub={subscription_id}"
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="V3 SAAS 초기 결제 예약이 없습니다. prepare 단계를 먼저 진행하세요.",
+            )
+        payment_id = str(pre_res.data[0]["id"])
+        supabase.table("payments").update({
+            "billing_key_id":  billing_key_id,
+            "inicis_order_id": moid,
+            "updated_at":      now,
+        }).eq("id", payment_id).execute()
+    else:
+        payment_row: Dict[str, Any] = {
+            "user_id":         user_id,
+            "product_type":    product_type,
+            "payment_method":  "INICIS",
+            "payment_type":    "CARD",
+            "pg_method":       "CardBilling",
+            "proof_type":      "CARD_RECEIPT",
+            "supply_amount":   supply,
+            "vat_amount":      vat,
+            "total_amount":    amount,
+            "inicis_order_id": moid,
+            "status_code":     "PENDING",
+            "service_status":  None,
+            "subscription_id": subscription_id,
+            "billing_key_id":  billing_key_id,
+            "charge_cycle":    charge_cycle,
+            "is_recurring":    is_recurring,
+            "plan_code":       plan_code,
+            "period_months":   1,
+            "created_at":      now,
+            "updated_at":      now,
+        }
+        if company_id:
+            payment_row["company_id"] = company_id
 
-    if not ins.data:
-        raise HTTPException(status_code=500, detail="결제 레코드 생성 실패")
-    payment_id = ins.data[0]["id"]
+        # V3 SAAS cycle≥2: payment_type=RENEWAL, propagate quote_id+contract_id
+        if product_type == "SAAS" and is_recurring:
+            init_res = (
+                supabase.table("payments")
+                .select("quote_id, contract_id")
+                .eq("subscription_id", subscription_id)
+                .eq("charge_cycle", 1)
+                .in_("status_code", ["PAID", "SUCCESS"])
+                .limit(1)
+                .execute()
+            )
+            if init_res.data:
+                init_pay = init_res.data[0]
+                payment_row["payment_type"] = "RENEWAL"
+                if init_pay.get("quote_id"):
+                    payment_row["quote_id"] = init_pay["quote_id"]
+                if init_pay.get("contract_id"):
+                    payment_row["contract_id"] = init_pay["contract_id"]
+
+        try:
+            ins = supabase.table("payments").insert(payment_row).execute()
+        except Exception as e:
+            # UNIQUE 위반(이미 같은 subscription_id + cycle 존재) 등
+            log.error(
+                f"[BILLING] payments INSERT 실패 sub={subscription_id} cycle={charge_cycle}: {e}"
+            )
+            raise HTTPException(status_code=409, detail=f"결제 레코드 생성 실패 (중복 가능): {e}")
+
+        if not ins.data:
+            raise HTTPException(status_code=500, detail="결제 레코드 생성 실패")
+        payment_id = str(ins.data[0]["id"])
 
     # 2) 이니시스 빌링승인 호출 (환경변수는 위에서 선로드됨)
 
@@ -781,6 +833,17 @@ async def billing_return(request: Request):
     )
 
     if charge_res.get("success"):
+        # V3 SAAS: 첫 결제 성공 → 계약 체인 실행
+        if subscription.get("product_type") == "SAAS":
+            try:
+                from services.payment_post_process import on_payment_success_sync
+                on_payment_success_sync(charge_res["payment_id"])
+            except Exception as _v3_err:
+                log.error(
+                    "[V3_BILLING_RETURN] on_payment_success_sync failed payment=%s: %s",
+                    charge_res["payment_id"], _v3_err,
+                )
+
         # ── Notification Runtime (034) — 결제 성공 (ACTIVE 후 첫 결제) ──
         try:
             asyncio.create_task(_wire_subscription_activated(
@@ -874,6 +937,17 @@ def billing_charge(body: BillingChargeBody):
         charge_cycle=cycle,
         is_recurring=True,
     )
+
+    # V3 SAAS: 정기청구 성공 → 갱신 계약 체인 실행
+    if result.get("success") and subscription.get("product_type") == "SAAS":
+        try:
+            from services.payment_post_process import on_payment_success_sync
+            on_payment_success_sync(result["payment_id"])
+        except Exception as _v3_err:
+            log.error(
+                "[V3_BILLING_CHARGE] on_payment_success_sync failed payment=%s: %s",
+                result.get("payment_id"), _v3_err,
+            )
 
     return {
         "status":   "success" if result.get("success") else "failed",
