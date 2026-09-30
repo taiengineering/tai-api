@@ -1653,7 +1653,9 @@ from run_c1_provision import (
     run as _pilot_run,
     PilotCaseNotAllowedError,
     StalePrefightError,
+    CaseFileSHAMismatchError,
     PILOT_ALLOWED_CASES,
+    CASE_SHA as _RUNNER_CASE_SHA,
 )
 
 
@@ -1926,11 +1928,7 @@ def test_s12_pilot_case_not_allowed():
     """S12: run() raises PilotCaseNotAllowedError when case_id is not in PILOT_ALLOWED_CASES."""
     with pytest.raises(PilotCaseNotAllowedError) as exc_info:
         _pilot_run(
-            ["MFG-002"], "cmp-001", True, MagicMock(),
-            _cases_fn=lambda: {"MFG-002": {
-                "case_id": "MFG-002", "factory_name": "비허용공장",
-                "sector": "MANUFACTURING", "sector_fields": {}, "worker_count": 10,
-            }},
+            ["MFG-002"], "cmp-001", True, MagicMock(), "/fake/case_file.json",
             _stale_check_fn=lambda *_a: False,
         )
     assert "PILOT_CASE_NOT_ALLOWED" in str(exc_info.value)
@@ -1944,8 +1942,7 @@ def test_s12_pilot_case_not_allowed():
 def test_s13_dry_run_only_without_execute():
     """S13: run(execute=False) returns DRY_RUN_ONLY without touching DB or filesystem."""
     result = _pilot_run(
-        ["MFG-001"], "cmp-001", False, MagicMock(),
-        _cases_fn=lambda: {},
+        ["MFG-001"], "cmp-001", False, MagicMock(), "/fake/case_file.json",
     )
     assert result["status"] == "DRY_RUN_ONLY"
     assert result["case_ids"] == ["MFG-001"]
@@ -1956,17 +1953,16 @@ def test_s13_dry_run_only_without_execute():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_s14_stale_preflight_blocks_all():
-    """S14: run() raises StalePrefightError (all-or-none) when any case is stale."""
-    cases = {
-        "MFG-001": {
-            "case_id": "MFG-001", "factory_name": "기존공장",
-            "sector": "MANUFACTURING", "sector_fields": {}, "worker_count": 10,
-        }
-    }
+    """S14: run() raises StalePrefightError (all-or-none) when any case is stale.
+
+    execute=True requires exact-3 set; real frozen bytes satisfy SHA gate so stale
+    check is reached.
+    """
+    real_bytes = _UNIVERSE_PATH.read_bytes()
     with pytest.raises(StalePrefightError) as exc_info:
         _pilot_run(
-            ["MFG-001"], "cmp-001", True, MagicMock(),
-            _cases_fn=lambda: cases,
+            ["MFG-001", "BLD-001", "CST-001"], "cmp-001", True, MagicMock(), _UNIVERSE_PATH,
+            _file_bytes_fn=lambda p: real_bytes,
             _stale_check_fn=lambda *_a: True,  # always stale
         )
     assert "STALE_PREFLIGHT_BLOCKED" in str(exc_info.value)
@@ -1980,6 +1976,7 @@ def test_s15_run_provisions_3_sector_pilot():
     """S15: run() provisions MFG-001/BLD-001/CST-001 sequentially; returns PROVISIONED manifest."""
     import tempfile
     provisioned: list = []
+    real_bytes = _UNIVERSE_PATH.read_bytes()
 
     def mock_provision(supabase, case_data, company_id):
         provisioned.append(case_data["case_id"])
@@ -1994,30 +1991,281 @@ def test_s15_run_provisions_3_sector_pilot():
             "equipment_source_exact": True,
         }
 
-    cases = {
-        "MFG-001": {"case_id": "MFG-001", "factory_name": "MFG공장",
-                    "sector": "MANUFACTURING", "sector_fields": {}, "worker_count": 10},
-        "BLD-001": {"case_id": "BLD-001", "factory_name": "BLD빌딩",
-                    "sector": "BUILDING", "sector_fields": {"building_area": 100.0}, "worker_count": 10},
-        "CST-001": {"case_id": "CST-001", "factory_name": "CST현장",
-                    "sector": "CONSTRUCTION",
-                    "sector_fields": {"construction_type": "건축", "construction_amount": 10_000_000_000},
-                    "worker_count": 10},
-    }
-
     with tempfile.TemporaryDirectory() as tmpdir:
         result = _pilot_run(
-            ["MFG-001", "BLD-001", "CST-001"], "cmp-001", True, MagicMock(),
+            ["MFG-001", "BLD-001", "CST-001"], "cmp-001", True, MagicMock(), _UNIVERSE_PATH,
+            _file_bytes_fn=lambda p: real_bytes,
             _provision_fn=mock_provision,
             _stale_check_fn=lambda *_a: False,
-            _cases_fn=lambda: cases,
             _runs_dir=Path(tmpdir),
         )
 
     assert result["status"] == "PROVISIONED"
     assert len(provisioned) == 3
     assert set(provisioned) == {"MFG-001", "BLD-001", "CST-001"}
-    # MFG provisioned before CST (sector order)
     assert provisioned.index("MFG-001") < provisioned.index("CST-001")
     assert result["manifest"]["all_exact"] is True
-    assert len(result["manifest"]["entries"]) == 3
+    assert len(result["manifest"]["cases"]) == 3
+    assert len(result["manifest"]["entries"]) == 3  # legacy alias
+
+
+# =============================================================================
+# WO-005C-PATCH1 — T_C1-T_C10: case_file SHA gate, exact-3 pilot gate,
+# manifest engine_matrix contract.
+# All mock/seam only.  PRODUCTION_WRITE = 0.  LEG_EXECUTED = 0.
+# =============================================================================
+
+from run_leg_engine_matrix import load_manifest as _engine_load_manifest
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T_C1 — correct Frozen file SHA → load PASS, no CaseFileSHAMismatchError
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_tc1_correct_sha_load_pass():
+    """T_C1: real frozen bytes → SHA check passes, run proceeds to PROVISIONED."""
+    import tempfile
+    real_bytes = _UNIVERSE_PATH.read_bytes()
+
+    def mock_provision(supabase, case_data, company_id):
+        return {
+            "factory_id": "fid-x", "site_id": None,
+            "pipeline_c1_exact": True, "direct_source_exact": True,
+            "process_source_exact": True, "work_source_exact": True,
+            "material_source_exact": True, "equipment_source_exact": True,
+        }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _pilot_run(
+            ["MFG-001", "BLD-001", "CST-001"], "cmp-001", True, MagicMock(), _UNIVERSE_PATH,
+            _file_bytes_fn=lambda p: real_bytes,
+            _provision_fn=mock_provision,
+            _stale_check_fn=lambda *_a: False,
+            _runs_dir=Path(tmpdir),
+        )
+    # No CaseFileSHAMismatchError raised
+    assert result["status"] == "PROVISIONED"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T_C2 — wrong case-file bytes → CaseFileSHAMismatchError, provision_fn never called
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_tc2_wrong_bytes_sha_mismatch():
+    """T_C2: wrong bytes → CaseFileSHAMismatchError before any provision_fn call."""
+    provision_calls = []
+
+    def mock_provision(supabase, case_data, company_id):
+        provision_calls.append("CALLED")
+        return {}
+
+    with pytest.raises(CaseFileSHAMismatchError) as exc_info:
+        _pilot_run(
+            ["MFG-001", "BLD-001", "CST-001"], "cmp-001", True, MagicMock(), "/fake/path",
+            _file_bytes_fn=lambda p: b"wrong bytes - not the frozen universe",
+            _provision_fn=mock_provision,
+            _stale_check_fn=lambda *_a: False,
+        )
+
+    assert "CASE_FILE_SHA_MISMATCH" in str(exc_info.value)
+    assert len(provision_calls) == 0  # DB write = 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T_C3 — generated manifest has case_sha == CASE_SHA
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_tc3_manifest_has_case_sha():
+    """T_C3: provisioned manifest['case_sha'] equals CASE_SHA constant."""
+    import tempfile
+    real_bytes = _UNIVERSE_PATH.read_bytes()
+
+    def mock_provision(supabase, case_data, company_id):
+        return {
+            "factory_id": "fid-x", "site_id": None,
+            "pipeline_c1_exact": True, "direct_source_exact": True,
+            "process_source_exact": True, "work_source_exact": True,
+            "material_source_exact": True, "equipment_source_exact": True,
+        }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _pilot_run(
+            ["MFG-001", "BLD-001", "CST-001"], "cmp-001", True, MagicMock(), _UNIVERSE_PATH,
+            _file_bytes_fn=lambda p: real_bytes,
+            _provision_fn=mock_provision,
+            _stale_check_fn=lambda *_a: False,
+            _runs_dir=Path(tmpdir),
+        )
+
+    assert result["manifest"]["case_sha"] == _RUNNER_CASE_SHA
+    assert result["manifest"]["case_sha"] == _CASE_SHA
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T_C4 — generated manifest uses `cases` as authority array
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_tc4_manifest_uses_cases_key():
+    """T_C4: manifest has `cases` key with 3 entries; each entry has case_id."""
+    import tempfile
+    real_bytes = _UNIVERSE_PATH.read_bytes()
+
+    def mock_provision(supabase, case_data, company_id):
+        return {
+            "factory_id": "fid-x", "site_id": None,
+            "pipeline_c1_exact": True, "direct_source_exact": True,
+            "process_source_exact": True, "work_source_exact": True,
+            "material_source_exact": True, "equipment_source_exact": True,
+        }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _pilot_run(
+            ["MFG-001", "BLD-001", "CST-001"], "cmp-001", True, MagicMock(), _UNIVERSE_PATH,
+            _file_bytes_fn=lambda p: real_bytes,
+            _provision_fn=mock_provision,
+            _stale_check_fn=lambda *_a: False,
+            _runs_dir=Path(tmpdir),
+        )
+
+    cases = result["manifest"]["cases"]
+    assert isinstance(cases, list)
+    assert len(cases) == 3
+    case_ids_in_manifest = {c["case_id"] for c in cases}
+    assert case_ids_in_manifest == {"MFG-001", "BLD-001", "CST-001"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T_C5 — generated manifest is accepted by run_leg_engine_matrix.load_manifest
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_tc5_manifest_compatible_with_engine_matrix():
+    """T_C5: written provision_manifest.json passes run_leg_engine_matrix.load_manifest."""
+    import tempfile
+    real_bytes = _UNIVERSE_PATH.read_bytes()
+
+    def mock_provision(supabase, case_data, company_id):
+        return {
+            "factory_id": "fid-x", "site_id": None,
+            "pipeline_c1_exact": True, "direct_source_exact": True,
+            "process_source_exact": True, "work_source_exact": True,
+            "material_source_exact": True, "equipment_source_exact": True,
+        }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _pilot_run(
+            ["MFG-001", "BLD-001", "CST-001"], "cmp-001", True, MagicMock(), _UNIVERSE_PATH,
+            _file_bytes_fn=lambda p: real_bytes,
+            _provision_fn=mock_provision,
+            _stale_check_fn=lambda *_a: False,
+            _runs_dir=Path(tmpdir),
+        )
+        manifest_path = Path(result["run_dir"]) / "provision_manifest.json"
+        loaded = _engine_load_manifest(str(manifest_path))
+
+    # load_manifest passes iff case_sha matches and no duplicate case_ids
+    assert loaded["case_sha"] == _RUNNER_CASE_SHA
+    assert len(loaded["cases"]) == 3
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T_C6 — execute=True + [] → PilotCaseNotAllowedError
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_tc6_execute_empty_list_blocked():
+    """T_C6: execute=True with empty case list → PilotCaseNotAllowedError (exact-3 gate)."""
+    with pytest.raises(PilotCaseNotAllowedError) as exc_info:
+        _pilot_run(
+            [], "cmp-001", True, MagicMock(), "/fake/path",
+            _file_bytes_fn=lambda p: b"",
+        )
+    assert "PILOT_EXACT_SET_REQUIRED" in str(exc_info.value)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T_C7 — execute=True + 1 or 2 cases → PilotCaseNotAllowedError
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_tc7_execute_partial_set_blocked():
+    """T_C7: execute=True with 1 or 2 cases → PilotCaseNotAllowedError."""
+    for partial in [["MFG-001"], ["MFG-001", "BLD-001"]]:
+        with pytest.raises(PilotCaseNotAllowedError) as exc_info:
+            _pilot_run(
+                partial, "cmp-001", True, MagicMock(), "/fake/path",
+                _file_bytes_fn=lambda p: b"",
+            )
+        assert "PILOT_EXACT_SET_REQUIRED" in str(exc_info.value)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T_C8 — execute=True + duplicate case_id → PilotCaseNotAllowedError
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_tc8_execute_duplicate_blocked():
+    """T_C8: execute=True with duplicate case_ids → PilotCaseNotAllowedError."""
+    with pytest.raises(PilotCaseNotAllowedError) as exc_info:
+        _pilot_run(
+            ["MFG-001", "MFG-001", "BLD-001"], "cmp-001", True, MagicMock(), "/fake/path",
+            _file_bytes_fn=lambda p: b"",
+        )
+    assert "PILOT_EXACT_SET_REQUIRED" in str(exc_info.value)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T_C9 — execute=True + exact {MFG-001, BLD-001, CST-001} → PASS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_tc9_execute_exact_set_passes():
+    """T_C9: execute=True with exactly {MFG-001, BLD-001, CST-001} → PROVISIONED."""
+    import tempfile
+    real_bytes = _UNIVERSE_PATH.read_bytes()
+
+    def mock_provision(supabase, case_data, company_id):
+        return {
+            "factory_id": "fid-x", "site_id": None,
+            "pipeline_c1_exact": True, "direct_source_exact": True,
+            "process_source_exact": True, "work_source_exact": True,
+            "material_source_exact": True, "equipment_source_exact": True,
+        }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _pilot_run(
+            ["CST-001", "BLD-001", "MFG-001"],  # input order does not matter
+            "cmp-001", True, MagicMock(), _UNIVERSE_PATH,
+            _file_bytes_fn=lambda p: real_bytes,
+            _provision_fn=mock_provision,
+            _stale_check_fn=lambda *_a: False,
+            _runs_dir=Path(tmpdir),
+        )
+    assert result["status"] == "PROVISIONED"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T_C10 — exact pilot provisioned in MFG → BLD → CST order
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_tc10_exact_pilot_order_mfg_bld_cst():
+    """T_C10: regardless of input order, provision executes MFG → BLD → CST."""
+    import tempfile
+    real_bytes = _UNIVERSE_PATH.read_bytes()
+    call_order = []
+
+    def mock_provision(supabase, case_data, company_id):
+        call_order.append(case_data["sector"])
+        return {
+            "factory_id": "fid-x", "site_id": None,
+            "pipeline_c1_exact": True, "direct_source_exact": True,
+            "process_source_exact": True, "work_source_exact": True,
+            "material_source_exact": True, "equipment_source_exact": True,
+        }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _pilot_run(
+            ["CST-001", "MFG-001", "BLD-001"],  # reversed input order
+            "cmp-001", True, MagicMock(), _UNIVERSE_PATH,
+            _file_bytes_fn=lambda p: real_bytes,
+            _provision_fn=mock_provision,
+            _stale_check_fn=lambda *_a: False,
+            _runs_dir=Path(tmpdir),
+        )
+
+    assert call_order == ["MANUFACTURING", "BUILDING", "CONSTRUCTION"]
