@@ -238,7 +238,17 @@ class TestTitleArtifactExclusion:
         assert result["display_article_title"] is None
 
     def test_p49c_clean_title_is_preserved(self):
-        result = build_public_legal_title(self._row(article_title="목적"))
+        # Use NORMAL_TEXT (ARTICLE_TEXT context) — SOURCE_UI_STUB context
+        # unconditionally flags any title as artifact (PATCH-003).
+        row = {
+            "id": "p49-uuid",
+            "law_name": "전기용품안전관리법",
+            "article_no": 5,
+            "article_sub_no": None,
+            "article_title": "목적",
+            "article_text": NORMAL_TEXT,
+        }
+        result = build_public_legal_title(row)
         assert result["display_article_title"] == "목적"
         assert "목적" in result["title"]
 
@@ -387,6 +397,10 @@ class TestTitleFalseNegativeMatrix:
         "전기통신사업용 무선설비의 기술기준의 자세한 내용은",
         "잔류성유기오염물질공정시험기준의 자세한 내용은",
         "가정용 섬유제품 예비안전기준의 자세한 내용은",
+        # PATCH-003: truncated production forms (SOURCE_UI_STUB → unconditionally artifact)
+        "「전기용품 안전기준(KC 62619)」의 자세한 내용",
+        "잔류성유기오염물질공정시험기준의 자세한",
+        "가정용 섬유제품 예비안전기준의",
     ]
 
     def _row(self, article_title):
@@ -479,6 +493,15 @@ class TestInlineMediaBroadened:
             '조항3'
         )
         assert _classify_article_text(mixed) == "INLINE_MEDIA"
+
+    def test_gas_mixed_content_prefers_inline_media_over_raw_download(self):
+        """PATCH-003: gas rows with both <img> and /LSW/flDownload.do → INLINE_MEDIA wins."""
+        from services.legal_content_projection import _classify_article_text
+        gas_mixed = (
+            '별표 2 <img id="111"> 가스 기준 표 </img>'
+            '\n/LSW/flDownload.do?flSeq=99887766 를 참조하시오.'
+        )
+        assert _classify_article_text(gas_mixed) == "INLINE_MEDIA"
 
     def test_364_img_articles_coverage_logic(self):
         """Verify that articles with any <img variant are classified INLINE_MEDIA,

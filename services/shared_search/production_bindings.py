@@ -449,6 +449,12 @@ _LEGAL_LAW_ARTICLE_SELECT = (
     "article_title,article_text,is_deleted_in_version,"
     "enforcement_date,updated_at"
 )
+_LEGAL_ATTACHMENT_META_SELECT = (
+    "id,law_version_id,attachment_title,attachment_no,"
+    "download_status,extraction_verdict"
+)
+_LEGAL_ATTACHMENT_TEXT_SELECT = "id,attachment_text"
+_ATTACH_CANDIDATE_BATCH_LIMIT = 20
 
 
 def get_current_legal_article_by_id(
@@ -488,8 +494,76 @@ def get_current_legal_article_by_id(
     return row
 
 
-def _make_legal_adapter(client: SupabaseClient) -> LegalAdapter:
+def _fetch_legal_attachments_batch(
+    legal_client: SupabaseClient,
+    version_ids: list[str],
+) -> dict[str, list[dict]]:
+    """Batch fetch law_attachment rows for given law_version_ids.
+
+    Phase A: metadata (no text) for all version_ids in one query.
+    Phase B: attachment_text for at most _ATTACH_CANDIDATE_BATCH_LIMIT
+             SUCCESS+CLEAN candidates per version_id, collected in a single
+             query across all version_ids.
+
+    Returns dict[law_version_id → list[attachment_row]].
+    """
+    if not version_ids:
+        return {}
+
+    # Phase A — metadata
+    r = (legal_client.table("law_attachment")
+             .select(_LEGAL_ATTACHMENT_META_SELECT)
+             .in_("law_version_id", version_ids)
+             .order("law_version_id")
+             .order("attachment_no")
+             .execute())
+    meta_rows = list(getattr(r, "data", None) or [])
+
+    meta_by_vid: dict[str, list[dict]] = {}
+    for row in meta_rows:
+        vid = row.get("law_version_id")
+        if vid:
+            meta_by_vid.setdefault(vid, []).append(dict(row))
+
+    # Phase B — bounded text fetch (per version_id limit prevents cost spikes)
+    candidate_ids: list[str] = []
+    for rows in meta_by_vid.values():
+        clean = [
+            row["id"] for row in rows
+            if row.get("download_status") == "SUCCESS"
+            and row.get("extraction_verdict") == "CLEAN"
+        ]
+        candidate_ids.extend(clean[:_ATTACH_CANDIDATE_BATCH_LIMIT])
+
+    if candidate_ids:
+        text_by_id: dict[str, Any] = {}
+        for start in range(0, len(candidate_ids), 200):
+            batch_ids = candidate_ids[start:start + 200]
+            tr = (legal_client.table("law_attachment")
+                      .select(_LEGAL_ATTACHMENT_TEXT_SELECT)
+                      .in_("id", batch_ids)
+                      .execute())
+            for trow in (getattr(tr, "data", None) or []):
+                text_by_id[trow["id"]] = trow.get("attachment_text")
+
+        for rows in meta_by_vid.values():
+            for row in rows:
+                if row["id"] in text_by_id:
+                    row["attachment_text"] = text_by_id[row["id"]]
+
+    return meta_by_vid
+
+
+def _make_legal_adapter(
+    client: SupabaseClient,
+    legal_client: Optional[SupabaseClient] = None,
+) -> LegalAdapter:
     """LEGAL binds directly to law_master + law_version + law_article.
+
+    All LEGAL queries use legal_client (leg-prod) exclusively. If
+    legal_client is None the adapter is fail-closed: iter_documents()
+    yields nothing and object_reindex_payload() returns None. There is
+    no generic-client fallback — callers must supply legal_client.
 
     F2 FINAL §3-§10: `law_article_current` does NOT exist in
     production; the binding assembles the current-eligible set at
@@ -511,13 +585,19 @@ def _make_legal_adapter(client: SupabaseClient) -> LegalAdapter:
       - legal_obligations has 0 rows → obligation_atom BLOCKED
       - norm_cluster BLOCKED
     """
+    if legal_client is None:
+        return LegalAdapter(
+            fetch_current=lambda: iter([]),
+            fetch_by_id=lambda _: None,
+        )
+
     CURRENT_VERSION_CHUNK = 400   # keep any single `.in_()` small
 
     def _active_masters() -> tuple[dict[str, dict], list[str]]:
         masters: dict[str, dict] = {}
         current_version_ids: list[str] = []
         for m in paginate_supabase(
-            client,
+            legal_client,
             table="law_master",
             select=_LEGAL_LAW_MASTER_SELECT,
             apply_filters=lambda q: q.eq("is_active", True),
@@ -557,7 +637,7 @@ def _make_legal_adapter(client: SupabaseClient) -> LegalAdapter:
             # Range-paginate WITHIN the chunk to survive large chunks.
             batch_start = 0
             while True:
-                q = (client.table("law_article")
+                q = (legal_client.table("law_article")
                          .select(_LEGAL_LAW_ARTICLE_SELECT)
                          .in_("law_version_id", batch)
                          .eq("is_deleted_in_version", False)
@@ -577,9 +657,16 @@ def _make_legal_adapter(client: SupabaseClient) -> LegalAdapter:
                 batch_start += 1000
 
     def _by_id(article_id: str) -> Optional[dict]:
-        return get_current_legal_article_by_id(client, article_id)
+        return get_current_legal_article_by_id(legal_client, article_id)
 
-    return LegalAdapter(fetch_current=_iter_current, fetch_by_id=_by_id)
+    def _attachments_batch(version_ids: list[str]) -> dict[str, list[dict]]:
+        return _fetch_legal_attachments_batch(legal_client, version_ids)
+
+    return LegalAdapter(
+        fetch_current=_iter_current,
+        fetch_by_id=_by_id,
+        fetch_attachments_batch=_attachments_batch,
+    )
 
 
 def _make_risk_adapter(_client: SupabaseClient) -> RiskAdapter:
@@ -594,12 +681,17 @@ def _make_risk_adapter(_client: SupabaseClient) -> RiskAdapter:
 # ---------------------------------------------------------------------------
 
 
-def build_production_adapters(client: SupabaseClient) -> list:
+def build_production_adapters(
+    client: SupabaseClient,
+    legal_client: Optional[SupabaseClient] = None,
+) -> list:
     """Return the full set of production Domain adapters, ordered
     for a full rebuild. The Consumer does NOT build fetchers itself.
 
     Caller responsibilities:
       - hand in a Supabase-py client (or duck-typed equivalent)
+      - supply legal_client (leg-prod) to enable LEGAL content;
+        without it the LEGAL adapter is fail-closed (yields 0 documents)
       - decide when to run the Indexer (this function performs zero
         I/O by itself)
     """
@@ -610,6 +702,6 @@ def build_production_adapters(client: SupabaseClient) -> list:
         _make_chem_adapter(client),
         _make_knowledge_adapter(client),
         _make_precedent_adapter(client),
-        _make_legal_adapter(client),
+        _make_legal_adapter(client, legal_client=legal_client),
         _make_risk_adapter(client),
     ]
