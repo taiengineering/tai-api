@@ -3,7 +3,7 @@
 - 신원/ownership 은 Bearer 토큰(get_current_user -> public.users row)에서만 파생.
   client 가 company_id/user_id 를 보낼 수 없다(Pydantic extra=forbid).
 - GET: 자기 회사 반환(없으면 data=null, 404 아님).
-- PUT: 회사 법적정보 수정/생성. 역할 001/002/010 만 허용.
+- PUT: 회사 법적정보 수정/생성. role_code 게이트 없음. authenticated ownership 으로만 제한.
 - SoT=public.companies. payments/tax_invoice_requests 는 건드리지 않는다.
 """
 from typing import Optional
@@ -16,9 +16,6 @@ from routers.auth import get_current_user
 from services import member_company_svc as svc
 
 router = APIRouter(prefix="/me", tags=["회원 회사정보"])
-
-# 회사 법적정보 수정 허용 역할: 최고관리자/관리자/대표이사
-PUT_ALLOWED_ROLES = {"001", "002", "010"}
 
 
 class MemberCompanyBody(BaseModel):
@@ -49,12 +46,9 @@ def get_my_company(current_user: dict = Depends(get_current_user)):
 
 @router.put("/company")
 def put_my_company(body: MemberCompanyBody, current_user: dict = Depends(get_current_user)):
-    """자기 회사정보 수정/생성(company-less 는 생성+연결). 역할 게이팅."""
+    """자기 회사정보 수정/생성(company-less 는 생성+연결). authenticated ownership 으로만 제한."""
     if not current_user.get("id"):
         raise HTTPException(status_code=401, detail="사용자 식별에 실패했습니다.")
-    role = (current_user.get("role_code") or "").strip()
-    if role not in PUT_ALLOWED_ROLES:
-        raise HTTPException(status_code=403, detail="회사정보 수정 권한이 없습니다.")
 
     sb = get_supabase()
     payload = body.dict(exclude_unset=True)  # 전달된 필드만 -> 부분수정

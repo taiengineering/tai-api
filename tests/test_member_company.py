@@ -381,24 +381,83 @@ def test_t1_unauth_get_401():
 
 
 @requires_client
-def test_t6_put_disallowed_role_403():
-    c = _client({"id": "u1", "company_id": "c1", "role_code": "099"}, {"companies": [_company("c1")]})
-    r = c.put("/me/company", json={"name": "X"})
-    assert r.status_code == 403
+def test_t5_put_any_role_updates():
+    # CO01: 기존 회사가 있는 사용자는 role_code 무관하게 자기 회사를 수정할 수 있다.
+    for role in ("001", "002", "010", "099", "500", ""):
+        store = {"companies": [_company("c1", name="old")]}
+        c = _client({"id": "u1", "company_id": "c1", "role_code": role}, store)
+        r = c.put("/me/company", json={"name": "new"})
+        assert r.status_code == 200, f"role={role!r} should be allowed, got {r.status_code}"
+        assert [x for x in store["companies"] if x["id"] == "c1"][0]["name"] == "new"
 
 
 @requires_client
-def test_t5_put_allowed_role_updates():
+def test_co01_existing_company_arbitrary_role_allowed():
+    # 구체적으로: 구 allowlist 밖 role_code=099 도 수정 허용
     store = {"companies": [_company("c1", name="old")]}
-    c = _client({"id": "u1", "company_id": "c1", "role_code": "001"}, store)
-    r = c.put("/me/company", json={"name": "new"})
+    c = _client({"id": "u1", "company_id": "c1", "role_code": "099"}, store)
+    r = c.put("/me/company", json={"name": "updated"})
     assert r.status_code == 200
-    assert [x for x in store["companies"] if x["id"] == "c1"][0]["name"] == "new"
+
+
+@requires_client
+def test_co02_existing_company_update_scoped_to_own():
+    # CO02: 수정은 current_user.company_id 소유 회사에만 적용
+    store = {"companies": [_company("c1", name="mine"), _company("c2", name="other")],
+             "users": [{"id": "u1", "company_id": "c1"}]}
+    c = _client({"id": "u1", "company_id": "c1", "role_code": "099"}, store)
+    r = c.put("/me/company", json={"name": "changed"})
+    assert r.status_code == 200
+    assert [x for x in store["companies"] if x["id"] == "c2"][0]["name"] == "other"
+
+
+@requires_client
+def test_co03_body_company_id_injection_422():
+    # CO03: body에 company_id 포함 시 422
+    c = _client({"id": "u1", "company_id": "c1", "role_code": "099"}, {"companies": [_company("c1")]})
+    r = c.put("/me/company", json={"name": "X", "company_id": "c-other"})
+    assert r.status_code == 422
+
+
+@requires_client
+def test_co04_company_less_outside_old_allowlist_can_create():
+    # CO04: company_id=None 사용자는 role_code가 구 allowlist 밖이어도 회사 생성+연결 가능
+    store = {"companies": [], "users": [{"id": "u1", "company_id": None}]}
+    c = _client({"id": "u1", "company_id": None, "role_code": "099"}, store)
+    r = c.put("/me/company", json={"name": "신규회사"})
+    assert r.status_code == 200
+    assert len(store["companies"]) == 1
+
+
+@requires_client
+def test_co05_company_less_create_binds_exactly_one():
+    # CO05: company-less ACTIVE 사용자 → 회사 정확히 1개 생성 + users.company_id 연결
+    store = {"companies": [], "users": [{"id": "u1", "company_id": None}]}
+    c = _client({"id": "u1", "company_id": None, "role_code": "003"}, store)
+    r = c.put("/me/company", json={"name": "TAI테스트"})
+    assert r.status_code == 200
+    assert len(store["companies"]) == 1
+    assert store["users"][0]["company_id"] == store["companies"][0]["id"]
+
+
+@requires_client
+def test_co07_get_company_returns_id_and_required_fields():
+    # CO07: GET /me/company 는 id + 필수 3필드 포함
+    store = {"companies": [_company("c1", name="테스트", business_number="1234567890",
+                                    representative_name="홍길동")]}
+    c = _client({"id": "u1", "company_id": "c1", "role_code": "099"}, store)
+    r = c.get("/me/company")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["id"] == "c1"
+    assert d["name"] == "테스트"
+    assert d["business_number"] == "1234567890"
+    assert d["representative_name"] == "홍길동"
 
 
 @requires_client
 def test_t7_t4_reject_id_injection():
-    c = _client({"id": "u1", "company_id": "c1", "role_code": "001"}, {"companies": [_company("c1")]})
+    c = _client({"id": "u1", "company_id": "c1", "role_code": "099"}, {"companies": [_company("c1")]})
     for bad in ({"name": "X", "company_id": "c-other"}, {"name": "X", "user_id": "u-other"}):
         r = c.put("/me/company", json=bad)
         assert r.status_code == 422
