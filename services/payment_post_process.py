@@ -421,11 +421,17 @@ def on_payment_success_sync(payment_id: str) -> None:
     plan_info = PLAN_MAP.get(plan_code, {"sector": "INDUSTRIAL", "level": 3})
 
     # [P2-4] 결제 성공 automation 이벤트 발화(모든 성공 경로 공통 지점: 카드성공·수동활성화).
+    # V2 SAAS: plan_code=None 이므로 INDUSTRY_PRO fallback을 automation payload에 주입하지 않는다.
+    _auto_plan_code = (
+        pay.get("plan_code")
+        if (pay.get("product_type") or "") == "SAAS"
+        else plan_code
+    )
     _fire_automation("payment.success", {
         "payment_id": payment_id,
         "company_id": pay.get("company_id"),
         "user_id": pay.get("user_id"),
-        "plan_code": plan_code,
+        "plan_code": _auto_plan_code,
         "product_type": pay.get("product_type"),
         "total_amount": pay.get("total_amount"),
         "status": status,
@@ -486,6 +492,32 @@ def on_payment_success_sync(payment_id: str) -> None:
             logger.error(
                 "[RENEWAL_RUNTIME_ROUTE_INVALID] payment=%s product_type=%s route=%s — no contract mutation",
                 payment_id, pay.get("product_type"), route,
+            )
+        return
+
+    # INITIAL V2: product_type=SAAS (initial — not RENEWAL, not UPGRADE already handled above)
+    # Fail-closed: error → no legacy fallback, no notification
+    if pay.get("product_type") == "SAAS":
+        from services.saas_initial_payment_runtime_v2 import (
+            SaasInitialPaymentRuntimeV2Error,
+            apply_saas_v2_initial_payment_runtime,
+        )
+        try:
+            result = apply_saas_v2_initial_payment_runtime(sb, pay)
+            logger.info(
+                "[INITIAL_V2_RUNTIME] payment=%s status=%s",
+                payment_id, (result or {}).get("status"),
+            )
+            v2_label = (
+                result.get("display_name")
+                or result.get("product_tier")
+                or "TAI Safe"
+            )
+            send_payment_notification(pay, v2_label, {})
+        except SaasInitialPaymentRuntimeV2Error as exc:
+            logger.error(
+                "[INITIAL_V2_RUNTIME] payment=%s error=%s message=%s — notification suppressed",
+                payment_id, exc.code, exc.message,
             )
         return
 

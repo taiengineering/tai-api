@@ -398,26 +398,10 @@ def process_card_success(
     except Exception as e:
         log.error("Payment post-process failed: %s", e)
 
-    # V2 Renewal: B2 Atomic RPC가 contract mutation authority.
-    # post-process 성공/실패 모두 여기서 direct write 금지.
-    # Defense-in-depth: payment_type key 자체가 없으면(partial caller projection)
-    # SAAS 결제에서 legacy write 허용으로 해석하지 않는다.
-    _raw_payment_type = payment.get("payment_type")
-    _is_v2_renewal = (
-        (_raw_payment_type or "").upper() == "RENEWAL"
-        and product_type == "SAAS"
-    )
-    _is_saas_payment_type_unknown = (
-        _raw_payment_type is None
-        and product_type == "SAAS"
-    )
-    if _is_saas_payment_type_unknown:
-        log.warning(
-            "[V2_PAYMENT_TYPE_MISSING] payment=%s product_type=SAAS contract=%s "
-            "— payment_type absent in caller projection, direct contract write skipped",
-            payment_id, contract_id,
-        )
-    if contract_id and not _is_v2_renewal and not _is_saas_payment_type_unknown:
+    # V2 SAAS (INITIAL/RENEWAL/UPGRADE): Atomic RPC 또는 전용 writer 가 contract mutation authority.
+    # product_type=SAAS 는 payment_type 무관하게 direct contracts.update 금지.
+    _is_v2_saas = product_type == "SAAS"
+    if contract_id and not _is_v2_saas:
         supabase.table("contracts").update({"is_active": True, "updated_at": now}).eq("id", contract_id).execute()
 
     if not with_redirect_qs:
