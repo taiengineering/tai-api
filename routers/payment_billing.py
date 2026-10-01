@@ -1078,6 +1078,8 @@ def billing_charge(body: BillingChargeBody):
         is_recurring=True,
     )
 
+    _post_process_ok = None
+
     # V3 SAAS: 정기청구 성공 → 갱신 계약 체인 실행 + next_billing_at 정렬
     if result.get("success") and subscription.get("product_type") == "SAAS":
         try:
@@ -1094,11 +1096,28 @@ def billing_charge(body: BillingChargeBody):
             _ct_id = _pay_align.data[0].get("contract_id") if _pay_align.data else None
             if _ct_id:
                 _align_v3_subscription_next_billing_to_contract_end(supabase, body.subscription_id, _ct_id)
+            _post_process_ok = True
         except Exception as _v3_err:
             log.error(
                 "[V3_BILLING_CHARGE] post-process failed payment=%s: %s",
                 result.get("payment_id"), _v3_err,
             )
+            _post_process_ok = False
+
+    # §PATCH4-A: V3 SAAS charge succeeded but post-process failed → distinct safe outcome
+    if result.get("success") and _post_process_ok is False:
+        return {
+            "status": "partial",
+            "data": {
+                "subscription_id": body.subscription_id,
+                "payment_id":      result.get("payment_id"),
+                "charge_cycle":    cycle,
+                "payment_charged": True,
+                "post_process":    "FAILED",
+                "retry_charge":    False,
+                "reason_code":     "POST_PROCESS_FAILED",
+            },
+        }
 
     return {
         "status":   "success" if result.get("success") else "failed",
