@@ -1,4 +1,4 @@
--- WO-QA-CONTROL-PHASE2A-001 + PATCH-2A-01 + PATCH-2A-02: QA Canonical DB Contract v1
+-- WO-QA-CONTROL-PHASE2A-001 + PATCH-2A-01 + PATCH-2A-02 + PATCH-2A-03: QA Canonical DB Contract v1
 -- 5개 테이블: qa_items / qa_schedules / qa_runs / qa_run_targets / qa_run_results
 -- RLS: ENABLED 전체 — anon / authenticated direct access = NONE
 -- tai-api service_role 전용. Admin Front → tai-api → Supabase 경로만 허용.
@@ -109,10 +109,11 @@ COMMENT ON COLUMN public.qa_schedules.day_of_week IS '0=Sunday .. 6=Saturday. Me
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Table 3: qa_runs
--- 실행 요청 / GitHub Actions 실행 단위.
+-- 실행 요청 / GitHub Actions 실행 단위 (1 workflow attempt = 1 row).
 -- TAI 내부 id(uuid) != github_run_id(bigint). 별개 authority.
--- github_run_id: non-NULL 값 중복 금지, NULL 다중 허용 (partial unique index).
--- github_run_attempt: non-NULL이면 >= 1 (PATCH-2A-02)
+-- GitHub identity = (github_run_id, github_run_attempt).
+-- Re-run = 동일 run_id + 증가된 attempt → 복합 UNIQUE로 수용 (PATCH-2A-03).
+-- Cross-column CHECK: 둘 다 NULL(dispatch 전) 또는 둘 다 NOT NULL(연결 후)만 허용.
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE public.qa_runs (
     id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -137,14 +138,18 @@ CREATE TABLE public.qa_runs (
     CONSTRAINT qa_runs_run_status_chk CHECK (
         run_status IN ('QUEUED','RUNNING','COMPLETED','ERROR','CANCELED')
     ),
-    CONSTRAINT qa_runs_github_run_attempt_chk CHECK (
-        github_run_attempt IS NULL OR github_run_attempt >= 1
+    -- GitHub identity cross-column: 둘 다 NULL(dispatch 전) 또는 둘 다 NOT NULL(>= 1)만 허용
+    CONSTRAINT qa_runs_github_identity_chk CHECK (
+        (github_run_id IS NULL     AND github_run_attempt IS NULL)
+        OR
+        (github_run_id IS NOT NULL AND github_run_attempt IS NOT NULL AND github_run_attempt >= 1)
     )
 );
 
--- github_run_id: non-NULL 중복 금지, NULL 다중 허용
-CREATE UNIQUE INDEX IF NOT EXISTS ux_qa_runs_github_run_id
-    ON public.qa_runs(github_run_id)
+-- GitHub workflow identity: (github_run_id, github_run_attempt) 복합 UNIQUE
+-- Re-run은 동일 run_id + 증가된 attempt → 복합으로 수용
+CREATE UNIQUE INDEX IF NOT EXISTS ux_qa_runs_github_identity
+    ON public.qa_runs(github_run_id, github_run_attempt)
     WHERE github_run_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS ix_qa_runs_run_status   ON public.qa_runs(run_status);
@@ -153,8 +158,9 @@ CREATE INDEX IF NOT EXISTS ix_qa_runs_requested_at ON public.qa_runs(requested_a
 
 ALTER TABLE public.qa_runs ENABLE ROW LEVEL SECURITY;
 
-COMMENT ON TABLE  public.qa_runs IS 'WO-QA-CONTROL-PHASE2A-001 One run = one GitHub Actions execution unit. TAI id != github_run_id.';
-COMMENT ON COLUMN public.qa_runs.github_run_id IS 'GitHub Actions run_id reference. Partial unique index: non-NULL must be unique, NULL allowed multiple times.';
+COMMENT ON TABLE  public.qa_runs IS 'WO-QA-CONTROL-PHASE2A-001 One GitHub workflow attempt = one row. TAI id != github_run_id. Re-run = same run_id + incremented attempt.';
+COMMENT ON COLUMN public.qa_runs.github_run_id IS 'GitHub Actions run_id. Composite unique with github_run_attempt. NULL until dispatch.';
+COMMENT ON COLUMN public.qa_runs.github_run_attempt IS 'GitHub Actions attempt number. >= 1 when set. NULL until dispatch. Cross-column CHECK: must be NULL iff github_run_id is NULL.';
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Table 4: qa_run_targets (PATCH-2A-01)
@@ -188,6 +194,7 @@ COMMENT ON COLUMN public.qa_run_targets.ordinal IS 'Optional execution order hin
 -- result_status = raw evidence: PASS / FAIL / BLOCKED / SKIPPED
 -- FLAKY = derived (API가 attempt1=FAIL + attempt2=PASS로 파생) — DB에 저장 안 함.
 -- NEVER_RUN = derived (result 이력 부재) — DB에 저장 안 함.
+-- attempt = Playwright/Scenario retry (qa_runs.github_run_attempt와 다른 개념).
 -- UNIQUE(run_id, qa_item_id, attempt) — retry row 별도 보존.
 -- composite FK → qa_run_targets(run_id, qa_item_id) (PATCH-2A-02)
 --   target에 없는 QA 항목 result INSERT = DB FK 차단.
@@ -231,4 +238,5 @@ ALTER TABLE public.qa_run_results ENABLE ROW LEVEL SECURITY;
 
 COMMENT ON TABLE  public.qa_run_results IS 'WO-QA-CONTROL-PHASE2A-001 Raw attempt evidence per scenario per run. FLAKY/NEVER_RUN are derived by API, not stored here. result must reference qa_run_targets(run_id, qa_item_id).';
 COMMENT ON COLUMN public.qa_run_results.result_status IS 'Raw result: PASS/FAIL/BLOCKED/SKIPPED. FLAKY = derived when attempt1=FAIL + attempt2=PASS for same run+item.';
+COMMENT ON COLUMN public.qa_run_results.attempt       IS 'Playwright/Scenario retry attempt. NOT the same as qa_runs.github_run_attempt (GitHub workflow attempt).';
 COMMENT ON COLUMN public.qa_run_results.artifact_ref  IS 'Internal reference only (GitHub artifact ID or storage key). Never store signed URLs or tokens.';
