@@ -39,6 +39,8 @@ ROUTERS = [
     {"module": "routers.pricing_validation_api"},
     {"module": "routers.payment_activation_api"},
     {"module": "routers.feedback_api"},
+    {"module": "routers.admin_qa"},      # WO-QA-CONTROL-PHASE2B-001 QA Control Admin API
+    {"module": "routers.internal_qa"},   # WO-QA-CONTROL-PHASE2B-001 QA Result Callback (internal)
 
     # ── SaaS 대시보드 의존 모듈 (유지) ──
     {"module": "routers.situation_dashboard_api"},
