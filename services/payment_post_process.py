@@ -22,6 +22,7 @@ from typing import Any, Dict, Optional
 from dateutil.relativedelta import relativedelta
 
 from db.supabase_client import get_supabase
+from schemas.saas_quote_v2 import SAAS_QUOTE_SCHEMA_VERSION
 from services.payment_helpers import SAAS_PRODUCT_TYPES, now_iso
 from services.time import business_today, now_kst
 
@@ -313,6 +314,55 @@ def _is_saas_payment(pay: dict) -> bool:
             and bool(pay.get("company_id")))
 
 
+def _is_commercial_v3_saas_payment(sb, pay: dict) -> bool:
+    """Trusted Commercial V3 SaaS payment predicate. Fail-closed on any error.
+
+    Conditions:
+    - pay.product_type == "SAAS"
+    - pay.company_id exists
+    - pay.quote_id exists
+    - quote server-side: company_id match, source="member_auto", service_type="SAAS",
+      items is list of exactly 1, items[0].quote_schema_version == SAAS_QUOTE_SCHEMA_VERSION
+    """
+    try:
+        if (pay.get("product_type") or "") != "SAAS":
+            return False
+        if not pay.get("company_id"):
+            return False
+        quote_id = pay.get("quote_id")
+        if not quote_id:
+            return False
+        res = (
+            sb.table("quotes")
+            .select("id, company_id, source, service_type, items")
+            .eq("id", quote_id)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        if not rows:
+            logger.warning("[V3-predicate] quote not found id=%s", quote_id)
+            return False
+        q = rows[0]
+        if str(q.get("company_id") or "") != str(pay.get("company_id") or ""):
+            logger.warning("[V3-predicate] company mismatch quote=%s pay=%s",
+                           q.get("company_id"), pay.get("company_id"))
+            return False
+        if q.get("source") != "member_auto":
+            return False
+        if q.get("service_type") != "SAAS":
+            return False
+        items = q.get("items")
+        if not isinstance(items, list) or len(items) != 1:
+            return False
+        if (items[0].get("quote_schema_version") or "") != SAAS_QUOTE_SCHEMA_VERSION:
+            return False
+        return True
+    except Exception:
+        logger.warning("[V3-predicate] lookup failed for quote_id=%s", pay.get("quote_id"), exc_info=True)
+        return False
+
+
 def _bootstrap_buyer_company_admin(sb, pay: dict) -> None:
     """WP-A Payment buyer bootstrap — SaaS 성공만.
 
@@ -331,7 +381,9 @@ def _bootstrap_buyer_company_admin(sb, pay: dict) -> None:
     """
     # PATCH-2 BLOCKER-2D : auto-contract 판정 대신 _is_saas_payment 사용.
     # renewal (contract_id 있는 SaaS 결제) 도 bootstrap 대상.
-    if not _is_saas_payment(pay):
+    is_legacy = _is_saas_payment(pay)
+    is_v3 = _is_commercial_v3_saas_payment(sb, pay)
+    if not is_legacy and not is_v3:
         return                                                       # SaaS 성공만
     buyer_id = pay.get("user_id")
     company_id = pay.get("company_id")
@@ -359,9 +411,22 @@ def _bootstrap_buyer_company_admin(sb, pay: dict) -> None:
     active_admins = _cap_count(sb, company_id)
     now = now_iso()
     if active_admins > 0:
-        # case C : 이미 관리자 존재 → NOOP (덮어쓰기 금지).
-        logger.info("[WP-A bootstrap] case=C active_admins=%d buyer=%s NOOP",
-                    active_admins, buyer_id)
+        if not is_v3:
+            # case C (legacy) : 이미 관리자 존재 → NOOP (덮어쓰기 금지).
+            logger.info("[WP-A bootstrap] case=C active_admins=%d buyer=%s NOOP (legacy)",
+                        active_admins, buyer_id)
+            return
+        # case C (V3) : 이미 관리자 존재해도 구매자는 즉시 ACTIVE.
+        patch = {"status_code": "ACTIVE", "is_active": True, "updated_at": now}
+        if (buyer.get("status_code") == "ACTIVE" and bool(buyer.get("is_active"))):
+            logger.info("[WP-A bootstrap] case=C V3 buyer=%s already ACTIVE, no churn", buyer_id)
+            return
+        try:
+            sb.table("users").update(patch).eq("id", buyer_id).execute()
+            logger.info("[WP-A bootstrap] case=C V3 active_admins=%d buyer=%s role=%s activated",
+                        active_admins, buyer_id, buyer.get("role_code"))
+        except Exception:
+            logger.warning("[WP-A bootstrap] case=C V3 update 실패 buyer=%s", buyer_id)
         return
     # active_admins == 0
     buyer_has_cap = _has_cap(sb, buyer.get("role_code"))
