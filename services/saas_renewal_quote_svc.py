@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -26,6 +27,7 @@ from services.saas_quote_site_scope_v2 import QuoteSiteScopeError
 _ALLOWED_RENEWAL_MONTHS = frozenset({3, 6, 9, 12})
 _MANUAL_RENEWAL_TIERS = frozenset({"MANAGER", "FIELD"})
 _PAID_STATUS = frozenset({"PAID", "SUCCESS"})
+_RENEWAL_SCHEMA_VERSION = "SAAS_CONTRACT_COMMERCIAL_V2"
 
 
 class SaasRenewalQuoteError(Exception):
@@ -38,10 +40,59 @@ class SaasRenewalQuoteError(Exception):
         super().__init__(self.message)
 
 
+def _parse_paid_at(s) -> datetime:
+    """Parse paid_at string → timezone-aware datetime. Raises ValueError if invalid/empty."""
+    if not s:
+        raise ValueError("paid_at is empty or None")
+    try:
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"paid_at not parseable: {s!r}") from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _get_latest_eligible_payment_id(supabase, contract_id: str) -> Optional[str]:
+    """latest SAAS PAID/SUCCESS payment for contract. UPGRADE excluded. CARD/RENEWAL/INITIAL allowed.
+
+    Uses timezone-aware paid_at sort (Fix C shared helper).
+    Returns None if no valid payment exists (all have invalid paid_at or no payments).
+    """
+    res = (
+        supabase.table("payments")
+        .select("id, payment_type, paid_at")
+        .eq("contract_id", contract_id)
+        .eq("product_type", "SAAS")
+        .in_("status_code", list(_PAID_STATUS))
+        .execute()
+    )
+    candidates: list = []
+    for p in (res.data or []):
+        ptype = (p.get("payment_type") or "INITIAL").upper()
+        if ptype == "UPGRADE":
+            continue
+        try:
+            dt = _parse_paid_at(p.get("paid_at"))
+            candidates.append((dt, str(p.get("id") or "")))
+        except Exception:
+            continue
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1]
+
+
+def is_renewal_quote_unique_violation(exc: Exception) -> bool:
+    """PostgreSQL 23505 unique violation이 uix_quotes_v3_renewal_source_active인지 판정."""
+    msg = str(exc)
+    return "23505" in msg and "uix_quotes_v3_renewal_source_active" in msg
+
+
 def _find_existing_renewal_quote(
     supabase, contract_id: str, version_no: int, company_id: str
 ) -> Optional[dict]:
-    """같은 company/contract/version_no의 활성 ISSUED renewal quote 조회."""
+    """같은 company/contract/version_no의 활성 ISSUED renewal quote 조회 (is_active=true 포함)."""
     res = (
         supabase.table("quotes")
         .select("id, quote_no, items, survey_data, status_code")
@@ -49,6 +100,7 @@ def _find_existing_renewal_quote(
         .eq("source", "member_auto")
         .eq("service_type", "SAAS")
         .eq("status_code", "ISSUED")
+        .eq("is_active", True)
         .execute()
     )
     for q in (res.data or []):
@@ -74,7 +126,7 @@ def create_renewal_quote(
 ) -> dict:
     """기존 ACTIVE V3 계약 기반 Renewal Frozen Quote 발행.
 
-    DB Read:  payments(1) + contracts(1) + saas_contract_commercial_versions(N)
+    DB Read:  payments(2) + contracts(1) + saas_contract_commercial_versions(N)
               + saas_contract_site_scopes(N) + factories/construction_sites (per scope)
     DB Write: quotes(1)
     DDL:      0
@@ -123,7 +175,7 @@ def create_renewal_quote(
 
     ct_res = (
         supabase.table("contracts")
-        .select("id, company_id, status_code, service_type, end_date")
+        .select("id, company_id, status_code, service_type, is_active, end_date")
         .eq("id", contract_id)
         .limit(1)
         .execute()
@@ -135,13 +187,26 @@ def create_renewal_quote(
         raise SaasRenewalQuoteError("CONTRACT_NOT_ACTIVE", "활성 계약에만 연장이 가능합니다.")
     if contract.get("service_type") != "SAAS":
         raise SaasRenewalQuoteError("CONTRACT_NOT_SAAS", "SaaS 계약에만 연장이 가능합니다.")
+    if contract.get("is_active") is not True:
+        raise SaasRenewalQuoteError("CONTRACT_NOT_ACTIVE", "활성 계약에만 연장이 가능합니다.")
+
+    # ── Step 3.5: payment must be latest eligible for contract ──────────────
+    latest_pid = _get_latest_eligible_payment_id(supabase, contract_id)
+    if latest_pid != payment_id:
+        raise SaasRenewalQuoteError("NOT_CURRENT_PAYMENT", "최신 결제에만 연장이 가능합니다.", 409)
 
     # ── Step 3-B: Temporal window guard ────────────────────────────────────────
     from services.saas_commercial_version_time_v2 import contract_end_date_to_effective_at_v2
 
     as_of = now_kst()
     end_date = contract.get("end_date")
-    if end_date:
+    if not end_date:
+        raise SaasRenewalQuoteError(
+            "RENEWAL_END_DATE_REQUIRED",
+            "계약 마감일 정보가 없어 연장이 불가합니다.",
+            422,
+        )
+    try:
         contract_end_boundary = contract_end_date_to_effective_at_v2(end_date)
         if as_of >= contract_end_boundary:
             raise SaasRenewalQuoteError(
@@ -149,13 +214,20 @@ def create_renewal_quote(
                 "계약 연장 기간이 종료되었습니다.",
                 422,
             )
+    except SaasRenewalQuoteError:
+        raise
+    except Exception:
+        raise SaasRenewalQuoteError(
+            "RENEWAL_STATE_INVALID",
+            "계약 날짜 파싱 오류.",
+            422,
+        )
 
     # ── Step 4: effective CV 조회 ────────────────────────────────────────
-    # as_of already set in Step 3-B
     cv_res = (
         supabase.table("saas_contract_commercial_versions")
         .select("id, version_no, product_tier, worker_capacity, commercial_schema_version, "
-                "pricing_mode, effective_from, superseded_at")
+                "payment_months, pricing_mode, effective_from, superseded_at")
         .eq("contract_id", contract_id)
         .execute()
     )
@@ -169,14 +241,22 @@ def create_renewal_quote(
             raise SaasRenewalQuoteError("CURRENT_CV_AMBIGUOUS", "현재 계약 버전이 중복됩니다.")
         raise
 
-    # ── Step 4-B: current CV payment_months 검증 ──────────────────────────
+    # ── Step 4-A: commercial_schema_version 검증 ──────────────────────────
+    cv_schema = str(current_cv.get("commercial_schema_version") or "")
+    if cv_schema != _RENEWAL_SCHEMA_VERSION:
+        raise SaasRenewalQuoteError(
+            "RENEWAL_STATE_INVALID",
+            f"상업계약 스키마 버전이 지원되지 않습니다: {cv_schema}",
+        )
+
+    # ── Step 4-B: current CV payment_months 검증 (0/missing = invalid) ──────────────────────────
     cv_payment_months = int(current_cv.get("payment_months") or 0)
     if cv_payment_months == 1:
         raise SaasRenewalQuoteError(
             "RECURRING_MANAGED_AUTOMATICALLY",
             "정기결제 계약은 수동 연장이 불가합니다.",
         )
-    if cv_payment_months not in _ALLOWED_RENEWAL_MONTHS and cv_payment_months != 0:
+    if cv_payment_months not in _ALLOWED_RENEWAL_MONTHS:
         raise SaasRenewalQuoteError(
             "RENEWAL_STATE_INVALID",
             f"현재 계약의 결제 주기가 연장 불가 상태입니다: {cv_payment_months}",
@@ -213,11 +293,6 @@ def create_renewal_quote(
         raise SaasRenewalQuoteError("SITE_SCOPES_EMPTY", "계약 사업장 정보가 없습니다.")
 
     # ── Step 8: canonical criteria DB reload ────────────────────────────
-    # re-use existing site scope resolver with DB-authority criteria
-    # We build SaasPricingPreviewSiteRequestV2 with placeholder criteria=0,
-    # then let resolve_quote_site_scope_v2 reload from DB.
-    # BUT resolve_quote_site_scope_v2 raises QUOTE_SITE_DATA_CHANGED if value differs.
-    # So we load DB criteria directly and build canonical sites.
     from services.saas_quote_site_scope_v2 import (
         _load_factory,
         _load_construction_site,
@@ -305,6 +380,26 @@ def create_renewal_quote(
     except SaasQuoteV2Error:
         raise
     except QuoteSiteScopeError:
+        raise
+    except Exception as exc:
+        if is_renewal_quote_unique_violation(exc):
+            # 23505 race: re-read existing quote
+            existing = _find_existing_renewal_quote(supabase, contract_id, version_no, company_id)
+            if existing:
+                ex_pm = None
+                try:
+                    items = existing.get("items") or []
+                    if items and isinstance(items[0], dict):
+                        ex_pm = int((items[0].get("pricing_snapshot") or {}).get("payment_months") or 0)
+                except Exception:  # noqa: BLE001
+                    pass
+                if ex_pm is not None and ex_pm == payment_months:
+                    return existing
+            raise SaasRenewalQuoteError(
+                "RENEWAL_QUOTE_ALREADY_ISSUED",
+                "동일 계약 버전에 대해 이미 연장 견적이 발행되었습니다.",
+                409,
+            )
         raise
 
     return quote

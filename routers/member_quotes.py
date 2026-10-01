@@ -348,7 +348,24 @@ def prepare_v2_renewal_payment(
     if int(current_cv.get("version_no") or -1) != int(current_version_no):
         raise HTTPException(status_code=409, detail={"code": "RENEWAL_VERSION_MISMATCH", "message": "계약 버전이 변경되었습니다. 연장 견적을 다시 발행해 주세요."})
 
-    # CV payment_months 독립 검증 (recurring 계약이 이후에 prepare 호출하는 경우 차단)
+    # Fix D: full CV validation before any payment INSERT / INICIS launch
+    cv_schema = str(current_cv.get("commercial_schema_version") or "")
+    if cv_schema != "SAAS_CONTRACT_COMMERCIAL_V2":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RENEWAL_STATE_INVALID", "message": "상업계약 스키마 버전이 지원되지 않습니다."},
+        )
+    cv_tier = str(current_cv.get("product_tier") or "")
+    if cv_tier == "CUSTOM":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "CUSTOM_REVIEW_REQUIRED", "message": "맞춤형 계약은 별도 문의가 필요합니다."},
+        )
+    if cv_tier not in {"MANAGER", "FIELD"}:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RENEWAL_STATE_INVALID", "message": "수동 연장이 불가한 상품 등급입니다."},
+        )
     cv_pm = int(current_cv.get("payment_months") or 0)
     if cv_pm == 1:
         raise HTTPException(
@@ -356,24 +373,53 @@ def prepare_v2_renewal_payment(
             detail={"code": "RECURRING_MANAGED_AUTOMATICALLY",
                     "message": "정기결제 계약은 수동 연장이 불가합니다."},
         )
+    _ALLOWED_PM = frozenset({3, 6, 9, 12})
+    if cv_pm not in _ALLOWED_PM:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RENEWAL_STATE_INVALID",
+                    "message": f"현재 계약의 결제 주기가 연장 불가 상태입니다: {cv_pm}"},
+        )
 
-    # Temporal window guard
+    # Fix E: contract is_active + end_date hard stop
     ct_res2 = (
         supabase.table("contracts")
-        .select("id, end_date")
+        .select("id, status_code, service_type, is_active, end_date")
         .eq("id", contract_id)
         .limit(1)
         .execute()
     )
     ct_row = (ct_res2.data or [None])[0]
-    end_date = (ct_row or {}).get("end_date")
-    if end_date:
+    if not ct_row:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "CONTRACT_NOT_FOUND", "message": "계약 정보를 찾을 수 없습니다."},
+        )
+    if ct_row.get("is_active") is not True:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RENEWAL_STATE_INVALID", "message": "활성 계약에만 연장이 가능합니다."},
+        )
+    end_date = ct_row.get("end_date")
+    if not end_date:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RENEWAL_END_DATE_REQUIRED", "message": "계약 마감일 정보가 없어 연장이 불가합니다."},
+        )
+    try:
         contract_end_boundary = contract_end_date_to_effective_at_v2(end_date)
         if _now >= contract_end_boundary:
             raise HTTPException(
                 status_code=422,
                 detail={"code": "RENEWAL_WINDOW_CLOSED", "message": "계약 연장 기간이 종료되었습니다."},
             )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RENEWAL_STATE_INVALID", "message": "계약 날짜 파싱 오류."},
+        )
 
     # ── Payment idempotency guard (RENEWAL) ──────────────────────────────────
     from services.saas_renewal_payment_guard import (
@@ -382,14 +428,12 @@ def prepare_v2_renewal_payment(
         RenewalPaymentGuardError,
     )
     try:
-        existing_result = check_existing_renewal_payment(
+        check_existing_renewal_payment(
             supabase,
             quote_id=quote_id,
             company_id=company_id,
             user_id=current["id"],
         )
-        if existing_result:
-            return existing_result
     except RenewalPaymentGuardError as exc:
         raise HTTPException(
             status_code=exc.http_status,
