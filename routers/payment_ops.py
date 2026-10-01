@@ -170,41 +170,39 @@ _PAID_STATUS = frozenset({"PAID", "SUCCESS"})
 def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
     """각 결제행에 renewal_eligible + renewal_reason_code 부여. N+1 금지.
 
-    Manual renewal 조건:
+    Manual renewal 조건 (PATCH-002: RENEWAL payment_type 포함, CV 기반 tier/pm 검증):
       - product_type=SAAS
-      - payment_type=INITIAL (not RENEWAL/UPGRADE)
-      - product_tier in {MANAGER, FIELD}
-      - period_months in {3,6,9,12}
+      - payment_type not in {UPGRADE}  (INITIAL + RENEWAL 모두 anchor 가능)
       - status_code in {PAID, SUCCESS}
       - contract_id 존재 + ACTIVE SAAS 계약
-      - 해당 contract의 가장 최근 결제 (not an older payment)
+      - current CV 기반: tier in {MANAGER,FIELD}, payment_months in {3,6,9,12}, not recurring(pm=1), not CUSTOM
+      - 해당 contract의 가장 최근 SAAS PAID/SUCCESS non-UPGRADE 결제
       - future renewal CV 없음
     """
     from services.saas_commercial_version_time_v2 import (
         find_future_commercial_versions_v2,
+        select_effective_commercial_version_v2,
         contract_end_date_to_effective_at_v2,
+        TemporalVersionError,
     )
+    from collections import defaultdict
 
-    # Pre-filter: only SAAS rows with contract_id are candidates
+    # ── Step 1: Basic pre-filter — SAAS + contract + PAID + not UPGRADE ──────
     candidates = [
         r for r in rows
         if (
             r.get("product_type") == "SAAS"
             and r.get("contract_id")
-            and (r.get("payment_type") or "INITIAL").upper() not in {"RENEWAL", "UPGRADE"}
-            and (r.get("product_tier") or "") in _MANUAL_RENEWAL_TIERS
-            and int(r.get("period_months") or 0) in _MANUAL_RENEWAL_MONTHS
+            and (r.get("payment_type") or "INITIAL").upper() not in {"UPGRADE"}
             and (r.get("status_code") or "") in _PAID_STATUS
         )
     ]
 
-    # Non-candidates get immediate reason
+    # Non-candidates: immediate reason
     for r in rows:
         if r not in candidates:
-            pt = r.get("product_type") or ""
-            tier = r.get("product_tier") or ""
-            pm = int(r.get("period_months") or 0)
             sc = r.get("status_code") or ""
+            pt = r.get("product_type") or ""
             ptype = (r.get("payment_type") or "INITIAL").upper()
             if sc not in _PAID_STATUS:
                 r["renewal_eligible"] = False
@@ -212,26 +210,16 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
             elif pt != "SAAS":
                 r["renewal_eligible"] = False
                 r["renewal_reason_code"] = "NOT_COMMERCIAL_V3"
-            elif pm == 1:
-                r["renewal_eligible"] = False
-                r["renewal_reason_code"] = "RECURRING_MANAGED_AUTOMATICALLY"
-            elif tier == "CUSTOM":
-                r["renewal_eligible"] = False
-                r["renewal_reason_code"] = "CUSTOM_REVIEW_REQUIRED"
-            elif tier not in _MANUAL_RENEWAL_TIERS:
-                r["renewal_eligible"] = False
-                r["renewal_reason_code"] = "NOT_COMMERCIAL_V3"
-            elif pm not in _MANUAL_RENEWAL_MONTHS:
-                r["renewal_eligible"] = False
-                r["renewal_reason_code"] = "NOT_COMMERCIAL_V3"
-            else:
+            else:  # UPGRADE
                 r["renewal_eligible"] = False
                 r["renewal_reason_code"] = "NOT_COMMERCIAL_V3"
 
     if not candidates:
         return
 
-    # Load ACTIVE SAAS contracts for company (batch)
+    as_of = now_kst()
+
+    # ── Step 2: Load ACTIVE SAAS contracts ────────────────────────────────────
     contract_ids = list({str(r["contract_id"]) for r in candidates})
     ct_res = (
         supabase.table("contracts")
@@ -246,76 +234,122 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
         if c.get("status_code") == "ACTIVE" and c.get("service_type") == "SAAS"
     }
 
-    # For each contract_id that is ACTIVE, find latest payment for that contract
     active_candidate_contract_ids = list({
         str(r["contract_id"]) for r in candidates
-        if str(r["contract_id"]) in active_contracts  # dict key check
+        if str(r["contract_id"]) in active_contracts
     })
+
+    # ── Step 3: Load all CVs for active contracts (batch, one query) ──────────
+    all_cvs_by_contract: dict = defaultdict(list)
+    if active_candidate_contract_ids:
+        cv_res = (
+            supabase.table("saas_contract_commercial_versions")
+            .select("id, contract_id, version_no, product_tier, payment_months, "
+                    "commercial_schema_version, pricing_mode, effective_from, superseded_at")
+            .in_("contract_id", active_candidate_contract_ids)
+            .execute()
+        )
+        for cv in (cv_res.data or []):
+            all_cvs_by_contract[str(cv.get("contract_id") or "")].append(cv)
+
+    # ── Step 4: Compute current_cv + future_renewal per contract ─────────────
+    current_cv_by_contract: dict = {}
+    future_renewal_contracts: set = set()
+    for cid, cvs in all_cvs_by_contract.items():
+        try:
+            cv = select_effective_commercial_version_v2(cvs, as_of)
+            current_cv_by_contract[cid] = cv
+        except TemporalVersionError:
+            pass  # handled as RENEWAL_STATE_INVALID below
+        if find_future_commercial_versions_v2(cvs, as_of):
+            future_renewal_contracts.add(cid)
+
+    # ── Step 5: Latest SAAS paid payment per contract (include RENEWAL, exclude UPGRADE)
     latest_pay_map: dict = {}
     if active_candidate_contract_ids:
         lp_res = (
             supabase.table("payments")
-            .select("id, contract_id, paid_at")
+            .select("id, contract_id, paid_at, payment_type")
             .in_("contract_id", active_candidate_contract_ids)
             .in_("status_code", list(_PAID_STATUS))
             .eq("product_type", "SAAS")
             .execute()
         )
-        from collections import defaultdict
         contract_pays: dict = defaultdict(list)
         for p in (lp_res.data or []):
+            ptype = (p.get("payment_type") or "INITIAL").upper()
+            if ptype == "UPGRADE":
+                continue
             cid = str(p.get("contract_id") or "")
             contract_pays[cid].append(p)
         for cid, pays in contract_pays.items():
-            # latest by paid_at
             pays.sort(key=lambda x: str(x.get("paid_at") or ""), reverse=True)
             latest_pay_map[cid] = str(pays[0]["id"]) if pays else None
 
-    # Check future renewal CVs (batch by contract_id)
-    as_of = now_kst()
-    future_renewal_contracts: set = set()
-    if active_candidate_contract_ids:
-        cv_res = (
-            supabase.table("saas_contract_commercial_versions")
-            .select("contract_id, effective_from, superseded_at")
-            .in_("contract_id", active_candidate_contract_ids)
-            .execute()
-        )
-        from collections import defaultdict as _dd
-        cvs_by_contract: dict = _dd(list)
-        for cv in (cv_res.data or []):
-            cvs_by_contract[str(cv.get("contract_id") or "")].append(cv)
-        for cid, cvs in cvs_by_contract.items():
-            if find_future_commercial_versions_v2(cvs, as_of):
-                future_renewal_contracts.add(cid)
-
-    # Assign eligibility
+    # ── Step 6: Assign eligibility per candidate ──────────────────────────────
     for r in candidates:
         cid = str(r["contract_id"])
         pid = str(r["id"])
+
         if cid not in active_contracts:
             r["renewal_eligible"] = False
             r["renewal_reason_code"] = "CONTRACT_NOT_ACTIVE"
-        elif latest_pay_map.get(cid) != pid:
+            continue
+
+        current_cv = current_cv_by_contract.get(cid)
+        if not current_cv:
+            r["renewal_eligible"] = False
+            r["renewal_reason_code"] = "RENEWAL_STATE_INVALID"
+            continue
+
+        # CV-based tier/payment_months checks
+        cv_pm = int(current_cv.get("payment_months") or 0)
+        cv_tier = str(current_cv.get("product_tier") or "")
+        if cv_pm == 1:
+            r["renewal_eligible"] = False
+            r["renewal_reason_code"] = "RECURRING_MANAGED_AUTOMATICALLY"
+            continue
+        if cv_tier == "CUSTOM":
+            r["renewal_eligible"] = False
+            r["renewal_reason_code"] = "CUSTOM_REVIEW_REQUIRED"
+            continue
+        if cv_tier not in _MANUAL_RENEWAL_TIERS:
+            r["renewal_eligible"] = False
+            r["renewal_reason_code"] = "NOT_COMMERCIAL_V3"
+            continue
+        if cv_pm not in _MANUAL_RENEWAL_MONTHS:
+            r["renewal_eligible"] = False
+            r["renewal_reason_code"] = "RENEWAL_STATE_INVALID"
+            continue
+
+        # Latest payment check
+        if latest_pay_map.get(cid) != pid:
             r["renewal_eligible"] = False
             r["renewal_reason_code"] = "NOT_CURRENT_PAYMENT"
-        elif cid in future_renewal_contracts:
+            continue
+
+        # Future renewal scheduled
+        if cid in future_renewal_contracts:
             r["renewal_eligible"] = False
             r["renewal_reason_code"] = "RENEWAL_ALREADY_SCHEDULED"
-        else:
-            # Temporal window guard
-            end_date = active_contracts.get(cid)
-            if end_date:
-                try:
-                    contract_end_boundary = contract_end_date_to_effective_at_v2(end_date)
-                    if as_of >= contract_end_boundary:
-                        r["renewal_eligible"] = False
-                        r["renewal_reason_code"] = "RENEWAL_WINDOW_CLOSED"
-                        continue
-                except Exception:  # noqa: BLE001 — fail-open on parse error
-                    pass
-            r["renewal_eligible"] = True
-            r["renewal_reason_code"] = "ELIGIBLE"
+            continue
+
+        # Temporal window guard
+        end_date = active_contracts.get(cid)
+        if end_date:
+            try:
+                contract_end_boundary = contract_end_date_to_effective_at_v2(end_date)
+                if as_of >= contract_end_boundary:
+                    r["renewal_eligible"] = False
+                    r["renewal_reason_code"] = "RENEWAL_WINDOW_CLOSED"
+                    continue
+            except Exception:  # noqa: BLE001 — fail-closed on parse error
+                r["renewal_eligible"] = False
+                r["renewal_reason_code"] = "RENEWAL_STATE_INVALID"
+                continue
+
+        r["renewal_eligible"] = True
+        r["renewal_reason_code"] = "ELIGIBLE"
 
 
 class RenewalQuoteBody(_BaseModel):

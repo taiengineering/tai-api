@@ -38,6 +38,32 @@ class SaasRenewalQuoteError(Exception):
         super().__init__(self.message)
 
 
+def _find_existing_renewal_quote(
+    supabase, contract_id: str, version_no: int, company_id: str
+) -> Optional[dict]:
+    """같은 company/contract/version_no의 활성 ISSUED renewal quote 조회."""
+    res = (
+        supabase.table("quotes")
+        .select("id, quote_no, items, survey_data, status_code")
+        .eq("company_id", company_id)
+        .eq("source", "member_auto")
+        .eq("service_type", "SAAS")
+        .eq("status_code", "ISSUED")
+        .execute()
+    )
+    for q in (res.data or []):
+        sd = (q.get("survey_data") or {})
+        if not isinstance(sd, dict):
+            continue
+        renewal_ctx = sd.get("commercial_v3_renewal")
+        if not isinstance(renewal_ctx, dict):
+            continue
+        if (str(renewal_ctx.get("contract_id") or "") == str(contract_id)
+                and int(renewal_ctx.get("current_version_no") or -1) == int(version_no)):
+            return q
+    return None
+
+
 def create_renewal_quote(
     supabase,
     *,
@@ -143,12 +169,24 @@ def create_renewal_quote(
             raise SaasRenewalQuoteError("CURRENT_CV_AMBIGUOUS", "현재 계약 버전이 중복됩니다.")
         raise
 
+    # ── Step 4-B: current CV payment_months 검증 ──────────────────────────
+    cv_payment_months = int(current_cv.get("payment_months") or 0)
+    if cv_payment_months == 1:
+        raise SaasRenewalQuoteError(
+            "RECURRING_MANAGED_AUTOMATICALLY",
+            "정기결제 계약은 수동 연장이 불가합니다.",
+        )
+    if cv_payment_months not in _ALLOWED_RENEWAL_MONTHS and cv_payment_months != 0:
+        raise SaasRenewalQuoteError(
+            "RENEWAL_STATE_INVALID",
+            f"현재 계약의 결제 주기가 연장 불가 상태입니다: {cv_payment_months}",
+        )
+
     # ── Step 5: product_tier 연장 자격 검증 ─────────────────────────────
     product_tier = str(current_cv.get("product_tier") or "")
     if product_tier not in _MANUAL_RENEWAL_TIERS:
         code = (
-            "RECURRING_MANAGED_AUTOMATICALLY" if product_tier == ""
-            else "CUSTOM_REVIEW_REQUIRED" if product_tier == "CUSTOM"
+            "CUSTOM_REVIEW_REQUIRED" if product_tier == "CUSTOM"
             else "NOT_COMMERCIAL_V3"
         )
         raise SaasRenewalQuoteError(code, f"수동 연장이 불가한 상품입니다: {product_tier}")
@@ -220,6 +258,28 @@ def create_renewal_quote(
             )
         )
 
+    # ── Step 8-B: 기존 활성 renewal quote 조회 (idempotency) ─────────────
+    version_no = int(current_cv.get("version_no") or 0)
+    existing_rq = _find_existing_renewal_quote(supabase, contract_id, version_no, company_id)
+    if existing_rq:
+        existing_pm = None
+        try:
+            items = existing_rq.get("items") or []
+            if items and isinstance(items[0], dict):
+                snap_data = items[0].get("pricing_snapshot") or {}
+                existing_pm = int(snap_data.get("payment_months") or 0)
+        except Exception:  # noqa: BLE001
+            existing_pm = None
+
+        if existing_pm is not None and existing_pm == payment_months:
+            return existing_rq  # 동일 조건 → 기존 quote 반환 (idempotent)
+        else:
+            raise SaasRenewalQuoteError(
+                "RENEWAL_QUOTE_ALREADY_ISSUED",
+                "동일 계약 버전에 대해 이미 연장 견적이 발행되었습니다.",
+                409,
+            )
+
     # ── Step 9: 기존 V3 quote issue pipeline 호출 ────────────────────────
     worker_capacity = int(current_cv.get("worker_capacity") or 0)
     request = SaasQuoteIssueRequestV2(
@@ -229,7 +289,6 @@ def create_renewal_quote(
         sites=canonical_sites,
     )
 
-    version_no = int(current_cv.get("version_no") or 0)
     server_survey_data = {
         "commercial_v3_renewal": {
             "contract_id": contract_id,
