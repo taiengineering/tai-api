@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import timedelta
 from typing import Optional
 from uuid import uuid4
 
@@ -703,3 +704,252 @@ def prepare_saas_v2_payment_from_quote(
                 buyername=buyername, buyertel=buyertel, buyeremail=buyeremail,
             ))
         raise
+
+
+# ── V3 SAAS VBANK Prepare ─────────────────────────────────────────────────────
+
+_VBANK_EXPIRE_MIN_DEFAULT = 4320  # 3 days
+
+
+def _find_existing_v2_vbank_payment(supabase, quote_id: str) -> Optional[dict]:
+    """PENDING/PAID/SUCCESS 상태인 기존 V3 SAAS VBANK 결제 행 조회 (최신 1건)."""
+    res = (
+        supabase.table("payments")
+        .select(_V2_PAYMENT_SELECT)
+        .eq("quote_id", quote_id)
+        .eq("product_type", "SAAS")
+        .eq("payment_type", "VBANK")
+        .in_("status_code", list(_ACTIVE_STATUSES))
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def _build_inicis_vbank_prepare_response(
+    sign_key: str,
+    payment_id: str,
+    order_id: str,
+    total_amount: int,
+    goodname: str,
+    *,
+    buyername: Optional[str] = None,
+    buyertel: Optional[str] = None,
+    buyeremail: Optional[str] = None,
+    vbank_expire_min: int = _VBANK_EXPIRE_MIN_DEFAULT,
+) -> dict:
+    """V3 SAAS VBANK prepare response. DB write = 0.
+
+    Builds on _build_inicis_prepare_response_exact and overrides gopaymethod/vbankexpire.
+    """
+    resp = _build_inicis_prepare_response_exact(
+        sign_key,
+        payment_id=payment_id,
+        order_id=order_id,
+        total_amount=total_amount,
+        goodname=goodname,
+        buyername=buyername,
+        buyertel=buyertel,
+        buyeremail=buyeremail,
+    )
+    resp["data"]["gopaymethod"] = "Vbank"
+    resp["data"]["vbankexpire"] = vbank_expire_min
+    return resp
+
+
+def _validate_pending_vbank_reuse(
+    existing: dict,
+    user_id: str,
+    company_id: str,
+    quote_id: str,
+    snap: SaasPricingSnapshotV2,
+    sign_key: str,
+    goodname: str,
+    *,
+    buyername: Optional[str] = None,
+    buyertel: Optional[str] = None,
+    buyeremail: Optional[str] = None,
+) -> dict:
+    """기존 VBANK 결제 행 분기: PAID/SUCCESS → ALREADY_PAID, other-user → PENDING, same-user → reuse."""
+    status = (existing.get("status_code") or "").upper()
+    if status in _PAID_STATUSES:
+        raise SaasPaymentV2AdapterError("QUOTE_ALREADY_PAID", "이미 결제 완료된 견적입니다.")
+    if str(existing.get("user_id")) != str(user_id):
+        raise SaasPaymentV2AdapterError("QUOTE_PAYMENT_PENDING", "이 견적에 대해 진행 중인 결제가 있습니다.")
+
+    def _conflict(reason: str) -> SaasPaymentV2AdapterError:
+        logger.warning("[V2_VBANK] PENDING state conflict: %s payment=%s", reason, existing.get("id"))
+        return SaasPaymentV2AdapterError("QUOTE_PAYMENT_STATE_CONFLICT", f"PENDING VBANK 결제 상태 불일치: {reason}")
+
+    if str(existing.get("company_id")) != str(company_id):
+        raise _conflict("company_id")
+    if str(existing.get("quote_id")) != str(quote_id):
+        raise _conflict("quote_id")
+    if existing.get("product_type") != "SAAS":
+        raise _conflict("product_type")
+    if existing.get("payment_type") != "VBANK":
+        raise _conflict("payment_type")
+    if existing.get("plan_code") is not None:
+        raise _conflict("plan_code non-null")
+    if int(existing.get("supply_amount") or 0) != snap.prepaid_supply_amount:
+        raise _conflict("supply_amount")
+    if int(existing.get("vat_amount") or 0) != snap.vat_amount:
+        raise _conflict("vat_amount")
+    if int(existing.get("total_amount") or 0) != snap.total_amount:
+        raise _conflict("total_amount")
+
+    payment_id = str(existing.get("id") or "")
+    order_id = str(existing.get("inicis_order_id") or "")
+    if not payment_id or not order_id:
+        raise _conflict("missing payment_id or inicis_order_id")
+
+    logger.info("[V2_VBANK] quote=%s user=%s PENDING reuse payment=%s", quote_id, user_id, payment_id)
+    return _build_inicis_vbank_prepare_response(
+        sign_key,
+        payment_id=payment_id,
+        order_id=order_id,
+        total_amount=snap.total_amount,
+        goodname=goodname,
+        buyername=buyername,
+        buyertel=buyertel,
+        buyeremail=buyeremail,
+    )
+
+
+def prepare_saas_v2_vbank_from_quote(
+    supabase,
+    quote_id: str,
+    user_id: str,
+    company_id: str,
+    *,
+    buyername: Optional[str] = None,
+    buyertel: Optional[str] = None,
+    buyeremail: Optional[str] = None,
+    vbank_expire_min: int = _VBANK_EXPIRE_MIN_DEFAULT,
+) -> dict:
+    """Quote V2 기반 V3 SAAS VBANK 결제 준비.
+
+    Reuses existing runtime:
+      process_vbank_deposit() → on_payment_success_sync()
+      → apply_saas_v2_initial_payment_runtime() → Atomic Contract → Buyer Activation
+
+    VBANK monthly (payment_months=1) 불가 — 단건(3/6/9/12개월)만 지원.
+    금지: 가격계산, repricing, contract 생성, Legacy VBANK 경로 변경.
+    """
+    # ── Steps 1-9: Quote validation (identical to CARD path) ─────────────
+    quote = member_quote_svc.get_member_quote(supabase, quote_id)
+    if not quote:
+        raise SaasPaymentV2AdapterError("QUOTE_NOT_FOUND", "견적을 찾을 수 없습니다.")
+    if str(quote.get("company_id")) != str(company_id):
+        raise SaasPaymentV2AdapterError("QUOTE_NOT_OWNED", "견적 소유권이 없습니다.")
+    if quote.get("status_code") != "ISSUED":
+        raise SaasPaymentV2AdapterError("QUOTE_NOT_ISSUED", "발행(ISSUED) 상태 견적만 결제할 수 있습니다.")
+    if quote.get("service_type") != "SAAS":
+        raise SaasPaymentV2AdapterError("QUOTE_NOT_SAAS", "SaaS 견적만 이 경로로 결제할 수 있습니다.")
+    items = quote.get("items") or []
+    if len(items) != 1:
+        raise SaasPaymentV2AdapterError(
+            "QUOTE_NOT_V2",
+            f"V2 견적은 정확히 1개의 item을 가져야 합니다. (실제: {len(items)})",
+        )
+    raw_item = items[0]
+    if raw_item.get("quote_schema_version") != SAAS_QUOTE_SCHEMA_VERSION:
+        raise SaasPaymentV2AdapterError(
+            "QUOTE_NOT_V2",
+            f"SAAS_QUOTE_V2 스키마가 아닙니다: {raw_item.get('quote_schema_version')}",
+        )
+    try:
+        item = SaasQuoteSnapshotItemV2.model_validate(raw_item)
+    except (ValidationError, Exception) as exc:
+        raise SaasPaymentV2AdapterError("QUOTE_ITEM_INVALID", str(exc)) from exc
+    try:
+        snap = SaasPricingSnapshotV2.model_validate(item.pricing_snapshot)
+    except (ValidationError, Exception) as exc:
+        raise SaasPaymentV2AdapterError("QUOTE_ITEM_INVALID", str(exc)) from exc
+
+    q_supply = int(quote.get("supply_amount") or 0)
+    q_vat = int(quote.get("vat_amount") or 0)
+    q_total = int(quote.get("total_amount") or 0)
+    if q_supply != item.supply_amount or item.supply_amount != snap.prepaid_supply_amount:
+        raise SaasPaymentV2AdapterError(
+            "QUOTE_PAYMENT_SNAPSHOT_INVALID",
+            f"supply_amount 불일치: quote={q_supply}, item={item.supply_amount}, snap={snap.prepaid_supply_amount}",
+        )
+    if q_vat != item.vat_amount or item.vat_amount != snap.vat_amount:
+        raise SaasPaymentV2AdapterError(
+            "QUOTE_PAYMENT_SNAPSHOT_INVALID",
+            f"vat_amount 불일치: quote={q_vat}, item={item.vat_amount}, snap={snap.vat_amount}",
+        )
+    if q_total != item.total_amount or item.total_amount != snap.total_amount:
+        raise SaasPaymentV2AdapterError(
+            "QUOTE_PAYMENT_SNAPSHOT_INVALID",
+            f"total_amount 불일치: quote={q_total}, item={item.total_amount}, snap={snap.total_amount}",
+        )
+    if snap.payment_months not in _VALID_PAYMENT_MONTHS:
+        raise SaasPaymentV2AdapterError(
+            "QUOTE_PAYMENT_MONTHS_INVALID",
+            f"payment_months는 1,3,6,9,12 중 하나여야 합니다: {snap.payment_months}",
+        )
+    if snap.payment_months == 1:
+        raise SaasPaymentV2AdapterError(
+            "VBANK_NOT_SUPPORTED_FOR_RECURRING",
+            "VBANK는 정기결제(1개월)를 지원하지 않습니다. 3개월 이상 단건결제를 이용해 주세요.",
+        )
+
+    sign_key = load_sign_key()
+    goodname = item.display_name
+
+    # ── Step 10: Duplicate Guard ─────────────────────────────────────────
+    existing = _find_existing_v2_vbank_payment(supabase, quote_id)
+    if existing:
+        return _validate_pending_vbank_reuse(
+            existing, user_id, company_id, quote_id, snap, sign_key, goodname,
+            buyername=buyername, buyertel=buyertel, buyeremail=buyeremail,
+        )
+
+    # ── Step 11: VBANK PENDING payment INSERT ────────────────────────────
+    now = _now_iso()
+    vbank_expires_at = (now_kst() + timedelta(minutes=vbank_expire_min)).isoformat()
+    try:
+        resp = _run_inicis_prepare_exact(
+            supabase,
+            sign_key,
+            supply_amount=snap.prepaid_supply_amount,
+            vat_amount=snap.vat_amount,
+            total_amount=snap.total_amount,
+            product_type="SAAS",
+            goodname=goodname,
+            user_id=user_id,
+            company_id=company_id,
+            quote_id=quote_id,
+            plan_code=None,
+            period_months=snap.payment_months,
+            payment_type="VBANK",
+            proof_type=None,
+            buyername=buyername,
+            buyertel=buyertel,
+            buyeremail=buyeremail,
+        )
+    except Exception as exc:
+        raise SaasPaymentV2AdapterError("V3_PAY_INSERT_FAILED", f"VBANK 결제 레코드 생성 실패: {exc}") from exc
+
+    payment_id = resp["data"]["payment_id"]
+    order_id = resp["data"]["oid"]
+
+    # pg_method + vbank_expires_at 보완 업데이트 (fail-soft: 결제 생성 보존)
+    try:
+        supabase.table("payments").update({
+            "pg_method": "VBANK",
+            "vbank_expires_at": vbank_expires_at,
+            "updated_at": now,
+        }).eq("id", payment_id).execute()
+    except Exception:
+        logger.warning("[V2_VBANK] vbank metadata 업데이트 실패 payment=%s", payment_id)
+
+    logger.info("[V2_VBANK] quote=%s user=%s payment=%s created", quote_id, user_id, payment_id)
+
+    # Override CARD defaults → VBANK params
+    resp["data"]["gopaymethod"] = "Vbank"
+    resp["data"]["vbankexpire"] = vbank_expire_min
+    return resp

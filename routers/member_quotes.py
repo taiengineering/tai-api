@@ -254,6 +254,13 @@ class SaasV2PaymentPrepareBody(BaseModel):
         return _validate_client_proof_type(v)
 
 
+class SaasV2VbankPrepareBody(BaseModel):
+    """POST /me/quotes/v2/{quote_id}/vbank/prepare — VBANK 결제 준비 (client input 최소화)."""
+    buyername: Optional[str] = None
+    buyertel: Optional[str] = None
+    buyeremail: Optional[str] = None
+
+
 @router.post("/v2/{quote_id}/payment/prepare")
 def prepare_v2_payment(
     quote_id: str,
@@ -280,6 +287,43 @@ def prepare_v2_payment(
             user_id=current["id"],
             company_id=company_id,
             proof_type=body.proof_type,
+            buyername=body.buyername,
+            buyertel=body.buyertel,
+            buyeremail=body.buyeremail,
+        )
+    except SaasPaymentV2AdapterError as exc:
+        if exc.code in {"QUOTE_NOT_FOUND", "QUOTE_NOT_OWNED"}:
+            raise HTTPException(status_code=404, detail={"code": exc.code, "message": exc.message})
+        if exc.code in {"QUOTE_PAYMENT_PENDING", "QUOTE_ALREADY_PAID", "QUOTE_PAYMENT_STATE_CONFLICT"}:
+            raise HTTPException(status_code=409, detail={"code": exc.code, "message": exc.message})
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": exc.message})
+    return result
+
+
+@router.post("/v2/{quote_id}/vbank/prepare")
+def prepare_v2_vbank_payment(
+    quote_id: str,
+    body: SaasV2VbankPrepareBody,
+    current: dict = Depends(get_current_user),
+):
+    """Frozen Quote V2 → INICIS VBANK 결제 준비.
+
+    서버 파생: user_id, company_id, amounts, product_type, plan_code, period_months.
+    VBANK는 단건결제(payment_months≥3)만 지원. payment_months=1 → 422.
+    기존 /payments/vbank/prepare (Legacy 연결 서비스) 변경 없음.
+    """
+    supabase = get_supabase()
+    company_id = _require_member_company(current, supabase)
+    from services.saas_payment_v2_adapter import (
+        SaasPaymentV2AdapterError,
+        prepare_saas_v2_vbank_from_quote,
+    )
+    try:
+        result = prepare_saas_v2_vbank_from_quote(
+            supabase,
+            quote_id=quote_id,
+            user_id=current["id"],
+            company_id=company_id,
             buyername=body.buyername,
             buyertel=body.buyertel,
             buyeremail=body.buyeremail,
