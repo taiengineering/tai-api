@@ -42,6 +42,9 @@ Production QA table write = 0 (mock 전용).
   AQ-37  update_schedule — existing MINUTES+disabled + PATCH ft=MANUAL → canonicalize PASS
   AQ-38  update_schedule — existing MINUTES+enabled=true + PATCH ft=MANUAL → 400
   AQ-39  update_schedule — partial patch (existing MINUTES + PATCH fv=60) → PASS
+  AQ-40  update_schedule — WEEKLY day_of_week=-1 → 400
+  AQ-41  update_schedule — WEEKLY day_of_week=7 → 400
+  AQ-42  update_schedule — WEEKLY day_of_week=0/6 → PASS
 """
 from __future__ import annotations
 
@@ -782,3 +785,41 @@ def test_AQ39_partial_patch_minutes_value_pass():
     result = svc.update_schedule(sb, "item-1", {"frequency_value": 60})
     assert result.get("frequency_value") == 60
     assert result.get("frequency_type") == "MINUTES"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AQ-40: update_schedule — WEEKLY day_of_week=-1 → 400
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _weekly_existing():
+    return dict(_sched(), frequency_type="WEEKLY", anchor_time="09:00:00", day_of_week=1, enabled=True)
+
+
+def test_AQ40_weekly_dow_negative_400():
+    sb = _Supabase({"qa_schedules": _SchedStateQ(existing=[_weekly_existing()])})
+    with pytest.raises(HTTPException) as exc:
+        svc.update_schedule(sb, "item-1", {"day_of_week": -1})
+    assert exc.value.status_code == 400
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AQ-41: update_schedule — WEEKLY day_of_week=7 → 400
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_AQ41_weekly_dow_out_of_range_400():
+    sb = _Supabase({"qa_schedules": _SchedStateQ(existing=[_weekly_existing()])})
+    with pytest.raises(HTTPException) as exc:
+        svc.update_schedule(sb, "item-1", {"day_of_week": 7})
+    assert exc.value.status_code == 400
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AQ-42: update_schedule — WEEKLY day_of_week=0 and 6 → PASS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_AQ42_weekly_dow_boundary_pass():
+    for dow in (0, 6):
+        ssq = _SchedStateQ(existing=[_weekly_existing()])
+        sb = _Supabase({"qa_schedules": ssq})
+        result = svc.update_schedule(sb, "item-1", {"day_of_week": dow})
+        assert result.get("day_of_week") == dow

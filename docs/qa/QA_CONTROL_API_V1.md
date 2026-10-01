@@ -106,16 +106,28 @@ QA 항목 목록. `schedule` + `effective_status` + 최근 실행 정보 포함.
 }
 ```
 
-**API validation** (DB CHECK 이전에 400 반환)
+**API validation** — `existing + patch` 병합 후 effective state 기준으로 검증 (DB CHECK 이전에 400 반환)
 
 | 조건 | 오류 |
 |------|------|
-| `MANUAL` + `enabled=true` | 400 |
-| `DAILY` without `anchor_time` | 400 |
-| `WEEKLY` without `anchor_time` | 400 |
-| `WEEKLY` without `day_of_week` | 400 |
-| `MINUTES`/`HOURLY` without `frequency_value > 0` | 400 |
+| effective `MANUAL` + `enabled=true` | 400 |
+| effective `DAILY` without `anchor_time` | 400 |
+| effective `WEEKLY` without `anchor_time` | 400 |
+| effective `WEEKLY` without `day_of_week` | 400 |
+| effective `WEEKLY` + `day_of_week` not in 0..6 | 400 |
+| effective `MINUTES`/`HOURLY` without `frequency_value > 0` | 400 |
 | `timezone != "Asia/Seoul"` | 400 |
+
+**Partial PATCH semantics**: 서버는 기존 스케줄을 먼저 조회한 뒤 patch 필드를 병합하여 effective state를 구성하고, effective state 전체를 기준으로 위 검증을 수행합니다. 예: 기존 `enabled=true`, PATCH `{frequency_type: "MANUAL"}` → effective `MANUAL+enabled=true` → 400.
+
+**Canonicalization** (검증 통과 후 DB write 전):
+
+| `frequency_type` | 강제 NULL 필드 |
+|-----------------|--------------|
+| `MANUAL` | `enabled=false`, `frequency_value`, `anchor_time`, `day_of_week` |
+| `DAILY` | `frequency_value`, `day_of_week` |
+| `WEEKLY` | `frequency_value` |
+| `MINUTES`/`HOURLY` | `day_of_week` |
 
 ---
 

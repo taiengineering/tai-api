@@ -169,8 +169,11 @@ def _validate_effective_schedule(effective: Dict) -> None:
     elif ft == "WEEKLY":
         if not effective.get("anchor_time"):
             raise HTTPException(400, "WEEKLY는 anchor_time이 필요합니다")
-        if effective.get("day_of_week") is None:
+        dow = effective.get("day_of_week")
+        if dow is None:
             raise HTTPException(400, "WEEKLY는 day_of_week(0-6)이 필요합니다")
+        if not isinstance(dow, int) or not (0 <= dow <= 6):
+            raise HTTPException(400, "day_of_week는 0~6 범위의 정수여야 합니다")
     elif ft in ("MINUTES", "HOURLY"):
         fv = effective.get("frequency_value")
         if fv is None or fv <= 0:
