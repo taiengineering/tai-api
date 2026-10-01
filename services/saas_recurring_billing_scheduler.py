@@ -1,5 +1,5 @@
 """
-WO-COMM-V3-RECURRING-SCHEDULER-TRIGGER-001
+WO-COMM-V3-RECURRING-SCHEDULER-TRIGGER-001 / PATCH-001
 Orchestration service: selects due SAAS subscriptions, validates pre-charge
 guards, and delegates to the existing _charge_subscription_once path.
 Does NOT contain billing logic and does NOT duplicate INICIS charge code.
@@ -7,6 +7,7 @@ Does NOT contain billing logic and does NOT duplicate INICIS charge code.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 
 from services.time import now_kst, serialize_business_datetime
@@ -15,6 +16,19 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_LIMIT = 20
 _MAX_LIMIT = 100
+
+
+class SaasRecurringBillingError(RuntimeError):
+    """Raised after batch when post_process_failed > 0 so monitoring cannot record clean SUCCESS."""
+    def __init__(self, summary: dict) -> None:
+        self.summary = summary
+        super().__init__(
+            f"[SAAS_RECURRING] batch completed with post-process failures: "
+            f"post_process_failed={summary['post_process_failed']} "
+            f"charged_success={summary['charged_success']} "
+            f"charged_failed={summary['charged_failed']} "
+            f"errors={summary['errors']}"
+        )
 
 
 def run_due_saas_recurring_billing(payload: dict) -> dict:
@@ -28,7 +42,8 @@ def run_due_saas_recurring_billing(payload: dict) -> dict:
     from db.supabase_client import get_supabase
     supabase = get_supabase()
 
-    now_iso = serialize_business_datetime(now_kst())
+    now_kst_dt: datetime = now_kst()
+    now_iso: str = serialize_business_datetime(now_kst_dt)
 
     # §4: bounded due candidate query — ordered by next_billing_at ASC, id ASC
     res = (
@@ -50,6 +65,7 @@ def run_due_saas_recurring_billing(payload: dict) -> dict:
     eligible_count = 0
     charged_success = 0
     charged_failed = 0
+    post_process_failed = 0
     skipped = 0
     errors = 0
     items: list[dict] = []
@@ -77,18 +93,34 @@ def run_due_saas_recurring_billing(payload: dict) -> dict:
             items.append(item)
             continue
 
+        # §D: fresh subscription re-read before any monetary call
+        fresh_sub, fresh_reason = _fresh_revalidate(supabase, sub_id, now_kst_dt)
+        if fresh_reason != "OK":
+            item["eligible"] = False
+            item["reason_code"] = fresh_reason
+            eligible_count -= 1
+            skipped += 1
+            items.append(item)
+            continue
+
         # §8: live — existing charge path called exactly once per candidate
         try:
             charge = _do_charge(
                 supabase,
-                sub,
+                fresh_sub,
                 guard["billing_key_row"],
                 guard["charge_cycle"],
             )
-            if charge["success"]:
+            if charge["success"] and charge.get("post_process") == "OK":
                 charged_success += 1
                 item["charged"] = True
                 item["payment_id"] = charge["payment_id"]
+            elif charge["success"] and charge.get("post_process") == "FAILED":
+                # §E state C: monetary succeeded, renewal post-process failed
+                post_process_failed += 1
+                item["charged"] = True
+                item["payment_id"] = charge["payment_id"]
+                item["reason_code"] = "POST_PROCESS_FAILED"
             else:
                 charged_failed += 1
                 item["charged"] = False
@@ -104,16 +136,23 @@ def run_due_saas_recurring_billing(payload: dict) -> dict:
 
         items.append(item)
 
-    return {
+    summary: dict[str, Any] = {
         "dry_run": dry_run,
         "scanned": scanned,
         "eligible": eligible_count,
         "charged_success": charged_success,
         "charged_failed": charged_failed,
+        "post_process_failed": post_process_failed,
         "skipped": skipped,
         "errors": errors,
         "items": items,
     }
+
+    # §E: post-process failures must not be silently reported as clean SUCCESS
+    if post_process_failed > 0:
+        raise SaasRecurringBillingError(summary)
+
+    return summary
 
 
 def _pre_charge_guard(supabase, sub: dict, now_iso: str) -> dict:
@@ -123,7 +162,7 @@ def _pre_charge_guard(supabase, sub: dict, now_iso: str) -> dict:
     """
     sub_id = sub["id"]
 
-    # §6.1: re-validate subscription state
+    # §6.1: re-validate subscription state (using scanned row for fast pre-filter)
     if sub.get("status") != "ACTIVE":
         return {"eligible": False, "reason_code": "SUB_NOT_ACTIVE"}
     if sub.get("product_type") != "SAAS":
@@ -192,7 +231,20 @@ def _pre_charge_guard(supabase, sub: dict, now_iso: str) -> dict:
     if not ct.get("end_date"):
         return {"eligible": False, "reason_code": "CONTRACT_END_DATE_MISSING"}
 
-    charge_cycle = len(all_pays) + 1
+    # §C: server-authoritative recurring cycle — FAILED attempts do not count
+    successful_cycles = [
+        p["charge_cycle"] for p in all_pays
+        if p.get("charge_cycle") is not None and p.get("status_code") in ("PAID", "SUCCESS")
+    ]
+    charge_cycle = (max(successful_cycles) + 1) if successful_cycles else 2
+
+    # §C: PENDING guard — if active attempt exists for computed cycle, fail closed
+    pending_for_cycle = [
+        p for p in all_pays
+        if p.get("charge_cycle") == charge_cycle and p.get("status_code") == "PENDING"
+    ]
+    if pending_for_cycle:
+        return {"eligible": False, "reason_code": "PENDING_CYCLE_EXISTS"}
 
     return {
         "eligible": True,
@@ -202,13 +254,59 @@ def _pre_charge_guard(supabase, sub: dict, now_iso: str) -> dict:
     }
 
 
+def _fresh_revalidate(supabase, sub_id: str, now_kst_dt: datetime) -> tuple[dict | None, str]:
+    """
+    §D: re-reads subscription immediately before charge.
+    Forbidden: raw string comparison for temporal check.
+    Returns (fresh_sub, reason_code) — "OK" means pass.
+    """
+    res = (
+        supabase.table("subscriptions")
+        .select("*")
+        .eq("id", sub_id)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return None, "SUB_VANISHED"
+    sub = res.data[0]
+
+    if sub.get("status") != "ACTIVE":
+        return None, "SUB_NOT_ACTIVE"
+    if sub.get("product_type") != "SAAS":
+        return None, "SUB_NOT_SAAS"
+    if not sub.get("billing_key_id"):
+        return None, "BILLING_KEY_ID_MISSING"
+
+    nba = sub.get("next_billing_at")
+    if not nba:
+        return None, "NEXT_BILLING_AT_MISSING"
+
+    # Timezone-aware datetime comparison — raw string comparison is forbidden
+    try:
+        nba_dt = datetime.fromisoformat(str(nba))
+    except (ValueError, TypeError):
+        return None, "NEXT_BILLING_AT_INVALID"
+
+    if nba_dt.tzinfo is None:
+        return None, "NEXT_BILLING_AT_INVALID"
+
+    if nba_dt > now_kst_dt:
+        return None, "NOT_YET_DUE"
+
+    return sub, "OK"
+
+
 def _do_charge(
     supabase,
     sub: dict,
     billing_key_row: dict,
     charge_cycle: int,
 ) -> dict:
-    """Delegates to existing charge path. Contains no billing logic."""
+    """
+    Delegates to existing charge path. Contains no billing logic.
+    Returns {"success": bool, "post_process": "OK"|"FAILED"|None, "payment_id": str, ...}.
+    """
     from routers.payment_billing import _charge_subscription_once
 
     result = _charge_subscription_once(
@@ -219,16 +317,34 @@ def _do_charge(
         is_recurring=True,
     )
 
-    # §5: V3 SAAS success → renewal chain (same path as billing_charge endpoint)
-    if result.get("success") and sub.get("product_type") == "SAAS":
-        try:
-            from services.payment_post_process import on_payment_success_sync
-            on_payment_success_sync(result["payment_id"])
-        except Exception as e:
-            log.error(
-                "[SAAS_RECURRING] on_payment_success_sync failed payment=%s: %s",
-                result.get("payment_id"),
-                e,
-            )
+    if not result.get("success"):
+        return {
+            "success": False,
+            "post_process": None,
+            "payment_id": result.get("payment_id"),
+            "result": result.get("result"),
+        }
 
-    return result
+    # §E: V3 SAAS success → renewal chain; post-process failure is a distinct state
+    try:
+        from services.payment_post_process import on_payment_success_sync
+        on_payment_success_sync(result["payment_id"])
+        return {
+            "success": True,
+            "post_process": "OK",
+            "payment_id": result["payment_id"],
+            "result": result.get("result"),
+        }
+    except Exception as e:
+        log.error(
+            "[SAAS_RECURRING] on_payment_success_sync failed payment=%s: %s",
+            result.get("payment_id"),
+            e,
+        )
+        return {
+            "success": True,
+            "post_process": "FAILED",
+            "post_process_error": str(e)[:200],
+            "payment_id": result["payment_id"],
+            "result": result.get("result"),
+        }

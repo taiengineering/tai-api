@@ -74,12 +74,15 @@ _BASE_CONTRACT = {
 # ── Mock builders ─────────────────────────────────────────────────────────────
 
 
-def _make_sub_table(candidates):
+def _make_sub_table(candidates, fresh_subs=None):
     """
-    subscriptions chain:
-      .select().eq().eq().not_.is_().lte().not_.is_().order().order().limit().execute()
+    subscriptions chains:
+      Scan:  .select().eq().eq().not_.is_().lte().not_.is_().order().order().limit().execute()
+      Fresh: .select().eq().limit().execute()  (PATCH-D fresh revalidation)
+    fresh_subs defaults to first candidate if not specified (same state = pass).
     """
     t = MagicMock()
+    # Scan chain (complex)
     c = t.select.return_value
     c = c.eq.return_value
     c = c.eq.return_value
@@ -90,6 +93,10 @@ def _make_sub_table(candidates):
     c = c.order.return_value
     c = c.limit.return_value
     c.execute.return_value = MagicMock(data=candidates)
+    # Fresh revalidation chain: select().eq().limit().execute()
+    # Uses t.select.rv.eq.rv (same first eq) then .limit (not the second .eq)
+    fresh = fresh_subs if fresh_subs is not None else (candidates[:1] if candidates else [])
+    t.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=fresh)
     return t
 
 
@@ -114,12 +121,12 @@ def _make_contracts_table(contracts):
     return t
 
 
-def _make_sb(*, subs=None, bks=None, pays=None, contracts=None):
+def _make_sb(*, subs=None, bks=None, pays=None, contracts=None, fresh_subs=None):
     sb = MagicMock()
 
     def _table(name):
         if name == "subscriptions":
-            return _make_sub_table(subs or [])
+            return _make_sub_table(subs or [], fresh_subs=fresh_subs)
         if name == "billing_keys":
             return _make_bk_table(bks or [])
         if name == "payments":
@@ -132,13 +139,18 @@ def _make_sb(*, subs=None, bks=None, pays=None, contracts=None):
     return sb
 
 
-def _run(payload, *, subs=None, bks=None, pays=None, contracts=None):
-    """Helper: run with mocked supabase + fixed now_iso."""
+def _now_kst_dt():
+    from datetime import datetime, timezone, timedelta
+    return datetime(2026, 10, 1, 10, 0, 0, tzinfo=timezone(timedelta(hours=9)))
+
+
+def _run(payload, *, subs=None, bks=None, pays=None, contracts=None, fresh_subs=None):
+    """Helper: run with mocked supabase + fixed now. dry_run=True by default."""
     from services.saas_recurring_billing_scheduler import run_due_saas_recurring_billing
-    sb = _make_sb(subs=subs, bks=bks, pays=pays, contracts=contracts)
+    sb = _make_sb(subs=subs, bks=bks, pays=pays, contracts=contracts, fresh_subs=fresh_subs)
     with (
         patch("db.supabase_client.get_supabase", return_value=sb),
-        patch("services.saas_recurring_billing_scheduler.now_kst"),
+        patch("services.saas_recurring_billing_scheduler.now_kst", return_value=_now_kst_dt()),
         patch(
             "services.saas_recurring_billing_scheduler.serialize_business_datetime",
             return_value=_NOW,
@@ -411,15 +423,18 @@ def test_RS18_contract_end_date_missing_skipped():
 
 
 def _run_live(*, subs=None, bks=None, pays=None, contracts=None,
-              charge_return=None, on_success_side_effect=None):
-    """Run with dry_run=False and mocked charge path."""
-    from services.saas_recurring_billing_scheduler import run_due_saas_recurring_billing
-    sb = _make_sb(subs=subs, bks=bks, pays=pays, contracts=contracts)
+              charge_return=None, on_success_side_effect=None, fresh_subs=None):
+    """Run with dry_run=False and mocked charge path. Handles SaasRecurringBillingError."""
+    from services.saas_recurring_billing_scheduler import (
+        run_due_saas_recurring_billing,
+        SaasRecurringBillingError,
+    )
+    sb = _make_sb(subs=subs, bks=bks, pays=pays, contracts=contracts, fresh_subs=fresh_subs)
     charge_mock = MagicMock(return_value=charge_return or {"success": True, "payment_id": _PAY_ID, "result": {}})
     on_success_mock = MagicMock(side_effect=on_success_side_effect)
     with (
         patch("db.supabase_client.get_supabase", return_value=sb),
-        patch("services.saas_recurring_billing_scheduler.now_kst"),
+        patch("services.saas_recurring_billing_scheduler.now_kst", return_value=_now_kst_dt()),
         patch(
             "services.saas_recurring_billing_scheduler.serialize_business_datetime",
             return_value=_NOW,
@@ -427,7 +442,10 @@ def _run_live(*, subs=None, bks=None, pays=None, contracts=None,
         patch("routers.payment_billing._charge_subscription_once", charge_mock),
         patch("services.payment_post_process.on_payment_success_sync", on_success_mock),
     ):
-        result = run_due_saas_recurring_billing({"dry_run": False})
+        try:
+            result = run_due_saas_recurring_billing({"dry_run": False})
+        except SaasRecurringBillingError as exc:
+            result = exc.summary
     return result, charge_mock, on_success_mock
 
 
@@ -463,7 +481,10 @@ def test_RS22_item_exception_does_not_abort_next():
         {**_BASE_SUB, "id": _SUB_ID},
         {**_BASE_SUB, "id": _SUB_ID_2},
     ]
-    from services.saas_recurring_billing_scheduler import run_due_saas_recurring_billing
+    from services.saas_recurring_billing_scheduler import (
+        run_due_saas_recurring_billing,
+        SaasRecurringBillingError,
+    )
     sb = _make_sb(subs=subs, bks=[_BASE_BK], pays=[_BASE_PAY], contracts=[_BASE_CONTRACT])
 
     call_count = 0
@@ -477,7 +498,7 @@ def test_RS22_item_exception_does_not_abort_next():
 
     with (
         patch("db.supabase_client.get_supabase", return_value=sb),
-        patch("services.saas_recurring_billing_scheduler.now_kst"),
+        patch("services.saas_recurring_billing_scheduler.now_kst", return_value=_now_kst_dt()),
         patch(
             "services.saas_recurring_billing_scheduler.serialize_business_datetime",
             return_value=_NOW,
@@ -485,7 +506,10 @@ def test_RS22_item_exception_does_not_abort_next():
         patch("routers.payment_billing._charge_subscription_once", side_effect=_charge_side_effect),
         patch("services.payment_post_process.on_payment_success_sync"),
     ):
-        result = run_due_saas_recurring_billing({"dry_run": False})
+        try:
+            result = run_due_saas_recurring_billing({"dry_run": False})
+        except SaasRecurringBillingError as exc:
+            result = exc.summary
 
     assert result["errors"] == 1
     assert result["charged_success"] == 1
@@ -510,7 +534,10 @@ def test_RS24_handler_summary_exact():
         {**_BASE_SUB, "id": _SUB_ID_2},  # will fail charge
         {**_BASE_SUB, "id": _SUB_ID_3, "billing_key_id": None},  # guard skip
     ]
-    from services.saas_recurring_billing_scheduler import run_due_saas_recurring_billing
+    from services.saas_recurring_billing_scheduler import (
+        run_due_saas_recurring_billing,
+        SaasRecurringBillingError,
+    )
     sb = _make_sb(subs=subs, bks=[_BASE_BK], pays=[_BASE_PAY], contracts=[_BASE_CONTRACT])
 
     call_idx = 0
@@ -524,7 +551,7 @@ def test_RS24_handler_summary_exact():
 
     with (
         patch("db.supabase_client.get_supabase", return_value=sb),
-        patch("services.saas_recurring_billing_scheduler.now_kst"),
+        patch("services.saas_recurring_billing_scheduler.now_kst", return_value=_now_kst_dt()),
         patch(
             "services.saas_recurring_billing_scheduler.serialize_business_datetime",
             return_value=_NOW,
@@ -532,7 +559,10 @@ def test_RS24_handler_summary_exact():
         patch("routers.payment_billing._charge_subscription_once", side_effect=_charge_side_effect),
         patch("services.payment_post_process.on_payment_success_sync"),
     ):
-        result = run_due_saas_recurring_billing({"dry_run": False})
+        try:
+            result = run_due_saas_recurring_billing({"dry_run": False})
+        except SaasRecurringBillingError as exc:
+            result = exc.summary
 
     assert result["scanned"] == 3
     assert result["eligible"] == 2

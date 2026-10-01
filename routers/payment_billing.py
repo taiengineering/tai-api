@@ -303,6 +303,42 @@ class SubscriptionCancelBody(BaseModel):
 
 # ── 내부 함수 ─────────────────────────────────────────────────────────
 
+
+def _compute_v3_saas_recurring_cycle(supabase, subscription_id: str) -> int:
+    """
+    V3 SAAS server-authoritative next recurring cycle.
+    = max(PAID/SUCCESS charge_cycle) + 1.
+    FAILED attempts do NOT advance the cycle.
+    """
+    res = (
+        supabase.table("payments")
+        .select("charge_cycle")
+        .eq("subscription_id", subscription_id)
+        .in_("status_code", ["PAID", "SUCCESS"])
+        .execute()
+    )
+    pays = res.data or []
+    successful_cycles = [
+        p["charge_cycle"] for p in pays
+        if p.get("charge_cycle") is not None
+    ]
+    return (max(successful_cycles) + 1) if successful_cycles else 2
+
+
+def _v3_saas_pending_cycle_exists(supabase, subscription_id: str, cycle: int) -> bool:
+    """Returns True if a PENDING active attempt already exists for this cycle."""
+    res = (
+        supabase.table("payments")
+        .select("id")
+        .eq("subscription_id", subscription_id)
+        .eq("charge_cycle", cycle)
+        .eq("status_code", "PENDING")
+        .limit(1)
+        .execute()
+    )
+    return bool(res.data)
+
+
 def _charge_subscription_once(
     supabase,
     *,
@@ -979,16 +1015,26 @@ def billing_charge(body: BillingChargeBody):
             detail=f"빌링키가 ACTIVE 상태가 아닙니다. (status={billing_key_row.get('status')})",
         )
 
-    # charge_cycle 자동 계산
-    cycle = body.charge_cycle
-    if cycle is None:
-        cnt_res = (
-            supabase.table("payments")
-            .select("id", count="exact")
-            .eq("subscription_id", body.subscription_id)
-            .execute()
-        )
-        cycle = (cnt_res.count or 0) + 1
+    # charge_cycle 계산
+    # V3 SAAS: server authority (max PAID/SUCCESS cycle + 1); caller-provided value ignored.
+    # Legacy: count-based (all payments + 1) or explicit body.charge_cycle.
+    if subscription.get("product_type") == "SAAS":
+        cycle = _compute_v3_saas_recurring_cycle(supabase, body.subscription_id)
+        if _v3_saas_pending_cycle_exists(supabase, body.subscription_id, cycle):
+            raise HTTPException(
+                status_code=409,
+                detail=f"V3_RECURRING_PENDING_EXISTS: cycle={cycle} already has a PENDING attempt",
+            )
+    else:
+        cycle = body.charge_cycle
+        if cycle is None:
+            cnt_res = (
+                supabase.table("payments")
+                .select("id", count="exact")
+                .eq("subscription_id", body.subscription_id)
+                .execute()
+            )
+            cycle = (cnt_res.count or 0) + 1
 
     result = _charge_subscription_once(
         supabase,
