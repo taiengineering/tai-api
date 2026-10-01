@@ -144,15 +144,16 @@ def _enrich_items(supabase, items: List[Dict]) -> None:
 # ── Schedule validation ───────────────────────────────────────────────────────
 
 _VALID_FREQ_TYPES = frozenset({"MANUAL", "MINUTES", "HOURLY", "DAILY", "WEEKLY"})
+_ALL_EFFECTIVE_STATUSES = ("PASS", "FAIL", "FLAKY", "BLOCKED", "SKIPPED", "NEVER_RUN")
 
 
-def _validate_schedule_patch(patch: Dict) -> None:
-    """API-level semantic CHECK. DB CHECK는 2차 방어선."""
-    tz = patch.get("timezone")
+def _validate_effective_schedule(effective: Dict) -> None:
+    """Merged effective schedule의 semantic CHECK. DB CHECK는 2차 방어선."""
+    tz = effective.get("timezone")
     if tz is not None and tz != "Asia/Seoul":
         raise HTTPException(400, "timezone은 Asia/Seoul만 허용됩니다")
 
-    ft = patch.get("frequency_type")
+    ft = effective.get("frequency_type")
     if ft is None:
         return
 
@@ -160,18 +161,18 @@ def _validate_schedule_patch(patch: Dict) -> None:
         raise HTTPException(400, f"알 수 없는 frequency_type: {ft}")
 
     if ft == "MANUAL":
-        if patch.get("enabled") is True:
+        if effective.get("enabled") is True:
             raise HTTPException(400, "MANUAL schedule은 enabled=true가 불가합니다")
     elif ft == "DAILY":
-        if not patch.get("anchor_time"):
+        if not effective.get("anchor_time"):
             raise HTTPException(400, "DAILY는 anchor_time이 필요합니다")
     elif ft == "WEEKLY":
-        if not patch.get("anchor_time"):
+        if not effective.get("anchor_time"):
             raise HTTPException(400, "WEEKLY는 anchor_time이 필요합니다")
-        if patch.get("day_of_week") is None:
+        if effective.get("day_of_week") is None:
             raise HTTPException(400, "WEEKLY는 day_of_week(0-6)이 필요합니다")
     elif ft in ("MINUTES", "HOURLY"):
-        fv = patch.get("frequency_value")
+        fv = effective.get("frequency_value")
         if fv is None or fv <= 0:
             raise HTTPException(400, f"{ft}는 frequency_value > 0이 필요합니다")
 
@@ -187,22 +188,28 @@ def get_summary(supabase) -> Dict[str, Any]:
     # Bulk enrich
     _enrich_items(supabase, all_items)
 
-    status_counts: Dict[str, int] = defaultdict(int)
-    site_status: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    status_counts: Dict[str, int] = dict.fromkeys(_ALL_EFFECTIVE_STATUSES, 0)
+    site_data: Dict[str, Dict] = {}
     for item in all_items:
         eff = item.get("effective_status", "NEVER_RUN")
-        status_counts[eff] += 1
-        site_status[item.get("site_code", "UNKNOWN")][eff] += 1
+        if eff in status_counts:
+            status_counts[eff] += 1
+        sc = item.get("site_code", "UNKNOWN")
+        if sc not in site_data:
+            site_data[sc] = {"total": 0, "status_counts": dict.fromkeys(_ALL_EFFECTIVE_STATUSES, 0)}
+        site_data[sc]["total"] += 1
+        if eff in site_data[sc]["status_counts"]:
+            site_data[sc]["status_counts"][eff] += 1
 
     sites = [
-        {"site_code": sc, "status_counts": dict(counts)}
-        for sc, counts in site_status.items()
+        {"site_code": sc, "total": v["total"], "status_counts": v["status_counts"]}
+        for sc, v in site_data.items()
     ]
 
     return {
         "total":         total,
         "enabled":       enabled_count,
-        "status_counts": dict(status_counts),
+        "status_counts": status_counts,
         "sites":         sites,
     }
 
@@ -291,7 +298,37 @@ def update_schedule(supabase, qa_item_id: str, patch: Dict[str, Any]) -> Dict[st
     if not data:
         raise HTTPException(422, "수정할 필드가 없습니다")
 
-    _validate_schedule_patch(data)
+    # Fetch existing to compute effective merged state
+    existing_res = (
+        supabase.table("qa_schedules")
+        .select(_SCHED_COLS)
+        .eq("qa_item_id", qa_item_id)
+        .limit(1)
+        .execute()
+    )
+    existing_rows = existing_res.data or []
+    if not existing_rows:
+        raise HTTPException(404, "qa_schedule not found for this item")
+    existing = existing_rows[0]
+
+    # Merge patch into existing → effective state
+    effective = {**existing, **data}
+    _validate_effective_schedule(effective)
+
+    # Canonicalize: force fields that must be NULL per frequency_type
+    ft = effective.get("frequency_type")
+    if ft == "MANUAL":
+        data["enabled"] = False
+        data["frequency_value"] = None
+        data["anchor_time"] = None
+        data["day_of_week"] = None
+    elif ft == "DAILY":
+        data["frequency_value"] = None
+        data["day_of_week"] = None
+    elif ft == "WEEKLY":
+        data["frequency_value"] = None
+    elif ft in ("MINUTES", "HOURLY"):
+        data["day_of_week"] = None
 
     # next_run_at는 항상 NULL로 강제 (Phase 2-E scheduler authority)
     data["next_run_at"] = None
@@ -514,6 +551,37 @@ def create_run(
 
 # ── Internal: Result Callback ─────────────────────────────────────────────────
 
+def _check_final_run_replay(
+    run: Dict,
+    github_run_id:      Optional[int],
+    github_run_attempt: Optional[int],
+    head_sha:           Optional[str],
+    branch_name:        Optional[str],
+    run_started_at:     Optional[str],
+    run_finished_at:    Optional[str],
+    run_error_code:     Optional[str],
+    run_error_summary:  Optional[str],
+) -> None:
+    """Final state exact replay guard. Any non-None incoming field that differs from stored → 409."""
+    mismatches = []
+    for key, val in [
+        ("github_run_id",      github_run_id),
+        ("github_run_attempt", github_run_attempt),
+        ("head_sha",           head_sha),
+        ("branch_name",        branch_name),
+        ("started_at",         run_started_at),
+        ("finished_at",        run_finished_at),
+        ("error_code",         run_error_code),
+    ]:
+        if val is not None and run.get(key) != val:
+            mismatches.append(key)
+    if run_error_summary is not None:
+        if redact_error_summary(run_error_summary) != redact_error_summary(run.get("error_summary")):
+            mismatches.append("error_summary")
+    if mismatches:
+        raise HTTPException(409, {"message": "FINAL_RUN_CONFLICT", "fields": mismatches})
+
+
 def _results_match(existing: Dict, incoming: Dict) -> bool:
     """canonical evidence 전체 동일 여부."""
     for field in ("result_status", "duration_ms", "http_status", "error_code", "artifact_ref", "started_at", "finished_at"):
@@ -550,18 +618,20 @@ def apply_results(
     run = run_res.data[0]
     current_status = run["run_status"]
 
-    # Lifecycle validation
-    if new_status:
+    # Lifecycle validation + final replay guard
+    if current_status in _FINAL_STATUSES:
+        if new_status is not None and new_status != current_status:
+            raise HTTPException(409, f"run {run_id} is already in final status {current_status}")
+        _check_final_run_replay(
+            run, github_run_id, github_run_attempt, head_sha, branch_name,
+            run_started_at, run_finished_at, run_error_code, run_error_summary,
+        )
+    elif new_status:
         if new_status not in _VALID_STATUSES:
             raise HTTPException(422, f"invalid run_status: {new_status}")
-        if current_status in _FINAL_STATUSES:
-            if new_status != current_status:
-                raise HTTPException(409, f"run {run_id} is already in final status {current_status}")
-            # Same final status = idempotent replay (fall through)
-        else:
-            allowed = _VALID_TRANSITIONS.get(current_status, frozenset())
-            if new_status != current_status and new_status not in allowed:
-                raise HTTPException(422, f"invalid transition {current_status} → {new_status}")
+        allowed = _VALID_TRANSITIONS.get(current_status, frozenset())
+        if new_status != current_status and new_status not in allowed:
+            raise HTTPException(422, f"invalid transition {current_status} → {new_status}")
 
     # GitHub identity guard
     if github_run_id is not None:

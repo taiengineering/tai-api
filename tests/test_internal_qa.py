@@ -27,6 +27,8 @@ Production QA table write = 0 (mock 전용).
   IQ-22  missing secret → 403 (router)
   IQ-23  wrong secret → 403 (router)
   IQ-24  correct secret → PASS (router)
+  IQ-25  final + 동일 status + head_sha 변경 → 409 FINAL_RUN_CONFLICT
+  IQ-26  final + 동일 status + error_summary 변경 → 409 FINAL_RUN_CONFLICT
 """
 from __future__ import annotations
 
@@ -582,3 +584,44 @@ def test_IQ24_correct_secret_pass(monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.json()["data"]["run_id"] == "run-1"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IQ-25: final + 동일 status + head_sha 변경 → 409 FINAL_RUN_CONFLICT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_IQ25_final_different_head_sha_409():
+    class _TQ(_Q):
+        def update(self, *a, **k): return _Q(rows=[_run_row("COMPLETED")])
+
+    sb = _Supabase({
+        "qa_runs":        _TQ(rows=[_run_row("COMPLETED")]),
+        "qa_items":       _Q(rows=[]),
+        "qa_run_targets": _Q(rows=[]),
+        "qa_run_results": _Q(rows=[]),
+    })
+    with pytest.raises(HTTPException) as exc:
+        _call(sb, new_status="COMPLETED", head_sha="different-sha")
+    assert exc.value.status_code == 409
+    assert "FINAL_RUN_CONFLICT" in str(exc.value.detail)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IQ-26: final + 동일 status + error_summary 변경 → 409 FINAL_RUN_CONFLICT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_IQ26_final_different_error_summary_409():
+    class _TQ(_Q):
+        def update(self, *a, **k): return _Q(rows=[_run_row("COMPLETED")])
+
+    # stored run has error_summary=None; incoming has error_summary="new error"
+    sb = _Supabase({
+        "qa_runs":        _TQ(rows=[_run_row("COMPLETED")]),
+        "qa_items":       _Q(rows=[]),
+        "qa_run_targets": _Q(rows=[]),
+        "qa_run_results": _Q(rows=[]),
+    })
+    with pytest.raises(HTTPException) as exc:
+        _call(sb, new_status="COMPLETED", run_error_summary="new error")
+    assert exc.value.status_code == 409
+    assert "FINAL_RUN_CONFLICT" in str(exc.value.detail)

@@ -1,4 +1,4 @@
-"""WO-QA-CONTROL-PHASE2B-001 PATCH-1 — Admin QA API 계약 테스트.
+"""WO-QA-CONTROL-PHASE2B-001 PATCH-2 — Admin QA API 계약 테스트.
 
 Production QA table write = 0 (mock 전용).
 
@@ -14,12 +14,12 @@ Production QA table write = 0 (mock 전용).
   AQ-09  update_item — enabled=None → 422
   AQ-10  update_item — item not found → 404
   AQ-11  update_schedule — next_run_at 항상 NULL 강제
-  AQ-12  update_schedule — MANUAL enabled=True → 400
-  AQ-13  update_schedule — DAILY without anchor_time → 400
-  AQ-14  update_schedule — WEEKLY without day_of_week → 400
-  AQ-15  update_schedule — MINUTES without frequency_value → 400
-  AQ-16  update_schedule — invalid timezone → 400
-  AQ-17  update_schedule — empty patch → 422
+  AQ-12  update_schedule — MANUAL enabled=True → 400 (effective state check)
+  AQ-13  update_schedule — DAILY without anchor_time → 400 (effective state check)
+  AQ-14  update_schedule — WEEKLY without day_of_week → 400 (effective state check)
+  AQ-15  update_schedule — MINUTES without frequency_value → 400 (effective state check)
+  AQ-16  update_schedule — invalid timezone → 400 (effective state check)
+  AQ-17  update_schedule — empty patch → 422 (before SELECT)
   AQ-18  update_schedule — not found → 404
   AQ-19  list_runs — from_date/to_date filter
   AQ-20  list_runs — target_count/result_count/effective_counts 포함
@@ -35,6 +35,13 @@ Production QA table write = 0 (mock 전용).
   AQ-30  create_run — compensating DELETE on target failure
   AQ-31  admin router — no token → 401
   AQ-32  admin router — non-admin → 403
+  AQ-33  admin router — invalid token → 401
+  AQ-34  admin router — platform admin → PASS
+  AQ-35  summary — 항상 6개 status keys with 0
+  AQ-36  update_schedule — existing MANUAL+false + PATCH enabled=true → 400
+  AQ-37  update_schedule — existing MINUTES+disabled + PATCH ft=MANUAL → canonicalize PASS
+  AQ-38  update_schedule — existing MINUTES+enabled=true + PATCH ft=MANUAL → 400
+  AQ-39  update_schedule — partial patch (existing MINUTES + PATCH fv=60) → PASS
 """
 from __future__ import annotations
 
@@ -86,6 +93,33 @@ class _Supabase:
 
     def table(self, name):
         return self._map.get(name, _Q())
+
+
+class _SchedStateQ:
+    """Stateful mock for update_schedule: SELECT (existing) then UPDATE (returns merged)."""
+    def __init__(self, existing=None):
+        self._existing = existing or []
+        self._update_data = {}
+        self._did_update = False
+
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k):     return self
+    def limit(self, *a, **k):  return self
+    def in_(self, *a, **k):    return self
+    def order(self, *a, **k):  return self
+    def range(self, *a, **k):  return self
+
+    def update(self, data, **k):
+        self._update_data = data
+        self._did_update = True
+        return self
+
+    def execute(self):
+        if self._did_update:
+            if self._existing:
+                return type("R", (), {"data": [dict(self._existing[0], **self._update_data)], "count": 1})()
+            return type("R", (), {"data": [], "count": 0})()
+        return type("R", (), {"data": self._existing, "count": len(self._existing)})()
 
 
 def _item(id_="item-1", priority="P0", site_code="WWW", enabled=True, category="auth"):
@@ -291,75 +325,73 @@ def test_AQ10_update_item_not_found():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_AQ11_update_schedule_next_run_at_forced_null():
-    captured = {}
-
-    class _SQ(_Q):
-        def update(self, data, **k):
-            captured.update(data)
-            return _Q(rows=[dict(_sched(), **data)])
-
-    sb = _Supabase({"qa_schedules": _SQ()})
+    ssq = _SchedStateQ(existing=[_sched()])
+    sb = _Supabase({"qa_schedules": ssq})
     svc.update_schedule(sb, "item-1", {"enabled": False})
-    assert captured.get("next_run_at") is None
+    assert ssq._update_data.get("next_run_at") is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AQ-12: update_schedule — MANUAL + enabled=True → 400
+# AQ-12: update_schedule — MANUAL + enabled=True → 400 (effective state check)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_AQ12_update_schedule_manual_enabled_true_400():
-    sb = _Supabase({"qa_schedules": _Q()})
+    # existing=MANUAL+disabled; patch adds enabled=True → effective MANUAL+enabled=True → 400
+    sb = _Supabase({"qa_schedules": _SchedStateQ(existing=[_sched()])})
     with pytest.raises(HTTPException) as exc:
         svc.update_schedule(sb, "item-1", {"frequency_type": "MANUAL", "enabled": True})
     assert exc.value.status_code == 400
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AQ-13: update_schedule — DAILY without anchor_time → 400
+# AQ-13: update_schedule — DAILY without anchor_time → 400 (effective state check)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_AQ13_update_schedule_daily_no_anchor_400():
-    sb = _Supabase({"qa_schedules": _Q()})
+    # existing has anchor_time=None; patch sets ft=DAILY → effective DAILY+no anchor → 400
+    sb = _Supabase({"qa_schedules": _SchedStateQ(existing=[_sched()])})
     with pytest.raises(HTTPException) as exc:
         svc.update_schedule(sb, "item-1", {"frequency_type": "DAILY"})
     assert exc.value.status_code == 400
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AQ-14: update_schedule — WEEKLY without day_of_week → 400
+# AQ-14: update_schedule — WEEKLY without day_of_week → 400 (effective state check)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_AQ14_update_schedule_weekly_no_dow_400():
-    sb = _Supabase({"qa_schedules": _Q()})
+    # existing has day_of_week=None; patch sets ft=WEEKLY+anchor_time → still no dow → 400
+    sb = _Supabase({"qa_schedules": _SchedStateQ(existing=[_sched()])})
     with pytest.raises(HTTPException) as exc:
         svc.update_schedule(sb, "item-1", {"frequency_type": "WEEKLY", "anchor_time": "09:00:00"})
     assert exc.value.status_code == 400
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AQ-15: update_schedule — MINUTES without frequency_value → 400
+# AQ-15: update_schedule — MINUTES without frequency_value → 400 (effective state check)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_AQ15_update_schedule_minutes_no_value_400():
-    sb = _Supabase({"qa_schedules": _Q()})
+    # existing has frequency_value=None; patch sets ft=MINUTES → effective MINUTES+no value → 400
+    sb = _Supabase({"qa_schedules": _SchedStateQ(existing=[_sched()])})
     with pytest.raises(HTTPException) as exc:
         svc.update_schedule(sb, "item-1", {"frequency_type": "MINUTES"})
     assert exc.value.status_code == 400
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AQ-16: update_schedule — invalid timezone → 400
+# AQ-16: update_schedule — invalid timezone → 400 (effective state check)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_AQ16_update_schedule_invalid_timezone_400():
-    sb = _Supabase({"qa_schedules": _Q()})
+    sb = _Supabase({"qa_schedules": _SchedStateQ(existing=[_sched()])})
     with pytest.raises(HTTPException) as exc:
         svc.update_schedule(sb, "item-1", {"timezone": "UTC"})
     assert exc.value.status_code == 400
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AQ-17: update_schedule — empty patch → 422
+# AQ-17: update_schedule — empty patch → 422 (fires before SELECT)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_AQ17_update_schedule_empty_422():
@@ -374,10 +406,8 @@ def test_AQ17_update_schedule_empty_422():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_AQ18_update_schedule_not_found_404():
-    class _NullSQ(_Q):
-        def update(self, *a, **k): return _Q(rows=[])
-
-    sb = _Supabase({"qa_schedules": _NullSQ()})
+    # _SchedStateQ with empty existing → SELECT returns [] → 404 before UPDATE
+    sb = _Supabase({"qa_schedules": _SchedStateQ(existing=[])})
     with pytest.raises(HTTPException) as exc:
         svc.update_schedule(sb, "item-none", {"enabled": False})
     assert exc.value.status_code == 404
@@ -632,3 +662,123 @@ def test_AQ32_non_admin_403(monkeypatch):
     resp = client.get("/admin/qa/summary", headers={"Authorization": "Bearer fake"})
     assert resp.status_code == 403
     app.dependency_overrides.clear()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AQ-33: admin router — invalid token → 401
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_AQ33_invalid_token_401():
+    from fastapi import FastAPI, HTTPException as FHTTPEx
+    from fastapi.testclient import TestClient
+    from routers.admin_qa import router
+    from routers.auth import get_current_user
+
+    def _raise_401():
+        raise FHTTPEx(status_code=401, detail="invalid token")
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = _raise_401
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.get("/admin/qa/summary", headers={"Authorization": "Bearer invalid"})
+    assert resp.status_code == 401
+    app.dependency_overrides.clear()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AQ-34: admin router — platform admin → PASS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_AQ34_platform_admin_pass(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers.admin_qa import router
+    from routers.auth import get_current_user
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: {"id": "admin-user", "role_code": "000"}
+
+    monkeypatch.setattr("routers.admin_qa._require_admin", lambda *a, **k: None)
+    monkeypatch.setattr("routers.admin_qa.get_supabase", lambda: None)
+    monkeypatch.setattr(
+        "routers.admin_qa.svc.get_summary",
+        lambda *a, **k: {"total": 0, "enabled": 0, "status_counts": {}, "sites": []},
+    )
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.get("/admin/qa/summary", headers={"Authorization": "Bearer valid"})
+    assert resp.status_code == 200
+    app.dependency_overrides.clear()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AQ-35: summary — 항상 6개 status keys with 0
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_AQ35_summary_always_six_status_keys():
+    sb = _Supabase({
+        "qa_items":        _Q(rows=[]),
+        "qa_run_results":  _Q(rows=[]),
+    })
+    result = svc.get_summary(sb)
+    expected = {"PASS", "FAIL", "FLAKY", "BLOCKED", "SKIPPED", "NEVER_RUN"}
+    assert set(result["status_counts"].keys()) == expected
+    assert all(v == 0 for v in result["status_counts"].values())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AQ-36: update_schedule — existing MANUAL+false + PATCH enabled=true → 400
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_AQ36_existing_manual_patch_enabled_true_400():
+    # Existing: ft=MANUAL, enabled=False; patch: {enabled: True}
+    # Effective: ft=MANUAL, enabled=True → 400
+    existing = _sched()  # ft=MANUAL, enabled=False
+    sb = _Supabase({"qa_schedules": _SchedStateQ(existing=[existing])})
+    with pytest.raises(HTTPException) as exc:
+        svc.update_schedule(sb, "item-1", {"enabled": True})
+    assert exc.value.status_code == 400
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AQ-37: update_schedule — existing MINUTES+disabled + PATCH ft=MANUAL → canonicalize PASS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_AQ37_minutes_to_manual_canonicalize_pass():
+    existing = dict(_sched(), frequency_type="MINUTES", frequency_value=30, enabled=False)
+    ssq = _SchedStateQ(existing=[existing])
+    sb = _Supabase({"qa_schedules": ssq})
+    result = svc.update_schedule(sb, "item-1", {"frequency_type": "MANUAL"})
+    # Canonicalized: frequency_value must be None
+    assert result.get("frequency_value") is None
+    assert result.get("frequency_type") == "MANUAL"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AQ-38: update_schedule — existing MINUTES+enabled=true + PATCH ft=MANUAL → 400
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_AQ38_minutes_enabled_to_manual_400():
+    # Existing: ft=MINUTES, enabled=True; patch: {ft: MANUAL}
+    # Effective: ft=MANUAL, enabled=True → 400
+    existing = dict(_sched(), frequency_type="MINUTES", frequency_value=30, enabled=True)
+    sb = _Supabase({"qa_schedules": _SchedStateQ(existing=[existing])})
+    with pytest.raises(HTTPException) as exc:
+        svc.update_schedule(sb, "item-1", {"frequency_type": "MANUAL"})
+    assert exc.value.status_code == 400
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AQ-39: update_schedule — partial patch (existing MINUTES + PATCH fv=60) → PASS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_AQ39_partial_patch_minutes_value_pass():
+    existing = dict(_sched(), frequency_type="MINUTES", frequency_value=30, enabled=True)
+    ssq = _SchedStateQ(existing=[existing])
+    sb = _Supabase({"qa_schedules": ssq})
+    result = svc.update_schedule(sb, "item-1", {"frequency_value": 60})
+    assert result.get("frequency_value") == 60
+    assert result.get("frequency_type") == "MINUTES"
