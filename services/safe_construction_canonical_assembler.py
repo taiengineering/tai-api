@@ -12,19 +12,19 @@ SAFE 건설 자산(construction_sites)을 READ-ONLY 로 읽어 Marketing CONSTRU
   - NON-RUNTIME UNRESOLVED 3(subcontractor_count/process_list/subcontractor)은 canonical
     key 로 유지하되 override 대상 아님. NOT_CONSUMED 5/27, LEG PASSTHROUGH 22/27.
   - false/0/[] 보존, NULL != false/0/"".
-  - contract_amount = 억(eok) 단위(construction_svc 관례) → project_amount 변환 없이 그대로.
+  - contract_amount = 억(eok) 단위(construction_svc 관례) → contract_amount_eok 로 전달(변환 없음).
   - DB WRITE 0. 새 법적 의미 생성 0.
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List
 
-CONTRACT_VERSION = "MKT_CST_PAID_CONTRACT_V1"
+CONTRACT_VERSION = "MKT_CST_PAID_CONTRACT_V2"
 SECTOR = "CONSTRUCTION"
 
 # frozen exact27 (audit DB 실측 순서 — diagnosis_input_fields sector=CONSTRUCTION tier=PAID)
 TARGET_FIELDS = [
-    "project_amount", "worker_count", "construction_type", "project_address",
+    "contract_amount_eok", "worker_count", "construction_type", "project_address",
     "has_subcontractor", "subcontractor_count", "process_list",
     "has_excavation", "has_demolition", "work_height_m",
     "has_truck_loading_unloading", "has_tower_crane", "truck_loading_height_m",
@@ -40,7 +40,7 @@ _EXACT_DIRECT = {
     "worker_count": "total_workers",        # 전체/동시 투입 인원 = total_workers(direct 아님)
     "construction_type": "site_type",       # 공사 유형
     "project_address": "site_address",      # 현장 주소
-    "project_amount": "contract_amount",    # 총 공사금액(억 단위, 변환 없음)
+    "contract_amount_eok": "contract_amount",    # 총 공사금액(억 단위, 변환 없음)
 }
 
 # RUNTIME_INPUT 20 — SAFE 자산에 표준코드 없음 → assembler None + unresolved.
