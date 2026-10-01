@@ -24,7 +24,7 @@ os.environ.setdefault("INICIS_CLIENT_IP", "1.2.3.4")
 _KST = timezone(timedelta(hours=9))
 _NOW_DT = datetime(2026, 10, 1, 10, 0, 0, tzinfo=_KST)
 _NOW_ISO = "2026-10-01T10:00:00+09:00"
-_DUE_ISO = "2026-10-01T09:00:00+09:00"    # before _NOW_DT
+_DUE_ISO = "2026-10-01T00:00:00+09:00"     # contract_due_at = contract end_date - 1 day (Oct 2 - 1 = Oct 1 midnight)
 _FUTURE_ISO = "2026-10-02T10:00:00+09:00"  # after _NOW_DT
 
 _SUB_ID   = str(uuid.uuid4())
@@ -58,7 +58,7 @@ _BASE_PAY = {
 }
 _BASE_CONTRACT = {
     "id": _CT_ID, "status_code": "ACTIVE", "service_type": "SAAS",
-    "is_active": True, "end_date": "2026-11-01",
+    "is_active": True, "end_date": "2026-10-02",  # contract_due_at = Oct 1 midnight KST; _NOW_DT (Oct 1 10am) is in window
 }
 
 
@@ -302,7 +302,10 @@ def test_P1_C04_pending_cycle2_fail_closed():
 
 
 def test_P1_C05_explicit_wrong_cycle_cannot_bypass_server_authority():
-    """P1-C05: billing_charge ignores caller-provided cycle for V3 SAAS — uses server authority."""
+    """P1-C05: billing_charge ignores caller-provided cycle for V3 SAAS — uses server authority.
+    With PATCH3, billing_charge delegates entirely to build_v3_recurring_charge_context for SAAS.
+    The ctx.charge_cycle (server authority = 2) must be used, not the caller's 999.
+    """
     from routers.payment_billing import billing_charge
 
     sub = {
@@ -314,29 +317,24 @@ def test_P1_C05_explicit_wrong_cycle_cannot_bypass_server_authority():
     }
     bk = {**_BASE_BK}
 
+    # Minimal supabase: only needs subscriptions (for initial read before the SAAS branch)
     def _table(name):
         t = MagicMock()
         if name == "subscriptions":
             t.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[sub])
-            t.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
-        elif name == "billing_keys":
-            t.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[bk])
-        elif name == "payments":
-            # _compute_v3_saas_recurring_cycle chain: select().eq().in_().execute()
-            t.select.return_value.eq.return_value.in_.return_value.execute.return_value = MagicMock(
-                data=[{"charge_cycle": 1, "status_code": "SUCCESS"}]  # cycle-1 SUCCESS → next = 2
-            )
-            # _v3_saas_pending_cycle_exists chain: select().eq().eq().eq().limit().execute()
-            t.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
-            # pre-payment reuse chain (cycle=1 SAAS): select().eq().eq().eq().eq().limit().execute()
-            t.select.return_value.eq.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
-                data=[{"id": _PAY_ID}]
-            )
-            t.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
         return t
 
     sb = MagicMock()
     sb.table.side_effect = _table
+
+    # Mock build_v3_recurring_charge_context to return ctx with server-authoritative cycle=2
+    mock_ctx = {
+        "eligible": True, "reason_code": "OK",
+        "subscription": sub,
+        "billing_key_row": bk,
+        "contract_id": _CT_ID, "quote_id": _QUOTE_ID,
+        "charge_cycle": 2,  # server authority: max success=1 + 1 = 2
+    }
 
     class _Body:
         subscription_id = _SUB_ID
@@ -350,12 +348,14 @@ def test_P1_C05_explicit_wrong_cycle_cannot_bypass_server_authority():
 
     with (
         patch("routers.payment_billing.get_supabase", return_value=sb),
+        patch("services.saas_recurring_billing_scheduler.build_v3_recurring_charge_context",
+              return_value=mock_ctx),
         patch("routers.payment_billing._charge_subscription_once", side_effect=_charge_spy),
         patch("services.payment_post_process.on_payment_success_sync"),
     ):
         billing_charge(_Body())
 
-    # Server authority: cycle must be 2 (max success=1 + 1), not caller's 999
+    # Server authority: cycle must be 2 (from ctx), not caller's 999
     assert cycle_used == [2], f"Expected [2] but got {cycle_used}"
 
 
@@ -405,11 +405,13 @@ def test_P1_R02_candidate_active_fresh_paused_skip():
 
 
 def test_P1_R03_candidate_due_fresh_future_skip():
-    """P1-R03: scanned due; fresh next_billing_at advanced to future → NOT_YET_DUE."""
+    """P1-R03: scanned due; fresh next_billing_at advanced to future → SCHEDULE_CONTRACT_MISMATCH.
+    _FUTURE_ISO (Oct 2 10am) != contract_due_at (Oct 1 midnight) → SCHEDULE_CONTRACT_MISMATCH.
+    """
     fresh = [{**_BASE_SUB, "next_billing_at": _FUTURE_ISO}]
     sb = _make_sb(**_full_eligible(), fresh_subs=fresh)
     result = _run_with_patches({"dry_run": False}, sb)
-    assert result["items"][0]["reason_code"] == "NOT_YET_DUE"
+    assert result["items"][0]["reason_code"] == "SCHEDULE_CONTRACT_MISMATCH"
 
 
 def test_P1_R04_fresh_billing_key_id_removed_skip():
@@ -422,8 +424,8 @@ def test_P1_R04_fresh_billing_key_id_removed_skip():
 
 def test_P1_R05_offset_equivalent_aware_compare_correct():
     """P1-R05: UTC timestamp equivalent to past KST time passes temporal check."""
-    # 2026-10-01T00:00:00Z = 2026-10-01T09:00:00+09:00 — same instant, different TZ
-    fresh = [{**_BASE_SUB, "next_billing_at": "2026-10-01T00:00:00+00:00"}]
+    # 2026-09-30T15:00:00+00:00 = 2026-10-01T00:00:00+09:00 — same instant (new contract_due_at), different TZ
+    fresh = [{**_BASE_SUB, "next_billing_at": "2026-09-30T15:00:00+00:00"}]
     sb = _make_sb(**_full_eligible(), fresh_subs=fresh)
     with (
         patch("db.supabase_client.get_supabase", return_value=sb),
@@ -441,7 +443,7 @@ def test_P1_R05_offset_equivalent_aware_compare_correct():
             result = run_due_saas_recurring_billing({"dry_run": False})
         except SaasRecurringBillingError as exc:
             result = exc.summary
-    # UTC 00:00:00 = KST 09:00:00 which is before KST 10:00:00 → should charge, not skip
+    # UTC 15:00:00 Sep 30 = KST 00:00:00 Oct 1 which equals contract_due_at → should charge, not skip
     assert result["charged_success"] == 1
 
 

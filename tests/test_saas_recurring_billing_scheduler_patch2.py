@@ -34,7 +34,7 @@ _BASE_SUB = {
     "id": _SUB_ID,
     "status": "ACTIVE",
     "product_type": "SAAS",
-    "next_billing_at": "2026-10-01T09:00:00+09:00",
+    "next_billing_at": "2026-10-01T00:00:00+09:00",  # contract_due_at = Oct 1 midnight KST (end_date Oct 2 - 1 day)
     "billing_key_id": _BK_ID,
     "amount": 110000,
     "supply_amount": 100000,
@@ -49,7 +49,7 @@ _BASE_PAY = {
 }
 _BASE_CONTRACT = {
     "id": _CT_ID, "status_code": "ACTIVE", "service_type": "SAAS",
-    "is_active": True, "end_date": "2026-11-01",
+    "is_active": True, "end_date": "2026-10-02",  # contract_due_at = Oct 1 midnight KST; _NOW (Oct 1 10am) is in window
 }
 
 _MOCK_SUMMARY = {

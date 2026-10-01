@@ -1027,37 +1027,39 @@ def billing_charge(body: BillingChargeBody):
             detail=f"ACTIVE 상태에서만 청구 가능합니다. (현재 status={subscription.get('status')})",
         )
 
-    billing_key_id = subscription.get("billing_key_id")
-    if not billing_key_id:
-        raise HTTPException(status_code=409, detail="구독에 연결된 빌링키가 없습니다.")
-
-    bk_res = (
-        supabase.table("billing_keys")
-        .select("*")
-        .eq("id", billing_key_id)
-        .limit(1)
-        .execute()
-    )
-    if not bk_res.data:
-        raise HTTPException(status_code=404, detail="빌링키를 찾을 수 없습니다.")
-    billing_key_row = bk_res.data[0]
-    if billing_key_row.get("status") != "ACTIVE":
-        raise HTTPException(
-            status_code=409,
-            detail=f"빌링키가 ACTIVE 상태가 아닙니다. (status={billing_key_row.get('status')})",
-        )
-
-    # charge_cycle 계산
-    # V3 SAAS: server authority (max PAID/SUCCESS cycle + 1); caller-provided value ignored.
-    # Legacy: count-based (all payments + 1) or explicit body.charge_cycle.
     if subscription.get("product_type") == "SAAS":
-        cycle = _compute_v3_saas_recurring_cycle(supabase, body.subscription_id)
-        if _v3_saas_pending_cycle_exists(supabase, body.subscription_id, cycle):
+        # §PATCH3: V3 SAAS — single fresh authority (contract boundary + schedule consistency)
+        from services.saas_recurring_billing_scheduler import build_v3_recurring_charge_context
+        ctx = build_v3_recurring_charge_context(supabase, body.subscription_id, now_kst())
+        if not ctx["eligible"]:
             raise HTTPException(
                 status_code=409,
-                detail=f"V3_RECURRING_PENDING_EXISTS: cycle={cycle} already has a PENDING attempt",
+                detail=f"V3_INELIGIBLE: {ctx['reason_code']}",
             )
+        subscription = ctx["subscription"]
+        billing_key_row = ctx["billing_key_row"]
+        cycle = ctx["charge_cycle"]
     else:
+        billing_key_id = subscription.get("billing_key_id")
+        if not billing_key_id:
+            raise HTTPException(status_code=409, detail="구독에 연결된 빌링키가 없습니다.")
+
+        bk_res = (
+            supabase.table("billing_keys")
+            .select("*")
+            .eq("id", billing_key_id)
+            .limit(1)
+            .execute()
+        )
+        if not bk_res.data:
+            raise HTTPException(status_code=404, detail="빌링키를 찾을 수 없습니다.")
+        billing_key_row = bk_res.data[0]
+        if billing_key_row.get("status") != "ACTIVE":
+            raise HTTPException(
+                status_code=409,
+                detail=f"빌링키가 ACTIVE 상태가 아닙니다. (status={billing_key_row.get('status')})",
+            )
+
         cycle = body.charge_cycle
         if cycle is None:
             cnt_res = (

@@ -31,7 +31,7 @@ _CT_ID    = str(uuid.uuid4())
 _QUOTE_ID = str(uuid.uuid4())
 
 _NOW    = "2026-10-01T10:00:00+09:00"
-_DUE    = "2026-10-01T09:00:00+09:00"   # before _NOW
+_DUE    = "2026-10-01T00:00:00+09:00"   # contract_due_at = contract end_date - 1 day (Oct 2 - 1 = Oct 1 midnight)
 _FUTURE = "2026-10-02T10:00:00+09:00"   # after _NOW
 
 # ── Base data fixtures ────────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ _BASE_CONTRACT = {
     "status_code": "ACTIVE",
     "service_type": "SAAS",
     "is_active": True,
-    "end_date": "2026-11-01",
+    "end_date": "2026-10-02",  # contract_due_at = Oct 1 midnight KST; _NOW (Oct 1 10am) is in window
 }
 
 # ── Mock builders ─────────────────────────────────────────────────────────────
@@ -202,14 +202,16 @@ def test_RS01_active_saas_due_is_candidate():
 
 
 def test_RS02_future_next_billing_at_excluded():
-    """RS02: next_billing_at in the future → guard skips (NOT_YET_DUE)."""
+    """RS02: next_billing_at in the future → guard skips (SCHEDULE_CONTRACT_MISMATCH).
+    _FUTURE (Oct 2 10am) != contract_due_at (Oct 1 midnight) → SCHEDULE_CONTRACT_MISMATCH.
+    """
     result = _run(
         {"dry_run": True},
         **_full_eligible(sub_override={"next_billing_at": _FUTURE}),
     )
     assert result["scanned"] == 1
     assert result["eligible"] == 0
-    assert result["items"][0]["reason_code"] == "NOT_YET_DUE"
+    assert result["items"][0]["reason_code"] == "SCHEDULE_CONTRACT_MISMATCH"
 
 
 def test_RS03_cancelled_excluded():
@@ -253,11 +255,13 @@ def test_RS06_no_billing_key_id_excluded():
 
 
 def test_RS07_limit_and_order_deterministic():
-    """RS07: three candidates with different IDs all processed; limit applied."""
+    """RS07: three candidates with different IDs all processed; limit applied.
+    All use contract_due_at (Oct 1 midnight KST) to pass SCHEDULE_CONTRACT_MISMATCH.
+    """
     subs = [
-        {**_BASE_SUB, "id": _SUB_ID, "next_billing_at": "2026-10-01T01:00:00+09:00"},
-        {**_BASE_SUB, "id": _SUB_ID_2, "next_billing_at": "2026-10-01T02:00:00+09:00"},
-        {**_BASE_SUB, "id": _SUB_ID_3, "next_billing_at": "2026-10-01T03:00:00+09:00"},
+        {**_BASE_SUB, "id": _SUB_ID, "next_billing_at": _DUE},
+        {**_BASE_SUB, "id": _SUB_ID_2, "next_billing_at": _DUE},
+        {**_BASE_SUB, "id": _SUB_ID_3, "next_billing_at": _DUE},
     ]
     result = _run(
         {"dry_run": True, "limit": 3},

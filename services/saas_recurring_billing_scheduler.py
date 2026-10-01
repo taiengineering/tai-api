@@ -7,10 +7,10 @@ Does NOT contain billing logic and does NOT duplicate INICIS charge code.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from services.time import now_kst, serialize_business_datetime
+from services.time import now_kst, serialize_business_datetime, TAI_TIMEZONE
 
 log = logging.getLogger(__name__)
 
@@ -70,8 +70,6 @@ def build_v3_recurring_charge_context(
         return {"eligible": False, "reason_code": "NEXT_BILLING_AT_INVALID"}
     if nba_dt.tzinfo is None:
         return {"eligible": False, "reason_code": "NEXT_BILLING_AT_INVALID"}
-    if nba_dt > now:
-        return {"eligible": False, "reason_code": "NOT_YET_DUE"}
 
     # Fresh billing key
     bk_res = (
@@ -128,6 +126,31 @@ def build_v3_recurring_charge_context(
         return {"eligible": False, "reason_code": "CONTRACT_IS_ACTIVE_FALSE"}
     if not ct.get("end_date"):
         return {"eligible": False, "reason_code": "CONTRACT_END_DATE_MISSING"}
+
+    # §PATCH3: Contract boundary temporal authority
+    end_val = ct["end_date"]
+    try:
+        from datetime import date as _date
+        end_dt = _date.fromisoformat(str(end_val)) if isinstance(end_val, str) else end_val
+        contract_end_boundary = datetime(end_dt.year, end_dt.month, end_dt.day, 0, 0, 0, tzinfo=TAI_TIMEZONE)
+    except Exception:
+        return {"eligible": False, "reason_code": "CONTRACT_END_DATE_INVALID"}
+    contract_due_at = contract_end_boundary - timedelta(days=1)
+
+    if now < contract_due_at:
+        return {"eligible": False, "reason_code": "CONTRACT_NOT_DUE"}
+    if now >= contract_end_boundary:
+        return {"eligible": False, "reason_code": "CONTRACT_EXPIRED_FOR_RECURRING"}
+
+    # §PATCH3: Subscription schedule must match contract due (by instant)
+    if nba_dt != contract_due_at:
+        return {
+            "eligible": False,
+            "reason_code": "SCHEDULE_CONTRACT_MISMATCH",
+            "subscription_next_billing_at": nba_dt.isoformat(),
+            "contract_due_at": contract_due_at.isoformat(),
+            "contract_end_boundary": contract_end_boundary.isoformat(),
+        }
 
     # §PATCH2-C: shared cycle helper
     from routers.payment_billing import _v3_cycle_from_pays
