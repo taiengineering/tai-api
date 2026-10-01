@@ -216,6 +216,11 @@ def _run_shared_search_reconcile(p):
     )
 
 
+def _run_saas_recurring_billing(p):
+    from services.saas_recurring_billing_scheduler import run_due_saas_recurring_billing
+    return run_due_saas_recurring_billing(p)
+
+
 def register_direct_handlers() -> dict[str, Handler]:
     if DIRECT_HANDLERS:
         return DIRECT_HANDLERS
@@ -250,6 +255,7 @@ def register_direct_handlers() -> dict[str, Handler]:
         "direct://holiday_sync": _run_holiday_sync,
         "direct://shared_search_incremental": _run_shared_search_incremental,
         "direct://shared_search_reconcile":   _run_shared_search_reconcile,
+        "direct://saas_recurring_billing":    _run_saas_recurring_billing,
     })
     return DIRECT_HANDLERS
 

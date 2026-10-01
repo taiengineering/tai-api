@@ -239,6 +239,8 @@ jobs:
         run: pytest tests/test_shared_search_incremental.py -q --tb=short
       - name: OBJ-CHEM MSDS incremental preview publisher tests
         run: pytest tests/test_chem11_incremental_publish.py -q --tb=short
+      - name: Commercial V3 recurring billing tests
+        run: pytest tests/test_saas_recurring_billing_scheduler.py tests/test_saas_recurring_billing_scheduler_patch1.py tests/test_saas_recurring_billing_scheduler_patch2.py tests/test_saas_recurring_billing_scheduler_patch3.py tests/test_saas_recurring_billing_scheduler_patch4.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"

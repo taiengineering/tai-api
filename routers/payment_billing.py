@@ -303,6 +303,74 @@ class SubscriptionCancelBody(BaseModel):
 
 # ── 내부 함수 ─────────────────────────────────────────────────────────
 
+
+def _v3_cycle_from_pays(pays: list) -> int:
+    """§PATCH2-C: shared pure formula — max(PAID/SUCCESS charge_cycle) + 1."""
+    cycles = [
+        p["charge_cycle"] for p in pays
+        if p.get("charge_cycle") is not None and p.get("status_code") in ("PAID", "SUCCESS")
+    ]
+    return (max(cycles) + 1) if cycles else 2
+
+
+def _compute_v3_saas_recurring_cycle(supabase, subscription_id: str) -> int:
+    """
+    V3 SAAS server-authoritative next recurring cycle.
+    = max(PAID/SUCCESS charge_cycle) + 1.
+    FAILED attempts do NOT advance the cycle.
+    """
+    res = (
+        supabase.table("payments")
+        .select("charge_cycle,status_code")
+        .eq("subscription_id", subscription_id)
+        .in_("status_code", ["PAID", "SUCCESS"])
+        .execute()
+    )
+    return _v3_cycle_from_pays(res.data or [])
+
+
+def _v3_saas_pending_cycle_exists(supabase, subscription_id: str, cycle: int) -> bool:
+    """Returns True if a PENDING active attempt already exists for this cycle."""
+    res = (
+        supabase.table("payments")
+        .select("id")
+        .eq("subscription_id", subscription_id)
+        .eq("charge_cycle", cycle)
+        .eq("status_code", "PENDING")
+        .limit(1)
+        .execute()
+    )
+    return bool(res.data)
+
+
+def _align_v3_subscription_next_billing_to_contract_end(
+    supabase,
+    subscription_id: str,
+    contract_id: str,
+) -> str:
+    """§PATCH2-A: align next_billing_at = contract.end_date 00:00 KST - 1 day."""
+    from datetime import date as _date
+    ct_res = (
+        supabase.table("contracts")
+        .select("end_date")
+        .eq("id", contract_id)
+        .limit(1)
+        .execute()
+    )
+    if not ct_res.data or not ct_res.data[0].get("end_date"):
+        raise ValueError(f"contract {contract_id} end_date missing for alignment")
+    end_val = ct_res.data[0]["end_date"]
+    end_dt = _date.fromisoformat(str(end_val)) if isinstance(end_val, str) else end_val
+    contract_end_boundary = datetime(end_dt.year, end_dt.month, end_dt.day, 0, 0, 0, tzinfo=TAI_TIMEZONE)
+    aligned_dt = contract_end_boundary - timedelta(days=1)
+    aligned_iso = aligned_dt.isoformat()
+    supabase.table("subscriptions").update({
+        "next_billing_at": aligned_iso,
+        "updated_at": _now_iso(),
+    }).eq("id", subscription_id).execute()
+    return aligned_iso
+
+
 def _charge_subscription_once(
     supabase,
     *,
@@ -959,36 +1027,48 @@ def billing_charge(body: BillingChargeBody):
             detail=f"ACTIVE 상태에서만 청구 가능합니다. (현재 status={subscription.get('status')})",
         )
 
-    billing_key_id = subscription.get("billing_key_id")
-    if not billing_key_id:
-        raise HTTPException(status_code=409, detail="구독에 연결된 빌링키가 없습니다.")
+    if subscription.get("product_type") == "SAAS":
+        # §PATCH3: V3 SAAS — single fresh authority (contract boundary + schedule consistency)
+        from services.saas_recurring_billing_scheduler import build_v3_recurring_charge_context
+        ctx = build_v3_recurring_charge_context(supabase, body.subscription_id, now_kst())
+        if not ctx["eligible"]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"V3_INELIGIBLE: {ctx['reason_code']}",
+            )
+        subscription = ctx["subscription"]
+        billing_key_row = ctx["billing_key_row"]
+        cycle = ctx["charge_cycle"]
+    else:
+        billing_key_id = subscription.get("billing_key_id")
+        if not billing_key_id:
+            raise HTTPException(status_code=409, detail="구독에 연결된 빌링키가 없습니다.")
 
-    bk_res = (
-        supabase.table("billing_keys")
-        .select("*")
-        .eq("id", billing_key_id)
-        .limit(1)
-        .execute()
-    )
-    if not bk_res.data:
-        raise HTTPException(status_code=404, detail="빌링키를 찾을 수 없습니다.")
-    billing_key_row = bk_res.data[0]
-    if billing_key_row.get("status") != "ACTIVE":
-        raise HTTPException(
-            status_code=409,
-            detail=f"빌링키가 ACTIVE 상태가 아닙니다. (status={billing_key_row.get('status')})",
-        )
-
-    # charge_cycle 자동 계산
-    cycle = body.charge_cycle
-    if cycle is None:
-        cnt_res = (
-            supabase.table("payments")
-            .select("id", count="exact")
-            .eq("subscription_id", body.subscription_id)
+        bk_res = (
+            supabase.table("billing_keys")
+            .select("*")
+            .eq("id", billing_key_id)
+            .limit(1)
             .execute()
         )
-        cycle = (cnt_res.count or 0) + 1
+        if not bk_res.data:
+            raise HTTPException(status_code=404, detail="빌링키를 찾을 수 없습니다.")
+        billing_key_row = bk_res.data[0]
+        if billing_key_row.get("status") != "ACTIVE":
+            raise HTTPException(
+                status_code=409,
+                detail=f"빌링키가 ACTIVE 상태가 아닙니다. (status={billing_key_row.get('status')})",
+            )
+
+        cycle = body.charge_cycle
+        if cycle is None:
+            cnt_res = (
+                supabase.table("payments")
+                .select("id", count="exact")
+                .eq("subscription_id", body.subscription_id)
+                .execute()
+            )
+            cycle = (cnt_res.count or 0) + 1
 
     result = _charge_subscription_once(
         supabase,
@@ -998,16 +1078,46 @@ def billing_charge(body: BillingChargeBody):
         is_recurring=True,
     )
 
-    # V3 SAAS: 정기청구 성공 → 갱신 계약 체인 실행
+    _post_process_ok = None
+
+    # V3 SAAS: 정기청구 성공 → 갱신 계약 체인 실행 + next_billing_at 정렬
     if result.get("success") and subscription.get("product_type") == "SAAS":
         try:
             from services.payment_post_process import on_payment_success_sync
             on_payment_success_sync(result["payment_id"])
+            # PATCH2-A: align next_billing_at to persisted contract end
+            _pay_align = (
+                supabase.table("payments")
+                .select("contract_id")
+                .eq("id", result["payment_id"])
+                .limit(1)
+                .execute()
+            )
+            _ct_id = _pay_align.data[0].get("contract_id") if _pay_align.data else None
+            if _ct_id:
+                _align_v3_subscription_next_billing_to_contract_end(supabase, body.subscription_id, _ct_id)
+            _post_process_ok = True
         except Exception as _v3_err:
             log.error(
-                "[V3_BILLING_CHARGE] on_payment_success_sync failed payment=%s: %s",
+                "[V3_BILLING_CHARGE] post-process failed payment=%s: %s",
                 result.get("payment_id"), _v3_err,
             )
+            _post_process_ok = False
+
+    # §PATCH4-A: V3 SAAS charge succeeded but post-process failed → distinct safe outcome
+    if result.get("success") and _post_process_ok is False:
+        return {
+            "status": "partial",
+            "data": {
+                "subscription_id": body.subscription_id,
+                "payment_id":      result.get("payment_id"),
+                "charge_cycle":    cycle,
+                "payment_charged": True,
+                "post_process":    "FAILED",
+                "retry_charge":    False,
+                "reason_code":     "POST_PROCESS_FAILED",
+            },
+        }
 
     return {
         "status":   "success" if result.get("success") else "failed",
