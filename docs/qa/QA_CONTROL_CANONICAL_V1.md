@@ -1,6 +1,6 @@
 # QA Control Canonical Contract v1
 
-**WO:** WO-QA-CONTROL-PHASE2A-001 + PATCH-2A-01 + PATCH-2A-02
+**WO:** WO-QA-CONTROL-PHASE2A-001 + PATCH-2A-01 + PATCH-2A-02 + PATCH-2A-03
 **Status:** READY FOR OWNER REVIEW
 **Date:** 2026-10-01
 **Migration:** `supabase/migrations/20261001000000_create_qa_control_canonical_v1.sql`
@@ -75,15 +75,15 @@ Phase 2-A scope: DB contract only. API / Scheduler / Admin Front 구현은 별�
 
 → MANUAL + enabled=true 일 수 없음. frequency_type 불일치 조합 DB에서 차단.
 
-### `qa_runs` — 실행 요청 단위
+### `qa_runs` — GitHub workflow attempt 단위
 
 | Column | Type | Nullable | Notes |
 |--------|------|----------|-------|
 | id | uuid PK | NO | TAI 내부 Run ID |
 | trigger_type | text | NO | CHECK: SCHEDULE/MANUAL/PR/RETRY |
 | run_status | text | NO | DEFAULT 'QUEUED'. CHECK: QUEUED/RUNNING/COMPLETED/ERROR/CANCELED |
-| github_run_id | bigint | YES | non-NULL 중복 금지 (partial unique index) |
-| github_run_attempt | integer | YES | **CHECK: IS NULL OR >= 1** (PATCH-2A-02) |
+| github_run_id | bigint | YES | GitHub Actions run_id. dispatch 전 NULL |
+| github_run_attempt | integer | YES | GitHub Actions attempt 번호. dispatch 전 NULL. **Cross-column: run_id와 함께만 허용** |
 | head_sha | text | YES | |
 | branch_name | text | YES | |
 | requested_by | text | YES | |
@@ -96,6 +96,29 @@ Phase 2-A scope: DB contract only. API / Scheduler / Admin Front 구현은 별�
 | updated_at | timestamptz | NO | |
 
 **주의:** `qa_runs.id` ≠ `github_run_id`. TAI 내부 authority와 외부 실행기 reference는 별개.
+
+**GitHub external identity (PATCH-2A-03):**
+```
+GitHub workflow identity = (github_run_id, github_run_attempt)
+```
+GitHub Actions Re-run은 동일 `run_id` + 증가된 `attempt`를 사용한다.
+→ 복합 UNIQUE index `(github_run_id, github_run_attempt) WHERE github_run_id IS NOT NULL`
+
+```
+예:
+attempt 1: github_run_id=36835441371, github_run_attempt=1  → row A
+Re-run:    github_run_id=36835441371, github_run_attempt=2  → row B (별도 row, 허용)
+동일 중복: github_run_id=36835441371, github_run_attempt=1  → UNIQUE 차단
+```
+
+**Cross-column CHECK** (`qa_runs_github_identity_chk`):
+
+| github_run_id | github_run_attempt | 허용 | 설명 |
+|---------------|-------------------|------|------|
+| NULL | NULL | YES | dispatch 전 |
+| NOT NULL | NOT NULL (>= 1) | YES | GitHub 연결 후 |
+| NOT NULL | NULL | **NO** | attempt 없이 run_id만 → 차단 |
+| NULL | NOT NULL | **NO** | run_id 없이 attempt만 → 차단 |
 
 ### `qa_run_targets` — 실행 요청 대상 (PATCH-2A-01)
 
@@ -125,7 +148,7 @@ QUEUED/RUNNING 상태에서도 대상 QA 항목을 DB에서 식별 가능.
 | run_id | uuid FK→qa_runs | NO | |
 | qa_item_id | uuid FK→qa_items | NO | |
 | result_status | text | NO | CHECK: **PASS/FAIL/BLOCKED/SKIPPED** |
-| attempt | integer | NO | DEFAULT 1. >= 1 |
+| attempt | integer | NO | DEFAULT 1. >= 1. **Playwright/Scenario retry** (GitHub workflow attempt과 다름) |
 | duration_ms | integer | YES | >= 0 |
 | http_status | integer | YES | |
 | error_code | text | YES | |
@@ -257,7 +280,7 @@ DB에는 `FLAKY`를 저장하지 않는다. raw attempt을 보존하는 구조�
 ## 6. Run / Target / Result Distinction
 
 ```
-qa_runs         = 실행 요청 1건 (GitHub Actions 1 workflow run)
+qa_runs         = 실행 요청 1건 (GitHub Actions 1 workflow attempt)
 qa_run_targets  = 해당 run에서 실행하기로 한 QA 항목 (request side)
 qa_run_results  = 실제 실행된 raw 시나리오 결과 (evidence side)
 ```
@@ -279,6 +302,24 @@ qa_run_results(run_id, qa_item_id)
 - result는 반드시 target을 참조해야 한다.
 - target에 없는 qa_item의 result는 DB에서 INSERT 불가 (FK 차단).
 - request side(target)와 evidence side(result)의 정합성은 DB FK가 보장.
+
+**`attempt` 개념 구분 (PATCH-2A-03):**
+
+| | 컬럼 | 의미 |
+|--|------|------|
+| `qa_runs.github_run_attempt` | GitHub workflow attempt | GitHub Actions "Re-run" 번호 |
+| `qa_run_results.attempt` | Playwright/Scenario retry | 시나리오 내부 재시도 번호 |
+
+```
+예:
+qa_runs:
+  github_run_id=36835441371, github_run_attempt=2   ← GitHub Re-run 2회차
+
+qa_run_results (같은 run_id 내부):
+  P0-SAAS-001, attempt=1, result_status='FAIL'      ← 시나리오 1차 시도
+  P0-SAAS-001, attempt=2, result_status='PASS'      ← 시나리오 2차 재시도
+  → effective_status = FLAKY
+```
 
 **상태별 조회 패턴:**
 ```
@@ -349,9 +390,11 @@ Phase 2-A 완료 체크리스트:
 - [x] contract 문서 작성
 - [x] result→target composite FK (PATCH-2A-02)
 - [x] ordinal >= 1 CHECK (PATCH-2A-02)
-- [x] github_run_attempt >= 1 CHECK (PATCH-2A-02)
+- [x] GitHub identity (run_id, attempt) 복합 UNIQUE (PATCH-2A-03)
+- [x] github_run_id / attempt cross-column CHECK (PATCH-2A-03)
+- [x] attempt 개념 구분 문서화 (PATCH-2A-03)
 - [ ] production DB apply (Owner Approval 대기)
-- [ ] verification V1~V13+ dynamic (apply 후 실행)
+- [ ] verification G1~G9+ dynamic (apply 후 실행)
 
 Phase 2-B handoff 항목:
 ```
