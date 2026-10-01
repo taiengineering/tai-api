@@ -1,9 +1,11 @@
-"""SEM-P0-01A-R4 — CST process projector + runtime injection tests.
+"""SEM-P0-01A-R4 + WO-BLK008 — CST process projector + runtime injection tests.
 
 Covers:
-  T01-T08 : project_cst_process_codes (pure projector)
+  T01-T08 : project_cst_process_codes (pure projector) [SEM-P0-01A-R4]
   T09-T13 : _load_site_process_work_type_codes (fail-closed reader)
   T14-T17 : run_safe_construction_leg integration (process projection wired)
+  T18-T19 : malformed payload hardening
+  T20-T26 : BLK-008 EXCAVATION → has_excavation mapping
 """
 import copy
 import pytest
@@ -119,7 +121,7 @@ def test_T05_unknown_code_omitted():
 
 def test_T06_mixed_known_unknown():
     result = project_cst_process_codes(["CONFINED_SPACE", "BLASTING", "EXCAVATION"])
-    assert result == {"performs_confined_space_work": True}
+    assert result == {"performs_confined_space_work": True, "has_excavation": True}
 
 def test_T07_duplicate_codes_idempotent():
     result = project_cst_process_codes(["CONFINED_SPACE", "CONFINED_SPACE"])
@@ -247,3 +249,53 @@ def test_T19_malformed_master_payload_raises():
             return _T(n, s._proc_store, c)
     with pytest.raises(ConstructionProcessSourceLoadError):
         _load_site_process_work_type_codes(_MalformedMasterSB(), "S1")
+
+
+# ── T20-T26 : BLK-008 EXCAVATION → has_excavation ────────────────────────────
+
+def test_T20_blk008_excavation_positive():
+    """T20: EXCAVATION code → has_excavation = True."""
+    result = project_cst_process_codes(["EXCAVATION"])
+    assert result == {"has_excavation": True}
+
+def test_T21_blk008_confined_space_no_excavation():
+    """T21: CONFINED_SPACE → has_excavation absent."""
+    result = project_cst_process_codes(["CONFINED_SPACE"])
+    assert "has_excavation" not in result
+    assert result.get("performs_confined_space_work") is True
+
+def test_T22_blk008_temp_electric_regression():
+    """T22: TEMP_ELECTRIC → performs_electrical_work, has_excavation absent."""
+    result = project_cst_process_codes(["TEMP_ELECTRIC"])
+    assert result == {"performs_electrical_work": True}
+    assert "has_excavation" not in result
+
+def test_T23_blk008_confined_space_regression():
+    """T23: CONFINED_SPACE → performs_confined_space_work, has_excavation absent."""
+    result = project_cst_process_codes(["CONFINED_SPACE"])
+    assert result == {"performs_confined_space_work": True}
+    assert "has_excavation" not in result
+
+def test_T24_blk008_unknown_code_empty():
+    """T24: unrecognized code → empty dict."""
+    result = project_cst_process_codes(["UNKNOWN_CODE"])
+    assert result == {}
+
+def test_T25_blk008_namespace_guard():
+    """T25: EXCAVATION from wrong namespace (kcsc_work_master) produces nothing.
+
+    project_cst_process_codes() receives only work_type_code strings, not
+    (table, code) tuples. The caller (_load_site_process_work_type_codes) reads
+    exclusively from kcsc_process_master. This test confirms the dict lookup
+    uses the exact (kcsc_process_master, code) key — a wrong-table key is absent.
+    """
+    wrong_table_key = ("kcsc_work_master", "EXCAVATION")
+    assert wrong_table_key not in _APPROVED_PROCESS_MAPPINGS_V1
+    correct_key = ("kcsc_process_master", "EXCAVATION")
+    assert correct_key in _APPROVED_PROCESS_MAPPINGS_V1
+
+def test_T26_blk008_registry_count():
+    """T26: registry has exactly 3 entries after BLK-008 extension."""
+    assert len(_APPROVED_PROCESS_MAPPINGS_V1) == 3
+    assert ("kcsc_process_master", "EXCAVATION") in _APPROVED_PROCESS_MAPPINGS_V1
+    assert _APPROVED_PROCESS_MAPPINGS_V1[("kcsc_process_master", "EXCAVATION")] == "has_excavation"

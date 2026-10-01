@@ -4,18 +4,20 @@ Pure projector: no DB reads.  Caller provides work_type_code list read from
 kcsc_process_master; this function emits boolean LEG input fields.
 
 Frozen registry: modifications require SEM semantic review + Owner approval.
-BLK-008 (has_excavation) and BLK-009 (has_blasting) are NOT in this registry
-until their LEG target-side repair objects are resolved.
+BLK-009 (has_blasting) is NOT in this registry until its LEG target-side
+repair object is resolved.
 """
 from __future__ import annotations
 
-# Owner-approved source→target mappings frozen at SEM-P0-01A-R4 (2026-10-01).
+# Owner-approved source→target mappings.
 # Key = (source_table, work_type_code); value = LEG input field name.
-# MAP-01: CONFINED_SPACE → performs_confined_space_work
-# MAP-02: TEMP_ELECTRIC  → performs_electrical_work
+# MAP-01: CONFINED_SPACE → performs_confined_space_work  (SEM-P0-01A-R4, 2026-10-01)
+# MAP-02: TEMP_ELECTRIC  → performs_electrical_work       (SEM-P0-01A-R4, 2026-10-01)
+# BLK-008: EXCAVATION    → has_excavation                 (WO-BLK008, 2026-10-02)
 _APPROVED_PROCESS_MAPPINGS_V1: dict[tuple[str, str], str] = {
     ("kcsc_process_master", "CONFINED_SPACE"): "performs_confined_space_work",
-    ("kcsc_process_master", "TEMP_ELECTRIC"): "performs_electrical_work",
+    ("kcsc_process_master", "TEMP_ELECTRIC"):  "performs_electrical_work",
+    ("kcsc_process_master", "EXCAVATION"):     "has_excavation",
 }
 
 
