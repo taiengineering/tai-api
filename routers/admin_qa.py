@@ -178,6 +178,13 @@ async def create_run(
         try:
             await dispatch_qa_run(run_id, scenario_ids)
             dispatch_status = "OK"
+            now_iso = serialize_external_utc(now_kst())
+            supabase.table("qa_runs").update({
+                "run_status": "RUNNING",
+                "started_at": now_iso,
+                "updated_at": now_iso,
+            }).eq("id", run_id).execute()
+            run_data["run_status"] = "RUNNING"
         except Exception as exc:
             log.error("[admin_qa] dispatch failed run=%s: %s", run_id, exc)
             now_iso = serialize_external_utc(now_kst())
