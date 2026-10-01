@@ -455,6 +455,11 @@ class SupabasePublishStore:
         # Paginated fetch: the preview slice is 1,997 rows which fits in
         # a single Supabase page, but future FULL rollouts (20,568) need
         # pagination. We stay safe under either.
+        # ORDER BY chemical_id is required for stable offset pagination:
+        # without it, PgBouncer connection pooling can cause the same row
+        # to appear in multiple pages while others are skipped entirely.
+        # (snapshot_id, chemical_id) is the PK, so within a fixed
+        # snapshot_id this ordering is unique and deterministic.
         page_size = 1000
         offset = 0
         acc: list[dict] = []
@@ -464,6 +469,7 @@ class SupabasePublishStore:
                 .select(SNAPSHOT_ITEM_SELECT)
                 .eq("snapshot_id", snapshot_id)
                 .eq("in_snapshot", True)
+                .order("chemical_id")
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
