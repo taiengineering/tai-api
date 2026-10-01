@@ -80,8 +80,8 @@ def test_direct_exact_4():
     assert v["worker_count"] == 0            # 0 보존
     assert v["construction_type"] == "CIVIL"
     assert v["project_address"] == "부산"
-    assert v["project_amount"] == 0          # 0 보존(억 단위, 변환 없음)
-    for f in ("worker_count", "construction_type", "project_address", "project_amount"):
+    assert v["contract_amount_eok"] == 0     # OBJ-01: project_amount → contract_amount_eok
+    for f in ("worker_count", "construction_type", "project_address", "contract_amount_eok"):
         assert f not in r["unresolved_fields"]
 
 
