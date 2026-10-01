@@ -185,18 +185,24 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
         contract_end_date_to_effective_at_v2,
         TemporalVersionError,
     )
-    from services.saas_renewal_quote_svc import _parse_paid_at
+    from services.saas_renewal_quote_svc import (
+        _parse_paid_at,
+        _select_latest_eligible_payment_id,
+        _ALLOWED_ANCHOR_TYPES,
+        SaasRenewalQuoteError,
+    )
     from collections import defaultdict
 
     _SENTINEL_NO_VALID_PAID_AT = "__NO_VALID_PAID_AT__"
+    _SENTINEL_STATE_INVALID = "__STATE_INVALID__"
 
-    # ── Step 1: Basic pre-filter — SAAS + contract + PAID + not UPGRADE ──────
+    # ── Step 1: Basic pre-filter — SAAS + contract + PAID + CARD/RENEWAL only ─
     candidates = [
         r for r in rows
         if (
             r.get("product_type") == "SAAS"
             and r.get("contract_id")
-            and (r.get("payment_type") or "INITIAL").upper() not in {"UPGRADE"}
+            and (r.get("payment_type") or "").upper() in _ALLOWED_ANCHOR_TYPES
             and (r.get("status_code") or "") in _PAID_STATUS
         )
     ]
@@ -212,7 +218,7 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
             elif pt != "SAAS":
                 r["renewal_eligible"] = False
                 r["renewal_reason_code"] = "NOT_COMMERCIAL_V3"
-            else:  # UPGRADE
+            else:  # forbidden payment_type (UPGRADE, INITIAL, NULL, unknown)
                 r["renewal_eligible"] = False
                 r["renewal_reason_code"] = "NOT_COMMERCIAL_V3"
 
@@ -281,24 +287,14 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
         )
         contract_pays: dict = defaultdict(list)
         for p in (lp_res.data or []):
-            ptype = (p.get("payment_type") or "INITIAL").upper()
-            if ptype == "UPGRADE":
-                continue
             cid = str(p.get("contract_id") or "")
             contract_pays[cid].append(p)
         for cid, pays in contract_pays.items():
-            timed: list = []
-            for p in pays:
-                try:
-                    dt = _parse_paid_at(p.get("paid_at"))
-                    timed.append((dt, str(p.get("id") or "")))
-                except Exception:  # noqa: BLE001 — skip invalid paid_at
-                    continue
-            if timed:
-                timed.sort(key=lambda x: x[0], reverse=True)
-                latest_pay_map[cid] = timed[0][1]
-            else:
-                latest_pay_map[cid] = _SENTINEL_NO_VALID_PAID_AT
+            try:
+                lid = _select_latest_eligible_payment_id(pays)
+                latest_pay_map[cid] = lid if lid is not None else _SENTINEL_NO_VALID_PAID_AT
+            except SaasRenewalQuoteError:
+                latest_pay_map[cid] = _SENTINEL_STATE_INVALID
 
     # ── Step 6: Assign eligibility per candidate ──────────────────────────────
     for r in candidates:
@@ -336,9 +332,9 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
             r["renewal_reason_code"] = "RENEWAL_STATE_INVALID"
             continue
 
-        # Latest payment check (timezone-aware; sentinel = all invalid paid_at)
+        # Latest payment check (timezone-aware; sentinel = all invalid paid_at or state invalid)
         latest_pid = latest_pay_map.get(cid)
-        if latest_pid == _SENTINEL_NO_VALID_PAID_AT:
+        if latest_pid in (_SENTINEL_NO_VALID_PAID_AT, _SENTINEL_STATE_INVALID):
             r["renewal_eligible"] = False
             r["renewal_reason_code"] = "RENEWAL_STATE_INVALID"
             continue
