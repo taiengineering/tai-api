@@ -31,6 +31,8 @@ from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
 from services import qa_control_svc as svc
+from services import qa_notify_svc as notify
+from services.slack_dispatcher import send_slack
 
 log = logging.getLogger("internal_qa")
 
@@ -65,14 +67,15 @@ class RunResultsPayload(BaseModel):
 
 
 @router.post("/runs/{run_id}/results")
-def post_run_results(
+async def post_run_results(
     run_id: str,
     body:   RunResultsPayload,
     x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
 ):
-    """QA 실행 결과 수신 + lifecycle 전이.
+    """QA 실행 결과 수신 + lifecycle 전이 + Slack 알림.
 
     scenario_id → qa_item_id resolve. canonical evidence 전체 비교 idempotency.
+    Slack 실패는 callback 결과에 영향 없음 (fail-safe).
     """
     expected = os.environ.get("INTERNAL_API_SECRET")
     if not expected or x_internal_secret != expected:
@@ -98,4 +101,44 @@ def post_run_results(
         run_error_summary=body.error_summary,
         results=results_dicts,
     )
-    return {"status": "success", "data": data}
+
+    # Slack dispatch — fail-safe: Slack failure ≠ callback failure
+    slack_attempted = 0
+    slack_sent = 0
+
+    for notif in data.get("notifications", []):
+        payload = notify.build_qa_slack_payload(notif)
+        slack_attempted += 1
+        try:
+            sent = await send_slack(**payload)
+            if sent:
+                slack_sent += 1
+            else:
+                log.warning("[qa_notify] Slack not sent: %s run=%s item=%s",
+                            notif["event_type"], run_id, notif.get("qa_item_id"))
+        except Exception as exc:
+            log.warning("[qa_notify] Slack exception: %s", exc)
+
+    run_notif = data.get("run_notification")
+    if run_notif:
+        payload = notify.build_qa_slack_payload(run_notif, is_run=True)
+        slack_attempted += 1
+        try:
+            sent = await send_slack(**payload)
+            if sent:
+                slack_sent += 1
+            else:
+                log.warning("[qa_notify] Slack not sent: %s run=%s",
+                            run_notif["event_type"], run_id)
+        except Exception as exc:
+            log.warning("[qa_notify] Slack exception: %s", exc)
+
+    return {
+        "status": "success",
+        "data":   data,
+        "slack":  {
+            "attempted": slack_attempted,
+            "sent":      slack_sent,
+            "failed":    slack_attempted - slack_sent,
+        },
+    }

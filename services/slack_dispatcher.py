@@ -69,16 +69,32 @@ EVENT_TYPE_CHANNEL = {
 }
 
 # WO-SLACK-EVENT-HUB-001 PR-③: event_type → admin 링크 (전부 LIST · 딥링크 미지원 확인됨).
-# 이 매핑에 있는 event_type 은, 호출부가 blocks 를 제공하지 않은 경우에만 dispatcher 가
-# text + "어드민에서 보기" 버튼 블록을 자동 조립한다. 호출부가 blocks 를 제공하면
-# (INQUIRY/WISH 의 build_blocks 경로) 버튼 append 를 하지 않는다(중복 방지).
+# 일반 경로: 호출부가 blocks 를 제공하지 않은 경우에만 dispatcher 가 text + 버튼 블록 조립.
+# 예외: QA_ADMIN_BUTTON_EVENTS — 호출부가 section-only blocks 를 제공해도 admin button 추가.
+#       (qa_notify_svc 는 section block 만 조립하고 버튼 추가는 dispatcher 에 위임)
+# INQUIRY/WISH 등 기존 이벤트는 caller blocks 를 byte-semantic 그대로 통과한다(회귀 0).
 ADMIN_BASE_URL = "https://admin.taieng.co.kr"
+
+# QA 이벤트만 blocks 경로에서도 admin button 자동 append (나머지 caller blocks 는 불변).
+QA_ADMIN_BUTTON_EVENTS = {
+    "QA_FAIL_DETECTED",
+    "QA_BLOCKED_DETECTED",
+    "QA_FLAKY_DETECTED",
+    "QA_RECOVERED",
+    "QA_RUN_ERROR",
+}
 EVENT_TYPE_ADMIN_PATH = {
     "INQUIRY_CREATED":          "/inquiry-list",
     "TAI_WISH_CREATED":         "/inquiry-list",
     "QUOTE_MANUAL_REQUESTED":   "/quote-list",
     "FREE_DIAGNOSIS_COMPLETED": "/anon-diagnosis-list",
     # APPROVAL_CREATED — source deferred, path 미할당
+    # QA events — Phase 2-D Admin QA UI 개편 시 path 변경 가능
+    "QA_FAIL_DETECTED":    "/auto-qa-dashboard",
+    "QA_BLOCKED_DETECTED": "/auto-qa-dashboard",
+    "QA_FLAKY_DETECTED":   "/auto-qa-dashboard",
+    "QA_RECOVERED":        "/auto-qa-dashboard",
+    "QA_RUN_ERROR":        "/auto-qa-dashboard",
 }
 
 # severity → 이모지
@@ -174,13 +190,27 @@ async def send_slack(
         text += f"\n> {detail}"
 
     payload = {"channel": channel_id, "text": text, "unfurl_links": False}
+    admin_path = EVENT_TYPE_ADMIN_PATH.get(event_type)
     if blocks:
-        # 호출부가 blocks 를 제공한 경로(INQUIRY/WISH · build_blocks) — 버튼 append 금지(중복 방지).
-        payload["blocks"] = blocks
+        payload["blocks"] = list(blocks)
+        # QA events: caller provides section-only blocks; dispatcher appends admin button.
+        # All other events: caller blocks passed through unchanged (no button injection).
+        if (
+            event_type in QA_ADMIN_BUTTON_EVENTS
+            and admin_path
+            and not any(b.get("type") == "actions" for b in blocks)
+        ):
+            payload["blocks"] = list(blocks) + [{
+                "type": "actions",
+                "elements": [{
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "어드민에서 보기"},
+                    "url": f"{ADMIN_BASE_URL}{admin_path}",
+                }],
+            }]
     else:
         # QUOTE/FREE 처럼 blocks 없이 들어오는 이벤트: text + "어드민에서 보기" 버튼 자동 조립.
         # 매핑에 없는 event_type(alert/ops/engine 등)은 text-only 유지(회귀 0).
-        admin_path = EVENT_TYPE_ADMIN_PATH.get(event_type)
         if admin_path:
             payload["blocks"] = [
                 {"type": "section", "text": {"type": "mrkdwn", "text": text}},

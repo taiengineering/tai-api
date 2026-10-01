@@ -552,6 +552,49 @@ def create_run(
     return run
 
 
+# ── Status transition event matrix ───────────────────────────────────────────
+
+_TRANSITION_EVENTS: Dict[tuple, str] = {
+    # → FAIL
+    ("NEVER_RUN", "FAIL"): "QA_FAIL_DETECTED",
+    ("PASS",      "FAIL"): "QA_FAIL_DETECTED",
+    ("SKIPPED",   "FAIL"): "QA_FAIL_DETECTED",
+    ("BLOCKED",   "FAIL"): "QA_FAIL_DETECTED",
+    ("FLAKY",     "FAIL"): "QA_FAIL_DETECTED",
+    # → BLOCKED
+    ("NEVER_RUN", "BLOCKED"): "QA_BLOCKED_DETECTED",
+    ("PASS",      "BLOCKED"): "QA_BLOCKED_DETECTED",
+    ("SKIPPED",   "BLOCKED"): "QA_BLOCKED_DETECTED",
+    ("FAIL",      "BLOCKED"): "QA_BLOCKED_DETECTED",
+    # → FLAKY
+    ("NEVER_RUN", "FLAKY"): "QA_FLAKY_DETECTED",
+    ("PASS",      "FLAKY"): "QA_FLAKY_DETECTED",
+    ("SKIPPED",   "FLAKY"): "QA_FLAKY_DETECTED",
+    ("FAIL",      "FLAKY"): "QA_FLAKY_DETECTED",
+    ("BLOCKED",   "FLAKY"): "QA_FLAKY_DETECTED",
+    # → PASS (recovery)
+    ("FAIL",    "PASS"): "QA_RECOVERED",
+    ("BLOCKED", "PASS"): "QA_RECOVERED",
+    ("FLAKY",   "PASS"): "QA_RECOVERED",
+}
+
+
+def _get_transition_event(prev: str, new: str) -> Optional[str]:
+    return _TRANSITION_EVENTS.get((prev, new))
+
+
+def _latest_run_effective_status(by_run: Dict[str, List]) -> str:
+    """Given run_id → attempts mapping, compute effective status of the latest run."""
+    if not by_run:
+        return "NEVER_RUN"
+    latest_run_id = max(
+        by_run.keys(),
+        key=lambda rid: max((r.get("checked_at") or "") for r in by_run[rid]),
+    )
+    attempts = sorted(by_run[latest_run_id], key=lambda a: a.get("attempt", 1))
+    return derive_effective_status(attempts)
+
+
 # ── Internal: Result Callback ─────────────────────────────────────────────────
 
 def _check_final_run_replay(
@@ -646,13 +689,26 @@ def apply_results(
             raise HTTPException(409, "GITHUB_IDENTITY_MISMATCH")
         # else: same identity — idempotent
 
+    # Run-level error notification
+    run_notification: Optional[Dict[str, Any]] = None
+    if new_status == "ERROR" and current_status not in _FINAL_STATUSES:
+        run_notification = {
+            "event_type":   "QA_RUN_ERROR",
+            "run_id":       run_id,
+            "run_status":   "ERROR",
+            "trigger_type": run.get("trigger_type"),
+            "github_run_id": github_run_id if github_run_id is not None else run.get("github_run_id"),
+            "head_sha":     head_sha or run.get("head_sha"),
+            "error_summary": redact_error_summary(run_error_summary or run.get("error_summary")),
+        }
+
     # Resolve scenario_id → qa_item_id
     scenario_ids = [r["scenario_id"] for r in results]
     resolved: List[Dict[str, Any]] = []
     if scenario_ids:
         items_res = (
             supabase.table("qa_items")
-            .select("id, scenario_id, enabled")
+            .select("id, scenario_id, site_code, name, enabled")
             .in_("scenario_id", scenario_ids)
             .execute()
         )
@@ -738,6 +794,59 @@ def apply_results(
     if conflicts:
         raise HTTPException(409, {"message": "RESULT_CONFLICT", "conflicts": conflicts})
 
+    # Item status transition notifications — N+1 safe: single IN_ bulk history query
+    notifications: List[Dict[str, Any]] = []
+    if to_insert:
+        notify_item_ids = list({r["qa_item_id"] for r in to_insert})
+        hist_res = (
+            supabase.table("qa_run_results")
+            .select("run_id, qa_item_id, result_status, attempt, checked_at")
+            .in_("qa_item_id", notify_item_ids)
+            .execute()
+        )
+        all_hist = hist_res.data or []
+
+        hist_by_item: Dict[str, Dict[str, List]] = defaultdict(lambda: defaultdict(list))
+        for r in all_hist:
+            hist_by_item[r["qa_item_id"]][r["run_id"]].append(r)
+
+        new_by_item: Dict[str, List] = defaultdict(list)
+        for r in to_insert:
+            new_by_item[r["qa_item_id"]].append(r)
+
+        for item_id in notify_item_ids:
+            by_run_existing = dict(hist_by_item[item_id])
+            prev_eff = _latest_run_effective_status(by_run_existing)
+
+            by_run_new: Dict[str, List] = {k: list(v) for k, v in by_run_existing.items()}
+            by_run_new.setdefault(run_id, [])
+            by_run_new[run_id] = list(by_run_existing.get(run_id, [])) + new_by_item[item_id]
+            new_eff = _latest_run_effective_status(by_run_new)
+
+            event_type = _get_transition_event(prev_eff, new_eff)
+            if event_type:
+                item_meta = next(
+                    (i for i in sid_to_item.values() if i["id"] == item_id),
+                    {},
+                )
+                sorted_new = sorted(new_by_item[item_id], key=lambda a: a.get("attempt", 1))
+                last = sorted_new[-1] if sorted_new else {}
+                notifications.append({
+                    "event_type":      event_type,
+                    "qa_item_id":      item_id,
+                    "scenario_id":     item_meta.get("scenario_id"),
+                    "site_code":       item_meta.get("site_code"),
+                    "name":            item_meta.get("name"),
+                    "previous_status": prev_eff,
+                    "new_status":      new_eff,
+                    "run_id":          run_id,
+                    "trigger_type":    run.get("trigger_type"),
+                    "github_run_id":   github_run_id if github_run_id is not None else run.get("github_run_id"),
+                    "head_sha":        head_sha or run.get("head_sha"),
+                    "error_summary":   last.get("error_summary"),
+                    "duration_ms":     last.get("duration_ms"),
+                })
+
     if to_insert:
         supabase.table("qa_run_results").insert(to_insert).execute()
 
@@ -763,4 +872,10 @@ def apply_results(
 
     supabase.table("qa_runs").update(run_patch).eq("id", run_id).execute()
 
-    return {"run_id": run_id, "inserted": len(to_insert), "skipped": skipped}
+    return {
+        "run_id":           run_id,
+        "inserted":         len(to_insert),
+        "skipped":          skipped,
+        "notifications":    notifications,
+        "run_notification": run_notification,
+    }
