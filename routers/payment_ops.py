@@ -29,6 +29,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel as _BaseModel
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
@@ -123,6 +124,243 @@ def _attach_tax_status(supabase, rows: list) -> None:
             r["tax_status"] = "UNKNOWN"
 
 
+def _attach_quote_enrichment(supabase, rows: list) -> None:
+    """각 결제행에 quote_no + product_tier 부여. N+1 금지 — 배치 1쿼리.
+
+    quote_id 없는 행(legacy/non-SAAS) → quote_no=None, product_tier=None.
+    """
+    quote_ids = list({
+        str(r["quote_id"])
+        for r in rows
+        if r.get("quote_id")
+    })
+    if not quote_ids:
+        for r in rows:
+            r.setdefault("quote_no", None)
+            r.setdefault("product_tier", None)
+        return
+
+    q_res = (
+        supabase.table("quotes")
+        .select("id, quote_no, items")
+        .in_("id", quote_ids)
+        .execute()
+    )
+    quote_map: dict = {}
+    for q in (q_res.data or []):
+        qid = str(q.get("id") or "")
+        items = q.get("items") or []
+        tier = None
+        if items and isinstance(items[0], dict):
+            tier = items[0].get("product_tier")
+        quote_map[qid] = {"quote_no": q.get("quote_no"), "product_tier": tier}
+
+    for r in rows:
+        qid = str(r.get("quote_id") or "")
+        info = quote_map.get(qid, {})
+        r["quote_no"] = info.get("quote_no")
+        r["product_tier"] = info.get("product_tier")
+
+
+_MANUAL_RENEWAL_TIERS = frozenset({"MANAGER", "FIELD"})
+_MANUAL_RENEWAL_MONTHS = frozenset({3, 6, 9, 12})
+_PAID_STATUS = frozenset({"PAID", "SUCCESS"})
+
+
+def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
+    """각 결제행에 renewal_eligible + renewal_reason_code 부여. N+1 금지.
+
+    Manual renewal 조건:
+      - product_type=SAAS
+      - payment_type=INITIAL (not RENEWAL/UPGRADE)
+      - product_tier in {MANAGER, FIELD}
+      - period_months in {3,6,9,12}
+      - status_code in {PAID, SUCCESS}
+      - contract_id 존재 + ACTIVE SAAS 계약
+      - 해당 contract의 가장 최근 결제 (not an older payment)
+      - future renewal CV 없음
+    """
+    from services.saas_commercial_version_time_v2 import (
+        find_future_commercial_versions_v2,
+        contract_end_date_to_effective_at_v2,
+    )
+
+    # Pre-filter: only SAAS rows with contract_id are candidates
+    candidates = [
+        r for r in rows
+        if (
+            r.get("product_type") == "SAAS"
+            and r.get("contract_id")
+            and (r.get("payment_type") or "INITIAL").upper() not in {"RENEWAL", "UPGRADE"}
+            and (r.get("product_tier") or "") in _MANUAL_RENEWAL_TIERS
+            and int(r.get("period_months") or 0) in _MANUAL_RENEWAL_MONTHS
+            and (r.get("status_code") or "") in _PAID_STATUS
+        )
+    ]
+
+    # Non-candidates get immediate reason
+    for r in rows:
+        if r not in candidates:
+            pt = r.get("product_type") or ""
+            tier = r.get("product_tier") or ""
+            pm = int(r.get("period_months") or 0)
+            sc = r.get("status_code") or ""
+            ptype = (r.get("payment_type") or "INITIAL").upper()
+            if sc not in _PAID_STATUS:
+                r["renewal_eligible"] = False
+                r["renewal_reason_code"] = "NOT_SUCCESSFUL_PAYMENT"
+            elif pt != "SAAS":
+                r["renewal_eligible"] = False
+                r["renewal_reason_code"] = "NOT_COMMERCIAL_V3"
+            elif pm == 1:
+                r["renewal_eligible"] = False
+                r["renewal_reason_code"] = "RECURRING_MANAGED_AUTOMATICALLY"
+            elif tier == "CUSTOM":
+                r["renewal_eligible"] = False
+                r["renewal_reason_code"] = "CUSTOM_REVIEW_REQUIRED"
+            elif tier not in _MANUAL_RENEWAL_TIERS:
+                r["renewal_eligible"] = False
+                r["renewal_reason_code"] = "NOT_COMMERCIAL_V3"
+            elif pm not in _MANUAL_RENEWAL_MONTHS:
+                r["renewal_eligible"] = False
+                r["renewal_reason_code"] = "NOT_COMMERCIAL_V3"
+            else:
+                r["renewal_eligible"] = False
+                r["renewal_reason_code"] = "NOT_COMMERCIAL_V3"
+
+    if not candidates:
+        return
+
+    # Load ACTIVE SAAS contracts for company (batch)
+    contract_ids = list({str(r["contract_id"]) for r in candidates})
+    ct_res = (
+        supabase.table("contracts")
+        .select("id, status_code, service_type, end_date")
+        .in_("id", contract_ids)
+        .eq("company_id", company_id)
+        .execute()
+    )
+    active_contracts: dict = {
+        str(c["id"]): c.get("end_date")
+        for c in (ct_res.data or [])
+        if c.get("status_code") == "ACTIVE" and c.get("service_type") == "SAAS"
+    }
+
+    # For each contract_id that is ACTIVE, find latest payment for that contract
+    active_candidate_contract_ids = list({
+        str(r["contract_id"]) for r in candidates
+        if str(r["contract_id"]) in active_contracts  # dict key check
+    })
+    latest_pay_map: dict = {}
+    if active_candidate_contract_ids:
+        lp_res = (
+            supabase.table("payments")
+            .select("id, contract_id, paid_at")
+            .in_("contract_id", active_candidate_contract_ids)
+            .in_("status_code", list(_PAID_STATUS))
+            .eq("product_type", "SAAS")
+            .execute()
+        )
+        from collections import defaultdict
+        contract_pays: dict = defaultdict(list)
+        for p in (lp_res.data or []):
+            cid = str(p.get("contract_id") or "")
+            contract_pays[cid].append(p)
+        for cid, pays in contract_pays.items():
+            # latest by paid_at
+            pays.sort(key=lambda x: str(x.get("paid_at") or ""), reverse=True)
+            latest_pay_map[cid] = str(pays[0]["id"]) if pays else None
+
+    # Check future renewal CVs (batch by contract_id)
+    as_of = now_kst()
+    future_renewal_contracts: set = set()
+    if active_candidate_contract_ids:
+        cv_res = (
+            supabase.table("saas_contract_commercial_versions")
+            .select("contract_id, effective_from, superseded_at")
+            .in_("contract_id", active_candidate_contract_ids)
+            .execute()
+        )
+        from collections import defaultdict as _dd
+        cvs_by_contract: dict = _dd(list)
+        for cv in (cv_res.data or []):
+            cvs_by_contract[str(cv.get("contract_id") or "")].append(cv)
+        for cid, cvs in cvs_by_contract.items():
+            if find_future_commercial_versions_v2(cvs, as_of):
+                future_renewal_contracts.add(cid)
+
+    # Assign eligibility
+    for r in candidates:
+        cid = str(r["contract_id"])
+        pid = str(r["id"])
+        if cid not in active_contracts:
+            r["renewal_eligible"] = False
+            r["renewal_reason_code"] = "CONTRACT_NOT_ACTIVE"
+        elif latest_pay_map.get(cid) != pid:
+            r["renewal_eligible"] = False
+            r["renewal_reason_code"] = "NOT_CURRENT_PAYMENT"
+        elif cid in future_renewal_contracts:
+            r["renewal_eligible"] = False
+            r["renewal_reason_code"] = "RENEWAL_ALREADY_SCHEDULED"
+        else:
+            # Temporal window guard
+            end_date = active_contracts.get(cid)
+            if end_date:
+                try:
+                    contract_end_boundary = contract_end_date_to_effective_at_v2(end_date)
+                    if as_of >= contract_end_boundary:
+                        r["renewal_eligible"] = False
+                        r["renewal_reason_code"] = "RENEWAL_WINDOW_CLOSED"
+                        continue
+                except Exception:  # noqa: BLE001 — fail-open on parse error
+                    pass
+            r["renewal_eligible"] = True
+            r["renewal_reason_code"] = "ELIGIBLE"
+
+
+class RenewalQuoteBody(_BaseModel):
+    payment_months: int
+
+
+@router.post("/{payment_id}/renewal/quote")
+def create_renewal_quote_endpoint(
+    payment_id: str,
+    body: RenewalQuoteBody,
+    current_user: dict = Depends(get_current_user),
+):
+    """기존 V3 ACTIVE 계약 → Renewal Frozen Quote 발행.
+
+    client는 contract_id/product_tier/amount를 전달하지 않는다.
+    server가 payment → contract → CV → site_scopes를 파생한다.
+    allowed payment_months: 3 / 6 / 9 / 12
+    """
+    company_id = current_user.get("company_id")
+    if not company_id:
+        raise HTTPException(status_code=403, detail="소속 회사가 없습니다.")
+
+    from services.saas_renewal_quote_svc import SaasRenewalQuoteError, create_renewal_quote
+    from services.saas_quote_v2 import SaasQuoteV2Error
+    from services.saas_quote_site_scope_v2 import QuoteSiteScopeError
+
+    supabase = get_supabase()
+    try:
+        quote = create_renewal_quote(
+            supabase,
+            payment_id=payment_id,
+            company_id=company_id,
+            user_id=current_user["id"],
+            payment_months=body.payment_months,
+        )
+    except SaasRenewalQuoteError as exc:
+        raise HTTPException(status_code=exc.http_status, detail={"code": exc.code, "message": exc.message})
+    except SaasQuoteV2Error as exc:
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": exc.message})
+    except QuoteSiteScopeError as exc:
+        raise HTTPException(status_code=exc.http_status, detail={"code": exc.code, "message": exc.message})
+
+    return {"status": "success", "data": {"quote_id": quote["id"], "quote_no": quote.get("quote_no")}}
+
+
 @router.get("")
 def list_payments(
     user_id: Optional[str] = Query(None),
@@ -200,7 +438,8 @@ def list_my_payments(
     q = (
         supabase.table("payments")
         .select(
-            "id, product_type, plan_code, "
+            "id, product_type, plan_code, payment_type, "
+            "quote_id, contract_id, subscription_id, charge_cycle, "
             "total_amount, supply_amount, vat_amount, "
             "status_code, service_status, "
             "pg_method, proof_type, "
@@ -220,6 +459,8 @@ def list_my_payments(
     total = res.count or 0
     rows = res.data or []
     _attach_tax_status(supabase, rows)
+    _attach_quote_enrichment(supabase, rows)
+    _attach_renewal_eligibility(supabase, rows, company_id)
     return {
         "status": "success",
         "data": {

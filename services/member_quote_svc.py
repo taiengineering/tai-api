@@ -186,7 +186,7 @@ def create_custom_quote(supabase, company_id, created_by, service_type, sector, 
 
 
 _LIST_COLS = ("id, quote_no, service_type, status_code, source, items, "
-              "supply_amount, vat_amount, total_amount, created_by, created_at")
+              "supply_amount, vat_amount, total_amount, created_by, created_at, survey_data")
 
 
 def list_member_quotes(supabase, company_id: Optional[str], page: int, page_size: int) -> Dict[str, Any]:
