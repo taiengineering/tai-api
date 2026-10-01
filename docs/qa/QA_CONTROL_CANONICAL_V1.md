@@ -1,9 +1,9 @@
 # QA Control Canonical Contract v1
 
-**WO:** WO-QA-CONTROL-PHASE2A-001 + PATCH-2A-01  
-**Status:** READY FOR OWNER REVIEW  
-**Date:** 2026-10-01  
-**Migration:** `supabase/migrations/20261001000000_create_qa_control_canonical_v1.sql`  
+**WO:** WO-QA-CONTROL-PHASE2A-001 + PATCH-2A-01 + PATCH-2A-02
+**Status:** READY FOR OWNER REVIEW
+**Date:** 2026-10-01
+**Migration:** `supabase/migrations/20261001000000_create_qa_control_canonical_v1.sql`
 **Seed:** `supabase/migrations/20261001000001_seed_qa_items_p0.sql`
 
 ---
@@ -55,7 +55,7 @@ Phase 2-A scope: DB contract only. API / Scheduler / Admin Front 구현은 별�
 | enabled | boolean | NO | DEFAULT false |
 | frequency_type | text | NO | MANUAL/MINUTES/HOURLY/DAILY/WEEKLY |
 | frequency_value | integer | YES | > 0. MINUTES/HOURLY에서 필수 |
-| anchor_time | time | YES | DAILY/WEEKLY에서 필수. MINUTES/HOURLY는 NULL/값 문제 없음 |
+| anchor_time | time | YES | DAILY/WEEKLY에서 필수. MINUTES/HOURLY는 NULL/값 모두 허용 |
 | day_of_week | smallint | YES | 0=Sun…6=Sat. WEEKLY에서 필수 |
 | timezone | text | NO | DEFAULT 'Asia/Seoul' |
 | next_run_at | timestamptz | YES | 스케줄러가 계산 |
@@ -83,7 +83,7 @@ Phase 2-A scope: DB contract only. API / Scheduler / Admin Front 구현은 별�
 | trigger_type | text | NO | CHECK: SCHEDULE/MANUAL/PR/RETRY |
 | run_status | text | NO | DEFAULT 'QUEUED'. CHECK: QUEUED/RUNNING/COMPLETED/ERROR/CANCELED |
 | github_run_id | bigint | YES | non-NULL 중복 금지 (partial unique index) |
-| github_run_attempt | integer | YES | |
+| github_run_attempt | integer | YES | **CHECK: IS NULL OR >= 1** (PATCH-2A-02) |
 | head_sha | text | YES | |
 | branch_name | text | YES | |
 | requested_by | text | YES | |
@@ -104,7 +104,7 @@ Phase 2-A scope: DB contract only. API / Scheduler / Admin Front 구현은 별�
 | id | uuid PK | NO | |
 | run_id | uuid FK→qa_runs | NO | |
 | qa_item_id | uuid FK→qa_items | NO | |
-| ordinal | integer | YES | 실행 순서 힌트. NULL = 순서 제한 없음 |
+| ordinal | integer | YES | 실행 순서 힌트. NULL = 순서 제한 없음. **CHECK: IS NULL OR >= 1** (PATCH-2A-02) |
 | created_at | timestamptz | NO | |
 
 UNIQUE: `(run_id, qa_item_id)` — 같은 run에 같은 항목 중복 금지.
@@ -137,6 +137,12 @@ QUEUED/RUNNING 상태에서도 대상 QA 항목을 DB에서 식별 가능.
 | created_at | timestamptz | NO | |
 
 UNIQUE: `(run_id, qa_item_id, attempt)` — retry별 row 독립 보존.
+
+**Composite FK** (`qa_run_results_target_fk`, PATCH-2A-02):
+```
+FOREIGN KEY (run_id, qa_item_id) REFERENCES qa_run_targets(run_id, qa_item_id)
+```
+→ result는 반드시 해당 run의 target에 존재하는 항목이어야 한다. target 밖 항목 INSERT는 DB FK 오류.
 
 ---
 
@@ -264,10 +270,20 @@ qa_items.id (1) ──→ (N) qa_run_targets.qa_item_id
 qa_items.id (1) ──→ (N) qa_run_results.qa_item_id
 ```
 
-**에제:**
+**Request/Evidence Integrity (PATCH-2A-02):**
 ```
-QUEUED / RUNNING 상태에서는 qa_run_results가 없다.
-다만 qa_run_targets로 대상 QA 항목은 파악 가능.
+qa_run_results(run_id, qa_item_id)
+    → FK → qa_run_targets(run_id, qa_item_id)
+```
+
+- result는 반드시 target을 참조해야 한다.
+- target에 없는 qa_item의 result는 DB에서 INSERT 불가 (FK 차단).
+- request side(target)와 evidence side(result)의 정합성은 DB FK가 보장.
+
+**상태별 조회 패턴:**
+```
+QUEUED / RUNNING:  qa_run_targets로 대상 QA 항목 파악 (qa_run_results 없음)
+COMPLETED:         qa_run_results로 실제 결과 조회 (target 범위 내 보장)
 ```
 
 ---
@@ -294,7 +310,7 @@ tai-api service_role = DB 접근 authority
 browser = QA 테이블 접근 금지
 ```
 
-**secret/token 저장 금지 콼럼:**
+**secret/token 저장 금지 컬럼:**
 - `artifact_ref`: 내부 reference만 (GitHub artifact ID / storage key). signed URL 저장 금지.
 - `error_summary`: 예외 메시지 원문 노출 최소화.
 
@@ -319,7 +335,7 @@ Phase 2-E: DB Scheduler가 authority 이전. GitHub cron 유지/제거 별도 �
 ## 10. Phase 2-B Handoff
 
 Phase 2-A 완료 체크리스트:
-- [x] Canonical 5-table contract 확정 (4으로 시작, PATCH-2A-01에서 5개로 확정)
+- [x] Canonical 5-table contract 확정 (PATCH-2A-01에서 5개로 확정)
 - [x] status/check constraint 확정
 - [x] Run / Target / Result 3분리 완료
 - [x] FLAKY 표현 가능 구조 (raw attempts 보존)
@@ -331,6 +347,9 @@ Phase 2-A 완료 체크리스트:
 - [x] legacy 3 table untouched
 - [x] migration 작성
 - [x] contract 문서 작성
+- [x] result→target composite FK (PATCH-2A-02)
+- [x] ordinal >= 1 CHECK (PATCH-2A-02)
+- [x] github_run_attempt >= 1 CHECK (PATCH-2A-02)
 - [ ] production DB apply (Owner Approval 대기)
 - [ ] verification V1~V13+ dynamic (apply 후 실행)
 
