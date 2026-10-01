@@ -69,10 +69,20 @@ EVENT_TYPE_CHANNEL = {
 }
 
 # WO-SLACK-EVENT-HUB-001 PR-③: event_type → admin 링크 (전부 LIST · 딥링크 미지원 확인됨).
-# 이 매핑에 있는 event_type 은, 호출부가 blocks 를 제공하지 않은 경우에만 dispatcher 가
-# text + "어드민에서 보기" 버튼 블록을 자동 조립한다. 호출부가 blocks 를 제공하면
-# (INQUIRY/WISH 의 build_blocks 경로) 버튼 append 를 하지 않는다(중복 방지).
+# 일반 경로: 호출부가 blocks 를 제공하지 않은 경우에만 dispatcher 가 text + 버튼 블록 조립.
+# 예외: QA_ADMIN_BUTTON_EVENTS — 호출부가 section-only blocks 를 제공해도 admin button 추가.
+#       (qa_notify_svc 는 section block 만 조립하고 버튼 추가는 dispatcher 에 위임)
+# INQUIRY/WISH 등 기존 이벤트는 caller blocks 를 byte-semantic 그대로 통과한다(회귀 0).
 ADMIN_BASE_URL = "https://admin.taieng.co.kr"
+
+# QA 이벤트만 blocks 경로에서도 admin button 자동 append (나머지 caller blocks 는 불변).
+QA_ADMIN_BUTTON_EVENTS = {
+    "QA_FAIL_DETECTED",
+    "QA_BLOCKED_DETECTED",
+    "QA_FLAKY_DETECTED",
+    "QA_RECOVERED",
+    "QA_RUN_ERROR",
+}
 EVENT_TYPE_ADMIN_PATH = {
     "INQUIRY_CREATED":          "/inquiry-list",
     "TAI_WISH_CREATED":         "/inquiry-list",
@@ -183,9 +193,13 @@ async def send_slack(
     admin_path = EVENT_TYPE_ADMIN_PATH.get(event_type)
     if blocks:
         payload["blocks"] = list(blocks)
-        # Append admin button when path exists and blocks don't already contain an
-        # actions block (INQUIRY/WISH build their own buttons — no duplicate).
-        if admin_path and not any(b.get("type") == "actions" for b in blocks):
+        # QA events: caller provides section-only blocks; dispatcher appends admin button.
+        # All other events: caller blocks passed through unchanged (no button injection).
+        if (
+            event_type in QA_ADMIN_BUTTON_EVENTS
+            and admin_path
+            and not any(b.get("type") == "actions" for b in blocks)
+        ):
             payload["blocks"] = list(blocks) + [{
                 "type": "actions",
                 "elements": [{

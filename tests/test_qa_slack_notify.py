@@ -750,3 +750,101 @@ def test_QF05_notify_formatter_only():
     assert "SLACK_CH_" not in src
     assert "chat.postMessage" not in src
     assert "slack.com/api" not in src
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Regression: legacy Slack Event Hub blocks contract (PR1/2/3 회귀 방지)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_slack_interceptor(monkeypatch, channel_env_key: str, channel_env_val: str):
+    """Returns captured dict; installs httpx mock + required env."""
+    import services.slack_dispatcher as sd
+    captured: dict = {}
+
+    class _FakeResp:
+        status_code = 200
+        def json(self): return {"ok": True}
+
+    class _FakeClient:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def post(self, url, *, headers, json):
+            captured["payload"] = json
+            return _FakeResp()
+
+    monkeypatch.setattr("services.slack_dispatcher.httpx.AsyncClient", lambda **k: _FakeClient())
+    monkeypatch.setenv("SLACK_BOT_TOKEN1", "xoxb-test")
+    monkeypatch.setenv(channel_env_key, channel_env_val)
+    monkeypatch.setenv("SLACK_WEBHOOK_ENABLED", "true")
+    return captured
+
+
+def test_R1_inquiry_section_blocks_unchanged(monkeypatch):
+    """INQUIRY_CREATED + section-only blocks → payload.blocks unchanged (no button inject)."""
+    captured = _make_slack_interceptor(monkeypatch, "SLACK_CH_INQUIRY", "C_INQUIRY")
+    from services.slack_dispatcher import send_slack
+    input_blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": "inquiry"}}]
+    asyncio.run(send_slack(
+        event_type="INQUIRY_CREATED", severity="INFO",
+        title="New Inquiry", blocks=input_blocks,
+    ))
+    assert captured["payload"]["blocks"] == input_blocks
+
+
+def test_R2_inquiry_existing_actions_no_duplicate(monkeypatch):
+    """INQUIRY_CREATED + blocks with actions → exactly 1 actions block (no duplicate)."""
+    captured = _make_slack_interceptor(monkeypatch, "SLACK_CH_INQUIRY", "C_INQUIRY")
+    from services.slack_dispatcher import send_slack
+    input_blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": "text"}},
+        {"type": "actions", "elements": [
+            {"type": "button", "text": {"type": "plain_text", "text": "바로가기"},
+             "url": "https://admin.taieng.co.kr/inquiry-list"},
+        ]},
+    ]
+    asyncio.run(send_slack(
+        event_type="INQUIRY_CREATED", severity="INFO",
+        title="New Inquiry", blocks=input_blocks,
+    ))
+    action_blocks = [b for b in captured["payload"]["blocks"] if b.get("type") == "actions"]
+    assert len(action_blocks) == 1
+
+
+def test_R3_qa_fail_section_blocks_gets_admin_button(monkeypatch):
+    """QA_FAIL_DETECTED + section-only blocks → payload contains admin actions button."""
+    captured = _make_slack_interceptor(monkeypatch, "SLACK_CH_ALERT", "C_ALERT")
+    from services.slack_dispatcher import send_slack
+    from services.qa_notify_svc import build_qa_slack_payload
+    notif = {
+        "event_type": "QA_FAIL_DETECTED", "qa_item_id": "item-1",
+        "scenario_id": "P0-001", "site_code": "WWW", "name": "Login",
+        "previous_status": "PASS", "new_status": "FAIL",
+        "run_id": "run-1", "trigger_type": "MANUAL",
+        "github_run_id": None, "head_sha": None,
+        "error_summary": None, "duration_ms": None,
+    }
+    payload = build_qa_slack_payload(notif)
+    asyncio.run(send_slack(**payload))
+    action_blocks = [b for b in captured["payload"]["blocks"] if b.get("type") == "actions"]
+    assert len(action_blocks) == 1
+    assert action_blocks[0]["elements"][0]["url"].endswith("/auto-qa-dashboard")
+
+
+def test_R4_qa_flaky_section_blocks_gets_admin_button(monkeypatch):
+    """QA_FLAKY_DETECTED + section-only blocks → payload contains admin actions button."""
+    captured = _make_slack_interceptor(monkeypatch, "SLACK_CH_OPS", "C_OPS")
+    from services.slack_dispatcher import send_slack
+    from services.qa_notify_svc import build_qa_slack_payload
+    notif = {
+        "event_type": "QA_FLAKY_DETECTED", "qa_item_id": "item-1",
+        "scenario_id": "P0-002", "site_code": "WWW", "name": "Search",
+        "previous_status": "PASS", "new_status": "FLAKY",
+        "run_id": "run-1", "trigger_type": "MANUAL",
+        "github_run_id": None, "head_sha": None,
+        "error_summary": None, "duration_ms": None,
+    }
+    payload = build_qa_slack_payload(notif)
+    asyncio.run(send_slack(**payload))
+    action_blocks = [b for b in captured["payload"]["blocks"] if b.get("type") == "actions"]
+    assert len(action_blocks) == 1
+    assert action_blocks[0]["elements"][0]["url"].endswith("/auto-qa-dashboard")
