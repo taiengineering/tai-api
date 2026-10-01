@@ -1,0 +1,132 @@
+---
+title: QA Slack Alert V1
+version: 1.0.0
+work_order: WO-QA-CONTROL-PHASE2C-001
+status: IMPLEMENTED
+---
+
+# QA Slack Alert V1
+
+## Architecture
+
+```
+routers/internal_qa.py          ← orchestrator (async)
+    │
+    ├─► services/qa_control_svc.py   ← transition calc, notification payload assembly
+    │         apply_results()
+    │         returns: { notifications: [...], run_notification: {...} | None }
+    │
+    ├─► services/qa_notify_svc.py    ← formatter only (no HTTP, no credentials)
+    │         build_qa_slack_payload(notif, *, is_run=False)
+    │         returns: { event_type, severity, title, detail, blocks }
+    │
+    └─► services/slack_dispatcher.py ← existing Slack client (unchanged routing logic)
+              send_slack(**payload)
+```
+
+No new Slack client. `qa_notify_svc` holds zero credentials and makes zero HTTP calls.
+
+## Status Transition Contract
+
+`_latest_run_effective_status(by_run)` finds the run with the latest `checked_at` and derives:
+
+| Attempts in that run                | Effective status |
+|-------------------------------------|-----------------|
+| Any attempt = BLOCKED               | BLOCKED          |
+| Final attempt = FAIL                | FAIL             |
+| Final attempt = PASS + earlier FAIL | FLAKY            |
+| Final attempt = PASS only           | PASS             |
+| Final attempt = SKIPPED             | SKIPPED          |
+| No results at all                   | NEVER_RUN        |
+
+"Final attempt" = the attempt with the highest `attempt` number in that run.
+
+## Event Types
+
+| Event                 | Trigger (prev → new)                                              | Severity |
+|-----------------------|-------------------------------------------------------------------|----------|
+| `QA_FAIL_DETECTED`    | NEVER_RUN/PASS/SKIPPED → FAIL                                     | HIGH     |
+| `QA_BLOCKED_DETECTED` | NEVER_RUN/PASS/SKIPPED/FAIL/FLAKY → BLOCKED                       | HIGH     |
+| `QA_FLAKY_DETECTED`   | NEVER_RUN/PASS/SKIPPED → FLAKY                                    | WARNING  |
+| `QA_RECOVERED`        | FAIL/BLOCKED/FLAKY → PASS                                         | INFO     |
+| `QA_RUN_ERROR`        | run_status=ERROR transition (QUEUED/RUNNING → ERROR)              | HIGH     |
+
+No notification is emitted for:
+- FAIL → FAIL (持続)
+- BLOCKED → BLOCKED
+- PASS → PASS
+- Any → SKIPPED
+- FAIL/FLAKY → FLAKY
+
+## Severity / Channel Mapping
+
+QA events use severity-based routing (NOT `EVENT_TYPE_CHANNEL`):
+
+| Severity | Channel        |
+|----------|----------------|
+| HIGH     | `#tai-alert`   |
+| WARNING  | `#tai-ops`     |
+| INFO     | `#tai-ops`     |
+
+`QA_FAIL_DETECTED`, `QA_BLOCKED_DETECTED`, `QA_RUN_ERROR` → HIGH → `#tai-alert`
+`QA_FLAKY_DETECTED` → WARNING → `#tai-ops`
+`QA_RECOVERED` → INFO → `#tai-ops`
+
+## Replay Suppression
+
+Notification is suppressed when `prev_eff == new_eff`:
+
+1. **Exact replay**: identical payload already inserted (idempotency skip) → `to_insert` is empty → no history query → no notification.
+2. **Stale callback**: incoming result belongs to an older run whose `checked_at` is earlier than a newer run already in DB → `_latest_run_effective_status` returns the newer run's status both before and after → same prev/new → no notification.
+
+## Run Error Notification
+
+`run_notification` is populated when `new_status == "ERROR"` and the run is not already in a final state. It carries `event_type = "QA_RUN_ERROR"` and is dispatched separately after the per-item `notifications` loop.
+
+`is_run=True` is passed to `build_qa_slack_payload` → item-specific fields (site_code, scenario_id, name, status transition) are omitted from the Slack block.
+
+## Message Contract
+
+`build_qa_slack_payload` returns:
+
+```python
+{
+    "event_type": str,   # e.g. "QA_FAIL_DETECTED"
+    "severity":   str,   # "HIGH" | "WARNING" | "INFO"
+    "title":      str,   # Korean title string
+    "detail":     "",    # always empty (fields are in blocks)
+    "blocks":     [{"type": "section", "text": {"type": "mrkdwn", "text": ...}}],
+}
+```
+
+Block text includes (per-item): severity header, site_code, scenario_id, name, status transition, trigger_type, run_id, github_run_id, head_sha (first 8 chars), duration_ms, error_summary.
+
+## Security / Redaction
+
+Error details are inherited from `qa_run_results.error_summary` which is already redacted at the ingestion layer (`routers/internal_qa.py` truncation/redaction). `qa_notify_svc` passes `error_summary` verbatim from the notification dict — no additional processing.
+
+## Slack Fail-Safe
+
+```python
+try:
+    sent = await send_slack(**payload)
+except Exception as exc:
+    log.warning("[qa_notify] Slack exception: %s", exc)
+```
+
+Slack failure never raises to the caller. The callback always returns HTTP 200 with `data` intact. `slack.failed` counter in the response reflects send failures.
+
+## Admin Link
+
+All five QA event types resolve to `/auto-qa-dashboard` via `EVENT_TYPE_ADMIN_PATH` in `slack_dispatcher.py`. Since `qa_notify_svc` always provides `blocks`, the dispatcher's button auto-assembly path (`else` branch) is **not** taken — blocks are rendered as-is without an "어드민에서 보기" button appended.
+
+## Known Limitation — No Persistent Outbox
+
+Slack dispatch is fire-and-send with no retry queue. A transient Slack API failure causes a silent drop (warning log only). A persistent outbox / retry mechanism is deferred to Phase 2-D.
+
+## Phase 2-D Handoff
+
+- Persistent Slack outbox with retry
+- Admin QA Dashboard UI path update (if `/auto-qa-dashboard` changes)
+- Per-item mute / suppression rules
+- QA_RUN_COMPLETED event (run-level success notification)

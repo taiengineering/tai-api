@@ -79,6 +79,12 @@ EVENT_TYPE_ADMIN_PATH = {
     "QUOTE_MANUAL_REQUESTED":   "/quote-list",
     "FREE_DIAGNOSIS_COMPLETED": "/anon-diagnosis-list",
     # APPROVAL_CREATED — source deferred, path 미할당
+    # QA events — Phase 2-D Admin QA UI 개편 시 path 변경 가능
+    "QA_FAIL_DETECTED":    "/auto-qa-dashboard",
+    "QA_BLOCKED_DETECTED": "/auto-qa-dashboard",
+    "QA_FLAKY_DETECTED":   "/auto-qa-dashboard",
+    "QA_RECOVERED":        "/auto-qa-dashboard",
+    "QA_RUN_ERROR":        "/auto-qa-dashboard",
 }
 
 # severity → 이모지
