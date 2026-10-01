@@ -30,33 +30,34 @@ No new Slack client. `qa_notify_svc` holds zero credentials and makes zero HTTP 
 
 `_latest_run_effective_status(by_run)` finds the run with the latest `checked_at` and derives:
 
-| Attempts in that run                | Effective status |
+| Final attempt status                | Effective status |
 |-------------------------------------|-----------------|
-| Any attempt = BLOCKED               | BLOCKED          |
-| Final attempt = FAIL                | FAIL             |
-| Final attempt = PASS + earlier FAIL | FLAKY            |
-| Final attempt = PASS only           | PASS             |
-| Final attempt = SKIPPED             | SKIPPED          |
+| FAIL                                | FAIL             |
+| PASS + any earlier attempt = FAIL   | FLAKY            |
+| PASS only                           | PASS             |
+| BLOCKED                             | BLOCKED          |
+| SKIPPED                             | SKIPPED          |
 | No results at all                   | NEVER_RUN        |
 
 "Final attempt" = the attempt with the highest `attempt` number in that run.
+Derived by `derive_effective_status` in `qa_control_svc.py`.
 
 ## Event Types
 
 | Event                 | Trigger (prev → new)                                              | Severity |
 |-----------------------|-------------------------------------------------------------------|----------|
-| `QA_FAIL_DETECTED`    | NEVER_RUN/PASS/SKIPPED → FAIL                                     | HIGH     |
+| `QA_FAIL_DETECTED`    | NEVER_RUN/PASS/SKIPPED/BLOCKED/FLAKY → FAIL                       | HIGH     |
 | `QA_BLOCKED_DETECTED` | NEVER_RUN/PASS/SKIPPED/FAIL/FLAKY → BLOCKED                       | HIGH     |
-| `QA_FLAKY_DETECTED`   | NEVER_RUN/PASS/SKIPPED → FLAKY                                    | WARNING  |
+| `QA_FLAKY_DETECTED`   | NEVER_RUN/PASS/SKIPPED/FAIL/BLOCKED → FLAKY                       | WARNING  |
 | `QA_RECOVERED`        | FAIL/BLOCKED/FLAKY → PASS                                         | INFO     |
 | `QA_RUN_ERROR`        | run_status=ERROR transition (QUEUED/RUNNING → ERROR)              | HIGH     |
 
 No notification is emitted for:
-- FAIL → FAIL (持続)
+- FAIL → FAIL
 - BLOCKED → BLOCKED
 - PASS → PASS
+- FLAKY → FLAKY
 - Any → SKIPPED
-- FAIL/FLAKY → FLAKY
 
 ## Severity / Channel Mapping
 
@@ -118,7 +119,9 @@ Slack failure never raises to the caller. The callback always returns HTTP 200 w
 
 ## Admin Link
 
-All five QA event types resolve to `/auto-qa-dashboard` via `EVENT_TYPE_ADMIN_PATH` in `slack_dispatcher.py`. Since `qa_notify_svc` always provides `blocks`, the dispatcher's button auto-assembly path (`else` branch) is **not** taken — blocks are rendered as-is without an "어드민에서 보기" button appended.
+All five QA event types resolve to `/auto-qa-dashboard` via `EVENT_TYPE_ADMIN_PATH` in `slack_dispatcher.py`.
+
+`qa_notify_svc` provides a section-only `blocks` list. `slack_dispatcher` detects no `actions` block in QA payloads and appends the "어드민에서 보기" button pointing to `https://admin.taieng.co.kr/auto-qa-dashboard`. Events that already include an `actions` block in their provided `blocks` (e.g., INQUIRY/WISH) are not modified — no duplicate button.
 
 ## Known Limitation — No Persistent Outbox
 

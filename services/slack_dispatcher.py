@@ -180,13 +180,23 @@ async def send_slack(
         text += f"\n> {detail}"
 
     payload = {"channel": channel_id, "text": text, "unfurl_links": False}
+    admin_path = EVENT_TYPE_ADMIN_PATH.get(event_type)
     if blocks:
-        # 호출부가 blocks 를 제공한 경로(INQUIRY/WISH · build_blocks) — 버튼 append 금지(중복 방지).
-        payload["blocks"] = blocks
+        payload["blocks"] = list(blocks)
+        # Append admin button when path exists and blocks don't already contain an
+        # actions block (INQUIRY/WISH build their own buttons — no duplicate).
+        if admin_path and not any(b.get("type") == "actions" for b in blocks):
+            payload["blocks"] = list(blocks) + [{
+                "type": "actions",
+                "elements": [{
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "어드민에서 보기"},
+                    "url": f"{ADMIN_BASE_URL}{admin_path}",
+                }],
+            }]
     else:
         # QUOTE/FREE 처럼 blocks 없이 들어오는 이벤트: text + "어드민에서 보기" 버튼 자동 조립.
         # 매핑에 없는 event_type(alert/ops/engine 등)은 text-only 유지(회귀 0).
-        admin_path = EVENT_TYPE_ADMIN_PATH.get(event_type)
         if admin_path:
             payload["blocks"] = [
                 {"type": "section", "text": {"type": "mrkdwn", "text": text}},

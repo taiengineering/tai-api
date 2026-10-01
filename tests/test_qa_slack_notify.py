@@ -511,6 +511,99 @@ def test_QS07_no_qa_channel_override():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# QS-08: QA_FAIL_DETECTED blocks → actual payload contains admin button
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QS08_qa_admin_button_in_payload(monkeypatch):
+    import asyncio
+    captured: dict = {}
+
+    class _FakeResp:
+        status_code = 200
+        def json(self): return {"ok": True}
+
+    class _FakeClient:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def post(self, url, *, headers, json):
+            captured["payload"] = json
+            return _FakeResp()
+
+    monkeypatch.setattr("services.slack_dispatcher.httpx.AsyncClient", lambda **k: _FakeClient())
+    monkeypatch.setenv("SLACK_BOT_TOKEN1", "xoxb-test")
+    monkeypatch.setenv("SLACK_CH_ALERT", "C_ALERT")
+    monkeypatch.setenv("SLACK_CH_OPS", "C_OPS")
+    monkeypatch.setenv("SLACK_WEBHOOK_ENABLED", "true")
+
+    from services.slack_dispatcher import send_slack
+    from services.qa_notify_svc import build_qa_slack_payload
+
+    for evt in ("QA_FAIL_DETECTED", "QA_FLAKY_DETECTED"):
+        captured.clear()
+        notif = {
+            "event_type": evt, "qa_item_id": "item-1",
+            "scenario_id": "P0-001", "site_code": "WWW", "name": "Login",
+            "previous_status": "PASS", "new_status": "FAIL",
+            "run_id": "run-1", "trigger_type": "MANUAL",
+            "github_run_id": None, "head_sha": None,
+            "error_summary": None, "duration_ms": None,
+        }
+        payload = build_qa_slack_payload(notif)
+        asyncio.run(send_slack(**payload))
+
+        blocks = captured["payload"]["blocks"]
+        action_blocks = [b for b in blocks if b.get("type") == "actions"]
+        assert len(action_blocks) == 1, f"{evt}: actions block must exist"
+        btn = action_blocks[0]["elements"][0]
+        assert btn["url"].endswith("/auto-qa-dashboard"), f"{evt}: wrong URL"
+        assert btn["text"]["text"] == "어드민에서 보기", f"{evt}: wrong button text"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QS-09: INQUIRY_CREATED blocks (already has actions) → no duplicate button
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QS09_inquiry_blocks_no_button_duplicate(monkeypatch):
+    import asyncio
+    captured: dict = {}
+
+    class _FakeResp:
+        status_code = 200
+        def json(self): return {"ok": True}
+
+    class _FakeClient:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def post(self, url, *, headers, json):
+            captured["payload"] = json
+            return _FakeResp()
+
+    monkeypatch.setattr("services.slack_dispatcher.httpx.AsyncClient", lambda **k: _FakeClient())
+    monkeypatch.setenv("SLACK_BOT_TOKEN1", "xoxb-test")
+    monkeypatch.setenv("SLACK_CH_INQUIRY", "C_INQUIRY")
+    monkeypatch.setenv("SLACK_WEBHOOK_ENABLED", "true")
+
+    from services.slack_dispatcher import send_slack
+
+    existing_blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": "inquiry text"}},
+        {"type": "actions", "elements": [{
+            "type": "button",
+            "text": {"type": "plain_text", "text": "바로가기"},
+            "url": "https://admin.taieng.co.kr/inquiry-list",
+        }]},
+    ]
+    asyncio.run(send_slack(
+        event_type="INQUIRY_CREATED", severity="HIGH",
+        title="New Inquiry", blocks=existing_blocks,
+    ))
+
+    blocks = captured["payload"]["blocks"]
+    action_blocks = [b for b in blocks if b.get("type") == "actions"]
+    assert len(action_blocks) == 1, "must not duplicate actions block"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # QF-01: Slack success → callback 200, sent=1
 # ─────────────────────────────────────────────────────────────────────────────
 
