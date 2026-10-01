@@ -12,6 +12,7 @@ ON public.quotes (
 WHERE source = 'member_auto'
   AND service_type = 'SAAS'
   AND status_code = 'ISSUED'
+  AND is_active IS TRUE
   AND survey_data ? 'commercial_v3_renewal';
 
 -- Renewal Payment 중복 결제 방지 — 같은 Renewal Quote당 하나의 활성 Payment만 허용

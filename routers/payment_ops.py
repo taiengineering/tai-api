@@ -174,9 +174,9 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
       - product_type=SAAS
       - payment_type not in {UPGRADE}  (INITIAL + RENEWAL 모두 anchor 가능)
       - status_code in {PAID, SUCCESS}
-      - contract_id 존재 + ACTIVE SAAS 계약
+      - contract_id 존재 + ACTIVE SAAS is_active=true 계약 + end_date 필수
       - current CV 기반: tier in {MANAGER,FIELD}, payment_months in {3,6,9,12}, not recurring(pm=1), not CUSTOM
-      - 해당 contract의 가장 최근 SAAS PAID/SUCCESS non-UPGRADE 결제
+      - 해당 contract의 가장 최근 SAAS PAID/SUCCESS non-UPGRADE 결제 (timezone-aware sort)
       - future renewal CV 없음
     """
     from services.saas_commercial_version_time_v2 import (
@@ -185,7 +185,10 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
         contract_end_date_to_effective_at_v2,
         TemporalVersionError,
     )
+    from services.saas_renewal_quote_svc import _parse_paid_at
     from collections import defaultdict
+
+    _SENTINEL_NO_VALID_PAID_AT = "__NO_VALID_PAID_AT__"
 
     # ── Step 1: Basic pre-filter — SAAS + contract + PAID + not UPGRADE ──────
     candidates = [
@@ -203,7 +206,6 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
         if r not in candidates:
             sc = r.get("status_code") or ""
             pt = r.get("product_type") or ""
-            ptype = (r.get("payment_type") or "INITIAL").upper()
             if sc not in _PAID_STATUS:
                 r["renewal_eligible"] = False
                 r["renewal_reason_code"] = "NOT_SUCCESSFUL_PAYMENT"
@@ -219,11 +221,11 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
 
     as_of = now_kst()
 
-    # ── Step 2: Load ACTIVE SAAS contracts ────────────────────────────────────
+    # ── Step 2: Load ACTIVE SAAS is_active=true contracts ─────────────────────
     contract_ids = list({str(r["contract_id"]) for r in candidates})
     ct_res = (
         supabase.table("contracts")
-        .select("id, status_code, service_type, end_date")
+        .select("id, status_code, service_type, is_active, end_date")
         .in_("id", contract_ids)
         .eq("company_id", company_id)
         .execute()
@@ -231,7 +233,9 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
     active_contracts: dict = {
         str(c["id"]): c.get("end_date")
         for c in (ct_res.data or [])
-        if c.get("status_code") == "ACTIVE" and c.get("service_type") == "SAAS"
+        if (c.get("status_code") == "ACTIVE"
+            and c.get("service_type") == "SAAS"
+            and c.get("is_active") is True)
     }
 
     active_candidate_contract_ids = list({
@@ -264,7 +268,7 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
         if find_future_commercial_versions_v2(cvs, as_of):
             future_renewal_contracts.add(cid)
 
-    # ── Step 5: Latest SAAS paid payment per contract (include RENEWAL, exclude UPGRADE)
+    # ── Step 5: Latest SAAS paid payment per contract — timezone-aware sort ────
     latest_pay_map: dict = {}
     if active_candidate_contract_ids:
         lp_res = (
@@ -283,8 +287,18 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
             cid = str(p.get("contract_id") or "")
             contract_pays[cid].append(p)
         for cid, pays in contract_pays.items():
-            pays.sort(key=lambda x: str(x.get("paid_at") or ""), reverse=True)
-            latest_pay_map[cid] = str(pays[0]["id"]) if pays else None
+            timed: list = []
+            for p in pays:
+                try:
+                    dt = _parse_paid_at(p.get("paid_at"))
+                    timed.append((dt, str(p.get("id") or "")))
+                except Exception:  # noqa: BLE001 — skip invalid paid_at
+                    continue
+            if timed:
+                timed.sort(key=lambda x: x[0], reverse=True)
+                latest_pay_map[cid] = timed[0][1]
+            else:
+                latest_pay_map[cid] = _SENTINEL_NO_VALID_PAID_AT
 
     # ── Step 6: Assign eligibility per candidate ──────────────────────────────
     for r in candidates:
@@ -322,8 +336,13 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
             r["renewal_reason_code"] = "RENEWAL_STATE_INVALID"
             continue
 
-        # Latest payment check
-        if latest_pay_map.get(cid) != pid:
+        # Latest payment check (timezone-aware; sentinel = all invalid paid_at)
+        latest_pid = latest_pay_map.get(cid)
+        if latest_pid == _SENTINEL_NO_VALID_PAID_AT:
+            r["renewal_eligible"] = False
+            r["renewal_reason_code"] = "RENEWAL_STATE_INVALID"
+            continue
+        if latest_pid != pid:
             r["renewal_eligible"] = False
             r["renewal_reason_code"] = "NOT_CURRENT_PAYMENT"
             continue
@@ -334,19 +353,22 @@ def _attach_renewal_eligibility(supabase, rows: list, company_id: str) -> None:
             r["renewal_reason_code"] = "RENEWAL_ALREADY_SCHEDULED"
             continue
 
-        # Temporal window guard
+        # Temporal window guard — end_date NULL is hard stop
         end_date = active_contracts.get(cid)
-        if end_date:
-            try:
-                contract_end_boundary = contract_end_date_to_effective_at_v2(end_date)
-                if as_of >= contract_end_boundary:
-                    r["renewal_eligible"] = False
-                    r["renewal_reason_code"] = "RENEWAL_WINDOW_CLOSED"
-                    continue
-            except Exception:  # noqa: BLE001 — fail-closed on parse error
+        if not end_date:
+            r["renewal_eligible"] = False
+            r["renewal_reason_code"] = "RENEWAL_END_DATE_REQUIRED"
+            continue
+        try:
+            contract_end_boundary = contract_end_date_to_effective_at_v2(end_date)
+            if as_of >= contract_end_boundary:
                 r["renewal_eligible"] = False
-                r["renewal_reason_code"] = "RENEWAL_STATE_INVALID"
+                r["renewal_reason_code"] = "RENEWAL_WINDOW_CLOSED"
                 continue
+        except Exception:  # noqa: BLE001 — fail-closed on parse error
+            r["renewal_eligible"] = False
+            r["renewal_reason_code"] = "RENEWAL_STATE_INVALID"
+            continue
 
         r["renewal_eligible"] = True
         r["renewal_reason_code"] = "ELIGIBLE"

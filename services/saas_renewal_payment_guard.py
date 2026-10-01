@@ -49,17 +49,15 @@ def check_existing_renewal_payment(
     quote_id: str,
     company_id: str,
     user_id: str,
-) -> Optional[dict]:
+) -> None:
     """기존 RENEWAL 결제 상태 검사.
 
-    Returns:
-      None — 신규 결제 진행 가능
-      dict — PENDING reuse 응답 (caller가 바로 return 가능)
+    Returns: None — 신규 결제 진행 가능
 
     Raises:
       RenewalPaymentGuardError:
         QUOTE_ALREADY_PAID    — 이미 결제 완료
-        QUOTE_PAYMENT_PENDING — 다른 사용자 진행 중
+        QUOTE_PAYMENT_PENDING — 결제 진행 중 (동일/다른 사용자 모두 409)
         QUOTE_PAYMENT_STATE_CONFLICT — 상태 불일치
     """
     existing = _find_existing_renewal_payment(supabase, quote_id)
@@ -73,42 +71,18 @@ def check_existing_renewal_payment(
             "QUOTE_ALREADY_PAID", "이미 결제 완료된 견적입니다.", 409
         )
 
-    # PENDING
-    if str(existing.get("user_id")) != str(user_id):
+    if status == "PENDING":
+        log.info(
+            "[RENEWAL_GUARD] quote=%s PENDING — blocking new attempt (user=%s existing_user=%s)",
+            quote_id, user_id, existing.get("user_id"),
+        )
         raise RenewalPaymentGuardError(
             "QUOTE_PAYMENT_PENDING", "이 견적에 대해 진행 중인 결제가 있습니다.", 409
         )
 
-    if str(existing.get("company_id")) != str(company_id):
-        raise RenewalPaymentGuardError(
-            "QUOTE_PAYMENT_STATE_CONFLICT", "결제 소유권 불일치.", 409
-        )
-
-    # Same-user PENDING: build minimal INICIS reuse hint
-    payment_id = str(existing.get("id") or "")
-    order_id = str(existing.get("inicis_order_id") or "")
-    total_amount = int(existing.get("total_amount") or 0)
-    if not payment_id or not order_id:
-        raise RenewalPaymentGuardError(
-            "QUOTE_PAYMENT_STATE_CONFLICT",
-            "PENDING 결제에 order_id가 없습니다.",
-            409,
-        )
-
-    log.info(
-        "[RENEWAL_GUARD] quote=%s user=%s PENDING reuse payment=%s",
-        quote_id, user_id, payment_id,
+    raise RenewalPaymentGuardError(
+        "QUOTE_PAYMENT_STATE_CONFLICT", "결제 상태 불일치.", 409
     )
-    # Return minimal reuse response — INICIS order_id + payment_id
-    return {
-        "status": "success",
-        "data": {
-            "payment_id": payment_id,
-            "inicis_order_id": order_id,
-            "total_amount": total_amount,
-            "reused": True,
-        },
-    }
 
 
 def is_renewal_unique_violation(exc: Exception) -> bool:

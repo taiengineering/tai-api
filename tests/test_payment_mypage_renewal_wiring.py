@@ -136,7 +136,8 @@ def test_P03_cv_period_1_recurring():
 
     ct_chain = MagicMock()
     ct_chain.execute.return_value = SimpleNamespace(
-        data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS", "end_date": None}], count=1
+        data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS",
+               "is_active": True, "end_date": None}], count=1
     )
     ct_chain.select.return_value = ct_chain
     ct_chain.in_.return_value = ct_chain
@@ -182,7 +183,8 @@ def test_P04_cv_tier_custom():
 
     ct_chain = MagicMock()
     ct_chain.execute.return_value = SimpleNamespace(
-        data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS", "end_date": None}], count=1
+        data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS",
+               "is_active": True, "end_date": None}], count=1
     )
     ct_chain.select.return_value = ct_chain
     ct_chain.in_.return_value = ct_chain
@@ -346,7 +348,8 @@ def test_P07_not_current_payment():
     """최신 결제가 아닌 경우 → NOT_CURRENT_PAYMENT."""
     rows = [_make_candidate_row(id="pay-OLD")]
     sb = _make_eligibility_supabase_with_cv(
-        contract_data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS", "end_date": None}],
+        contract_data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS",
+                        "is_active": True, "end_date": None}],
         payment_data=[{"id": "pay-LATEST", "contract_id": "ct-001", "paid_at": "2026-09-01T00:00:00+09:00", "payment_type": "INITIAL"}],
         cv_data=_BASE_CV_DATA,
     )
@@ -360,7 +363,8 @@ def test_P08_eligible():
     """모든 조건 통과 → renewal_eligible=True, ELIGIBLE."""
     rows = [_make_candidate_row(id="pay-LATEST")]
     sb = _make_eligibility_supabase_with_cv(
-        contract_data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS", "end_date": None}],
+        contract_data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS",
+                        "is_active": True, "end_date": "2030-01-01"}],
         payment_data=[{"id": "pay-LATEST", "contract_id": "ct-001", "paid_at": "2026-09-01T00:00:00+09:00", "payment_type": "INITIAL"}],
         cv_data=_BASE_CV_DATA,
     )
@@ -421,6 +425,7 @@ def _base_payment(**overrides):
         "status_code": "SUCCESS",
         "period_months": 6,
         "quote_id": "q-prev",
+        "paid_at": "2026-01-01T00:00:00+09:00",
     }
     d.update(overrides)
     return d
@@ -432,19 +437,21 @@ def _base_contract(**overrides):
         "company_id": "co-001",
         "status_code": "ACTIVE",
         "service_type": "SAAS",
+        "is_active": True,
+        "end_date": "2030-01-01",
     }
     d.update(overrides)
     return d
 
 
 def _base_cv(**overrides):
-    import datetime
     d = {
         "id": "cv-001",
         "version_no": 1,
         "product_tier": "MANAGER",
         "worker_capacity": 50,
-        "commercial_schema_version": "V2",
+        "commercial_schema_version": "SAAS_CONTRACT_COMMERCIAL_V2",
+        "payment_months": 6,
         "pricing_mode": "STANDARD",
         "effective_from": "2026-01-01T00:00:00+09:00",
         "superseded_at": None,
@@ -824,7 +831,8 @@ def test_T01_eligibility_window_closed():
         "effective_from": "2019-01-01T00:00:00+09:00", "superseded_at": None,
     }]
     sb = _make_eligibility_supabase(
-        contract_data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS", "end_date": "2020-01-01"}],
+        contract_data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS",
+                        "is_active": True, "end_date": "2020-01-01"}],
         payment_data=[{"id": "pay-LATEST", "contract_id": "ct-001", "paid_at": "2019-06-01T00:00:00+09:00", "payment_type": "INITIAL"}],
         cv_data=cv_data_t01,
     )
@@ -856,7 +864,8 @@ def test_T02_eligibility_already_scheduled():
         },
     ]
     sb = _make_eligibility_supabase(
-        contract_data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS", "end_date": "2030-01-01"}],
+        contract_data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS",
+                        "is_active": True, "end_date": "2030-01-01"}],
         payment_data=[{"id": "pay-LATEST", "contract_id": "ct-001", "paid_at": "2026-01-01T00:00:00+09:00", "payment_type": "INITIAL"}],
         cv_data=cv_data_t02,
     )
@@ -968,7 +977,8 @@ def test_RR04_second_renewal_uses_renewal_payment_as_anchor():
 
     ct_chain = MagicMock()
     ct_chain.execute.return_value = SimpleNamespace(
-        data=[{"id": cid, "status_code": "ACTIVE", "service_type": "SAAS", "end_date": None}], count=1
+        data=[{"id": cid, "status_code": "ACTIVE", "service_type": "SAAS",
+               "is_active": True, "end_date": "2030-01-01"}], count=1
     )
     ct_chain.select.return_value = ct_chain
     ct_chain.in_.return_value = ct_chain
@@ -1039,7 +1049,8 @@ def test_RC01_cv_pm1_history_recurring():
 
     ct_chain = MagicMock()
     ct_chain.execute.return_value = SimpleNamespace(
-        data=[{"id": cid, "status_code": "ACTIVE", "service_type": "SAAS", "end_date": None}], count=1
+        data=[{"id": cid, "status_code": "ACTIVE", "service_type": "SAAS",
+               "is_active": True, "end_date": None}], count=1
     )
     ct_chain.select.return_value = ct_chain
     ct_chain.in_.return_value = ct_chain
@@ -1087,7 +1098,7 @@ def test_RC02_direct_renewal_quote_with_recurring_cv_blocked():
     cv_recurring = {
         "id": "cv-recurring", "version_no": 1,
         "product_tier": "MANAGER", "payment_months": 1,
-        "worker_capacity": 50, "commercial_schema_version": "V2",
+        "worker_capacity": 50, "commercial_schema_version": "SAAS_CONTRACT_COMMERCIAL_V2",
         "pricing_mode": "STANDARD",
         "effective_from": "2026-01-01T00:00:00+09:00", "superseded_at": None,
     }
@@ -1129,7 +1140,8 @@ def test_TF01_malformed_end_date_fail_closed():
 
     ct_chain = MagicMock()
     ct_chain.execute.return_value = SimpleNamespace(
-        data=[{"id": cid, "status_code": "ACTIVE", "service_type": "SAAS", "end_date": "not-a-date"}], count=1
+        data=[{"id": cid, "status_code": "ACTIVE", "service_type": "SAAS",
+               "is_active": True, "end_date": "not-a-date"}], count=1
     )
     ct_chain.select.return_value = ct_chain
     ct_chain.in_.return_value = ct_chain
@@ -1370,3 +1382,495 @@ def test_PA05_no_existing_payment_returns_none():
             user_id=_USER,
         )
     assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PATCH-003 tests
+# P3A: Fix A — commercial_schema_version validation
+# P3B: Fix B — latest eligible payment ID check
+# P3C: Fix C — _parse_paid_at timezone-aware helper
+# P3D: Fix D — prepare_v2_renewal_payment full CV validation
+# P3E: Fix E — end_date IS NULL hard stop (all 3 paths)
+# P3F: Fix F — PENDING payment always raises (no same-user reuse)
+# P3G: Fix G — unique violation 23505 race recovery
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── P3A: Fix A — commercial_schema_version validation ───────────────────────
+
+def test_P3A01_missing_schema_version_renewal_state_invalid():
+    """CV commercial_schema_version empty → RENEWAL_STATE_INVALID."""
+    from services.saas_renewal_quote_svc import SaasRenewalQuoteError, create_renewal_quote
+    pay = _base_payment()
+    ct = _base_contract()
+    cv = _base_cv(commercial_schema_version="")
+    sb = _make_sb_for_renewal(payment=pay, contract=ct, cvs=[cv])
+    with patch("services.saas_commercial_version_time_v2.select_effective_commercial_version_v2", return_value=cv), \
+         patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]):
+        with pytest.raises(SaasRenewalQuoteError) as exc:
+            create_renewal_quote(sb, payment_id="pay-base", company_id=_COMPANY, user_id=_USER, payment_months=6)
+    assert exc.value.code == "RENEWAL_STATE_INVALID"
+
+
+def test_P3A02_old_schema_version_renewal_state_invalid():
+    """CV commercial_schema_version='V2' (old) → RENEWAL_STATE_INVALID."""
+    from services.saas_renewal_quote_svc import SaasRenewalQuoteError, create_renewal_quote
+    pay = _base_payment()
+    ct = _base_contract()
+    cv = _base_cv(commercial_schema_version="V2")
+    sb = _make_sb_for_renewal(payment=pay, contract=ct, cvs=[cv])
+    with patch("services.saas_commercial_version_time_v2.select_effective_commercial_version_v2", return_value=cv), \
+         patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]):
+        with pytest.raises(SaasRenewalQuoteError) as exc:
+            create_renewal_quote(sb, payment_id="pay-base", company_id=_COMPANY, user_id=_USER, payment_months=6)
+    assert exc.value.code == "RENEWAL_STATE_INVALID"
+
+
+def test_P3A03_renewal_schema_version_constant():
+    """_RENEWAL_SCHEMA_VERSION == 'SAAS_CONTRACT_COMMERCIAL_V2'."""
+    from services.saas_renewal_quote_svc import _RENEWAL_SCHEMA_VERSION
+    assert _RENEWAL_SCHEMA_VERSION == "SAAS_CONTRACT_COMMERCIAL_V2"
+
+
+# ─── P3B: Fix B — latest eligible payment ID check ───────────────────────────
+
+def test_P3B01_current_payment_passes():
+    """payment_id == latest eligible → passes step 3.5, reaches SITE_SCOPES_EMPTY."""
+    from services.saas_renewal_quote_svc import SaasRenewalQuoteError, create_renewal_quote
+    pay = _base_payment()
+    ct = _base_contract()
+    cv = _base_cv()
+    sb = _make_sb_for_renewal(payment=pay, contract=ct, cvs=[cv], scopes=[])
+    with patch("services.saas_commercial_version_time_v2.select_effective_commercial_version_v2", return_value=cv), \
+         patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]):
+        with pytest.raises(SaasRenewalQuoteError) as exc:
+            create_renewal_quote(sb, payment_id="pay-base", company_id=_COMPANY, user_id=_USER, payment_months=6)
+    assert exc.value.code == "SITE_SCOPES_EMPTY"
+
+
+def test_P3B02_not_current_payment_blocked():
+    """payment_id != latest eligible → NOT_CURRENT_PAYMENT."""
+    from services.saas_renewal_quote_svc import SaasRenewalQuoteError, create_renewal_quote
+    pay = _base_payment()
+    ct = _base_contract()
+    sb = _make_sb_for_renewal(payment=pay, contract=ct)
+    with patch("services.saas_renewal_quote_svc._get_latest_eligible_payment_id", return_value="pay-NEWER"):
+        with pytest.raises(SaasRenewalQuoteError) as exc:
+            create_renewal_quote(sb, payment_id="pay-base", company_id=_COMPANY, user_id=_USER, payment_months=6)
+    assert exc.value.code == "NOT_CURRENT_PAYMENT"
+    assert exc.value.http_status == 409
+
+
+def test_P3B03_upgrade_excluded_from_latest():
+    """_get_latest_eligible_payment_id: UPGRADE 결제 제외 → INITIAL이 최신."""
+    from services.saas_renewal_quote_svc import _get_latest_eligible_payment_id
+    upgrade_pay = {"id": "pay-upgrade", "payment_type": "UPGRADE", "paid_at": "2026-09-01T00:00:00+09:00"}
+    initial_pay = {"id": "pay-initial", "payment_type": "INITIAL", "paid_at": "2026-01-01T00:00:00+09:00"}
+    sb = MagicMock()
+    chain = MagicMock()
+    chain.execute.return_value = SimpleNamespace(data=[upgrade_pay, initial_pay], count=2)
+    chain.select.return_value = chain
+    chain.eq.return_value = chain
+    chain.in_.return_value = chain
+    chain.order.return_value = chain
+    chain.limit.return_value = chain
+    sb.table.return_value = chain
+    result = _get_latest_eligible_payment_id(sb, "ct-001")
+    assert result == "pay-initial"
+
+
+def test_P3B04_no_non_upgrade_candidates_returns_none():
+    """모든 결제가 UPGRADE → latest_pid=None → NOT_CURRENT_PAYMENT."""
+    from services.saas_renewal_quote_svc import SaasRenewalQuoteError, create_renewal_quote
+    pay = _base_payment()
+    ct = _base_contract()
+    sb = _make_sb_for_renewal(payment=pay, contract=ct)
+    with patch("services.saas_renewal_quote_svc._get_latest_eligible_payment_id", return_value=None):
+        with pytest.raises(SaasRenewalQuoteError) as exc:
+            create_renewal_quote(sb, payment_id="pay-base", company_id=_COMPANY, user_id=_USER, payment_months=6)
+    assert exc.value.code == "NOT_CURRENT_PAYMENT"
+
+
+def test_P3B05_latest_by_paid_at_timezone_aware():
+    """_get_latest_eligible_payment_id: 시간대 인식 정렬로 최신 RENEWAL 반환."""
+    from services.saas_renewal_quote_svc import _get_latest_eligible_payment_id
+    pay1 = {"id": "pay-A", "payment_type": "INITIAL", "paid_at": "2026-01-01T00:00:00Z"}
+    pay2 = {"id": "pay-B", "payment_type": "RENEWAL", "paid_at": "2026-06-01T09:00:00+09:00"}
+    pay3 = {"id": "pay-C", "payment_type": "UPGRADE", "paid_at": "2026-09-01T00:00:00Z"}
+    sb = MagicMock()
+    chain = MagicMock()
+    chain.execute.return_value = SimpleNamespace(data=[pay1, pay2, pay3], count=3)
+    chain.select.return_value = chain
+    chain.eq.return_value = chain
+    chain.in_.return_value = chain
+    chain.order.return_value = chain
+    chain.limit.return_value = chain
+    sb.table.return_value = chain
+    result = _get_latest_eligible_payment_id(sb, "ct-001")
+    assert result == "pay-B"  # UPGRADE 제외; RENEWAL이 INITIAL보다 최신
+
+
+# ─── P3C: Fix C — _parse_paid_at timezone-aware helper ───────────────────────
+
+def test_P3C01_parse_utc_timestamp():
+    """'2026-01-01T00:00:00Z' → timezone-aware UTC datetime."""
+    from services.saas_renewal_quote_svc import _parse_paid_at
+    dt = _parse_paid_at("2026-01-01T00:00:00Z")
+    assert dt.tzinfo is not None
+    assert dt.year == 2026
+
+
+def test_P3C02_parse_kst_timestamp():
+    """'+09:00' suffix → timezone-aware datetime with +09:00 offset."""
+    import datetime
+    from services.saas_renewal_quote_svc import _parse_paid_at
+    dt = _parse_paid_at("2026-06-01T12:00:00+09:00")
+    assert dt.tzinfo is not None
+    assert dt.utcoffset() == datetime.timedelta(hours=9)
+
+
+def test_P3C03_naive_datetime_gets_utc():
+    """Naive ISO string → timezone-aware with UTC tzinfo."""
+    from services.saas_renewal_quote_svc import _parse_paid_at
+    dt = _parse_paid_at("2026-01-01T00:00:00")
+    assert dt.tzinfo is not None
+
+
+def test_P3C04_empty_paid_at_raises_valueerror():
+    """empty/None paid_at → ValueError."""
+    from services.saas_renewal_quote_svc import _parse_paid_at
+    with pytest.raises(ValueError):
+        _parse_paid_at("")
+    with pytest.raises(ValueError):
+        _parse_paid_at(None)
+
+
+# ─── P3D: Fix D — prepare_v2_renewal_payment full CV validation ──────────────
+
+def _make_renewal_quote_for_prepare(company_id=_COMPANY, version_no=1, contract_id="ct-001"):
+    return {
+        "id": "q-renewal-p3d", "company_id": company_id,
+        "source": "member_auto", "status_code": "ISSUED", "service_type": "SAAS",
+        "survey_data": {"commercial_v3_renewal": {
+            "contract_id": contract_id,
+            "current_version_no": version_no,
+        }},
+    }
+
+
+def _call_prepare_fixd(cv_overrides):
+    """Fix D 검증 도달용 helper — CV 값만 조작."""
+    from routers.member_quotes import prepare_v2_renewal_payment, SaasV2PaymentPrepareBody
+    quote = _make_renewal_quote_for_prepare()
+    current_cv = {
+        "id": "cv-test", "version_no": 1,
+        "product_tier": "MANAGER", "payment_months": 6,
+        "commercial_schema_version": "SAAS_CONTRACT_COMMERCIAL_V2",
+        "effective_from": "2026-01-01T00:00:00+09:00", "superseded_at": None,
+    }
+    current_cv.update(cv_overrides)
+    body = SaasV2PaymentPrepareBody(proof_type=None)
+    supabase_mock = MagicMock()
+    chain = MagicMock()
+    chain.execute.return_value = SimpleNamespace(data=[], count=0)
+    chain.select.return_value = chain
+    chain.eq.return_value = chain
+    chain.in_.return_value = chain
+    chain.limit.return_value = chain
+    supabase_mock.table.return_value = chain
+    current = {"id": _USER, "company_id": _COMPANY}
+    with patch("routers.member_quotes._require_member_company", return_value=_COMPANY), \
+         patch("routers.member_quotes.get_supabase", return_value=supabase_mock), \
+         patch("services.member_quote_svc.get_member_quote", return_value=quote), \
+         patch("services.saas_commercial_version_time_v2.select_effective_commercial_version_v2", return_value=current_cv):
+        return prepare_v2_renewal_payment("q-test", body, current)
+
+
+def test_P3D01_prepare_schema_version_invalid():
+    """prepare: CV commercial_schema_version != V2 → RENEWAL_STATE_INVALID."""
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        _call_prepare_fixd({"commercial_schema_version": "V2"})
+    assert exc.value.status_code == 422
+    assert exc.value.detail["code"] == "RENEWAL_STATE_INVALID"
+
+
+def test_P3D02_prepare_custom_tier_blocked():
+    """prepare: CV product_tier=CUSTOM → CUSTOM_REVIEW_REQUIRED."""
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        _call_prepare_fixd({"product_tier": "CUSTOM"})
+    assert exc.value.status_code == 422
+    assert exc.value.detail["code"] == "CUSTOM_REVIEW_REQUIRED"
+
+
+def test_P3D03_prepare_recurring_pm1_blocked():
+    """prepare: CV payment_months=1 → RECURRING_MANAGED_AUTOMATICALLY."""
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        _call_prepare_fixd({"payment_months": 1})
+    assert exc.value.status_code == 422
+    assert exc.value.detail["code"] == "RECURRING_MANAGED_AUTOMATICALLY"
+
+
+def test_P3D04_prepare_disallowed_pm_blocked():
+    """prepare: CV payment_months=2 → RENEWAL_STATE_INVALID."""
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        _call_prepare_fixd({"payment_months": 2})
+    assert exc.value.status_code == 422
+    assert exc.value.detail["code"] == "RENEWAL_STATE_INVALID"
+
+
+# ─── P3E: Fix E — end_date IS NULL hard stop ─────────────────────────────────
+
+def test_P3E01_create_renewal_quote_no_end_date():
+    """create_renewal_quote: contract.end_date=None → RENEWAL_END_DATE_REQUIRED."""
+    from services.saas_renewal_quote_svc import SaasRenewalQuoteError, create_renewal_quote
+    pay = _base_payment()
+    ct = _base_contract(end_date=None)
+    cv = _base_cv()
+    sb = _make_sb_for_renewal(payment=pay, contract=ct, cvs=[cv])
+    with patch("services.saas_renewal_quote_svc._get_latest_eligible_payment_id", return_value="pay-base"):
+        with pytest.raises(SaasRenewalQuoteError) as exc:
+            create_renewal_quote(sb, payment_id="pay-base", company_id=_COMPANY, user_id=_USER, payment_months=6)
+    assert exc.value.code == "RENEWAL_END_DATE_REQUIRED"
+
+
+def test_P3E02_eligibility_no_end_date_hard_stop():
+    """_attach_renewal_eligibility: contract.end_date=None → RENEWAL_END_DATE_REQUIRED."""
+    from routers.payment_ops import _attach_renewal_eligibility
+    cid = str(uuid4())
+    pid = str(uuid4())
+    row = {
+        "id": pid, "contract_id": cid,
+        "product_type": "SAAS", "payment_type": "INITIAL",
+        "status_code": "PAID", "period_months": 6, "product_tier": "MANAGER",
+        "paid_at": "2026-06-01T00:00:00+09:00",
+    }
+
+    ct_chain = MagicMock()
+    ct_chain.execute.return_value = SimpleNamespace(
+        data=[{"id": cid, "status_code": "ACTIVE", "service_type": "SAAS",
+               "is_active": True, "end_date": None}], count=1
+    )
+    ct_chain.select.return_value = ct_chain
+    ct_chain.in_.return_value = ct_chain
+    ct_chain.eq.return_value = ct_chain
+
+    cv_chain = MagicMock()
+    cv_chain.execute.return_value = SimpleNamespace(data=[{
+        "id": "cv-p3e02", "contract_id": cid, "version_no": 1,
+        "product_tier": "MANAGER", "payment_months": 6,
+        "commercial_schema_version": "SAAS_CONTRACT_COMMERCIAL_V2",
+        "pricing_mode": "STANDARD",
+        "effective_from": "2026-01-01T00:00:00+09:00", "superseded_at": None,
+    }], count=1)
+    cv_chain.select.return_value = cv_chain
+    cv_chain.in_.return_value = cv_chain
+    cv_chain.eq.return_value = cv_chain
+
+    pay_chain = MagicMock()
+    pay_chain.execute.return_value = SimpleNamespace(
+        data=[{"id": pid, "contract_id": cid, "paid_at": "2026-06-01T00:00:00+09:00", "payment_type": "INITIAL"}], count=1
+    )
+    pay_chain.select.return_value = pay_chain
+    pay_chain.in_.return_value = pay_chain
+    pay_chain.eq.return_value = pay_chain
+
+    sb = MagicMock()
+    def _tside_p3e02(name):
+        if name == "contracts":
+            return ct_chain
+        if name == "saas_contract_commercial_versions":
+            return cv_chain
+        return pay_chain
+    sb.table.side_effect = _tside_p3e02
+
+    with patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]):
+        _attach_renewal_eligibility(sb, [row], _COMPANY)
+    assert row["renewal_eligible"] is False
+    assert row["renewal_reason_code"] == "RENEWAL_END_DATE_REQUIRED"
+
+
+def test_P3E03_prepare_no_end_date():
+    """prepare_v2_renewal_payment: contract.end_date=None → RENEWAL_END_DATE_REQUIRED."""
+    from fastapi import HTTPException
+    from routers.member_quotes import prepare_v2_renewal_payment, SaasV2PaymentPrepareBody
+
+    quote = _make_renewal_quote_for_prepare()
+    current_cv = {
+        "id": "cv-test", "version_no": 1,
+        "product_tier": "MANAGER", "payment_months": 6,
+        "commercial_schema_version": "SAAS_CONTRACT_COMMERCIAL_V2",
+        "effective_from": "2026-01-01T00:00:00+09:00", "superseded_at": None,
+    }
+    ct_row = {"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS",
+              "is_active": True, "end_date": None}
+
+    body = SaasV2PaymentPrepareBody(proof_type=None)
+    supabase_mock = MagicMock()
+
+    def _make_data_chain(data):
+        c = MagicMock()
+        c.execute.return_value = SimpleNamespace(data=data, count=len(data))
+        c.select.return_value = c
+        c.eq.return_value = c
+        c.in_.return_value = c
+        c.limit.return_value = c
+        return c
+
+    def _tside_p3e03(name):
+        if name == "contracts":
+            return _make_data_chain([ct_row])
+        return _make_data_chain([])
+
+    supabase_mock.table.side_effect = _tside_p3e03
+    current = {"id": _USER, "company_id": _COMPANY}
+
+    with patch("routers.member_quotes._require_member_company", return_value=_COMPANY), \
+         patch("routers.member_quotes.get_supabase", return_value=supabase_mock), \
+         patch("services.member_quote_svc.get_member_quote", return_value=quote), \
+         patch("services.saas_commercial_version_time_v2.select_effective_commercial_version_v2", return_value=current_cv):
+        with pytest.raises(HTTPException) as exc:
+            prepare_v2_renewal_payment("q-test", body, current)
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail["code"] == "RENEWAL_END_DATE_REQUIRED"
+
+
+# ─── P3F: Fix F — PENDING payment always raises (no same-user reuse) ─────────
+
+def test_P3F01_same_user_pending_blocked():
+    """같은 사용자 PENDING → QUOTE_PAYMENT_PENDING (Fix F: reuse 경로 제거)."""
+    from services.saas_renewal_payment_guard import (
+        check_existing_renewal_payment,
+        RenewalPaymentGuardError,
+    )
+    qid = str(uuid4())
+    existing = {
+        "id": str(uuid4()), "user_id": _USER,
+        "company_id": _COMPANY, "quote_id": qid,
+        "product_type": "SAAS", "payment_type": "RENEWAL",
+        "status_code": "PENDING", "total_amount": 300000,
+        "period_months": 6, "created_at": "2026-10-01T00:00:00+09:00",
+    }
+    with patch(
+        "services.saas_renewal_payment_guard._find_existing_renewal_payment",
+        return_value=existing,
+    ):
+        with pytest.raises(RenewalPaymentGuardError) as exc:
+            check_existing_renewal_payment(
+                MagicMock(), quote_id=qid, company_id=_COMPANY, user_id=_USER,
+            )
+    assert exc.value.code == "QUOTE_PAYMENT_PENDING"
+    assert exc.value.http_status == 409
+
+
+def test_P3F02_guard_return_annotation_is_none():
+    """check_existing_renewal_payment 반환 타입 None 명시 (Fix F: dict 반환 제거)."""
+    import inspect
+    from services.saas_renewal_payment_guard import check_existing_renewal_payment
+    src = inspect.getsource(check_existing_renewal_payment)
+    assert "-> None" in src
+    assert "reused" not in src.lower()
+
+
+def test_P3F03_unknown_status_conflict():
+    """예외적 status(CANCELLED 등) → QUOTE_PAYMENT_STATE_CONFLICT."""
+    from services.saas_renewal_payment_guard import (
+        check_existing_renewal_payment,
+        RenewalPaymentGuardError,
+    )
+    qid = str(uuid4())
+    existing = {
+        "id": str(uuid4()), "user_id": _USER, "company_id": _COMPANY,
+        "quote_id": qid, "product_type": "SAAS", "payment_type": "RENEWAL",
+        "status_code": "CANCELLED", "total_amount": 300000,
+        "period_months": 6, "created_at": "2026-10-01T00:00:00+09:00",
+    }
+    with patch(
+        "services.saas_renewal_payment_guard._find_existing_renewal_payment",
+        return_value=existing,
+    ):
+        with pytest.raises(RenewalPaymentGuardError) as exc:
+            check_existing_renewal_payment(
+                MagicMock(), quote_id=qid, company_id=_COMPANY, user_id=_USER,
+            )
+    assert exc.value.code == "QUOTE_PAYMENT_STATE_CONFLICT"
+    assert exc.value.http_status == 409
+
+
+# ─── P3G: Fix G — unique violation 23505 race recovery ───────────────────────
+
+def test_P3G01_is_renewal_quote_unique_violation():
+    """is_renewal_quote_unique_violation: 23505 + 올바른 인덱스명 조합만 True."""
+    from services.saas_renewal_quote_svc import is_renewal_quote_unique_violation
+    exc_match = Exception("23505: uix_quotes_v3_renewal_source_active duplicate key")
+    exc_wrong_idx = Exception("23505: uix_some_other_index")
+    exc_no_pg = Exception("unique constraint violated on something else")
+    assert is_renewal_quote_unique_violation(exc_match) is True
+    assert is_renewal_quote_unique_violation(exc_wrong_idx) is False
+    assert is_renewal_quote_unique_violation(exc_no_pg) is False
+
+
+def test_P3G02_race_same_term_returns_existing():
+    """23505 race: 동일 payment_months existing quote → 기존 견적 반환."""
+    from services.saas_renewal_quote_svc import create_renewal_quote
+
+    existing_quote = {
+        "id": "q-race-02", "company_id": _COMPANY,
+        "survey_data": {"commercial_v3_renewal": {"contract_id": "ct-001", "current_version_no": 1}},
+        "items": [{"pricing_snapshot": {"payment_months": 6}}],
+    }
+    pay = _base_payment()
+    ct = _base_contract()
+    cv = _base_cv()
+    _FAC_UUID = "33333333-3333-3333-3333-333333333333"
+    scope = {"entity_type": "FACTORY", "entity_id": _FAC_UUID, "sector": "INDUSTRY"}
+    factory = {"id": _FAC_UUID, "company_id": _COMPANY, "sector": "INDUSTRY",
+               "employee_count": 100, "building_area": None}
+    sb = _make_sb_for_renewal(payment=pay, contract=ct, cvs=[cv], scopes=[scope], factory_row=factory)
+
+    race_exc = Exception("23505: duplicate key violates uix_quotes_v3_renewal_source_active")
+
+    with patch("services.saas_commercial_version_time_v2.select_effective_commercial_version_v2", return_value=cv), \
+         patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]), \
+         patch("services.saas_quote_site_scope_v2._load_factory", return_value=factory), \
+         patch("services.saas_quote_site_scope_v2._canonical_criteria", return_value=100.0), \
+         patch("services.saas_renewal_quote_svc._find_existing_renewal_quote",
+               side_effect=[None, existing_quote]), \
+         patch("services.saas_renewal_quote_svc.issue_saas_quote_v2", side_effect=race_exc):
+        result = create_renewal_quote(
+            sb, payment_id="pay-base", company_id=_COMPANY, user_id=_USER, payment_months=6
+        )
+    assert result["id"] == "q-race-02"
+
+
+def test_P3G03_race_no_existing_quote_raises():
+    """23505 race: 재조회 후 existing quote 없음 → RENEWAL_QUOTE_ALREADY_ISSUED."""
+    from services.saas_renewal_quote_svc import create_renewal_quote, SaasRenewalQuoteError
+
+    pay = _base_payment()
+    ct = _base_contract()
+    cv = _base_cv()
+    _FAC_UUID = "44444444-4444-4444-4444-444444444444"
+    scope = {"entity_type": "FACTORY", "entity_id": _FAC_UUID, "sector": "INDUSTRY"}
+    factory = {"id": _FAC_UUID, "company_id": _COMPANY, "sector": "INDUSTRY",
+               "employee_count": 100, "building_area": None}
+    sb = _make_sb_for_renewal(payment=pay, contract=ct, cvs=[cv], scopes=[scope], factory_row=factory)
+
+    race_exc = Exception("23505: duplicate key violates uix_quotes_v3_renewal_source_active")
+
+    with patch("services.saas_commercial_version_time_v2.select_effective_commercial_version_v2", return_value=cv), \
+         patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]), \
+         patch("services.saas_quote_site_scope_v2._load_factory", return_value=factory), \
+         patch("services.saas_quote_site_scope_v2._canonical_criteria", return_value=100.0), \
+         patch("services.saas_renewal_quote_svc._find_existing_renewal_quote",
+               side_effect=[None, None]), \
+         patch("services.saas_renewal_quote_svc.issue_saas_quote_v2", side_effect=race_exc):
+        with pytest.raises(SaasRenewalQuoteError) as exc:
+            create_renewal_quote(
+                sb, payment_id="pay-base", company_id=_COMPANY, user_id=_USER, payment_months=6
+            )
+    assert exc.value.code == "RENEWAL_QUOTE_ALREADY_ISSUED"
+    assert exc.value.http_status == 409
