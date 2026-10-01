@@ -28,7 +28,14 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
+# Canonical: SUPABASE_SERVICE_ROLE_KEY (.env.example 정본)
+# Legacy alias: SUPABASE_SERVICE_KEY
+# SUPABASE_KEY(anon) fallback은 admin client에서 금지 — silent 권한 강등 방지
+_SUPABASE_SERVICE_ROLE_KEY = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    or os.getenv("SUPABASE_SERVICE_KEY")
+)
+SUPABASE_SERVICE_KEY = _SUPABASE_SERVICE_ROLE_KEY  # 기존 참조 호환
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 
 # 전화번호만 아는 작업자에게 GoTrue 계정을 만들기 위한 가상 이메일 도메인.
@@ -49,7 +56,12 @@ def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 def get_supabase_admin():
-    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    if not _SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError(
+            "Supabase service role key is not configured "
+            "(set SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY)"
+        )
+    return create_client(SUPABASE_URL, _SUPABASE_SERVICE_ROLE_KEY)
 
 def normalize_phone(phone: str) -> str:
     return re.sub(r'[^0-9]', '', phone)
@@ -747,13 +759,16 @@ def login(req: LoginRequest):
             clear_trace()
             raise HTTPException(status_code=401, detail="비밀번호가 올바르지 않습니다")
 
+        _recovery_stage = "admin_client"
         try:
             supabase_admin = get_supabase_admin()
             if user.get("auth_id"):
+                _recovery_stage = "admin_update"
                 supabase_admin.auth.admin.update_user_by_id(
                     user["auth_id"], {"password": req.password}
                 )
             else:
+                _recovery_stage = "admin_create"
                 new_auth = supabase_admin.auth.admin.create_user({
                     "email": login_email,
                     "password": req.password,
@@ -764,11 +779,16 @@ def login(req: LoginRequest):
                     "updated_at": _now_iso(),
                 }).eq("id", user["id"]).execute()
 
+            _recovery_stage = "second_signin"
             auth_res = supabase.auth.sign_in_with_password({
                 "email": login_email,
                 "password": req.password,
             })
-        except Exception:
+        except Exception as _exc:
+            log.warning(
+                "auth_recovery_failed stage=%s exception_type=%s",
+                _recovery_stage, type(_exc).__name__,
+            )
             emit_event(
                 step_key="validate_auth",
                 step_order=1,
