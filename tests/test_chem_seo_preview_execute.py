@@ -538,6 +538,8 @@ class _FakeItemsQuery:
 
     def select(self, *_a, **_kw): return self
 
+    def order(self, *_a, **_kw): return self
+
     def eq(self, col: str, value):
         self._eqs[col] = value
         return self
