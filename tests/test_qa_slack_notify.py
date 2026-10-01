@@ -490,13 +490,13 @@ def test_QS05_run_error_routes_alert():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# QS-06: QA events admin button → /auto-qa-dashboard
+# QS-06: QA events admin button → /qa/dashboard (Phase 2-D Admin QA Console)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_QS06_admin_button_path():
     for evt in ("QA_FAIL_DETECTED", "QA_BLOCKED_DETECTED", "QA_FLAKY_DETECTED",
                 "QA_RECOVERED", "QA_RUN_ERROR"):
-        assert EVENT_TYPE_ADMIN_PATH.get(evt) == "/auto-qa-dashboard", f"{evt} missing"
+        assert EVENT_TYPE_ADMIN_PATH.get(evt) == "/qa/dashboard", f"{evt} missing"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -555,7 +555,7 @@ def test_QS08_qa_admin_button_in_payload(monkeypatch):
         action_blocks = [b for b in blocks if b.get("type") == "actions"]
         assert len(action_blocks) == 1, f"{evt}: actions block must exist"
         btn = action_blocks[0]["elements"][0]
-        assert btn["url"].endswith("/auto-qa-dashboard"), f"{evt}: wrong URL"
+        assert btn["url"].endswith("/qa/dashboard"), f"{evt}: wrong URL"
         assert btn["text"]["text"] == "어드민에서 보기", f"{evt}: wrong button text"
 
 
@@ -827,7 +827,7 @@ def test_R3_qa_fail_section_blocks_gets_admin_button(monkeypatch):
     asyncio.run(send_slack(**payload))
     action_blocks = [b for b in captured["payload"]["blocks"] if b.get("type") == "actions"]
     assert len(action_blocks) == 1
-    assert action_blocks[0]["elements"][0]["url"].endswith("/auto-qa-dashboard")
+    assert action_blocks[0]["elements"][0]["url"].endswith("/qa/dashboard")
 
 
 def test_R4_qa_flaky_section_blocks_gets_admin_button(monkeypatch):
@@ -847,4 +847,4 @@ def test_R4_qa_flaky_section_blocks_gets_admin_button(monkeypatch):
     asyncio.run(send_slack(**payload))
     action_blocks = [b for b in captured["payload"]["blocks"] if b.get("type") == "actions"]
     assert len(action_blocks) == 1
-    assert action_blocks[0]["elements"][0]["url"].endswith("/auto-qa-dashboard")
+    assert action_blocks[0]["elements"][0]["url"].endswith("/qa/dashboard")
