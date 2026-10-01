@@ -166,12 +166,16 @@ def issue_saas_quote_v2(
     request: SaasQuoteIssueRequestV2,
     user_id: str,
     company_id: str,
+    server_survey_data: dict | None = None,
 ) -> dict:
     """SaaS V2 자동견적 발행.
 
     DB Read: companies (company_name), price_master (via Preview V2)
     DB Write: quotes (1 row)
     Contract: 0. Payment: 0. Subscription: 0.
+
+    server_survey_data: 서버가 주입하는 survey_data (e.g. commercial_v3_renewal 바인딩).
+                        None 이면 {} 로 저장.
     """
     # ── Step 1: 회사명 스냅샷 ──────────────────────────────────────────
     company_name = member_quote_svc._company_name_snapshot(supabase, company_id)
@@ -250,6 +254,7 @@ def issue_saas_quote_v2(
         "vat_amount": snap.vat_amount,
         "total_amount": snap.total_amount,
         "is_active": True,
+        "survey_data": server_survey_data if server_survey_data is not None else {},
         "created_at": now,
         "updated_at": now,
     }
