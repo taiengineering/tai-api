@@ -29,6 +29,12 @@ from services.saas_entitlement_runtime_v2 import (
 )
 from services.time import now_kst
 
+
+class CommercialRuntimeStateInvalidError(Exception):
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
 _CONTRACT_COLS = (
     "id, contract_no, company_id, quote_id, "
     "service_type, status_code, is_active, "
@@ -244,4 +250,117 @@ def get_member_commercial_contract(
         "contract": contract,
         "commercial_version": cv,
         "site_scopes": scopes,
+    }
+
+
+# ── Runtime Gate ──────────────────────────────────────────────────────────────
+
+_NOT_V3_RESULT_BASE = {
+    "generation": "NOT_COMMERCIAL_V3",
+    "can_execute": None,
+    "status": None,
+    "reason_code": None,
+    "product_tier": None,
+    "commercial_version_no": None,
+}
+
+_COMPLIANT_ENTITLEMENT_CODES = frozenset({"ALLOWED"})
+_BLOCKED_BY_ENTITLEMENT = frozenset({"DENIED", "CUSTOM_CONTEXT_REQUIRED"})
+
+
+def get_member_runtime_gate(
+    supabase,
+    company_id: Optional[str],
+    factory_id: Optional[str] = None,
+    site_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Commercial V3 실행 게이트 — entitlement + site scope 판정.
+
+    정확히 factory_id / site_id 중 하나만 허용.
+    DB write = 0.
+
+    generation=COMMERCIAL_V3: V3 판정 결과 반환
+    generation=NOT_COMMERCIAL_V3: legacy fallback 신호
+
+    state machine:
+      ALLOWED                 — can_execute=true
+      DENIED                  — can_execute=false
+      CUSTOM_CONTEXT_REQUIRED — can_execute=false
+      SITE_OUT_OF_SCOPE       — can_execute=false
+    """
+    from services.saas_entitlement_gate_v2 import evaluate_saas_entitlement_v2
+
+    # ── target validation ─────────────────────────────────────────────────────
+    fid = (factory_id or "").strip() or None
+    sid = (site_id or "").strip() or None
+    if (fid is None) == (sid is None):
+        raise ValueError("factory_id 또는 site_id 중 하나만 전달해야 합니다.")
+    entity_type = "factory" if fid else "site"
+    entity_id = fid or sid
+
+    if not company_id:
+        return {
+            **_NOT_V3_RESULT_BASE,
+            "target": {"entity_type": entity_type, "entity_id": entity_id},
+        }
+
+    as_of = now_kst()
+
+    # ── V3 contract + CV resolution ───────────────────────────────────────────
+    try:
+        resolution = resolve_saas_entitlement_context_v2(supabase, company_id, as_of)
+    except SaasEntitlementRuntimeError as exc:
+        if exc.code in {"NO_ACTIVE_SAAS_CONTRACT", "CURRENT_CV_NOT_FOUND"}:
+            return {
+                **_NOT_V3_RESULT_BASE,
+                "target": {"entity_type": entity_type, "entity_id": entity_id},
+            }
+        raise CommercialRuntimeStateInvalidError(exc.code)
+
+    # ── COMPLIANCE_CORE entitlement ───────────────────────────────────────────
+    decision = evaluate_saas_entitlement_v2(resolution.context, "COMPLIANCE_CORE")
+    ent_status = decision.status  # ALLOWED | DENIED | CUSTOM_CONTEXT_REQUIRED
+
+    if ent_status != "ALLOWED":
+        return {
+            "generation": "COMMERCIAL_V3",
+            "can_execute": False,
+            "status": ent_status,
+            "reason_code": ent_status,
+            "product_tier": resolution.product_tier,
+            "commercial_version_no": resolution.commercial_version_no,
+            "target": {"entity_type": entity_type, "entity_id": entity_id},
+        }
+
+    # ── Site scope ────────────────────────────────────────────────────────────
+    scope_res = (
+        supabase.table("saas_contract_site_scopes")
+        .select("id")
+        .eq("commercial_version_id", resolution.commercial_version_id)
+        .eq("entity_type", entity_type)
+        .eq("entity_id", str(entity_id))
+        .limit(1)
+        .execute()
+    )
+    in_scope = bool(scope_res.data)
+
+    if not in_scope:
+        return {
+            "generation": "COMMERCIAL_V3",
+            "can_execute": False,
+            "status": "SITE_OUT_OF_SCOPE",
+            "reason_code": "SITE_OUT_OF_SCOPE",
+            "product_tier": resolution.product_tier,
+            "commercial_version_no": resolution.commercial_version_no,
+            "target": {"entity_type": entity_type, "entity_id": entity_id},
+        }
+
+    return {
+        "generation": "COMMERCIAL_V3",
+        "can_execute": True,
+        "status": "ALLOWED",
+        "reason_code": None,
+        "product_tier": resolution.product_tier,
+        "commercial_version_no": resolution.commercial_version_no,
+        "target": {"entity_type": entity_type, "entity_id": entity_id},
     }

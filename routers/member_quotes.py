@@ -293,6 +293,207 @@ def prepare_v2_payment(
     return result
 
 
+@router.post("/v2/{quote_id}/renewal/payment/prepare")
+def prepare_v2_renewal_payment(
+    quote_id: str,
+    body: SaasV2PaymentPrepareBody,
+    current: dict = Depends(get_current_user),
+):
+    """Renewal Frozen Quote → INICIS Renewal 결제 준비.
+
+    client는 contract_id를 전달하지 않는다.
+    server가 quote의 survey_data.commercial_v3_renewal에서 contract_id를 파생한다.
+    """
+    supabase = get_supabase()
+    company_id = _require_member_company(current, supabase)
+
+    # Load + ownership
+    from services import member_quote_svc as _mqs
+    quote = _mqs.get_member_quote(supabase, quote_id)
+    if not quote or str(quote.get("company_id")) != str(company_id):
+        raise HTTPException(status_code=404, detail={"code": "QUOTE_NOT_FOUND", "message": "견적을 찾을 수 없습니다."})
+
+    # Validate renewal binding
+    survey = quote.get("survey_data") or {}
+    renewal_ctx = survey.get("commercial_v3_renewal") if isinstance(survey, dict) else None
+    if not renewal_ctx or not isinstance(renewal_ctx, dict):
+        raise HTTPException(status_code=422, detail={"code": "NOT_RENEWAL_QUOTE", "message": "연장 견적이 아닙니다."})
+
+    contract_id = str(renewal_ctx.get("contract_id") or "")
+    current_version_no = renewal_ctx.get("current_version_no")
+    if not contract_id or current_version_no is None:
+        raise HTTPException(status_code=422, detail={"code": "RENEWAL_BINDING_INVALID", "message": "연장 바인딩이 유효하지 않습니다."})
+
+    # Verify CV still matches (version_no binding check)
+    from services.saas_commercial_version_time_v2 import (
+        TemporalVersionError,
+        select_effective_commercial_version_v2,
+        contract_end_date_to_effective_at_v2,
+    )
+    from services.time import now_kst
+    _now = now_kst()
+    cv_res = (
+        supabase.table("saas_contract_commercial_versions")
+        .select("id, version_no, payment_months, product_tier, commercial_schema_version, "
+                "effective_from, superseded_at, contract_id")
+        .eq("contract_id", contract_id)
+        .execute()
+    )
+    all_cvs = cv_res.data or []
+    try:
+        current_cv = select_effective_commercial_version_v2(all_cvs, _now)
+    except TemporalVersionError:
+        raise HTTPException(status_code=409, detail={"code": "CURRENT_CV_NOT_FOUND", "message": "현재 계약 버전을 확인할 수 없습니다."})
+
+    if int(current_cv.get("version_no") or -1) != int(current_version_no):
+        raise HTTPException(status_code=409, detail={"code": "RENEWAL_VERSION_MISMATCH", "message": "계약 버전이 변경되었습니다. 연장 견적을 다시 발행해 주세요."})
+
+    # Fix D: full CV validation before any payment INSERT / INICIS launch
+    cv_schema = str(current_cv.get("commercial_schema_version") or "")
+    if cv_schema != "SAAS_CONTRACT_COMMERCIAL_V2":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RENEWAL_STATE_INVALID", "message": "상업계약 스키마 버전이 지원되지 않습니다."},
+        )
+    cv_tier = str(current_cv.get("product_tier") or "")
+    if cv_tier == "CUSTOM":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "CUSTOM_REVIEW_REQUIRED", "message": "맞춤형 계약은 별도 문의가 필요합니다."},
+        )
+    if cv_tier not in {"MANAGER", "FIELD"}:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RENEWAL_STATE_INVALID", "message": "수동 연장이 불가한 상품 등급입니다."},
+        )
+    cv_pm = int(current_cv.get("payment_months") or 0)
+    if cv_pm == 1:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RECURRING_MANAGED_AUTOMATICALLY",
+                    "message": "정기결제 계약은 수동 연장이 불가합니다."},
+        )
+    _ALLOWED_PM = frozenset({3, 6, 9, 12})
+    if cv_pm not in _ALLOWED_PM:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RENEWAL_STATE_INVALID",
+                    "message": f"현재 계약의 결제 주기가 연장 불가 상태입니다: {cv_pm}"},
+        )
+
+    # Fix E: contract is_active + end_date hard stop
+    ct_res2 = (
+        supabase.table("contracts")
+        .select("id, status_code, service_type, is_active, end_date")
+        .eq("id", contract_id)
+        .limit(1)
+        .execute()
+    )
+    ct_row = (ct_res2.data or [None])[0]
+    if not ct_row:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "CONTRACT_NOT_FOUND", "message": "계약 정보를 찾을 수 없습니다."},
+        )
+    if ct_row.get("status_code") != "ACTIVE":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "CONTRACT_NOT_ACTIVE", "message": "활성 상태 계약에만 연장이 가능합니다."},
+        )
+    if ct_row.get("service_type") != "SAAS":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "CONTRACT_NOT_SAAS", "message": "SaaS 계약에만 연장이 가능합니다."},
+        )
+    if ct_row.get("is_active") is not True:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RENEWAL_STATE_INVALID", "message": "활성 계약에만 연장이 가능합니다."},
+        )
+    end_date = ct_row.get("end_date")
+    if not end_date:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RENEWAL_END_DATE_REQUIRED", "message": "계약 마감일 정보가 없어 연장이 불가합니다."},
+        )
+    try:
+        contract_end_boundary = contract_end_date_to_effective_at_v2(end_date)
+        if _now >= contract_end_boundary:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "RENEWAL_WINDOW_CLOSED", "message": "계약 연장 기간이 종료되었습니다."},
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RENEWAL_STATE_INVALID", "message": "계약 날짜 파싱 오류."},
+        )
+
+    # ── Payment idempotency guard (RENEWAL) ──────────────────────────────────
+    from services.saas_renewal_payment_guard import (
+        check_existing_renewal_payment,
+        is_renewal_unique_violation,
+        RenewalPaymentGuardError,
+    )
+    try:
+        check_existing_renewal_payment(
+            supabase,
+            quote_id=quote_id,
+            company_id=company_id,
+            user_id=current["id"],
+        )
+    except RenewalPaymentGuardError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"code": exc.code, "message": exc.message},
+        )
+
+    from services.saas_renewal_v2_adapter import (
+        SaasRenewalV2AdapterError,
+        prepare_saas_v2_renewal_payment_from_quote,
+    )
+    try:
+        result = prepare_saas_v2_renewal_payment_from_quote(
+            supabase,
+            contract_id=contract_id,
+            quote_id=quote_id,
+            company_id=company_id,
+            user_id=current["id"],
+            as_of=_now,
+            proof_type=body.proof_type,
+            buyername=body.buyername,
+            buyertel=body.buyertel,
+            buyeremail=body.buyeremail,
+        )
+    except SaasRenewalV2AdapterError as exc:
+        if exc.code in {"CONTRACT_NOT_FOUND", "CONTRACT_NOT_OWNED", "QUOTE_NOT_FOUND", "QUOTE_NOT_OWNED"}:
+            raise HTTPException(status_code=404, detail={"code": exc.code, "message": exc.message})
+        if exc.code in {"RENEWAL_ALREADY_SCHEDULED", "CURRENT_CV_SUPERSEDED", "RENEWAL_BOUNDARY_CONFLICT"}:
+            raise HTTPException(status_code=409, detail={"code": exc.code, "message": exc.message})
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": exc.message})
+    except Exception as exc:
+        if is_renewal_unique_violation(exc):
+            # 23505 race: re-read existing
+            try:
+                existing_result = check_existing_renewal_payment(
+                    supabase,
+                    quote_id=quote_id,
+                    company_id=company_id,
+                    user_id=current["id"],
+                )
+                if existing_result:
+                    return existing_result
+            except RenewalPaymentGuardError as guard_exc:
+                raise HTTPException(
+                    status_code=guard_exc.http_status,
+                    detail={"code": guard_exc.code, "message": guard_exc.message},
+                )
+        raise
+    return result
+
+
 @router.get("")
 def list_my_quotes(page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
                    current: dict = Depends(get_current_user)):
