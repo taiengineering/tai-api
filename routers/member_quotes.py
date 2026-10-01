@@ -395,6 +395,16 @@ def prepare_v2_renewal_payment(
             status_code=404,
             detail={"code": "CONTRACT_NOT_FOUND", "message": "계약 정보를 찾을 수 없습니다."},
         )
+    if ct_row.get("status_code") != "ACTIVE":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "CONTRACT_NOT_ACTIVE", "message": "활성 상태 계약에만 연장이 가능합니다."},
+        )
+    if ct_row.get("service_type") != "SAAS":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "CONTRACT_NOT_SAAS", "message": "SaaS 계약에만 연장이 가능합니다."},
+        )
     if ct_row.get("is_active") is not True:
         raise HTTPException(
             status_code=422,

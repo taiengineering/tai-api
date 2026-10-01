@@ -28,6 +28,7 @@ _ALLOWED_RENEWAL_MONTHS = frozenset({3, 6, 9, 12})
 _MANUAL_RENEWAL_TIERS = frozenset({"MANAGER", "FIELD"})
 _PAID_STATUS = frozenset({"PAID", "SUCCESS"})
 _RENEWAL_SCHEMA_VERSION = "SAAS_CONTRACT_COMMERCIAL_V2"
+_ALLOWED_ANCHOR_TYPES = frozenset({"CARD", "RENEWAL"})
 
 
 class SaasRenewalQuoteError(Exception):
@@ -41,7 +42,7 @@ class SaasRenewalQuoteError(Exception):
 
 
 def _parse_paid_at(s) -> datetime:
-    """Parse paid_at string → timezone-aware datetime. Raises ValueError if invalid/empty."""
+    """Parse paid_at string → timezone-aware datetime. Raises ValueError if invalid/empty/naive."""
     if not s:
         raise ValueError("paid_at is empty or None")
     try:
@@ -49,15 +50,42 @@ def _parse_paid_at(s) -> datetime:
     except (ValueError, TypeError) as exc:
         raise ValueError(f"paid_at not parseable: {s!r}") from exc
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        raise ValueError(f"paid_at has no timezone: {s!r}")
     return dt
 
 
-def _get_latest_eligible_payment_id(supabase, contract_id: str) -> Optional[str]:
-    """latest SAAS PAID/SUCCESS payment for contract. UPGRADE excluded. CARD/RENEWAL/INITIAL allowed.
+def _select_latest_eligible_payment_id(rows: list) -> Optional[str]:
+    """Pure helper: CARD/RENEWAL only; strict paid_at; deterministic (paid_at, id) tie-breaker.
 
-    Uses timezone-aware paid_at sort (Fix C shared helper).
-    Returns None if no valid payment exists (all have invalid paid_at or no payments).
+    Raises SaasRenewalQuoteError(RENEWAL_STATE_INVALID) if any CARD/RENEWAL row has
+    invalid/missing paid_at — do NOT skip and fall back to an older row.
+    Returns None if no CARD/RENEWAL rows exist.
+    """
+    candidates: list = []
+    for p in rows:
+        ptype = (p.get("payment_type") or "").upper()
+        if ptype not in _ALLOWED_ANCHOR_TYPES:
+            continue
+        paid_at_raw = p.get("paid_at")
+        try:
+            dt = _parse_paid_at(paid_at_raw)
+        except ValueError:
+            raise SaasRenewalQuoteError(
+                "RENEWAL_STATE_INVALID",
+                f"결제 날짜 파싱 오류: {paid_at_raw!r}",
+            )
+        candidates.append((dt, str(p.get("id") or "")))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return candidates[0][1]
+
+
+def _get_latest_eligible_payment_id(supabase, contract_id: str) -> Optional[str]:
+    """Fetches PAID/SUCCESS SAAS payments for contract; delegates to _select_latest_eligible_payment_id.
+
+    Raises SaasRenewalQuoteError(RENEWAL_STATE_INVALID) if any CARD/RENEWAL row has bad paid_at.
+    Returns None if no CARD/RENEWAL payments exist.
     """
     res = (
         supabase.table("payments")
@@ -67,20 +95,7 @@ def _get_latest_eligible_payment_id(supabase, contract_id: str) -> Optional[str]
         .in_("status_code", list(_PAID_STATUS))
         .execute()
     )
-    candidates: list = []
-    for p in (res.data or []):
-        ptype = (p.get("payment_type") or "INITIAL").upper()
-        if ptype == "UPGRADE":
-            continue
-        try:
-            dt = _parse_paid_at(p.get("paid_at"))
-            candidates.append((dt, str(p.get("id") or "")))
-        except Exception:
-            continue
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    return candidates[0][1]
+    return _select_latest_eligible_payment_id(res.data or [])
 
 
 def is_renewal_quote_unique_violation(exc: Exception) -> bool:
@@ -162,11 +177,16 @@ def create_renewal_quote(
     if str(pay.get("company_id") or "") != str(company_id):
         raise SaasRenewalQuoteError("PAYMENT_NOT_OWNED", "결제를 찾을 수 없습니다.", 404)
 
-    # ── Step 2: product_type / status 가드 ──────────────────────────────
+    # ── Step 2: product_type / status / payment_type 가드 ──────────────
     if pay.get("product_type") != "SAAS":
         raise SaasRenewalQuoteError("NOT_COMMERCIAL_V3", "V3 SAAS 결제에만 연장이 가능합니다.")
     if (pay.get("status_code") or "") not in _PAID_STATUS:
         raise SaasRenewalQuoteError("NOT_SUCCESSFUL_PAYMENT", "완료된 결제에만 연장이 가능합니다.")
+    if (pay.get("payment_type") or "").upper() not in _ALLOWED_ANCHOR_TYPES:
+        raise SaasRenewalQuoteError(
+            "NOT_COMMERCIAL_V3",
+            "CARD 또는 RENEWAL 결제에만 연장이 가능합니다.",
+        )
 
     # ── Step 3: contract 조회 ────────────────────────────────────────────
     contract_id = str(pay.get("contract_id") or "")
