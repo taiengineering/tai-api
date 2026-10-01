@@ -1,7 +1,7 @@
 # QA Control Canonical Contract v1
 
-**WO:** WO-QA-CONTROL-PHASE2A-001 + PATCH-2A-01 + PATCH-2A-02 + PATCH-2A-03
-**Status:** READY FOR OWNER REVIEW
+**WO:** WO-QA-CONTROL-PHASE2A-001 + PATCH-2A-01 + PATCH-2A-02 + PATCH-2A-03 + PATCH-2A-04
+**Status:** CLOSED — Production APPLIED / Dynamic Verify PASS
 **Date:** 2026-10-01
 **Migration:** `supabase/migrations/20261001000000_create_qa_control_canonical_v1.sql`
 **Seed:** `supabase/migrations/20261001000001_seed_qa_items_p0.sql`
@@ -351,6 +351,8 @@ tai-api service_role = DB 접근 authority
 browser = QA 테이블 접근 금지
 ```
 
+Supabase Security Advisor `RLS enabled, no policy` INFO = **의도된 상태**. tai-api service_role 전용 접근이므로 browser/anon 정책 불필요.
+
 **secret/token 저장 금지 컬럼:**
 - `artifact_ref`: 내부 reference만 (GitHub artifact ID / storage key). signed URL 저장 금지.
 - `error_summary`: 예외 메시지 원문 노출 최소화.
@@ -393,8 +395,8 @@ Phase 2-A 완료 체크리스트:
 - [x] GitHub identity (run_id, attempt) 복합 UNIQUE (PATCH-2A-03)
 - [x] github_run_id / attempt cross-column CHECK (PATCH-2A-03)
 - [x] attempt 개념 구분 문서화 (PATCH-2A-03)
-- [ ] production DB apply (Owner Approval 대기)
-- [ ] verification G1~G9+ dynamic (apply 후 실행)
+- [x] production DB apply — COMPLETE 2026-10-01
+- [x] dynamic verification — 9/9 PASS (G1~G6 + T2~T4, 2026-10-01)
 
 Phase 2-B handoff 항목:
 ```
@@ -406,4 +408,4 @@ Phase 2-B handoff 항목:
 6. GET  /admin/qa/runs/{id}           — run 상세 + targets + results
 ```
 
-Phase 2-B 시작 조건: GPT 검증 + Owner production apply 승인.
+Phase 2-B 시작 조건: PR #470 merge 완료.
