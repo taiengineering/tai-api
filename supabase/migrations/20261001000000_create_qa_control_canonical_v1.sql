@@ -1,5 +1,5 @@
--- WO-QA-CONTROL-PHASE2A-001 + PATCH-2A-01: QA Canonical DB Contract v1
--- 5개 테이블: qa_items / qa_schedules / qa_run_targets / qa_runs / qa_run_results
+-- WO-QA-CONTROL-PHASE2A-001 + PATCH-2A-01 + PATCH-2A-02: QA Canonical DB Contract v1
+-- 5개 테이블: qa_items / qa_schedules / qa_runs / qa_run_targets / qa_run_results
 -- RLS: ENABLED 전체 — anon / authenticated direct access = NONE
 -- tai-api service_role 전용. Admin Front → tai-api → Supabase 경로만 허용.
 -- text + CHECK constraints (ENUM 미사용 — 향후 value 확장 부담 최소화).
@@ -46,7 +46,7 @@ COMMENT ON COLUMN public.qa_items.expected_summary IS 'Display-only. NOT used fo
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Table 2: qa_schedules
 -- 항목별 자동 실행 설정. UNIQUE(qa_item_id) — 1항목 1스케줄.
--- Semantic CHECK: frequency_type + 연관 컨럼 조합 고정.
+-- Semantic CHECK: frequency_type + 연관 컬럼 조합 고정.
 --   MANUAL    → enabled=false, frequency_value/anchor_time/day_of_week 모두 NULL
 --   MINUTES   → frequency_value > 0, day_of_week NULL
 --   HOURLY    → frequency_value > 0, day_of_week NULL
@@ -69,7 +69,7 @@ CREATE TABLE public.qa_schedules (
 
     CONSTRAINT qa_schedules_qa_item_id_key  UNIQUE (qa_item_id),
 
-    -- 시맨틱 CHECK: frequency_type별 연관 컨럼 조합 강제
+    -- 시맨틱 CHECK: frequency_type별 연관 컬럼 조합 강제
     -- MINUTES/HOURLY의 anchor_time은 향후 offset 용도로 NULL/값 모두 허용
     CONSTRAINT qa_schedules_semantic_chk CHECK (
         (frequency_type = 'MANUAL'
@@ -112,6 +112,7 @@ COMMENT ON COLUMN public.qa_schedules.day_of_week IS '0=Sunday .. 6=Saturday. Me
 -- 실행 요청 / GitHub Actions 실행 단위.
 -- TAI 내부 id(uuid) != github_run_id(bigint). 별개 authority.
 -- github_run_id: non-NULL 값 중복 금지, NULL 다중 허용 (partial unique index).
+-- github_run_attempt: non-NULL이면 >= 1 (PATCH-2A-02)
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE public.qa_runs (
     id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -133,8 +134,11 @@ CREATE TABLE public.qa_runs (
     CONSTRAINT qa_runs_trigger_type_chk CHECK (
         trigger_type IN ('SCHEDULE','MANUAL','PR','RETRY')
     ),
-    CONSTRAINT qa_runs_run_status_chk   CHECK (
+    CONSTRAINT qa_runs_run_status_chk CHECK (
         run_status IN ('QUEUED','RUNNING','COMPLETED','ERROR','CANCELED')
+    ),
+    CONSTRAINT qa_runs_github_run_attempt_chk CHECK (
+        github_run_attempt IS NULL OR github_run_attempt >= 1
     )
 );
 
@@ -154,9 +158,10 @@ COMMENT ON COLUMN public.qa_runs.github_run_id IS 'GitHub Actions run_id referen
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Table 4: qa_run_targets (PATCH-2A-01)
--- 실행 요청 대상 구체화. QUEUED/RUNNING 싴레에서도 대상 QA 항목 파악 가능.
+-- 실행 요청 대상 구체화. QUEUED/RUNNING 상태에서도 대상 QA 항목 파악 가능.
 -- qa_run_targets = 실행하기로 한 것 (request side)
 -- qa_run_results = 실제 실행 결과 (evidence side)
+-- ordinal: non-NULL이면 >= 1 (PATCH-2A-02)
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE public.qa_run_targets (
     id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -165,7 +170,8 @@ CREATE TABLE public.qa_run_targets (
     ordinal     integer,
     created_at  timestamptz NOT NULL DEFAULT now(),
 
-    CONSTRAINT qa_run_targets_run_item_key UNIQUE (run_id, qa_item_id)
+    CONSTRAINT qa_run_targets_run_item_key UNIQUE (run_id, qa_item_id),
+    CONSTRAINT qa_run_targets_ordinal_chk  CHECK (ordinal IS NULL OR ordinal >= 1)
 );
 
 CREATE INDEX IF NOT EXISTS ix_qa_run_targets_run_id     ON public.qa_run_targets(run_id);
@@ -174,7 +180,7 @@ CREATE INDEX IF NOT EXISTS ix_qa_run_targets_qa_item_id ON public.qa_run_targets
 ALTER TABLE public.qa_run_targets ENABLE ROW LEVEL SECURITY;
 
 COMMENT ON TABLE  public.qa_run_targets IS 'WO-QA-CONTROL-PHASE2A-001 Run request targets. Enables QUEUED/RUNNING state inspection without waiting for results. request side != evidence side.';
-COMMENT ON COLUMN public.qa_run_targets.ordinal IS 'Optional execution order hint. NULL = no ordering constraint.';
+COMMENT ON COLUMN public.qa_run_targets.ordinal IS 'Optional execution order hint. NULL = no ordering constraint. If set, must be >= 1.';
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Table 5: qa_run_results
@@ -183,6 +189,8 @@ COMMENT ON COLUMN public.qa_run_targets.ordinal IS 'Optional execution order hin
 -- FLAKY = derived (API가 attempt1=FAIL + attempt2=PASS로 파생) — DB에 저장 안 함.
 -- NEVER_RUN = derived (result 이력 부재) — DB에 저장 안 함.
 -- UNIQUE(run_id, qa_item_id, attempt) — retry row 별도 보존.
+-- composite FK → qa_run_targets(run_id, qa_item_id) (PATCH-2A-02)
+--   target에 없는 QA 항목 result INSERT = DB FK 차단.
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE public.qa_run_results (
     id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -201,12 +209,16 @@ CREATE TABLE public.qa_run_results (
     created_at    timestamptz NOT NULL DEFAULT now(),
 
     -- raw evidence only: FLAKY는 API가 파생 — DB에 저장 금지
-    CONSTRAINT qa_run_results_result_status_chk     CHECK (
+    CONSTRAINT qa_run_results_result_status_chk    CHECK (
         result_status IN ('PASS','FAIL','BLOCKED','SKIPPED')
     ),
-    CONSTRAINT qa_run_results_attempt_chk           CHECK (attempt >= 1),
-    CONSTRAINT qa_run_results_duration_ms_chk       CHECK (duration_ms IS NULL OR duration_ms >= 0),
-    CONSTRAINT qa_run_results_run_item_attempt_key  UNIQUE (run_id, qa_item_id, attempt)
+    CONSTRAINT qa_run_results_attempt_chk          CHECK (attempt >= 1),
+    CONSTRAINT qa_run_results_duration_ms_chk      CHECK (duration_ms IS NULL OR duration_ms >= 0),
+    CONSTRAINT qa_run_results_run_item_attempt_key UNIQUE (run_id, qa_item_id, attempt),
+    -- request/evidence integrity: result는 반드시 해당 run의 target이어야 한다 (PATCH-2A-02)
+    CONSTRAINT qa_run_results_target_fk
+        FOREIGN KEY (run_id, qa_item_id)
+        REFERENCES public.qa_run_targets(run_id, qa_item_id)
 );
 
 CREATE INDEX IF NOT EXISTS ix_qa_run_results_run_id        ON public.qa_run_results(run_id);
@@ -217,6 +229,6 @@ CREATE INDEX IF NOT EXISTS ix_qa_run_results_run_item      ON public.qa_run_resu
 
 ALTER TABLE public.qa_run_results ENABLE ROW LEVEL SECURITY;
 
-COMMENT ON TABLE  public.qa_run_results IS 'WO-QA-CONTROL-PHASE2A-001 Raw attempt evidence per scenario per run. FLAKY/NEVER_RUN are derived by API, not stored here.';
+COMMENT ON TABLE  public.qa_run_results IS 'WO-QA-CONTROL-PHASE2A-001 Raw attempt evidence per scenario per run. FLAKY/NEVER_RUN are derived by API, not stored here. result must reference qa_run_targets(run_id, qa_item_id).';
 COMMENT ON COLUMN public.qa_run_results.result_status IS 'Raw result: PASS/FAIL/BLOCKED/SKIPPED. FLAKY = derived when attempt1=FAIL + attempt2=PASS for same run+item.';
 COMMENT ON COLUMN public.qa_run_results.artifact_ref  IS 'Internal reference only (GitHub artifact ID or storage key). Never store signed URLs or tokens.';
