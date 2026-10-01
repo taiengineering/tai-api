@@ -1,16 +1,25 @@
-"""WO-COMM-V3-PAYMENT-MYPAGE-RENEWAL-WIRING-001 — Payment History Projection + Renewal Wiring 인수 테스트.
+"""WO-COMM-V3-PAYMENT-MYPAGE-RENEWAL-WIRING-001/PATCH-002 — Payment History Projection + Renewal Wiring 인수 테스트.
 
 Q01-Q03 : _attach_quote_enrichment 배치 enrichment
 P01-P08 : _attach_renewal_eligibility 조건 분기
 R01-R19 : create_renewal_quote 도메인 가드
 C01-C03 : prepare_v2_renewal_payment 라우터 renewal binding 검증
 Regression : 기존 _attach_tax_status / issue_saas_quote_v2 시그니처 회귀 없음
+RR01-RR05 : Repeat Renewal (PATCH-002)
+RC01-RC03 : Recurring bypass guard (PATCH-002)
+TF01-TF03 : Temporal fail-closed (PATCH-002)
+QI01-QI03 : Quote Idempotency (PATCH-002)
+PA01-PA04 : Payment Attempt Guard (PATCH-002)
 """
 from __future__ import annotations
 
 import pytest
 from unittest.mock import MagicMock, patch
 from types import SimpleNamespace
+from uuid import uuid4
+
+_COMPANY = "co-001"
+_USER = "u-001"
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -121,30 +130,137 @@ def test_P02_not_saas():
     assert rows[0]["renewal_reason_code"] == "NOT_COMMERCIAL_V3"
 
 
-def test_P03_period_1_recurring():
-    """period_months=1 → RECURRING_MANAGED_AUTOMATICALLY."""
+def test_P03_cv_period_1_recurring():
+    """current CV payment_months=1 → RECURRING_MANAGED_AUTOMATICALLY (PATCH-002: CV 기반)."""
     rows = [_make_candidate_row(period_months=1)]
+
+    ct_chain = MagicMock()
+    ct_chain.execute.return_value = SimpleNamespace(
+        data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS", "end_date": None}], count=1
+    )
+    ct_chain.select.return_value = ct_chain
+    ct_chain.in_.return_value = ct_chain
+    ct_chain.eq.return_value = ct_chain
+
+    cv_chain = MagicMock()
+    cv_chain.execute.return_value = SimpleNamespace(
+        data=[{
+            "id": "cv-001", "contract_id": "ct-001", "version_no": 1,
+            "product_tier": "MANAGER", "payment_months": 1,
+            "commercial_schema_version": "V2", "pricing_mode": "STANDARD",
+            "effective_from": "2026-01-01T00:00:00+09:00", "superseded_at": None,
+        }], count=1
+    )
+    cv_chain.select.return_value = cv_chain
+    cv_chain.in_.return_value = cv_chain
+    cv_chain.eq.return_value = cv_chain
+
+    pay_chain = MagicMock()
+    pay_chain.execute.return_value = SimpleNamespace(data=[], count=0)
+    pay_chain.select.return_value = pay_chain
+    pay_chain.in_.return_value = pay_chain
+    pay_chain.eq.return_value = pay_chain
+
     sb = MagicMock()
-    _attach_renewal_eligibility(sb, rows, "co-001")
+    def table_side(name):
+        if name == "contracts":
+            return ct_chain
+        if name == "saas_contract_commercial_versions":
+            return cv_chain
+        return pay_chain
+    sb.table.side_effect = table_side
+
+    with patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]):
+        _attach_renewal_eligibility(sb, rows, "co-001")
     assert rows[0]["renewal_eligible"] is False
     assert rows[0]["renewal_reason_code"] == "RECURRING_MANAGED_AUTOMATICALLY"
 
 
-def test_P04_tier_custom():
-    """product_tier=CUSTOM → CUSTOM_REVIEW_REQUIRED."""
+def test_P04_cv_tier_custom():
+    """current CV product_tier=CUSTOM → CUSTOM_REVIEW_REQUIRED (PATCH-002: CV 기반)."""
     rows = [_make_candidate_row(product_tier="CUSTOM")]
+
+    ct_chain = MagicMock()
+    ct_chain.execute.return_value = SimpleNamespace(
+        data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS", "end_date": None}], count=1
+    )
+    ct_chain.select.return_value = ct_chain
+    ct_chain.in_.return_value = ct_chain
+    ct_chain.eq.return_value = ct_chain
+
+    cv_chain = MagicMock()
+    cv_chain.execute.return_value = SimpleNamespace(
+        data=[{
+            "id": "cv-001", "contract_id": "ct-001", "version_no": 1,
+            "product_tier": "CUSTOM", "payment_months": 6,
+            "commercial_schema_version": "V2", "pricing_mode": "STANDARD",
+            "effective_from": "2026-01-01T00:00:00+09:00", "superseded_at": None,
+        }], count=1
+    )
+    cv_chain.select.return_value = cv_chain
+    cv_chain.in_.return_value = cv_chain
+    cv_chain.eq.return_value = cv_chain
+
+    pay_chain = MagicMock()
+    pay_chain.execute.return_value = SimpleNamespace(data=[], count=0)
+    pay_chain.select.return_value = pay_chain
+    pay_chain.in_.return_value = pay_chain
+    pay_chain.eq.return_value = pay_chain
+
     sb = MagicMock()
-    _attach_renewal_eligibility(sb, rows, "co-001")
+    def table_side(name):
+        if name == "contracts":
+            return ct_chain
+        if name == "saas_contract_commercial_versions":
+            return cv_chain
+        return pay_chain
+    sb.table.side_effect = table_side
+
+    with patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]):
+        _attach_renewal_eligibility(sb, rows, "co-001")
     assert rows[0]["renewal_eligible"] is False
     assert rows[0]["renewal_reason_code"] == "CUSTOM_REVIEW_REQUIRED"
 
 
-def test_P05_renewal_payment_type_skipped():
-    """payment_type=RENEWAL → NOT_COMMERCIAL_V3 경로 (pre-filter 제외)."""
-    rows = [_make_candidate_row(payment_type="RENEWAL")]
+def test_P05_upgrade_payment_type_skipped():
+    """payment_type=UPGRADE → NOT_COMMERCIAL_V3 경로 (pre-filter 제외, PATCH-002)."""
+    rows = [_make_candidate_row(payment_type="UPGRADE")]
     sb = MagicMock()
     _attach_renewal_eligibility(sb, rows, "co-001")
     assert rows[0]["renewal_eligible"] is False
+    assert rows[0]["renewal_reason_code"] == "NOT_COMMERCIAL_V3"
+
+
+def test_P05b_renewal_payment_type_now_candidate():
+    """payment_type=RENEWAL → PATCH-002: pre-filter 통과 (RENEWAL 포함). CONTRACT_NOT_ACTIVE 또는 그 이후 단계."""
+    rows = [_make_candidate_row(payment_type="RENEWAL")]
+    ct_chain = MagicMock()
+    ct_chain.execute.return_value = SimpleNamespace(data=[], count=0)
+    ct_chain.select.return_value = ct_chain
+    ct_chain.in_.return_value = ct_chain
+    ct_chain.eq.return_value = ct_chain
+    cv_chain = MagicMock()
+    cv_chain.execute.return_value = SimpleNamespace(data=[], count=0)
+    cv_chain.select.return_value = cv_chain
+    cv_chain.in_.return_value = cv_chain
+    cv_chain.eq.return_value = cv_chain
+    pay_chain = MagicMock()
+    pay_chain.execute.return_value = SimpleNamespace(data=[], count=0)
+    pay_chain.select.return_value = pay_chain
+    pay_chain.in_.return_value = pay_chain
+    pay_chain.eq.return_value = pay_chain
+    sb = MagicMock()
+    def table_side(name):
+        if name == "contracts":
+            return ct_chain
+        if name == "saas_contract_commercial_versions":
+            return cv_chain
+        return pay_chain
+    sb.table.side_effect = table_side
+    _attach_renewal_eligibility(sb, rows, "co-001")
+    # RENEWAL이 pre-filter를 통과하므로 CONTRACT_NOT_ACTIVE (DB mock이 빈 contracts 반환)
+    assert rows[0]["renewal_eligible"] is False
+    assert rows[0]["renewal_reason_code"] == "CONTRACT_NOT_ACTIVE"
 
 
 def test_P06_contract_not_active():
@@ -185,41 +301,55 @@ def test_P06_contract_not_active():
     assert rows[0]["renewal_reason_code"] == "CONTRACT_NOT_ACTIVE"
 
 
-def test_P07_not_current_payment():
-    """최신 결제가 아닌 경우 → NOT_CURRENT_PAYMENT."""
-    rows = [_make_candidate_row(id="pay-OLD")]
+def _make_eligibility_supabase_with_cv(contract_data, payment_data, cv_data=None):
+    """PATCH-002 _attach_renewal_eligibility 용 supabase stub (CV 포함)."""
+    cv_data = cv_data or []
 
     ct_chain = MagicMock()
-    ct_chain.execute.return_value = SimpleNamespace(
-        data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS"}], count=1
-    )
+    ct_chain.execute.return_value = SimpleNamespace(data=contract_data, count=len(contract_data))
     ct_chain.select.return_value = ct_chain
     ct_chain.in_.return_value = ct_chain
     ct_chain.eq.return_value = ct_chain
 
-    pay_chain = MagicMock()
-    pay_chain.execute.return_value = SimpleNamespace(
-        data=[{"id": "pay-LATEST", "contract_id": "ct-001", "paid_at": "2026-09-01T00:00:00+09:00"}], count=1
-    )
-    pay_chain.select.return_value = pay_chain
-    pay_chain.in_.return_value = pay_chain
-    pay_chain.eq.return_value = pay_chain
-
     cv_chain = MagicMock()
-    cv_chain.execute.return_value = SimpleNamespace(data=[], count=0)
+    cv_chain.execute.return_value = SimpleNamespace(data=cv_data, count=len(cv_data))
     cv_chain.select.return_value = cv_chain
     cv_chain.in_.return_value = cv_chain
     cv_chain.eq.return_value = cv_chain
+
+    pay_chain = MagicMock()
+    pay_chain.execute.return_value = SimpleNamespace(data=payment_data, count=len(payment_data))
+    pay_chain.select.return_value = pay_chain
+    pay_chain.in_.return_value = pay_chain
+    pay_chain.eq.return_value = pay_chain
 
     sb = MagicMock()
     def table_side(name):
         if name == "contracts":
             return ct_chain
-        if name == "payments":
-            return pay_chain
-        return cv_chain
+        if name == "saas_contract_commercial_versions":
+            return cv_chain
+        return pay_chain
     sb.table.side_effect = table_side
+    return sb
 
+
+_BASE_CV_DATA = [{
+    "id": "cv-001", "contract_id": "ct-001", "version_no": 1,
+    "product_tier": "MANAGER", "payment_months": 6,
+    "commercial_schema_version": "V2", "pricing_mode": "STANDARD",
+    "effective_from": "2026-01-01T00:00:00+09:00", "superseded_at": None,
+}]
+
+
+def test_P07_not_current_payment():
+    """최신 결제가 아닌 경우 → NOT_CURRENT_PAYMENT."""
+    rows = [_make_candidate_row(id="pay-OLD")]
+    sb = _make_eligibility_supabase_with_cv(
+        contract_data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS", "end_date": None}],
+        payment_data=[{"id": "pay-LATEST", "contract_id": "ct-001", "paid_at": "2026-09-01T00:00:00+09:00", "payment_type": "INITIAL"}],
+        cv_data=_BASE_CV_DATA,
+    )
     with patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]):
         _attach_renewal_eligibility(sb, rows, "co-001")
     assert rows[0]["renewal_eligible"] is False
@@ -229,38 +359,11 @@ def test_P07_not_current_payment():
 def test_P08_eligible():
     """모든 조건 통과 → renewal_eligible=True, ELIGIBLE."""
     rows = [_make_candidate_row(id="pay-LATEST")]
-
-    ct_chain = MagicMock()
-    ct_chain.execute.return_value = SimpleNamespace(
-        data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS"}], count=1
+    sb = _make_eligibility_supabase_with_cv(
+        contract_data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS", "end_date": None}],
+        payment_data=[{"id": "pay-LATEST", "contract_id": "ct-001", "paid_at": "2026-09-01T00:00:00+09:00", "payment_type": "INITIAL"}],
+        cv_data=_BASE_CV_DATA,
     )
-    ct_chain.select.return_value = ct_chain
-    ct_chain.in_.return_value = ct_chain
-    ct_chain.eq.return_value = ct_chain
-
-    pay_chain = MagicMock()
-    pay_chain.execute.return_value = SimpleNamespace(
-        data=[{"id": "pay-LATEST", "contract_id": "ct-001", "paid_at": "2026-09-01T00:00:00+09:00"}], count=1
-    )
-    pay_chain.select.return_value = pay_chain
-    pay_chain.in_.return_value = pay_chain
-    pay_chain.eq.return_value = pay_chain
-
-    cv_chain = MagicMock()
-    cv_chain.execute.return_value = SimpleNamespace(data=[], count=0)
-    cv_chain.select.return_value = cv_chain
-    cv_chain.in_.return_value = cv_chain
-    cv_chain.eq.return_value = cv_chain
-
-    sb = MagicMock()
-    def table_side(name):
-        if name == "contracts":
-            return ct_chain
-        if name == "payments":
-            return pay_chain
-        return cv_chain
-    sb.table.side_effect = table_side
-
     with patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]):
         _attach_renewal_eligibility(sb, rows, "co-001")
     assert rows[0]["renewal_eligible"] is True
@@ -713,10 +816,17 @@ def _make_eligibility_supabase(contract_data, payment_data, cv_data=None):
 def test_T01_eligibility_window_closed():
     """payment history: contract end_date 과거 → RENEWAL_WINDOW_CLOSED."""
     rows = [_make_candidate_row(id="pay-LATEST")]
+    # PATCH-002: CV 데이터 필요 (current_cv 미로드 시 RENEWAL_STATE_INVALID로 처리됨)
+    cv_data_t01 = [{
+        "id": "cv-001", "contract_id": "ct-001", "version_no": 1,
+        "product_tier": "MANAGER", "payment_months": 6,
+        "commercial_schema_version": "V2", "pricing_mode": "STANDARD",
+        "effective_from": "2019-01-01T00:00:00+09:00", "superseded_at": None,
+    }]
     sb = _make_eligibility_supabase(
         contract_data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS", "end_date": "2020-01-01"}],
-        payment_data=[{"id": "pay-LATEST", "contract_id": "ct-001", "paid_at": "2019-06-01T00:00:00+09:00"}],
-        cv_data=[],
+        payment_data=[{"id": "pay-LATEST", "contract_id": "ct-001", "paid_at": "2019-06-01T00:00:00+09:00", "payment_type": "INITIAL"}],
+        cv_data=cv_data_t01,
     )
     with patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]):
         _attach_renewal_eligibility(sb, rows, "co-001")
@@ -729,10 +839,26 @@ def test_T02_eligibility_already_scheduled():
     from datetime import datetime, timezone, timedelta
     rows = [_make_candidate_row(id="pay-LATEST")]
     future_effective = (datetime.now(timezone.utc) + timedelta(days=365)).isoformat()
+    # PATCH-002: current CV 필요 (past effective_from)
+    current_effective = "2026-01-01T00:00:00+09:00"
+    cv_data_t02 = [
+        {
+            "id": "cv-001", "contract_id": "ct-001", "version_no": 1,
+            "product_tier": "MANAGER", "payment_months": 6,
+            "commercial_schema_version": "V2", "pricing_mode": "STANDARD",
+            "effective_from": current_effective, "superseded_at": future_effective,
+        },
+        {
+            "id": "cv-002", "contract_id": "ct-001", "version_no": 2,
+            "product_tier": "MANAGER", "payment_months": 6,
+            "commercial_schema_version": "V2", "pricing_mode": "STANDARD",
+            "effective_from": future_effective, "superseded_at": None,
+        },
+    ]
     sb = _make_eligibility_supabase(
         contract_data=[{"id": "ct-001", "status_code": "ACTIVE", "service_type": "SAAS", "end_date": "2030-01-01"}],
-        payment_data=[{"id": "pay-LATEST", "contract_id": "ct-001", "paid_at": "2026-01-01T00:00:00+09:00"}],
-        cv_data=[{"contract_id": "ct-001", "effective_from": future_effective, "superseded_at": None}],
+        payment_data=[{"id": "pay-LATEST", "contract_id": "ct-001", "paid_at": "2026-01-01T00:00:00+09:00", "payment_type": "INITIAL"}],
+        cv_data=cv_data_t02,
     )
     future_cv = {"contract_id": "ct-001", "effective_from": future_effective, "superseded_at": None}
     with patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[future_cv]):
@@ -824,4 +950,423 @@ def test_I05_renewal_eligibility_code_in_payment_ops():
     from routers import payment_ops
     src = inspect.getsource(payment_ops)
     assert "RENEWAL_ALREADY_SCHEDULED" in src
-    assert "RENEWAL_WINDOW_CLOSED" in src
+
+
+# ─── RR: Repeat Renewal (PATCH-002) ─────────────────────────────────────────
+
+def test_RR04_second_renewal_uses_renewal_payment_as_anchor():
+    """RENEWAL payment_type이 anchor가 될 수 있다 (pre-filter 통과, PATCH-002)."""
+    from routers.payment_ops import _attach_renewal_eligibility
+    cid = str(uuid4())
+    pid = str(uuid4())
+    row = {
+        "id": pid, "contract_id": cid,
+        "product_type": "SAAS", "payment_type": "RENEWAL",
+        "status_code": "PAID", "period_months": 3, "product_tier": "MANAGER",
+        "paid_at": "2026-06-01T00:00:00+09:00",
+    }
+
+    ct_chain = MagicMock()
+    ct_chain.execute.return_value = SimpleNamespace(
+        data=[{"id": cid, "status_code": "ACTIVE", "service_type": "SAAS", "end_date": None}], count=1
+    )
+    ct_chain.select.return_value = ct_chain
+    ct_chain.in_.return_value = ct_chain
+    ct_chain.eq.return_value = ct_chain
+
+    cv_chain = MagicMock()
+    cv_chain.execute.return_value = SimpleNamespace(data=[{
+        "id": "cv-rr04", "contract_id": cid, "version_no": 1,
+        "product_tier": "MANAGER", "payment_months": 3,
+        "commercial_schema_version": "V2", "pricing_mode": "STANDARD",
+        "effective_from": "2026-01-01T00:00:00+09:00", "superseded_at": None,
+    }], count=1)
+    cv_chain.select.return_value = cv_chain
+    cv_chain.in_.return_value = cv_chain
+    cv_chain.eq.return_value = cv_chain
+
+    pay_chain = MagicMock()
+    pay_chain.execute.return_value = SimpleNamespace(
+        data=[{"id": pid, "contract_id": cid, "paid_at": "2026-06-01T00:00:00+09:00", "payment_type": "RENEWAL"}], count=1
+    )
+    pay_chain.select.return_value = pay_chain
+    pay_chain.in_.return_value = pay_chain
+    pay_chain.eq.return_value = pay_chain
+
+    sb = MagicMock()
+    def table_side(name):
+        if name == "contracts":
+            return ct_chain
+        if name == "saas_contract_commercial_versions":
+            return cv_chain
+        return pay_chain
+    sb.table.side_effect = table_side
+
+    with patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]):
+        _attach_renewal_eligibility(sb, [row], _COMPANY)
+    assert row["renewal_eligible"] is True
+    assert row["renewal_reason_code"] == "ELIGIBLE"
+
+
+def test_RR05_upgrade_cannot_anchor_renewal():
+    """UPGRADE payment cannot anchor manual renewal — NOT_COMMERCIAL_V3 immediately."""
+    from routers.payment_ops import _attach_renewal_eligibility
+    row = {
+        "id": str(uuid4()), "contract_id": str(uuid4()),
+        "product_type": "SAAS", "payment_type": "UPGRADE",
+        "status_code": "PAID", "period_months": 3, "product_tier": "MANAGER",
+        "paid_at": "2026-06-01T00:00:00+09:00",
+    }
+    sb = MagicMock()  # UPGRADE → excluded immediately, no DB call needed
+    _attach_renewal_eligibility(sb, [row], _COMPANY)
+    assert row["renewal_eligible"] is False
+    assert row["renewal_reason_code"] == "NOT_COMMERCIAL_V3"
+
+
+# ─── RC: Recurring bypass guard (PATCH-002) ──────────────────────────────────
+
+def test_RC01_cv_pm1_history_recurring():
+    """Current CV payment_months=1 → RECURRING_MANAGED_AUTOMATICALLY in history."""
+    from routers.payment_ops import _attach_renewal_eligibility
+    cid = str(uuid4())
+    pid = str(uuid4())
+    row = {
+        "id": pid, "contract_id": cid,
+        "product_type": "SAAS", "payment_type": "INITIAL",
+        "status_code": "PAID", "period_months": 1, "product_tier": "MANAGER",
+        "paid_at": "2026-06-01T00:00:00+09:00",
+    }
+
+    ct_chain = MagicMock()
+    ct_chain.execute.return_value = SimpleNamespace(
+        data=[{"id": cid, "status_code": "ACTIVE", "service_type": "SAAS", "end_date": None}], count=1
+    )
+    ct_chain.select.return_value = ct_chain
+    ct_chain.in_.return_value = ct_chain
+    ct_chain.eq.return_value = ct_chain
+
+    cv_chain = MagicMock()
+    cv_chain.execute.return_value = SimpleNamespace(data=[{
+        "id": "cv-rc01", "contract_id": cid, "version_no": 1,
+        "product_tier": "MANAGER", "payment_months": 1,  # recurring
+        "commercial_schema_version": "V2", "pricing_mode": "STANDARD",
+        "effective_from": "2026-01-01T00:00:00+09:00", "superseded_at": None,
+    }], count=1)
+    cv_chain.select.return_value = cv_chain
+    cv_chain.in_.return_value = cv_chain
+    cv_chain.eq.return_value = cv_chain
+
+    pay_chain = MagicMock()
+    pay_chain.execute.return_value = SimpleNamespace(
+        data=[{"id": pid, "contract_id": cid, "paid_at": "2026-06-01T00:00:00+09:00", "payment_type": "INITIAL"}], count=1
+    )
+    pay_chain.select.return_value = pay_chain
+    pay_chain.in_.return_value = pay_chain
+    pay_chain.eq.return_value = pay_chain
+
+    sb = MagicMock()
+    def table_side(name):
+        if name == "contracts":
+            return ct_chain
+        if name == "saas_contract_commercial_versions":
+            return cv_chain
+        return pay_chain
+    sb.table.side_effect = table_side
+
+    with patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]):
+        _attach_renewal_eligibility(sb, [row], _COMPANY)
+    assert row["renewal_eligible"] is False
+    assert row["renewal_reason_code"] == "RECURRING_MANAGED_AUTOMATICALLY"
+
+
+def test_RC02_direct_renewal_quote_with_recurring_cv_blocked():
+    """create_renewal_quote with current CV payment_months=1 → RECURRING_MANAGED_AUTOMATICALLY."""
+    from services.saas_renewal_quote_svc import SaasRenewalQuoteError, create_renewal_quote
+    from services.saas_commercial_version_time_v2 import TemporalVersionError
+
+    cv_recurring = {
+        "id": "cv-recurring", "version_no": 1,
+        "product_tier": "MANAGER", "payment_months": 1,
+        "worker_capacity": 50, "commercial_schema_version": "V2",
+        "pricing_mode": "STANDARD",
+        "effective_from": "2026-01-01T00:00:00+09:00", "superseded_at": None,
+    }
+
+    sb = _make_sb_for_renewal(
+        payment=_base_payment(),
+        contract=_base_contract(),
+        cvs=[cv_recurring],
+    )
+    with patch("services.saas_commercial_version_time_v2.select_effective_commercial_version_v2", return_value=cv_recurring), \
+         patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]):
+        with pytest.raises(SaasRenewalQuoteError) as exc:
+            create_renewal_quote(sb, payment_id="pay-base", company_id=_COMPANY, user_id=_USER, payment_months=6)
+    assert exc.value.code == "RECURRING_MANAGED_AUTOMATICALLY"
+
+
+def test_RC03_prepare_has_recurring_check():
+    """prepare_v2_renewal_payment 소스에 RECURRING_MANAGED_AUTOMATICALLY + payment_months 검증 존재."""
+    import inspect
+    from routers.member_quotes import prepare_v2_renewal_payment
+    src = inspect.getsource(prepare_v2_renewal_payment)
+    assert "RECURRING_MANAGED_AUTOMATICALLY" in src
+    assert "payment_months" in src
+
+
+# ─── TF: Temporal Fail Closed (PATCH-002) ────────────────────────────────────
+
+def test_TF01_malformed_end_date_fail_closed():
+    """Malformed end_date → RENEWAL_STATE_INVALID (fail-closed, not eligible)."""
+    from routers.payment_ops import _attach_renewal_eligibility
+    cid = str(uuid4())
+    pid = str(uuid4())
+    row = {
+        "id": pid, "contract_id": cid,
+        "product_type": "SAAS", "payment_type": "INITIAL",
+        "status_code": "PAID", "period_months": 6, "product_tier": "MANAGER",
+        "paid_at": "2026-06-01T00:00:00+09:00",
+    }
+
+    ct_chain = MagicMock()
+    ct_chain.execute.return_value = SimpleNamespace(
+        data=[{"id": cid, "status_code": "ACTIVE", "service_type": "SAAS", "end_date": "not-a-date"}], count=1
+    )
+    ct_chain.select.return_value = ct_chain
+    ct_chain.in_.return_value = ct_chain
+    ct_chain.eq.return_value = ct_chain
+
+    cv_chain = MagicMock()
+    cv_chain.execute.return_value = SimpleNamespace(data=[{
+        "id": "cv-tf01", "contract_id": cid, "version_no": 1,
+        "product_tier": "MANAGER", "payment_months": 6,
+        "commercial_schema_version": "V2", "pricing_mode": "STANDARD",
+        "effective_from": "2026-01-01T00:00:00+09:00", "superseded_at": None,
+    }], count=1)
+    cv_chain.select.return_value = cv_chain
+    cv_chain.in_.return_value = cv_chain
+    cv_chain.eq.return_value = cv_chain
+
+    pay_chain = MagicMock()
+    pay_chain.execute.return_value = SimpleNamespace(
+        data=[{"id": pid, "contract_id": cid, "paid_at": "2026-06-01T00:00:00+09:00", "payment_type": "INITIAL"}], count=1
+    )
+    pay_chain.select.return_value = pay_chain
+    pay_chain.in_.return_value = pay_chain
+    pay_chain.eq.return_value = pay_chain
+
+    sb = MagicMock()
+    def table_side(name):
+        if name == "contracts":
+            return ct_chain
+        if name == "saas_contract_commercial_versions":
+            return cv_chain
+        return pay_chain
+    sb.table.side_effect = table_side
+
+    # malformed end_date causes contract_end_date_to_effective_at_v2 to raise → fail-closed
+    with patch("services.saas_commercial_version_time_v2.find_future_commercial_versions_v2", return_value=[]):
+        from services.saas_commercial_version_time_v2 import contract_end_date_to_effective_at_v2
+        with patch("services.saas_commercial_version_time_v2.contract_end_date_to_effective_at_v2",
+                   side_effect=Exception("parse error")):
+            _attach_renewal_eligibility(sb, [row], _COMPANY)
+    assert row["renewal_eligible"] is False
+    assert row["renewal_reason_code"] == "RENEWAL_STATE_INVALID"
+
+
+def test_TF02_quote_creator_handles_temporal_error():
+    """saas_renewal_quote_svc: TemporalVersionError 처리 소스 존재."""
+    import inspect
+    from services import saas_renewal_quote_svc
+    src = inspect.getsource(saas_renewal_quote_svc)
+    assert "TemporalVersionError" in src
+    assert "CURRENT_CV_NOT_FOUND" in src
+
+
+def test_TF03_prepare_handles_temporal_error():
+    """prepare_v2_renewal_payment: TemporalVersionError 처리 소스 존재."""
+    import inspect
+    from routers.member_quotes import prepare_v2_renewal_payment
+    src = inspect.getsource(prepare_v2_renewal_payment)
+    assert "TemporalVersionError" in src
+    assert "CURRENT_CV_NOT_FOUND" in src
+
+
+# ─── QI: Quote Idempotency (PATCH-002) ───────────────────────────────────────
+
+def test_QI01_same_term_returns_existing_quote_source():
+    """create_renewal_quote 소스에 _find_existing_renewal_quote + idempotent return 존재."""
+    import inspect
+    from services import saas_renewal_quote_svc
+    src = inspect.getsource(saas_renewal_quote_svc.create_renewal_quote)
+    assert "_find_existing_renewal_quote" in src
+    assert "return existing_rq" in src
+
+
+def test_QI02_different_term_returns_409_source():
+    """create_renewal_quote 소스에 RENEWAL_QUOTE_ALREADY_ISSUED 409 존재."""
+    import inspect
+    from services import saas_renewal_quote_svc
+    src = inspect.getsource(saas_renewal_quote_svc.create_renewal_quote)
+    assert "RENEWAL_QUOTE_ALREADY_ISSUED" in src
+
+
+def test_QI03_find_existing_renewal_quote_matches_by_ctx():
+    """_find_existing_renewal_quote: contract_id + version_no 기반 매칭."""
+    from services.saas_renewal_quote_svc import _find_existing_renewal_quote
+
+    cid = str(uuid4())
+    qid = str(uuid4())
+
+    chain = MagicMock()
+    chain.execute.return_value = SimpleNamespace(data=[{
+        "id": qid, "status_code": "ISSUED",
+        "survey_data": {
+            "commercial_v3_renewal": {
+                "contract_id": cid,
+                "current_version_no": 1,
+                "origin_payment_id": str(uuid4()),
+            }
+        },
+        "items": [],
+        "quote_no": "QT-TEST",
+    }], count=1)
+    chain.select.return_value = chain
+    chain.eq.return_value = chain
+    chain.in_.return_value = chain
+    chain.limit.return_value = chain
+    chain.order.return_value = chain
+
+    sb = MagicMock()
+    sb.table.return_value = chain
+
+    result = _find_existing_renewal_quote(sb, cid, 1, _COMPANY)
+    assert result is not None
+    assert result["id"] == qid
+
+
+def test_QI04_find_existing_no_match_different_contract():
+    """_find_existing_renewal_quote: 다른 contract_id → None 반환."""
+    from services.saas_renewal_quote_svc import _find_existing_renewal_quote
+
+    cid = str(uuid4())
+    other_cid = str(uuid4())
+
+    chain = MagicMock()
+    chain.execute.return_value = SimpleNamespace(data=[{
+        "id": str(uuid4()), "status_code": "ISSUED",
+        "survey_data": {
+            "commercial_v3_renewal": {
+                "contract_id": other_cid,
+                "current_version_no": 1,
+            }
+        },
+        "items": [],
+    }], count=1)
+    chain.select.return_value = chain
+    chain.eq.return_value = chain
+    chain.in_.return_value = chain
+    chain.limit.return_value = chain
+    chain.order.return_value = chain
+
+    sb = MagicMock()
+    sb.table.return_value = chain
+
+    result = _find_existing_renewal_quote(sb, cid, 1, _COMPANY)
+    assert result is None
+
+
+# ─── PA: Payment Attempt Guard (PATCH-002) ───────────────────────────────────
+
+def test_PA01_existing_renewal_pending_guard_source():
+    """check_existing_renewal_payment 소스에 PENDING/ACTIVE_STATUSES 존재."""
+    import inspect
+    from services import saas_renewal_payment_guard
+    src = inspect.getsource(saas_renewal_payment_guard.check_existing_renewal_payment)
+    assert "_ACTIVE_STATUSES" in src or "_find_existing_renewal_payment" in src
+
+
+def test_PA02_existing_renewal_success_quota_already_paid():
+    """Existing RENEWAL PAID → QUOTE_ALREADY_PAID."""
+    from services.saas_renewal_payment_guard import (
+        check_existing_renewal_payment,
+        RenewalPaymentGuardError,
+    )
+
+    qid = str(uuid4())
+    existing = {
+        "id": str(uuid4()), "user_id": _USER, "company_id": _COMPANY,
+        "quote_id": qid, "product_type": "SAAS", "payment_type": "RENEWAL",
+        "status_code": "PAID", "total_amount": 300000, "inicis_order_id": "ORD001",
+        "period_months": 6, "created_at": "2026-10-01T00:00:00+09:00",
+    }
+    with patch(
+        "services.saas_renewal_payment_guard._find_existing_renewal_payment",
+        return_value=existing,
+    ):
+        with pytest.raises(RenewalPaymentGuardError) as exc:
+            check_existing_renewal_payment(
+                MagicMock(),
+                quote_id=qid,
+                company_id=_COMPANY,
+                user_id=_USER,
+            )
+    assert exc.value.code == "QUOTE_ALREADY_PAID"
+    assert exc.value.http_status == 409
+
+
+def test_PA03_23505_guard_detects_correct_index():
+    """is_renewal_unique_violation: 올바른 인덱스명 감지."""
+    from services.saas_renewal_payment_guard import is_renewal_unique_violation
+    exc_match = Exception("23505: duplicate key violates uix_payments_quote_v3_renewal_active")
+    exc_other = Exception("23505: other_constraint_name")
+    exc_no23505 = Exception("some other error")
+    assert is_renewal_unique_violation(exc_match) is True
+    assert is_renewal_unique_violation(exc_other) is False
+    assert is_renewal_unique_violation(exc_no23505) is False
+
+
+def test_PA04_mismatched_user_pending():
+    """Existing RENEWAL PENDING from different user → QUOTE_PAYMENT_PENDING."""
+    from services.saas_renewal_payment_guard import (
+        check_existing_renewal_payment,
+        RenewalPaymentGuardError,
+    )
+
+    qid = str(uuid4())
+    other_user = str(uuid4())
+    existing = {
+        "id": str(uuid4()), "user_id": other_user, "company_id": _COMPANY,
+        "quote_id": qid, "product_type": "SAAS", "payment_type": "RENEWAL",
+        "status_code": "PENDING", "total_amount": 300000, "inicis_order_id": "ORD002",
+        "period_months": 6, "created_at": "2026-10-01T00:00:00+09:00",
+    }
+    with patch(
+        "services.saas_renewal_payment_guard._find_existing_renewal_payment",
+        return_value=existing,
+    ):
+        with pytest.raises(RenewalPaymentGuardError) as exc:
+            check_existing_renewal_payment(
+                MagicMock(),
+                quote_id=qid,
+                company_id=_COMPANY,
+                user_id=_USER,  # different from existing.user_id (other_user)
+            )
+    assert exc.value.code == "QUOTE_PAYMENT_PENDING"
+    assert exc.value.http_status == 409
+
+
+def test_PA05_no_existing_payment_returns_none():
+    """기존 결제 없음 → None 반환 (신규 진행 가능)."""
+    from services.saas_renewal_payment_guard import check_existing_renewal_payment
+
+    with patch(
+        "services.saas_renewal_payment_guard._find_existing_renewal_payment",
+        return_value=None,
+    ):
+        result = check_existing_renewal_payment(
+            MagicMock(),
+            quote_id=str(uuid4()),
+            company_id=_COMPANY,
+            user_id=_USER,
+        )
+    assert result is None

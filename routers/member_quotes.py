@@ -334,7 +334,8 @@ def prepare_v2_renewal_payment(
     _now = now_kst()
     cv_res = (
         supabase.table("saas_contract_commercial_versions")
-        .select("id, version_no, contract_id, superseded_at, effective_from")
+        .select("id, version_no, payment_months, product_tier, commercial_schema_version, "
+                "effective_from, superseded_at, contract_id")
         .eq("contract_id", contract_id)
         .execute()
     )
@@ -346,6 +347,15 @@ def prepare_v2_renewal_payment(
 
     if int(current_cv.get("version_no") or -1) != int(current_version_no):
         raise HTTPException(status_code=409, detail={"code": "RENEWAL_VERSION_MISMATCH", "message": "계약 버전이 변경되었습니다. 연장 견적을 다시 발행해 주세요."})
+
+    # CV payment_months 독립 검증 (recurring 계약이 이후에 prepare 호출하는 경우 차단)
+    cv_pm = int(current_cv.get("payment_months") or 0)
+    if cv_pm == 1:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RECURRING_MANAGED_AUTOMATICALLY",
+                    "message": "정기결제 계약은 수동 연장이 불가합니다."},
+        )
 
     # Temporal window guard
     ct_res2 = (
@@ -364,6 +374,27 @@ def prepare_v2_renewal_payment(
                 status_code=422,
                 detail={"code": "RENEWAL_WINDOW_CLOSED", "message": "계약 연장 기간이 종료되었습니다."},
             )
+
+    # ── Payment idempotency guard (RENEWAL) ──────────────────────────────────
+    from services.saas_renewal_payment_guard import (
+        check_existing_renewal_payment,
+        is_renewal_unique_violation,
+        RenewalPaymentGuardError,
+    )
+    try:
+        existing_result = check_existing_renewal_payment(
+            supabase,
+            quote_id=quote_id,
+            company_id=company_id,
+            user_id=current["id"],
+        )
+        if existing_result:
+            return existing_result
+    except RenewalPaymentGuardError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"code": exc.code, "message": exc.message},
+        )
 
     from services.saas_renewal_v2_adapter import (
         SaasRenewalV2AdapterError,
@@ -388,6 +419,24 @@ def prepare_v2_renewal_payment(
         if exc.code in {"RENEWAL_ALREADY_SCHEDULED", "CURRENT_CV_SUPERSEDED", "RENEWAL_BOUNDARY_CONFLICT"}:
             raise HTTPException(status_code=409, detail={"code": exc.code, "message": exc.message})
         raise HTTPException(status_code=422, detail={"code": exc.code, "message": exc.message})
+    except Exception as exc:
+        if is_renewal_unique_violation(exc):
+            # 23505 race: re-read existing
+            try:
+                existing_result = check_existing_renewal_payment(
+                    supabase,
+                    quote_id=quote_id,
+                    company_id=company_id,
+                    user_id=current["id"],
+                )
+                if existing_result:
+                    return existing_result
+            except RenewalPaymentGuardError as guard_exc:
+                raise HTTPException(
+                    status_code=guard_exc.http_status,
+                    detail={"code": guard_exc.code, "message": guard_exc.message},
+                )
+        raise
     return result
 
 
