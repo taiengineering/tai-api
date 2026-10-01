@@ -209,11 +209,31 @@ def get_summary(supabase) -> Dict[str, Any]:
         for sc, v in site_data.items()
     ]
 
+    # last_run_at: max(last_checked_at) across all items
+    checked_times = [i["last_checked_at"] for i in all_items if i.get("last_checked_at")]
+    last_run_at = max(checked_times) if checked_times else None
+
+    # next_run_at: min(next_run_at) across enabled schedules (Phase 2-E scheduler authority)
+    item_ids = [i["id"] for i in all_items]
+    next_run_at = None
+    if item_ids:
+        sched_res = (
+            supabase.table("qa_schedules")
+            .select("next_run_at")
+            .eq("enabled", True)
+            .not_.is_("next_run_at", "null")
+            .execute()
+        )
+        sched_times = [s["next_run_at"] for s in (sched_res.data or []) if s.get("next_run_at")]
+        next_run_at = min(sched_times) if sched_times else None
+
     return {
         "total":         total,
         "enabled":       enabled_count,
         "status_counts": status_counts,
         "sites":         sites,
+        "last_run_at":   last_run_at,
+        "next_run_at":   next_run_at,
     }
 
 

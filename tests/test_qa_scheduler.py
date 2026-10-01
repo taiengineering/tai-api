@@ -397,3 +397,38 @@ def test_MR04_targets_created():
     assert len(target_rows) == 2
     assert {r["qa_item_id"] for r in target_rows} == {"i1", "i2"}
     assert sorted(r["ordinal"] for r in target_rows) == [1, 2]
+
+
+def test_MR04b_dispatch_connected():
+    """MR-04b: POST /admin/qa/runs 라우터가 dispatch_qa_run을 호출한다."""
+    dispatched: list = []
+
+    async def _fake_dispatch(run_id, scenario_ids):
+        dispatched.append({"run_id": run_id, "scenario_ids": scenario_ids})
+
+    fake_run = {
+        "id": "run-dispatch-test",
+        "targets": [{"qa_item_id": "item-d1", "ordinal": 1}],
+    }
+
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.in_.return_value.execute.return_value = MagicMock(
+        data=[{"id": "item-d1", "scenario_id": "P0-DISP-001"}]
+    )
+
+    async def _run():
+        import routers.admin_qa as mod
+        with patch("routers.admin_qa.get_supabase", return_value=sb), \
+             patch("routers.admin_qa._require_admin"), \
+             patch("routers.admin_qa.svc.create_run", return_value=fake_run), \
+             patch("services.github_dispatch_svc.dispatch_qa_run", _fake_dispatch):
+            body = MagicMock()
+            body.qa_item_ids = ["item-d1"]
+            current = {"id": "admin-user"}
+            return await mod.create_run(body, current)
+
+    result = asyncio.run(_run())
+    assert result["dispatch"] == "OK"
+    assert len(dispatched) == 1
+    assert dispatched[0]["run_id"] == "run-dispatch-test"
+    assert "P0-DISP-001" in dispatched[0]["scenario_ids"]
