@@ -1,5 +1,5 @@
 """
-WO-COMM-V3-RECURRING-SCHEDULER-TRIGGER-001 / PATCH-001
+WO-COMM-V3-RECURRING-SCHEDULER-TRIGGER-001 / PATCH-001 / PATCH-002
 Orchestration service: selects due SAAS subscriptions, validates pre-charge
 guards, and delegates to the existing _charge_subscription_once path.
 Does NOT contain billing logic and does NOT duplicate INICIS charge code.
@@ -19,16 +19,137 @@ _MAX_LIMIT = 100
 
 
 class SaasRecurringBillingError(RuntimeError):
-    """Raised after batch when post_process_failed > 0 so monitoring cannot record clean SUCCESS."""
+    """Raised after batch when post_process_failed > 0 or errors > 0 so monitoring cannot record clean SUCCESS."""
     def __init__(self, summary: dict) -> None:
         self.summary = summary
         super().__init__(
-            f"[SAAS_RECURRING] batch completed with post-process failures: "
+            f"[SAAS_RECURRING] batch completed with failures: "
             f"post_process_failed={summary['post_process_failed']} "
+            f"errors={summary['errors']} "
             f"charged_success={summary['charged_success']} "
-            f"charged_failed={summary['charged_failed']} "
-            f"errors={summary['errors']}"
+            f"charged_failed={summary['charged_failed']}"
         )
+
+
+def build_v3_recurring_charge_context(
+    supabase,
+    subscription_id: str,
+    now: datetime,
+) -> dict:
+    """
+    §PATCH2-B: single fresh read for all monetary authority.
+    Returns {"eligible": True, subscription, billing_key_row, contract_id, quote_id, charge_cycle}
+    or {"eligible": False, "reason_code": str}.
+    """
+    # Fresh subscription read
+    sub_res = (
+        supabase.table("subscriptions")
+        .select("*")
+        .eq("id", subscription_id)
+        .limit(1)
+        .execute()
+    )
+    if not sub_res.data:
+        return {"eligible": False, "reason_code": "SUB_VANISHED"}
+    sub = sub_res.data[0]
+
+    if sub.get("status") != "ACTIVE":
+        return {"eligible": False, "reason_code": "SUB_NOT_ACTIVE"}
+    if sub.get("product_type") != "SAAS":
+        return {"eligible": False, "reason_code": "SUB_NOT_SAAS"}
+    if not sub.get("billing_key_id"):
+        return {"eligible": False, "reason_code": "BILLING_KEY_ID_MISSING"}
+
+    # §PATCH2-D: timezone-aware temporal check
+    nba = sub.get("next_billing_at")
+    if not nba:
+        return {"eligible": False, "reason_code": "NEXT_BILLING_AT_MISSING"}
+    try:
+        nba_dt = datetime.fromisoformat(str(nba))
+    except (ValueError, TypeError):
+        return {"eligible": False, "reason_code": "NEXT_BILLING_AT_INVALID"}
+    if nba_dt.tzinfo is None:
+        return {"eligible": False, "reason_code": "NEXT_BILLING_AT_INVALID"}
+    if nba_dt > now:
+        return {"eligible": False, "reason_code": "NOT_YET_DUE"}
+
+    # Fresh billing key
+    bk_res = (
+        supabase.table("billing_keys")
+        .select("*")
+        .eq("id", sub["billing_key_id"])
+        .limit(1)
+        .execute()
+    )
+    if not bk_res.data:
+        return {"eligible": False, "reason_code": "BILLING_KEY_NOT_FOUND"}
+    bk = bk_res.data[0]
+    if bk.get("status") != "ACTIVE":
+        return {"eligible": False, "reason_code": "BILLING_KEY_INACTIVE"}
+
+    # V3 linkage
+    pays_res = (
+        supabase.table("payments")
+        .select("id,charge_cycle,status_code,quote_id,contract_id")
+        .eq("subscription_id", subscription_id)
+        .execute()
+    )
+    all_pays = pays_res.data or []
+    cycle1_ok = [
+        p for p in all_pays
+        if p.get("charge_cycle") == 1 and p.get("status_code") in ("PAID", "SUCCESS")
+    ]
+    if not cycle1_ok:
+        return {"eligible": False, "reason_code": "CYCLE1_PAYMENT_NOT_FOUND"}
+    init_pay = cycle1_ok[0]
+    if not init_pay.get("quote_id"):
+        return {"eligible": False, "reason_code": "QUOTE_ID_MISSING"}
+    if not init_pay.get("contract_id"):
+        return {"eligible": False, "reason_code": "CONTRACT_ID_MISSING"}
+    contract_id = init_pay["contract_id"]
+    quote_id = init_pay["quote_id"]
+
+    # Contract state
+    ct_res = (
+        supabase.table("contracts")
+        .select("*")
+        .eq("id", contract_id)
+        .limit(1)
+        .execute()
+    )
+    if not ct_res.data:
+        return {"eligible": False, "reason_code": "CONTRACT_NOT_FOUND"}
+    ct = ct_res.data[0]
+    if ct.get("status_code") != "ACTIVE":
+        return {"eligible": False, "reason_code": "CONTRACT_NOT_ACTIVE"}
+    if ct.get("service_type") != "SAAS":
+        return {"eligible": False, "reason_code": "CONTRACT_NOT_SAAS"}
+    if not ct.get("is_active"):
+        return {"eligible": False, "reason_code": "CONTRACT_IS_ACTIVE_FALSE"}
+    if not ct.get("end_date"):
+        return {"eligible": False, "reason_code": "CONTRACT_END_DATE_MISSING"}
+
+    # §PATCH2-C: shared cycle helper
+    from routers.payment_billing import _v3_cycle_from_pays
+    charge_cycle = _v3_cycle_from_pays(all_pays)
+
+    # PENDING guard from already-fetched data
+    pending_for_cycle = [
+        p for p in all_pays
+        if p.get("charge_cycle") == charge_cycle and p.get("status_code") == "PENDING"
+    ]
+    if pending_for_cycle:
+        return {"eligible": False, "reason_code": "PENDING_CYCLE_EXISTS"}
+
+    return {
+        "eligible": True,
+        "reason_code": "OK",
+        "subscription": sub,
+        "billing_key_row": bk,
+        "contract_id": contract_id,
+        "quote_id": quote_id,
+        "charge_cycle": charge_cycle,
+    }
 
 
 def run_due_saas_recurring_billing(payload: dict) -> dict:
@@ -77,10 +198,11 @@ def run_due_saas_recurring_billing(payload: dict) -> dict:
             "next_billing_at": sub.get("next_billing_at"),
         }
 
-        guard = _pre_charge_guard(supabase, sub, now_iso)
-        if not guard["eligible"]:
+        # §PATCH2-B: single fresh read for all monetary authority (dry_run and live)
+        ctx = build_v3_recurring_charge_context(supabase, sub_id, now_kst_dt)
+        if not ctx["eligible"]:
             item["eligible"] = False
-            item["reason_code"] = guard["reason_code"]
+            item["reason_code"] = ctx["reason_code"]
             skipped += 1
             items.append(item)
             continue
@@ -93,23 +215,14 @@ def run_due_saas_recurring_billing(payload: dict) -> dict:
             items.append(item)
             continue
 
-        # §D: fresh subscription re-read before any monetary call
-        fresh_sub, fresh_reason = _fresh_revalidate(supabase, sub_id, now_kst_dt)
-        if fresh_reason != "OK":
-            item["eligible"] = False
-            item["reason_code"] = fresh_reason
-            eligible_count -= 1
-            skipped += 1
-            items.append(item)
-            continue
-
         # §8: live — existing charge path called exactly once per candidate
         try:
             charge = _do_charge(
                 supabase,
-                fresh_sub,
-                guard["billing_key_row"],
-                guard["charge_cycle"],
+                ctx["subscription"],
+                ctx["billing_key_row"],
+                ctx["charge_cycle"],
+                contract_id=ctx["contract_id"],
             )
             if charge["success"] and charge.get("post_process") == "OK":
                 charged_success += 1
@@ -148,153 +261,11 @@ def run_due_saas_recurring_billing(payload: dict) -> dict:
         "items": items,
     }
 
-    # §E: post-process failures must not be silently reported as clean SUCCESS
-    if post_process_failed > 0:
+    # §PATCH2-F: post-process failures OR errors must not be silently reported as clean SUCCESS
+    if post_process_failed > 0 or errors > 0:
         raise SaasRecurringBillingError(summary)
 
     return summary
-
-
-def _pre_charge_guard(supabase, sub: dict, now_iso: str) -> dict:
-    """
-    §6 fail-closed guard. All checks must pass before any INICIS call.
-    Returns {"eligible": bool, "reason_code": str, ...}.
-    """
-    sub_id = sub["id"]
-
-    # §6.1: re-validate subscription state (using scanned row for fast pre-filter)
-    if sub.get("status") != "ACTIVE":
-        return {"eligible": False, "reason_code": "SUB_NOT_ACTIVE"}
-    if sub.get("product_type") != "SAAS":
-        return {"eligible": False, "reason_code": "SUB_NOT_SAAS"}
-    if not sub.get("next_billing_at"):
-        return {"eligible": False, "reason_code": "NEXT_BILLING_AT_MISSING"}
-    if sub["next_billing_at"] > now_iso:
-        return {"eligible": False, "reason_code": "NOT_YET_DUE"}
-    if not sub.get("billing_key_id"):
-        return {"eligible": False, "reason_code": "BILLING_KEY_ID_MISSING"}
-
-    # §6.2: billing key — must exist and be ACTIVE
-    bk_res = (
-        supabase.table("billing_keys")
-        .select("*")
-        .eq("id", sub["billing_key_id"])
-        .limit(1)
-        .execute()
-    )
-    if not bk_res.data:
-        return {"eligible": False, "reason_code": "BILLING_KEY_NOT_FOUND"}
-    bk = bk_res.data[0]
-    if bk.get("status") != "ACTIVE":
-        return {"eligible": False, "reason_code": "BILLING_KEY_INACTIVE"}
-
-    # §6.3: V3 linkage — cycle-1 success + quote_id + contract_id
-    pays_res = (
-        supabase.table("payments")
-        .select("id,charge_cycle,status_code,quote_id,contract_id")
-        .eq("subscription_id", sub_id)
-        .execute()
-    )
-    all_pays = pays_res.data or []
-    cycle1_ok = [
-        p for p in all_pays
-        if p.get("charge_cycle") == 1 and p.get("status_code") in ("PAID", "SUCCESS")
-    ]
-    if not cycle1_ok:
-        return {"eligible": False, "reason_code": "CYCLE1_PAYMENT_NOT_FOUND"}
-
-    init_pay = cycle1_ok[0]
-    if not init_pay.get("quote_id"):
-        return {"eligible": False, "reason_code": "QUOTE_ID_MISSING"}
-    if not init_pay.get("contract_id"):
-        return {"eligible": False, "reason_code": "CONTRACT_ID_MISSING"}
-
-    contract_id = init_pay["contract_id"]
-
-    # §6.4: contract state
-    ct_res = (
-        supabase.table("contracts")
-        .select("*")
-        .eq("id", contract_id)
-        .limit(1)
-        .execute()
-    )
-    if not ct_res.data:
-        return {"eligible": False, "reason_code": "CONTRACT_NOT_FOUND"}
-    ct = ct_res.data[0]
-    if ct.get("status_code") != "ACTIVE":
-        return {"eligible": False, "reason_code": "CONTRACT_NOT_ACTIVE"}
-    if ct.get("service_type") != "SAAS":
-        return {"eligible": False, "reason_code": "CONTRACT_NOT_SAAS"}
-    if not ct.get("is_active"):
-        return {"eligible": False, "reason_code": "CONTRACT_IS_ACTIVE_FALSE"}
-    if not ct.get("end_date"):
-        return {"eligible": False, "reason_code": "CONTRACT_END_DATE_MISSING"}
-
-    # §C: server-authoritative recurring cycle — FAILED attempts do not count
-    successful_cycles = [
-        p["charge_cycle"] for p in all_pays
-        if p.get("charge_cycle") is not None and p.get("status_code") in ("PAID", "SUCCESS")
-    ]
-    charge_cycle = (max(successful_cycles) + 1) if successful_cycles else 2
-
-    # §C: PENDING guard — if active attempt exists for computed cycle, fail closed
-    pending_for_cycle = [
-        p for p in all_pays
-        if p.get("charge_cycle") == charge_cycle and p.get("status_code") == "PENDING"
-    ]
-    if pending_for_cycle:
-        return {"eligible": False, "reason_code": "PENDING_CYCLE_EXISTS"}
-
-    return {
-        "eligible": True,
-        "reason_code": "OK",
-        "billing_key_row": bk,
-        "charge_cycle": charge_cycle,
-    }
-
-
-def _fresh_revalidate(supabase, sub_id: str, now_kst_dt: datetime) -> tuple[dict | None, str]:
-    """
-    §D: re-reads subscription immediately before charge.
-    Forbidden: raw string comparison for temporal check.
-    Returns (fresh_sub, reason_code) — "OK" means pass.
-    """
-    res = (
-        supabase.table("subscriptions")
-        .select("*")
-        .eq("id", sub_id)
-        .limit(1)
-        .execute()
-    )
-    if not res.data:
-        return None, "SUB_VANISHED"
-    sub = res.data[0]
-
-    if sub.get("status") != "ACTIVE":
-        return None, "SUB_NOT_ACTIVE"
-    if sub.get("product_type") != "SAAS":
-        return None, "SUB_NOT_SAAS"
-    if not sub.get("billing_key_id"):
-        return None, "BILLING_KEY_ID_MISSING"
-
-    nba = sub.get("next_billing_at")
-    if not nba:
-        return None, "NEXT_BILLING_AT_MISSING"
-
-    # Timezone-aware datetime comparison — raw string comparison is forbidden
-    try:
-        nba_dt = datetime.fromisoformat(str(nba))
-    except (ValueError, TypeError):
-        return None, "NEXT_BILLING_AT_INVALID"
-
-    if nba_dt.tzinfo is None:
-        return None, "NEXT_BILLING_AT_INVALID"
-
-    if nba_dt > now_kst_dt:
-        return None, "NOT_YET_DUE"
-
-    return sub, "OK"
 
 
 def _do_charge(
@@ -302,6 +273,7 @@ def _do_charge(
     sub: dict,
     billing_key_row: dict,
     charge_cycle: int,
+    contract_id: str | None = None,
 ) -> dict:
     """
     Delegates to existing charge path. Contains no billing logic.
@@ -329,6 +301,9 @@ def _do_charge(
     try:
         from services.payment_post_process import on_payment_success_sync
         on_payment_success_sync(result["payment_id"])
+        if contract_id:
+            from routers.payment_billing import _align_v3_subscription_next_billing_to_contract_end
+            _align_v3_subscription_next_billing_to_contract_end(supabase, sub["id"], contract_id)
         return {
             "success": True,
             "post_process": "OK",

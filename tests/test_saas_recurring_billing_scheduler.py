@@ -76,15 +76,20 @@ _BASE_CONTRACT = {
 
 def _make_sub_table(candidates, fresh_subs=None):
     """
-    subscriptions chains:
-      Scan:  .select().eq().eq().not_.is_().lte().not_.is_().order().order().limit().execute()
-      Fresh: .select().eq().limit().execute()  (PATCH-D fresh revalidation)
-    fresh_subs defaults to first candidate if not specified (same state = pass).
+    Subscriptions mock:
+      Scan chain: complex ordering/filtering
+      Fresh chain (per-id): select(*).eq("id", sub_id).limit(1).execute()
     """
     t = MagicMock()
-    # Scan chain (complex)
+
+    # Build per-ID lookup for fresh reads
+    fresh_list = fresh_subs if fresh_subs is not None else candidates
+    fresh_by_id = {s["id"]: s for s in fresh_list}
+
+    # Scan chain
     c = t.select.return_value
-    c = c.eq.return_value
+    first_eq_rv = c.eq.return_value  # shared return value for first .eq()
+    c = first_eq_rv
     c = c.eq.return_value
     c = c.not_.is_.return_value
     c = c.lte.return_value
@@ -93,10 +98,25 @@ def _make_sub_table(candidates, fresh_subs=None):
     c = c.order.return_value
     c = c.limit.return_value
     c.execute.return_value = MagicMock(data=candidates)
-    # Fresh revalidation chain: select().eq().limit().execute()
-    # Uses t.select.rv.eq.rv (same first eq) then .limit (not the second .eq)
-    fresh = fresh_subs if fresh_subs is not None else (candidates[:1] if candidates else [])
-    t.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=fresh)
+
+    # Argument-aware fresh read: capture sub_id from .eq("id", sub_id) call
+    class _IdCapture:
+        last_id = None
+    cap = _IdCapture()
+
+    def _first_eq_side_effect(field, value=None):
+        if field == "id":
+            cap.last_id = value
+        return first_eq_rv
+
+    t.select.return_value.eq.side_effect = _first_eq_side_effect
+
+    def _fresh_execute():
+        sub = fresh_by_id.get(cap.last_id)
+        return MagicMock(data=[sub] if sub else [])
+
+    first_eq_rv.limit.return_value.execute.side_effect = _fresh_execute
+
     return t
 
 
@@ -267,7 +287,7 @@ def test_RS09_dry_run_inicis_calls_zero():
     sb = _make_sb(**_full_eligible())
     with (
         patch("db.supabase_client.get_supabase", return_value=sb),
-        patch("services.saas_recurring_billing_scheduler.now_kst"),
+        patch("services.saas_recurring_billing_scheduler.now_kst", return_value=_now_kst_dt()),
         patch(
             "services.saas_recurring_billing_scheduler.serialize_business_datetime",
             return_value=_NOW,
@@ -298,7 +318,7 @@ def test_RS10_dry_run_db_writes_zero():
 
     with (
         patch("db.supabase_client.get_supabase", return_value=sb),
-        patch("services.saas_recurring_billing_scheduler.now_kst"),
+        patch("services.saas_recurring_billing_scheduler.now_kst", return_value=_now_kst_dt()),
         patch(
             "services.saas_recurring_billing_scheduler.serialize_business_datetime",
             return_value=_NOW,

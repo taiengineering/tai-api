@@ -65,10 +65,21 @@ _BASE_CONTRACT = {
 # ── Shared mock helpers ───────────────────────────────────────────────────────
 
 def _make_sub_table(candidates, fresh_subs=None):
+    """
+    Subscriptions mock:
+      Scan chain: complex ordering/filtering
+      Fresh chain (per-id): select(*).eq("id", sub_id).limit(1).execute()
+    """
     t = MagicMock()
+
+    # Build per-ID lookup for fresh reads
+    fresh_list = fresh_subs if fresh_subs is not None else candidates
+    fresh_by_id = {s["id"]: s for s in fresh_list}
+
     # Scan chain
     c = t.select.return_value
-    c = c.eq.return_value
+    first_eq_rv = c.eq.return_value  # shared return value for first .eq()
+    c = first_eq_rv
     c = c.eq.return_value
     c = c.not_.is_.return_value
     c = c.lte.return_value
@@ -77,9 +88,25 @@ def _make_sub_table(candidates, fresh_subs=None):
     c = c.order.return_value
     c = c.limit.return_value
     c.execute.return_value = MagicMock(data=candidates)
-    # Fresh revalidation chain: select().eq().limit().execute()
-    fresh = fresh_subs if fresh_subs is not None else (candidates[:1] if candidates else [])
-    t.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=fresh)
+
+    # Argument-aware fresh read: capture sub_id from .eq("id", sub_id) call
+    class _IdCapture:
+        last_id = None
+    cap = _IdCapture()
+
+    def _first_eq_side_effect(field, value=None):
+        if field == "id":
+            cap.last_id = value
+        return first_eq_rv
+
+    t.select.return_value.eq.side_effect = _first_eq_side_effect
+
+    def _fresh_execute():
+        sub = fresh_by_id.get(cap.last_id)
+        return MagicMock(data=[sub] if sub else [])
+
+    first_eq_rv.limit.return_value.execute.side_effect = _fresh_execute
+
     return t
 
 
@@ -234,7 +261,7 @@ def test_P1_C01_cycle1_success_next_is_2():
     from routers.payment_billing import _compute_v3_saas_recurring_cycle
     sb = MagicMock()
     sb.table.return_value.select.return_value.eq.return_value.in_.return_value.execute.return_value = MagicMock(
-        data=[{"charge_cycle": 1}]
+        data=[{"charge_cycle": 1, "status_code": "SUCCESS"}]
     )
     assert _compute_v3_saas_recurring_cycle(sb, _SUB_ID) == 2
 
@@ -245,7 +272,7 @@ def test_P1_C02_failed_cycle2_retry_remains_cycle2():
     sb = MagicMock()
     # Only PAID/SUCCESS are returned — FAILED is excluded by the query filter
     sb.table.return_value.select.return_value.eq.return_value.in_.return_value.execute.return_value = MagicMock(
-        data=[{"charge_cycle": 1}]
+        data=[{"charge_cycle": 1, "status_code": "SUCCESS"}]
     )
     assert _compute_v3_saas_recurring_cycle(sb, _SUB_ID) == 2
 
@@ -255,7 +282,7 @@ def test_P1_C03_successful_cycle2_next_is_3():
     from routers.payment_billing import _compute_v3_saas_recurring_cycle
     sb = MagicMock()
     sb.table.return_value.select.return_value.eq.return_value.in_.return_value.execute.return_value = MagicMock(
-        data=[{"charge_cycle": 1}, {"charge_cycle": 2}]
+        data=[{"charge_cycle": 1, "status_code": "SUCCESS"}, {"charge_cycle": 2, "status_code": "SUCCESS"}]
     )
     assert _compute_v3_saas_recurring_cycle(sb, _SUB_ID) == 3
 
@@ -297,7 +324,7 @@ def test_P1_C05_explicit_wrong_cycle_cannot_bypass_server_authority():
         elif name == "payments":
             # _compute_v3_saas_recurring_cycle chain: select().eq().in_().execute()
             t.select.return_value.eq.return_value.in_.return_value.execute.return_value = MagicMock(
-                data=[{"charge_cycle": 1}]  # cycle-1 SUCCESS → next = 2
+                data=[{"charge_cycle": 1, "status_code": "SUCCESS"}]  # cycle-1 SUCCESS → next = 2
             )
             # _v3_saas_pending_cycle_exists chain: select().eq().eq().eq().limit().execute()
             t.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])

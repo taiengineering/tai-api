@@ -304,6 +304,15 @@ class SubscriptionCancelBody(BaseModel):
 # ── 내부 함수 ─────────────────────────────────────────────────────────
 
 
+def _v3_cycle_from_pays(pays: list) -> int:
+    """§PATCH2-C: shared pure formula — max(PAID/SUCCESS charge_cycle) + 1."""
+    cycles = [
+        p["charge_cycle"] for p in pays
+        if p.get("charge_cycle") is not None and p.get("status_code") in ("PAID", "SUCCESS")
+    ]
+    return (max(cycles) + 1) if cycles else 2
+
+
 def _compute_v3_saas_recurring_cycle(supabase, subscription_id: str) -> int:
     """
     V3 SAAS server-authoritative next recurring cycle.
@@ -312,17 +321,12 @@ def _compute_v3_saas_recurring_cycle(supabase, subscription_id: str) -> int:
     """
     res = (
         supabase.table("payments")
-        .select("charge_cycle")
+        .select("charge_cycle,status_code")
         .eq("subscription_id", subscription_id)
         .in_("status_code", ["PAID", "SUCCESS"])
         .execute()
     )
-    pays = res.data or []
-    successful_cycles = [
-        p["charge_cycle"] for p in pays
-        if p.get("charge_cycle") is not None
-    ]
-    return (max(successful_cycles) + 1) if successful_cycles else 2
+    return _v3_cycle_from_pays(res.data or [])
 
 
 def _v3_saas_pending_cycle_exists(supabase, subscription_id: str, cycle: int) -> bool:
@@ -337,6 +341,34 @@ def _v3_saas_pending_cycle_exists(supabase, subscription_id: str, cycle: int) ->
         .execute()
     )
     return bool(res.data)
+
+
+def _align_v3_subscription_next_billing_to_contract_end(
+    supabase,
+    subscription_id: str,
+    contract_id: str,
+) -> str:
+    """§PATCH2-A: align next_billing_at = contract.end_date 00:00 KST - 1 day."""
+    from datetime import date as _date
+    ct_res = (
+        supabase.table("contracts")
+        .select("end_date")
+        .eq("id", contract_id)
+        .limit(1)
+        .execute()
+    )
+    if not ct_res.data or not ct_res.data[0].get("end_date"):
+        raise ValueError(f"contract {contract_id} end_date missing for alignment")
+    end_val = ct_res.data[0]["end_date"]
+    end_dt = _date.fromisoformat(str(end_val)) if isinstance(end_val, str) else end_val
+    contract_end_boundary = datetime(end_dt.year, end_dt.month, end_dt.day, 0, 0, 0, tzinfo=TAI_TIMEZONE)
+    aligned_dt = contract_end_boundary - timedelta(days=1)
+    aligned_iso = aligned_dt.isoformat()
+    supabase.table("subscriptions").update({
+        "next_billing_at": aligned_iso,
+        "updated_at": _now_iso(),
+    }).eq("id", subscription_id).execute()
+    return aligned_iso
 
 
 def _charge_subscription_once(
@@ -1044,14 +1076,25 @@ def billing_charge(body: BillingChargeBody):
         is_recurring=True,
     )
 
-    # V3 SAAS: 정기청구 성공 → 갱신 계약 체인 실행
+    # V3 SAAS: 정기청구 성공 → 갱신 계약 체인 실행 + next_billing_at 정렬
     if result.get("success") and subscription.get("product_type") == "SAAS":
         try:
             from services.payment_post_process import on_payment_success_sync
             on_payment_success_sync(result["payment_id"])
+            # PATCH2-A: align next_billing_at to persisted contract end
+            _pay_align = (
+                supabase.table("payments")
+                .select("contract_id")
+                .eq("id", result["payment_id"])
+                .limit(1)
+                .execute()
+            )
+            _ct_id = _pay_align.data[0].get("contract_id") if _pay_align.data else None
+            if _ct_id:
+                _align_v3_subscription_next_billing_to_contract_end(supabase, body.subscription_id, _ct_id)
         except Exception as _v3_err:
             log.error(
-                "[V3_BILLING_CHARGE] on_payment_success_sync failed payment=%s: %s",
+                "[V3_BILLING_CHARGE] post-process failed payment=%s: %s",
                 result.get("payment_id"), _v3_err,
             )
 

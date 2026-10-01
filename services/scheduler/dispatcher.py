@@ -20,6 +20,29 @@ logger = logging.getLogger(__name__)
 LEASE = timedelta(minutes=15)
 DEFAULT_TICK_CAP = 20
 
+_BLOCKED_DETAIL_KEYS = frozenset({
+    "bill_key", "billing_key", "card_number", "inicis_raw",
+    "sign_key", "iniapi_key", "inicis_secret",
+})
+
+
+def _safe_exception_detail(summary: dict) -> dict:
+    out = {}
+    for k, v in summary.items():
+        if k in _BLOCKED_DETAIL_KEYS:
+            continue
+        if k == "items":
+            safe_items = []
+            for item in (v or []):
+                safe_items.append({
+                    ik: iv for ik, iv in item.items()
+                    if ik not in _BLOCKED_DETAIL_KEYS
+                })
+            out["items"] = safe_items
+        else:
+            out[k] = v
+    return out
+
 
 def _http_execute(job: JobRow) -> Any:
     import os
@@ -111,7 +134,11 @@ def tick(
                 detail = execute_job(job)
             except Exception as e:
                 status = "FAILED"
-                detail = {"error": str(e)[:1000]}
+                _exc_summary = getattr(e, "summary", None)
+                if isinstance(_exc_summary, dict):
+                    detail = _safe_exception_detail(_exc_summary)
+                else:
+                    detail = {"error": str(e)[:1000]}
                 logger.error("[SCHED] %s FAILED scheduled_for=%s: %s", job.job_code, claim.scheduled_for, e)
             nxt = next_fire_after(job.cron_expression, claim.scheduled_for)
             try:
