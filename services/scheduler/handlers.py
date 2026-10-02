@@ -221,6 +221,11 @@ def _run_saas_recurring_billing(p):
     return run_due_saas_recurring_billing(p)
 
 
+def _run_qa_scheduler_tick(p):
+    from services.qa_scheduler_svc import scheduler_tick
+    return asyncio.run(scheduler_tick(_sb()))
+
+
 def register_direct_handlers() -> dict[str, Handler]:
     if DIRECT_HANDLERS:
         return DIRECT_HANDLERS
@@ -256,6 +261,7 @@ def register_direct_handlers() -> dict[str, Handler]:
         "direct://shared_search_incremental": _run_shared_search_incremental,
         "direct://shared_search_reconcile":   _run_shared_search_reconcile,
         "direct://saas_recurring_billing":    _run_saas_recurring_billing,
+        "direct://qa_scheduler_tick":         _run_qa_scheduler_tick,
     })
     return DIRECT_HANDLERS
 

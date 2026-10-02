@@ -4,10 +4,11 @@ scheduler_tick():
   1. enabled schedules where next_run_at <= now 조회
   2. 이미 QUEUED/RUNNING run이 있는 item 제외 (중복 방지)
   3. qa_run (SCHEDULE) + qa_run_targets 생성
-  4. next_run_at 갱신
+  4. next_run_at 갱신 (기준: 기존 next_run_at, not now — cadence drift 방지)
   5. GitHub Actions dispatch
 
-compute_next_run_at(): MINUTE / HOUR / DAY 계산.
+compute_next_run_at(): MINUTES / HOURLY / DAILY 계산.
+  DAILY: from_dt + 1 day (from_dt = 기존 anchor 시각이므로 anchor 유지됨).
 """
 from __future__ import annotations
 
@@ -22,23 +23,39 @@ from services.time import now_kst
 log = logging.getLogger("qa_scheduler")
 
 _ACTIVE_STATUSES = frozenset({"QUEUED", "RUNNING"})
-_SUPPORTED_FREQ = frozenset({"MINUTE", "HOUR", "DAY"})
+_SUPPORTED_FREQ = frozenset({"MINUTES", "HOURLY", "DAILY"})
 
 
 def compute_next_run_at(
     frequency_type: str,
-    frequency_value: int,
+    frequency_value: Optional[int],
     from_dt: datetime,
 ) -> datetime:
-    """from_dt 기준으로 다음 실행 시각 계산."""
-    fv = max(1, int(frequency_value))
-    if frequency_type == "MINUTE":
+    """from_dt 기준으로 다음 실행 시각 계산.
+
+    MINUTES/HOURLY: frequency_value 필수.
+    DAILY: frequency_value 무시 (DB constraint: NULL). from_dt + 1 day.
+    """
+    if frequency_type == "MINUTES":
+        fv = max(1, int(frequency_value))
         return from_dt + timedelta(minutes=fv)
-    if frequency_type == "HOUR":
+    if frequency_type == "HOURLY":
+        fv = max(1, int(frequency_value))
         return from_dt + timedelta(hours=fv)
-    if frequency_type == "DAY":
-        return from_dt + timedelta(days=fv)
+    if frequency_type == "DAILY":
+        return from_dt + timedelta(days=1)
     raise ValueError(f"지원하지 않는 frequency_type: {frequency_type}")
+
+
+def _parse_dt(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _active_item_ids(supabase) -> frozenset:
@@ -85,6 +102,16 @@ def _set_run_error(supabase, run_id: str, error: str) -> None:
         "error_summary": error[:500],
         "finished_at":   now_iso,
         "updated_at":    now_iso,
+    }).eq("id", run_id).execute()
+
+
+def _set_run_running(supabase, run_id: str) -> None:
+    from services.time import serialize_external_utc
+    now_iso = serialize_external_utc(now_kst())
+    supabase.table("qa_runs").update({
+        "run_status": "RUNNING",
+        "started_at": now_iso,
+        "updated_at": now_iso,
     }).eq("id", run_id).execute()
 
 
@@ -147,13 +174,14 @@ async def scheduler_tick(supabase) -> Dict[str, Any]:
         supabase.table("qa_runs").delete().eq("id", run_id).execute()
         return {"skipped": len(schedules) - len(eligible), "created": 0, "error": 1, "items": []}
 
-    # 5. next_run_at 갱신 (dispatch 성공 여부와 무관하게 갱신)
+    # 5. next_run_at 갱신 — 기준: sched["next_run_at"] (not now), cadence drift 방지
     for sched in eligible:
-        ft = sched.get("frequency_type", "DAY")
-        fv = sched.get("frequency_value") or 1
+        ft = sched.get("frequency_type", "DAILY")
+        fv = sched.get("frequency_value")
         try:
             if ft in _SUPPORTED_FREQ:
-                next_dt = compute_next_run_at(ft, fv, now)
+                base_dt = _parse_dt(sched.get("next_run_at")) or now
+                next_dt = compute_next_run_at(ft, fv, base_dt)
                 supabase.table("qa_schedules").update({
                     "next_run_at":       next_dt.isoformat(),
                     "last_scheduled_at": now_iso,
@@ -162,9 +190,10 @@ async def scheduler_tick(supabase) -> Dict[str, Any]:
         except Exception as e:
             log.warning("[qa_scheduler] next_run_at update failed sched=%s: %s", sched["id"], e)
 
-    # 6. GitHub Actions dispatch
+    # 6. GitHub Actions dispatch → QUEUED→RUNNING (manual path와 동일 lifecycle)
     try:
         await dispatch_qa_run(run_id, scenario_ids)
+        _set_run_running(supabase, run_id)
     except Exception as exc:
         log.error("[qa_scheduler] dispatch failed run=%s: %s", run_id, exc)
         _set_run_error(supabase, run_id, str(exc))
