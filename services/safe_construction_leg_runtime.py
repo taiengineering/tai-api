@@ -19,7 +19,7 @@ from services.safe_construction_canonical_assembler import (
 )
 from services.canonical.saas_leg_source_adapter import build_saas_leg_step1
 from services.leg_diagnosis_svc import run_leg_diagnosis
-from services.cst_process_projector import project_cst_process_codes
+from services.cst_process_projector import project_cst_process_codes, project_cst_work_codes
 
 
 class ConstructionSiteBridgeError(Exception):
@@ -30,6 +30,16 @@ class ConstructionProcessSourceLoadError(RuntimeError):
     """CST process source DB/query failure. Must not be treated as empty source."""
 
     code = "CST_PROCESS_SOURCE_UNAVAILABLE"
+
+    def __init__(self, message: str, *, site_id: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.site_id = site_id
+
+
+class ConstructionWorkSourceLoadError(RuntimeError):
+    """CST work source DB/query failure. Must not be treated as empty source."""
+
+    code = "CST_WORK_SOURCE_UNAVAILABLE"
 
     def __init__(self, message: str, *, site_id: Optional[str] = None) -> None:
         super().__init__(message)
@@ -85,6 +95,61 @@ def _load_site_process_work_type_codes(supabase, site_id: str) -> List[str]:
     if not isinstance(_master_data, list):
         raise ConstructionProcessSourceLoadError(
             "kcsc_process_master 응답 형식 오류", site_id=site_id
+        )
+    master_rows: list = _master_data
+
+    return [r["work_type_code"] for r in master_rows if r.get("work_type_code")]
+
+
+def _load_site_work_type_codes(supabase, site_id: str) -> List[str]:
+    """Read active kcsc_work_master.work_type_code values for the site.
+
+    Fail-closed: raises ConstructionWorkSourceLoadError on any DB failure.
+    Returns [] when the site has no active work rows (valid empty case).
+    """
+    if supabase is None:
+        raise ConstructionWorkSourceLoadError(
+            "CST work source client missing", site_id=site_id
+        )
+    try:
+        _work_res = (
+            supabase.table("construction_works")
+            .select("work_master_id")
+            .eq("site_id", site_id)
+            .eq("is_active", True)
+            .execute()
+        )
+    except Exception as exc:
+        raise ConstructionWorkSourceLoadError(
+            f"construction_works 조회 실패: {exc}", site_id=site_id
+        ) from exc
+    _work_data = getattr(_work_res, "data", None)
+    if not isinstance(_work_data, list):
+        raise ConstructionWorkSourceLoadError(
+            "construction_works 응답 형식 오류", site_id=site_id
+        )
+    work_rows: list = _work_data
+
+    work_master_ids = [r["work_master_id"] for r in work_rows if r.get("work_master_id")]
+    if not work_master_ids:
+        return []
+
+    try:
+        _master_res = (
+            supabase.table("kcsc_work_master")
+            .select("work_type_code")
+            .in_("id", work_master_ids)
+            .eq("is_active", True)
+            .execute()
+        )
+    except Exception as exc:
+        raise ConstructionWorkSourceLoadError(
+            f"kcsc_work_master 조회 실패: {exc}", site_id=site_id
+        ) from exc
+    _master_data = getattr(_master_res, "data", None)
+    if not isinstance(_master_data, list):
+        raise ConstructionWorkSourceLoadError(
+            "kcsc_work_master 응답 형식 오류", site_id=site_id
         )
     master_rows: list = _master_data
 
@@ -167,6 +232,16 @@ def run_safe_construction_leg(supabase, site_id: str, consumer_input) -> Dict[st
     for field, val in cst_facts.items():
         values[field] = val
         provenance[field] = {"mode": "CST_PROCESS_PROJECTION", "source": "kcsc_process_master"}
+        unresolved.discard(field)
+
+    # B-prime-prime. CST work projection (BLK-009 — has_blasting).
+    #   READ-ONLY. DB failure raises ConstructionWorkSourceLoadError
+    #   (fail-closed — LEG is NOT called on source read failure).
+    work_codes = _load_site_work_type_codes(supabase, site_id)
+    work_facts = project_cst_work_codes(work_codes)
+    for field, val in work_facts.items():
+        values[field] = val
+        provenance[field] = {"mode": "CST_WORK_PROJECTION", "source": "kcsc_work_master"}
         unresolved.discard(field)
 
     # C. WO-010 STEP-2C : canonical27 final-cut 제거. TARGET_FIELDS / RUNTIME_INPUT_FIELDS 는
