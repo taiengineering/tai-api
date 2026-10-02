@@ -325,11 +325,11 @@ _charge_subscription_once()
     ↓
 INICIS Billing API (INIAPI)
     ↓
-payment row 생성 (payment_type=BILLING, charge_cycle=N)
+payment row 생성 (cycle=1: 기존 PENDING row 재사용/payment_type=CARD; cycle≥2: 신규 row/payment_type=RENEWAL, pg_method=CardBilling)
     ↓
 on_payment_success_sync()
     ↓
-payment_type=RENEWAL 경로:
+payment_type=RENEWAL 경로 (cycle≥2) / CARD 경로 (cycle=1, SAAS initial 분기):
     classify_renewal_runtime_route() → "V2"
     apply_saas_v2_renewal_runtime()
     apply_saas_v2_renewal_atomic (RPC)
@@ -674,15 +674,31 @@ INICIS BillKey 원격 폐기         = 없음 (DB only)
 
 ## Section 18 — Payment Status / Type Definitions
 
+> **원칙:** `payment_type`은 결제의 비즈니스 목적/처리 경로를 나타낸다.  
+> `pg_method`는 실제 PG 수단을 나타낸다.  
+> 두 값은 독립적이며 혼동하지 않는다.
+
 ### payment_type (결제 분류)
 
-| payment_type | 의미 | Writer |
-|---|---|---|
-| `CARD` | 단건 카드결제 (신규/갱신 공통) | `payment_svc._prepare_payment()` |
-| `BILLING` | 정기결제 (RS1, INIAPI) | `payment_billing._charge_subscription_once()` |
-| `RENEWAL` | 수동 갱신 단건결제 | `member_quotes.renewal_payment_prepare()` |
-| `UPGRADE` | Tier 업그레이드 | `payment.upgrade_prepare()` |
-| `VBANK` | 가상계좌 (신규/갱신) | `payment_svc._prepare_payment()` |
+| payment_type | 의미 | 사용 경로 | 소스 |
+|---|---|---|---|
+| `CARD` | 단건 카드/VBank 결제 준비 + RS1 cycle=1 | 신규 구매 prepare, RS1 cycle=1 (기존 PENDING row 재사용) | `payment_svc._prepare_payment()` / `payment_billing._charge_subscription_once()` cycle=1 |
+| `RENEWAL` | 자동 갱신(RS1) cycle≥2 + 수동 갱신 단건결제 | RS1 cycle≥2 V3 SAAS: `payment_row["payment_type"] = "RENEWAL"` (line 508); 수동 갱신 prepare | `payment_billing._charge_subscription_once()` line 508 / `member_quotes.renewal_payment_prepare()` |
+| `UPGRADE` | Tier 업그레이드 | upgrade prepare 경로 | `payment.upgrade_prepare()` |
+| `VBANK` | 가상계좌 구매 분류 | VBank prepare 경로 일부 | `payment_svc._prepare_payment()` |
+| `BILLING` | **EXISTS / NON-CANONICAL (V3)** — 레거시 writer에서 기록. V3 RS1에서는 사용하지 않음. | 레거시 billing path (`payment_billing.py` line ~861 구 writer) | 레거시. V3 SAAS cycle≥2 canonical = `RENEWAL` |
+
+**RS1 payment_type 상세 (Commercial V3 SAAS):**
+
+| RS1 charge cycle | payment_type | pg_method | 근거 |
+|---|---|---|---|
+| cycle = 1 | `CARD` | `CardBilling` | 기존 PENDING row 재사용; `payment_type` 불변 (prepare에서 CARD 고정) |
+| cycle ≥ 2 | `RENEWAL` | `CardBilling` | 새 payment row 생성: default `CARD` (line 450) → V3 SAAS override `RENEWAL` (line 508) |
+
+소스: `routers/payment_billing.py`
+- line 450: `"payment_type": "CARD"` (신규 row 기본값)
+- line 451: `"pg_method": "CardBilling"`
+- line 508: `payment_row["payment_type"] = "RENEWAL"` (product_type=="SAAS" and is_recurring 조건)
 
 ### pg_method (결제 수단)
 
@@ -691,7 +707,7 @@ INICIS BillKey 원격 폐기         = 없음 (DB only)
 | `Card` | 카드 (INIStdPay 또는 수동) |
 | `DirectBank` | 계좌이체 |
 | `VBANK` | 가상계좌 |
-| `CardBilling` | INICIS 정기결제 (RS1) |
+| `CardBilling` | INICIS 정기결제 (RS1, cycle=1 및 cycle≥2 모두 동일) |
 
 ### status_code (결제 상태)
 
@@ -1076,7 +1092,7 @@ PAID          FAILED
   │            └──→ cron_job_log status ≠ SUCCESS
   ▼
 on_payment_success_sync
-(payment_type=BILLING → RENEWAL runtime)
+(cycle≥2: payment_type=RENEWAL → RENEWAL runtime; cycle=1: payment_type=CARD → SAAS initial runtime)
   │
   ▼
 new CV + contract.end_date + next_billing_at 재정렬
@@ -1094,7 +1110,7 @@ Commercial V3 결제 관련 코드를 수정하기 전에 반드시 준수한다
 
 3. **기존 component를 재사용한다.**  새 writer, 새 RPC, 새 atomic 함수를 만들기 전에 기존 것으로 커버되는지 먼저 확인한다.
 
-4. **payment_type과 pg_method를 혼동하지 않는다.**  `payment_type`은 결제 분류(CARD/BILLING/RENEWAL/UPGRADE)이고, `pg_method`는 실제 수단(Card/DirectBank/VBANK/CardBilling)이다.
+4. **payment_type과 pg_method를 혼동하지 않는다.**  `payment_type`은 결제의 비즈니스 목적/경로(CARD/RENEWAL/UPGRADE/VBANK)이고, `pg_method`는 실제 PG 수단(Card/DirectBank/VBANK/CardBilling)이다.  `BILLING`은 레거시 값으로 V3 RS1 canonical이 아니다(V3 RS1 canonical = `CARD`(cycle=1) / `RENEWAL`(cycle≥2)).
 
 5. **`plan_code`를 V3 authority로 사용하지 않는다.**  V3 권한 기준은 `product_tier`다. `plan_code = NULL`이 정상이다.
 
