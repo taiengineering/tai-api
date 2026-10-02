@@ -150,6 +150,9 @@ class LoginRequest(BaseModel):
     phone:    Optional[str] = None
     password: str
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
 class RegisterRequest(BaseModel):
     phone:                str
     email:                str
@@ -866,6 +869,35 @@ def login(req: LoginRequest):
                 "profile_image_url": user.get("profile_image_url"),
             }
         }
+    }
+
+
+# ── 세션 갱신 ──────────────────────────────────────
+# Access JWT는 짧게 유지하고 refresh token으로 새 access/refresh token 쌍을 발급한다.
+# 클라이언트별 최대 로그인 유지시간(관리자 12시간)은 해당 프론트에서 별도 제한한다.
+@router.post("/refresh")
+def refresh_auth_session(req: RefreshRequest):
+    refresh_token = (req.refresh_token or "").strip()
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="refresh_token이 필요합니다")
+
+    supabase = get_supabase()
+    try:
+        auth_res = supabase.auth.refresh_session(refresh_token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="세션을 갱신할 수 없습니다")
+
+    if not auth_res or not auth_res.session:
+        raise HTTPException(status_code=401, detail="세션을 갱신할 수 없습니다")
+
+    return {
+        "status": "success",
+        "data": {
+            "access_token":  auth_res.session.access_token,
+            "refresh_token": auth_res.session.refresh_token,
+            "token_type":    "Bearer",
+            "expires_in":    auth_res.session.expires_in,
+        },
     }
 
 
