@@ -402,12 +402,12 @@ def get_taxonomy(supabase) -> Dict[str, Any]:
     for lst in areas_by_service.values():
         lst.sort(key=lambda x: x["code"])
 
+    # services: 항상 canonical 4종 고정 반환 — areas 유무와 무관
     services = [
         {"code": code, "label": _SERVICE_LABELS.get(code, code)}
         for code in _SERVICE_ORDER
-        if code in areas_by_service  # only emit services that have items
     ]
-    # Append any unknown service codes not in canonical order
+    # Append any unknown service codes (future-proofing)
     known = set(_SERVICE_ORDER)
     for code in sorted(areas_by_service.keys()):
         if code not in known:

@@ -266,7 +266,9 @@ def test_TAX06_legacy_filters_unchanged():
 # TAX-API-07: GET /taxonomy — services 반환
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_TAX07_taxonomy_services():
+def test_TAX07_taxonomy_services_canonical_4():
+    """services는 qa_items 유무와 무관하게 canonical 4종 고정/순서 반환."""
+    # Only WWW and SAAS have items — but all 4 must appear
     rows = [
         {"service_code": "WWW",  "area_code": "LANDING"},
         {"service_code": "SAAS", "area_code": "MYPAGE"},
@@ -274,9 +276,8 @@ def test_TAX07_taxonomy_services():
     sb = _Supabase({"qa_items": _Q(rows=rows)})
     result = svc.get_taxonomy(sb)
     codes = [s["code"] for s in result["services"]]
-    assert "WWW" in codes
-    assert "SAAS" in codes
-    # Each service has label
+    assert codes == ["WWW", "SAAS", "ADMIN", "WORKER"], \
+        f"services must be canonical 4 in order, got {codes}"
     for svc_item in result["services"]:
         assert "label" in svc_item
         assert svc_item["label"]  # non-empty
