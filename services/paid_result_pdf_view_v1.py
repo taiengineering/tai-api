@@ -130,6 +130,11 @@ def _build_obligation_rows(
     return rows
 
 
+def _bool_or_none(v: Any) -> Optional[bool]:
+    """True→True, False→False, None/other→None. unknown ≠ false."""
+    return v if isinstance(v, bool) else None
+
+
 def _build_profile_view(profile: dict) -> Dict[str, Any]:
     sector_raw = (profile.get("sector") or "").strip().upper()
     sector_label = _SECTOR_LABELS.get(sector_raw) or _text(profile.get("sector"))
@@ -142,8 +147,8 @@ def _build_profile_view(profile: dict) -> Dict[str, Any]:
         "construction_type": _text(profile.get("construction_type")),
         "building_use_type": _text(profile.get("building_use_type")),
         "address": _text(profile.get("address")),
-        "has_excavation": profile.get("has_excavation") is True,
-        "has_hazardous_material": profile.get("has_hazardous_material") is True,
+        "has_excavation": _bool_or_none(profile.get("has_excavation")),
+        "has_hazardous_material": _bool_or_none(profile.get("has_hazardous_material")),
     }
 
 

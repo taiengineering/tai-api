@@ -353,16 +353,50 @@ def test_pdf16_canonical_source_dedup_fail_closed():
     assert view["obligations"][0]["source_text"] is None
 
 
-# ── PDF17: profile view construction ─────────────────────────────────────────
+# ── PDF17: profile view — boolean preservation (True/False/None) ──────────────
 
-def test_pdf17_profile_view_fields():
+def test_pdf17_profile_bool_true_preserved():
+    prem = _premium()
+    prem["profile"]["has_excavation"] = True
+    prem["profile"]["has_hazardous_material"] = True
+    view = build_paid_result_pdf_view_v1(prem)
+    assert view["profile"]["has_excavation"] is True
+    assert view["profile"]["has_hazardous_material"] is True
+
+
+def test_pdf17b_profile_bool_false_preserved():
+    prem = _premium()
+    prem["profile"]["has_excavation"] = False
+    prem["profile"]["has_hazardous_material"] = False
+    view = build_paid_result_pdf_view_v1(prem)
+    assert view["profile"]["has_excavation"] is False
+    assert view["profile"]["has_hazardous_material"] is False
+
+
+def test_pdf17c_profile_bool_none_preserved():
+    prem = _premium()
+    prem["profile"]["has_excavation"] = None
+    prem["profile"]["has_hazardous_material"] = None
+    view = build_paid_result_pdf_view_v1(prem)
+    assert view["profile"]["has_excavation"] is None
+    assert view["profile"]["has_hazardous_material"] is None
+
+
+def test_pdf17d_profile_bool_invalid_becomes_none():
+    prem = _premium()
+    prem["profile"]["has_excavation"] = "yes"
+    prem["profile"]["has_hazardous_material"] = 1
+    view = build_paid_result_pdf_view_v1(prem)
+    assert view["profile"]["has_excavation"] is None
+    assert view["profile"]["has_hazardous_material"] is None
+
+
+def test_pdf17e_profile_basic_fields():
     prem = _premium(company_name="테스트 건설", sector="CONSTRUCTION", workers=120)
     view = build_paid_result_pdf_view_v1(prem)
     p = view["profile"]
     assert p["company_name"] == "테스트 건설"
     assert p["workers"] == 120
-    assert isinstance(p["has_excavation"], bool)
-    assert isinstance(p["has_hazardous_material"], bool)
 
 
 # ── PDF18: sector label mapping ───────────────────────────────────────────────
