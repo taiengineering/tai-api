@@ -22,7 +22,6 @@ class IdentifierBody(BaseModel):
     identifier_value: str
     issuer_name: Optional[str] = None
     is_primary: bool = False
-    created_source: str = "MANUAL"
 
     class Config:
         extra = "forbid"
@@ -32,7 +31,6 @@ class ProductCreateBody(BaseModel):
     product_name: str
     manufacturer_name: Optional[str] = None
     identifiers: Optional[List[IdentifierBody]] = None
-    created_source: str = "MANUAL"
 
     class Config:
         extra = "forbid"
@@ -95,7 +93,7 @@ def create_product(
             product_name=body.product_name,
             manufacturer_name=body.manufacturer_name,
             identifiers=identifiers,
-            created_source=body.created_source,
+            created_source="MANUAL",
         )
     except svc.MsdsProductError as e:
         raise _err(e) from e
@@ -172,8 +170,10 @@ def add_identifier(
 ):
     _require_user(current_user)
     sb = get_supabase()
+    payload = body.dict()
+    payload["created_source"] = "MANUAL"
     try:
-        ident = svc.add_identifier(sb, current_user, product_id, body.dict())
+        ident = svc.add_identifier(sb, current_user, product_id, payload)
     except svc.MsdsProductError as e:
         raise _err(e) from e
     return {"status": "success", "data": ident}
