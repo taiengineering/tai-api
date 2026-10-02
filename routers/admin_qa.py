@@ -193,7 +193,8 @@ async def create_run(
     dispatch_status = "SKIPPED"
     if scenario_ids:
         try:
-            await dispatch_qa_run(run_id, scenario_ids)
+            # Manual Admin path — allow_conditional=True (Admin 명시적 요청)
+            await dispatch_qa_run(run_id, scenario_ids, allow_conditional=True)
             dispatch_status = "OK"
             now_iso = serialize_external_utc(now_kst())
             supabase.table("qa_runs").update({
