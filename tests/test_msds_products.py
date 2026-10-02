@@ -1,7 +1,8 @@
-"""WO-MSDS-02 chemical_products / identifiers 단위·통합 테스트.
+"""WO-MSDS-02-PATCH-003 chemical_products / identifiers 단위·통합 테스트.
 
 FakeSupabase 격리 — 운영 DB/네트워크 불사용.
-Tenant 격리(BOLA), Duplicate Candidate, Identifier 생명주기 검증.
+Canonical Scope: factory_id (factories.id). company_id 는 factory 귀속 검증용.
+Site 격리(동일회사 다른 시설), Tenant 격리(BOLA), Duplicate Candidate, Identifier 생명주기 검증.
 """
 from __future__ import annotations
 
@@ -102,7 +103,6 @@ class _Query:
                 elif str(rv) != str(v):
                     return False
             elif op == "ilike":
-                # pattern: %text%
                 pat = v.replace("%", "").lower()
                 if rv is None or pat not in str(rv).lower():
                     return False
@@ -166,23 +166,41 @@ class FakeSB:
         return _Query(self.store, name, self.log)
 
 
-# ─── Fixture helpers ──────────────────────────────────────────────────────────
+# ─── Fixture 상수 ─────────────────────────────────────────────────────────────
 
 CO_A = "company-a"
 CO_B = "company-b"
-U_A = "user-a"
-U_B = "user-b"
+FAC_A1 = "factory-a1"   # Company A, Site 1
+FAC_A2 = "factory-a2"   # Company A, Site 2
+FAC_B  = "factory-b1"   # Company B
 
-CALLER_A = {"id": U_A, "company_id": CO_A, "role_code": "010"}
-CALLER_B = {"id": U_B, "company_id": CO_B, "role_code": "010"}
-NO_CO = {"id": "user-nocompany", "company_id": None, "role_code": "010"}
+CALLER_A  = {"id": "user-a", "company_id": CO_A, "role_code": "010"}
+CALLER_B  = {"id": "user-b", "company_id": CO_B, "role_code": "010"}
+NO_CO     = {"id": "user-nocompany", "company_id": None, "role_code": "010"}
+
+_FACTORIES = [
+    {"id": FAC_A1, "company_id": CO_A, "name": "A사 1공장"},
+    {"id": FAC_A2, "company_id": CO_A, "name": "A사 2공장"},
+    {"id": FAC_B,  "company_id": CO_B, "name": "B사 공장"},
+]
+
+
+def _make_sb(extra=None):
+    store = {"factories": list(_FACTORIES)}
+    if extra:
+        store.update(extra)
+    return FakeSB(store)
 
 
 def _client(current_user, store=None):
+    if store is None:
+        store = {"factories": list(_FACTORIES)}
+    elif "factories" not in store:
+        store["factories"] = list(_FACTORIES)
     app = FastAPI()
     app.include_router(mp.router)
     app.dependency_overrides[mp.get_current_user] = lambda: current_user
-    fake = FakeSB(store or {})
+    fake = FakeSB(store)
     mp.get_supabase = lambda: fake
     c = TestClient(app)
     c._fake = fake
@@ -194,10 +212,10 @@ def _client(current_user, store=None):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_cp01_create_product():
-    sb = FakeSB()
-    product, cands = svc.create_product(sb, CALLER_A, "ABC 세척제")
+    sb = _make_sb()
+    product, cands = svc.create_product(sb, CALLER_A, FAC_A1, "ABC 세척제")
     assert product["product_name"] == "ABC 세척제"
-    assert product["company_id"] == CO_A
+    assert product["factory_id"] == FAC_A1
     assert product["identity_status"] == "DRAFT"
     assert product["status_code"] == "ACTIVE"
     assert product["created_source"] == "MANUAL"
@@ -205,8 +223,8 @@ def test_cp01_create_product():
 
 
 def test_cp02_manufacturer_nullable():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "XYZ 절삭유", manufacturer_name=None)
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "XYZ 절삭유", manufacturer_name=None)
     assert product["manufacturer_name"] is None
     assert product["manufacturer_normalized"] is None
 
@@ -221,76 +239,76 @@ def test_cp03_normalization_deterministic():
 
 
 def test_cp04_invalid_identity_status_reject():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "Test Product")
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "Test Product")
     with pytest.raises(svc.MsdsProductError) as exc:
-        svc.update_product(sb, CALLER_A, product["id"], {"identity_status": "INVALID_STATE"})
+        svc.update_product(sb, CALLER_A, FAC_A1, product["id"], {"identity_status": "INVALID_STATE"})
     assert exc.value.status_code == 400
 
 
 def test_cp05_invalid_status_code_reject():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "Test Product")
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "Test Product")
     with pytest.raises(svc.MsdsProductError):
-        svc.update_product(sb, CALLER_A, product["id"], {"status_code": "DELETED"})
+        svc.update_product(sb, CALLER_A, FAC_A1, product["id"], {"status_code": "DELETED"})
 
 
 def test_cp06_invalid_created_source_reject():
-    sb = FakeSB()
+    sb = _make_sb()
     with pytest.raises(svc.MsdsProductError) as exc:
-        svc.create_product(sb, CALLER_A, "Test", created_source="UNKNOWN_SOURCE")
+        svc.create_product(sb, CALLER_A, FAC_A1, "Test", created_source="UNKNOWN_SOURCE")
     assert exc.value.status_code == 400
 
 
-def test_cp07_company_scope_required():
-    sb = FakeSB()
+def test_cp07_no_company_403():
+    sb = _make_sb()
     with pytest.raises(svc.MsdsProductError) as exc:
-        svc.create_product(sb, NO_CO, "Test")
+        svc.create_product(sb, NO_CO, FAC_A1, "Test")
     assert exc.value.status_code == 403
     assert exc.value.code == "NO_COMPANY"
 
 
 def test_cp08_inactive_lifecycle():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "세척제")
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "세척제")
     assert product["status_code"] == "ACTIVE"
-    inactive = svc.deactivate_product(sb, CALLER_A, product["id"])
+    inactive = svc.deactivate_product(sb, CALLER_A, FAC_A1, product["id"])
     assert inactive["status_code"] == "INACTIVE"
-    active = svc.reactivate_product(sb, CALLER_A, product["id"])
+    active = svc.reactivate_product(sb, CALLER_A, FAC_A1, product["id"])
     assert active["status_code"] == "ACTIVE"
 
 
 def test_cp09_deactivate_idempotent():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "세척제")
-    r1 = svc.deactivate_product(sb, CALLER_A, product["id"])
-    r2 = svc.deactivate_product(sb, CALLER_A, product["id"])
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "세척제")
+    r1 = svc.deactivate_product(sb, CALLER_A, FAC_A1, product["id"])
+    r2 = svc.deactivate_product(sb, CALLER_A, FAC_A1, product["id"])
     assert r1["status_code"] == "INACTIVE"
     assert r2["status_code"] == "INACTIVE"
 
 
 def test_cp10_product_not_found_404():
-    sb = FakeSB()
+    sb = _make_sb()
     with pytest.raises(svc.MsdsProductError) as exc:
-        svc.get_product(sb, CALLER_A, str(uuid.uuid4()))
+        svc.get_product(sb, CALLER_A, FAC_A1, str(uuid.uuid4()))
     assert exc.value.status_code == 404
 
 
 def test_cp11_update_normalizes_name():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "Old Name")
-    updated = svc.update_product(sb, CALLER_A, product["id"], {"product_name": "  New Name  "})
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "Old Name")
+    updated = svc.update_product(sb, CALLER_A, FAC_A1, product["id"], {"product_name": "  New Name  "})
     assert updated["product_name"] == "New Name"
     assert updated["product_name_normalized"] == "new name"
 
 
 def test_cp12_identity_status_transition():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "테스트")
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "테스트")
     assert product["identity_status"] == "DRAFT"
-    confirmed = svc.update_product(sb, CALLER_A, product["id"], {"identity_status": "CONFIRMED"})
+    confirmed = svc.update_product(sb, CALLER_A, FAC_A1, product["id"], {"identity_status": "CONFIRMED"})
     assert confirmed["identity_status"] == "CONFIRMED"
-    review = svc.update_product(sb, CALLER_A, product["id"], {"identity_status": "REVIEW_REQUIRED"})
+    review = svc.update_product(sb, CALLER_A, FAC_A1, product["id"], {"identity_status": "REVIEW_REQUIRED"})
     assert review["identity_status"] == "REVIEW_REQUIRED"
 
 
@@ -299,46 +317,42 @@ def test_cp12_identity_status_transition():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_id01_identifier_add():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "제품A")
-    ident = svc.add_identifier(sb, CALLER_A, product["id"], {
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "제품A")
+    ident = svc.add_identifier(sb, CALLER_A, FAC_A1, product["id"], {
         "identifier_type": "BARCODE",
         "identifier_value": "1234567890",
     })
     assert ident["identifier_type"] == "BARCODE"
     assert ident["identifier_value"] == "1234567890"
     assert ident["is_active"] is True
+    assert ident["factory_id"] == FAC_A1
 
 
 def test_id02_multiple_identifiers_per_product():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "제품B")
-    svc.add_identifier(sb, CALLER_A, product["id"], {"identifier_type": "BARCODE", "identifier_value": "111"})
-    svc.add_identifier(sb, CALLER_A, product["id"], {"identifier_type": "GTIN", "identifier_value": "222"})
-    items = svc.list_identifiers(sb, CALLER_A, product["id"])
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "제품B")
+    svc.add_identifier(sb, CALLER_A, FAC_A1, product["id"], {"identifier_type": "BARCODE", "identifier_value": "111"})
+    svc.add_identifier(sb, CALLER_A, FAC_A1, product["id"], {"identifier_type": "GTIN", "identifier_value": "222"})
+    items = svc.list_identifiers(sb, CALLER_A, FAC_A1, product["id"])
     assert len(items) == 2
 
 
 def test_id03_same_product_active_exact_identifier_duplicate_contract():
-    # DB 레벨: uidx_cpi_active_unique (chemical_product_id, identifier_type, identifier_normalized WHERE is_active=true)
-    # FakeSB는 UNIQUE INDEX를 enforce하지 않으나, duplicate 방지 계약은 migration DDL에 존재함.
-    # 이 테스트는 FakeSB에서 insert가 허용됨을 확인 (DB 격리 환경에서 정상)하며
-    # 동일 제품+타입+코드의 identifier_normalized가 동일하게 처리됨을 검증.
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "제품C")
-    svc.add_identifier(sb, CALLER_A, product["id"], {"identifier_type": "BARCODE", "identifier_value": "999"})
-    ident2 = svc.add_identifier(sb, CALLER_A, product["id"], {"identifier_type": "BARCODE", "identifier_value": "999"})
-    # FakeSB에서는 중복 허용, 실제 DB에서는 UNIQUE INDEX가 constraint error 발생
-    assert ident2["identifier_normalized"] == "999"  # normalization 동일 결과 확인
+    # uidx_cpi_active_unique: FakeSB 미적용, 실 DB에서 UNIQUE INDEX가 차단함
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "제품C")
+    svc.add_identifier(sb, CALLER_A, FAC_A1, product["id"], {"identifier_type": "BARCODE", "identifier_value": "999"})
+    ident2 = svc.add_identifier(sb, CALLER_A, FAC_A1, product["id"], {"identifier_type": "BARCODE", "identifier_value": "999"})
+    assert ident2["identifier_normalized"] == "999"
 
 
 def test_id05_leading_zero_identifier_preserved():
     assert svc.normalize_identifier("00012345") == "00012345"
     assert svc.normalize_identifier("0000001") == "0000001"
-    # numeric cast하지 않으므로 leading zero 유지
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "EAN 제품")
-    ident = svc.add_identifier(sb, CALLER_A, product["id"], {
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "EAN 제품")
+    ident = svc.add_identifier(sb, CALLER_A, FAC_A1, product["id"], {
         "identifier_type": "EAN",
         "identifier_value": "00012345678905",
     })
@@ -346,20 +360,20 @@ def test_id05_leading_zero_identifier_preserved():
 
 
 def test_id06_identifier_deactivate():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "제품D")
-    ident = svc.add_identifier(sb, CALLER_A, product["id"], {
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "제품D")
+    ident = svc.add_identifier(sb, CALLER_A, FAC_A1, product["id"], {
         "identifier_type": "BARCODE", "identifier_value": "777"
     })
-    result = svc.deactivate_identifier(sb, CALLER_A, product["id"], ident["id"])
+    result = svc.deactivate_identifier(sb, CALLER_A, FAC_A1, product["id"], ident["id"])
     assert result["is_active"] is False
 
 
 def test_id08_identifier_invalid_type_reject():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "제품E")
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "제품E")
     with pytest.raises(svc.MsdsProductError) as exc:
-        svc.add_identifier(sb, CALLER_A, product["id"], {
+        svc.add_identifier(sb, CALLER_A, FAC_A1, product["id"], {
             "identifier_type": "INVALID_TYPE",
             "identifier_value": "123",
         })
@@ -367,10 +381,10 @@ def test_id08_identifier_invalid_type_reject():
 
 
 def test_id09_identifier_empty_value_reject():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "제품F")
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "제품F")
     with pytest.raises(svc.MsdsProductError) as exc:
-        svc.add_identifier(sb, CALLER_A, product["id"], {
+        svc.add_identifier(sb, CALLER_A, FAC_A1, product["id"], {
             "identifier_type": "BARCODE",
             "identifier_value": "   ",
         })
@@ -378,16 +392,16 @@ def test_id09_identifier_empty_value_reject():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# DUP — Duplicate Candidate 테스트
+# DUP — Duplicate Candidate (factory 기준)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def test_dup01_exact_identifier_candidate():
-    sb = FakeSB()
-    product1, _ = svc.create_product(sb, CALLER_A, "제품X")
-    svc.add_identifier(sb, CALLER_A, product1["id"], {
+def test_dup01_exact_identifier_same_site():
+    sb = _make_sb()
+    product1, _ = svc.create_product(sb, CALLER_A, FAC_A1, "제품X")
+    svc.add_identifier(sb, CALLER_A, FAC_A1, product1["id"], {
         "identifier_type": "BARCODE", "identifier_value": "BARCODE-001"
     })
-    _, candidates = svc.create_product(sb, CALLER_A, "제품X 복사", identifiers=[{
+    _, candidates = svc.create_product(sb, CALLER_A, FAC_A1, "제품X 복사", identifiers=[{
         "identifier_type": "BARCODE",
         "identifier_value": "BARCODE-001",
     }])
@@ -395,39 +409,43 @@ def test_dup01_exact_identifier_candidate():
     assert any(c["product_id"] == product1["id"] for c in candidates)
 
 
-def test_dup02_normalized_name_manufacturer_candidate():
-    sb = FakeSB()
-    svc.create_product(sb, CALLER_A, "ABC 세척제", manufacturer_name="ABC Chemical")
-    _, candidates = svc.create_product(sb, CALLER_A, "abc 세척제", manufacturer_name="abc chemical")
+def test_dup02_different_site_same_identifier_no_candidate():
+    """동일 회사 다른 시설의 동일 Barcode = duplicate 아님."""
+    sb = _make_sb()
+    product_a1, _ = svc.create_product(sb, CALLER_A, FAC_A1, "A1 제품")
+    svc.add_identifier(sb, CALLER_A, FAC_A1, product_a1["id"], {
+        "identifier_type": "BARCODE", "identifier_value": "SHARED-BC"
+    })
+    _, candidates = svc.create_product(sb, CALLER_A, FAC_A2, "A2 제품", identifiers=[{
+        "identifier_type": "BARCODE",
+        "identifier_value": "SHARED-BC",
+    }])
+    assert not any(c["reason"] == "EXACT_IDENTIFIER" for c in candidates)
+
+
+def test_dup03_name_manufacturer_same_site():
+    sb = _make_sb()
+    svc.create_product(sb, CALLER_A, FAC_A1, "ABC 세척제", manufacturer_name="ABC Chemical")
+    _, candidates = svc.create_product(sb, CALLER_A, FAC_A1, "abc 세척제", manufacturer_name="abc chemical")
     assert any(c["reason"] == "POSSIBLE_DUPLICATE_NAME_MFR" for c in candidates)
 
 
-def test_dup03_same_name_different_manufacturer_not_exact():
-    sb = FakeSB()
-    svc.create_product(sb, CALLER_A, "세척제 100", manufacturer_name="ABC Chemical")
-    _, candidates = svc.create_product(sb, CALLER_A, "세척제 100", manufacturer_name="XYZ Chemical")
-    # 제조사가 다르면 POSSIBLE_DUPLICATE_NAME_MFR 에 걸리지 않음
-    assert not any(c["reason"] == "POSSIBLE_DUPLICATE_NAME_MFR" for c in candidates)
-
-
 def test_dup04_manufacturer_null_no_false_positive():
-    sb = FakeSB()
-    svc.create_product(sb, CALLER_A, "공통 제품명", manufacturer_name=None)
-    _, candidates = svc.create_product(sb, CALLER_A, "공통 제품명", manufacturer_name=None)
-    # manufacturer가 NULL이면 name+mfr 기반 중복 탐지 skip
+    sb = _make_sb()
+    svc.create_product(sb, CALLER_A, FAC_A1, "공통 제품명", manufacturer_name=None)
+    _, candidates = svc.create_product(sb, CALLER_A, FAC_A1, "공통 제품명", manufacturer_name=None)
     assert not any(c["reason"] == "POSSIBLE_DUPLICATE_NAME_MFR" for c in candidates)
 
 
 def test_dup05_candidate_does_not_auto_merge():
-    sb = FakeSB()
-    product1, _ = svc.create_product(sb, CALLER_A, "제품Y")
-    svc.add_identifier(sb, CALLER_A, product1["id"], {
+    sb = _make_sb()
+    product1, _ = svc.create_product(sb, CALLER_A, FAC_A1, "제품Y")
+    svc.add_identifier(sb, CALLER_A, FAC_A1, product1["id"], {
         "identifier_type": "BARCODE", "identifier_value": "SAME-CODE"
     })
-    product2, candidates = svc.create_product(sb, CALLER_A, "제품Y 복사", identifiers=[{
+    product2, candidates = svc.create_product(sb, CALLER_A, FAC_A1, "제품Y 복사", identifiers=[{
         "identifier_type": "BARCODE", "identifier_value": "SAME-CODE",
     }])
-    # 두 product가 모두 존재해야 함 (자동 merge 금지)
     p1 = sb.table("chemical_products").select("*").eq("id", product1["id"]).execute()
     p2 = sb.table("chemical_products").select("*").eq("id", product2["id"]).execute()
     assert len(p1.data) == 1
@@ -436,68 +454,147 @@ def test_dup05_candidate_does_not_auto_merge():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# SITE — 시설 격리 테스트
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_site01_create_product_at_site():
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "A1 세척제")
+    assert product["factory_id"] == FAC_A1
+
+
+def test_site02_site_a1_list_only_site_a1():
+    sb = _make_sb()
+    svc.create_product(sb, CALLER_A, FAC_A1, "A1 제품")
+    svc.create_product(sb, CALLER_A, FAC_A2, "A2 제품")
+    result = svc.list_products(sb, CALLER_A, FAC_A1)
+    assert all(i["factory_id"] == FAC_A1 for i in result["items"])
+    assert len(result["items"]) == 1
+
+
+def test_site03_same_company_site_a2_not_in_site_a1_list():
+    sb = _make_sb()
+    svc.create_product(sb, CALLER_A, FAC_A2, "A2 제품")
+    result = svc.list_products(sb, CALLER_A, FAC_A1)
+    assert result["items"] == []
+    assert result["total"] == 0
+
+
+def test_site04_same_product_name_may_exist_in_a1_and_a2():
+    """동일 회사 시설 A1/A2에 동일 이름 제품이 각각 존재 가능."""
+    sb = _make_sb()
+    p_a1, _ = svc.create_product(sb, CALLER_A, FAC_A1, "ABC 세척제", manufacturer_name="ABC Chemical")
+    p_a2, cands = svc.create_product(sb, CALLER_A, FAC_A2, "ABC 세척제", manufacturer_name="ABC Chemical")
+    assert p_a1["id"] != p_a2["id"]
+    assert not any(c["reason"] == "POSSIBLE_DUPLICATE_NAME_MFR" for c in cands)
+
+
+def test_site05_same_barcode_may_exist_in_a1_and_a2():
+    """동일 Barcode가 A1/A2에 각각 존재 가능."""
+    sb = _make_sb()
+    p_a1, _ = svc.create_product(sb, CALLER_A, FAC_A1, "A1 제품")
+    svc.add_identifier(sb, CALLER_A, FAC_A1, p_a1["id"], {
+        "identifier_type": "BARCODE", "identifier_value": "SHARED-BC"
+    })
+    p_a2, cands = svc.create_product(sb, CALLER_A, FAC_A2, "A2 제품", identifiers=[
+        {"identifier_type": "BARCODE", "identifier_value": "SHARED-BC"}
+    ])
+    assert not any(c["reason"] == "EXACT_IDENTIFIER" for c in cands)
+
+
+def test_site06_cross_company_factory_inaccessible():
+    """Company A 사용자가 Company B 공장에 접근 불가."""
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, CALLER_A, FAC_B)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_site07_cross_company_product_inaccessible():
+    """Company A 사용자가 Company B 공장의 제품에 접근 불가."""
+    sb = _make_sb()
+    product_b, _ = svc.create_product(sb, CALLER_B, FAC_B, "B사 제품")
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.get_product(sb, CALLER_A, FAC_B, product_b["id"])
+    assert exc.value.status_code == 404
+
+
+def test_site08_factory_id_immutable_in_patch():
+    """update_product 에서 factory_id 변경 시도는 무시됨."""
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "테스트 제품")
+    updated = svc.update_product(sb, CALLER_A, FAC_A1, product["id"], {
+        "factory_id": FAC_A2,
+        "product_name": "New Name",
+    })
+    assert updated["factory_id"] == FAC_A1
+    assert updated["product_name"] == "New Name"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # TEN — Tenant Isolation (BOLA) 테스트
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_ten01_company_a_list_cannot_see_company_b():
-    sb = FakeSB()
-    svc.create_product(sb, CALLER_A, "A사 제품")
-    svc.create_product(sb, CALLER_B, "B사 제품")
-    result = svc.list_products(sb, CALLER_A)
-    assert all(i["company_id"] == CO_A for i in result["items"])
-    assert all(i["company_id"] != CO_B for i in result["items"])
+    sb = _make_sb()
+    svc.create_product(sb, CALLER_A, FAC_A1, "A사 제품")
+    svc.create_product(sb, CALLER_B, FAC_B, "B사 제품")
+    result = svc.list_products(sb, CALLER_A, FAC_A1)
+    assert all(i["factory_id"] == FAC_A1 for i in result["items"])
 
 
 def test_ten02_company_a_get_b_product_inaccessible():
-    sb = FakeSB()
-    product_b, _ = svc.create_product(sb, CALLER_B, "B사 제품")
+    sb = _make_sb()
+    product_b, _ = svc.create_product(sb, CALLER_B, FAC_B, "B사 제품")
     with pytest.raises(svc.MsdsProductError) as exc:
-        svc.get_product(sb, CALLER_A, product_b["id"])
+        svc.get_product(sb, CALLER_A, FAC_A1, product_b["id"])
     assert exc.value.status_code == 404
 
 
 def test_ten03_company_a_patch_b_product_inaccessible():
-    sb = FakeSB()
-    product_b, _ = svc.create_product(sb, CALLER_B, "B사 제품")
+    sb = _make_sb()
+    product_b, _ = svc.create_product(sb, CALLER_B, FAC_B, "B사 제품")
     with pytest.raises(svc.MsdsProductError) as exc:
-        svc.update_product(sb, CALLER_A, product_b["id"], {"product_name": "탈취 시도"})
+        svc.update_product(sb, CALLER_A, FAC_A1, product_b["id"], {"product_name": "탈취 시도"})
     assert exc.value.status_code == 404
 
 
 def test_ten04_company_a_deactivate_b_product_inaccessible():
-    sb = FakeSB()
-    product_b, _ = svc.create_product(sb, CALLER_B, "B사 제품")
+    sb = _make_sb()
+    product_b, _ = svc.create_product(sb, CALLER_B, FAC_B, "B사 제품")
     with pytest.raises(svc.MsdsProductError) as exc:
-        svc.deactivate_product(sb, CALLER_A, product_b["id"])
+        svc.deactivate_product(sb, CALLER_A, FAC_A1, product_b["id"])
     assert exc.value.status_code == 404
 
 
 def test_ten05_company_a_add_identifier_to_b_product_inaccessible():
-    sb = FakeSB()
-    product_b, _ = svc.create_product(sb, CALLER_B, "B사 제품")
+    sb = _make_sb()
+    product_b, _ = svc.create_product(sb, CALLER_B, FAC_B, "B사 제품")
     with pytest.raises(svc.MsdsProductError) as exc:
-        svc.add_identifier(sb, CALLER_A, product_b["id"], {
+        svc.add_identifier(sb, CALLER_A, FAC_A1, product_b["id"], {
             "identifier_type": "BARCODE", "identifier_value": "hack"
         })
     assert exc.value.status_code == 404
 
 
 def test_ten06_company_a_deactivate_identifier_on_b_product_inaccessible():
-    sb = FakeSB()
-    product_b, _ = svc.create_product(sb, CALLER_B, "B사 제품")
-    ident_b = svc.add_identifier(sb, CALLER_B, product_b["id"], {
+    sb = _make_sb()
+    product_b, _ = svc.create_product(sb, CALLER_B, FAC_B, "B사 제품")
+    ident_b = svc.add_identifier(sb, CALLER_B, FAC_B, product_b["id"], {
         "identifier_type": "BARCODE", "identifier_value": "bcode"
     })
     with pytest.raises(svc.MsdsProductError) as exc:
-        svc.deactivate_identifier(sb, CALLER_A, product_b["id"], ident_b["id"])
+        svc.deactivate_identifier(sb, CALLER_A, FAC_A1, product_b["id"], ident_b["id"])
     assert exc.value.status_code == 404
 
 
-def test_ten07_identifier_list_scoped_to_company():
-    sb = FakeSB()
-    product_b, _ = svc.create_product(sb, CALLER_B, "B사 제품")
+def test_ten07_same_company_cross_site_product_inaccessible_by_product_id():
+    """동일 회사 내 Site A1 사용자가 Site A2 product_id 로 접근 불가."""
+    sb = _make_sb()
+    product_a2, _ = svc.create_product(sb, CALLER_A, FAC_A2, "A2 제품")
     with pytest.raises(svc.MsdsProductError) as exc:
-        svc.list_identifiers(sb, CALLER_A, product_b["id"])
+        svc.get_product(sb, CALLER_A, FAC_A1, product_a2["id"])
     assert exc.value.status_code == 404
 
 
@@ -508,11 +605,12 @@ def test_ten07_identifier_list_scoped_to_company():
 @requires_client
 def test_router_create_product_201():
     c = _client(CALLER_A)
-    r = c.post("/me/msds/products", json={"product_name": "ABC 세척제"})
+    r = c.post(f"/me/msds/factories/{FAC_A1}/products", json={"product_name": "ABC 세척제"})
     assert r.status_code == 201
     d = r.json()
     assert d["status"] == "success"
     assert d["data"]["product_name"] == "ABC 세척제"
+    assert d["data"]["factory_id"] == FAC_A1
     assert "duplicate_candidates" in d
 
 
@@ -520,9 +618,9 @@ def test_router_create_product_201():
 def test_router_list_products_200():
     store = {}
     c = _client(CALLER_A, store)
-    c.post("/me/msds/products", json={"product_name": "제품1"})
-    c.post("/me/msds/products", json={"product_name": "제품2"})
-    r = c.get("/me/msds/products")
+    c.post(f"/me/msds/factories/{FAC_A1}/products", json={"product_name": "제품1"})
+    c.post(f"/me/msds/factories/{FAC_A1}/products", json={"product_name": "제품2"})
+    r = c.get(f"/me/msds/factories/{FAC_A1}/products")
     assert r.status_code == 200
     assert r.json()["data"]["total"] >= 2
 
@@ -531,9 +629,9 @@ def test_router_list_products_200():
 def test_router_get_product_200():
     store = {}
     c = _client(CALLER_A, store)
-    created = c.post("/me/msds/products", json={"product_name": "세척제"})
+    created = c.post(f"/me/msds/factories/{FAC_A1}/products", json={"product_name": "세척제"})
     pid = created.json()["data"]["id"]
-    r = c.get(f"/me/msds/products/{pid}")
+    r = c.get(f"/me/msds/factories/{FAC_A1}/products/{pid}")
     assert r.status_code == 200
     assert r.json()["data"]["id"] == pid
 
@@ -542,9 +640,9 @@ def test_router_get_product_200():
 def test_router_patch_product():
     store = {}
     c = _client(CALLER_A, store)
-    created = c.post("/me/msds/products", json={"product_name": "Old"})
+    created = c.post(f"/me/msds/factories/{FAC_A1}/products", json={"product_name": "Old"})
     pid = created.json()["data"]["id"]
-    r = c.patch(f"/me/msds/products/{pid}", json={"product_name": "New"})
+    r = c.patch(f"/me/msds/factories/{FAC_A1}/products/{pid}", json={"product_name": "New"})
     assert r.status_code == 200
     assert r.json()["data"]["product_name"] == "New"
 
@@ -553,12 +651,12 @@ def test_router_patch_product():
 def test_router_deactivate_reactivate():
     store = {}
     c = _client(CALLER_A, store)
-    created = c.post("/me/msds/products", json={"product_name": "Cycle"})
+    created = c.post(f"/me/msds/factories/{FAC_A1}/products", json={"product_name": "Cycle"})
     pid = created.json()["data"]["id"]
-    r1 = c.post(f"/me/msds/products/{pid}/deactivate")
+    r1 = c.post(f"/me/msds/factories/{FAC_A1}/products/{pid}/deactivate")
     assert r1.status_code == 200
     assert r1.json()["data"]["status_code"] == "INACTIVE"
-    r2 = c.post(f"/me/msds/products/{pid}/reactivate")
+    r2 = c.post(f"/me/msds/factories/{FAC_A1}/products/{pid}/reactivate")
     assert r2.status_code == 200
     assert r2.json()["data"]["status_code"] == "ACTIVE"
 
@@ -567,21 +665,21 @@ def test_router_deactivate_reactivate():
 def test_router_add_get_deactivate_identifier():
     store = {}
     c = _client(CALLER_A, store)
-    created = c.post("/me/msds/products", json={"product_name": "바코드 제품"})
+    created = c.post(f"/me/msds/factories/{FAC_A1}/products", json={"product_name": "바코드 제품"})
     pid = created.json()["data"]["id"]
 
-    r_add = c.post(f"/me/msds/products/{pid}/identifiers", json={
+    r_add = c.post(f"/me/msds/factories/{FAC_A1}/products/{pid}/identifiers", json={
         "identifier_type": "BARCODE",
         "identifier_value": "9876543210",
     })
     assert r_add.status_code == 201
     iid = r_add.json()["data"]["id"]
 
-    r_list = c.get(f"/me/msds/products/{pid}/identifiers")
+    r_list = c.get(f"/me/msds/factories/{FAC_A1}/products/{pid}/identifiers")
     assert r_list.status_code == 200
     assert r_list.json()["data"]["total"] == 1
 
-    r_del = c.delete(f"/me/msds/products/{pid}/identifiers/{iid}")
+    r_del = c.delete(f"/me/msds/factories/{FAC_A1}/products/{pid}/identifiers/{iid}")
     assert r_del.status_code == 200
     assert r_del.json()["data"]["is_active"] is False
 
@@ -589,25 +687,27 @@ def test_router_add_get_deactivate_identifier():
 @requires_client
 def test_router_forbidden_body_fields_422():
     c = _client(CALLER_A)
-    r = c.post("/me/msds/products", json={"product_name": "X", "company_id": "hack"})
+    r = c.post(f"/me/msds/factories/{FAC_A1}/products", json={
+        "product_name": "X", "company_id": "hack"
+    })
     assert r.status_code == 422
 
 
 @requires_client
 def test_router_no_company_403():
     c = _client(NO_CO)
-    r = c.post("/me/msds/products", json={"product_name": "X"})
+    r = c.post(f"/me/msds/factories/{FAC_A1}/products", json={"product_name": "X"})
     assert r.status_code == 403
 
 
 @requires_client
-def test_router_cross_company_get_404():
+def test_router_cross_factory_get_404():
     store = {}
-    c_a = _client(CALLER_A, store)
-    c_b = _client(CALLER_B, store)
-    created = c_b.post("/me/msds/products", json={"product_name": "B사 전용"})
+    c = _client(CALLER_A, store)
+    created = c.post(f"/me/msds/factories/{FAC_A1}/products", json={"product_name": "A1 전용"})
     pid = created.json()["data"]["id"]
-    r = c_a.get(f"/me/msds/products/{pid}")
+    # FAC_A2 로 같은 product_id 접근 — 404
+    r = c.get(f"/me/msds/factories/{FAC_A2}/products/{pid}")
     assert r.status_code == 404
 
 
@@ -616,115 +716,103 @@ def test_router_cross_company_get_404():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_forbidden_factory_materials_not_touched():
-    sb = FakeSB()
-    svc.create_product(sb, CALLER_A, "테스트")
+    sb = _make_sb()
+    svc.create_product(sb, CALLER_A, FAC_A1, "테스트")
     touched = {t for (t, _) in sb.log}
     assert "factory_materials" not in touched
     assert "material_legal_master" not in touched
 
 
 def test_forbidden_msds_ref_not_touched():
-    sb = FakeSB()
-    svc.create_product(sb, CALLER_A, "테스트")
+    sb = _make_sb()
+    svc.create_product(sb, CALLER_A, FAC_A1, "테스트")
     touched = {t for (t, _) in sb.log}
     for table in touched:
         assert not table.startswith("msds_ref")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SEARCH — q 검색 테스트 (PATCH-001)
+# SEARCH — q 검색 (factory-scoped)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_search01_product_name_search():
-    sb = FakeSB()
-    svc.create_product(sb, CALLER_A, "ABC 세척제", manufacturer_name="XYZ Chemical")
-    svc.create_product(sb, CALLER_A, "전혀 다른 제품")
-    result = svc.list_products(sb, CALLER_A, q="abc 세척")
+    sb = _make_sb()
+    svc.create_product(sb, CALLER_A, FAC_A1, "ABC 세척제", manufacturer_name="XYZ Chemical")
+    svc.create_product(sb, CALLER_A, FAC_A1, "전혀 다른 제품")
+    result = svc.list_products(sb, CALLER_A, FAC_A1, q="abc 세척")
     assert len(result["items"]) == 1
     assert result["items"][0]["product_name"] == "ABC 세척제"
 
 
 def test_search02_manufacturer_search():
-    sb = FakeSB()
-    svc.create_product(sb, CALLER_A, "제품1", manufacturer_name="ABC Chemical")
-    svc.create_product(sb, CALLER_A, "제품2", manufacturer_name="XYZ Corp")
-    result = svc.list_products(sb, CALLER_A, q="abc chem")
+    sb = _make_sb()
+    svc.create_product(sb, CALLER_A, FAC_A1, "제품1", manufacturer_name="ABC Chemical")
+    svc.create_product(sb, CALLER_A, FAC_A1, "제품2", manufacturer_name="XYZ Corp")
+    result = svc.list_products(sb, CALLER_A, FAC_A1, q="abc chem")
     assert len(result["items"]) == 1
     assert result["items"][0]["product_name"] == "제품1"
 
 
 def test_search03_identifier_search():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "바코드 제품")
-    svc.add_identifier(sb, CALLER_A, product["id"], {
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "바코드 제품")
+    svc.add_identifier(sb, CALLER_A, FAC_A1, product["id"], {
         "identifier_type": "BARCODE", "identifier_value": "BARCODE-99999"
     })
-    svc.create_product(sb, CALLER_A, "다른 제품")
-    result = svc.list_products(sb, CALLER_A, q="99999")
+    svc.create_product(sb, CALLER_A, FAC_A1, "다른 제품")
+    result = svc.list_products(sb, CALLER_A, FAC_A1, q="99999")
     assert len(result["items"]) == 1
     assert result["items"][0]["id"] == product["id"]
 
 
 def test_search04_no_match():
-    sb = FakeSB()
-    svc.create_product(sb, CALLER_A, "ABC 세척제")
-    result = svc.list_products(sb, CALLER_A, q="전혀없는검색어xyz123")
+    sb = _make_sb()
+    svc.create_product(sb, CALLER_A, FAC_A1, "ABC 세척제")
+    result = svc.list_products(sb, CALLER_A, FAC_A1, q="전혀없는검색어xyz123")
     assert result["items"] == []
     assert result["total"] == 0
 
 
-def test_search05_cross_company_product_not_visible():
-    sb = FakeSB()
-    svc.create_product(sb, CALLER_B, "B사 세척제")
-    result = svc.list_products(sb, CALLER_A, q="세척제")
+def test_search05_different_site_excluded_same_company():
+    """동일 회사 다른 시설 제품은 검색에서 제외."""
+    sb = _make_sb()
+    svc.create_product(sb, CALLER_A, FAC_A2, "A2 세척제")
+    result = svc.list_products(sb, CALLER_A, FAC_A1, q="세척제")
     assert result["items"] == []
     assert result["total"] == 0
 
 
-def test_search06_cross_company_identifier_not_visible():
-    sb = FakeSB()
-    prod_b, _ = svc.create_product(sb, CALLER_B, "B사 제품")
-    svc.add_identifier(sb, CALLER_B, prod_b["id"], {
-        "identifier_type": "BARCODE", "identifier_value": "SHARED-CODE"
-    })
-    result = svc.list_products(sb, CALLER_A, q="SHARED-CODE")
+def test_search06_cross_company_excluded():
+    sb = _make_sb()
+    svc.create_product(sb, CALLER_B, FAC_B, "B사 세척제")
+    result = svc.list_products(sb, CALLER_A, FAC_A1, q="세척제")
     assert result["items"] == []
 
 
-def test_search07_filtered_total_correct():
-    sb = FakeSB()
-    svc.create_product(sb, CALLER_A, "세척제 A")
-    svc.create_product(sb, CALLER_A, "세척제 B")
-    svc.create_product(sb, CALLER_A, "절삭유 C")
-    result = svc.list_products(sb, CALLER_A, q="세척제")
-    assert result["total"] == 2
-    assert len(result["items"]) == 2
-
-
-def test_search08_pagination_after_filtering():
-    sb = FakeSB()
+def test_search07_pagination_after_filtering():
+    sb = _make_sb()
     for i in range(5):
-        svc.create_product(sb, CALLER_A, f"세척제 {i:02d}")
-    svc.create_product(sb, CALLER_A, "절삭유")
-    result = svc.list_products(sb, CALLER_A, q="세척제", limit=2, offset=0)
+        svc.create_product(sb, CALLER_A, FAC_A1, f"세척제 {i:02d}")
+    svc.create_product(sb, CALLER_A, FAC_A1, "절삭유")
+    result = svc.list_products(sb, CALLER_A, FAC_A1, q="세척제", limit=2, offset=0)
     assert result["total"] == 5
     assert len(result["items"]) == 2
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PROV — Provenance (created_source) 보호 테스트 (PATCH-001)
+# PROV — Provenance (created_source) 보호 테스트
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_prov03_normal_product_create_source_manual():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "Test Product")
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "Test Product")
     assert product["created_source"] == "MANUAL"
 
 
 def test_prov04_normal_identifier_create_source_manual():
-    sb = FakeSB()
-    product, _ = svc.create_product(sb, CALLER_A, "Test Product")
-    ident = svc.add_identifier(sb, CALLER_A, product["id"], {
+    sb = _make_sb()
+    product, _ = svc.create_product(sb, CALLER_A, FAC_A1, "Test Product")
+    ident = svc.add_identifier(sb, CALLER_A, FAC_A1, product["id"], {
         "identifier_type": "BARCODE", "identifier_value": "TESTCODE"
     })
     assert ident["created_source"] == "MANUAL"
@@ -733,7 +821,7 @@ def test_prov04_normal_identifier_create_source_manual():
 @requires_client
 def test_prov01_post_product_with_created_source_422():
     c = _client(CALLER_A)
-    r = c.post("/me/msds/products", json={
+    r = c.post(f"/me/msds/factories/{FAC_A1}/products", json={
         "product_name": "Test",
         "created_source": "PDF"
     })
@@ -744,9 +832,9 @@ def test_prov01_post_product_with_created_source_422():
 def test_prov02_post_identifier_with_created_source_422():
     store = {}
     c = _client(CALLER_A, store)
-    created = c.post("/me/msds/products", json={"product_name": "Test"})
+    created = c.post(f"/me/msds/factories/{FAC_A1}/products", json={"product_name": "Test"})
     pid = created.json()["data"]["id"]
-    r = c.post(f"/me/msds/products/{pid}/identifiers", json={
+    r = c.post(f"/me/msds/factories/{FAC_A1}/products/{pid}/identifiers", json={
         "identifier_type": "BARCODE",
         "identifier_value": "CODE123",
         "created_source": "PHOTO"
@@ -758,6 +846,6 @@ def test_prov02_post_identifier_with_created_source_422():
 def test_prov05_product_created_source_server_owned_manual():
     store = {}
     c = _client(CALLER_A, store)
-    r = c.post("/me/msds/products", json={"product_name": "Manual Product"})
+    r = c.post(f"/me/msds/factories/{FAC_A1}/products", json={"product_name": "Manual Product"})
     assert r.status_code == 201
     assert r.json()["data"]["created_source"] == "MANUAL"
