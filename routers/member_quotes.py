@@ -337,22 +337,31 @@ def prepare_v2_vbank_payment(
     return result
 
 
-@router.post("/v2/{quote_id}/renewal/payment/prepare")
-def prepare_v2_renewal_payment(
+def _validate_renewal_router_context(
+    supabase,
+    *,
     quote_id: str,
-    body: SaasV2PaymentPrepareBody,
-    current: dict = Depends(get_current_user),
-):
-    """Renewal Frozen Quote → INICIS Renewal 결제 준비.
+    company_id: str,
+    user_id: str,
+) -> dict:
+    """공통 Renewal 준비 검증 — quote → renewal binding → CV → contract → idempotency guard.
 
-    client는 contract_id를 전달하지 않는다.
-    server가 quote의 survey_data.commercial_v3_renewal에서 contract_id를 파생한다.
+    Returns: {"contract_id": str, "company_id": str, "user_id": str, "as_of": datetime}
+    Raises: HTTPException
     """
-    supabase = get_supabase()
-    company_id = _require_member_company(current, supabase)
+    from services import member_quote_svc as _mqs
+    from services.saas_commercial_version_time_v2 import (
+        TemporalVersionError,
+        select_effective_commercial_version_v2,
+        contract_end_date_to_effective_at_v2,
+    )
+    from services.time import now_kst
+    from services.saas_renewal_payment_guard import (
+        check_existing_renewal_payment,
+        RenewalPaymentGuardError,
+    )
 
     # Load + ownership
-    from services import member_quote_svc as _mqs
     quote = _mqs.get_member_quote(supabase, quote_id)
     if not quote or str(quote.get("company_id")) != str(company_id):
         raise HTTPException(status_code=404, detail={"code": "QUOTE_NOT_FOUND", "message": "견적을 찾을 수 없습니다."})
@@ -369,12 +378,6 @@ def prepare_v2_renewal_payment(
         raise HTTPException(status_code=422, detail={"code": "RENEWAL_BINDING_INVALID", "message": "연장 바인딩이 유효하지 않습니다."})
 
     # Verify CV still matches (version_no binding check)
-    from services.saas_commercial_version_time_v2 import (
-        TemporalVersionError,
-        select_effective_commercial_version_v2,
-        contract_end_date_to_effective_at_v2,
-    )
-    from services.time import now_kst
     _now = now_kst()
     cv_res = (
         supabase.table("saas_contract_commercial_versions")
@@ -476,17 +479,12 @@ def prepare_v2_renewal_payment(
         )
 
     # ── Payment idempotency guard (RENEWAL) ──────────────────────────────────
-    from services.saas_renewal_payment_guard import (
-        check_existing_renewal_payment,
-        is_renewal_unique_violation,
-        RenewalPaymentGuardError,
-    )
     try:
         check_existing_renewal_payment(
             supabase,
             quote_id=quote_id,
             company_id=company_id,
-            user_id=current["id"],
+            user_id=user_id,
         )
     except RenewalPaymentGuardError as exc:
         raise HTTPException(
@@ -494,6 +492,34 @@ def prepare_v2_renewal_payment(
             detail={"code": exc.code, "message": exc.message},
         )
 
+    return {"contract_id": contract_id, "company_id": company_id, "user_id": user_id, "as_of": _now}
+
+
+@router.post("/v2/{quote_id}/renewal/payment/prepare")
+def prepare_v2_renewal_payment(
+    quote_id: str,
+    body: SaasV2PaymentPrepareBody,
+    current: dict = Depends(get_current_user),
+):
+    """Renewal Frozen Quote → INICIS Renewal 결제 준비 (CARD).
+
+    client는 contract_id를 전달하지 않는다.
+    server가 quote의 survey_data.commercial_v3_renewal에서 contract_id를 파생한다.
+    """
+    supabase = get_supabase()
+    company_id = _require_member_company(current, supabase)
+    ctx = _validate_renewal_router_context(
+        supabase,
+        quote_id=quote_id,
+        company_id=company_id,
+        user_id=current["id"],
+    )
+
+    from services.saas_renewal_payment_guard import (
+        check_existing_renewal_payment,
+        is_renewal_unique_violation,
+        RenewalPaymentGuardError,
+    )
     from services.saas_renewal_v2_adapter import (
         SaasRenewalV2AdapterError,
         prepare_saas_v2_renewal_payment_from_quote,
@@ -501,11 +527,11 @@ def prepare_v2_renewal_payment(
     try:
         result = prepare_saas_v2_renewal_payment_from_quote(
             supabase,
-            contract_id=contract_id,
+            contract_id=ctx["contract_id"],
             quote_id=quote_id,
-            company_id=company_id,
-            user_id=current["id"],
-            as_of=_now,
+            company_id=ctx["company_id"],
+            user_id=ctx["user_id"],
+            as_of=ctx["as_of"],
             proof_type=body.proof_type,
             buyername=body.buyername,
             buyertel=body.buyertel,
@@ -519,13 +545,12 @@ def prepare_v2_renewal_payment(
         raise HTTPException(status_code=422, detail={"code": exc.code, "message": exc.message})
     except Exception as exc:
         if is_renewal_unique_violation(exc):
-            # 23505 race: re-read existing
             try:
                 existing_result = check_existing_renewal_payment(
                     supabase,
                     quote_id=quote_id,
-                    company_id=company_id,
-                    user_id=current["id"],
+                    company_id=ctx["company_id"],
+                    user_id=ctx["user_id"],
                 )
                 if existing_result:
                     return existing_result
