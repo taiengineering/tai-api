@@ -188,6 +188,57 @@ def issue_v2(body: SaasQuoteIssueRequestV2, current: dict = Depends(get_current_
         raise HTTPException(status_code=503, detail={"code": "INTERNAL_ERROR"})
 
 
+class RenewalIssueBody(BaseModel):
+    payment_months: int
+
+    @field_validator("payment_months")
+    @classmethod
+    def validate_months(cls, v: int) -> int:
+        if v not in {3, 6, 9, 12}:
+            raise ValueError("payment_months는 3/6/9/12 중 하나여야 합니다")
+        return v
+
+
+@router.post("/v2/renewal/issue")
+def issue_v2_renewal(
+    body: RenewalIssueBody,
+    current: dict = Depends(get_current_user),
+):
+    """V3 계약 수동 Renewal Quote 발행.
+
+    client는 payment_months만 제공한다.
+    contract_id / payment_id는 server가 company authority로 파생한다.
+    1개월(RS1 자동결제) 및 CUSTOM 계약은 422로 거부된다.
+    """
+    supabase = get_supabase()
+    company_id = _require_member_company(current, supabase)
+
+    from services.saas_renewal_quote_svc import SaasRenewalQuoteError, create_member_renewal_quote
+    from services.saas_quote_v2 import SaasQuoteV2Error
+    from services.saas_quote_site_scope_v2 import QuoteSiteScopeError
+
+    try:
+        quote = create_member_renewal_quote(
+            supabase,
+            user_id=current["id"],
+            company_id=company_id,
+            payment_months=body.payment_months,
+        )
+    except SaasRenewalQuoteError as exc:
+        if exc.code in {"CONTRACT_NOT_FOUND", "PAYMENT_NOT_FOUND"}:
+            raise HTTPException(status_code=404, detail={"code": exc.code, "message": exc.message})
+        if exc.code in {"NOT_CURRENT_PAYMENT", "RENEWAL_ALREADY_SCHEDULED", "RENEWAL_QUOTE_ALREADY_ISSUED"}:
+            raise HTTPException(status_code=409, detail={"code": exc.code, "message": exc.message})
+        raise HTTPException(status_code=exc.http_status, detail={"code": exc.code, "message": exc.message})
+    except (SaasQuoteV2Error, QuoteSiteScopeError) as exc:
+        raise HTTPException(
+            status_code=getattr(exc, "http_status", 422),
+            detail={"code": getattr(exc, "code", "QUOTE_ERROR"), "message": str(exc)},
+        )
+
+    return {"quote_id": quote["id"], "quote_no": quote.get("quote_no")}
+
+
 class CommercialConstructionSiteBody(BaseModel):
     site_name: str
     criteria_value: float  # 원 단위. 서버가 억원으로 변환해 DB 저장.

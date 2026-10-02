@@ -423,3 +423,67 @@ def create_renewal_quote(
         raise
 
     return quote
+
+
+def create_member_renewal_quote(
+    supabase,
+    *,
+    user_id: str,
+    company_id: str,
+    payment_months: int,
+) -> dict:
+    """회원 권한 기반 Renewal Quote 발행 — client는 payment_months만 제공.
+
+    server가 company_id로 active V3 contract를 파생하고,
+    latest eligible payment를 파생하여 create_renewal_quote()를 호출한다.
+
+    금지:
+      - client-supplied contract_id / payment_id / product_tier / amount / site scopes
+    """
+    from services.member_commercial_svc import get_member_commercial_contract
+
+    if payment_months not in _ALLOWED_RENEWAL_MONTHS:
+        raise SaasRenewalQuoteError(
+            "RENEWAL_PAYMENT_MONTHS_INVALID",
+            f"payment_months는 3/6/9/12 중 하나여야 합니다: {payment_months}",
+        )
+
+    ctx = get_member_commercial_contract(supabase, company_id)
+    if ctx.get("state") != "ACTIVE":
+        error_code = ctx.get("error_code") or "CONTRACT_NOT_ACTIVE"
+        raise SaasRenewalQuoteError(
+            error_code if error_code in {"NO_ACTIVE_SAAS_CONTRACT"} else "CONTRACT_NOT_ACTIVE",
+            "활성 V3 계약이 없습니다.",
+            422,
+        )
+
+    contract = ctx["contract"]
+    contract_id = str(contract.get("id") or "")
+    if not contract_id:
+        raise SaasRenewalQuoteError("CONTRACT_NOT_FOUND", "계약 정보를 찾을 수 없습니다.", 404)
+
+    # CUSTOM 계약은 수동 갱신 자동화 대상이 아님 — early reject
+    cv = ctx.get("commercial_version") or {}
+    product_tier = str(cv.get("product_tier") or "")
+    if product_tier == "CUSTOM":
+        raise SaasRenewalQuoteError(
+            "CUSTOM_REVIEW_REQUIRED",
+            "맞춤형 계약은 담당자에게 문의해 주세요.",
+            422,
+        )
+
+    payment_id = _get_latest_eligible_payment_id(supabase, contract_id)
+    if not payment_id:
+        raise SaasRenewalQuoteError(
+            "PAYMENT_NOT_FOUND",
+            "갱신 가능한 결제 내역이 없습니다.",
+            422,
+        )
+
+    return create_renewal_quote(
+        supabase,
+        payment_id=payment_id,
+        company_id=company_id,
+        user_id=user_id,
+        payment_months=payment_months,
+    )
