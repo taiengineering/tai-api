@@ -43,4 +43,6 @@ ROUTERS = [
     {"module": "routers.company_users"},
     # WO-FE-SAFE-01: 현재 SaaS 이용계약 + CV + Site Scope (GET /me/commercial/contract)
     {"module": "routers.member_commercial"},
+    # WO-MSDS-02: Canonical Chemical Product (/me/msds/products)
+    {"module": "routers.msds_products"},
 ]
