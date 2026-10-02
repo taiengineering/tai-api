@@ -1,12 +1,12 @@
-"""GitHub Actions Dispatch — WO-QA-CONTROL-PHASE2E-001.
+"""GitHub Actions Dispatch — WO-QA-CONTROL-PHASE2E-001 / WO-QA-CROSS-REPO-CONDITIONAL-CONTRACT-001.
 
-tai-qa workflow_dispatch: run_id + scenario_ids 전달.
+tai-qa workflow_dispatch: run_id + scenario_ids + allow_conditional 전달.
 
 Secret contract:
   QA_GITHUB_TOKEN   — PAT with workflow scope (절대 log 출력 금지)
   QA_GITHUB_OWNER   — repo 소유자 (default: taiengineering)
   QA_GITHUB_REPO    — tai-qa repo name (default: tai-qa)
-  QA_GITHUB_WORKFLOW — workflow file id (default: run-qa.yml)
+  QA_GITHUB_WORKFLOW — workflow file id (default: p0-smoke.yml)
   QA_GITHUB_REF     — branch to dispatch on (default: main)
 """
 from __future__ import annotations
@@ -30,14 +30,21 @@ def _cfg() -> dict:
         "token":    token,
         "owner":    os.environ.get("QA_GITHUB_OWNER", "taiengineering"),
         "repo":     os.environ.get("QA_GITHUB_REPO", "tai-qa"),
-        "workflow": os.environ.get("QA_GITHUB_WORKFLOW", "run-qa.yml"),
+        "workflow": os.environ.get("QA_GITHUB_WORKFLOW", "p0-smoke.yml"),
         "ref":      os.environ.get("QA_GITHUB_REF", "main"),
     }
 
 
-async def dispatch_qa_run(run_id: str, scenario_ids: List[str]) -> None:
+async def dispatch_qa_run(
+    run_id: str,
+    scenario_ids: List[str],
+    *,
+    allow_conditional: bool = False,
+) -> None:
     """tai-qa workflow_dispatch 호출.
 
+    allow_conditional: True = Admin 명시적 요청 (Manual path 전용).
+                       False = 기본값 / Scheduler path (fail-close).
     실패 시 RuntimeError. 호출자가 run_status=ERROR 처리 담당.
     token은 절대 log에 출력하지 않는다.
     """
@@ -49,8 +56,9 @@ async def dispatch_qa_run(run_id: str, scenario_ids: List[str]) -> None:
     payload = {
         "ref": cfg["ref"],
         "inputs": {
-            "run_id":       run_id,
-            "scenario_ids": ",".join(scenario_ids),
+            "run_id":            run_id,
+            "scenario_ids":      ",".join(scenario_ids),
+            "allow_conditional": "true" if allow_conditional else "false",
         },
     }
     headers = {

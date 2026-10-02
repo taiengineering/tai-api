@@ -1,12 +1,17 @@
-"""GitHub Dispatch tests — WO-QA-CONTROL-PHASE2E-001.
+"""GitHub Dispatch tests — WO-QA-CONTROL-PHASE2E-001 / WO-QA-CROSS-REPO-CONDITIONAL-CONTRACT-001.
 
-GD-01: dispatch payload 구조 (ref / inputs.run_id / inputs.scenario_ids)
+GD-01: dispatch payload 구조 (ref / inputs.run_id / inputs.scenario_ids / inputs.allow_conditional)
 GD-02: Token 없음 실패 (QA_GITHUB_TOKEN 미설정 → RuntimeError)
 GD-03: Token 노출 없음 (payload / captured 헤더에 token 미포함)
 GD-04: HTTP 4xx/5xx → RuntimeError (run 상태는 호출자 책임)
 GD-05: scenario_ids comma-join + callback 연결 계약 (SCHEDULE run 거부 없음)
 GD-06: Run ERROR 처리 (scheduler dispatch fail → _set_run_error 호출)
 GD-07: Secret fail-close (token 미설정 즉시 실패, lazy 허용 금지)
+GD-08: workflow default = p0-smoke.yml (PROD CONFIG DRIFT 수정)
+GD-09: allow_conditional 기본값 = false
+GD-10: allow_conditional=True → payload "true"
+GD-11: allow_conditional=False → payload "false"
+GD-12: Manual path = allow_conditional=True / Scheduler path = allow_conditional=False
 """
 import asyncio
 import os
@@ -41,11 +46,11 @@ class _FakeClient:
 # ── GD-01: dispatch payload 구조 ──────────────────────────────────────────────
 
 def test_GD01_dispatch_payload_structure(monkeypatch):
-    """dispatch_qa_run이 올바른 ref / inputs payload를 전달한다."""
+    """dispatch_qa_run이 올바른 ref / inputs payload를 전달한다 (allow_conditional 포함)."""
     monkeypatch.setenv("QA_GITHUB_TOKEN", "ghp-test-token")
     monkeypatch.setenv("QA_GITHUB_OWNER", "taiengineering")
     monkeypatch.setenv("QA_GITHUB_REPO",  "tai-qa")
-    monkeypatch.setenv("QA_GITHUB_WORKFLOW", "run-qa.yml")
+    monkeypatch.setenv("QA_GITHUB_WORKFLOW", "p0-smoke.yml")
     monkeypatch.setenv("QA_GITHUB_REF", "main")
 
     client = _FakeClient(status_code=204)
@@ -60,6 +65,7 @@ def test_GD01_dispatch_payload_structure(monkeypatch):
     assert payload["inputs"]["run_id"] == "run-001"
     assert "P0-WWW-001" in payload["inputs"]["scenario_ids"]
     assert "P0-SAAS-001" in payload["inputs"]["scenario_ids"]
+    assert "allow_conditional" in payload["inputs"]
 
 
 # ── GD-02: token 미설정 → RuntimeError ────────────────────────────────────────
@@ -82,7 +88,7 @@ def test_GD03_scenario_ids_comma_join(monkeypatch):
     monkeypatch.setenv("QA_GITHUB_TOKEN", "ghp-test")
     monkeypatch.setenv("QA_GITHUB_OWNER", "taiengineering")
     monkeypatch.setenv("QA_GITHUB_REPO",  "tai-qa")
-    monkeypatch.setenv("QA_GITHUB_WORKFLOW", "run-qa.yml")
+    monkeypatch.setenv("QA_GITHUB_WORKFLOW", "p0-smoke.yml")
     monkeypatch.setenv("QA_GITHUB_REF", "main")
 
     client = _FakeClient(status_code=204)
@@ -105,7 +111,7 @@ def test_GD03b_token_not_in_payload(monkeypatch):
     monkeypatch.setenv("QA_GITHUB_TOKEN", token)
     monkeypatch.setenv("QA_GITHUB_OWNER", "taiengineering")
     monkeypatch.setenv("QA_GITHUB_REPO",  "tai-qa")
-    monkeypatch.setenv("QA_GITHUB_WORKFLOW", "run-qa.yml")
+    monkeypatch.setenv("QA_GITHUB_WORKFLOW", "p0-smoke.yml")
     monkeypatch.setenv("QA_GITHUB_REF", "main")
 
     client = _FakeClient(status_code=204)
@@ -133,7 +139,7 @@ def test_GD04_http_failure_raises(monkeypatch, status_code):
     monkeypatch.setenv("QA_GITHUB_TOKEN", "ghp-test")
     monkeypatch.setenv("QA_GITHUB_OWNER", "taiengineering")
     monkeypatch.setenv("QA_GITHUB_REPO",  "tai-qa")
-    monkeypatch.setenv("QA_GITHUB_WORKFLOW", "run-qa.yml")
+    monkeypatch.setenv("QA_GITHUB_WORKFLOW", "p0-smoke.yml")
     monkeypatch.setenv("QA_GITHUB_REF", "main")
 
     client = _FakeClient(status_code=status_code)
@@ -199,7 +205,7 @@ def test_GD06_scheduler_dispatch_fail_sets_error():
     sb = MagicMock()
     sb.table.side_effect = _table
 
-    async def _fail_dispatch(run_id, scenarios):
+    async def _fail_dispatch(run_id, scenarios, **kwargs):
         raise RuntimeError("dispatch error")
 
     async def _run():
@@ -229,3 +235,105 @@ def test_GD07_secret_fail_close_immediate(monkeypatch):
         assert "QA_GITHUB_TOKEN" in str(e)
     # HTTP 호출 없이 즉시 실패해야 함
     assert raised
+
+
+# ── GD-08: workflow default = p0-smoke.yml ────────────────────────────────────
+
+def test_GD08_workflow_default_p0_smoke(monkeypatch):
+    """QA_GITHUB_WORKFLOW 미설정 시 기본값이 p0-smoke.yml이어야 한다."""
+    monkeypatch.setenv("QA_GITHUB_TOKEN", "ghp-test")
+    monkeypatch.setenv("QA_GITHUB_OWNER", "taiengineering")
+    monkeypatch.setenv("QA_GITHUB_REPO",  "tai-qa")
+    monkeypatch.delenv("QA_GITHUB_WORKFLOW", raising=False)
+    monkeypatch.setenv("QA_GITHUB_REF", "main")
+
+    client = _FakeClient(status_code=204)
+    import importlib, services.github_dispatch_svc as mod
+    importlib.reload(mod)
+    monkeypatch.setattr("services.github_dispatch_svc.httpx.AsyncClient", lambda **k: client)
+
+    asyncio.run(mod.dispatch_qa_run("run-008", ["P0-001"]))
+
+    url = client.captured["url"]
+    assert "p0-smoke.yml" in url, f"Expected p0-smoke.yml in URL, got: {url}"
+
+
+# ── GD-09: allow_conditional 기본값 = false ───────────────────────────────────
+
+def test_GD09_allow_conditional_default_false(monkeypatch):
+    """allow_conditional 미전달 시 기본값이 payload에 'false'로 전달된다."""
+    monkeypatch.setenv("QA_GITHUB_TOKEN", "ghp-test")
+    monkeypatch.setenv("QA_GITHUB_OWNER", "taiengineering")
+    monkeypatch.setenv("QA_GITHUB_REPO",  "tai-qa")
+    monkeypatch.setenv("QA_GITHUB_WORKFLOW", "p0-smoke.yml")
+    monkeypatch.setenv("QA_GITHUB_REF", "main")
+
+    client = _FakeClient(status_code=204)
+    import importlib, services.github_dispatch_svc as mod
+    importlib.reload(mod)
+    monkeypatch.setattr("services.github_dispatch_svc.httpx.AsyncClient", lambda **k: client)
+
+    asyncio.run(mod.dispatch_qa_run("run-009", ["P0-001"]))
+
+    inputs = client.captured["payload"]["inputs"]
+    assert inputs["allow_conditional"] == "false"
+
+
+# ── GD-10: allow_conditional=True → payload "true" ───────────────────────────
+
+def test_GD10_allow_conditional_true_in_payload(monkeypatch):
+    """allow_conditional=True 전달 시 payload inputs에 'true' 문자열이 들어간다."""
+    monkeypatch.setenv("QA_GITHUB_TOKEN", "ghp-test")
+    monkeypatch.setenv("QA_GITHUB_OWNER", "taiengineering")
+    monkeypatch.setenv("QA_GITHUB_REPO",  "tai-qa")
+    monkeypatch.setenv("QA_GITHUB_WORKFLOW", "p0-smoke.yml")
+    monkeypatch.setenv("QA_GITHUB_REF", "main")
+
+    client = _FakeClient(status_code=204)
+    import importlib, services.github_dispatch_svc as mod
+    importlib.reload(mod)
+    monkeypatch.setattr("services.github_dispatch_svc.httpx.AsyncClient", lambda **k: client)
+
+    asyncio.run(mod.dispatch_qa_run("run-010", ["P0-001"], allow_conditional=True))
+
+    inputs = client.captured["payload"]["inputs"]
+    assert inputs["allow_conditional"] == "true"
+
+
+# ── GD-11: allow_conditional=False → payload "false" ─────────────────────────
+
+def test_GD11_allow_conditional_false_in_payload(monkeypatch):
+    """allow_conditional=False 전달 시 payload inputs에 'false' 문자열이 들어간다."""
+    monkeypatch.setenv("QA_GITHUB_TOKEN", "ghp-test")
+    monkeypatch.setenv("QA_GITHUB_OWNER", "taiengineering")
+    monkeypatch.setenv("QA_GITHUB_REPO",  "tai-qa")
+    monkeypatch.setenv("QA_GITHUB_WORKFLOW", "p0-smoke.yml")
+    monkeypatch.setenv("QA_GITHUB_REF", "main")
+
+    client = _FakeClient(status_code=204)
+    import importlib, services.github_dispatch_svc as mod
+    importlib.reload(mod)
+    monkeypatch.setattr("services.github_dispatch_svc.httpx.AsyncClient", lambda **k: client)
+
+    asyncio.run(mod.dispatch_qa_run("run-011", ["P0-001"], allow_conditional=False))
+
+    inputs = client.captured["payload"]["inputs"]
+    assert inputs["allow_conditional"] == "false"
+
+
+# ── GD-12: Manual=True / Scheduler=False ─────────────────────────────────────
+
+def test_GD12_manual_allow_conditional_true():
+    """admin_qa create_run은 allow_conditional=True로 dispatch_qa_run을 호출한다."""
+    import inspect, routers.admin_qa as admin_mod
+    source = inspect.getsource(admin_mod.create_run)
+    assert "allow_conditional=True" in source, \
+        "Manual create_run must pass allow_conditional=True to dispatch_qa_run"
+
+
+def test_GD12b_scheduler_allow_conditional_false():
+    """qa_scheduler_svc.scheduler_tick은 allow_conditional=False로 dispatch_qa_run을 호출한다."""
+    import inspect, services.qa_scheduler_svc as sched_mod
+    source = inspect.getsource(sched_mod.scheduler_tick)
+    assert "allow_conditional=False" in source, \
+        "Scheduler tick must pass allow_conditional=False to dispatch_qa_run"

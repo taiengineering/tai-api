@@ -191,8 +191,9 @@ async def scheduler_tick(supabase) -> Dict[str, Any]:
             log.warning("[qa_scheduler] next_run_at update failed sched=%s: %s", sched["id"], e)
 
     # 6. GitHub Actions dispatch → QUEUED→RUNNING (manual path와 동일 lifecycle)
+    # Scheduler는 conditional 권한을 자동 획득하지 않는다 — allow_conditional=False 명시.
     try:
-        await dispatch_qa_run(run_id, scenario_ids)
+        await dispatch_qa_run(run_id, scenario_ids, allow_conditional=False)
         _set_run_running(supabase, run_id)
     except Exception as exc:
         log.error("[qa_scheduler] dispatch failed run=%s: %s", run_id, exc)
