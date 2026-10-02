@@ -48,6 +48,7 @@ def _resolve_subscription_by_contract(
         supabase.table("payments")
         .select(_PAYMENT_COLS)
         .eq("contract_id", contract_id)
+        .eq("product_type", "SAAS")
         .in_("status_code", ["PAID", "SUCCESS"])
         .eq("charge_cycle", 1)
         .limit(10)

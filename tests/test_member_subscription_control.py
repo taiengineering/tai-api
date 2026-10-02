@@ -423,3 +423,73 @@ def test_SC15_scheduler_and_billing_engine_not_imported():
         "member_subscription_svc must not import payment_billing"
     assert "run_billing_cancel" not in src, \
         "member_subscription_svc must not use run_billing_cancel (remote INIAPI)"
+
+
+# ── SC16: product_type=SAAS 전용 authority ────────────────────────────────────
+
+def test_SC16_saas_product_type_authority_selects_only_saas():
+    """같은 contract_id에 non-SAAS + SAAS payment 공존 시 SAAS subscription만 선택."""
+    company_id = _uid()
+    contract_id = _uid()
+    sub_id_saas = _uid()
+    sub_id_other = _uid()
+
+    store = {
+        "payments": [
+            # non-SAAS payment (INSPECTION product_type)
+            {
+                "id": _uid(),
+                "subscription_id": sub_id_other,
+                "contract_id": contract_id,
+                "product_type": "INSPECTION",
+                "status_code": "PAID",
+                "charge_cycle": 1,
+            },
+            # SAAS payment
+            {
+                "id": _uid(),
+                "subscription_id": sub_id_saas,
+                "contract_id": contract_id,
+                "product_type": "SAAS",
+                "status_code": "PAID",
+                "charge_cycle": 1,
+            },
+        ],
+        "subscriptions": [
+            _make_subscription(sub_id_saas, company_id),
+            _make_subscription(sub_id_other, company_id),
+        ],
+        "billing_keys": [],
+    }
+    sb = FakeSB(store)
+    result = svc.get_member_subscription(sb, company_id, contract_id, 1)
+    assert result["state"] == "ACTIVE"
+    assert result["subscription"]["id"] == sub_id_saas
+
+
+# ── SC17: non-SAAS only → NOT_FOUND ──────────────────────────────────────────
+
+def test_SC17_non_saas_only_payment_returns_not_found():
+    """SAAS payment 없이 non-SAAS cycle1만 존재하면 NOT_FOUND."""
+    company_id = _uid()
+    contract_id = _uid()
+    sub_id = _uid()
+
+    store = {
+        "payments": [
+            {
+                "id": _uid(),
+                "subscription_id": sub_id,
+                "contract_id": contract_id,
+                "product_type": "INSPECTION",
+                "status_code": "PAID",
+                "charge_cycle": 1,
+            },
+        ],
+        "subscriptions": [_make_subscription(sub_id, company_id)],
+        "billing_keys": [],
+    }
+    sb = FakeSB(store)
+    result = svc.get_member_subscription(sb, company_id, contract_id, 1)
+    assert result["state"] == "NOT_FOUND"
+    assert result["subscription"] is None
