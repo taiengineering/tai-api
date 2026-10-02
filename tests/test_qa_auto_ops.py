@@ -416,3 +416,118 @@ def test_AOF08_initial_inactive():
         sql = f.read().lower()
     assert "is_active" in sql
     assert "false" in sql
+
+
+# ── AO-F09: dispatch 성공 → RUNNING update ───────────────────────────────────
+
+def test_AOF09_dispatch_success_sets_running():
+    """AO-F09: SCHEDULE run 생성 → dispatch 성공 → qa_runs RUNNING update (started_at 포함)."""
+    import services.qa_scheduler_svc as mod
+
+    sched = _sched("item-af9", "P0-SAAS-001", next_run_offset=-1)
+    running_updates: list = []
+
+    def _table(name):
+        m = MagicMock()
+        if name == "qa_runs":
+            m.insert.return_value.execute.return_value = MagicMock(data=[{"id": "run-af9"}])
+
+            def _update(payload):
+                running_updates.append(dict(payload))
+                inner = MagicMock()
+                inner.eq.return_value.execute.return_value = MagicMock(data=[{}])
+                return inner
+            m.update = _update
+        elif name == "qa_run_targets":
+            m.insert.return_value.execute.return_value = MagicMock(data=[{}])
+        elif name == "qa_schedules":
+            def _update2(payload):
+                inner = MagicMock()
+                inner.eq.return_value.execute.return_value = MagicMock(data=[{}])
+                return inner
+            m.update = _update2
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    async def _ok_dispatch(run_id, scenario_ids): pass
+
+    async def _run():
+        with patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "dispatch_qa_run", _ok_dispatch):
+            return await mod.scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["created"] == 1
+    assert result["dispatch"] == "OK"
+
+    running_up = [u for u in running_updates if u.get("run_status") == "RUNNING"]
+    assert running_up, "RUNNING update 없음"
+    assert running_up[0].get("started_at") is not None, "started_at 없음"
+    assert running_up[0].get("updated_at") is not None, "updated_at 없음"
+
+
+# ── AO-F10: dispatch failure → ERROR, RUNNING update 없음 ────────────────────
+
+def test_AOF10_dispatch_failure_sets_error_not_running():
+    """AO-F10: dispatch 실패 → ERROR 처리, RUNNING update 없음."""
+    import services.qa_scheduler_svc as mod
+
+    sched = _sched("item-af10", "P0-SAAS-001", next_run_offset=-1)
+    run_updates: list = []
+
+    def _table(name):
+        m = MagicMock()
+        if name == "qa_runs":
+            m.insert.return_value.execute.return_value = MagicMock(data=[{"id": "run-af10"}])
+
+            def _update(payload):
+                run_updates.append(dict(payload))
+                inner = MagicMock()
+                inner.eq.return_value.execute.return_value = MagicMock(data=[{}])
+                return inner
+            m.update = _update
+        elif name == "qa_run_targets":
+            m.insert.return_value.execute.return_value = MagicMock(data=[{}])
+        elif name == "qa_schedules":
+            def _update2(p):
+                inner = MagicMock()
+                inner.eq.return_value.execute.return_value = MagicMock(data=[{}])
+                return inner
+            m.update = _update2
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    async def _fail_dispatch(run_id, scenario_ids): raise RuntimeError("dispatch error")
+
+    async def _run():
+        with patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "dispatch_qa_run", _fail_dispatch):
+            return await mod.scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["dispatch"] == "ERROR"
+
+    running_ups = [u for u in run_updates if u.get("run_status") == "RUNNING"]
+    error_ups   = [u for u in run_updates if u.get("run_status") == "ERROR"]
+    assert not running_ups, f"RUNNING update가 있어선 안 됨: {running_ups}"
+    assert error_ups, "ERROR update 없음"
+
+
+# ── AO-F11: RUNNING → COMPLETED lifecycle 허용 ───────────────────────────────
+
+def test_AOF11_running_to_completed_allowed():
+    """AO-F11: QUEUED→RUNNING→COMPLETED lifecycle가 canonical에서 허용됨 (소스 계약)."""
+    import services.qa_control_svc as svc
+
+    transitions = getattr(svc, "_VALID_TRANSITIONS", None)
+    assert transitions is not None, "_VALID_TRANSITIONS 없음"
+    assert "RUNNING" in transitions.get("QUEUED", frozenset()), \
+        "QUEUED→RUNNING이 _VALID_TRANSITIONS에 없음"
+    assert "COMPLETED" in transitions.get("RUNNING", frozenset()), \
+        "RUNNING→COMPLETED가 _VALID_TRANSITIONS에 없음"

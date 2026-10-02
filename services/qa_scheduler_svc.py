@@ -105,6 +105,16 @@ def _set_run_error(supabase, run_id: str, error: str) -> None:
     }).eq("id", run_id).execute()
 
 
+def _set_run_running(supabase, run_id: str) -> None:
+    from services.time import serialize_external_utc
+    now_iso = serialize_external_utc(now_kst())
+    supabase.table("qa_runs").update({
+        "run_status": "RUNNING",
+        "started_at": now_iso,
+        "updated_at": now_iso,
+    }).eq("id", run_id).execute()
+
+
 async def scheduler_tick(supabase) -> Dict[str, Any]:
     """Scheduler 한 틱 실행. 결과 summary 반환.
 
@@ -180,9 +190,10 @@ async def scheduler_tick(supabase) -> Dict[str, Any]:
         except Exception as e:
             log.warning("[qa_scheduler] next_run_at update failed sched=%s: %s", sched["id"], e)
 
-    # 6. GitHub Actions dispatch
+    # 6. GitHub Actions dispatch → QUEUED→RUNNING (manual path와 동일 lifecycle)
     try:
         await dispatch_qa_run(run_id, scenario_ids)
+        _set_run_running(supabase, run_id)
     except Exception as exc:
         log.error("[qa_scheduler] dispatch failed run=%s: %s", run_id, exc)
         _set_run_error(supabase, run_id, str(exc))
