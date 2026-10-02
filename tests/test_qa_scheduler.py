@@ -3,9 +3,9 @@
 SC-01: enabled schedule 조회 → QUEUED 상태 run 생성
 SC-02: next_run_at 미도달 → run 생성 없음
 SC-03: next_run_at 도달 → run 생성
-SC-04: frequency MINUTE 계산
-SC-05: frequency HOUR 계산
-SC-06: frequency DAY 계산
+SC-04: frequency MINUTES 계산
+SC-05: frequency HOURLY 계산
+SC-06: frequency DAILY 계산
 SC-07: 중복 QUEUED/RUNNING 방지
 SC-08: disabled schedule skip
 
@@ -105,7 +105,7 @@ def _make_supabase(
     return sb
 
 
-def _sched(item_id, scenario_id, ft="DAY", fv=1, enabled_item=True, next_run_offset=-1):
+def _sched(item_id, scenario_id, ft="DAILY", fv=None, enabled_item=True, next_run_offset=-1):
     """schedule row fixture."""
     return {
         "id":             f"sched-{item_id}",
@@ -140,43 +140,54 @@ async def _tick_with_dispatch(sb, dispatch_ok=True):
 
 # ── SC-04/05/06: compute_next_run_at ─────────────────────────────────────────
 
-def test_SC04_minute_calculation():
+def test_SC04_minutes_calculation():
     base = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
-    result = compute_next_run_at("MINUTE", 10, base)
+    result = compute_next_run_at("MINUTES", 10, base)
     assert result == datetime(2026, 10, 1, 9, 10, tzinfo=timezone.utc)
 
 
-def test_SC05_hour_calculation():
+def test_SC05_hourly_calculation():
     base = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
-    result = compute_next_run_at("HOUR", 2, base)
+    result = compute_next_run_at("HOURLY", 2, base)
     assert result == datetime(2026, 10, 1, 11, 0, tzinfo=timezone.utc)
 
 
-def test_SC06_day_calculation():
+def test_SC06_daily_calculation():
     base = datetime(2026, 10, 1, 8, 0, tzinfo=timezone.utc)
-    result = compute_next_run_at("DAY", 1, base)
+    result = compute_next_run_at("DAILY", None, base)
     assert result == datetime(2026, 10, 2, 8, 0, tzinfo=timezone.utc)
 
 
-def test_SC04b_minute_respects_value():
+def test_SC04b_minutes_respects_value():
     base = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
-    assert compute_next_run_at("MINUTE", 30, base) == datetime(2026, 10, 1, 9, 30, tzinfo=timezone.utc)
+    assert compute_next_run_at("MINUTES", 30, base) == datetime(2026, 10, 1, 9, 30, tzinfo=timezone.utc)
 
 
-def test_SC05b_hour_respects_value():
+def test_SC05b_hourly_respects_value():
     base = datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc)
-    assert compute_next_run_at("HOUR", 6, base) == datetime(2026, 10, 1, 6, 0, tzinfo=timezone.utc)
+    assert compute_next_run_at("HOURLY", 6, base) == datetime(2026, 10, 1, 6, 0, tzinfo=timezone.utc)
 
 
-def test_SC06b_day_multi():
+def test_SC06b_daily_anchor_preserved():
+    """DAILY: anchor 시각(08:00)이 유지됨 — from_dt + 1day."""
     base = datetime(2026, 10, 1, 8, 0, tzinfo=timezone.utc)
-    assert compute_next_run_at("DAY", 7, base) == datetime(2026, 10, 8, 8, 0, tzinfo=timezone.utc)
+    result = compute_next_run_at("DAILY", None, base)
+    assert result == datetime(2026, 10, 2, 8, 0, tzinfo=timezone.utc)
+    assert result.hour == 8 and result.minute == 0
 
 
 def test_compute_next_run_at_unknown_type_raises():
     base = datetime(2026, 10, 1, tzinfo=timezone.utc)
     with pytest.raises(ValueError, match="지원하지 않는"):
         compute_next_run_at("MONTH", 1, base)
+
+
+def test_compute_next_run_at_old_aliases_rejected():
+    """MINUTE/HOUR/DAY (구 alias) 는 ValueError."""
+    base = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    for old in ("MINUTE", "HOUR", "DAY"):
+        with pytest.raises(ValueError, match="지원하지 않는"):
+            compute_next_run_at(old, 1, base)
 
 
 # ── SC-01/02/03: scheduler_tick with _due_schedules mock ─────────────────────
