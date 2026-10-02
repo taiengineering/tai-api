@@ -210,6 +210,19 @@ def create_product(
     return product, candidates
 
 
+def _product_ids_by_identifier_q(sb, company_id: str, qnorm: str) -> List[str]:
+    """identifier_normalized ILIKE %qnorm% 로 product_id 목록 반환 (company-scoped, active only)."""
+    res = (
+        sb.table("chemical_product_identifiers")
+        .select("chemical_product_id")
+        .eq("company_id", company_id)
+        .eq("is_active", True)
+        .ilike("identifier_normalized", f"%{qnorm}%")
+        .execute()
+    )
+    return list({row["chemical_product_id"] for row in (res.data or [])})
+
+
 def list_products(
     sb,
     current_user: Dict[str, Any],
@@ -219,8 +232,59 @@ def list_products(
     limit: int = 20,
     offset: int = 0,
 ) -> Dict[str, Any]:
+    """Product 목록. q 있으면 name/manufacturer/identifier 검색 후 pagination."""
     company_id = _require_company(current_user)
 
+    # q 검색: company scope 내에서 filtered id set 결정
+    if q and q.strip():
+        qnorm = normalize_product_name(q)  # trim + casefold + collapse
+
+        # product_name_normalized 또는 manufacturer_normalized ILIKE
+        name_res = (
+            sb.table("chemical_products")
+            .select("id")
+            .eq("company_id", company_id)
+            .ilike("product_name_normalized", f"%{qnorm}%")
+            .execute()
+        )
+        mfr_res = (
+            sb.table("chemical_products")
+            .select("id")
+            .eq("company_id", company_id)
+            .ilike("manufacturer_normalized", f"%{qnorm}%")
+            .execute()
+        )
+        ident_ids = _product_ids_by_identifier_q(sb, company_id, qnorm)
+
+        matched_ids = list({
+            *(r["id"] for r in (name_res.data or [])),
+            *(r["id"] for r in (mfr_res.data or [])),
+            *ident_ids,
+        })
+
+        if not matched_ids:
+            return {"items": [], "total": 0}
+
+        # matched_ids 기반 전체 목록 조회 후 필터
+        all_res = (
+            sb.table("chemical_products")
+            .select("*")
+            .eq("company_id", company_id)
+            .in_("id", matched_ids)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        rows = all_res.data or []
+        if status:
+            rows = [r for r in rows if r.get("status_code") == status]
+        if identity_status:
+            rows = [r for r in rows if r.get("identity_status") == identity_status]
+
+        total = len(rows)
+        items = rows[offset: offset + limit]
+        return {"items": items, "total": total}
+
+    # q 없음: 일반 필터 + pagination
     query = (
         sb.table("chemical_products")
         .select("*")

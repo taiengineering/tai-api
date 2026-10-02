@@ -70,6 +70,14 @@ class _Query:
         self._filters.append(("eq", c, v))
         return self
 
+    def ilike(self, c, pattern):
+        self._filters.append(("ilike", c, pattern))
+        return self
+
+    def in_(self, c, vals):
+        self._filters.append(("in", c, list(vals)))
+        return self
+
     def limit(self, n):
         self._limit_n = n
         return self
@@ -86,12 +94,20 @@ class _Query:
 
     def _match(self, row):
         for op, c, v in self._filters:
+            rv = row.get(c)
             if op == "eq":
-                rv = row.get(c)
                 if isinstance(v, bool) or isinstance(rv, bool):
                     if bool(rv) != bool(v):
                         return False
                 elif str(rv) != str(v):
+                    return False
+            elif op == "ilike":
+                # pattern: %text%
+                pat = v.replace("%", "").lower()
+                if rv is None or pat not in str(rv).lower():
+                    return False
+            elif op == "in":
+                if rv not in v and str(rv) not in [str(x) for x in v]:
                     return False
         return True
 
@@ -613,3 +629,135 @@ def test_forbidden_msds_ref_not_touched():
     touched = {t for (t, _) in sb.log}
     for table in touched:
         assert not table.startswith("msds_ref")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEARCH — q 검색 테스트 (PATCH-001)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_search01_product_name_search():
+    sb = FakeSB()
+    svc.create_product(sb, CALLER_A, "ABC 세척제", manufacturer_name="XYZ Chemical")
+    svc.create_product(sb, CALLER_A, "전혀 다른 제품")
+    result = svc.list_products(sb, CALLER_A, q="abc 세척")
+    assert len(result["items"]) == 1
+    assert result["items"][0]["product_name"] == "ABC 세척제"
+
+
+def test_search02_manufacturer_search():
+    sb = FakeSB()
+    svc.create_product(sb, CALLER_A, "제품1", manufacturer_name="ABC Chemical")
+    svc.create_product(sb, CALLER_A, "제품2", manufacturer_name="XYZ Corp")
+    result = svc.list_products(sb, CALLER_A, q="abc chem")
+    assert len(result["items"]) == 1
+    assert result["items"][0]["product_name"] == "제품1"
+
+
+def test_search03_identifier_search():
+    sb = FakeSB()
+    product, _ = svc.create_product(sb, CALLER_A, "바코드 제품")
+    svc.add_identifier(sb, CALLER_A, product["id"], {
+        "identifier_type": "BARCODE", "identifier_value": "BARCODE-99999"
+    })
+    svc.create_product(sb, CALLER_A, "다른 제품")
+    result = svc.list_products(sb, CALLER_A, q="99999")
+    assert len(result["items"]) == 1
+    assert result["items"][0]["id"] == product["id"]
+
+
+def test_search04_no_match():
+    sb = FakeSB()
+    svc.create_product(sb, CALLER_A, "ABC 세척제")
+    result = svc.list_products(sb, CALLER_A, q="전혀없는검색어xyz123")
+    assert result["items"] == []
+    assert result["total"] == 0
+
+
+def test_search05_cross_company_product_not_visible():
+    sb = FakeSB()
+    svc.create_product(sb, CALLER_B, "B사 세척제")
+    result = svc.list_products(sb, CALLER_A, q="세척제")
+    assert result["items"] == []
+    assert result["total"] == 0
+
+
+def test_search06_cross_company_identifier_not_visible():
+    sb = FakeSB()
+    prod_b, _ = svc.create_product(sb, CALLER_B, "B사 제품")
+    svc.add_identifier(sb, CALLER_B, prod_b["id"], {
+        "identifier_type": "BARCODE", "identifier_value": "SHARED-CODE"
+    })
+    result = svc.list_products(sb, CALLER_A, q="SHARED-CODE")
+    assert result["items"] == []
+
+
+def test_search07_filtered_total_correct():
+    sb = FakeSB()
+    svc.create_product(sb, CALLER_A, "세척제 A")
+    svc.create_product(sb, CALLER_A, "세척제 B")
+    svc.create_product(sb, CALLER_A, "절삭유 C")
+    result = svc.list_products(sb, CALLER_A, q="세척제")
+    assert result["total"] == 2
+    assert len(result["items"]) == 2
+
+
+def test_search08_pagination_after_filtering():
+    sb = FakeSB()
+    for i in range(5):
+        svc.create_product(sb, CALLER_A, f"세척제 {i:02d}")
+    svc.create_product(sb, CALLER_A, "절삭유")
+    result = svc.list_products(sb, CALLER_A, q="세척제", limit=2, offset=0)
+    assert result["total"] == 5
+    assert len(result["items"]) == 2
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PROV — Provenance (created_source) 보호 테스트 (PATCH-001)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_prov03_normal_product_create_source_manual():
+    sb = FakeSB()
+    product, _ = svc.create_product(sb, CALLER_A, "Test Product")
+    assert product["created_source"] == "MANUAL"
+
+
+def test_prov04_normal_identifier_create_source_manual():
+    sb = FakeSB()
+    product, _ = svc.create_product(sb, CALLER_A, "Test Product")
+    ident = svc.add_identifier(sb, CALLER_A, product["id"], {
+        "identifier_type": "BARCODE", "identifier_value": "TESTCODE"
+    })
+    assert ident["created_source"] == "MANUAL"
+
+
+@requires_client
+def test_prov01_post_product_with_created_source_422():
+    c = _client(CALLER_A)
+    r = c.post("/me/msds/products", json={
+        "product_name": "Test",
+        "created_source": "PDF"
+    })
+    assert r.status_code == 422
+
+
+@requires_client
+def test_prov02_post_identifier_with_created_source_422():
+    store = {}
+    c = _client(CALLER_A, store)
+    created = c.post("/me/msds/products", json={"product_name": "Test"})
+    pid = created.json()["data"]["id"]
+    r = c.post(f"/me/msds/products/{pid}/identifiers", json={
+        "identifier_type": "BARCODE",
+        "identifier_value": "CODE123",
+        "created_source": "PHOTO"
+    })
+    assert r.status_code == 422
+
+
+@requires_client
+def test_prov05_product_created_source_server_owned_manual():
+    store = {}
+    c = _client(CALLER_A, store)
+    r = c.post("/me/msds/products", json={"product_name": "Manual Product"})
+    assert r.status_code == 201
+    assert r.json()["data"]["created_source"] == "MANUAL"
