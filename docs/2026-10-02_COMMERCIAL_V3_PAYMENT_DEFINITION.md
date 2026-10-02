@@ -714,11 +714,12 @@ INICIS BillKey 원격 폐기         = 없음 (DB only)
 | status_code | 의미 | Writer |
 |---|---|---|
 | `PENDING` | 결제 대기 (VBank 입금 전, 결제 준비 직후) | `_prepare_payment()` |
-| `SUCCESS` | 결제 완료 | `process_card_success()`, `process_vbank_deposit()` |
-| `PAID` | 결제 완료 (billing 성공) | `_charge_subscription_once()` (RS1) |
+| `SUCCESS` | 결제 성공 — Card / DirectBank / VBank 입금 / RS1 Billing 성공 모두 기록 | `process_card_success()`, `process_vbank_deposit()`, `_charge_subscription_once()` (RS1 canonical) |
+| `PAID` | **ACCEPTED SUCCESS STATUS / LEGACY-COMPATIBLE** — `PAID_STATUS_CODES`에 포함되어 post-process reader가 인정. 현재 Commercial V3 RS1 canonical writer 값은 `SUCCESS`. | 레거시 writer 또는 mock 환경 |
 | `FAILED` | 결제 실패 | `_apply_failure_to_subscription()` |
 
-`PAID_STATUS_CODES = frozenset({"PAID", "SUCCESS"})` — 두 값 모두 post-process trigger.
+`PAID_STATUS_CODES = frozenset({"PAID", "SUCCESS"})` — post-process reader(on_payment_success_sync)는 두 값 모두 성공으로 처리.  
+단, 이것이 모든 writer가 `PAID`를 기록한다는 의미가 아니다. **Commercial V3 현재 RS1 canonical writer는 `SUCCESS`를 사용한다** (`_charge_subscription_once()` → `status_code="SUCCESS"`).
 
 ---
 
@@ -1087,8 +1088,8 @@ INICIS Billing API (INIAPI)
         │
   ┌─────┴──────┐
   ▼            ▼
-성공          실패
-PAID          FAILED
+성공            실패
+SUCCESS         FAILED
   │            └──→ cron_job_log status ≠ SUCCESS
   ▼
 on_payment_success_sync
