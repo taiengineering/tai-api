@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from services.time.legacy_naive_utc_adapter import legacy_naive_utc_to_aware
 from typing import Optional
 
@@ -43,7 +43,9 @@ from schemas.saas_contract_commercial_v2 import (
 from schemas.saas_pricing_v2 import SaasCommercialSelection, SaasPricingSnapshotV2
 from schemas.saas_quote_v2 import SAAS_QUOTE_SCHEMA_VERSION, SaasQuoteSnapshotItemV2
 from services.payment_post_process import PAID_STATUS_CODES
+from services.payment_helpers import now_iso as _renewal_now_iso
 from services.payment_svc import _run_inicis_prepare_exact, load_sign_key
+from services.time import now_kst
 from services.saas_commercial_version_time_v2 import (
     TemporalVersionError,
     find_future_commercial_versions_v2,
@@ -363,6 +365,91 @@ def prepare_saas_v2_renewal_payment_from_quote(
         buyertel=buyertel,
         buyeremail=buyeremail,
     )
+
+
+_RENEWAL_VBANK_EXPIRE_MIN_DEFAULT = 4320  # 3 days
+
+
+def prepare_saas_v2_renewal_vbank_from_quote(
+    supabase,
+    *,
+    contract_id: str,
+    quote_id: str,
+    company_id: str,
+    user_id: str,
+    as_of: datetime,
+    buyername: Optional[str] = None,
+    buyertel: Optional[str] = None,
+    buyeremail: Optional[str] = None,
+    vbank_expire_min: int = _RENEWAL_VBANK_EXPIRE_MIN_DEFAULT,
+) -> dict:
+    """기존 V2 Contract에 대해 Renewal Quote 기반 INICIS VBANK 결제 준비.
+
+    DB Read:  contracts(1) + saas_contract_commercial_versions(N) + quotes(1)
+    DB Write: payments(1, payment_type=RENEWAL, pg_method=VBANK, contract_id=기존)
+    DB Write 금지: contracts 0 · commercial_versions 0 · site_scopes 0 ·
+                  subscriptions 0 · billing_keys 0
+
+    payment_type = RENEWAL (초기 계약 runtime 오분기 차단).
+    pg_method = VBANK (process_vbank_deposit → on_payment_success_sync → V2 renewal runtime).
+    VBANK 정기결제(payment_months=1) 불가 — 3/6/9/12개월 단건결제만 지원.
+
+    as_of: timezone-aware datetime (caller 제공, datetime.now() 직접 호출 금지)
+    """
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+
+    if as_of.tzinfo is None:
+        raise SaasRenewalV2AdapterError(
+            "RENEWAL_AS_OF_INVALID",
+            f"as_of은 timezone-aware datetime이어야 합니다: {as_of!r}",
+        )
+    _fetch_and_validate_contract(supabase, contract_id, company_id, as_of)
+    _quote, item, snap = _validate_renewal_quote(supabase, quote_id, company_id)
+
+    if snap.payment_months == 1:
+        raise SaasRenewalV2AdapterError(
+            "VBANK_NOT_SUPPORTED_FOR_RECURRING",
+            "VBANK는 정기결제(1개월)를 지원하지 않습니다. 3개월 이상 단건결제를 이용해 주세요.",
+        )
+
+    sign_key = load_sign_key()
+    resp = _run_inicis_prepare_exact(
+        supabase,
+        sign_key,
+        supply_amount=snap.prepaid_supply_amount,
+        vat_amount=snap.vat_amount,
+        total_amount=snap.total_amount,
+        product_type="SAAS",
+        goodname=item.display_name,
+        user_id=user_id,
+        company_id=company_id,
+        contract_id=contract_id,
+        quote_id=quote_id,
+        plan_code=None,
+        period_months=snap.payment_months,
+        payment_type="RENEWAL",
+        proof_type=None,
+        buyername=buyername,
+        buyertel=buyertel,
+        buyeremail=buyeremail,
+    )
+
+    payment_id = resp["data"]["payment_id"]
+    now = _renewal_now_iso()
+    vbank_expires_at = (now_kst() + timedelta(minutes=vbank_expire_min)).isoformat()
+    try:
+        supabase.table("payments").update({
+            "pg_method": "VBANK",
+            "vbank_expires_at": vbank_expires_at,
+            "updated_at": now,
+        }).eq("id", payment_id).execute()
+    except Exception:
+        _logger.warning("[RENEWAL_VBANK] vbank metadata 업데이트 실패 payment=%s", payment_id)
+
+    resp["data"]["gopaymethod"] = "Vbank"
+    resp["data"]["vbankexpire"] = vbank_expire_min
+    return resp
 
 
 # ── Plan Builder Entry Point ──────────────────────────────────────────────────

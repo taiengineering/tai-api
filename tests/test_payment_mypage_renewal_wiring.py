@@ -885,10 +885,10 @@ def test_T03_renewal_quote_window_closed_source():
 
 
 def test_T04_prepare_renewal_window_closed_source():
-    """member_quotes.prepare_v2_renewal_payment: RENEWAL_WINDOW_CLOSED 처리 존재."""
+    """member_quotes 공통 컨텍스트 검증 함수: RENEWAL_WINDOW_CLOSED 처리 존재."""
     import inspect
-    from routers.member_quotes import prepare_v2_renewal_payment
-    src = inspect.getsource(prepare_v2_renewal_payment)
+    from routers.member_quotes import _validate_renewal_router_context
+    src = inspect.getsource(_validate_renewal_router_context)
     assert "RENEWAL_WINDOW_CLOSED" in src
 
 
@@ -1116,10 +1116,10 @@ def test_RC02_direct_renewal_quote_with_recurring_cv_blocked():
 
 
 def test_RC03_prepare_has_recurring_check():
-    """prepare_v2_renewal_payment 소스에 RECURRING_MANAGED_AUTOMATICALLY + payment_months 검증 존재."""
+    """member_quotes 공통 컨텍스트 검증 함수 소스에 RECURRING_MANAGED_AUTOMATICALLY + payment_months 검증 존재."""
     import inspect
-    from routers.member_quotes import prepare_v2_renewal_payment
-    src = inspect.getsource(prepare_v2_renewal_payment)
+    from routers.member_quotes import _validate_renewal_router_context
+    src = inspect.getsource(_validate_renewal_router_context)
     assert "RECURRING_MANAGED_AUTOMATICALLY" in src
     assert "payment_months" in src
 
@@ -1195,10 +1195,10 @@ def test_TF02_quote_creator_handles_temporal_error():
 
 
 def test_TF03_prepare_handles_temporal_error():
-    """prepare_v2_renewal_payment: TemporalVersionError 처리 소스 존재."""
+    """member_quotes 공통 컨텍스트 검증 함수: TemporalVersionError 처리 소스 존재."""
     import inspect
-    from routers.member_quotes import prepare_v2_renewal_payment
-    src = inspect.getsource(prepare_v2_renewal_payment)
+    from routers.member_quotes import _validate_renewal_router_context
+    src = inspect.getsource(_validate_renewal_router_context)
     assert "TemporalVersionError" in src
     assert "CURRENT_CV_NOT_FOUND" in src
 
