@@ -1,7 +1,7 @@
-"""MSDS Chemical Product orchestration — /me/msds/products.
+"""MSDS Chemical Product orchestration — /me/msds/factories/{factory_id}/products.
 
-company_id 는 100% 토큰(current_user)에서 결정. client 주입 금지.
-신규 Object: chemical_products + chemical_product_identifiers.
+factory_id 는 URL path에서 수신. company 귀속은 factories.company_id 를 통해 검증.
+company_id 는 Product/Identifier field 아님 — factories 테이블을 통해 역참조.
 기존 factory_materials / material_legal_master / leg-prod 불변.
 """
 from __future__ import annotations
@@ -62,13 +62,34 @@ def normalize_identifier(raw: str) -> str:
     return s
 
 
+# ─── Factory Scope Guard ──────────────────────────────────────────────────────
+
+def _require_factory_scope(sb, current_user: Dict[str, Any], factory_id: str) -> str:
+    """factory_id 가 current_user 의 company 에 귀속되는지 검증. 검증된 factory_id 반환."""
+    company_id = current_user.get("company_id")
+    if not company_id:
+        raise MsdsProductError(403, "NO_COMPANY", "회사 정보가 없습니다.")
+    res = (
+        sb.table("factories")
+        .select("id")
+        .eq("id", factory_id)
+        .eq("company_id", company_id)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
+    return factory_id
+
+
 # ─── Duplicate Candidate Detection ───────────────────────────────────────────
 
 def _check_identifier_duplicates(
-    sb, company_id: str, product_name: str, manufacturer_name: Optional[str],
-    identifiers: Optional[List[Dict[str, Any]]]
+    sb, factory_id: str, product_name: str,
+    manufacturer_name: Optional[str],
+    identifiers: Optional[List[Dict[str, Any]]],
 ) -> List[Dict[str, Any]]:
-    """Create 요청에 대한 중복 후보 탐색. 자동 merge 없음."""
+    """Create 요청에 대한 중복 후보 탐색 (factory 기준). 자동 merge 없음."""
     candidates = []
 
     if identifiers:
@@ -78,7 +99,7 @@ def _check_identifier_duplicates(
             res = (
                 sb.table("chemical_product_identifiers")
                 .select("chemical_product_id, identifier_type, identifier_normalized")
-                .eq("company_id", company_id)
+                .eq("factory_id", factory_id)
                 .eq("identifier_type", itype)
                 .eq("identifier_normalized", inorm)
                 .eq("is_active", True)
@@ -91,6 +112,7 @@ def _check_identifier_duplicates(
                         sb.table("chemical_products")
                         .select("id, product_name, manufacturer_name")
                         .eq("id", pid)
+                        .eq("factory_id", factory_id)
                         .limit(1)
                         .execute()
                     )
@@ -110,7 +132,7 @@ def _check_identifier_duplicates(
         res = (
             sb.table("chemical_products")
             .select("id, product_name, manufacturer_name")
-            .eq("company_id", company_id)
+            .eq("factory_id", factory_id)
             .eq("product_name_normalized", pnorm)
             .eq("manufacturer_normalized", mnorm)
             .eq("status_code", "ACTIVE")
@@ -131,19 +153,12 @@ def _check_identifier_duplicates(
 
 # ─── Product CRUD ─────────────────────────────────────────────────────────────
 
-def _require_company(current_user: Dict[str, Any]) -> str:
-    cid = current_user.get("company_id")
-    if not cid:
-        raise MsdsProductError(403, "NO_COMPANY", "회사 정보가 없습니다.")
-    return cid
-
-
-def _get_product_or_404(sb, company_id: str, product_id: str) -> Dict[str, Any]:
+def _get_product_or_404(sb, factory_id: str, product_id: str) -> Dict[str, Any]:
     res = (
         sb.table("chemical_products")
         .select("*")
         .eq("id", product_id)
-        .eq("company_id", company_id)
+        .eq("factory_id", factory_id)
         .limit(1)
         .execute()
     )
@@ -155,13 +170,14 @@ def _get_product_or_404(sb, company_id: str, product_id: str) -> Dict[str, Any]:
 def create_product(
     sb,
     current_user: Dict[str, Any],
+    factory_id: str,
     product_name: str,
     manufacturer_name: Optional[str] = None,
     identifiers: Optional[List[Dict[str, Any]]] = None,
     created_source: str = "MANUAL",
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """Product 생성. (product_row, duplicate_candidates) 반환."""
-    company_id = _require_company(current_user)
+    _require_factory_scope(sb, current_user, factory_id)
     user_id = current_user.get("id")
 
     if created_source not in VALID_CREATED_SOURCE:
@@ -171,12 +187,12 @@ def create_product(
     mnorm = normalize_manufacturer(manufacturer_name)
 
     candidates = _check_identifier_duplicates(
-        sb, company_id, product_name, manufacturer_name, identifiers
+        sb, factory_id, product_name, manufacturer_name, identifiers
     )
 
     now = _now_iso()
     row = {
-        "company_id": company_id,
+        "factory_id": factory_id,
         "product_name": product_name.strip(),
         "product_name_normalized": pnorm,
         "manufacturer_name": manufacturer_name.strip() if manufacturer_name else None,
@@ -197,7 +213,7 @@ def create_product(
 
     if identifiers:
         for ident in identifiers:
-            _add_identifier_row(sb, company_id, product["id"], ident, user_id)
+            _add_identifier_row(sb, factory_id, product["id"], ident, user_id)
 
     ident_res = (
         sb.table("chemical_product_identifiers")
@@ -210,12 +226,12 @@ def create_product(
     return product, candidates
 
 
-def _product_ids_by_identifier_q(sb, company_id: str, qnorm: str) -> List[str]:
-    """identifier_normalized ILIKE %qnorm% 로 product_id 목록 반환 (company-scoped, active only)."""
+def _product_ids_by_identifier_q(sb, factory_id: str, qnorm: str) -> List[str]:
+    """identifier_normalized ILIKE %qnorm% (factory-scoped, active only)."""
     res = (
         sb.table("chemical_product_identifiers")
         .select("chemical_product_id")
-        .eq("company_id", company_id)
+        .eq("factory_id", factory_id)
         .eq("is_active", True)
         .ilike("identifier_normalized", f"%{qnorm}%")
         .execute()
@@ -226,35 +242,34 @@ def _product_ids_by_identifier_q(sb, company_id: str, qnorm: str) -> List[str]:
 def list_products(
     sb,
     current_user: Dict[str, Any],
+    factory_id: str,
     status: Optional[str] = None,
     identity_status: Optional[str] = None,
     q: Optional[str] = None,
     limit: int = 20,
     offset: int = 0,
 ) -> Dict[str, Any]:
-    """Product 목록. q 있으면 name/manufacturer/identifier 검색 후 pagination."""
-    company_id = _require_company(current_user)
+    """Product 목록 (factory-scoped). q 있으면 name/manufacturer/identifier 검색 후 pagination."""
+    _require_factory_scope(sb, current_user, factory_id)
 
-    # q 검색: company scope 내에서 filtered id set 결정
     if q and q.strip():
-        qnorm = normalize_product_name(q)  # trim + casefold + collapse
+        qnorm = normalize_product_name(q)
 
-        # product_name_normalized 또는 manufacturer_normalized ILIKE
         name_res = (
             sb.table("chemical_products")
             .select("id")
-            .eq("company_id", company_id)
+            .eq("factory_id", factory_id)
             .ilike("product_name_normalized", f"%{qnorm}%")
             .execute()
         )
         mfr_res = (
             sb.table("chemical_products")
             .select("id")
-            .eq("company_id", company_id)
+            .eq("factory_id", factory_id)
             .ilike("manufacturer_normalized", f"%{qnorm}%")
             .execute()
         )
-        ident_ids = _product_ids_by_identifier_q(sb, company_id, qnorm)
+        ident_ids = _product_ids_by_identifier_q(sb, factory_id, qnorm)
 
         matched_ids = list({
             *(r["id"] for r in (name_res.data or [])),
@@ -265,11 +280,10 @@ def list_products(
         if not matched_ids:
             return {"items": [], "total": 0}
 
-        # matched_ids 기반 전체 목록 조회 후 필터
         all_res = (
             sb.table("chemical_products")
             .select("*")
-            .eq("company_id", company_id)
+            .eq("factory_id", factory_id)
             .in_("id", matched_ids)
             .order("created_at", desc=True)
             .execute()
@@ -284,11 +298,10 @@ def list_products(
         items = rows[offset: offset + limit]
         return {"items": items, "total": total}
 
-    # q 없음: 일반 필터 + pagination
     query = (
         sb.table("chemical_products")
         .select("*")
-        .eq("company_id", company_id)
+        .eq("factory_id", factory_id)
         .order("created_at", desc=True)
         .range(offset, offset + limit - 1)
     )
@@ -303,7 +316,7 @@ def list_products(
     count_query = (
         sb.table("chemical_products")
         .select("id", count="exact")
-        .eq("company_id", company_id)
+        .eq("factory_id", factory_id)
     )
     if status:
         count_query = count_query.eq("status_code", status)
@@ -315,9 +328,9 @@ def list_products(
     return {"items": items, "total": total}
 
 
-def get_product(sb, current_user: Dict[str, Any], product_id: str) -> Dict[str, Any]:
-    company_id = _require_company(current_user)
-    product = _get_product_or_404(sb, company_id, product_id)
+def get_product(sb, current_user: Dict[str, Any], factory_id: str, product_id: str) -> Dict[str, Any]:
+    _require_factory_scope(sb, current_user, factory_id)
+    product = _get_product_or_404(sb, factory_id, product_id)
 
     ident_res = (
         sb.table("chemical_product_identifiers")
@@ -332,13 +345,14 @@ def get_product(sb, current_user: Dict[str, Any], product_id: str) -> Dict[str, 
 def update_product(
     sb,
     current_user: Dict[str, Any],
+    factory_id: str,
     product_id: str,
     patch: Dict[str, Any],
 ) -> Dict[str, Any]:
-    company_id = _require_company(current_user)
-    _get_product_or_404(sb, company_id, product_id)
+    _require_factory_scope(sb, current_user, factory_id)
+    _get_product_or_404(sb, factory_id, product_id)
 
-    forbidden = {"company_id", "created_source", "created_by", "id"}
+    forbidden = {"factory_id", "company_id", "created_source", "created_by", "id"}
     for key in forbidden:
         patch.pop(key, None)
 
@@ -363,7 +377,7 @@ def update_product(
         sb.table("chemical_products")
         .update(patch)
         .eq("id", product_id)
-        .eq("company_id", company_id)
+        .eq("factory_id", factory_id)
         .execute()
     )
     if not res.data:
@@ -371,26 +385,26 @@ def update_product(
     return res.data[0]
 
 
-def deactivate_product(sb, current_user: Dict[str, Any], product_id: str) -> Dict[str, Any]:
-    company_id = _require_company(current_user)
-    product = _get_product_or_404(sb, company_id, product_id)
+def deactivate_product(sb, current_user: Dict[str, Any], factory_id: str, product_id: str) -> Dict[str, Any]:
+    _require_factory_scope(sb, current_user, factory_id)
+    product = _get_product_or_404(sb, factory_id, product_id)
     if product["status_code"] == "INACTIVE":
         return product
-    return update_product(sb, current_user, product_id, {"status_code": "INACTIVE"})
+    return update_product(sb, current_user, factory_id, product_id, {"status_code": "INACTIVE"})
 
 
-def reactivate_product(sb, current_user: Dict[str, Any], product_id: str) -> Dict[str, Any]:
-    company_id = _require_company(current_user)
-    product = _get_product_or_404(sb, company_id, product_id)
+def reactivate_product(sb, current_user: Dict[str, Any], factory_id: str, product_id: str) -> Dict[str, Any]:
+    _require_factory_scope(sb, current_user, factory_id)
+    product = _get_product_or_404(sb, factory_id, product_id)
     if product["status_code"] == "ACTIVE":
         return product
-    return update_product(sb, current_user, product_id, {"status_code": "ACTIVE"})
+    return update_product(sb, current_user, factory_id, product_id, {"status_code": "ACTIVE"})
 
 
 # ─── Identifier ───────────────────────────────────────────────────────────────
 
 def _add_identifier_row(
-    sb, company_id: str, product_id: str, ident: Dict[str, Any], user_id: Optional[str]
+    sb, factory_id: str, product_id: str, ident: Dict[str, Any], user_id: Optional[str]
 ) -> Dict[str, Any]:
     itype = ident.get("identifier_type", "")
     if itype not in VALID_IDENTIFIER_TYPE:
@@ -407,7 +421,7 @@ def _add_identifier_row(
 
     now = _now_iso()
     row = {
-        "company_id": company_id,
+        "factory_id": factory_id,
         "chemical_product_id": product_id,
         "identifier_type": itype,
         "identifier_value": ival.strip(),
@@ -426,9 +440,9 @@ def _add_identifier_row(
     return res.data[0]
 
 
-def list_identifiers(sb, current_user: Dict[str, Any], product_id: str) -> List[Dict[str, Any]]:
-    company_id = _require_company(current_user)
-    _get_product_or_404(sb, company_id, product_id)
+def list_identifiers(sb, current_user: Dict[str, Any], factory_id: str, product_id: str) -> List[Dict[str, Any]]:
+    _require_factory_scope(sb, current_user, factory_id)
+    _get_product_or_404(sb, factory_id, product_id)
     res = (
         sb.table("chemical_product_identifiers")
         .select("*")
@@ -439,26 +453,26 @@ def list_identifiers(sb, current_user: Dict[str, Any], product_id: str) -> List[
 
 
 def add_identifier(
-    sb, current_user: Dict[str, Any], product_id: str, ident: Dict[str, Any]
+    sb, current_user: Dict[str, Any], factory_id: str, product_id: str, ident: Dict[str, Any]
 ) -> Dict[str, Any]:
-    company_id = _require_company(current_user)
-    _get_product_or_404(sb, company_id, product_id)
+    _require_factory_scope(sb, current_user, factory_id)
+    _get_product_or_404(sb, factory_id, product_id)
     user_id = current_user.get("id")
-    return _add_identifier_row(sb, company_id, product_id, ident, user_id)
+    return _add_identifier_row(sb, factory_id, product_id, ident, user_id)
 
 
 def deactivate_identifier(
-    sb, current_user: Dict[str, Any], product_id: str, identifier_id: str
+    sb, current_user: Dict[str, Any], factory_id: str, product_id: str, identifier_id: str
 ) -> Dict[str, Any]:
-    company_id = _require_company(current_user)
-    _get_product_or_404(sb, company_id, product_id)
+    _require_factory_scope(sb, current_user, factory_id)
+    _get_product_or_404(sb, factory_id, product_id)
 
     res = (
         sb.table("chemical_product_identifiers")
         .select("*")
         .eq("id", identifier_id)
         .eq("chemical_product_id", product_id)
-        .eq("company_id", company_id)
+        .eq("factory_id", factory_id)
         .limit(1)
         .execute()
     )
@@ -471,7 +485,7 @@ def deactivate_identifier(
         .update({"is_active": False, "updated_at": now})
         .eq("id", identifier_id)
         .eq("chemical_product_id", product_id)
-        .eq("company_id", company_id)
+        .eq("factory_id", factory_id)
         .execute()
     )
     if not upd.data:

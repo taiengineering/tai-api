@@ -1,12 +1,12 @@
-"""MSDS Chemical Product API — /me/msds/products.
+"""MSDS Chemical Product API — /me/msds/factories/{factory_id}/products.
 
-company_id 는 Bearer 토큰(get_current_user)에서만 파생.
-client 가 company_id 를 보낼 수 없다(Pydantic extra=forbid).
+factory_id 는 URL path에서만 수신. Bearer 토큰으로 factory 귀속 검증.
+client 가 factory_id / company_id / created_source 를 body 로 보낼 수 없다(Pydantic extra=forbid).
 """
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
@@ -59,8 +59,9 @@ def _require_user(current_user: dict) -> dict:
 
 # ─── Product Endpoints ────────────────────────────────────────────────────────
 
-@router.get("/products")
+@router.get("/factories/{factory_id}/products")
 def list_products(
+    factory_id: str,
     status: Optional[str] = Query(None),
     identity_status: Optional[str] = Query(None),
     q: Optional[str] = Query(None),
@@ -71,7 +72,7 @@ def list_products(
     _require_user(current_user)
     sb = get_supabase()
     try:
-        data = svc.list_products(sb, current_user, status=status,
+        data = svc.list_products(sb, current_user, factory_id, status=status,
                                   identity_status=identity_status, q=q,
                                   limit=limit, offset=offset)
     except svc.MsdsProductError as e:
@@ -79,8 +80,9 @@ def list_products(
     return {"status": "success", "data": data}
 
 
-@router.post("/products", status_code=201)
+@router.post("/factories/{factory_id}/products", status_code=201)
 def create_product(
+    factory_id: str,
     body: ProductCreateBody,
     current_user: dict = Depends(get_current_user),
 ):
@@ -89,7 +91,7 @@ def create_product(
     identifiers = [i.dict() for i in body.identifiers] if body.identifiers else None
     try:
         product, candidates = svc.create_product(
-            sb, current_user,
+            sb, current_user, factory_id,
             product_name=body.product_name,
             manufacturer_name=body.manufacturer_name,
             identifiers=identifiers,
@@ -100,19 +102,24 @@ def create_product(
     return {"status": "success", "data": product, "duplicate_candidates": candidates}
 
 
-@router.get("/products/{product_id}")
-def get_product(product_id: str, current_user: dict = Depends(get_current_user)):
+@router.get("/factories/{factory_id}/products/{product_id}")
+def get_product(
+    factory_id: str,
+    product_id: str,
+    current_user: dict = Depends(get_current_user),
+):
     _require_user(current_user)
     sb = get_supabase()
     try:
-        product = svc.get_product(sb, current_user, product_id)
+        product = svc.get_product(sb, current_user, factory_id, product_id)
     except svc.MsdsProductError as e:
         raise _err(e) from e
     return {"status": "success", "data": product}
 
 
-@router.patch("/products/{product_id}")
+@router.patch("/factories/{factory_id}/products/{product_id}")
 def update_product(
+    factory_id: str,
     product_id: str,
     body: ProductUpdateBody,
     current_user: dict = Depends(get_current_user),
@@ -121,29 +128,37 @@ def update_product(
     sb = get_supabase()
     patch = body.dict(exclude_unset=True)
     try:
-        product = svc.update_product(sb, current_user, product_id, patch)
+        product = svc.update_product(sb, current_user, factory_id, product_id, patch)
     except svc.MsdsProductError as e:
         raise _err(e) from e
     return {"status": "success", "data": product}
 
 
-@router.post("/products/{product_id}/deactivate")
-def deactivate_product(product_id: str, current_user: dict = Depends(get_current_user)):
+@router.post("/factories/{factory_id}/products/{product_id}/deactivate")
+def deactivate_product(
+    factory_id: str,
+    product_id: str,
+    current_user: dict = Depends(get_current_user),
+):
     _require_user(current_user)
     sb = get_supabase()
     try:
-        product = svc.deactivate_product(sb, current_user, product_id)
+        product = svc.deactivate_product(sb, current_user, factory_id, product_id)
     except svc.MsdsProductError as e:
         raise _err(e) from e
     return {"status": "success", "data": product}
 
 
-@router.post("/products/{product_id}/reactivate")
-def reactivate_product(product_id: str, current_user: dict = Depends(get_current_user)):
+@router.post("/factories/{factory_id}/products/{product_id}/reactivate")
+def reactivate_product(
+    factory_id: str,
+    product_id: str,
+    current_user: dict = Depends(get_current_user),
+):
     _require_user(current_user)
     sb = get_supabase()
     try:
-        product = svc.reactivate_product(sb, current_user, product_id)
+        product = svc.reactivate_product(sb, current_user, factory_id, product_id)
     except svc.MsdsProductError as e:
         raise _err(e) from e
     return {"status": "success", "data": product}
@@ -151,19 +166,24 @@ def reactivate_product(product_id: str, current_user: dict = Depends(get_current
 
 # ─── Identifier Endpoints ─────────────────────────────────────────────────────
 
-@router.get("/products/{product_id}/identifiers")
-def list_identifiers(product_id: str, current_user: dict = Depends(get_current_user)):
+@router.get("/factories/{factory_id}/products/{product_id}/identifiers")
+def list_identifiers(
+    factory_id: str,
+    product_id: str,
+    current_user: dict = Depends(get_current_user),
+):
     _require_user(current_user)
     sb = get_supabase()
     try:
-        items = svc.list_identifiers(sb, current_user, product_id)
+        items = svc.list_identifiers(sb, current_user, factory_id, product_id)
     except svc.MsdsProductError as e:
         raise _err(e) from e
     return {"status": "success", "data": {"items": items, "total": len(items)}}
 
 
-@router.post("/products/{product_id}/identifiers", status_code=201)
+@router.post("/factories/{factory_id}/products/{product_id}/identifiers", status_code=201)
 def add_identifier(
+    factory_id: str,
     product_id: str,
     body: IdentifierBody,
     current_user: dict = Depends(get_current_user),
@@ -173,14 +193,15 @@ def add_identifier(
     payload = body.dict()
     payload["created_source"] = "MANUAL"
     try:
-        ident = svc.add_identifier(sb, current_user, product_id, payload)
+        ident = svc.add_identifier(sb, current_user, factory_id, product_id, payload)
     except svc.MsdsProductError as e:
         raise _err(e) from e
     return {"status": "success", "data": ident}
 
 
-@router.delete("/products/{product_id}/identifiers/{identifier_id}")
+@router.delete("/factories/{factory_id}/products/{product_id}/identifiers/{identifier_id}")
 def deactivate_identifier(
+    factory_id: str,
     product_id: str,
     identifier_id: str,
     current_user: dict = Depends(get_current_user),
@@ -188,7 +209,7 @@ def deactivate_identifier(
     _require_user(current_user)
     sb = get_supabase()
     try:
-        ident = svc.deactivate_identifier(sb, current_user, product_id, identifier_id)
+        ident = svc.deactivate_identifier(sb, current_user, factory_id, product_id, identifier_id)
     except svc.MsdsProductError as e:
         raise _err(e) from e
     return {"status": "success", "data": ident}
