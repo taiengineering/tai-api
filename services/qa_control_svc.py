@@ -1,4 +1,4 @@
-"""QA Control Service — WO-QA-CONTROL-PHASE2B-001 PATCH-1.
+"""QA Control Service — WO-QA-CONTROL-PHASE2B-001 PATCH-1 / WO-QA-UNIVERSE-PHASE1-TAXONOMY-CANONICAL-001.
 
 5-table canonical schema: qa_items / qa_schedules / qa_runs / qa_run_targets / qa_run_results
 N+1 금지 — 목록 조회는 bulk query + Python join.
@@ -29,8 +29,62 @@ _VALID_TRANSITIONS: Dict[str, frozenset] = {
 
 _ITEM_COLS = (
     "id, scenario_id, site_code, category, name, description, "
-    "expected_summary, priority, runner_type, enabled, created_at, updated_at"
+    "expected_summary, priority, runner_type, enabled, created_at, updated_at, "
+    "service_code, area_code, qa_type"
 )
+
+# ── Taxonomy label maps ───────────────────────────────────────────────────────
+
+_SERVICE_LABELS: Dict[str, str] = {
+    "WWW":    "웹사이트",
+    "SAAS":   "SaaS",
+    "ADMIN":  "Admin",
+    "WORKER": "작업자앱",
+}
+
+_SERVICE_ORDER = ["WWW", "SAAS", "ADMIN", "WORKER"]
+
+_AREA_LABELS: Dict[str, str] = {
+    "AUTH":           "인증",
+    "LANDING":        "랜딩",
+    "SEARCH":         "통합검색",
+    "FREE_DIAGNOSIS": "무료 법령진단",
+    "HEADER":         "헤더",
+    "MYPAGE":         "마이페이지",
+    "DASHBOARD":      "대시보드",
+    "INSPECTION":     "점검",
+    "EDUCATION":      "교육",
+    "BILLING":        "결제",
+    "SUPPORT":        "지원",
+    "LEGAL":          "법령",
+    "SETTINGS":       "설정",
+    "QA":             "QA",
+    "OPERATIONS":     "운영",
+    "CUSTOMER":       "고객",
+    "MARKETING":      "마케팅",
+    "STATISTICS":     "통계",
+    "SERVICE":        "서비스",
+    "CONSTRUCTION":   "건설",
+    "RISK":           "리스크",
+}
+
+_QA_TYPE_ORDER = [
+    "AVAILABILITY", "FUNCTIONAL", "INTEGRATION", "E2E", "API",
+    "PERFORMANCE", "SECURITY", "DATA", "ACCESSIBILITY", "VISUAL",
+]
+
+_QA_TYPE_LABELS: Dict[str, str] = {
+    "AVAILABILITY": "가용성/진입",
+    "FUNCTIONAL":   "기능",
+    "INTEGRATION":  "연동",
+    "E2E":          "전체 흐름",
+    "API":          "API",
+    "PERFORMANCE":  "성능",
+    "SECURITY":     "보안",
+    "DATA":         "데이터",
+    "ACCESSIBILITY": "접근성",
+    "VISUAL":       "화면",
+}
 _SCHED_COLS = (
     "id, qa_item_id, enabled, frequency_type, frequency_value, "
     "anchor_time, day_of_week, timezone, next_run_at, last_scheduled_at, "
@@ -246,6 +300,9 @@ def list_items(
     enabled:          Optional[bool] = None,
     category:         Optional[str]  = None,
     effective_status: Optional[str]  = None,
+    service_code:     Optional[str]  = None,
+    area_code:        Optional[str]  = None,
+    qa_type:          Optional[str]  = None,
     page:             int            = 1,
     page_size:        int            = 50,
 ) -> Dict[str, Any]:
@@ -259,6 +316,12 @@ def list_items(
         q = q.eq("enabled", enabled)
     if category:
         q = q.eq("category", category)
+    if service_code:
+        q = q.eq("service_code", service_code)
+    if area_code:
+        q = q.eq("area_code", area_code)
+    if qa_type:
+        q = q.eq("qa_type", qa_type)
     res = q.order("priority").order("created_at").execute()
     all_items = res.data or []
 
@@ -297,6 +360,68 @@ def list_items(
         "page":        page,
         "page_size":   page_size,
         "total_pages": total_pages,
+    }
+
+
+def get_taxonomy(supabase) -> Dict[str, Any]:
+    """서비스/영역/QA종류 분류 메타데이터 반환.
+
+    services: 고정 순서 4종.
+    areas: qa_items distinct service_code + area_code에서 동적 생성 — master table 불필요.
+    qa_types: 고정 10종.
+    """
+    # areas: derive from current qa_items (no new master table)
+    res = (
+        supabase.table("qa_items")
+        .select("service_code, area_code")
+        .not_.is_("service_code", "null")
+        .not_.is_("area_code", "null")
+        .execute()
+    )
+    rows = res.data or []
+
+    areas_by_service: Dict[str, list] = {}
+    seen: set = set()
+    for row in rows:
+        svc_code  = row.get("service_code")
+        area_code = row.get("area_code")
+        if not svc_code or not area_code:
+            continue
+        key = (svc_code, area_code)
+        if key in seen:
+            continue
+        seen.add(key)
+        if svc_code not in areas_by_service:
+            areas_by_service[svc_code] = []
+        areas_by_service[svc_code].append({
+            "code":  area_code,
+            "label": _AREA_LABELS.get(area_code, area_code),
+        })
+
+    # Sort area lists alphabetically by code for deterministic output
+    for lst in areas_by_service.values():
+        lst.sort(key=lambda x: x["code"])
+
+    # services: 항상 canonical 4종 고정 반환 — areas 유무와 무관
+    services = [
+        {"code": code, "label": _SERVICE_LABELS.get(code, code)}
+        for code in _SERVICE_ORDER
+    ]
+    # Append any unknown service codes (future-proofing)
+    known = set(_SERVICE_ORDER)
+    for code in sorted(areas_by_service.keys()):
+        if code not in known:
+            services.append({"code": code, "label": _SERVICE_LABELS.get(code, code)})
+
+    qa_types = [
+        {"code": code, "label": _QA_TYPE_LABELS[code]}
+        for code in _QA_TYPE_ORDER
+    ]
+
+    return {
+        "services": services,
+        "areas":    areas_by_service,
+        "qa_types": qa_types,
     }
 
 

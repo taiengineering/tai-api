@@ -1,4 +1,4 @@
-"""Admin QA Control API — WO-QA-CONTROL-PHASE2B-001 PATCH-1 / Phase 2-E.
+"""Admin QA Control API — WO-QA-CONTROL-PHASE2B-001 PATCH-1 / Phase 2-E / WO-QA-UNIVERSE-PHASE1-TAXONOMY-CANONICAL-001.
 
 /admin/qa/summary                       GET  — 전체 현황 요약
 /admin/qa/items                         GET  — QA 항목 목록 (schedule + effective_status 포함)
@@ -7,6 +7,7 @@
 /admin/qa/runs                          GET  — 실행 목록 (target_count/result_count/effective_counts 포함)
 /admin/qa/runs/{run_id}                 GET  — 실행 상세 (targets 풍부, FLAKY 파생)
 /admin/qa/runs                          POST — MANUAL 실행 생성 + GitHub dispatch (Phase 2-E)
+/admin/qa/taxonomy                      GET  — 서비스/영역/QA종류 분류 메타데이터 (Phase 1)
 
 인증: get_current_user + _require_admin (ALL scope).
 Slack = 0. DB schema mutation = 0.
@@ -60,6 +61,18 @@ def get_summary(current: dict = Depends(get_current_user)):
     return {"status": "success", "data": svc.get_summary(supabase)}
 
 
+@router.get("/taxonomy")
+def get_taxonomy(current: dict = Depends(get_current_user)):
+    """QA 분류 메타데이터 — services/areas/qa_types.
+
+    areas는 qa_items의 distinct service_code+area_code에서 동적 생성.
+    Frontend CATEGORY_OPTIONS 하드코딩 대체 용도.
+    """
+    supabase = get_supabase()
+    _require_admin(current, supabase)
+    return {"status": "success", "data": svc.get_taxonomy(supabase)}
+
+
 @router.get("/items")
 def list_items(
     site_code:        Optional[str]  = Query(None),
@@ -67,6 +80,9 @@ def list_items(
     enabled:          Optional[bool] = Query(None),
     category:         Optional[str]  = Query(None),
     effective_status: Optional[str]  = Query(None),
+    service_code:     Optional[str]  = Query(None),
+    area_code:        Optional[str]  = Query(None),
+    qa_type:          Optional[str]  = Query(None),
     page:             int            = Query(1, ge=1),
     page_size:        int            = Query(50, ge=1, le=200),
     current:          dict           = Depends(get_current_user),
@@ -77,7 +93,8 @@ def list_items(
     return {
         "status": "success",
         "data": svc.list_items(
-            supabase, site_code, priority, enabled, category, effective_status, page, page_size
+            supabase, site_code, priority, enabled, category, effective_status,
+            service_code, area_code, qa_type, page, page_size,
         ),
     }
 
@@ -176,7 +193,8 @@ async def create_run(
     dispatch_status = "SKIPPED"
     if scenario_ids:
         try:
-            await dispatch_qa_run(run_id, scenario_ids)
+            # Manual Admin path — allow_conditional=True (Admin 명시적 요청)
+            await dispatch_qa_run(run_id, scenario_ids, allow_conditional=True)
             dispatch_status = "OK"
             now_iso = serialize_external_utc(now_kst())
             supabase.table("qa_runs").update({

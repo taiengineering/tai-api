@@ -199,7 +199,7 @@ def test_SC01_due_schedule_creates_run():
 
     created_run_id = None
 
-    async def _dispatch(run_id, scenarios):
+    async def _dispatch(run_id, scenarios, **kwargs):
         nonlocal created_run_id
         created_run_id = run_id
 
@@ -241,7 +241,7 @@ def test_SC03_due_schedule_creates_run_verify_trigger():
     sched = _sched("item-2", "P0-002", next_run_offset=-1)
     sb = _make_supabase(schedules=[sched])
 
-    async def _dispatch(run_id, scenarios): pass
+    async def _dispatch(run_id, scenarios, **kwargs): pass
 
     async def _run():
         with patch.object(mod, "_due_schedules", return_value=[sched]), \
@@ -414,7 +414,7 @@ def test_MR04b_dispatch_connected():
     """MR-04b: POST /admin/qa/runs 라우터가 dispatch_qa_run을 호출한다."""
     dispatched: list = []
 
-    async def _fake_dispatch(run_id, scenario_ids):
+    async def _fake_dispatch(run_id, scenario_ids, **kwargs):
         dispatched.append({"run_id": run_id, "scenario_ids": scenario_ids})
 
     fake_run = {
