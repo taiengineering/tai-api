@@ -38,8 +38,8 @@ Surface Inventory v1.2.0의 ADMIN UNVERIFIED 26개를 소스 직접 확인 후 �
 | SURFACE | ROUTE_NAME | 판정 | 근거 |
 |---------|-----------|------|------|
 | 운영자 대시보드 | root/index | VERIFIED | pages/index/index.vue — GET /companies, /subscriptions, /admin/stats, /payments, /matching/admin/dashboard |
-| QA 현황 | qa-dashboard | EXCLUDED | pages/qa-dashboard/ 파일 없음 (admin-vue3/src/pages에 미존재) |
-| QA 설정 | qa-settings | EXCLUDED | pages/qa-settings/ 파일 없음 (admin-vue3/src/pages에 미존재) |
+| QA 현황 | qa-dashboard | VERIFIED | admin-vue3/src/pages/qa/dashboard.vue — GET /admin/qa/summary |
+| QA 설정 | qa-settings | VERIFIED | admin-vue3/src/pages/qa/settings.vue — GET /admin/qa/items + PATCH .../schedule (CM-002 결함) |
 | 푸시 테스트 | push-test | VERIFIED | pages/push-test/index.vue 존재 — api.taieng.co.kr push 엔드포인트 |
 | 서비스 이행 | stats-fulfillment | VERIFIED | GET /stats/fulfillment?days=N |
 | 워커 활동 | stats-workers | VERIFIED | GET /stats/workers?days=N |
@@ -64,8 +64,8 @@ Surface Inventory v1.2.0의 ADMIN UNVERIFIED 26개를 소스 직접 확인 후 �
 | 문서출력 | document-output | VERIFIED | GET /watch-engine/documents/summary, /mvp, /generated |
 | 다이어그램 | diagram-gallery | VERIFIED | Supabase REST diagram_templates (anon key, READ-ONLY) |
 
-**결과: VERIFIED 24 / EXCLUDED 2 (파일 미존재)**  
-ADMIN ACTIVE VERIFIED: 56 + 24 = **80개**
+**결과: VERIFIED 26 / EXCLUDED 0**  
+ADMIN ACTIVE VERIFIED: 56 + 26 = **82개**
 
 ---
 
@@ -360,7 +360,7 @@ NOTE: MYPAGE는 tai-www 정적 HTML, API는 tai-api
 ```
 AUTH_BOUNDARY: JWT Bearer (Operator role 전용)
 SOURCE: tai-admin/admin-vue3/ @ feat/admin-rebuild
-NOTE: qa-dashboard / qa-settings 페이지 파일 미존재 — QA 생성 불가
+NOTE: qa/dashboard.vue = GET /admin/qa/summary / qa/settings.vue = GET /admin/qa/items + PATCH .../schedule (CM-002)
 ```
 
 ### AREA: DASHBOARD
@@ -382,6 +382,9 @@ NOTE: qa-dashboard / qa-settings 페이지 파일 미존재 — QA 생성 불가
 | P1-ADMIN-OPS-FNC-003 | P1 | FUNCTIONAL | QA 수동 실행 dispatch | POST /admin/qa/runs | Y | C | HYB | AUTH_LOGIN + FORM_SUBMIT | — | NEW |
 | P1-ADMIN-OPS-FNC-004 | P1 | FUNCTIONAL | QA 실행 이력 목록 로드 | GET /admin/qa/runs | Y | C | PW | AUTH_LOGIN + LIST_LOAD | — | NEW |
 | P1-ADMIN-OPS-FNC-005 | P1 | FUNCTIONAL | 운영 자동화 승인/완료 처리 | POST /automation/runs/{id}/approve | Y | C | HYB | AUTH_LOGIN + FORM_SUBMIT | — | NEW |
+| P1-ADMIN-OPS-AVL-003 | P1 | AVAILABILITY | QA 현황 대시보드 정상 진입 | GET /admin/qa/summary | Y | C | PW | AUTH_LOGIN + PAGE_OPEN | — | NEW |
+| P1-ADMIN-OPS-AVL-004 | P1 | AVAILABILITY | QA 설정 페이지 정상 진입 | GET /admin/qa/items | Y | C | PW | AUTH_LOGIN + PAGE_OPEN | — | NEW |
+| P1-ADMIN-OPS-FNC-006 | P1 | FUNCTIONAL | QA 스케줄 수정 (CM-002 결함 수정 후) | PATCH /admin/qa/items/{id}/schedule | Y | C | HYB | AUTH_LOGIN + SAVE_UPDATE | — | BLOCKED |
 | P2-ADMIN-OPS-AVL-001 | P2 | AVAILABILITY | 자동 QA 대시보드 정상 진입 | Supabase REST auto_qa_checks | Y | C | PW | AUTH_LOGIN + PAGE_OPEN | — | NEW |
 | P2-ADMIN-OPS-AVL-002 | P2 | AVAILABILITY | 내부 API 모니터 정상 진입 | GET /internal-api-registry | Y | C | PW | AUTH_LOGIN + LIST_LOAD | — | NEW |
 
@@ -582,22 +585,22 @@ NOTE: API QA는 UI와 독립적인 API 계약/보안 검증. UI QA와 중복되�
 
 | MODULE_PATTERN | QA 수 | 대표 QA | 필요 Runner | REUSE 등급 |
 |----------------|-------|---------|------------|-----------|
-| `PAGE_OPEN` | 56 | P0-WWW-001, P0-DIAG-001, P0-SRCH-001 | PW | **REUSE_CORE** |
-| `AUTH_LOGIN` | 112 | P0-SAAS-001, P0-MYP-001 (선행 패턴) | PW | **REUSE_CORE** |
-| `LIST_LOAD` | 78 | P0-MYP-005, P1-ADMIN-BILL-FNC-001 | PW/HYB | **REUSE_CORE** |
-| `AUTH_GUARD` | 8 | P1-WWW-AUTH-SEC-001, P1-SAAS-AUTH-SEC-001 | PW/API | **REUSE_CORE** |
-| `API_CONTRACT` | 28 | P0-API-QA-API-001, P0-API-AUTH-API-001 | API | **REUSE_CORE** |
+| `PAGE_OPEN` | 55 | P0-WWW-001, P0-DIAG-001, P0-SRCH-001 | PW | **REUSE_CORE** |
+| `AUTH_LOGIN` | 145 | P0-SAAS-001, P0-MYP-001 (선행 패턴) | PW | **REUSE_CORE** |
+| `LIST_LOAD` | 60 | P0-MYP-005, P1-ADMIN-BILL-FNC-001 | PW/HYB | **REUSE_CORE** |
+| `AUTH_GUARD` | 5 | P1-WWW-AUTH-SEC-001, P1-SAAS-AUTH-SEC-001 | PW/API | **REUSE_CORE** |
+| `API_CONTRACT` | 24 | P0-API-QA-API-001, P0-API-AUTH-API-001 | API | **REUSE_CORE** |
 | `E2E_FLOW` | 8 | P0-SAAS-001, P0-WWW-003 | PW | **REUSE_CORE** |
-| `DETAIL_LOAD` | 28 | P1-SAAS-MYP-FNC-002 | PW | **REUSE_CORE** |
-| `FORM_SUBMIT` | 32 | P1-WWW-AUTH-FNC-001, P0-API-QA-API-001 | PW/HYB | **REUSE_CORE** |
-| `SAVE_UPDATE` | 18 | P1-SAAS-SET-FNC-001 | PW/HYB | **REUSE_CORE** |
-| `ACCESS_DENY` | 7 | P1-ADMIN-BILL-SEC-001, P1-SAAS-QA-SEC-001 | PW/API | **REUSE_CORE** |
-| `DATA_MATCH` | 7 | P1-SAAS-MYP-DATA-001, P1-ADMIN-BILL-DATA-001 | PW/HYB | **REUSE_OPTIONAL** |
-| `SEARCH_RESULT` | 4 | P0-SRCH-002, P0-API-PUB-API-002 | PW | **REUSE_OPTIONAL** |
-| `NAVIGATE` | 3 | P0-WWW-005 | PW | **REUSE_OPTIONAL** |
-| `TENANT_ISOLATION` | 2 | P1-API-PAY-SEC-001 | API | **REUSE_OPTIONAL** |
-| `API_ERROR` | 2 | P0-API-AUTH-SEC-001 | API | **REUSE_OPTIONAL** |
-| `FILTER_RESULT` | 2 | P1-API-QA-API-002 | API | **REUSE_OPTIONAL** |
+| `DETAIL_LOAD` | 20 | P1-SAAS-MYP-FNC-002 | PW | **REUSE_CORE** |
+| `FORM_SUBMIT` | 29 | P1-WWW-AUTH-FNC-001, P0-API-QA-API-001 | PW/HYB | **REUSE_CORE** |
+| `SAVE_UPDATE` | 14 | P1-SAAS-SET-FNC-001 | PW/HYB | **REUSE_CORE** |
+| `ACCESS_DENY` | 3 | P1-ADMIN-BILL-SEC-001, P1-SAAS-QA-SEC-001 | PW/API | **REUSE_CORE** |
+| `DATA_MATCH` | 5 | P1-SAAS-MYP-DATA-001, P1-ADMIN-BILL-DATA-001 | PW/HYB | **REUSE_OPTIONAL** |
+| `SEARCH_RESULT` | 2 | P0-SRCH-002, P0-API-PUB-API-002 | PW | **REUSE_OPTIONAL** |
+| `NAVIGATE` | 1 | P0-WWW-005 | PW | **REUSE_OPTIONAL** |
+| `TENANT_ISOLATION` | 1 | P1-API-PAY-SEC-001 | API | **REUSE_OPTIONAL** |
+| `API_ERROR` | 1 | P0-API-AUTH-SEC-001 | API | **REUSE_OPTIONAL** |
+| `FILTER_RESULT` | 0 | — | API | **REUSE_OPTIONAL** |
 | `DATA_PERSISTENCE` | 0 | — | — | LOCAL |
 | `PERF_PAGE_LOAD` | 0 | — | — | LOCAL |
 | `PERF_API_RESPONSE` | 0 | — | — | LOCAL |
@@ -612,45 +615,44 @@ NOTE: API QA는 UI와 독립적인 API 계약/보안 검증. UI QA와 중복되�
 ## 최종 통계
 
 ```
-TOTAL QA:     236
+TOTAL QA:     219
 
-P0:            27
-P1:           156
-P2:            53
+P0:            22
+P1:           139
+P2:            58
 
-WWW:           38
-SAAS:          65
-ADMIN:        105
-API:           28
+WWW:           41
+SAAS:          64
+ADMIN:         88
+API:           26
 
 AVAILABILITY:  89
-FUNCTIONAL:   100
-E2E:            8
-SECURITY:      14
-API:           27
-DATA:           8
+FUNCTIONAL:    86
+E2E:            3
+SECURITY:      10
+API:           24
+DATA:           4
 INTEGRATION:    2
 VISUAL:         1
 PERFORMANCE:    0
 ACCESSIBILITY:  0
 
-AUTOMATABLE YES:     194
-AUTOMATABLE PARTIAL:  13
-AUTOMATABLE NO:        5 (MANUAL_ONLY 포함)
-AUTOMATABLE BLOCKED:   0
+AUTOMATABLE YES:     213
+AUTOMATABLE PARTIAL:   5
+AUTOMATABLE NO:        1 (Inicis 결제 MANUAL_ONLY)
 
-PROD_SAFE YES:         54
-PROD_SAFE CONDITIONAL: 177
-PROD_SAFE NO:           5
+PROD_SAFE YES:         44
+PROD_SAFE CONDITIONAL: 173
+PROD_SAFE NO:           2
 
 EXISTING:      10  (P0-WWW-001/003/004/005, P0-DIAG-001, P0-SRCH-001/002, P0-MYP-001/005, P0-SAAS-001)
-NEW:          222
-MANUAL_ONLY:    4  (Inicis 결제/환불/소셜OAuth 2종)
-BLOCKED:        0
+NEW:          206
+MANUAL_ONLY:    2  (Inicis 결제 / 수동 환불)
+BLOCKED:        1  (P1-ADMIN-OPS-FNC-006: CM-002 스케줄 결함)
 
 ADMIN UNVERIFIED 처리:
-  VERIFIED:   24
-  EXCLUDED:    2  (qa-dashboard, qa-settings — 페이지 파일 미존재)
+  VERIFIED:   26  (소스 직접 확인)
+  EXCLUDED:    0
 
 UNVERIFIED:    0  (QA 미생성 = source 근거 없음, 추측 금지 원칙 준수)
 ```
