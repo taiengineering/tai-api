@@ -75,7 +75,14 @@ CREATE TABLE IF NOT EXISTS public.customer_msds_versions (
 
     -- Current must not have superseded_at
     CONSTRAINT chk_cmv_current_no_superseded
-        CHECK (NOT (is_current = true AND superseded_at IS NOT NULL))
+        CHECK (NOT (is_current = true AND superseded_at IS NOT NULL)),
+
+    -- ACTIVE record must not have void fields populated
+    CONSTRAINT chk_cmv_active_void_null
+        CHECK (
+            record_status <> 'ACTIVE'
+            OR (voided_at IS NULL AND void_reason IS NULL)
+        )
 );
 
 -- ─── Unique Constraints ───────────────────────────────────────────────────────

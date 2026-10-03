@@ -219,7 +219,7 @@ def list_versions(
     status: Optional[str] = None,
     limit: int = 20,
     offset: int = 0,
-) -> List[Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], int]:
     _require_factory_scope(sb, current_user, factory_id)
     _assert_product_belongs_to_factory(sb, factory_id, product_id)
 
@@ -234,14 +234,13 @@ def list_versions(
 
     query = query.order("version_no", desc=True)
     res = query.execute()
-    rows = res.data or []
+    all_rows = res.data or []
+    total = len(all_rows)
 
-    if offset:
-        rows = rows[offset:]
-    if limit:
-        rows = rows[:limit]
+    rows = all_rows[offset:] if offset else all_rows
+    rows = rows[:limit] if limit else rows
 
-    return [_enrich_version(sb, r) for r in rows]
+    return ([_enrich_version(sb, r) for r in rows], total)
 
 
 def get_version(
@@ -421,6 +420,8 @@ async def create_version(
     storage_path = doc.get("storage_path") if doc else None
 
     if not doc_id:
+        if storage_path:
+            await _compensate(sb, None, storage_path, _cleanup_storage_fn, _cleanup_document_fn)
         raise MsdsProductError(500, "DOCUMENT_CREATE_FAILED", "문서 생성에 실패했습니다.")
 
     # 7. Service-level document contract pre-validation

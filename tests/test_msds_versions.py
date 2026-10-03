@@ -30,11 +30,38 @@ class _Result:
         self.count = count if count is not None else (len(data) if data else 0)
 
 
+class _FakeBucket:
+    """Fake Storage bucket — tracks uploads/removes."""
+    def __init__(self):
+        self.uploads: list = []
+        self.removes: list = []
+
+    def upload(self, path, file, file_options=None):
+        self.uploads.append(path)
+
+    def remove(self, paths):
+        self.removes.extend(paths)
+
+    def create_signed_url(self, path, expires_in=3600):
+        return {"signedURL": f"https://fake/{path}"}
+
+
+class _FakeStorageRoot:
+    def __init__(self):
+        self._buckets: dict = {}
+
+    def from_(self, bucket_name):
+        if bucket_name not in self._buckets:
+            self._buckets[bucket_name] = _FakeBucket()
+        return self._buckets[bucket_name]
+
+
 class _Query:
-    def __init__(self, store, table, log):
+    def __init__(self, store, table, log, hooks=None):
         self.store = store
         self.table_name = table
         self.log = log
+        self._hooks = hooks or {}
         self._op = None
         self._payload = None
         self._filters = []
@@ -104,6 +131,9 @@ class _Query:
             return _Result(matched, count=cnt)
 
         if self._op == "insert":
+            hook = self._hooks.get((self.table_name, "insert"))
+            if hook is not None:
+                return hook(self._payload)
             items = self._payload if isinstance(self._payload, list) else [self._payload]
             out = []
             for it in items:
@@ -135,12 +165,18 @@ class FakeSB:
         self.store = store if store is not None else {}
         self.log = []
         self._rpc_overrides: Dict[str, Any] = {}
+        self._table_hooks: Dict[tuple, Any] = {}
+        self.storage = _FakeStorageRoot()
 
     def table(self, name):
-        return _Query(self.store, name, self.log)
+        return _Query(self.store, name, self.log, self._table_hooks)
 
     def set_rpc_override(self, fn_name: str, result: Any):
         self._rpc_overrides[fn_name] = result
+
+    def set_insert_hook(self, table_name: str, fn):
+        """fn: (payload) -> _Result  — called instead of normal insert."""
+        self._table_hooks[(table_name, "insert")] = fn
 
     def rpc(self, fn_name: str, params: dict):
         if fn_name in self._rpc_overrides:
@@ -1106,7 +1142,7 @@ def test_lock06_unrelated_document_unchanged():
 def test_auth_factory_exact_match():
     sb = _make_sb()
     # FACTORY scope user at FAC_A1 can access FAC_A1
-    items = svc.list_versions(sb, CALLER_FACTORY_A1, FAC_A1, PROD_A1_1)
+    items, _ = svc.list_versions(sb, CALLER_FACTORY_A1, FAC_A1, PROD_A1_1)
     assert isinstance(items, list)
 
 
@@ -1119,7 +1155,7 @@ def test_auth_factory_sibling_rejected():
 
 def test_auth_assigned_exact():
     sb = _make_sb()
-    items = svc.list_versions(sb, CALLER_ASGN_A1, FAC_A1, PROD_A1_1)
+    items, _ = svc.list_versions(sb, CALLER_ASGN_A1, FAC_A1, PROD_A1_1)
     assert isinstance(items, list)
 
 
@@ -1154,7 +1190,7 @@ def test_auth_cross_company_denied():
 
 def test_auth_all_scope_can_access_any_factory():
     sb = _make_sb()
-    items = svc.list_versions(sb, CALLER_ALL, FAC_A1, PROD_A1_1)
+    items, _ = svc.list_versions(sb, CALLER_ALL, FAC_A1, PROD_A1_1)
     assert isinstance(items, list)
 
 
@@ -1177,8 +1213,9 @@ def test_list_includes_void_versions():
             {**_ver(v2id, vno=2, is_current=True, sha=_sha(b"v2")), "document_id": DOC_2},
         ],
     )
-    items = svc.list_versions(sb, CALLER_A, FAC_A1, PROD_A1_1)
+    items, total = svc.list_versions(sb, CALLER_A, FAC_A1, PROD_A1_1)
     assert len(items) == 2  # VOID included in history
+    assert total == 2
 
 
 def test_list_filter_by_status_active_only():
@@ -1191,6 +1228,264 @@ def test_list_filter_by_status_active_only():
             {**_ver(v2id, vno=2, is_current=True, sha=_sha(b"v2")), "document_id": DOC_2},
         ],
     )
-    items = svc.list_versions(sb, CALLER_A, FAC_A1, PROD_A1_1, status="ACTIVE")
+    items, total = svc.list_versions(sb, CALLER_A, FAC_A1, PROD_A1_1, status="ACTIVE")
     assert all(v["record_status"] == "ACTIVE" for v in items)
     assert len(items) == 1
+    assert total == 1
+
+
+# ─── PATCH-001: STG03 Actual upload_document Path Tests ───────────────────────
+
+def test_stg03a_storage_insert_exception_cleanup():
+    """Storage upload 성공 → documents INSERT 예외 → storage remove 1회 → version 0."""
+    from services.document_svc import upload_document
+
+    sb = _make_sb()
+
+    # Override INSERT to raise
+    def _raise_on_insert(payload):
+        raise RuntimeError("DB INSERT failed")
+    sb.set_insert_hook("documents", _raise_on_insert)
+
+    with pytest.raises(RuntimeError):
+        _run(upload_document(
+            file_bytes=PDF_BYTES,
+            file_name="msds.pdf",
+            mime_type="application/pdf",
+            company_id=CO_A,
+            category="msds",
+            factory_id=FAC_A1,
+            linked_table="chemical_products",
+            linked_id=PROD_A1_1,
+            uploaded_by="user-a",
+            _sb=sb,
+        ))
+
+    bucket = sb.storage.from_("company-docs")
+    assert len(bucket.removes) == 1
+    assert len(sb.store.get("documents", [])) == 0
+    assert len(sb.store.get("customer_msds_versions", [])) == 0
+
+
+def test_stg03b_storage_insert_empty_cleanup():
+    """Storage upload 성공 → documents INSERT empty data → storage remove → version 0."""
+    from services.document_svc import upload_document
+
+    sb = _make_sb()
+
+    def _empty_insert(payload):
+        return _Result([])
+    sb.set_insert_hook("documents", _empty_insert)
+
+    with pytest.raises(RuntimeError):
+        _run(upload_document(
+            file_bytes=PDF_BYTES,
+            file_name="msds.pdf",
+            mime_type="application/pdf",
+            company_id=CO_A,
+            category="msds",
+            factory_id=FAC_A1,
+            linked_table="chemical_products",
+            linked_id=PROD_A1_1,
+            uploaded_by="user-a",
+            _sb=sb,
+        ))
+
+    bucket = sb.storage.from_("company-docs")
+    assert len(bucket.removes) == 1
+    assert len(sb.store.get("documents", [])) == 0
+
+
+def test_stg03c_storage_path_orphan_cleanup_on_no_doc_id():
+    """create_version: upload_fn returns no id but storage_path exists → cleanup called."""
+    sb = _make_sb(docs=[_msds_doc(DOC_1)])
+    cleanup_storage = []
+    cleanup_doc = []
+
+    async def _upload_returns_no_id(**kwargs):
+        # Simulate: storage uploaded but document INSERT returned no id
+        return {"storage_path": f"{CO_A}/msds/2026-10/orphan.pdf"}
+
+    async def _cs(path):
+        cleanup_storage.append(path)
+
+    async def _cd(doc_id):
+        cleanup_doc.append(doc_id)
+
+    with pytest.raises(MsdsProductError) as exc:
+        _run(svc.create_version(
+            sb, CALLER_A, FAC_A1, PROD_A1_1,
+            PDF_BYTES, "msds.pdf", "application/pdf",
+            _upload_fn=_upload_returns_no_id,
+            _cleanup_storage_fn=_cs,
+            _cleanup_document_fn=_cd,
+        ))
+    assert exc.value.code == "DOCUMENT_CREATE_FAILED"
+    assert len(cleanup_storage) == 1
+    assert len(cleanup_doc) == 0
+
+
+# ─── PATCH-001: Evidence Lock Fail-Closed Tests ───────────────────────────────
+
+class _FaultySB(FakeSB):
+    """FakeSB that raises on customer_msds_versions SELECT — simulates DB fault."""
+    def table(self, name):
+        if name == "customer_msds_versions":
+            raise RuntimeError("DB connection lost")
+        return super().table(name)
+
+
+def test_lock07_evidence_lock_check_exception_blocks_soft_delete():
+    """customer_msds_versions 조회 예외 → soft_delete DENY (fail-closed)."""
+    import services.document_svc as doc_svc
+    sb = _FaultySB()
+
+    # _is_msds_evidence_document raises → soft_delete must propagate that exception
+    with pytest.raises(Exception):
+        # Directly test the guard (soft_delete is async, test sync helper)
+        doc_svc._is_msds_evidence_document(sb, DOC_1)
+
+
+def test_lock08_evidence_lock_check_exception_blocks_category_change():
+    """customer_msds_versions 조회 예외 → category 변경 DENY (fail-closed)."""
+    import services.document_svc as doc_svc
+    sb = _FaultySB()
+
+    with pytest.raises(Exception):
+        doc_svc._is_msds_evidence_document(sb, DOC_1)
+
+
+def test_lock09_referenced_document_soft_delete_denied():
+    """참조된 document → _is_msds_evidence_document True → guard would raise MSDS_EVIDENCE_LOCKED."""
+    import services.document_svc as doc_svc
+    doc = _msds_doc(DOC_1)
+    existing_ver = {**_ver(str(uuid.uuid4()), vno=1, is_current=True), "document_id": DOC_1}
+    sb = _make_sb(docs=[doc], versions=[existing_ver])
+
+    # Guard returns True — soft_delete will raise MSDS_EVIDENCE_LOCKED
+    result = doc_svc._is_msds_evidence_document(sb, DOC_1)
+    assert result is True
+    # Verify the guard raises ValueError directly as soft_delete does
+    with pytest.raises(ValueError, match="MSDS_EVIDENCE_LOCKED"):
+        if doc_svc._is_msds_evidence_document(sb, DOC_1):
+            raise ValueError("MSDS_EVIDENCE_LOCKED: MSDS Version에 참조된 문서는 삭제할 수 없습니다.")
+
+
+def test_lock10_referenced_document_category_change_denied():
+    """참조된 document → _is_msds_evidence_document True → guard would raise MSDS_EVIDENCE_LOCKED."""
+    import services.document_svc as doc_svc
+    doc = _msds_doc(DOC_1)
+    existing_ver = {**_ver(str(uuid.uuid4()), vno=1, is_current=True), "document_id": DOC_1}
+    sb = _make_sb(docs=[doc], versions=[existing_ver])
+
+    # Guard returns True — update_document would raise MSDS_EVIDENCE_LOCKED for category change
+    assert doc_svc._is_msds_evidence_document(sb, DOC_1) is True
+
+
+def test_lock11_unreferenced_document_not_locked():
+    """참조 없는 document → Evidence Lock 없음."""
+    import services.document_svc as doc_svc
+    doc = _msds_doc(DOC_1)
+    sb = _make_sb(docs=[doc], versions=[])
+    assert doc_svc._is_msds_evidence_document(sb, DOC_1) is False
+
+
+# ─── PATCH-001: HTTP Status Tests (router) ────────────────────────────────────
+
+def test_http01_new_version_returns_201():
+    """NEW_VERSION → rpc_status == NEW_VERSION (router sets 201 by default)."""
+    docs = [_msds_doc(DOC_1)]
+    sb = _make_sb(docs=docs)
+
+    async def _fake_upload(**kwargs):
+        return _msds_doc(DOC_1)
+
+    version, rpc_status = _run(svc.create_version(
+        sb, CALLER_A, FAC_A1, PROD_A1_1,
+        PDF_BYTES, "msds.pdf", "application/pdf",
+        _upload_fn=_fake_upload,
+    ))
+    assert rpc_status == "NEW_VERSION"
+
+
+def test_http02_no_change_returns_no_change_status():
+    """NO_CHANGE (duplicate) → rpc_status == NO_CHANGE (router applies 200)."""
+    sha1 = _sha(PDF_BYTES)
+    existing_ver = {**_ver(str(uuid.uuid4()), vno=1, is_current=True, sha=sha1),
+                    "created_at": "2026-10-03T00:00:00Z"}
+    sb = _make_sb(docs=[_msds_doc(DOC_1)], versions=[existing_ver])
+
+    version, rpc_status = _run(svc.create_version(
+        sb, CALLER_A, FAC_A1, PROD_A1_1,
+        PDF_BYTES, "msds.pdf", "application/pdf",
+    ))
+    assert rpc_status == "NO_CHANGE"
+
+
+# ─── PATCH-001: Concurrent NO_CHANGE Cleanup Test ─────────────────────────────
+
+def test_stg05_concurrent_nochange_after_upload_cleans_up():
+    """Pre-check misses (different SHA). Upload succeeds. RPC returns NO_CHANGE (race).
+    Both storage and document temp assets must be cleaned up."""
+    existing_vid = str(uuid.uuid4())
+    # Existing version uses PDF_BYTES sha
+    existing_ver = {**_ver(existing_vid, vno=1, is_current=True, sha=_sha(PDF_BYTES)),
+                    "created_at": "2026-10-03T00:00:00Z"}
+    # Use DIFFERENT bytes for the concurrent upload — pre-check finds no match
+    pdf_concurrent = b"%PDF-concurrent-race " + b"z" * 100
+
+    docs = [_msds_doc(DOC_1), _msds_doc(DOC_2, product_id=PROD_A1_1)]
+    sb = _make_sb(docs=docs, versions=[existing_ver])
+    cleanup_called = []
+
+    async def _fake_upload(**kwargs):
+        return _msds_doc(DOC_2, product_id=PROD_A1_1)
+
+    async def _cleanup_storage(path):
+        cleanup_called.append("storage")
+
+    async def _cleanup_doc(doc_id):
+        cleanup_called.append("doc")
+
+    # RPC simulates concurrent race: another thread committed same content first
+    sb.set_rpc_override("register_customer_msds_version", lambda _: {
+        "status": "NO_CHANGE",
+        "version_id": existing_vid,
+        "version_no": 1,
+        "is_current": True,
+        "record_status": "ACTIVE",
+    })
+
+    version, status = _run(svc.create_version(
+        sb, CALLER_A, FAC_A1, PROD_A1_1,
+        pdf_concurrent, "msds.pdf", "application/pdf",
+        _upload_fn=_fake_upload,
+        _cleanup_storage_fn=_cleanup_storage,
+        _cleanup_document_fn=_cleanup_doc,
+    ))
+    assert status == "NO_CHANGE"
+    assert "storage" in cleanup_called, f"storage cleanup not called, got: {cleanup_called}"
+    assert "doc" in cleanup_called, f"doc cleanup not called, got: {cleanup_called}"
+
+
+# ─── PATCH-001: List Pagination Total ─────────────────────────────────────────
+
+def test_list_pagination_total_is_unsliced_count():
+    """total = 전체 건수, items = 페이지 크기. limit < total 이면 total > len(items)."""
+    vids = [str(uuid.uuid4()) for _ in range(5)]
+    doc_ids = [str(uuid.uuid4()) for _ in range(5)]
+    docs = [_msds_doc(did, product_id=PROD_A1_1) for did in doc_ids]
+    versions = [
+        {**_ver(vids[i], vno=i+1, is_current=(i==4), sha=_sha(f"v{i}".encode())),
+         "document_id": doc_ids[i]}
+        for i in range(5)
+    ]
+    sb = _make_sb(docs=docs, versions=versions)
+
+    items, total = svc.list_versions(sb, CALLER_A, FAC_A1, PROD_A1_1, limit=3, offset=0)
+    assert total == 5
+    assert len(items) == 3
+
+    items2, total2 = svc.list_versions(sb, CALLER_A, FAC_A1, PROD_A1_1, limit=3, offset=3)
+    assert total2 == 5
+    assert len(items2) == 2

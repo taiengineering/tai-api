@@ -5,7 +5,7 @@ DELETE 없음. VOID로 처리.
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
@@ -51,11 +51,11 @@ def list_versions(
     _require_user(current_user)
     sb = get_supabase()
     try:
-        items = svc.list_versions(sb, current_user, factory_id, product_id,
-                                   status=status, limit=limit, offset=offset)
+        items, total = svc.list_versions(sb, current_user, factory_id, product_id,
+                                          status=status, limit=limit, offset=offset)
     except MsdsProductError as e:
         raise _err(e) from e
-    return {"status": "success", "data": {"items": items, "total": len(items)}}
+    return {"status": "success", "data": {"items": items, "total": total}}
 
 
 @router.get("/factories/{factory_id}/products/{product_id}/versions/current")
@@ -97,6 +97,7 @@ async def create_version(
     source_revision_date: Optional[str] = Form(None),
     source_revision_no: Optional[str] = Form(None),
     supplier_name: Optional[str] = Form(None),
+    response: Response = None,
     current_user: dict = Depends(get_current_user),
 ):
     _require_user(current_user)
@@ -118,7 +119,8 @@ async def create_version(
     except MsdsProductError as e:
         raise _err(e) from e
 
-    status_code = 200 if rpc_status == "NO_CHANGE" else 201
+    if rpc_status == "NO_CHANGE" and response is not None:
+        response.status_code = 200
     return {"status": "success", "data": version, "result": rpc_status}
 
 

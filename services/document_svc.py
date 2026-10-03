@@ -62,8 +62,9 @@ async def upload_document(
     retention_years: Optional[int] = None,
     generated_by: Optional[str] = None,
     generation_params: Optional[Dict[str, Any]] = None,
+    _sb=None,
 ) -> Dict[str, Any]:
-    sb = get_supabase()
+    sb = _sb or get_supabase()
     ext = _get_ext(file_name or "")
     storage_path = _build_path(company_id, category, ext)
 
@@ -102,8 +103,23 @@ async def upload_document(
     }
     record = {k: v for k, v in record.items() if v is not None}
 
-    result = sb.table("documents").insert(record).execute()
-    return result.data[0] if result.data else record
+    try:
+        result = sb.table("documents").insert(record).execute()
+    except Exception:
+        try:
+            sb.storage.from_(BUCKET).remove([storage_path])
+        except Exception:
+            pass
+        raise
+
+    if not result.data:
+        try:
+            sb.storage.from_(BUCKET).remove([storage_path])
+        except Exception:
+            pass
+        raise RuntimeError(f"documents INSERT returned no data for path={storage_path}")
+
+    return result.data[0]
 
 
 async def register_generated(
@@ -231,18 +247,15 @@ async def soft_delete(doc_id: str) -> bool:
 
 
 def _is_msds_evidence_document(sb, doc_id: str) -> bool:
-    """customer_msds_versions에 참조된 문서이면 True (Evidence Lock)."""
-    try:
-        res = (
-            sb.table("customer_msds_versions")
-            .select("id")
-            .eq("document_id", doc_id)
-            .limit(1)
-            .execute()
-        )
-        return bool(res.data)
-    except Exception:
-        return False
+    """customer_msds_versions에 참조된 문서이면 True. 조회 실패 시 fail-closed (Evidence Lock)."""
+    res = (
+        sb.table("customer_msds_versions")
+        .select("id")
+        .eq("document_id", doc_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(res.data)
 
 
 async def get_stats(company_id: str) -> List[Dict[str, Any]]:
