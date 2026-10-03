@@ -1,7 +1,7 @@
 ---
 title: QA Slack Alert V1
-version: 1.0.0
-work_order: WO-QA-CONTROL-PHASE2C-001
+version: 1.1.0
+work_order: WO-QA-CONTROL-PHASE2C-001 / WO-QA-LIVE-HOURLY-OPS-001
 status: IMPLEMENTED
 ---
 
@@ -20,7 +20,7 @@ routers/internal_qa.py          ← orchestrator (async)
     │         build_qa_slack_payload(notif, *, is_run=False)
     │         returns: { event_type, severity, title, detail, blocks }
     │
-    └─► services/slack_dispatcher.py ← existing Slack client (unchanged routing logic)
+    └─► services/slack_dispatcher.py ← Slack client; QA events routed to #auto-qa (CHANNEL_QA)
               send_slack(**payload)
 ```
 
@@ -59,19 +59,23 @@ No notification is emitted for:
 - FLAKY → FLAKY
 - Any → SKIPPED
 
-## Severity / Channel Mapping
+## Channel Routing (updated: WO-QA-LIVE-HOURLY-OPS-001)
 
-QA events use severity-based routing (NOT `EVENT_TYPE_CHANNEL`):
+All five QA event types route to `#auto-qa` via `EVENT_TYPE_CHANNEL` in `slack_dispatcher.py`,
+**regardless of severity**. This takes priority over severity-based routing.
 
-| Severity | Channel        |
-|----------|----------------|
-| HIGH     | `#tai-alert`   |
-| WARNING  | `#tai-ops`     |
-| INFO     | `#tai-ops`     |
+| Event                 | Channel    | Env var       | Channel ID (ops) |
+|-----------------------|-----------|---------------|------------------|
+| `QA_FAIL_DETECTED`    | `#auto-qa` | `SLACK_CH_QA` | `C0C6EV30CBG`    |
+| `QA_BLOCKED_DETECTED` | `#auto-qa` | `SLACK_CH_QA` | `C0C6EV30CBG`    |
+| `QA_FLAKY_DETECTED`   | `#auto-qa` | `SLACK_CH_QA` | `C0C6EV30CBG`    |
+| `QA_RECOVERED`        | `#auto-qa` | `SLACK_CH_QA` | `C0C6EV30CBG`    |
+| `QA_RUN_ERROR`        | `#auto-qa` | `SLACK_CH_QA` | `C0C6EV30CBG`    |
 
-`QA_FAIL_DETECTED`, `QA_BLOCKED_DETECTED`, `QA_RUN_ERROR` → HIGH → `#tai-alert`
-`QA_FLAKY_DETECTED` → WARNING → `#tai-ops`
-`QA_RECOVERED` → INFO → `#tai-ops`
+Scheduler dispatch failure also sends `QA_RUN_ERROR` → `#auto-qa` directly from
+`qa_scheduler_svc.scheduler_tick()` (no callback path). Slack failure is absorbed; scheduler result is unaffected.
+
+The severity field is preserved in the Slack message text for readability but does not affect routing.
 
 ## Replay Suppression
 

@@ -1,4 +1,4 @@
-"""TAI Slack Dispatcher v1.1.0
+"""TAI Slack Dispatcher v1.2.0
 모든 이벤트를 Slack 채널로 분리 발송. WO-SLACK-EVENT-HUB-001 로 event_type 라우팅과
 Block Kit 인자를 추가. 기존 severity 기반 라우팅은 회귀 없이 유지.
 
@@ -9,6 +9,7 @@ Block Kit 인자를 추가. 기존 severity 기반 라우팅은 회귀 없이 �
 - INQUIRY        : 문의/피드백 인박스 (INQUIRY_CREATED · TAI_WISH_CREATED)
 - APPROVAL       : 결재/견적요청 (APPROVAL_CREATED · QUOTE_MANUAL_REQUESTED)
 - FREE_DIAGNOSIS : 익명 무료진단 완료 (FREE_DIAGNOSIS_COMPLETED)
+- #auto-qa       : QA 상태 전이/실행 오류 (QA_FAIL_DETECTED 등 5종)
 
 환경변수:
 - SLACK_BOT_TOKEN1        : Slack Bot OAuth Token (우선)
@@ -19,6 +20,7 @@ Block Kit 인자를 추가. 기존 severity 기반 라우팅은 회귀 없이 �
 - SLACK_CH_APPROVAL       : APPROVAL 채널 ID
 - SLACK_CH_INQUIRY        : INQUIRY 채널 ID (fallback: SLACK_CHANNEL_ID_INBOX)
 - SLACK_CH_FREE_DIAGNOSIS : FREE_DIAGNOSIS 채널 ID
+- SLACK_CH_QA             : #auto-qa 채널 ID
 - SLACK_WEBHOOK_ENABLED   : true/false (default: true)
 """
 import os
@@ -36,6 +38,7 @@ CHANNEL_ENGINE = "engine"
 CHANNEL_INQUIRY = "inquiry"
 CHANNEL_APPROVAL = "approval"
 CHANNEL_FREE_DIAGNOSIS = "free_diagnosis"
+CHANNEL_QA = "qa"
 
 # severity → 채널 매핑
 SEVERITY_CHANNEL = {
@@ -66,6 +69,11 @@ EVENT_TYPE_CHANNEL = {
     "APPROVAL_CREATED":        CHANNEL_APPROVAL,
     "QUOTE_MANUAL_REQUESTED":  CHANNEL_APPROVAL,
     "FREE_DIAGNOSIS_COMPLETED": CHANNEL_FREE_DIAGNOSIS,
+    "QA_FAIL_DETECTED":        CHANNEL_QA,
+    "QA_BLOCKED_DETECTED":     CHANNEL_QA,
+    "QA_FLAKY_DETECTED":       CHANNEL_QA,
+    "QA_RECOVERED":            CHANNEL_QA,
+    "QA_RUN_ERROR":            CHANNEL_QA,
 }
 
 # WO-SLACK-EVENT-HUB-001 PR-③: event_type → admin 링크 (전부 LIST · 딥링크 미지원 확인됨).
@@ -116,6 +124,7 @@ def _get_channel_id(channel_type: str) -> Optional[str]:
         CHANNEL_APPROVAL:       os.environ.get("SLACK_CH_APPROVAL", "").strip(),
         CHANNEL_INQUIRY:        os.environ.get("SLACK_CH_INQUIRY", "").strip(),
         CHANNEL_FREE_DIAGNOSIS: os.environ.get("SLACK_CH_FREE_DIAGNOSIS", "").strip(),
+        CHANNEL_QA:             os.environ.get("SLACK_CH_QA", "").strip(),
     }
     ch = mapping.get(channel_type, "")
     if ch:

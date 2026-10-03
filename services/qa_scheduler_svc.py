@@ -24,6 +24,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from services.github_dispatch_svc import dispatch_qa_run
+from services.qa_notify_svc import QA_RUN_ERROR, build_qa_slack_payload
+from services.slack_dispatcher import send_slack
 from services.time import now_kst
 
 log = logging.getLogger("qa_scheduler")
@@ -292,6 +294,17 @@ async def scheduler_tick(supabase) -> Dict[str, Any]:
     except Exception as exc:
         log.error("[qa_scheduler] dispatch failed run=%s: %s", run_id, exc)
         _set_run_error(supabase, run_id, str(exc))
+        try:
+            notif = {
+                "event_type":    QA_RUN_ERROR,
+                "trigger_type":  "SCHEDULE",
+                "run_id":        run_id,
+                "error_summary": str(exc)[:500],
+            }
+            slack_payload = build_qa_slack_payload(notif, is_run=True)
+            await send_slack(**slack_payload)
+        except Exception as slack_exc:
+            log.warning("[qa_scheduler] slack notify failed: %s", slack_exc)
         return {
             "skipped":     len(schedules) - len(eligible),
             "created":     1,
