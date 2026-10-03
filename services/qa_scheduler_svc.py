@@ -90,7 +90,7 @@ def bootstrap_next_run_at(sched: Dict[str, Any], now: datetime) -> datetime:
             candidate = now_local.replace(hour=h, minute=m, second=0, microsecond=0)
             if candidate <= now_local:
                 candidate += timedelta(days=1)
-            return candidate.astimezone(timezone.utc)
+            return candidate  # tz-aware (KST); PostgreSQL handles offset
 
         # WEEKLY — day_of_week: 0=Sun,1=Mon,…,6=Sat → Python weekday 0=Mon,…,6=Sun
         our_dow = int(sched.get("day_of_week") or 0)
@@ -105,7 +105,7 @@ def bootstrap_next_run_at(sched: Dict[str, Any], now: datetime) -> datetime:
             candidate = (now_local + timedelta(days=days_ahead)).replace(
                 hour=h, minute=m, second=0, microsecond=0
             )
-        return candidate.astimezone(timezone.utc)
+        return candidate  # tz-aware (KST); PostgreSQL handles offset
 
     raise ValueError(f"bootstrap 미지원 frequency_type: {ft}")
 
