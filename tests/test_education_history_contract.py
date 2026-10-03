@@ -205,7 +205,9 @@ def test_t2_list_no_nested_join():
     assert "education_group" in helper_src
     assert "required_hours" in helper_src
     users_src = inspect.getsource(edu_mod._fetch_users_for_rows)
-    assert "job_type" not in users_src, "job_type must not be queried (not in production DB)"
+    assert "job_type_code" not in users_src, "job_type_code (worker_registry) must not be queried"
+    assert "position" in users_src and "department" in users_src, \
+        "job_type must be computed from position/department (canonical source: auth.py)"
 
 
 # ── T3: status filter converts API → DB ───────────────────────────────────────
@@ -482,7 +484,8 @@ def test_t8_list_returns_users_data():
     assert u is not None, "users must be populated via separate fetch"
     assert u.get("name") == "홍길동"
     assert u.get("department") == "안전팀"
-    assert "job_type" not in u, "job_type must not be in users response (not in production DB)"
+    assert "job_type" in u, "job_type must be present as computed compatibility field"
+    assert u.get("job_type") == "담당자", "job_type = position or department or '' (canonical: auth.py)"
 
 
 # ── T9: detail endpoint uses separate fetch for master + users ────────────────

@@ -567,7 +567,10 @@ def _fetch_users_for_rows(supabase: Client, rows: list) -> None:
     ures = supabase.table("users") \
         .select("id,name,department,position,email") \
         .in_("id", uids).execute()
-    user_map = {u["id"]: u for u in (ures.data or [])}
+    user_map = {}
+    for u in (ures.data or []):
+        u["job_type"] = u.get("position") or u.get("department") or ""
+        user_map[u["id"]] = u
     for r in rows:
         r["users"] = user_map.get(r.get("user_id"))
 
@@ -822,6 +825,8 @@ def get_education_history_detail(history_id: str, supabase: Client = Depends(get
         ures = supabase.table("users") \
             .select("id,name,department,position,email") \
             .eq("id", res.data["user_id"]).maybe_single().execute()
+        if ures.data:
+            ures.data["job_type"] = ures.data.get("position") or ures.data.get("department") or ""
         res.data["users"] = ures.data
     else:
         res.data["users"] = None
