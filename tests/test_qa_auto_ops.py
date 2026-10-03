@@ -1,4 +1,4 @@
-"""QA Auto Ops tests — WO-QA-CONTROL-PHASE2E-AUTO-OPS-001 + PATCH1.
+"""QA Auto Ops tests — WO-QA-CONTROL-PHASE2E-AUTO-OPS-001 + PATCH1 + WO-QA-LIVE-HOURLY-OPS-001.
 
 AO-01  enabled schedule → tick 조회 대상
 AO-02  next_run_at 도달 → run 생성
@@ -17,6 +17,8 @@ AO-F05  next_run_at cadence 기반 advance (not now)
 AO-F06  direct handler 실제 result 반환 (coroutine 아님)
 AO-F07  migration contains cron_job_master + cron_schedule_config
 AO-F08  initial is_active=false / is_enabled=false
+AO-F12  dispatch failure → QA_RUN_ERROR Slack 발송
+AO-F13  Slack 실패가 scheduler result에 영향 없음
 """
 from __future__ import annotations
 
@@ -85,7 +87,7 @@ async def _tick(schedules, busy_ids=frozenset(), dispatch_ok=True):
 
     sb = _make_sb(schedules)
 
-    async def _ok_dispatch(run_id, scenario_ids): pass
+    async def _ok_dispatch(run_id, scenario_ids, **kwargs): pass
     async def _fail_dispatch(run_id, scenario_ids): raise RuntimeError("dispatch error")
 
     with patch.object(mod, "_due_schedules", return_value=schedules), \
@@ -170,7 +172,7 @@ def test_AO05_next_run_at_updated_after_tick():
     sb2 = MagicMock()
     sb2.table.side_effect = _table
 
-    async def _ok_dispatch(run_id, scenario_ids): pass
+    async def _ok_dispatch(run_id, scenario_ids, **kwargs): pass
 
     async def _run():
         with patch.object(mod, "_due_schedules", return_value=[sched]), \
@@ -343,7 +345,7 @@ def test_AOF05_next_run_at_based_on_scheduled_time():
     sb = MagicMock()
     sb.table.side_effect = _table
 
-    async def _ok_dispatch(run_id, scenario_ids): pass
+    async def _ok_dispatch(run_id, scenario_ids, **kwargs): pass
 
     async def _run():
         with patch.object(mod, "_due_schedules", return_value=[sched]), \
@@ -451,7 +453,7 @@ def test_AOF09_dispatch_success_sets_running():
     sb = MagicMock()
     sb.table.side_effect = _table
 
-    async def _ok_dispatch(run_id, scenario_ids): pass
+    async def _ok_dispatch(run_id, scenario_ids, **kwargs): pass
 
     async def _run():
         with patch.object(mod, "_due_schedules", return_value=[sched]), \
@@ -531,3 +533,87 @@ def test_AOF11_running_to_completed_allowed():
         "QUEUED→RUNNING이 _VALID_TRANSITIONS에 없음"
     assert "COMPLETED" in transitions.get("RUNNING", frozenset()), \
         "RUNNING→COMPLETED가 _VALID_TRANSITIONS에 없음"
+
+
+# ── AO-F12: dispatch failure → QA_RUN_ERROR Slack 발송 ───────────────────────
+
+def test_AOF12_dispatch_failure_sends_slack():
+    """AO-F12: dispatch 실패 시 QA_RUN_ERROR Slack이 1회 호출됨."""
+    import services.qa_scheduler_svc as mod
+
+    sched = _sched("item-af12", "P0-API-001", next_run_offset=-1)
+    slack_calls: list = []
+
+    def _table(name):
+        m = MagicMock()
+        if name == "qa_runs":
+            m.insert.return_value.execute.return_value = MagicMock(data=[{"id": "run-af12"}])
+            m.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[{}])
+        elif name == "qa_run_targets":
+            m.insert.return_value.execute.return_value = MagicMock(data=[{}])
+        elif name == "qa_schedules":
+            m.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[{}])
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    async def _fail_dispatch(run_id, scenario_ids, **kwargs):
+        raise RuntimeError("github dispatch error")
+
+    async def _fake_send(**kwargs):
+        slack_calls.append(kwargs)
+        return True
+
+    async def _run():
+        with patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "dispatch_qa_run", _fail_dispatch), \
+             patch.object(mod, "send_slack", _fake_send):
+            return await mod.scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["dispatch"] == "ERROR"
+    assert len(slack_calls) == 1, f"Slack 1회 호출 기대, 실제={len(slack_calls)}"
+    assert slack_calls[0].get("event_type") == "QA_RUN_ERROR"
+
+
+# ── AO-F13: Slack 실패가 scheduler result에 영향 없음 ─────────────────────────
+
+def test_AOF13_slack_failure_does_not_propagate():
+    """AO-F13: dispatch 실패 후 Slack도 실패해도 scheduler가 ERROR result 정상 반환."""
+    import services.qa_scheduler_svc as mod
+
+    sched = _sched("item-af13", "P0-API-002", next_run_offset=-1)
+
+    def _table(name):
+        m = MagicMock()
+        if name == "qa_runs":
+            m.insert.return_value.execute.return_value = MagicMock(data=[{"id": "run-af13"}])
+            m.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[{}])
+        elif name == "qa_run_targets":
+            m.insert.return_value.execute.return_value = MagicMock(data=[{}])
+        elif name == "qa_schedules":
+            m.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[{}])
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    async def _fail_dispatch(run_id, scenario_ids, **kwargs):
+        raise RuntimeError("github error")
+
+    async def _fail_slack(**kwargs):
+        raise RuntimeError("slack network error")
+
+    async def _run():
+        with patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "dispatch_qa_run", _fail_dispatch), \
+             patch.object(mod, "send_slack", _fail_slack):
+            return await mod.scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["dispatch"] == "ERROR"
+    assert result["error"] == 1
+    assert result["created"] == 1

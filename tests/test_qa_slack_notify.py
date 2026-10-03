@@ -17,9 +17,9 @@ import pytest
 import services.qa_control_svc as svc
 import services.qa_notify_svc as notify
 from services.slack_dispatcher import (
-    CHANNEL_ALERT, CHANNEL_OPS,
+    CHANNEL_ALERT, CHANNEL_OPS, CHANNEL_QA,
     EVENT_TYPE_ADMIN_PATH, EVENT_TYPE_CHANNEL,
-    _resolve_channel,
+    _get_channel_id, _resolve_channel,
 )
 
 
@@ -453,40 +453,40 @@ def test_QR04_canceled_no_notify():
 # QS-01: QA_FAIL_DETECTED HIGH → alert channel
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_QS01_fail_detected_routes_alert():
-    assert _resolve_channel("QA_FAIL_DETECTED", "HIGH") == CHANNEL_ALERT
+def test_QS01_fail_detected_routes_qa():
+    assert _resolve_channel("QA_FAIL_DETECTED", "HIGH") == CHANNEL_QA
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QS-02: QA_BLOCKED_DETECTED HIGH → alert channel
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_QS02_blocked_detected_routes_alert():
-    assert _resolve_channel("QA_BLOCKED_DETECTED", "HIGH") == CHANNEL_ALERT
+def test_QS02_blocked_detected_routes_qa():
+    assert _resolve_channel("QA_BLOCKED_DETECTED", "HIGH") == CHANNEL_QA
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QS-03: QA_FLAKY_DETECTED WARNING → ops channel
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_QS03_flaky_detected_routes_ops():
-    assert _resolve_channel("QA_FLAKY_DETECTED", "WARNING") == CHANNEL_OPS
+def test_QS03_flaky_detected_routes_qa():
+    assert _resolve_channel("QA_FLAKY_DETECTED", "WARNING") == CHANNEL_QA
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QS-04: QA_RECOVERED INFO → ops channel
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_QS04_recovered_routes_ops():
-    assert _resolve_channel("QA_RECOVERED", "INFO") == CHANNEL_OPS
+def test_QS04_recovered_routes_qa():
+    assert _resolve_channel("QA_RECOVERED", "INFO") == CHANNEL_QA
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QS-05: QA_RUN_ERROR HIGH → alert channel
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_QS05_run_error_routes_alert():
-    assert _resolve_channel("QA_RUN_ERROR", "HIGH") == CHANNEL_ALERT
+def test_QS05_run_error_routes_qa():
+    assert _resolve_channel("QA_RUN_ERROR", "HIGH") == CHANNEL_QA
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -500,14 +500,15 @@ def test_QS06_admin_button_path():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# QS-07: 신규 SLACK_CH_QA env 없음 — QA는 severity 라우팅 재사용
+# QS-07: QA events → EVENT_TYPE_CHANNEL에 CHANNEL_QA로 등록됨
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_QS07_no_qa_channel_override():
+def test_QS07_qa_events_in_event_type_channel():
     qa_events = {"QA_FAIL_DETECTED", "QA_BLOCKED_DETECTED",
                  "QA_FLAKY_DETECTED", "QA_RECOVERED", "QA_RUN_ERROR"}
     for evt in qa_events:
-        assert evt not in EVENT_TYPE_CHANNEL, f"{evt} must not override channel"
+        assert evt in EVENT_TYPE_CHANNEL, f"{evt} must be in EVENT_TYPE_CHANNEL"
+        assert EVENT_TYPE_CHANNEL[evt] == CHANNEL_QA, f"{evt} must map to CHANNEL_QA"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -531,8 +532,7 @@ def test_QS08_qa_admin_button_in_payload(monkeypatch):
 
     monkeypatch.setattr("services.slack_dispatcher.httpx.AsyncClient", lambda **k: _FakeClient())
     monkeypatch.setenv("SLACK_BOT_TOKEN1", "xoxb-test")
-    monkeypatch.setenv("SLACK_CH_ALERT", "C_ALERT")
-    monkeypatch.setenv("SLACK_CH_OPS", "C_OPS")
+    monkeypatch.setenv("SLACK_CH_QA", "C_QA")
     monkeypatch.setenv("SLACK_WEBHOOK_ENABLED", "true")
 
     from services.slack_dispatcher import send_slack
@@ -812,7 +812,7 @@ def test_R2_inquiry_existing_actions_no_duplicate(monkeypatch):
 
 def test_R3_qa_fail_section_blocks_gets_admin_button(monkeypatch):
     """QA_FAIL_DETECTED + section-only blocks → payload contains admin actions button."""
-    captured = _make_slack_interceptor(monkeypatch, "SLACK_CH_ALERT", "C_ALERT")
+    captured = _make_slack_interceptor(monkeypatch, "SLACK_CH_QA", "C_QA")
     from services.slack_dispatcher import send_slack
     from services.qa_notify_svc import build_qa_slack_payload
     notif = {
@@ -832,7 +832,7 @@ def test_R3_qa_fail_section_blocks_gets_admin_button(monkeypatch):
 
 def test_R4_qa_flaky_section_blocks_gets_admin_button(monkeypatch):
     """QA_FLAKY_DETECTED + section-only blocks → payload contains admin actions button."""
-    captured = _make_slack_interceptor(monkeypatch, "SLACK_CH_OPS", "C_OPS")
+    captured = _make_slack_interceptor(monkeypatch, "SLACK_CH_QA", "C_QA")
     from services.slack_dispatcher import send_slack
     from services.qa_notify_svc import build_qa_slack_payload
     notif = {
@@ -848,3 +848,35 @@ def test_R4_qa_flaky_section_blocks_gets_admin_button(monkeypatch):
     action_blocks = [b for b in captured["payload"]["blocks"] if b.get("type") == "actions"]
     assert len(action_blocks) == 1
     assert action_blocks[0]["elements"][0]["url"].endswith("/qa/dashboard")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QS-10: SLACK_CH_QA env var → _get_channel_id("qa") 해석
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QS10_slack_ch_qa_env_resolution(monkeypatch):
+    monkeypatch.setenv("SLACK_CH_QA", "C0C6EV30CBG")
+    assert _get_channel_id(CHANNEL_QA) == "C0C6EV30CBG"
+
+
+def test_QS10b_slack_ch_qa_env_missing(monkeypatch):
+    monkeypatch.delenv("SLACK_CH_QA", raising=False)
+    assert _get_channel_id(CHANNEL_QA) is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QS-11: 5종 QA 이벤트 전부 CHANNEL_QA로 라우팅 (severity 무관)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QS11_all_qa_events_route_to_channel_qa():
+    qa_events = [
+        ("QA_FAIL_DETECTED",    "CRITICAL"),
+        ("QA_FAIL_DETECTED",    "HIGH"),
+        ("QA_BLOCKED_DETECTED", "HIGH"),
+        ("QA_FLAKY_DETECTED",   "WARNING"),
+        ("QA_RECOVERED",        "INFO"),
+        ("QA_RUN_ERROR",        "HIGH"),
+    ]
+    for evt, sev in qa_events:
+        result = _resolve_channel(evt, sev)
+        assert result == CHANNEL_QA, f"{evt}/{sev} → {result!r} (expected CHANNEL_QA)"
