@@ -16,6 +16,7 @@ ROUTERS = [
     {"module": "routers.diagnosis_factory_test"},
     {"module": "routers.obligation_adapter"},
     {"module": "routers.trigger_diagnosis"},
+    {"module": "routers.anonymous_diagnosis_admin"},  # admin.taieng.co.kr 익명진단 목록/상세/관리
     {"module": "routers.saas_setup"},
     # WO-CUTOVER-PIPELINE-001: 축2 LEG standalone 컷오버 — WO-ISOLATE-001 격리 해제.
     #   DEFINITION_consumer_pipeline_v1 이 규정한 Consumer Entry 를 운영 배선에 연결한다.
