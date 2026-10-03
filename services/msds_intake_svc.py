@@ -19,7 +19,9 @@ from services.msds_version_svc import validate_pdf, create_version
 from services import msds_fact_extractor as extractor
 from services import msds_reference_svc as ref_svc
 from services import msds_ocr_fact_parser as ocr_parser
-from services.msds_ocr_provider import OcrCredentialError, OcrProviderError, run_clova_ocr
+from services.msds_ocr_provider import (
+    OcrCredentialError, OcrProviderError, clova_available, run_clova_ocr_range,
+)
 from services.msds_vision_provider import VisionCredentialError, rasterize_pdf_page, run_vision_ocr
 
 # Fixed snapshot for OBJ-04A — WO-MSDS-04A-IMPLEMENTATION-001
@@ -199,20 +201,10 @@ def process_intake(sb, current_user: Dict, factory_id: str, intake_id: str) -> D
 
 def _do_process(sb, current_user, factory_id, intake_id, intake) -> Dict[str, Any]:
     """Inner process logic — any exception becomes FAILED via outer handler."""
-    # Load artifact
-    art_res = (
-        sb.table("msds_intake_artifacts")
-        .select("*")
-        .eq("intake_id", intake_id)
-        .eq("artifact_type", "PDF")
-        .limit(1)
-        .execute()
-    )
-    if not art_res.data:
-        _fail_intake(sb, intake_id, "NO_ARTIFACT", "PDF artifact 없음")
+    artifact = _get_primary_pdf_artifact(sb, intake_id)
+    if artifact is None:
+        _fail_intake(sb, intake_id, "NO_ARTIFACT", "Primary artifact 없음")
         raise MsdsProductError(500, "NO_ARTIFACT", "PDF artifact를 찾을 수 없습니다.")
-
-    artifact = art_res.data[0]
 
     # Download PDF bytes from storage
     try:
@@ -399,6 +391,29 @@ def _fail_intake(sb, intake_id: str, error_code: str, error_detail: str):
     }).eq("id", intake_id).execute()
 
 
+def _get_primary_pdf_artifact(sb, intake_id: str) -> Optional[Dict]:
+    """Return is_primary=True artifact, falling back to artifact_type='PDF' for legacy rows."""
+    res = (
+        sb.table("msds_intake_artifacts")
+        .select("*")
+        .eq("intake_id", intake_id)
+        .eq("is_primary", True)
+        .limit(1)
+        .execute()
+    )
+    if res.data:
+        return res.data[0]
+    res = (
+        sb.table("msds_intake_artifacts")
+        .select("*")
+        .eq("intake_id", intake_id)
+        .eq("artifact_type", "PDF")
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
 # ─── Get Intake ────────────────────────────────────────────────────────────────
 
 def get_intake(sb, current_user: Dict, factory_id: str, intake_id: str) -> Dict:
@@ -576,28 +591,9 @@ async def finalize_intake(
     if not selected_product_id:
         raise MsdsProductError(409, "NO_PRODUCT_SELECTED", "Confirm 단계에서 Product가 선택되지 않았습니다.")
 
-    # Get primary artifact — prefer is_primary=True (PHOTO_DERIVED or original PDF)
-    art_res = (
-        sb.table("msds_intake_artifacts")
-        .select("*")
-        .eq("intake_id", intake_id)
-        .eq("is_primary", True)
-        .limit(1)
-        .execute()
-    )
-    if not art_res.data:
-        # Fallback for intakes created before is_primary column existed
-        art_res = (
-            sb.table("msds_intake_artifacts")
-            .select("*")
-            .eq("intake_id", intake_id)
-            .eq("artifact_type", "PDF")
-            .limit(1)
-            .execute()
-        )
-    if not art_res.data:
+    artifact = _get_primary_pdf_artifact(sb, intake_id)
+    if artifact is None:
         raise MsdsProductError(500, "NO_ARTIFACT", "PDF artifact 없음")
-    artifact = art_res.data[0]
 
     # Get selected reference candidates
     selected_candidates_res = (
@@ -678,6 +674,33 @@ async def finalize_intake(
 
 # ─── Photo Intake ──────────────────────────────────────────────────────────────
 
+_PHOTO_MAX_COUNT = 20
+_PHOTO_MAX_SINGLE_BYTES = 10 * 1024 * 1024   # 10 MiB
+_PHOTO_MAX_TOTAL_BYTES = 100 * 1024 * 1024   # 100 MiB
+_PHOTO_LONG_EDGE_MAX = 2560
+
+
+def _normalize_photo(photo_bytes: bytes) -> bytes:
+    """Apply EXIF orientation correction and resize so long-edge ≤ 2560. Returns JPEG bytes."""
+    import io as _io
+    try:
+        from PIL import Image, ImageOps
+    except ImportError as e:
+        raise MsdsProductError(500, "PHOTO_PDF_BUILD_FAILED", f"Pillow 없음: {e}")
+    img = Image.open(_io.BytesIO(photo_bytes))
+    img = ImageOps.exif_transpose(img)
+    w, h = img.size
+    long_edge = max(w, h)
+    if long_edge > _PHOTO_LONG_EDGE_MAX:
+        scale = _PHOTO_LONG_EDGE_MAX / long_edge
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    if img.mode in ("RGBA", "P", "LA"):
+        img = img.convert("RGB")
+    buf = _io.BytesIO()
+    img.save(buf, "JPEG", quality=85)
+    return buf.getvalue()
+
+
 def _build_derived_pdf(photo_records: List[Dict]) -> bytes:
     """Build a derived PDF from ordered JPEG photo records using reportlab canvas."""
     import io as _io
@@ -719,11 +742,11 @@ def create_photo_intake(
     factory_id: str,
     photos: List[Dict],
 ) -> Dict[str, Any]:
-    """Create MSDS Intake from ordered JPEG photo set.
+    """Create MSDS Intake from ordered JPEG/PNG photo set.
 
     photos: list of {"bytes": bytes, "file_name": str, "sequence_no": int, "mime_type": str}
-    Stores each JPEG as PHOTO artifact (is_primary=False), builds derived PDF,
-    stores derived PDF as PHOTO_DERIVED artifact (is_primary=True).
+    Each photo stored as PHOTO artifact (is_primary=False).
+    Derived PDF stored as artifact_type='PDF' / is_primary=True / sequence_no=NULL.
     Returns intake dict.
     """
     import tempfile
@@ -733,13 +756,27 @@ def create_photo_intake(
 
     if not photos:
         raise MsdsProductError(422, "PHOTO_REQUIRED", "사진이 없습니다.")
-    if len(photos) > 50:
-        raise MsdsProductError(422, "PHOTO_TOO_MANY", "사진은 최대 50장까지 허용됩니다.")
+    if len(photos) > _PHOTO_MAX_COUNT:
+        raise MsdsProductError(422, "PHOTO_TOO_MANY", f"사진은 최대 {_PHOTO_MAX_COUNT}장까지 허용됩니다.")
 
-    # Validate JPEG magic bytes
+    _JPEG_MAGIC = b"\xff\xd8"
+    _PNG_MAGIC = b"\x89PNG"
+    total_bytes = 0
     for p in photos:
-        if not p.get("bytes", b"").startswith(b"\xff\xd8"):
-            raise MsdsProductError(422, "INVALID_PHOTO_FORMAT", f"JPEG 파일이 아닙니다: {p.get('file_name','')}")
+        raw = p.get("bytes", b"")
+        if len(raw) > _PHOTO_MAX_SINGLE_BYTES:
+            raise MsdsProductError(
+                422, "PHOTO_TOO_LARGE",
+                f"사진 1장 최대 10MiB 초과: {p.get('file_name','')} ({len(raw)} bytes)"
+            )
+        total_bytes += len(raw)
+        if not (raw.startswith(_JPEG_MAGIC) or raw.startswith(_PNG_MAGIC)):
+            raise MsdsProductError(
+                422, "INVALID_PHOTO_FORMAT",
+                f"JPEG 또는 PNG 파일이 아닙니다: {p.get('file_name','')}"
+            )
+    if total_bytes > _PHOTO_MAX_TOTAL_BYTES:
+        raise MsdsProductError(422, "PHOTO_TOTAL_TOO_LARGE", f"전체 사진 용량이 100MiB를 초과합니다.")
 
     company_id = _get_company_id(sb, factory_id)
 
@@ -756,28 +793,24 @@ def create_photo_intake(
     intake = intake_res.data[0]
     intake_id = intake["id"]
 
-    stored_paths: List[str] = []
+    # Track which storage paths have been committed to DB (artifact row exists)
+    # Only delete uncommitted paths on failure
+    committed_paths: set = set()
+    all_storage_paths: List[str] = []
     tmp_files: List[str] = []
 
     try:
-        # Store each JPEG photo artifact
         photo_records: List[Dict] = []
         for p in photos:
-            photo_bytes = p["bytes"]
-            sha = _sha256(photo_bytes)
+            normalized = _normalize_photo(p["bytes"])
+            sha = _sha256(normalized)
             storage_path = _temp_storage_path(company_id, intake_id, "jpg")
             sb.storage.from_(_INTAKE_BUCKET).upload(
                 path=storage_path,
-                file=photo_bytes,
-                file_options={"content-type": p.get("mime_type", "image/jpeg")},
+                file=normalized,
+                file_options={"content-type": "image/jpeg"},
             )
-            stored_paths.append(storage_path)
-
-            # Write to temp file for PDF building
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                tmp.write(photo_bytes)
-                tmp_path = tmp.name
-            tmp_files.append(tmp_path)
+            all_storage_paths.append(storage_path)
 
             art_res = sb.table("msds_intake_artifacts").insert({
                 "intake_id": intake_id,
@@ -785,15 +818,20 @@ def create_photo_intake(
                 "bucket_id": _INTAKE_BUCKET,
                 "storage_path": storage_path,
                 "file_name": p.get("file_name", f"photo_{p['sequence_no']:03d}.jpg"),
-                "mime_type": p.get("mime_type", "image/jpeg"),
-                "file_size": len(photo_bytes),
+                "mime_type": "image/jpeg",
+                "file_size": len(normalized),
                 "content_sha256": sha,
                 "sequence_no": p["sequence_no"],
                 "is_primary": False,
             }).execute()
             if not art_res.data:
                 raise MsdsProductError(500, "ARTIFACT_CREATE_FAILED", "Photo artifact 생성 실패")
+            committed_paths.add(storage_path)
 
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp.write(normalized)
+                tmp_path = tmp.name
+            tmp_files.append(tmp_path)
             photo_records.append({"sequence_no": p["sequence_no"], "tmp_path": tmp_path})
 
         # Build derived PDF
@@ -805,11 +843,11 @@ def create_photo_intake(
             file=pdf_bytes,
             file_options={"content-type": "application/pdf"},
         )
-        stored_paths.append(pdf_storage_path)
+        all_storage_paths.append(pdf_storage_path)
 
         pdf_art_res = sb.table("msds_intake_artifacts").insert({
             "intake_id": intake_id,
-            "artifact_type": "PHOTO_DERIVED",
+            "artifact_type": "PDF",
             "bucket_id": _INTAKE_BUCKET,
             "storage_path": pdf_storage_path,
             "file_name": f"derived_{intake_id[:8]}.pdf",
@@ -820,14 +858,16 @@ def create_photo_intake(
         }).execute()
         if not pdf_art_res.data:
             raise MsdsProductError(500, "ARTIFACT_CREATE_FAILED", "Derived PDF artifact 생성 실패")
+        committed_paths.add(pdf_storage_path)
 
     except MsdsProductError:
-        # Compensate: remove all uploaded storage objects
-        for sp in stored_paths:
-            try:
-                sb.storage.from_(_INTAKE_BUCKET).remove([sp])
-            except Exception:
-                pass
+        # Only remove storage objects without a committed artifact row
+        for sp in all_storage_paths:
+            if sp not in committed_paths:
+                try:
+                    sb.storage.from_(_INTAKE_BUCKET).remove([sp])
+                except Exception:
+                    pass
         sb.table("msds_intakes").update({
             "status": "FAILED",
             "error_code": "PHOTO_INTAKE_FAILED",
@@ -890,20 +930,12 @@ def run_ocr(sb, current_user: Dict, factory_id: str, intake_id: str) -> Dict[str
 
 def _do_ocr_process(sb, current_user, factory_id, intake_id, intake) -> Dict[str, Any]:
     """Inner OCR logic. Exceptions propagate to outer handler."""
-    # Load primary artifact
-    art_res = (
-        sb.table("msds_intake_artifacts")
-        .select("*")
-        .eq("intake_id", intake_id)
-        .eq("is_primary", True)
-        .limit(1)
-        .execute()
-    )
-    if not art_res.data:
+    import os as _os
+
+    artifact = _get_primary_pdf_artifact(sb, intake_id)
+    if artifact is None:
         _fail_intake(sb, intake_id, "NO_ARTIFACT", "Primary artifact 없음")
         raise MsdsProductError(500, "NO_ARTIFACT", "처리할 artifact를 찾을 수 없습니다.")
-
-    artifact = art_res.data[0]
 
     try:
         pdf_bytes = sb.storage.from_(_INTAKE_BUCKET).download(artifact["storage_path"])
@@ -911,21 +943,41 @@ def _do_ocr_process(sb, current_user, factory_id, intake_id, intake) -> Dict[str
         _fail_intake(sb, intake_id, "STORAGE_READ_FAILED", str(e))
         raise MsdsProductError(500, "STORAGE_READ_FAILED", "파일 읽기 실패")
 
-    # CLOVA OCR
     facts: List[Dict] = []
     ocr_method = "OCR"
 
+    # CLOVA pass1/pass2 — credentials required
+    if not clova_available():
+        _fail_intake(sb, intake_id, "OCR_PROVIDER_NOT_CONFIGURED", "CLOVA 자격증명 없음")
+        raise MsdsProductError(500, "OCR_PROVIDER_NOT_CONFIGURED", "CLOVA OCR 자격증명이 설정되지 않았습니다.")
+
     try:
-        ocr_result = run_clova_ocr(pdf_bytes)
-        if not ocr_result.error and ocr_result.full_text.strip():
-            facts = ocr_parser.parse_ocr_facts(ocr_result.full_text, extraction_method="OCR")
+        # Pass 1: pages 1-5 (0-indexed: [0, 5))
+        p1 = run_clova_ocr_range(pdf_bytes, start_page=0, end_page=5)
+        facts = ocr_parser.parse_ocr_facts(p1.full_text, extraction_method="OCR") if p1.full_text.strip() else []
+        _add_provenance(facts, provider="CLOVA", request_id=p1.request_id)
+
+        # Pass 2: pages 6-10 only when pass1 is insufficient
+        if not ocr_parser.is_sufficient(facts):
+            p2 = run_clova_ocr_range(pdf_bytes, start_page=5, end_page=10)
+            if p2.full_text.strip():
+                p2_facts = ocr_parser.parse_ocr_facts(p2.full_text, extraction_method="OCR")
+                _add_provenance(p2_facts, provider="CLOVA", request_id=p2.request_id)
+                existing_keys = {(f["fact_type"], f["normalized_value"]) for f in facts}
+                for f in p2_facts:
+                    key = (f["fact_type"], f["normalized_value"])
+                    if key not in existing_keys:
+                        facts.append(f)
+                        existing_keys.add(key)
+
     except OcrCredentialError:
-        facts = []  # credentials absent → fall through to Vision
+        _fail_intake(sb, intake_id, "OCR_PROVIDER_NOT_CONFIGURED", "CLOVA 자격증명 없음")
+        raise MsdsProductError(500, "OCR_PROVIDER_NOT_CONFIGURED", "CLOVA OCR 자격증명이 설정되지 않았습니다.")
     except OcrProviderError as e:
         _fail_intake(sb, intake_id, "OCR_PROVIDER_FAILED", str(e)[:500])
         raise MsdsProductError(500, "OCR_PROVIDER_FAILED", f"CLOVA OCR 실패: {str(e)[:200]}")
 
-    # Vision fallback if CLOVA returned insufficient facts
+    # Vision fallback if still insufficient
     if not ocr_parser.is_sufficient(facts):
         img_path = rasterize_pdf_page(pdf_bytes, page_no=1)
         if img_path:
@@ -935,17 +987,17 @@ def _do_ocr_process(sb, current_user, factory_id, intake_id, intake) -> Dict[str
                     vision_facts = ocr_parser.parse_ocr_facts(
                         vision_result.full_text, extraction_method="VISION"
                     )
-                    # Merge: Vision facts supplement CLOVA facts (no duplicate fact_type)
-                    existing_types = {f["fact_type"] for f in facts}
+                    _add_provenance(vision_facts, provider="GPT_VISION")
+                    existing_keys = {(f["fact_type"], f["normalized_value"]) for f in facts}
                     for vf in vision_facts:
-                        if vf["fact_type"] not in existing_types:
+                        key = (vf["fact_type"], vf["normalized_value"])
+                        if key not in existing_keys:
                             facts.append(vf)
-                            existing_types.add(vf["fact_type"])
+                            existing_keys.add(key)
                     ocr_method = "VISION"
             except VisionCredentialError:
-                pass  # Vision credentials absent — proceed with what we have
+                pass
             finally:
-                import os as _os
                 try:
                     _os.unlink(img_path)
                 except Exception:
@@ -965,7 +1017,6 @@ def _do_ocr_process(sb, current_user, factory_id, intake_id, intake) -> Dict[str
         _fail_intake(sb, intake_id, "REFERENCE_LOOKUP_FAILED", str(e)[:500])
         raise MsdsProductError(500, "REFERENCE_LOOKUP_FAILED", "참조 DB 조회 실패")
 
-    # Write facts
     fact_rows = []
     for f in facts:
         fact_res = sb.table("msds_intake_facts").insert({
@@ -996,3 +1047,12 @@ def _do_ocr_process(sb, current_user, factory_id, intake_id, intake) -> Dict[str
         "reference_candidates": reference_candidates,
         "ocr_method": ocr_method,
     }
+
+
+def _add_provenance(facts: List[Dict], provider: str, request_id: str = "") -> None:
+    """Mutate facts in-place to add provider/request_id to evidence_json."""
+    for f in facts:
+        ev = f.setdefault("evidence_json", {})
+        ev["provider"] = provider
+        if request_id:
+            ev["request_id"] = request_id

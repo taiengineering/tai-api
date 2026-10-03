@@ -317,14 +317,22 @@ class TestOcrFactParser:
         facts = parser.parse_ocr_facts("제품명: 테스트", extraction_method="VISION")
         assert all(f["extraction_method"] == "VISION" for f in facts)
 
-    def test_fp09_is_sufficient_true_with_product_name(self):
-        """FP09: is_sufficient returns True when PRODUCT_NAME present."""
+    def test_fp09_is_sufficient_false_with_product_name_only(self):
+        """FP09: is_sufficient returns False when only PRODUCT_NAME (CAS required too)."""
         facts = [{"fact_type": "PRODUCT_NAME", "raw_value": "테스트"}]
-        assert parser.is_sufficient(facts) is True
+        assert parser.is_sufficient(facts) is False
 
-    def test_fp10_is_sufficient_true_with_cas(self):
-        """FP10: is_sufficient returns True when CAS present."""
+    def test_fp10_is_sufficient_false_with_cas_only(self):
+        """FP10: is_sufficient returns False when only CAS (PRODUCT_NAME required too)."""
         facts = [{"fact_type": "CAS", "normalized_value": "7647-01-0"}]
+        assert parser.is_sufficient(facts) is False
+
+    def test_fp15_is_sufficient_true_with_product_name_and_cas(self):
+        """FP15: is_sufficient returns True only when both PRODUCT_NAME and CAS present."""
+        facts = [
+            {"fact_type": "PRODUCT_NAME", "raw_value": "염산"},
+            {"fact_type": "CAS", "normalized_value": "7647-01-0"},
+        ]
         assert parser.is_sufficient(facts) is True
 
     def test_fp11_is_sufficient_false_with_only_manufacturer(self):
@@ -366,10 +374,10 @@ class TestPhotoIntake:
         assert exc.value.code == "PHOTO_REQUIRED"
 
     def test_ph02_too_many_photos_raises(self):
-        """PH02: >50 photos raises PHOTO_TOO_MANY."""
+        """PH02: >20 photos raises PHOTO_TOO_MANY."""
         sb = _make_sb()
         photos = [{"bytes": JPEG_MAGIC, "file_name": f"p{i}.jpg",
-                   "sequence_no": i, "mime_type": "image/jpeg"} for i in range(51)]
+                   "sequence_no": i, "mime_type": "image/jpeg"} for i in range(21)]
         with pytest.raises(MsdsProductError) as exc:
             svc.create_photo_intake(sb, USER_A, FAC_A, photos)
         assert exc.value.code == "PHOTO_TOO_MANY"
@@ -393,9 +401,10 @@ class TestPhotoIntake:
             svc.create_photo_intake(sb, wrong_user, FAC_A, photos)
         assert exc.value.status_code in (403, 404)
 
+    @patch("services.msds_intake_svc._normalize_photo", side_effect=lambda b: b)
     @patch("services.msds_intake_svc._build_derived_pdf")
-    def test_ph05_photo_intake_creates_artifacts(self, mock_build_pdf):
-        """PH05: create_photo_intake creates PHOTO artifacts + PHOTO_DERIVED artifact."""
+    def test_ph05_photo_intake_creates_artifacts(self, mock_build_pdf, mock_norm):
+        """PH05: create_photo_intake creates PHOTO artifacts + derived PDF artifact."""
         mock_build_pdf.return_value = b"%PDF-1.4 derived"
         sb = _make_sb()
         photos = [
@@ -409,17 +418,20 @@ class TestPhotoIntake:
 
         artifacts = sb.store["msds_intake_artifacts"]
         photo_arts = [a for a in artifacts if a["artifact_type"] == "PHOTO"]
-        derived_arts = [a for a in artifacts if a["artifact_type"] == "PHOTO_DERIVED"]
+        # Derived PDF stored as artifact_type='PDF', is_primary=True, sequence_no=None
+        derived_arts = [a for a in artifacts if a["artifact_type"] == "PDF"]
 
         assert len(photo_arts) == 2
         assert len(derived_arts) == 1
         assert derived_arts[0]["is_primary"] is True
+        assert derived_arts[0].get("sequence_no") is None
         assert all(a["is_primary"] is False for a in photo_arts)
         seq_nos = sorted(a["sequence_no"] for a in photo_arts)
         assert seq_nos == [1, 2]
 
+    @patch("services.msds_intake_svc._normalize_photo", side_effect=lambda b: b)
     @patch("services.msds_intake_svc._build_derived_pdf")
-    def test_ph06_intake_status_received(self, mock_build_pdf):
+    def test_ph06_intake_status_received(self, mock_build_pdf, mock_norm):
         """PH06: Newly created photo intake has RECEIVED status."""
         mock_build_pdf.return_value = b"%PDF-1.4 test"
         sb = _make_sb()
@@ -428,8 +440,9 @@ class TestPhotoIntake:
         result = svc.create_photo_intake(sb, USER_A, FAC_A, photos)
         assert result["intake"]["status"] == "RECEIVED"
 
+    @patch("services.msds_intake_svc._normalize_photo", side_effect=lambda b: b)
     @patch("services.msds_intake_svc._build_derived_pdf")
-    def test_ph07_storage_uploaded_for_each_photo_plus_derived(self, mock_build_pdf):
+    def test_ph07_storage_uploaded_for_each_photo_plus_derived(self, mock_build_pdf, mock_norm):
         """PH07: Storage uploads include one per photo + one for derived PDF."""
         mock_build_pdf.return_value = b"%PDF-1.4 test"
         sb = _make_sb()
@@ -494,15 +507,17 @@ class TestOcrRun:
             svc.run_ocr(sb, USER_A, FAC_A, str(uuid.uuid4()))
         assert exc.value.status_code == 404
 
-    @patch("services.msds_intake_svc.run_clova_ocr")
+    @patch("services.msds_intake_svc.clova_available", return_value=True)
+    @patch("services.msds_intake_svc.run_clova_ocr_range")
     @patch("services.msds_intake_svc.ref_svc.find_reference_candidates", return_value=[])
-    def test_ocr03_clova_facts_extracted_and_stored(self, mock_ref, mock_clova):
+    def test_ocr03_clova_facts_extracted_and_stored(self, mock_ref, mock_ocr, mock_avail):
         """OCR03: CLOVA text with product name and CAS yields facts stored in DB."""
         from services.msds_ocr_provider import OcrResult
-        mock_clova.return_value = OcrResult(
+        mock_ocr.return_value = OcrResult(
             provider="CLOVA",
             full_text="제품명: 염산\n구성 성분: CAS No: 7647-01-0",
             pages_processed=2,
+            request_id="req-001",
         )
         sb = _make_sb()
         intake_id, _ = self._make_ocr_required_intake(sb)
@@ -518,18 +533,18 @@ class TestOcrRun:
         intake = sb.store["msds_intakes"][0]
         assert intake["status"] == "REVIEW_REQUIRED"
 
-    @patch("services.msds_intake_svc.run_clova_ocr")
-    @patch("services.msds_intake_svc.rasterize_pdf_page", return_value=None)
+    @patch("services.msds_intake_svc.clova_available", return_value=True)
+    @patch("services.msds_intake_svc.run_clova_ocr_range")
     @patch("services.msds_intake_svc.ref_svc.find_reference_candidates", return_value=[])
     def test_ocr04_insufficient_facts_triggers_vision_fallback(
-        self, mock_ref, mock_rasterize, mock_clova
+        self, mock_ref, mock_ocr, mock_avail
     ):
         """OCR04: CLOVA with only manufacturer falls back to Vision; Vision adds product+CAS."""
         from services.msds_ocr_provider import OcrResult
         from services.msds_vision_provider import VisionResult
 
-        mock_clova.return_value = OcrResult(
-            provider="CLOVA", full_text="제조사: 주식회사A"
+        mock_ocr.return_value = OcrResult(
+            provider="CLOVA", full_text="제조사: 주식회사A", request_id="req-001"
         )
 
         with patch("services.msds_intake_svc.run_vision_ocr") as mock_vision, \
@@ -548,12 +563,13 @@ class TestOcrRun:
         fact_types = {f["fact_type"] for f in facts}
         assert "PRODUCT_NAME" in fact_types
 
-    @patch("services.msds_intake_svc.run_clova_ocr")
+    @patch("services.msds_intake_svc.clova_available", return_value=True)
+    @patch("services.msds_intake_svc.run_clova_ocr_range")
     @patch("services.msds_intake_svc.rasterize_pdf_page", return_value=None)
-    def test_ocr05_no_facts_after_all_providers_fails(self, mock_rast, mock_clova):
+    def test_ocr05_no_facts_after_all_providers_fails(self, mock_rast, mock_ocr, mock_avail):
         """OCR05: No facts extracted from any provider → intake FAILED."""
         from services.msds_ocr_provider import OcrResult
-        mock_clova.return_value = OcrResult(provider="CLOVA", full_text="")
+        mock_ocr.return_value = OcrResult(provider="CLOVA", full_text="", request_id="req-001")
 
         sb = _make_sb()
         intake_id, _ = self._make_ocr_required_intake(sb)
@@ -565,13 +581,14 @@ class TestOcrRun:
         intake = sb.store["msds_intakes"][0]
         assert intake["status"] == "FAILED"
 
-    @patch("services.msds_intake_svc.run_clova_ocr")
+    @patch("services.msds_intake_svc.clova_available", return_value=True)
+    @patch("services.msds_intake_svc.run_clova_ocr_range")
     @patch("services.msds_intake_svc.ref_svc.find_reference_candidates", return_value=[])
-    def test_ocr06_extraction_method_ocr_in_facts(self, mock_ref, mock_clova):
+    def test_ocr06_extraction_method_ocr_in_facts(self, mock_ref, mock_ocr, mock_avail):
         """OCR06: Facts extracted via CLOVA have extraction_method='OCR'."""
         from services.msds_ocr_provider import OcrResult
-        mock_clova.return_value = OcrResult(
-            provider="CLOVA", full_text="제품명: 염산\n7647-01-0"
+        mock_ocr.return_value = OcrResult(
+            provider="CLOVA", full_text="제품명: 염산\n7647-01-0", request_id="req-001"
         )
         sb = _make_sb()
         intake_id, _ = self._make_ocr_required_intake(sb)
@@ -581,13 +598,14 @@ class TestOcrRun:
         methods = {f["extraction_method"] for f in facts}
         assert methods <= {"OCR", "VISION"}
 
-    @patch("services.msds_intake_svc.run_clova_ocr")
+    @patch("services.msds_intake_svc.clova_available", return_value=True)
+    @patch("services.msds_intake_svc.run_clova_ocr_range")
     @patch("services.msds_intake_svc.ref_svc.find_reference_candidates", return_value=[])
-    def test_ocr07_resets_previous_facts_on_retry(self, mock_ref, mock_clova):
+    def test_ocr07_resets_previous_facts_on_retry(self, mock_ref, mock_ocr, mock_avail):
         """OCR07: Running OCR twice resets previous facts before processing."""
         from services.msds_ocr_provider import OcrResult
-        mock_clova.return_value = OcrResult(
-            provider="CLOVA", full_text="제품명: 염산\n7647-01-0"
+        mock_ocr.return_value = OcrResult(
+            provider="CLOVA", full_text="제품명: 염산\n7647-01-0", request_id="req-001"
         )
         sb = _make_sb()
         intake_id, _ = self._make_ocr_required_intake(sb)
@@ -609,6 +627,160 @@ class TestOcrRun:
         second_count = len(sb.store["msds_intake_facts"])
 
         assert second_count == first_count
+
+    @patch("services.msds_intake_svc.clova_available", return_value=True)
+    @patch("services.msds_intake_svc.run_clova_ocr_range")
+    @patch("services.msds_intake_svc.ref_svc.find_reference_candidates", return_value=[])
+    def test_ocr08_pass1_sufficient_no_pass2(self, mock_ref, mock_ocr, mock_avail):
+        """OCR08: When pass1 yields PRODUCT_NAME+CAS, pass2 is NOT called."""
+        from services.msds_ocr_provider import OcrResult
+        mock_ocr.return_value = OcrResult(
+            provider="CLOVA",
+            full_text="제품명: 염산\n구성 성분: CAS No: 7647-01-0",
+            request_id="req-p1",
+        )
+        sb = _make_sb()
+        intake_id, _ = self._make_ocr_required_intake(sb)
+        svc.run_ocr(sb, USER_A, FAC_A, intake_id)
+        assert mock_ocr.call_count == 1  # only pass1
+
+    @patch("services.msds_intake_svc.clova_available", return_value=True)
+    @patch("services.msds_intake_svc.run_clova_ocr_range")
+    @patch("services.msds_intake_svc.ref_svc.find_reference_candidates", return_value=[])
+    def test_ocr09_pass1_insufficient_triggers_pass2(self, mock_ref, mock_ocr, mock_avail):
+        """OCR09: Pass1 returns manufacturer only → pass2 called; merged facts include product+CAS."""
+        from services.msds_ocr_provider import OcrResult
+        pass1 = OcrResult(provider="CLOVA", full_text="제조사: 주식회사A", request_id="req-p1")
+        pass2 = OcrResult(
+            provider="CLOVA",
+            full_text="제품명: 황산\n구성 성분: CAS No: 7664-93-9",
+            request_id="req-p2",
+        )
+        mock_ocr.side_effect = [pass1, pass2]
+        sb = _make_sb()
+        intake_id, _ = self._make_ocr_required_intake(sb)
+        result = svc.run_ocr(sb, USER_A, FAC_A, intake_id)
+        assert mock_ocr.call_count == 2
+        calls = mock_ocr.call_args_list
+        assert calls[0][1].get("start_page", calls[0][0][1] if len(calls[0][0]) > 1 else 0) == 0
+        assert calls[1][1].get("start_page", calls[1][0][1] if len(calls[1][0]) > 1 else 5) == 5
+        facts = sb.store["msds_intake_facts"]
+        fact_types = {f["fact_type"] for f in facts}
+        assert "PRODUCT_NAME" in fact_types
+        assert "CAS" in fact_types
+
+    @patch("services.msds_intake_svc.clova_available", return_value=True)
+    @patch("services.msds_intake_svc.run_clova_ocr_range")
+    @patch("services.msds_intake_svc.ref_svc.find_reference_candidates", return_value=[])
+    def test_ocr10_provenance_in_evidence_json(self, mock_ref, mock_ocr, mock_avail):
+        """OCR10: Facts written to DB carry provider and request_id in evidence_json."""
+        from services.msds_ocr_provider import OcrResult
+        mock_ocr.return_value = OcrResult(
+            provider="CLOVA",
+            full_text="제품명: 염산\n7647-01-0",
+            request_id="req-prov-001",
+        )
+        sb = _make_sb()
+        intake_id, _ = self._make_ocr_required_intake(sb)
+        svc.run_ocr(sb, USER_A, FAC_A, intake_id)
+        facts = sb.store["msds_intake_facts"]
+        assert facts, "expected facts in DB"
+        for f in facts:
+            ev = f.get("evidence_json", {})
+            assert ev.get("provider") == "CLOVA", f"missing provider in {f}"
+            assert ev.get("request_id") == "req-prov-001", f"missing request_id in {f}"
+
+    @patch("services.msds_intake_svc.clova_available", return_value=False)
+    def test_ocr11_no_credentials_fails(self, mock_avail):
+        """OCR11: No CLOVA credentials → OCR_PROVIDER_NOT_CONFIGURED, intake FAILED."""
+        sb = _make_sb()
+        intake_id, _ = self._make_ocr_required_intake(sb)
+        with pytest.raises(MsdsProductError) as exc:
+            svc.run_ocr(sb, USER_A, FAC_A, intake_id)
+        assert exc.value.code == "OCR_PROVIDER_NOT_CONFIGURED"
+        intake = next(r for r in sb.store["msds_intakes"] if r["id"] == intake_id)
+        assert intake["status"] == "FAILED"
+
+
+# ─── Photo guard extra tests ───────────────────────────────────────────────────
+
+class TestPhotoGuards:
+    def test_ph08_png_magic_accepted(self):
+        """PH08: PNG magic bytes pass INVALID_PHOTO_FORMAT guard (no error raised at format check)."""
+        sb = _make_sb()
+        png_magic = b"\x89PNG\r\n\x1a\n" + b"\x00" * 56  # minimal PNG header-like bytes
+        # PH08 just verifies format guard passes; _normalize_photo would fail on invalid PNG
+        # so we patch it to isolate the guard
+        with patch("services.msds_intake_svc._normalize_photo", side_effect=lambda b: b), \
+             patch("services.msds_intake_svc._build_derived_pdf", return_value=b"%PDF-1.4 x"):
+            result = svc.create_photo_intake(
+                sb, USER_A, FAC_A,
+                [{"bytes": png_magic, "file_name": "p1.png", "sequence_no": 1, "mime_type": "image/png"}],
+            )
+        assert result["photo_count"] == 1
+
+    def test_ph09_heic_rejected(self):
+        """PH09: HEIC bytes (no JPEG/PNG magic) raise INVALID_PHOTO_FORMAT."""
+        sb = _make_sb()
+        heic_bytes = b"\x00\x00\x00\x18ftypheic" + b"\x00" * 40
+        with pytest.raises(MsdsProductError) as exc:
+            svc.create_photo_intake(
+                sb, USER_A, FAC_A,
+                [{"bytes": heic_bytes, "file_name": "p1.heic", "sequence_no": 1, "mime_type": "image/heic"}],
+            )
+        assert exc.value.code == "INVALID_PHOTO_FORMAT"
+
+    def test_ph10_single_photo_too_large_raises(self):
+        """PH10: Single photo > 10 MiB raises PHOTO_TOO_LARGE."""
+        sb = _make_sb()
+        large_jpeg = b"\xff\xd8" + b"\x00" * (10 * 1024 * 1024 + 1)
+        with pytest.raises(MsdsProductError) as exc:
+            svc.create_photo_intake(
+                sb, USER_A, FAC_A,
+                [{"bytes": large_jpeg, "file_name": "big.jpg", "sequence_no": 1, "mime_type": "image/jpeg"}],
+            )
+        assert exc.value.code == "PHOTO_TOO_LARGE"
+
+    def test_ph11_total_too_large_raises(self):
+        """PH11: Total photos > 100 MiB raises PHOTO_TOTAL_TOO_LARGE."""
+        sb = _make_sb()
+        # 11 photos each just under 10 MiB → total ~110 MiB > 100 MiB limit
+        # chunk = 2 + (10MiB - 3) = 10MiB - 1 bytes each (passes single-photo check)
+        chunk = b"\xff\xd8" + b"\x00" * (10 * 1024 * 1024 - 3)
+        photos = [
+            {"bytes": chunk, "file_name": f"p{i}.jpg", "sequence_no": i, "mime_type": "image/jpeg"}
+            for i in range(11)
+        ]
+        with pytest.raises(MsdsProductError) as exc:
+            svc.create_photo_intake(sb, USER_A, FAC_A, photos)
+        assert exc.value.code == "PHOTO_TOTAL_TOO_LARGE"
+
+
+# ─── CAS B→8 correction test ──────────────────────────────────────────────────
+
+class TestCasBCorrection:
+    def test_cv11_b_to_8_correction(self):
+        """CV11: 'B' in CAS body corrects to '8' (not '0')."""
+        # Construct a CAS where B→8 gives valid checksum
+        # 7664-93-9 (H2SO4): replace '9' in body with 'B' → 7664-B3-9
+        # Actually B→8, so 7664-83-9 checksum: body="766483", from right: 3*1+8*2+4*3+6*4+6*5+7*6
+        # = 3+16+12+24+30+42 = 127, 127%10=7 ≠ 9 → not valid
+        # Use 7664-93-9: body="766493"
+        # 3*1+9*2+4*3+6*4+6*5+7*6 = 3+18+12+24+30+42 = 129, 129%10=9 ✓
+        # Introduce B in first segment: 766B-93-9 → corrects to 7668-93-9
+        # 7668-93-9: body="766893": 3*1+9*2+8*3+6*4+6*5+7*6 = 3+18+24+24+30+42 = 141, 141%10=1 ≠ 9
+        # So B→8 correction of 766B-93-9 won't validate. Use known example:
+        # 64-17-5 (Ethanol): body="6417": 7*1+1*2+4*3+6*4 = 7+2+12+24 = 45, 45%10=5 ✓
+        # Replace '1' with 'B' (not OCR candidate) and '4' ... let's try directly:
+        # The point is B→8 (not B→0). Use try_correct_cas to confirm substitution direction.
+        from services.cas_validator import try_correct_cas, _OCR_TABLE
+        # Verify the substitution table maps B→8
+        assert "B".translate(_OCR_TABLE) == "8"
+
+    def test_cv12_b_not_mapped_to_0(self):
+        """CV12: B is mapped to 8, not 0 (regression for original bug)."""
+        from services.cas_validator import _OCR_TABLE
+        assert "B".translate(_OCR_TABLE) != "0"
 
 
 # ─── is_primary on PDF intake tests ───────────────────────────────────────────

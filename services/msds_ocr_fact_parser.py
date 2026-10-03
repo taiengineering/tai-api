@@ -1,11 +1,12 @@
-"""OCR / Vision text → MSDS Fact contract — WO-MSDS-04B-IMPLEMENTATION-001."""
+"""OCR / Vision text → MSDS Fact contract — WO-MSDS-04B-PATCH-001."""
 from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Optional
 
-from services.cas_validator import extract_valid_cas
+from services.cas_validator import extract_valid_cas, try_correct_cas
 
+# Broad pattern capturing CAS-like strings with possible OCR character substitutions
 _CAS_PATTERN = re.compile(r'\b([0-9A-Z]{2,7}-[0-9A-Z]{2}-[0-9A-Z])\b')
 
 _PRODUCT_NAME_MARKERS = [
@@ -62,11 +63,25 @@ def _extract_first(markers: list, text: str) -> Optional[str]:
     return None
 
 
+def _cas_evidence(raw: str, valid: str, method: str, context: Optional[str] = None) -> Dict:
+    correction_applied = valid != raw.strip()
+    ev: Dict[str, Any] = {
+        "cas": valid,
+        "correction_applied": correction_applied,
+    }
+    if correction_applied:
+        ev["corrected_value"] = valid
+    if context:
+        ev["context"] = context
+    return ev
+
+
 def parse_ocr_facts(text: str, extraction_method: str = "OCR") -> List[Dict[str, Any]]:
     """Parse OCR or Vision text into MSDS fact dicts ready for msds_intake_facts insertion.
 
     extraction_method: 'OCR' | 'VISION'
-    CAS numbers are validated and OCR-corrected via cas_validator.
+    CAS numbers validated and OCR-corrected via cas_validator.
+    Corrected CAS carries correction_applied=true in evidence_json.
     """
     facts: List[Dict[str, Any]] = []
 
@@ -127,7 +142,8 @@ def parse_ocr_facts(text: str, extraction_method: str = "OCR") -> List[Dict[str,
                         "raw_value": raw_cas,
                         "normalized_value": valid,
                         "extraction_method": extraction_method,
-                        "evidence_json": {"context": ctx_pat.pattern, "cas": valid},
+                        "evidence_json": _cas_evidence(raw_cas, valid, extraction_method,
+                                                       ctx_pat.pattern),
                     })
 
     if not cas_found:
@@ -141,13 +157,13 @@ def parse_ocr_facts(text: str, extraction_method: str = "OCR") -> List[Dict[str,
                     "raw_value": raw_cas,
                     "normalized_value": valid,
                     "extraction_method": extraction_method,
-                    "evidence_json": {"cas": valid},
+                    "evidence_json": _cas_evidence(raw_cas, valid, extraction_method),
                 })
 
     return facts
 
 
 def is_sufficient(facts: List[Dict[str, Any]]) -> bool:
-    """True if facts contain at least one of PRODUCT_NAME or CAS."""
+    """True only when facts contain both PRODUCT_NAME and at least one checksum-valid CAS."""
     types = {f["fact_type"] for f in facts}
-    return bool(types & {"PRODUCT_NAME", "CAS"})
+    return "PRODUCT_NAME" in types and "CAS" in types

@@ -1,4 +1,4 @@
-"""GPT Vision fallback provider — WO-MSDS-04B-IMPLEMENTATION-001.
+"""GPT Vision fallback provider — WO-MSDS-04B-PATCH-001.
 
 Called only when CLOVA returns insufficient facts.
 Structured Outputs — model never selects Product/Reference candidates.
@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -139,26 +140,36 @@ def run_vision_ocr(image_path: str) -> VisionResult:
 
 
 def rasterize_pdf_page(pdf_bytes: bytes, page_no: int = 1, dpi: int = 150) -> Optional[str]:
-    """Rasterize a single PDF page to a temp JPEG. Returns temp file path or None."""
+    """Rasterize a single PDF page to a temp JPEG using pypdfium2.
+
+    page_no is 1-indexed. Returns temp file path or None on failure.
+    Caller must delete the returned file when done.
+    """
+    tmp_jpg_path: Optional[str] = None
     try:
-        from pdf2image import convert_from_path
-        import tempfile
-        import io as _io
+        import pypdfium2 as pdfium
 
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
-            tmp_pdf.write(pdf_bytes)
-            pdf_path = tmp_pdf.name
-
-        images = convert_from_path(
-            pdf_path, first_page=page_no, last_page=page_no, dpi=dpi
-        )
-        if not images:
+        doc = pdfium.PdfDocument(pdf_bytes)
+        page_index = page_no - 1
+        if page_index < 0 or page_index >= len(doc):
             return None
 
+        page = doc[page_index]
+        scale = dpi / 72.0
+        bitmap = page.render(scale=scale)
+        pil_image = bitmap.to_pil()
+
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_jpg:
-            images[0].save(tmp_jpg.name, "JPEG", quality=85)
-            return tmp_jpg.name
+            tmp_jpg_path = tmp_jpg.name
+
+        pil_image.save(tmp_jpg_path, "JPEG", quality=85)
+        return tmp_jpg_path
     except Exception:
+        if tmp_jpg_path is not None:
+            try:
+                os.unlink(tmp_jpg_path)
+            except OSError:
+                pass
         return None
 
 

@@ -28,6 +28,9 @@ boto3>=1.34.0,<2
 # 우회용. 누락 시 POST /payments/inicis/billing/prepare 가 ModuleNotFoundError로
 # 평문 500("Internal Server Error") 반환 → 프론트 JSON 파싱 실패.
 pypdf==6.19.0  # BSD-3-Clause, pure Python / no system binary dependency. Tested version: 6.19.0
+Pillow==12.3.0  # WO-MSDS-04B: EXIF correction + photo normalization (JPEG/PNG resize)
+reportlab==5.0.1  # WO-MSDS-04B: PDF canvas for photo-derived PDF generation
+pypdfium2==5.12.1  # WO-MSDS-04B: PDF rasterizer for Vision fallback — bundled PDFium, no system deps
 
 # urllib3==2.0.7 + requests==2.31.0: 프록시(OUTBOUND_PROXY) 경유 data.go.kr
 # HTTPS 호출이 requests 2.32+ 에서 코드10(INVALID_REQUEST_PARAMETER)로 거부됨(프록시
