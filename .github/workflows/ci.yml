@@ -247,6 +247,8 @@ jobs:
         run: pytest tests/test_paid_result_artifact_v1.py tests/test_paid_result_excel_v1.py -q --tb=short
       - name: Paid PDF visual tests (VIS-04)
         run: pytest tests/test_paid_result_pdf_visual_v1.py -q --tb=short
+      - name: Education history schema contract tests (PATCH-001)
+        run: pytest tests/test_education_history_contract.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"
