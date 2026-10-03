@@ -45,4 +45,6 @@ ROUTERS = [
     {"module": "routers.member_commercial"},
     # WO-MSDS-02: Canonical Chemical Product (/me/msds/products)
     {"module": "routers.msds_products"},
+    # WO-MSDS-03: Customer Original MSDS Version (/me/msds/factories/{fid}/products/{pid}/versions)
+    {"module": "routers.msds_versions"},
 ]

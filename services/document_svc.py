@@ -208,6 +208,11 @@ async def update_document(doc_id: str, updates: Dict[str, Any]) -> Optional[Dict
     payload = {k: v for k, v in updates.items() if k in allowed}
     if not payload:
         return None
+
+    # Evidence Lock: MSDS-referenced document의 category 변경 금지
+    if "category" in payload and _is_msds_evidence_document(sb, doc_id):
+        raise ValueError("MSDS_EVIDENCE_LOCKED: category 변경 금지")
+
     result = sb.table("documents").update(payload).eq("id", doc_id).execute()
     if result.data:
         return result.data[0]
@@ -216,10 +221,28 @@ async def update_document(doc_id: str, updates: Dict[str, Any]) -> Optional[Dict
 
 async def soft_delete(doc_id: str) -> bool:
     sb = get_supabase()
+    # Evidence Lock: MSDS-referenced document soft-delete 금지
+    if _is_msds_evidence_document(sb, doc_id):
+        raise ValueError("MSDS_EVIDENCE_LOCKED: MSDS Version에 참조된 문서는 삭제할 수 없습니다.")
     result = sb.table("documents").update(
         {"deleted_at": serialize_business_datetime(now_kst()), "is_active": False}
     ).eq("id", doc_id).execute()
     return bool(result.data)
+
+
+def _is_msds_evidence_document(sb, doc_id: str) -> bool:
+    """customer_msds_versions에 참조된 문서이면 True (Evidence Lock)."""
+    try:
+        res = (
+            sb.table("customer_msds_versions")
+            .select("id")
+            .eq("document_id", doc_id)
+            .limit(1)
+            .execute()
+        )
+        return bool(res.data)
+    except Exception:
+        return False
 
 
 async def get_stats(company_id: str) -> List[Dict[str, Any]]:
