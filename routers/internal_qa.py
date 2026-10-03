@@ -57,7 +57,6 @@ class ScenarioItem(BaseModel):
     description:      Optional[str] = None
     expected_summary: Optional[str] = None
     site_code:        str
-    category:         str
     priority:         str
     runner_type:      str
     service_code:     str
