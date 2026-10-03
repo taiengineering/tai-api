@@ -181,24 +181,27 @@ NO_CO     = {"id": "user-nocompany", "company_id": None, "role_code": "010"}
 
 # ─── AUTH fixtures ─────────────────────────────────────────────────────────────
 # role_code 매핑 (role_data_scope 테이블과 동기)
-ROLE_COMPANY  = "010"
-ROLE_FACTORY  = "012"
-ROLE_TEAM     = "013"
-ROLE_ASSIGNED = "020"
-ROLE_ALL      = "099"
-ROLE_PLATFORM = "090"   # PLATFORM scope (알 수 없는 tier → fail-closed)
+ROLE_COMPANY    = "010"
+ROLE_FACTORY    = "012"
+ROLE_TEAM       = "013"
+ROLE_ASSIGNED   = "020"
+ROLE_ALL        = "099"
+ROLE_PLATFORM   = "090"   # PLATFORM scope → fail-closed
+ROLE_NULL_SCOPE = "888"   # role_data_scope row exists but scope_type=None → fail-closed
 
-AUTH_COMPANY_A    = {"id": "auth-co-a",    "company_id": CO_A, "role_code": ROLE_COMPANY}
-AUTH_FACTORY_A1   = {"id": "auth-fac-a1",  "company_id": CO_A, "role_code": ROLE_FACTORY, "factory_id": FAC_A1}
-AUTH_FACTORY_A2   = {"id": "auth-fac-a2",  "company_id": CO_A, "role_code": ROLE_FACTORY, "factory_id": FAC_A2}
-AUTH_FACTORY_NOFID = {"id": "auth-fac-nofid", "company_id": CO_A, "role_code": ROLE_FACTORY}  # factory_id 미배정
-AUTH_TEAM_A1      = {"id": "auth-team-a1", "company_id": CO_A, "role_code": ROLE_TEAM,    "factory_id": FAC_A1}
-AUTH_TEAM_NOFID   = {"id": "auth-team-nofid", "company_id": CO_A, "role_code": ROLE_TEAM}  # factory_id 미배정
-AUTH_ALL          = {"id": "auth-all",     "role_code": ROLE_ALL}  # 플랫폼 관리자 (company_id 없어도 됨)
-AUTH_ASSIGNED_A1  = {"id": "auth-asgn-a1", "company_id": CO_A, "role_code": ROLE_ASSIGNED, "factory_id": FAC_A1}
-AUTH_ASSIGNED_NOFID = {"id": "auth-asgn-nofid", "company_id": CO_A, "role_code": ROLE_ASSIGNED}  # company fallback
-AUTH_PLATFORM     = {"id": "auth-platform", "company_id": CO_A, "role_code": ROLE_PLATFORM}
-AUTH_UNKNOWN_ROLE = {"id": "auth-unknown",  "company_id": CO_A, "role_code": "999"}  # role_data_scope 미존재
+AUTH_COMPANY_A      = {"id": "auth-co-a",      "company_id": CO_A, "role_code": ROLE_COMPANY}
+AUTH_FACTORY_A1     = {"id": "auth-fac-a1",    "company_id": CO_A, "role_code": ROLE_FACTORY,  "factory_id": FAC_A1}
+AUTH_FACTORY_A2     = {"id": "auth-fac-a2",    "company_id": CO_A, "role_code": ROLE_FACTORY,  "factory_id": FAC_A2}
+AUTH_FACTORY_NOFID  = {"id": "auth-fac-nofid", "company_id": CO_A, "role_code": ROLE_FACTORY}  # factory_id 미배정
+AUTH_TEAM_A1        = {"id": "auth-team-a1",   "company_id": CO_A, "role_code": ROLE_TEAM,     "factory_id": FAC_A1}
+AUTH_TEAM_NOFID     = {"id": "auth-team-nofid","company_id": CO_A, "role_code": ROLE_TEAM}     # factory_id 미배정
+AUTH_ALL            = {"id": "auth-all",        "role_code": ROLE_ALL}  # 플랫폼 관리자 (company_id 없어도 됨)
+AUTH_ASSIGNED_A1    = {"id": "auth-asgn-a1",   "company_id": CO_A, "role_code": ROLE_ASSIGNED, "factory_id": FAC_A1}
+AUTH_ASSIGNED_NOFID = {"id": "auth-asgn-nofid","company_id": CO_A, "role_code": ROLE_ASSIGNED}  # factory_id 미배정 → DENY
+AUTH_PLATFORM       = {"id": "auth-platform",  "company_id": CO_A, "role_code": ROLE_PLATFORM}
+AUTH_UNKNOWN_ROLE   = {"id": "auth-unknown",   "company_id": CO_A, "role_code": "999"}            # role_data_scope 미존재, factory_id 없음
+AUTH_UNKNOWN_WITH_FID = {"id": "auth-unk-fid", "company_id": CO_A, "role_code": "999",  "factory_id": FAC_A1}  # 미정의 role + factory_id 있음
+AUTH_NULL_SCOPE     = {"id": "auth-null-sc",   "company_id": CO_A, "role_code": ROLE_NULL_SCOPE, "factory_id": FAC_A1}  # scope_type=None
 
 _FACTORIES = [
     {"id": FAC_A1, "company_id": CO_A, "name": "A사 1공장"},
@@ -207,12 +210,13 @@ _FACTORIES = [
 ]
 
 _ROLE_DATA_SCOPE = [
-    {"role_code": ROLE_COMPANY,  "scope_type": "COMPANY"},
-    {"role_code": ROLE_FACTORY,  "scope_type": "FACTORY"},
-    {"role_code": ROLE_TEAM,     "scope_type": "TEAM"},
-    {"role_code": ROLE_ASSIGNED, "scope_type": "ASSIGNED"},
-    {"role_code": ROLE_ALL,      "scope_type": "ALL"},
-    {"role_code": ROLE_PLATFORM, "scope_type": "PLATFORM"},
+    {"role_code": ROLE_COMPANY,    "scope_type": "COMPANY"},
+    {"role_code": ROLE_FACTORY,    "scope_type": "FACTORY"},
+    {"role_code": ROLE_TEAM,       "scope_type": "TEAM"},
+    {"role_code": ROLE_ASSIGNED,   "scope_type": "ASSIGNED"},
+    {"role_code": ROLE_ALL,        "scope_type": "ALL"},
+    {"role_code": ROLE_PLATFORM,   "scope_type": "PLATFORM"},
+    {"role_code": ROLE_NULL_SCOPE, "scope_type": None},   # AUTH19: row exists but scope_type null
 ]
 
 
@@ -962,8 +966,8 @@ def test_auth10_team_scope_with_no_factory_id_fail_closed():
     assert exc.value.code == "FACTORY_NOT_FOUND"
 
 
-def test_auth11_unknown_role_code_fail_closed():
-    """role_data_scope에 없는 role_code → _scope() 반환값 없음(TEAM fallback) → factory_id 없으면 DENY."""
+def test_auth11_unknown_role_code_no_factory_id_fail_closed():
+    """미정의 role_code + factory_id 없음 → fail-closed."""
     sb = _make_sb()
     with pytest.raises(svc.MsdsProductError) as exc:
         svc.list_products(sb, AUTH_UNKNOWN_ROLE, FAC_A1)
@@ -972,8 +976,7 @@ def test_auth11_unknown_role_code_fail_closed():
 
 
 def test_auth12_platform_scope_fail_closed():
-    """PLATFORM scope_type은 알 수 없는 tier → fail-closed.
-    GAP: company_scope.py에 PLATFORM 처리 없음 — DENY와 동일 취급 기록."""
+    """PLATFORM scope_type → fail-closed (PLATFORM은 화학제품 관리 tier 아님)."""
     sb = _make_sb()
     with pytest.raises(svc.MsdsProductError) as exc:
         svc.list_products(sb, AUTH_PLATFORM, FAC_A1)
@@ -981,13 +984,13 @@ def test_auth12_platform_scope_fail_closed():
     assert exc.value.code == "FACTORY_NOT_FOUND"
 
 
-def test_auth_assigned_with_factory_id_can_access_own():
+def test_auth13_assigned_own_factory_allow():
     sb = _make_sb()
     result = svc.list_products(sb, AUTH_ASSIGNED_A1, FAC_A1)
     assert "items" in result
 
 
-def test_auth_assigned_with_factory_id_cannot_access_other_factory():
+def test_auth14_assigned_same_company_other_factory_deny():
     sb = _make_sb()
     with pytest.raises(svc.MsdsProductError) as exc:
         svc.list_products(sb, AUTH_ASSIGNED_A1, FAC_A2)
@@ -995,11 +998,72 @@ def test_auth_assigned_with_factory_id_cannot_access_other_factory():
     assert exc.value.code == "FACTORY_NOT_FOUND"
 
 
-def test_auth_assigned_no_factory_id_company_fallback():
-    """ASSIGNED + factory_id 미배정 → company fallback (기존 company_scope 계약 유지)."""
+def test_auth15_assigned_no_factory_id_fail_closed():
+    """PATCH-005 핵심: ASSIGNED + factory_id 미배정 → DENY (company fallback 금지).
+    factory_id scoped resource에서 company fallback은 같은 회사 전 시설 노출이므로 불허."""
     sb = _make_sb()
-    result = svc.list_products(sb, AUTH_ASSIGNED_NOFID, FAC_A1)
-    assert "items" in result
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_ASSIGNED_NOFID, FAC_A1)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth16_undefined_role_no_factory_id_fail_closed():
+    """미정의 role + factory_id 없음 → strict DB 조회 실패 → fail-closed."""
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_UNKNOWN_ROLE, FAC_A1)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth17_undefined_role_with_factory_id_fail_closed():
+    """PATCH-005 핵심: 미정의 role + factory_id 있음 → TEAM fallback 불허 → fail-closed.
+    _resolve_scope_strict()의 strict DB 조회로만 tier를 결정하므로
+    role_data_scope에 없는 role_code는 factory_id가 있어도 DENY."""
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_UNKNOWN_WITH_FID, FAC_A1)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth18_scope_lookup_exception_fail_closed():
+    """role_data_scope 조회 시 예외 발생 → fail-closed."""
+    class _ExceptionSB(FakeSB):
+        def table(self, name):
+            if name == "role_data_scope":
+                class _Raiser:
+                    def select(self, *a, **k): return self
+                    def eq(self, *a, **k): return self
+                    def limit(self, *a, **k): return self
+                    def execute(self): raise RuntimeError("simulated DB error")
+                return _Raiser()
+            return super().table(name)
+
+    sb = _ExceptionSB({"factories": list(_FACTORIES)})
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_FACTORY_A1, FAC_A1)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth19_null_scope_type_fail_closed():
+    """role_data_scope row 존재하지만 scope_type=None → fail-closed."""
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_NULL_SCOPE, FAC_A1)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth20_platform_scope_fail_closed_repeat():
+    """PLATFORM → fail-closed (AUTH12 동일, WO 번호 유지를 위한 alias)."""
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_PLATFORM, FAC_A1)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
 
 
 def test_auth_all_scope_can_access_any_factory():

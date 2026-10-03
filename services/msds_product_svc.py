@@ -10,7 +10,6 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from services.company_scope import _scope as _get_scope
 from services.time import now_kst, serialize_external_utc
 
 VALID_IDENTITY_STATUS = frozenset(["DRAFT", "CONFIRMED", "REVIEW_REQUIRED"])
@@ -65,18 +64,44 @@ def normalize_identifier(raw: str) -> str:
 
 # ─── Factory Scope Guard ──────────────────────────────────────────────────────
 
-def _require_factory_scope(sb, current_user: Dict[str, Any], factory_id: str) -> str:
-    """기존 role_data_scope tier 기반으로 factory 접근을 검증. 검증된 factory_id 반환.
+def _resolve_scope_strict(sb, role_code) -> Optional[str]:
+    """role_data_scope strict 조회. 미정의/lookup 실패/빈 scope → None (fail-closed용).
 
-    tier 별 계약:
+    company_scope._scope()의 silent TEAM fallback을 우회하여 명시적 scope만 신뢰.
+    """
+    if not role_code:
+        return None
+    try:
+        res = (
+            sb.table("role_data_scope")
+            .select("scope_type")
+            .eq("role_code", role_code)
+            .limit(1)
+            .execute()
+        )
+        if not res.data or not res.data[0].get("scope_type"):
+            return None
+        return res.data[0]["scope_type"]
+    except Exception:
+        return None
+
+
+def _require_factory_scope(sb, current_user: Dict[str, Any], factory_id: str) -> str:
+    """role_data_scope strict 조회 기반 factory 접근 검증. 검증된 factory_id 반환.
+
+    tier 별 최종 계약:
       ALL      — factory 존재 확인만 (플랫폼 관리자)
       COMPANY  — factory.company_id == user.company_id
       FACTORY  — factory_id == user.factory_id AND 동일 company
-      TEAM     — factory_id == user.factory_id AND 동일 company (chemical_products에 team_id 없음)
-      ASSIGNED — user.factory_id 배정 시 exact 일치; 미배정 시 company fallback
-      그 외    — fail-closed (404)
+      TEAM     — factory_id == user.factory_id AND 동일 company (team_id 컬럼 없음)
+      ASSIGNED — factory_id == user.factory_id AND 동일 company; 미배정 → DENY
+      그 외(PLATFORM/unknown/lookup 실패) — fail-closed (404)
     """
-    tier = _get_scope(sb, current_user.get("role_code"))
+    tier = _resolve_scope_strict(sb, current_user.get("role_code"))
+
+    if tier is None:
+        # role 미정의 / lookup 실패 / scope_type 없음 → fail-closed (silent TEAM 불허)
+        raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
 
     if tier == "ALL":
         res = sb.table("factories").select("id").eq("id", factory_id).limit(1).execute()
@@ -119,7 +144,10 @@ def _require_factory_scope(sb, current_user: Dict[str, Any], factory_id: str) ->
 
     if tier == "ASSIGNED":
         user_fid = current_user.get("factory_id")
-        if user_fid and factory_id != user_fid:
+        if not user_fid:
+            # factory_id scoped resource — 미배정 ASSIGNED는 DENY (company fallback 금지)
+            raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
+        if factory_id != user_fid:
             raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
         res = (
             sb.table("factories")
@@ -133,7 +161,7 @@ def _require_factory_scope(sb, current_user: Dict[str, Any], factory_id: str) ->
             raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
         return factory_id
 
-    # 알 수 없는 tier (PLATFORM 포함) → fail-closed
+    # PLATFORM 등 알 수 없는 tier → fail-closed
     raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
 
 
