@@ -179,3 +179,57 @@ async def finalize_intake(
     except MsdsProductError as e:
         raise _err(e) from e
     return {"status": "success", "data": result}
+
+
+# ─── Photo Intake ──────────────────────────────────────────────────────────────
+
+@router.post("/factories/{factory_id}/intakes/photos", status_code=201)
+async def create_photo_intake(
+    factory_id: str,
+    files: List[UploadFile] = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """Accept ordered JPEG photo set (sequence order = upload order)."""
+    _require_user(current_user)
+    sb = get_supabase()
+
+    photos = []
+    for seq_no, f in enumerate(files, start=1):
+        file_bytes = await f.read()
+        photos.append({
+            "bytes": file_bytes,
+            "file_name": f.filename or f"photo_{seq_no:03d}.jpg",
+            "sequence_no": seq_no,
+            "mime_type": f.content_type or "image/jpeg",
+        })
+
+    try:
+        result = svc.create_photo_intake(
+            sb=sb,
+            current_user=current_user,
+            factory_id=factory_id,
+            photos=photos,
+        )
+    except MsdsProductError as e:
+        raise _err(e) from e
+
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=201, content={"status": "success", "data": result})
+
+
+# ─── OCR Trigger ───────────────────────────────────────────────────────────────
+
+@router.post("/factories/{factory_id}/intakes/{intake_id}/ocr")
+def trigger_ocr(
+    factory_id: str,
+    intake_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Trigger OCR on an OCR_REQUIRED intake (CLOVA → Vision fallback)."""
+    _require_user(current_user)
+    sb = get_supabase()
+    try:
+        result = svc.run_ocr(sb, current_user, factory_id, intake_id)
+    except MsdsProductError as e:
+        raise _err(e) from e
+    return {"status": "success", "data": result}

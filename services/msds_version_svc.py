@@ -377,6 +377,7 @@ async def create_version(
     source_revision_date: Optional[str] = None,
     source_revision_no: Optional[str] = None,
     supplier_name: Optional[str] = None,
+    created_source: str = "PDF",
     _upload_fn: Optional[Callable] = None,
     _cleanup_storage_fn: Optional[Callable] = None,
     _cleanup_document_fn: Optional[Callable] = None,
@@ -443,7 +444,7 @@ async def create_version(
             source_revision_date=source_revision_date,
             source_revision_no=source_revision_no,
             supplier_name=supplier_name,
-            created_source="PDF",
+            created_source=created_source,
             created_by=current_user.get("id"),
         )
     except Exception as e:
