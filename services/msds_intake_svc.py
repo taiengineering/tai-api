@@ -20,7 +20,7 @@ from services import msds_fact_extractor as extractor
 from services import msds_reference_svc as ref_svc
 from services import msds_ocr_fact_parser as ocr_parser
 from services.msds_ocr_provider import (
-    OcrCredentialError, OcrProviderError, clova_available, run_clova_ocr_range,
+    OcrCredentialError, OcrProviderError, clova_available, run_clova_ocr_range, pdf_page_count,
 )
 from services.msds_vision_provider import VisionCredentialError, rasterize_pdf_page, run_vision_ocr
 
@@ -674,6 +674,17 @@ async def finalize_intake(
 
 # ─── Photo Intake ──────────────────────────────────────────────────────────────
 
+def _validate_photo_decode(photo_bytes: bytes, file_name: str = "") -> None:
+    """Verify photo bytes decode successfully with Pillow. Raises MsdsProductError on failure."""
+    try:
+        from PIL import Image
+        import io as _io
+        img = Image.open(_io.BytesIO(photo_bytes))
+        img.load()
+    except Exception:
+        raise MsdsProductError(422, "INVALID_PHOTO_FORMAT", f"이미지 디코딩 실패: {file_name}")
+
+
 _PHOTO_MAX_COUNT = 20
 _PHOTO_MAX_SINGLE_BYTES = 10 * 1024 * 1024   # 10 MiB
 _PHOTO_MAX_TOTAL_BYTES = 100 * 1024 * 1024   # 100 MiB
@@ -778,6 +789,10 @@ def create_photo_intake(
     if total_bytes > _PHOTO_MAX_TOTAL_BYTES:
         raise MsdsProductError(422, "PHOTO_TOTAL_TOO_LARGE", f"전체 사진 용량이 100MiB를 초과합니다.")
 
+    # Decode validation before any DB writes — corrupt images rejected here
+    for p in photos:
+        _validate_photo_decode(p["bytes"], p.get("file_name", ""))
+
     company_id = _get_company_id(sb, factory_id)
 
     # Create intake row
@@ -802,13 +817,17 @@ def create_photo_intake(
     try:
         photo_records: List[Dict] = []
         for p in photos:
-            normalized = _normalize_photo(p["bytes"])
-            sha = _sha256(normalized)
+            original_bytes = p["bytes"]
+            original_sha = _sha256(original_bytes)
+            original_mime = p.get("mime_type", "image/jpeg")
+            file_name = p.get("file_name", f"photo_{p['sequence_no']:03d}.jpg")
+
+            # Store original bytes in PHOTO artifact (no normalization)
             storage_path = _temp_storage_path(company_id, intake_id, "jpg")
             sb.storage.from_(_INTAKE_BUCKET).upload(
                 path=storage_path,
-                file=normalized,
-                file_options={"content-type": "image/jpeg"},
+                file=original_bytes,
+                file_options={"content-type": original_mime},
             )
             all_storage_paths.append(storage_path)
 
@@ -817,16 +836,24 @@ def create_photo_intake(
                 "artifact_type": "PHOTO",
                 "bucket_id": _INTAKE_BUCKET,
                 "storage_path": storage_path,
-                "file_name": p.get("file_name", f"photo_{p['sequence_no']:03d}.jpg"),
-                "mime_type": "image/jpeg",
-                "file_size": len(normalized),
-                "content_sha256": sha,
+                "file_name": file_name,
+                "mime_type": original_mime,
+                "file_size": len(original_bytes),
+                "content_sha256": original_sha,
                 "sequence_no": p["sequence_no"],
                 "is_primary": False,
             }).execute()
             if not art_res.data:
                 raise MsdsProductError(500, "ARTIFACT_CREATE_FAILED", "Photo artifact 생성 실패")
             committed_paths.add(storage_path)
+
+            # Normalize original → JPEG for derived PDF building only
+            try:
+                normalized = _normalize_photo(original_bytes)
+            except MsdsProductError:
+                raise
+            except Exception as e:
+                raise MsdsProductError(500, "PHOTO_PROCESS_FAILED", f"이미지 처리 실패: {file_name}: {e}") from e
 
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 tmp.write(normalized)
@@ -957,8 +984,8 @@ def _do_ocr_process(sb, current_user, factory_id, intake_id, intake) -> Dict[str
         facts = ocr_parser.parse_ocr_facts(p1.full_text, extraction_method="OCR") if p1.full_text.strip() else []
         _add_provenance(facts, provider="CLOVA", request_id=p1.request_id)
 
-        # Pass 2: pages 6-10 only when pass1 is insufficient
-        if not ocr_parser.is_sufficient(facts):
+        # Pass 2: pages 6-10 only when pass1 insufficient AND document has >5 pages
+        if not ocr_parser.is_sufficient(facts) and pdf_page_count(pdf_bytes) > 5:
             p2 = run_clova_ocr_range(pdf_bytes, start_page=5, end_page=10)
             if p2.full_text.strip():
                 p2_facts = ocr_parser.parse_ocr_facts(p2.full_text, extraction_method="OCR")

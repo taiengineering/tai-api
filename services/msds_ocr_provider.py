@@ -132,13 +132,15 @@ def _call_clova(pdf_bytes: bytes) -> OcrResult:
         reraise=True,
     )
     def _do_post() -> "requests.Response":
-        return requests.post(
+        r = requests.post(
             url,
             headers={"X-OCR-SECRET": secret},
             data={"message": request_body},
             files={"file": ("msds.pdf", pdf_bytes, "application/pdf")},
             timeout=60,
         )
+        r.raise_for_status()  # raises HTTPError inside retry — triggers retry on 429/5xx
+        return r
 
     t0 = time.perf_counter()
     try:
@@ -152,14 +154,6 @@ def _call_clova(pdf_bytes: bytes) -> OcrResult:
         raise OcrRequestFailedError(f"CLOVA HTTP {status}") from e
     except Exception as e:
         raise OcrRequestFailedError(f"CLOVA request failed: {str(e)[:200]}") from e
-
-    try:
-        resp.raise_for_status()
-    except Exception as e:
-        status = resp.status_code
-        if status == 429:
-            raise OcrRateLimitError(f"CLOVA rate limited (429)") from e
-        raise OcrRequestFailedError(f"CLOVA HTTP {status}") from e
 
     latency_ms = (time.perf_counter() - t0) * 1000
 
@@ -186,6 +180,11 @@ def _call_clova(pdf_bytes: bytes) -> OcrResult:
         call_count=1,
         request_id=request_id,
     )
+
+
+def pdf_page_count(pdf_bytes: bytes) -> int:
+    """Return the number of pages in a PDF. Returns 0 on parse failure."""
+    return _pdf_page_count(pdf_bytes)
 
 
 def run_clova_ocr_range(

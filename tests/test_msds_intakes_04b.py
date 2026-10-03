@@ -401,9 +401,10 @@ class TestPhotoIntake:
             svc.create_photo_intake(sb, wrong_user, FAC_A, photos)
         assert exc.value.status_code in (403, 404)
 
+    @patch("services.msds_intake_svc._validate_photo_decode")
     @patch("services.msds_intake_svc._normalize_photo", side_effect=lambda b: b)
     @patch("services.msds_intake_svc._build_derived_pdf")
-    def test_ph05_photo_intake_creates_artifacts(self, mock_build_pdf, mock_norm):
+    def test_ph05_photo_intake_creates_artifacts(self, mock_build_pdf, mock_norm, mock_val):
         """PH05: create_photo_intake creates PHOTO artifacts + derived PDF artifact."""
         mock_build_pdf.return_value = b"%PDF-1.4 derived"
         sb = _make_sb()
@@ -429,9 +430,10 @@ class TestPhotoIntake:
         seq_nos = sorted(a["sequence_no"] for a in photo_arts)
         assert seq_nos == [1, 2]
 
+    @patch("services.msds_intake_svc._validate_photo_decode")
     @patch("services.msds_intake_svc._normalize_photo", side_effect=lambda b: b)
     @patch("services.msds_intake_svc._build_derived_pdf")
-    def test_ph06_intake_status_received(self, mock_build_pdf, mock_norm):
+    def test_ph06_intake_status_received(self, mock_build_pdf, mock_norm, mock_val):
         """PH06: Newly created photo intake has RECEIVED status."""
         mock_build_pdf.return_value = b"%PDF-1.4 test"
         sb = _make_sb()
@@ -440,9 +442,10 @@ class TestPhotoIntake:
         result = svc.create_photo_intake(sb, USER_A, FAC_A, photos)
         assert result["intake"]["status"] == "RECEIVED"
 
+    @patch("services.msds_intake_svc._validate_photo_decode")
     @patch("services.msds_intake_svc._normalize_photo", side_effect=lambda b: b)
     @patch("services.msds_intake_svc._build_derived_pdf")
-    def test_ph07_storage_uploaded_for_each_photo_plus_derived(self, mock_build_pdf, mock_norm):
+    def test_ph07_storage_uploaded_for_each_photo_plus_derived(self, mock_build_pdf, mock_norm, mock_val):
         """PH07: Storage uploads include one per photo + one for derived PDF."""
         mock_build_pdf.return_value = b"%PDF-1.4 test"
         sb = _make_sb()
@@ -629,9 +632,10 @@ class TestOcrRun:
         assert second_count == first_count
 
     @patch("services.msds_intake_svc.clova_available", return_value=True)
+    @patch("services.msds_intake_svc.pdf_page_count", return_value=10)
     @patch("services.msds_intake_svc.run_clova_ocr_range")
     @patch("services.msds_intake_svc.ref_svc.find_reference_candidates", return_value=[])
-    def test_ocr08_pass1_sufficient_no_pass2(self, mock_ref, mock_ocr, mock_avail):
+    def test_ocr08_pass1_sufficient_no_pass2(self, mock_ref, mock_ocr, mock_count, mock_avail):
         """OCR08: When pass1 yields PRODUCT_NAME+CAS, pass2 is NOT called."""
         from services.msds_ocr_provider import OcrResult
         mock_ocr.return_value = OcrResult(
@@ -645,9 +649,10 @@ class TestOcrRun:
         assert mock_ocr.call_count == 1  # only pass1
 
     @patch("services.msds_intake_svc.clova_available", return_value=True)
+    @patch("services.msds_intake_svc.pdf_page_count", return_value=10)
     @patch("services.msds_intake_svc.run_clova_ocr_range")
     @patch("services.msds_intake_svc.ref_svc.find_reference_candidates", return_value=[])
-    def test_ocr09_pass1_insufficient_triggers_pass2(self, mock_ref, mock_ocr, mock_avail):
+    def test_ocr09_pass1_insufficient_triggers_pass2(self, mock_ref, mock_ocr, mock_count, mock_avail):
         """OCR09: Pass1 returns manufacturer only → pass2 called; merged facts include product+CAS."""
         from services.msds_ocr_provider import OcrResult
         pass1 = OcrResult(provider="CLOVA", full_text="제조사: 주식회사A", request_id="req-p1")
@@ -661,9 +666,8 @@ class TestOcrRun:
         intake_id, _ = self._make_ocr_required_intake(sb)
         result = svc.run_ocr(sb, USER_A, FAC_A, intake_id)
         assert mock_ocr.call_count == 2
-        calls = mock_ocr.call_args_list
-        assert calls[0][1].get("start_page", calls[0][0][1] if len(calls[0][0]) > 1 else 0) == 0
-        assert calls[1][1].get("start_page", calls[1][0][1] if len(calls[1][0]) > 1 else 5) == 5
+        assert mock_ocr.call_args_list[0][1].get("start_page") == 0
+        assert mock_ocr.call_args_list[1][1].get("start_page") == 5
         facts = sb.store["msds_intake_facts"]
         fact_types = {f["fact_type"] for f in facts}
         assert "PRODUCT_NAME" in fact_types
@@ -709,9 +713,9 @@ class TestPhotoGuards:
         """PH08: PNG magic bytes pass INVALID_PHOTO_FORMAT guard (no error raised at format check)."""
         sb = _make_sb()
         png_magic = b"\x89PNG\r\n\x1a\n" + b"\x00" * 56  # minimal PNG header-like bytes
-        # PH08 just verifies format guard passes; _normalize_photo would fail on invalid PNG
-        # so we patch it to isolate the guard
-        with patch("services.msds_intake_svc._normalize_photo", side_effect=lambda b: b), \
+        # Patch both decode validation and normalize to isolate the magic-bytes guard
+        with patch("services.msds_intake_svc._validate_photo_decode"), \
+             patch("services.msds_intake_svc._normalize_photo", side_effect=lambda b: b), \
              patch("services.msds_intake_svc._build_derived_pdf", return_value=b"%PDF-1.4 x"):
             result = svc.create_photo_intake(
                 sb, USER_A, FAC_A,
@@ -798,3 +802,273 @@ class TestIsPrimary:
         assert len(artifacts) == 1
         assert artifacts[0]["is_primary"] is True
         assert artifacts[0]["artifact_type"] == "PDF"
+
+
+# ─── CLOVA retry tests ─────────────────────────────────────────────────────────
+
+def _make_minimal_jpeg() -> bytes:
+    """Generate a minimal valid 4x4 JPEG via Pillow (if available)."""
+    try:
+        import io as _io
+        from PIL import Image
+        buf = _io.BytesIO()
+        Image.new("RGB", (4, 4), color=(255, 128, 0)).save(buf, "JPEG")
+        return buf.getvalue()
+    except ImportError:
+        return JPEG_MAGIC
+
+
+def _make_minimal_png() -> bytes:
+    """Generate a minimal valid 4x4 PNG via Pillow (if available)."""
+    try:
+        import io as _io
+        from PIL import Image
+        buf = _io.BytesIO()
+        Image.new("RGB", (4, 4), color=(0, 128, 255)).save(buf, "PNG")
+        return buf.getvalue()
+    except ImportError:
+        return b"\x89PNG\r\n\x1a\n" + b"\x00" * 56
+
+
+class TestClovaOcrRetry:
+    """CLOVA retry: raise_for_status inside _do_post triggers retry on 429/5xx."""
+
+    _ENV = {"CLOVA_OCR_INVOKE_URL": "https://fake.clova.test", "CLOVA_OCR_SECRET": "secret"}
+
+    def _http_err(self, status: int):
+        """Return (mock_response, HTTPError) pair for given status code."""
+        import requests as req_lib
+        mock_resp = MagicMock()
+        mock_resp.status_code = status
+        err = req_lib.exceptions.HTTPError(response=mock_resp)
+        mock_resp.raise_for_status.side_effect = err
+        return mock_resp
+
+    @patch.dict("os.environ", {"CLOVA_OCR_INVOKE_URL": "https://fake.clova.test", "CLOVA_OCR_SECRET": "s"})
+    @patch("time.sleep")
+    @patch("services.msds_ocr_provider._slice_pdf", return_value=b"sliced")
+    def test_or01_429_retries_3_times_raises_rate_limit(self, mock_slice, mock_sleep):
+        """OR01: 429 response triggers retry on all 3 attempts, raises OcrRateLimitError."""
+        from services.msds_ocr_provider import run_clova_ocr_range, OcrRateLimitError
+        mock_resp = self._http_err(429)
+        with patch("requests.post", return_value=mock_resp) as mock_post:
+            with pytest.raises(OcrRateLimitError):
+                run_clova_ocr_range(b"fake", start_page=0, end_page=5)
+            assert mock_post.call_count == 3
+
+    @patch.dict("os.environ", {"CLOVA_OCR_INVOKE_URL": "https://fake.clova.test", "CLOVA_OCR_SECRET": "s"})
+    @patch("time.sleep")
+    @patch("services.msds_ocr_provider._slice_pdf", return_value=b"sliced")
+    def test_or02_500_then_success_on_third_attempt(self, mock_slice, mock_sleep):
+        """OR02: 500 on attempts 1+2, 200 on attempt 3 → success, post called 3 times."""
+        from services.msds_ocr_provider import run_clova_ocr_range
+        import requests as req_lib
+        mock_500 = self._http_err(500)
+        mock_200 = MagicMock()
+        mock_200.status_code = 200
+        mock_200.raise_for_status.return_value = None
+        mock_200.json.return_value = {"images": [{"fields": [{"inferText": "테스트"}]}]}
+        with patch("requests.post", side_effect=[mock_500, mock_500, mock_200]) as mock_post:
+            result = run_clova_ocr_range(b"fake", start_page=0, end_page=5)
+        assert mock_post.call_count == 3
+        assert "테스트" in result.full_text
+
+    @patch.dict("os.environ", {"CLOVA_OCR_INVOKE_URL": "https://fake.clova.test", "CLOVA_OCR_SECRET": "s"})
+    @patch("time.sleep")
+    @patch("services.msds_ocr_provider._slice_pdf", return_value=b"sliced")
+    def test_or03_400_no_retry_raises_unsupported_format(self, mock_slice, mock_sleep):
+        """OR03: 400 is not retryable — exactly 1 attempt, raises OcrUnsupportedFormatError."""
+        from services.msds_ocr_provider import run_clova_ocr_range, OcrUnsupportedFormatError
+        mock_resp = self._http_err(400)
+        with patch("requests.post", return_value=mock_resp) as mock_post:
+            with pytest.raises(OcrUnsupportedFormatError):
+                run_clova_ocr_range(b"fake", start_page=0, end_page=5)
+            assert mock_post.call_count == 1
+
+    @patch.dict("os.environ", {"CLOVA_OCR_INVOKE_URL": "https://fake.clova.test", "CLOVA_OCR_SECRET": "s"})
+    @patch("time.sleep")
+    @patch("services.msds_ocr_provider._slice_pdf", return_value=b"sliced")
+    def test_or04_415_no_retry_raises_unsupported_format(self, mock_slice, mock_sleep):
+        """OR04: 415 is not retryable — exactly 1 attempt, raises OcrUnsupportedFormatError."""
+        from services.msds_ocr_provider import run_clova_ocr_range, OcrUnsupportedFormatError
+        mock_resp = self._http_err(415)
+        with patch("requests.post", return_value=mock_resp) as mock_post:
+            with pytest.raises(OcrUnsupportedFormatError):
+                run_clova_ocr_range(b"fake", start_page=0, end_page=5)
+            assert mock_post.call_count == 1
+
+
+# ─── Short PDF pass2 skip tests ────────────────────────────────────────────────
+
+class TestOcrPass2ShortPdf:
+    """Verify pass2 is skipped when PDF has ≤5 pages (avoid empty-range API error)."""
+
+    def _make_ocr_required_intake(self, sb):
+        intake_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        storage_path = f"company-a/msds-intake/{intake_id}/doc.pdf"
+        pdf_bytes = b"%PDF-1.4 short"
+        sb.storage.from_("company-docs")._store[storage_path] = pdf_bytes
+        sb.store["msds_intakes"].append({
+            "id": intake_id, "factory_id": FAC_A, "source_type": "PDF",
+            "status": "OCR_REQUIRED",
+            "reference_snapshot_id": "0ad73e46-d61b-474d-a90e-5b5ab8080d80",
+            "created_by": "user-a",
+        })
+        sb.store["msds_intake_artifacts"].append({
+            "id": artifact_id, "intake_id": intake_id, "artifact_type": "PDF",
+            "bucket_id": "company-docs", "storage_path": storage_path,
+            "file_name": "test.pdf", "mime_type": "application/pdf",
+            "file_size": len(pdf_bytes),
+            "content_sha256": hashlib.sha256(pdf_bytes).hexdigest(),
+            "is_primary": True,
+        })
+        return intake_id
+
+    @patch("services.msds_intake_svc.clova_available", return_value=True)
+    @patch("services.msds_intake_svc.pdf_page_count", return_value=3)
+    @patch("services.msds_intake_svc.run_clova_ocr_range")
+    @patch("services.msds_intake_svc.rasterize_pdf_page", return_value=None)
+    @patch("services.msds_intake_svc.ref_svc.find_reference_candidates", return_value=[])
+    def test_s01_3page_insufficient_no_pass2(self, mock_ref, mock_rast, mock_ocr, mock_count, mock_avail):
+        """S01: 3-page PDF, pass1 insufficient → pass2 NOT called (only 1 OCR call)."""
+        from services.msds_ocr_provider import OcrResult
+        mock_ocr.return_value = OcrResult(
+            provider="CLOVA", full_text="제조사: 주식회사테스트", request_id="r1"
+        )
+        sb = _make_sb()
+        intake_id = self._make_ocr_required_intake(sb)
+        svc.run_ocr(sb, USER_A, FAC_A, intake_id)
+        assert mock_ocr.call_count == 1
+
+    @patch("services.msds_intake_svc.clova_available", return_value=True)
+    @patch("services.msds_intake_svc.pdf_page_count", return_value=5)
+    @patch("services.msds_intake_svc.run_clova_ocr_range")
+    @patch("services.msds_intake_svc.rasterize_pdf_page", return_value=None)
+    @patch("services.msds_intake_svc.ref_svc.find_reference_candidates", return_value=[])
+    def test_s02_5page_insufficient_no_pass2(self, mock_ref, mock_rast, mock_ocr, mock_count, mock_avail):
+        """S02: 5-page PDF, pass1 insufficient → pass2 NOT called (boundary: >5 required)."""
+        from services.msds_ocr_provider import OcrResult
+        mock_ocr.return_value = OcrResult(
+            provider="CLOVA", full_text="제조사: 주식회사테스트", request_id="r1"
+        )
+        sb = _make_sb()
+        intake_id = self._make_ocr_required_intake(sb)
+        svc.run_ocr(sb, USER_A, FAC_A, intake_id)
+        assert mock_ocr.call_count == 1
+
+    @patch("services.msds_intake_svc.clova_available", return_value=True)
+    @patch("services.msds_intake_svc.pdf_page_count", return_value=8)
+    @patch("services.msds_intake_svc.run_clova_ocr_range")
+    @patch("services.msds_intake_svc.ref_svc.find_reference_candidates", return_value=[])
+    def test_s03_8page_insufficient_triggers_pass2(self, mock_ref, mock_ocr, mock_count, mock_avail):
+        """S03: 8-page PDF, pass1 insufficient → pass2 called with start_page=5."""
+        from services.msds_ocr_provider import OcrResult
+        pass1 = OcrResult(provider="CLOVA", full_text="제조사: X", request_id="r1")
+        pass2 = OcrResult(provider="CLOVA", full_text="제품명: Y\n7647-01-0", request_id="r2")
+        mock_ocr.side_effect = [pass1, pass2]
+        sb = _make_sb()
+        intake_id = self._make_ocr_required_intake(sb)
+        svc.run_ocr(sb, USER_A, FAC_A, intake_id)
+        assert mock_ocr.call_count == 2
+        pass2_kwargs = mock_ocr.call_args_list[1][1]
+        assert pass2_kwargs.get("start_page") == 5
+        assert pass2_kwargs.get("end_page") == 10
+
+
+# ─── Original photo preservation tests ────────────────────────────────────────
+
+class TestPhotoOriginalPreservation:
+    """PHOTO artifact must store user-supplied original bytes, not the normalized form."""
+
+    @patch("services.msds_intake_svc._build_derived_pdf", return_value=b"%PDF-1.4 derived")
+    def test_pp01_jpeg_original_sha_in_artifact(self, mock_pdf):
+        """PP01: JPEG PHOTO artifact content_sha256 matches original upload, not normalized."""
+        real_jpeg = _make_minimal_jpeg()
+        original_sha = hashlib.sha256(real_jpeg).hexdigest()
+        sb = _make_sb()
+        svc.create_photo_intake(
+            sb, USER_A, FAC_A,
+            [{"bytes": real_jpeg, "file_name": "orig.jpg", "sequence_no": 1, "mime_type": "image/jpeg"}],
+        )
+        artifacts = sb.store["msds_intake_artifacts"]
+        photo_art = next(a for a in artifacts if a["artifact_type"] == "PHOTO")
+        assert photo_art["content_sha256"] == original_sha
+        assert photo_art["file_size"] == len(real_jpeg)
+        assert photo_art["mime_type"] == "image/jpeg"
+
+    @patch("services.msds_intake_svc._build_derived_pdf", return_value=b"%PDF-1.4 derived")
+    def test_pp02_jpeg_original_stored_in_storage(self, mock_pdf):
+        """PP02: Storage object for JPEG PHOTO contains original bytes, not re-encoded JPEG."""
+        real_jpeg = _make_minimal_jpeg()
+        original_sha = hashlib.sha256(real_jpeg).hexdigest()
+        sb = _make_sb()
+        svc.create_photo_intake(
+            sb, USER_A, FAC_A,
+            [{"bytes": real_jpeg, "file_name": "orig.jpg", "sequence_no": 1, "mime_type": "image/jpeg"}],
+        )
+        artifacts = sb.store["msds_intake_artifacts"]
+        photo_art = next(a for a in artifacts if a["artifact_type"] == "PHOTO")
+        stored = sb.storage.from_("company-docs")._store[photo_art["storage_path"]]
+        assert hashlib.sha256(stored).hexdigest() == original_sha
+
+    @patch("services.msds_intake_svc._build_derived_pdf", return_value=b"%PDF-1.4 derived")
+    def test_pp03_png_original_preserved_with_png_mimetype(self, mock_pdf):
+        """PP03: PNG PHOTO artifact preserves original PNG bytes and image/png mime_type."""
+        real_png = _make_minimal_png()
+        original_sha = hashlib.sha256(real_png).hexdigest()
+        sb = _make_sb()
+        svc.create_photo_intake(
+            sb, USER_A, FAC_A,
+            [{"bytes": real_png, "file_name": "orig.png", "sequence_no": 1, "mime_type": "image/png"}],
+        )
+        artifacts = sb.store["msds_intake_artifacts"]
+        photo_art = next(a for a in artifacts if a["artifact_type"] == "PHOTO")
+        assert photo_art["content_sha256"] == original_sha
+        assert photo_art["mime_type"] == "image/png"
+        stored = sb.storage.from_("company-docs")._store[photo_art["storage_path"]]
+        assert hashlib.sha256(stored).hexdigest() == original_sha
+
+    @patch("services.msds_intake_svc._build_derived_pdf", return_value=b"%PDF-1.4 derived")
+    def test_pp04_derived_pdf_sha_differs_from_original(self, mock_pdf):
+        """PP04: Derived PDF artifact SHA ≠ original PHOTO SHA (separate objects)."""
+        real_jpeg = _make_minimal_jpeg()
+        original_sha = hashlib.sha256(real_jpeg).hexdigest()
+        sb = _make_sb()
+        svc.create_photo_intake(
+            sb, USER_A, FAC_A,
+            [{"bytes": real_jpeg, "file_name": "orig.jpg", "sequence_no": 1, "mime_type": "image/jpeg"}],
+        )
+        artifacts = sb.store["msds_intake_artifacts"]
+        pdf_art = next(a for a in artifacts if a["artifact_type"] == "PDF")
+        assert pdf_art["content_sha256"] != original_sha
+
+
+# ─── Invalid image decode tests ────────────────────────────────────────────────
+
+class TestInvalidImageDecode:
+    """Corrupt images with valid magic bytes must be rejected before intake row creation."""
+
+    def test_id01_broken_jpeg_rejected_no_intake(self):
+        """ID01: JPEG magic + corrupt body → INVALID_PHOTO_FORMAT, no intake row created."""
+        broken = b"\xff\xd8\xff\xe0" + b"CORRUPT_BODY_NOT_A_REAL_JPEG"
+        sb = _make_sb()
+        with pytest.raises(MsdsProductError) as exc:
+            svc.create_photo_intake(
+                sb, USER_A, FAC_A,
+                [{"bytes": broken, "file_name": "bad.jpg", "sequence_no": 1, "mime_type": "image/jpeg"}],
+            )
+        assert exc.value.code == "INVALID_PHOTO_FORMAT"
+        assert len(sb.store["msds_intakes"]) == 0
+
+    def test_id02_broken_png_rejected_no_intake(self):
+        """ID02: PNG magic + corrupt body → INVALID_PHOTO_FORMAT, no intake row created."""
+        broken = b"\x89PNG\r\n\x1a\n" + b"CORRUPT_PNG_GARBAGE"
+        sb = _make_sb()
+        with pytest.raises(MsdsProductError) as exc:
+            svc.create_photo_intake(
+                sb, USER_A, FAC_A,
+                [{"bytes": broken, "file_name": "bad.png", "sequence_no": 1, "mime_type": "image/png"}],
+            )
+        assert exc.value.code == "INVALID_PHOTO_FORMAT"
+        assert len(sb.store["msds_intakes"]) == 0
