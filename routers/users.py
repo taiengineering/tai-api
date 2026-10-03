@@ -120,6 +120,82 @@ def _demo_user_ids(supabase) -> list:
         return []
 
 
+def _enrich_user_rows(supabase, items: list) -> list:
+    """회원관리 목록 표시용 라벨을 FK 기준으로 병합한다.
+
+    기존 /users 소비자는 raw 컬럼을 그대로 사용하므로 원본 필드는 보존하고,
+    admin member-list 가 기대하는 role_name/company_name/factory_name/status_name 만
+    additive 하게 추가한다.
+    """
+    if not items:
+        return []
+
+    role_codes = list({r.get("role_code") for r in items if r.get("role_code")})
+    company_ids = list({r.get("company_id") for r in items if r.get("company_id")})
+    factory_ids = list({r.get("factory_id") for r in items if r.get("factory_id")})
+    status_codes = list({r.get("status_code") for r in items if r.get("status_code")})
+
+    role_map = {}
+    if role_codes:
+        rows = (
+            supabase.table("roles")
+            .select("role_code,role_name")
+            .in_("role_code", role_codes)
+            .execute()
+            .data
+        ) or []
+        role_map = {r.get("role_code"): r.get("role_name") for r in rows}
+
+    company_map = {}
+    if company_ids:
+        rows = (
+            supabase.table("companies")
+            .select("id,name")
+            .in_("id", company_ids)
+            .execute()
+            .data
+        ) or []
+        company_map = {r.get("id"): r.get("name") for r in rows}
+
+    factory_map = {}
+    if factory_ids:
+        rows = (
+            supabase.table("factories")
+            .select("id,name")
+            .in_("id", factory_ids)
+            .execute()
+            .data
+        ) or []
+        factory_map = {r.get("id"): r.get("name") for r in rows}
+
+    status_map = {}
+    if status_codes:
+        rows = (
+            supabase.table("system_codes")
+            .select("code,code_name")
+            .eq("category", "user_status")
+            .in_("code", status_codes)
+            .execute()
+            .data
+        ) or []
+        status_map = {r.get("code"): r.get("code_name") for r in rows}
+
+    out = []
+    for row in items:
+        item = dict(row)
+        role_code = item.get("role_code")
+        company_id = item.get("company_id")
+        factory_id = item.get("factory_id")
+        status_code = item.get("status_code")
+        item["role_name"] = role_map.get(role_code)
+        item["company_name"] = company_map.get(company_id)
+        item["factory_name"] = factory_map.get(factory_id)
+        item["status"] = status_code
+        item["status_name"] = status_map.get(status_code)
+        out.append(item)
+    return out
+
+
 # ============================================================
 # 1. 회원 목록
 #    company_id·factory_id 둘 다 미지정(어드민 전체목록)이면 데모 테넌트 사용자 제외.
@@ -135,23 +211,34 @@ def get_users(
     factory_id:  Optional[str] = Query(default=None),
     role_code:   Optional[str] = Query(default=None),
     status_code: Optional[str] = Query(default=None),
+    # admin-vue3 member-list 호환 별칭. canonical 파라미터가 있으면 canonical 우선.
+    keyword:     Optional[str] = Query(default=None),
+    role:        Optional[str] = Query(default=None),
+    status:      Optional[str] = Query(default=None),
 ):
     supabase = get_supabase()
+
+    effective_search = search or keyword
+    effective_role = role_code or role
+    effective_status = status_code or status
+
     query = supabase.table("users").select("*", count="exact")
     if not company_id and not factory_id:
         for uid in _demo_user_ids(supabase):
             query = query.neq("id", uid)
-    if search:      query = query.or_(f"name.ilike.%{search}%,email.ilike.%{search}%")
-    if company_id:  query = query.eq("company_id", company_id)
-    if factory_id:  query = query.eq("factory_id", factory_id)
-    if role_code:   query = query.eq("role_code", role_code)
-    if status_code: query = query.eq("status_code", status_code)
+    if effective_search:
+        query = query.or_(f"name.ilike.%{effective_search}%,email.ilike.%{effective_search}%")
+    if company_id:       query = query.eq("company_id", company_id)
+    if factory_id:       query = query.eq("factory_id", factory_id)
+    if effective_role:   query = query.eq("role_code", effective_role)
+    if effective_status: query = query.eq("status_code", effective_status)
     offset = (page - 1) * size
     res = query.order("created_at", desc=True).range(offset, offset + size - 1).execute()
+    items = _enrich_user_rows(supabase, res.data or [])
     return {
         "status": "success",
         "data": {
-            "items":       res.data,
+            "items":       items,
             "total":       res.count,
             "page":        page,
             "size":        size,
