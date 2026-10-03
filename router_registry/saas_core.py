@@ -47,4 +47,6 @@ ROUTERS = [
     {"module": "routers.msds_products"},
     # WO-MSDS-03: Customer Original MSDS Version (/me/msds/factories/{fid}/products/{pid}/versions)
     {"module": "routers.msds_versions"},
+    # WO-MSDS-04A: MSDS Document Intake
+    {"module": "routers.msds_intakes"},
 ]

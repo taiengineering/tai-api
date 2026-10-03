@@ -27,6 +27,7 @@ boto3>=1.34.0,<2
 # psycopg2-binary: 정기결제 직접 SQL(db/direct_sql.py) — PostgREST 스키마캐시
 # 우회용. 누락 시 POST /payments/inicis/billing/prepare 가 ModuleNotFoundError로
 # 평문 500("Internal Server Error") 반환 → 프론트 JSON 파싱 실패.
+pypdf>=4.0.0,<5
 
 # urllib3==2.0.7 + requests==2.31.0: 프록시(OUTBOUND_PROXY) 경유 data.go.kr
 # HTTPS 호출이 requests 2.32+ 에서 코드10(INVALID_REQUEST_PARAMETER)로 거부됨(프록시
