@@ -1,0 +1,15 @@
+{
+  "id": "M03",
+  "product_name": "실험실 혼합산 / Lab Mixed Acid",
+  "manufacturer_name": "케미칼코리아(주)",
+  "supplier_name": "한국과학(주)",
+  "product_code": "LAB-ACD-M",
+  "cas_numbers": [
+    "7647-01-0",
+    "7664-93-9"
+  ],
+  "language": "mixed",
+  "variant": "clean",
+  "cas_page": 2,
+  "total_pages": 10
+}

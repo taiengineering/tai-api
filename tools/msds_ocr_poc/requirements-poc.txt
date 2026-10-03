@@ -1,0 +1,16 @@
+# PoC-only dependencies — do NOT add to root requirements.txt
+# Already available in dev environment (confirmed 2026-10-03):
+#   Pillow==12.3.0
+#   reportlab==5.0.1
+#   pypdf==6.19.0
+#
+# Optional (requires installation):
+#   pytesseract          -- needs tesseract binary (ABSENT on current env)
+#   openai>=1.0.0        -- Vision fallback (needs OPENAI_API_KEY)
+#   requests             -- CLOVA adapter (stdlib available, listed for clarity)
+#
+# Install for full benchmark:
+#   pip install pytesseract openai requests
+#
+# Install tesseract (macOS):
+#   brew install tesseract tesseract-lang

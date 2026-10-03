@@ -1,0 +1,15 @@
+{
+  "id": "M01",
+  "product_name": "혼합용제 / Mixed Solvent A",
+  "manufacturer_name": "한국용제(주)",
+  "supplier_name": null,
+  "product_code": "MIX-SOL-A",
+  "cas_numbers": [
+    "108-88-3",
+    "1330-20-7"
+  ],
+  "language": "mixed",
+  "variant": "clean",
+  "cas_page": 3,
+  "total_pages": 10
+}

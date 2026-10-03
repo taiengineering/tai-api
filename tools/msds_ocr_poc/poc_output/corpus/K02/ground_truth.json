@@ -1,0 +1,14 @@
+{
+  "id": "K02",
+  "product_name": "황산 98%",
+  "manufacturer_name": "한국화학(주)",
+  "supplier_name": "대한시약(주)",
+  "product_code": "H2SO4-98",
+  "cas_numbers": [
+    "7664-93-9"
+  ],
+  "language": "korean",
+  "variant": "clean",
+  "cas_page": 2,
+  "total_pages": 10
+}

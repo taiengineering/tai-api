@@ -1,0 +1,16 @@
+{
+  "id": "M08",
+  "product_name": "산업용 세척제 / Industrial Cleaner",
+  "manufacturer_name": "케이엠화학",
+  "supplier_name": "클린켐(주)",
+  "product_code": "IND-CLN-3",
+  "cas_numbers": [
+    "67-56-1",
+    "67-63-0",
+    "64-17-5"
+  ],
+  "language": "mixed",
+  "variant": "clean",
+  "cas_page": 3,
+  "total_pages": 10
+}

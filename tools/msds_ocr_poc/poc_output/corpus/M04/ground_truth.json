@@ -1,0 +1,16 @@
+{
+  "id": "M04",
+  "product_name": "유기용제혼합물 / Organic Solvent Mix",
+  "manufacturer_name": "한화케미칼",
+  "supplier_name": null,
+  "product_code": "ORG-MIX-3",
+  "cas_numbers": [
+    "71-43-2",
+    "108-88-3",
+    "1330-20-7"
+  ],
+  "language": "mixed",
+  "variant": "clean",
+  "cas_page": 4,
+  "total_pages": 10
+}

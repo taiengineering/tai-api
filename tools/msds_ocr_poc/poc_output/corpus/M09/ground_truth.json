@@ -1,0 +1,16 @@
+{
+  "id": "M09",
+  "product_name": "도료희석제 / Paint Thinner",
+  "manufacturer_name": "SK케미칼(주)",
+  "supplier_name": null,
+  "product_code": "PAINT-THN",
+  "cas_numbers": [
+    "108-88-3",
+    "110-54-3",
+    "1330-20-7"
+  ],
+  "language": "mixed",
+  "variant": "clean",
+  "cas_page": 5,
+  "total_pages": 10
+}

@@ -1,0 +1,14 @@
+{
+  "id": "K06",
+  "product_name": "벤젠",
+  "manufacturer_name": "한국바스프(주)",
+  "supplier_name": "한국시약(주)",
+  "product_code": "BNZ-99",
+  "cas_numbers": [
+    "71-43-2"
+  ],
+  "language": "korean",
+  "variant": "clean",
+  "cas_page": 4,
+  "total_pages": 10
+}

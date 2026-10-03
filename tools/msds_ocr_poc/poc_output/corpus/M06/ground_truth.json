@@ -1,0 +1,14 @@
+{
+  "id": "M06",
+  "product_name": "단순혼합용제 / Simple Blend",
+  "manufacturer_name": "OCI(주)",
+  "supplier_name": null,
+  "product_code": "SMPL-BLD",
+  "cas_numbers": [
+    "64-17-5"
+  ],
+  "language": "mixed",
+  "variant": "clean",
+  "cas_page": 5,
+  "total_pages": 10
+}

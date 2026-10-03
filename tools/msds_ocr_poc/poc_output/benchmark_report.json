@@ -1,0 +1,1181 @@
+{
+  "output_dir": "/Users/taiwangsim/Desktop/tai-engineering/tai-api-msds-04a/tools/msds_ocr_poc/poc_output",
+  "credentials": {
+    "clova": "ABSENT",
+    "openai": "ABSENT"
+  },
+  "cas_validator": {
+    "total": 32,
+    "passed": 32,
+    "failed": 0,
+    "details": [
+      {
+        "id": "7647-01-0",
+        "description": "HCl — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "7664-93-9",
+        "description": "H2SO4 — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "1310-73-2",
+        "description": "NaOH — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "67-64-1",
+        "description": "Acetone — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "64-17-5",
+        "description": "Ethanol — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "71-43-2",
+        "description": "Benzene — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "108-88-3",
+        "description": "Toluene — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "75-09-2",
+        "description": "DCM — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "7664-41-7",
+        "description": "NH3 — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "7722-84-1",
+        "description": "H2O2 — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "75-05-8",
+        "description": "Acetonitrile — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "67-66-3",
+        "description": "Chloroform — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "67-56-1",
+        "description": "Methanol — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "50-00-0",
+        "description": "Formaldehyde — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "108-95-2",
+        "description": "Phenol — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "1330-20-7",
+        "description": "Xylene — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "67-63-0",
+        "description": "IPA — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "110-54-3",
+        "description": "n-Hexane — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "67-68-5",
+        "description": "DMSO — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "148-24-3",
+        "description": "8-HQ — valid",
+        "format_valid": true,
+        "checksum_valid": true,
+        "format_expect": true,
+        "checksum_expect": true,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "7647-01-1",
+        "description": "HCl wrong check digit",
+        "format_valid": true,
+        "checksum_valid": false,
+        "format_expect": true,
+        "checksum_expect": false,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "7664-93-0",
+        "description": "H2SO4 wrong check digit",
+        "format_valid": true,
+        "checksum_valid": false,
+        "format_expect": true,
+        "checksum_expect": false,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "67-64-9",
+        "description": "Acetone wrong check digit",
+        "format_valid": true,
+        "checksum_valid": false,
+        "format_expect": true,
+        "checksum_expect": false,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "1234-56-7",
+        "description": "made-up wrong checksum",
+        "format_valid": true,
+        "checksum_valid": false,
+        "format_expect": true,
+        "checksum_expect": false,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "7647-01",
+        "description": "missing check digit",
+        "format_valid": false,
+        "checksum_valid": false,
+        "format_expect": false,
+        "checksum_expect": false,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "7647-1-0",
+        "description": "short second segment",
+        "format_valid": false,
+        "checksum_valid": false,
+        "format_expect": false,
+        "checksum_expect": false,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "ABCD-12-3",
+        "description": "non-digit first segment",
+        "format_valid": false,
+        "checksum_valid": false,
+        "format_expect": false,
+        "checksum_expect": false,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "76470100",
+        "description": "no hyphens",
+        "format_valid": false,
+        "checksum_valid": false,
+        "format_expect": false,
+        "checksum_expect": false,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "764O-01-0",
+        "description": "O→0 but result checksum invalid",
+        "format_valid": false,
+        "checksum_valid": false,
+        "format_expect": false,
+        "checksum_expect": false,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "7647-O1-0",
+        "description": "O→0 in second segment (HCl)",
+        "format_valid": false,
+        "checksum_valid": false,
+        "format_expect": false,
+        "checksum_expect": false,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": true,
+        "corrected": "7647-01-0",
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "7647-0I-0",
+        "description": "I→1 in second segment (HCl)",
+        "format_valid": false,
+        "checksum_valid": false,
+        "format_expect": false,
+        "checksum_expect": false,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": true,
+        "corrected": "7647-01-0",
+        "correction_pass": true,
+        "overall": true
+      },
+      {
+        "id": "6S-64-1",
+        "description": "S→5 OCR error (Acetone partial)",
+        "format_valid": false,
+        "checksum_valid": false,
+        "format_expect": false,
+        "checksum_expect": false,
+        "format_pass": true,
+        "checksum_pass": true,
+        "ocr_correctable": false,
+        "corrected": null,
+        "correction_pass": true,
+        "overall": true
+      }
+    ]
+  },
+  "parser_benchmark": {
+    "total_fixtures": 30,
+    "product_name_exact_rate": 1.0,
+    "manufacturer_exact_rate": 1.0,
+    "cas_full_recall_rate": 1.0,
+    "cas_zero_false_positive_rate": 1.0,
+    "details": [
+      {
+        "id": "K01",
+        "language": "korean",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "7647-01-0"
+        ],
+        "cas_expected": [
+          "7647-01-0"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "K02",
+        "language": "korean",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "EXACT",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "7664-93-9"
+        ],
+        "cas_expected": [
+          "7664-93-9"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "K03",
+        "language": "korean",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "1310-73-2"
+        ],
+        "cas_expected": [
+          "1310-73-2"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "K04",
+        "language": "korean",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "67-64-1"
+        ],
+        "cas_expected": [
+          "67-64-1"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "K05",
+        "language": "korean",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "64-17-5"
+        ],
+        "cas_expected": [
+          "64-17-5"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "K06",
+        "language": "korean",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "EXACT",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "71-43-2"
+        ],
+        "cas_expected": [
+          "71-43-2"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "K07",
+        "language": "korean",
+        "variant": "low_contrast",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "108-88-3"
+        ],
+        "cas_expected": [
+          "108-88-3"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "K08",
+        "language": "korean",
+        "variant": "small_text",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "75-09-2"
+        ],
+        "cas_expected": [
+          "75-09-2"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "K09",
+        "language": "korean",
+        "variant": "rotated",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "7664-41-7"
+        ],
+        "cas_expected": [
+          "7664-41-7"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "K10",
+        "language": "korean",
+        "variant": "noise",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "EXACT",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "7722-84-1"
+        ],
+        "cas_expected": [
+          "7722-84-1"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "E01",
+        "language": "english",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "75-05-8"
+        ],
+        "cas_expected": [
+          "75-05-8"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "E02",
+        "language": "english",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "67-66-3"
+        ],
+        "cas_expected": [
+          "67-66-3"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "E03",
+        "language": "english",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "67-56-1"
+        ],
+        "cas_expected": [
+          "67-56-1"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "E04",
+        "language": "english",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "50-00-0"
+        ],
+        "cas_expected": [
+          "50-00-0"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "E05",
+        "language": "english",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "108-95-2"
+        ],
+        "cas_expected": [
+          "108-95-2"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "E06",
+        "language": "english",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "EXACT",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "1330-20-7"
+        ],
+        "cas_expected": [
+          "1330-20-7"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "E07",
+        "language": "english",
+        "variant": "low_contrast",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "67-63-0"
+        ],
+        "cas_expected": [
+          "67-63-0"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "E08",
+        "language": "english",
+        "variant": "small_text",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "110-54-3"
+        ],
+        "cas_expected": [
+          "110-54-3"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "E09",
+        "language": "english",
+        "variant": "rotated",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "67-68-5"
+        ],
+        "cas_expected": [
+          "67-68-5"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "E10",
+        "language": "english",
+        "variant": "noise",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "148-24-3"
+        ],
+        "cas_expected": [
+          "148-24-3"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "M01",
+        "language": "mixed",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "108-88-3",
+          "1330-20-7"
+        ],
+        "cas_expected": [
+          "108-88-3",
+          "1330-20-7"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "M02",
+        "language": "mixed",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "67-63-0",
+          "67-64-1"
+        ],
+        "cas_expected": [
+          "67-63-0",
+          "67-64-1"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "M03",
+        "language": "mixed",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "EXACT",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "7647-01-0",
+          "7664-93-9"
+        ],
+        "cas_expected": [
+          "7647-01-0",
+          "7664-93-9"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "M04",
+        "language": "mixed",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "108-88-3",
+          "1330-20-7",
+          "71-43-2"
+        ],
+        "cas_expected": [
+          "108-88-3",
+          "1330-20-7",
+          "71-43-2"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "M05",
+        "language": "mixed",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "7664-93-9",
+          "7722-84-1"
+        ],
+        "cas_expected": [
+          "7664-93-9",
+          "7722-84-1"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "M06",
+        "language": "mixed",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "64-17-5"
+        ],
+        "cas_expected": [
+          "64-17-5"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "M07",
+        "language": "mixed",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "64-17-5",
+          "67-56-1",
+          "67-63-0"
+        ],
+        "cas_expected": [
+          "64-17-5",
+          "67-56-1",
+          "67-63-0"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "M08",
+        "language": "mixed",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "EXACT",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "64-17-5",
+          "67-56-1",
+          "67-63-0"
+        ],
+        "cas_expected": [
+          "64-17-5",
+          "67-56-1",
+          "67-63-0"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "M09",
+        "language": "mixed",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "N/A",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "108-88-3",
+          "110-54-3",
+          "1330-20-7"
+        ],
+        "cas_expected": [
+          "108-88-3",
+          "110-54-3",
+          "1330-20-7"
+        ],
+        "cas_invalid_rejected": []
+      },
+      {
+        "id": "M10",
+        "language": "mixed",
+        "variant": "clean",
+        "product_name": "EXACT",
+        "manufacturer_name": "EXACT",
+        "supplier_name": "EXACT",
+        "product_code": "EXACT",
+        "cas_recall": 1.0,
+        "cas_false_positive": 0,
+        "cas_extracted": [
+          "75-09-2"
+        ],
+        "cas_expected": [
+          "75-09-2"
+        ],
+        "cas_invalid_rejected": []
+      }
+    ]
+  },
+  "page_strategy": {
+    "pages_1-3": {
+      "max_pages": 3,
+      "documents": 30,
+      "product_recall": 1.0,
+      "cas_full_recall": 0.9,
+      "cas_mean_recall": 0.9,
+      "provider_calls_per_doc": 1
+    },
+    "pages_1-5": {
+      "max_pages": 5,
+      "documents": 30,
+      "product_recall": 1.0,
+      "cas_full_recall": 1.0,
+      "cas_mean_recall": 1.0,
+      "provider_calls_per_doc": 1
+    },
+    "pages_1-10": {
+      "max_pages": 10,
+      "documents": 30,
+      "product_recall": 1.0,
+      "cas_full_recall": 1.0,
+      "cas_mean_recall": 1.0,
+      "provider_calls_per_doc": 1
+    },
+    "full": {
+      "max_pages": null,
+      "documents": 30,
+      "product_recall": 1.0,
+      "cas_full_recall": 1.0,
+      "cas_mean_recall": 1.0,
+      "provider_calls_per_doc": 1
+    }
+  },
+  "photo_pipeline": {
+    "jpeg_1920": {
+      "long_edge": 1920,
+      "n_photos": 5,
+      "elapsed_ms": 205.8,
+      "photo_sizes_bytes": [
+        68788,
+        66369,
+        66357,
+        66231,
+        66365
+      ],
+      "long_edges_correct": true,
+      "sequence_order_correct": true,
+      "derived_pdf": {
+        "path": "/Users/taiwangsim/Desktop/tai-engineering/tai-api-msds-04a/tools/msds_ocr_poc/poc_output/photo_pipeline/1920/derived.pdf",
+        "page_count": 5,
+        "size_bytes": 422369,
+        "sequence_preserved": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      },
+      "derived_pdf_verify": {
+        "page_count_expected": 5,
+        "page_count_actual": 5,
+        "page_count_match": true,
+        "seq_markers_found": [],
+        "order_correct": null,
+        "note": "seq_markers_found may be empty if JPEG text is image-only (expected)"
+      },
+      "status": "PASS"
+    },
+    "jpeg_2560": {
+      "long_edge": 2560,
+      "n_photos": 5,
+      "elapsed_ms": 298.3,
+      "photo_sizes_bytes": [
+        110657,
+        107318,
+        107382,
+        107248,
+        107450
+      ],
+      "long_edges_correct": true,
+      "sequence_order_correct": true,
+      "derived_pdf": {
+        "path": "/Users/taiwangsim/Desktop/tai-engineering/tai-api-msds-04a/tools/msds_ocr_poc/poc_output/photo_pipeline/2560/derived.pdf",
+        "page_count": 5,
+        "size_bytes": 679802,
+        "sequence_preserved": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      },
+      "derived_pdf_verify": {
+        "page_count_expected": 5,
+        "page_count_actual": 5,
+        "page_count_match": true,
+        "seq_markers_found": [],
+        "order_correct": null,
+        "note": "seq_markers_found may be empty if JPEG text is image-only (expected)"
+      },
+      "status": "PASS"
+    }
+  },
+  "providers": {
+    "CLOVA": {
+      "status": "BLOCKED_CREDENTIALS",
+      "reason": "CLOVA credentials absent: CLOVA_OCR_INVOKE_URL and CLOVA_OCR_SECRET not set"
+    },
+    "TESSERACT": {
+      "status": "NOT_EXECUTED",
+      "reason": "pytesseract not installed: pip install pytesseract"
+    },
+    "VISION_FALLBACK": {
+      "status": "BLOCKED_CREDENTIALS",
+      "reason": "OpenAI credentials absent: OPENAI_API_KEY not set"
+    }
+  },
+  "regression": {
+    "OBJ04A": {
+      "status": "PASS",
+      "count": 87,
+      "expected": 87,
+      "count_match": true,
+      "elapsed_ms": 566.0,
+      "returncode": 0
+    },
+    "OBJ03": {
+      "status": "PASS",
+      "count": 74,
+      "expected": 74,
+      "count_match": true,
+      "elapsed_ms": 493.0,
+      "returncode": 0
+    },
+    "OBJ02": {
+      "status": "PASS",
+      "count": 83,
+      "expected": 83,
+      "count_match": true,
+      "elapsed_ms": 747.0,
+      "returncode": 0
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "K05",
+  "product_name": "에탄올 99.9%",
+  "manufacturer_name": "SK케미칼(주)",
+  "supplier_name": null,
+  "product_code": "EtOH-99",
+  "cas_numbers": [
+    "64-17-5"
+  ],
+  "language": "korean",
+  "variant": "clean",
+  "cas_page": 2,
+  "total_pages": 10
+}
