@@ -1,4 +1,4 @@
-"""MSDS Document Intake Service — WO-MSDS-04A-PATCH-003."""
+"""MSDS Document Intake Service — WO-MSDS-04A-PATCH-004."""
 from __future__ import annotations
 
 import hashlib
@@ -156,6 +156,7 @@ def process_intake(sb, current_user: Dict, factory_id: str, intake_id: str) -> D
 
     Transitions: RECEIVED → PROCESSING → REVIEW_REQUIRED / OCR_REQUIRED / FAILED.
     Reference lookup failure → FAILED (REFERENCE_LOOKUP_FAILED).
+    Reset happens BEFORE PROCESSING so a reset failure leaves status RECEIVED/FAILED (retryable).
     """
     _require_factory_scope(sb, current_user, factory_id)
 
@@ -163,19 +164,31 @@ def process_intake(sb, current_user: Dict, factory_id: str, intake_id: str) -> D
     if intake["status"] not in ("RECEIVED", "FAILED"):
         raise MsdsProductError(409, "INTAKE_ALREADY_PROCESSED", "이미 처리된 Intake입니다.")
 
-    # Mark PROCESSING
-    sb.table("msds_intakes").update({"status": "PROCESSING"}).eq("id", intake_id).execute()
+    # Reset BEFORE PROCESSING — failure keeps status RECEIVED/FAILED so caller can retry
+    try:
+        _reset_process_data(sb, intake_id)
+    except Exception:
+        raise MsdsProductError(500, "PROCESS_RESET_FAILED", "이전 처리 데이터 초기화에 실패했습니다.")
 
-    # Remove stale transient data from any previous failed attempt before this one starts
-    _reset_process_data(sb, intake_id)
+    sb.table("msds_intakes").update({"status": "PROCESSING"}).eq("id", intake_id).execute()
 
     try:
         return _do_process(sb, current_user, factory_id, intake_id, intake)
     except MsdsProductError:
-        _reset_process_data(sb, intake_id)  # clean up any partial writes from this attempt
+        # _do_process already called _fail_intake with the correct error_code
+        # clean up partial writes; if cleanup itself fails, override to PROCESS_CLEANUP_FAILED
+        try:
+            _reset_process_data(sb, intake_id)
+        except Exception:
+            _fail_intake(sb, intake_id, "PROCESS_CLEANUP_FAILED", "처리 후 데이터 정리에 실패했습니다.")
+            raise MsdsProductError(500, "PROCESS_CLEANUP_FAILED", "처리 후 정리 중 오류가 발생했습니다.")
         raise
     except Exception as e:
-        _reset_process_data(sb, intake_id)
+        try:
+            _reset_process_data(sb, intake_id)
+        except Exception:
+            _fail_intake(sb, intake_id, "PROCESS_CLEANUP_FAILED", "처리 후 데이터 정리에 실패했습니다.")
+            raise MsdsProductError(500, "PROCESS_CLEANUP_FAILED", "처리 후 정리 중 오류가 발생했습니다.")
         _fail_intake(sb, intake_id, "PROCESS_UNEXPECTED_FAILURE", str(e)[:500])
         raise MsdsProductError(500, "PROCESS_UNEXPECTED_FAILURE", "처리 중 예기치 않은 오류가 발생했습니다.")
 

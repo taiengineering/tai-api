@@ -1968,3 +1968,114 @@ def test_rt10_review_required_process_retry_409_preserves_data():
     assert exc.value.code == "INTAKE_ALREADY_PROCESSED"
     assert len([r for r in sb.store["msds_intake_facts"] if r["intake_id"] == intake_id]) == 2
     assert len([r for r in sb.store["msds_match_candidates"] if r["intake_id"] == intake_id]) == 1
+
+
+# ─── RT-PATCH-004: Reset Failure Guard Tests ──────────────────────────────────
+
+def test_rt11_initial_reset_failure_status_not_processing():
+    """RT11: _reset_process_data raises before PROCESSING → status stays RECEIVED, PROCESS_RESET_FAILED."""
+    sb = _make_sb()
+    intake = _make_received_intake(sb)
+    intake_id = intake["id"]
+
+    with patch.object(svc, "_reset_process_data", side_effect=RuntimeError("delete failed")):
+        with pytest.raises(MsdsProductError) as exc:
+            svc.process_intake(sb, USER_A, FAC_A1, intake_id)
+
+    assert exc.value.code == "PROCESS_RESET_FAILED"
+    stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake_id)
+    assert stored["status"] == "RECEIVED"
+
+
+def test_rt12_partial_write_cleanup_failure_process_cleanup_failed():
+    """RT12: Partial fact write + cleanup DELETE raises → FAILED/PROCESS_CLEANUP_FAILED, not PROCESSING."""
+    sb = _make_sb()
+    intake = _make_received_intake(sb)
+    intake_id = intake["id"]
+
+    text_facts = [
+        {"fact_type": "PRODUCT_NAME", "raw_value": "염산", "normalized_value": "염산",
+         "source_page": 1, "evidence_json": {}},
+        {"fact_type": "CAS", "raw_value": "7647-01-0", "normalized_value": "7647-01-0",
+         "source_page": 1, "evidence_json": {}},
+    ]
+    mock_result = MagicMock()
+    mock_result.page_count = 1
+    mock_result.facts = text_facts
+    mock_result.ocr_required = False
+    mock_result.error = None
+
+    # First reset call (before PROCESSING) must succeed; subsequent calls raise
+    _call_count = [0]
+    _original_reset = svc._reset_process_data
+
+    def _fail_after_first(sb_arg, intake_id_arg):
+        _call_count[0] += 1
+        if _call_count[0] <= 1:
+            return _original_reset(sb_arg, intake_id_arg)
+        raise RuntimeError("delete permission denied")
+
+    fact_call = [0]
+
+    def _partial_fact_insert(payload):
+        fact_call[0] += 1
+        if fact_call[0] == 1:
+            row = dict(payload)
+            row.setdefault("id", str(uuid.uuid4()))
+            sb.store["msds_intake_facts"].append(row)
+            return _Result([dict(row)])
+        raise RuntimeError("DB error on second INSERT")
+
+    sb.set_insert_hook("msds_intake_facts", _partial_fact_insert)
+
+    with patch.object(svc, "_reset_process_data", side_effect=_fail_after_first), \
+         patch("services.msds_intake_svc.extractor.extract_facts", return_value=mock_result), \
+         _mock_ref_find([]):
+        with pytest.raises(MsdsProductError) as exc:
+            svc.process_intake(sb, USER_A, FAC_A1, intake_id)
+
+    assert exc.value.code == "PROCESS_CLEANUP_FAILED"
+    stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake_id)
+    assert stored["status"] == "FAILED"
+    assert stored["error_code"] == "PROCESS_CLEANUP_FAILED"
+
+
+def test_rt13_reference_failure_cleanup_success_error_code_preserved():
+    """RT13: Reference lookup failure + cleanup succeeds → REFERENCE_LOOKUP_FAILED preserved."""
+    sb = _make_sb()
+    intake = _make_received_intake(sb)
+    intake_id = intake["id"]
+
+    text_facts = [{"fact_type": "PRODUCT_NAME", "raw_value": "염산", "normalized_value": "염산",
+                   "source_page": 1, "evidence_json": {}}]
+    mock_result = MagicMock()
+    mock_result.page_count = 1
+    mock_result.facts = text_facts
+    mock_result.ocr_required = False
+    mock_result.error = None
+
+    with patch("services.msds_intake_svc.extractor.extract_facts", return_value=mock_result), \
+         patch("services.msds_intake_svc.ref_svc.find_reference_candidates",
+               side_effect=RuntimeError("leg-prod down")):
+        with pytest.raises(MsdsProductError) as exc:
+            svc.process_intake(sb, USER_A, FAC_A1, intake_id)
+
+    assert exc.value.code == "REFERENCE_LOOKUP_FAILED"
+    stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake_id)
+    assert stored["status"] == "FAILED"
+    assert stored["error_code"] == "REFERENCE_LOOKUP_FAILED"
+    assert stored["error_code"] != "PROCESS_CLEANUP_FAILED"
+
+
+def test_rt14_failed_intake_initial_reset_failure_stays_retryable():
+    """RT14: FAILED intake _reset_process_data raises → stays FAILED (retryable), PROCESS_RESET_FAILED."""
+    sb = _make_sb()
+    intake_id = _make_failed_with_data(sb, n_facts=2, n_candidates=1)
+
+    with patch.object(svc, "_reset_process_data", side_effect=RuntimeError("delete failed")):
+        with pytest.raises(MsdsProductError) as exc:
+            svc.process_intake(sb, USER_A, FAC_A1, intake_id)
+
+    assert exc.value.code == "PROCESS_RESET_FAILED"
+    stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake_id)
+    assert stored["status"] == "FAILED"  # retryable — not PROCESSING
