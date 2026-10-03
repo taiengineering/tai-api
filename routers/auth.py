@@ -968,10 +968,10 @@ def register(req: RegisterRequest):
         ur = supabase.table("users").insert({
             "auth_id": auth_id, "email": req.email, "phone": phone_normalized,
             "name": req.name, "username": phone_normalized, "role_code": req.role_code,
-            "company_id": company_id, "user_code": user_code, "status_code": "PENDING",
+            "company_id": company_id, "user_code": user_code, "status_code": "ACTIVE",
             # v3.8.1: sector 를 명시한다. 컬럼 기본값이 CHECK 제약과 어긋나 있던 이력이 있다.
             "sector": DEFAULT_SECTOR,
-            "is_active": False, "allow_push": True, "allow_sms": True,
+            "is_active": True, "allow_push": True, "allow_sms": True,
             "allow_email": True, "allow_kakao": False,
             # 본인인증 매핑 (CI는 해시 저장, UNIQUE 제약으로 중복가입 차단)
             "identity_verified": True, "identity_verified_at": _now_iso(),
@@ -980,6 +980,11 @@ def register(req: RegisterRequest):
             "created_at": _now_iso(), "updated_at": _now_iso(),
         }).execute()
     except Exception as e:
+        # public.users INSERT 실패 시 방금 생성한 auth.users만 보상 삭제 (신규 auth_id 한정)
+        try:
+            supabase.auth.admin.delete_user(auth_id)
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=f"사용자 저장 실패: {str(e)}")
     new_user_id = ur.data[0]["id"]
     # ── 이력 승계(D3): 동일 CI 무료진단/인증 이력을 계정에 연결 ──
@@ -1044,8 +1049,8 @@ def ensure_user(authorization: Optional[str] = Header(None)):
     user_code = "USR-" + now_kst().strftime("%Y%m%d") + "-" + "".join(random.choices(string.digits, k=4))
     row = {
         "auth_id": auth_id, "email": email, "name": name, "username": email or user_code,
-        "role_code": "002", "user_code": user_code, "status_code": "PENDING",
-        "sector": DEFAULT_SECTOR, "is_active": False, "social_provider": provider,
+        "role_code": "002", "user_code": user_code, "status_code": "ACTIVE",
+        "sector": DEFAULT_SECTOR, "is_active": True, "social_provider": provider,
         "identity_verified": False,
         "allow_push": True, "allow_sms": True, "allow_email": True, "allow_kakao": False,
         "created_at": _now_iso(), "updated_at": _now_iso(),
