@@ -26,6 +26,7 @@ from services.time import now_kst
 router = APIRouter(prefix="/anonymous-diagnosis", tags=["익명 무료진단 (관리자)"])
 
 ADMIN_ALLOWED_STATUS = frozenset({"ACTIVE", "CLAIMED", "EXPIRED"})
+ADMIN_ALLOWED_SOURCE_TYPES = frozenset({"free_diag", "paid_diag", "saas", "site_free", "site_free_leg"})
 
 
 def _require_admin(current_user: dict = Depends(get_current_user)) -> dict:
@@ -73,16 +74,23 @@ class AdminAnonDiagPatch(BaseModel):
 def list_anonymous_diagnoses(
     page: int = 1, size: int = 20,
     status: Optional[str] = None, keyword: Optional[str] = None,
+    source_type: Optional[str] = None,
     _admin: dict = Depends(_require_admin),
 ):
+    if source_type and source_type not in ADMIN_ALLOWED_SOURCE_TYPES:
+        raise HTTPException(status_code=422, detail={
+            "code": "INVALID_SOURCE_TYPE",
+            "message": f"허용되지 않는 source_type입니다. 허용값: {sorted(ADMIN_ALLOWED_SOURCE_TYPES)}",
+        })
     supabase = get_supabase()
     q = supabase.table("anonymous_diagnosis_results").select(
         "id,public_token,input_data,created_at,expires_at,claimed_user_id,status,source_type,auth_log_id",
         count="exact",
     )
-    if status: q = q.eq("status", status)
+    if status:      q = q.eq("status", status)
+    if source_type: q = q.eq("source_type", source_type)
     kw = (keyword or "").strip()
-    if kw:     q = q.ilike("public_token", f"%{kw}%")
+    if kw:          q = q.ilike("public_token", f"%{kw}%")
     offset = (page - 1) * size
     res = q.order("created_at", desc=True).range(offset, offset + size - 1).execute()
     items = _attach_applicant(supabase, res.data or [])

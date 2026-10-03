@@ -226,3 +226,48 @@ def test_BE_FD_06_engine_version_is_leg_runtime_v3():
     src = inspect.getsource(dil)
     assert "leg-runtime-v3" in src, \
         "diagnosis_integrated_leg 에 engine_version=leg-runtime-v3 가 없다"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# BE-FD-07~10: 무료진단 admin 목록 source_type 필터
+# ═══════════════════════════════════════════════════════════════════
+
+def test_BE_FD_07_admin_list_no_source_type_returns_all():
+    """source_type 미지정 시 전체 조회 — source_type eq 필터 없이 실행."""
+    import routers.anonymous_diagnosis_admin as ada
+    src = inspect.getsource(ada.list_anonymous_diagnoses)
+    assert "source_type" in src, \
+        "list_anonymous_diagnoses 에 source_type 파라미터가 없다"
+    # source_type 미지정 분기 확인: 조건부 eq 적용
+    assert 'if source_type' in src, \
+        "source_type 미지정 시 전체 조회 분기가 없다"
+
+
+def test_BE_FD_08_admin_list_free_diag_applies_eq_filter():
+    """source_type=free_diag 지정 시 .eq('source_type', source_type) 가 호출된다."""
+    import routers.anonymous_diagnosis_admin as ada
+    src = inspect.getsource(ada.list_anonymous_diagnoses)
+    assert 'q.eq("source_type", source_type)' in src \
+           or "q = q.eq(\"source_type\", source_type)" in src \
+           or '.eq("source_type"' in src, \
+        "list_anonymous_diagnoses 에 source_type eq 필터가 없다"
+
+
+def test_BE_FD_09_admin_list_allowed_source_types_defined():
+    """ADMIN_ALLOWED_SOURCE_TYPES 에 free_diag / paid_diag / saas 가 포함되어 있다."""
+    import routers.anonymous_diagnosis_admin as ada
+    assert hasattr(ada, "ADMIN_ALLOWED_SOURCE_TYPES"), \
+        "ADMIN_ALLOWED_SOURCE_TYPES 상수가 없다"
+    allowed = ada.ADMIN_ALLOWED_SOURCE_TYPES
+    for st in ("free_diag", "paid_diag", "saas"):
+        assert st in allowed, f"ADMIN_ALLOWED_SOURCE_TYPES 에 '{st}' 이 없다"
+
+
+def test_BE_FD_10_admin_list_invalid_source_type_raises_422():
+    """허용되지 않는 source_type 입력 시 422 반환."""
+    import routers.anonymous_diagnosis_admin as ada
+    src = inspect.getsource(ada.list_anonymous_diagnoses)
+    assert "INVALID_SOURCE_TYPE" in src, \
+        "list_anonymous_diagnoses 에 INVALID_SOURCE_TYPE 422 처리가 없다"
+    assert "422" in src, \
+        "list_anonymous_diagnoses 에 422 응답이 없다"
