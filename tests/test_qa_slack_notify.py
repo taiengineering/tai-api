@@ -880,3 +880,153 @@ def test_QS11_all_qa_events_route_to_channel_qa():
     for evt, sev in qa_events:
         result = _resolve_channel(evt, sev)
         assert result == CHANNEL_QA, f"{evt}/{sev} → {result!r} (expected CHANNEL_QA)"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN formatter contract (WO-QA-SLACK-DIAGNOSTIC-CONTEXT-001)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _notif(**kwargs):
+    base = {
+        "event_type":       "QA_FAIL_DETECTED",
+        "previous_status":  "PASS",
+        "new_status":       "FAIL",
+    }
+    base.update(kwargs)
+    return base
+
+
+def test_QN01_payload_keys():
+    payload = notify.build_qa_slack_payload(_notif())
+    assert payload["event_type"] == "QA_FAIL_DETECTED"
+    assert payload["severity"]   == "HIGH"
+    assert payload["title"]      == "QA 이상 감지"
+    assert payload["detail"]     == ""
+    assert isinstance(payload["blocks"], list)
+    assert payload["blocks"][0]["type"] == "section"
+    assert payload["blocks"][0]["text"]["type"] == "mrkdwn"
+
+
+def test_QN02_severity_emoji_title():
+    cases = [
+        ("QA_FAIL_DETECTED",    "🔴", "QA 이상 감지"),
+        ("QA_BLOCKED_DETECTED", "🔴", "QA BLOCKED 감지"),
+        ("QA_FLAKY_DETECTED",   "🟡", "QA FLAKY 감지"),
+        ("QA_RECOVERED",        "✅", "QA 정상 복구"),
+        ("QA_RUN_ERROR",        "🔴", "QA 실행 시스템 오류"),
+    ]
+    for event_type, emoji, title in cases:
+        payload = notify.build_qa_slack_payload({
+            "event_type": event_type,
+            "previous_status": "PASS", "new_status": "FAIL",
+        })
+        text = payload["blocks"][0]["text"]["text"]
+        assert emoji in text,  f"{event_type}: missing emoji {emoji}"
+        assert title in text,  f"{event_type}: missing title {title}"
+
+
+def test_QN03_location_section():
+    payload = notify.build_qa_slack_payload(_notif(
+        service_code="WWW",
+        area_code="AUTH",
+        site_code="prod-kr-1",
+    ))
+    text = payload["blocks"][0]["text"]["text"]
+    assert "위치" in text
+    assert "웹사이트" in text
+    assert "인증" in text
+    assert "실행 Host" in text
+    assert "prod-kr-1" in text
+
+
+def test_QN04_test_section():
+    payload = notify.build_qa_slack_payload(_notif(
+        scenario_id="P0-WWW-001",
+        name="로그인 플로우",
+        qa_type="E2E",
+    ))
+    text = payload["blocks"][0]["text"]["text"]
+    assert "QA ID" in text
+    assert "P0-WWW-001" in text
+    assert "테스트" in text
+    assert "로그인 플로우" in text
+    assert "종류" in text
+    assert "전체 흐름" in text
+
+
+def test_QN05_description_expected():
+    payload = notify.build_qa_slack_payload(_notif(
+        description="로그인 API 응답 검증",
+        expected_summary="HTTP 200 + JWT 반환",
+    ))
+    text = payload["blocks"][0]["text"]["text"]
+    assert "검증 대상" in text
+    assert "로그인 API 응답 검증" in text
+    assert "기대 결과" in text
+    assert "HTTP 200 + JWT 반환" in text
+
+
+def test_QN06_error_section_for_fail():
+    payload = notify.build_qa_slack_payload(_notif(
+        error_summary="locator '.btn-login' not found",
+        http_status=None,
+        error_code=None,
+    ))
+    text = payload["blocks"][0]["text"]["text"]
+    assert "실제 오류" in text
+    assert "locator '.btn-login' not found" in text
+
+
+def test_QN07_no_error_section_for_recovered():
+    payload = notify.build_qa_slack_payload({
+        "event_type":      "QA_RECOVERED",
+        "previous_status": "FAIL",
+        "new_status":      "PASS",
+        "error_summary":   "should be ignored",
+    })
+    text = payload["blocks"][0]["text"]["text"]
+    assert "실제 오류" not in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-08: http_status-only → error section rendered (PATCH1)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN08_http_only_shows_error_section():
+    payload = notify.build_qa_slack_payload(_notif(
+        error_summary=None,
+        http_status=500,
+        error_code="INTERNAL_SERVER_ERROR",
+    ))
+    text = payload["blocks"][0]["text"]["text"]
+    assert "실제 오류" in text, "error section must appear when http_status is set"
+    assert "500" in text
+    assert "INTERNAL_SERVER_ERROR" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-09: FLAKY error preservation via apply_results (PATCH1)
+# attempt 1 = FAIL (error_summary="locator timeout"), attempt 2 = PASS
+# → notification.error_summary == "locator timeout"
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN09_flaky_preserves_fail_error_summary():
+    hist = [_hist_row(run_id="run-prev", status="PASS", checked_at="2026-10-01T00:00:00+09:00")]
+    sb = _Supabase({
+        "qa_runs":        _mutable_run_q(),
+        "qa_items":       _qa_items_q(),
+        "qa_run_targets": _targets_q(),
+        "qa_run_results": _ResultsQ(current=[], history=hist),
+    })
+    results = [
+        {"scenario_id": "P0-WWW-001", "result_status": "FAIL", "attempt": 1,
+         "error_summary": "locator timeout"},
+        {"scenario_id": "P0-WWW-001", "result_status": "PASS", "attempt": 2},
+    ]
+    data = _call(sb, results=results)
+    notifs = data["notifications"]
+    assert len(notifs) == 1
+    assert notifs[0]["event_type"] == "QA_FLAKY_DETECTED"
+    assert notifs[0]["error_summary"] == "locator timeout", (
+        "FLAKY must carry error_summary from the FAIL attempt, not from the final PASS"
+    )
