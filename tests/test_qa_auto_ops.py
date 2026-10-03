@@ -88,7 +88,7 @@ async def _tick(schedules, busy_ids=frozenset(), dispatch_ok=True):
     sb = _make_sb(schedules)
 
     async def _ok_dispatch(run_id, scenario_ids, **kwargs): pass
-    async def _fail_dispatch(run_id, scenario_ids): raise RuntimeError("dispatch error")
+    async def _fail_dispatch(run_id, scenario_ids, **kwargs): raise RuntimeError("dispatch error")
 
     with patch.object(mod, "_due_schedules", return_value=schedules), \
          patch.object(mod, "_active_item_ids", return_value=busy_ids), \
@@ -504,7 +504,7 @@ def test_AOF10_dispatch_failure_sets_error_not_running():
     sb = MagicMock()
     sb.table.side_effect = _table
 
-    async def _fail_dispatch(run_id, scenario_ids): raise RuntimeError("dispatch error")
+    async def _fail_dispatch(run_id, scenario_ids, **kwargs): raise RuntimeError("dispatch error")
 
     async def _run():
         with patch.object(mod, "_due_schedules", return_value=[sched]), \
