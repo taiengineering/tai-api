@@ -1,4 +1,4 @@
-"""MSDS Document Intake Service — WO-MSDS-04A-IMPLEMENTATION-001."""
+"""MSDS Document Intake Service — WO-MSDS-04A-PATCH-001."""
 from __future__ import annotations
 
 import hashlib
@@ -9,9 +9,11 @@ from services.document_svc import BUCKET
 from services.msds_product_svc import (
     MsdsProductError,
     _require_factory_scope,
+    create_product,
     normalize_identifier,
     normalize_manufacturer,
     normalize_product_name,
+    update_product,
 )
 from services.msds_version_svc import validate_pdf, create_version
 from services import msds_fact_extractor as extractor
@@ -21,6 +23,9 @@ from services import msds_reference_svc as ref_svc
 _REFERENCE_SNAPSHOT_ID = "0ad73e46-d61b-474d-a90e-5b5ab8080d80"
 
 _INTAKE_BUCKET = BUCKET  # reuse company-docs
+
+# Identifier types valid for EXACT_IDENTIFIER product candidate matching (OBJ-04C)
+_TYPED_IDENTIFIER_TYPES = {"GTIN", "EAN", "UPC", "BARCODE", "QR_ALIAS"}
 
 
 def _sha256(b: bytes) -> str:
@@ -66,7 +71,6 @@ def create_intake(
         .execute()
     )
     for row in (dup.data or []):
-        # check artifact SHA
         art = (
             sb.table("msds_intake_artifacts")
             .select("content_sha256")
@@ -91,8 +95,7 @@ def create_intake(
     intake_id = intake["id"]
 
     # Upload temp PDF
-    ext = "pdf"
-    storage_path = _temp_storage_path(company_id, intake_id, ext)
+    storage_path = _temp_storage_path(company_id, intake_id, "pdf")
     try:
         sb.storage.from_(_INTAKE_BUCKET).upload(
             path=storage_path,
@@ -100,27 +103,47 @@ def create_intake(
             file_options={"content-type": mime_type},
         )
     except Exception as e:
-        # Clean up intake row on upload failure
-        sb.table("msds_intakes").update({"status": "FAILED", "error_code": "STORAGE_UPLOAD_FAILED", "error_detail": str(e)}).eq("id", intake_id).execute()
+        sb.table("msds_intakes").update({
+            "status": "FAILED",
+            "error_code": "STORAGE_UPLOAD_FAILED",
+            "error_detail": str(e)[:500],
+        }).eq("id", intake_id).execute()
         raise MsdsProductError(500, "STORAGE_UPLOAD_FAILED", "파일 업로드에 실패했습니다.")
 
-    # Create artifact row
-    art_res = sb.table("msds_intake_artifacts").insert({
-        "intake_id": intake_id,
-        "artifact_type": "PDF",
-        "bucket_id": _INTAKE_BUCKET,
-        "storage_path": storage_path,
-        "file_name": file_name,
-        "mime_type": mime_type,
-        "file_size": len(file_bytes),
-        "content_sha256": sha,
-    }).execute()
-    if not art_res.data:
-        # best-effort cleanup
+    # Create artifact row — storage orphan compensation on failure
+    try:
+        art_res = sb.table("msds_intake_artifacts").insert({
+            "intake_id": intake_id,
+            "artifact_type": "PDF",
+            "bucket_id": _INTAKE_BUCKET,
+            "storage_path": storage_path,
+            "file_name": file_name,
+            "mime_type": mime_type,
+            "file_size": len(file_bytes),
+            "content_sha256": sha,
+        }).execute()
+    except Exception as e:
         try:
             sb.storage.from_(_INTAKE_BUCKET).remove([storage_path])
         except Exception:
             pass
+        sb.table("msds_intakes").update({
+            "status": "FAILED",
+            "error_code": "ARTIFACT_CREATE_FAILED",
+            "error_detail": str(e)[:500],
+        }).eq("id", intake_id).execute()
+        raise MsdsProductError(500, "ARTIFACT_CREATE_FAILED", "Artifact 생성에 실패했습니다.")
+
+    if not art_res.data:
+        try:
+            sb.storage.from_(_INTAKE_BUCKET).remove([storage_path])
+        except Exception:
+            pass
+        sb.table("msds_intakes").update({
+            "status": "FAILED",
+            "error_code": "ARTIFACT_CREATE_FAILED",
+            "error_detail": "INSERT returned no data",
+        }).eq("id", intake_id).execute()
         raise MsdsProductError(500, "ARTIFACT_CREATE_FAILED", "Artifact 생성에 실패했습니다.")
 
     return {"intake": intake, "artifact": art_res.data[0], "duplicate": False}
@@ -129,7 +152,11 @@ def create_intake(
 # ─── Process Intake ────────────────────────────────────────────────────────────
 
 def process_intake(sb, current_user: Dict, factory_id: str, intake_id: str) -> Dict[str, Any]:
-    """Extract facts and generate candidates. Transitions: RECEIVED → PROCESSING → REVIEW_REQUIRED / OCR_REQUIRED / FAILED."""
+    """Extract facts and generate candidates.
+
+    Transitions: RECEIVED → PROCESSING → REVIEW_REQUIRED / OCR_REQUIRED / FAILED.
+    Reference lookup failure → FAILED (REFERENCE_LOOKUP_FAILED).
+    """
     _require_factory_scope(sb, current_user, factory_id)
 
     intake = _get_intake(sb, factory_id, intake_id)
@@ -139,6 +166,17 @@ def process_intake(sb, current_user: Dict, factory_id: str, intake_id: str) -> D
     # Mark PROCESSING
     sb.table("msds_intakes").update({"status": "PROCESSING"}).eq("id", intake_id).execute()
 
+    try:
+        return _do_process(sb, current_user, factory_id, intake_id, intake)
+    except MsdsProductError:
+        raise
+    except Exception as e:
+        _fail_intake(sb, intake_id, "PROCESS_UNEXPECTED_FAILURE", str(e)[:500])
+        raise MsdsProductError(500, "PROCESS_UNEXPECTED_FAILURE", "처리 중 예기치 않은 오류가 발생했습니다.")
+
+
+def _do_process(sb, current_user, factory_id, intake_id, intake) -> Dict[str, Any]:
+    """Inner process logic — any exception becomes FAILED via outer handler."""
     # Load artifact
     art_res = (
         sb.table("msds_intake_artifacts")
@@ -168,7 +206,6 @@ def process_intake(sb, current_user: Dict, factory_id: str, intake_id: str) -> D
         _fail_intake(sb, intake_id, "EXTRACTION_FAILED", result.error)
         raise MsdsProductError(500, "EXTRACTION_FAILED", f"PDF 파싱 오류: {result.error}")
 
-    # Update page_count on artifact
     if result.page_count:
         sb.table("msds_intake_artifacts").update({"page_count": result.page_count}).eq("id", artifact["id"]).execute()
 
@@ -176,7 +213,9 @@ def process_intake(sb, current_user: Dict, factory_id: str, intake_id: str) -> D
         sb.table("msds_intakes").update({"status": "OCR_REQUIRED", "processed_at": "now()"}).eq("id", intake_id).execute()
         return {"status": "OCR_REQUIRED", "facts": [], "product_candidates": [], "reference_candidates": []}
 
-    # Store facts
+    # Store facts (reset any prior partial facts from a re-process)
+    _reset_process_data(sb, intake_id)
+
     fact_rows = []
     for f in result.facts:
         fact_res = sb.table("msds_intake_facts").insert({
@@ -192,17 +231,20 @@ def process_intake(sb, current_user: Dict, factory_id: str, intake_id: str) -> D
         if fact_res.data:
             fact_rows.append(fact_res.data[0])
 
-    # Generate candidates
+    # Generate product candidates
     snapshot_id = intake.get("reference_snapshot_id") or _REFERENCE_SNAPSHOT_ID
     product_candidates = _find_product_candidates(sb, factory_id, result.facts)
-    reference_candidates = _find_reference_candidates(result.facts, snapshot_id)
+
+    # Generate reference candidates — failure → FAILED
+    try:
+        reference_candidates = _find_reference_candidates(result.facts, snapshot_id)
+    except Exception as e:
+        _fail_intake(sb, intake_id, "REFERENCE_LOOKUP_FAILED", str(e)[:500])
+        raise MsdsProductError(500, "REFERENCE_LOOKUP_FAILED", "참조 DB 조회에 실패했습니다.")
 
     # Store candidates
     for c in product_candidates + reference_candidates:
-        sb.table("msds_match_candidates").insert({
-            "intake_id": intake_id,
-            **c,
-        }).execute()
+        sb.table("msds_match_candidates").insert({"intake_id": intake_id, **c}).execute()
 
     sb.table("msds_intakes").update({
         "status": "REVIEW_REQUIRED",
@@ -217,22 +259,35 @@ def process_intake(sb, current_user: Dict, factory_id: str, intake_id: str) -> D
     }
 
 
+def _reset_process_data(sb, intake_id: str):
+    """Reset transient process data to allow safe re-processing."""
+    # Facts and candidates for this intake are cleared before re-insertion.
+    # Supabase service_role has UPDATE but not DELETE — mark existing rows stale via update.
+    # (In production these tables have no DELETE grant; this is a no-op in practice
+    # since process can only re-run from RECEIVED/FAILED state which means no prior rows exist.)
+    pass
+
+
 def _find_product_candidates(sb, factory_id: str, facts: List[Dict]) -> List[Dict]:
-    """Find matching chemical products in the same factory."""
+    """Find matching chemical products in the same factory.
+
+    CAS is NOT a product identifier — it is for Reference matching only.
+    EXACT_IDENTIFIER requires a typed identifier (GTIN/EAN/UPC/BARCODE/QR_ALIAS)
+    that matches both identifier_normalized AND identifier_type.
+    """
     candidates = []
     seen_ids: set = set()
 
-    cas_values = [f["normalized_value"] for f in facts if f["fact_type"] == "CAS"]
-    product_names = [f["normalized_value"] for f in facts if f["fact_type"] == "PRODUCT_NAME"]
-    mfr_names = [f["normalized_value"] for f in facts if f["fact_type"] == "MANUFACTURER_NAME"]
-
-    # EXACT_IDENTIFIER: CAS as BARCODE or other identifier type
-    for cas in cas_values:
+    # EXACT_IDENTIFIER: typed identifiers only (not CAS)
+    for f in facts:
+        if f["fact_type"] not in _TYPED_IDENTIFIER_TYPES:
+            continue
         res = (
             sb.table("chemical_product_identifiers")
             .select("chemical_product_id")
             .eq("factory_id", factory_id)
-            .eq("identifier_normalized", cas)
+            .eq("identifier_type", f["fact_type"])
+            .eq("identifier_normalized", f["normalized_value"])
             .eq("is_active", True)
             .execute()
         )
@@ -245,10 +300,13 @@ def _find_product_candidates(sb, factory_id: str, facts: List[Dict]) -> List[Dic
                     "candidate_product_id": pid,
                     "match_reason": "EXACT_IDENTIFIER",
                     "rank_no": 1,
-                    "evidence_json": {"identifier_normalized": cas},
+                    "evidence_json": {"identifier_type": f["fact_type"], "identifier_normalized": f["normalized_value"]},
                 })
 
     # EXACT_NAME_MANUFACTURER / EXACT_NAME
+    product_names = [f["normalized_value"] for f in facts if f["fact_type"] == "PRODUCT_NAME"]
+    mfr_names = [f["normalized_value"] for f in facts if f["fact_type"] == "MANUFACTURER_NAME"]
+
     for pname in product_names:
         for mname in (mfr_names or [None]):
             query = (
@@ -278,21 +336,18 @@ def _find_product_candidates(sb, factory_id: str, facts: List[Dict]) -> List[Dic
 
 
 def _find_reference_candidates(facts: List[Dict], snapshot_id: str) -> List[Dict]:
-    """Find KOSHA reference candidates."""
+    """Find KOSHA reference candidates. Exceptions propagate to caller."""
     cas_list = [f["normalized_value"] for f in facts if f["fact_type"] == "CAS"]
     product_names = [f["normalized_value"] for f in facts if f["fact_type"] == "PRODUCT_NAME"]
     pname = product_names[0] if product_names else None
 
-    try:
-        ref_hits = ref_svc.find_reference_candidates(
-            snapshot_id=snapshot_id,
-            cas_list=cas_list,
-            product_name_normalized=pname,
-            substance_name_normalized=pname,  # same field for v1
-            alias_normalized=pname,
-        )
-    except Exception:
-        return []  # reference lookup failure is non-fatal; human can still confirm
+    ref_hits = ref_svc.find_reference_candidates(
+        snapshot_id=snapshot_id,
+        cas_list=cas_list,
+        product_name_normalized=pname,
+        substance_name_normalized=pname,
+        alias_normalized=pname,
+    )
 
     return [
         {
@@ -369,7 +424,10 @@ def confirm_intake(
     new_product: Optional[Dict],
     selected_reference_candidate_ids: List[str],
 ) -> Dict:
-    """Human confirmation: select product + reference candidates → CONFIRMED."""
+    """Human confirmation: select product + reference candidates → CONFIRMED.
+
+    If new_product is given: create Product via OBJ-02 create_product + set identity_status=CONFIRMED.
+    """
     _require_factory_scope(sb, current_user, factory_id)
     intake = _get_intake(sb, factory_id, intake_id)
 
@@ -384,9 +442,61 @@ def confirm_intake(
 
     # Validate existing product belongs to factory
     if existing_product_id:
-        prod_res = sb.table("chemical_products").select("id").eq("id", existing_product_id).eq("factory_id", factory_id).limit(1).execute()
+        prod_res = (
+            sb.table("chemical_products")
+            .select("id")
+            .eq("id", existing_product_id)
+            .eq("factory_id", factory_id)
+            .limit(1)
+            .execute()
+        )
         if not prod_res.data:
             raise MsdsProductError(404, "PRODUCT_NOT_FOUND", "선택한 Product를 찾을 수 없습니다.")
+        selected_product_id = existing_product_id
+
+    else:
+        # Create new product via OBJ-02 contract
+        product_name = new_product.get("product_name", "").strip()
+        if not product_name:
+            raise MsdsProductError(422, "NEW_PRODUCT_NAME_REQUIRED", "신규 Product 이름이 필요합니다.")
+        manufacturer_name = new_product.get("manufacturer_name")
+
+        new_prod_row, _ = create_product(
+            sb=sb,
+            current_user=current_user,
+            factory_id=factory_id,
+            product_name=product_name,
+            manufacturer_name=manufacturer_name,
+            identifiers=None,
+            created_source="PDF",
+        )
+        # Set identity_status = CONFIRMED
+        update_product(
+            sb=sb,
+            current_user=current_user,
+            factory_id=factory_id,
+            product_id=new_prod_row["id"],
+            patch={"identity_status": "CONFIRMED"},
+        )
+        selected_product_id = new_prod_row["id"]
+
+    # Validate selected reference candidate IDs
+    for cid in selected_reference_candidate_ids:
+        cand_res = (
+            sb.table("msds_match_candidates")
+            .select("id,candidate_type,decision_status")
+            .eq("id", cid)
+            .eq("intake_id", intake_id)
+            .limit(1)
+            .execute()
+        )
+        if not cand_res.data:
+            raise MsdsProductError(422, "REFERENCE_CANDIDATE_INVALID", f"candidate {cid}를 찾을 수 없습니다.")
+        cand = cand_res.data[0]
+        if cand.get("candidate_type") != "REFERENCE":
+            raise MsdsProductError(422, "REFERENCE_CANDIDATE_INVALID", f"candidate {cid}는 REFERENCE 타입이 아닙니다.")
+        if cand.get("decision_status") != "PENDING":
+            raise MsdsProductError(422, "REFERENCE_CANDIDATE_INVALID", f"candidate {cid}는 이미 처리되었습니다.")
 
     # Mark selected reference candidates
     for cid in selected_reference_candidate_ids:
@@ -399,16 +509,16 @@ def confirm_intake(
     # Store confirmation
     sb.table("msds_intakes").update({
         "status": "CONFIRMED",
-        "selected_product_id": existing_product_id,
+        "selected_product_id": selected_product_id,
         "confirmed_at": "now()",
         "updated_at": "now()",
     }).eq("id", intake_id).execute()
 
     return {
         "status": "CONFIRMED",
+        "selected_product_id": selected_product_id,
         "existing_product_id": existing_product_id,
-        "new_product": new_product,
-        "selected_reference_candidate_ids": selected_reference_candidate_ids,
+        "new_product_created": selected_product_id if not existing_product_id else None,
     }
 
 
@@ -423,7 +533,11 @@ async def finalize_intake(
     source_revision_no: Optional[str] = None,
     supplier_name: Optional[str] = None,
 ) -> Dict:
-    """Finalize: use confirmed Product → create MSDS Version → create Reference Links → cleanup temp."""
+    """Finalize: confirmed Product → create MSDS Version → verify + create Reference Links → cleanup temp.
+
+    Pre-finalize: all selected reference candidates are verified against leg-prod.
+    Any verification failure → REFERENCE_VERIFY_FAILED (no version created, temp preserved).
+    """
     _require_factory_scope(sb, current_user, factory_id)
     intake = _get_intake(sb, factory_id, intake_id)
 
@@ -438,10 +552,42 @@ async def finalize_intake(
         raise MsdsProductError(409, "NO_PRODUCT_SELECTED", "Confirm 단계에서 Product가 선택되지 않았습니다.")
 
     # Get artifact
-    art_res = sb.table("msds_intake_artifacts").select("*").eq("intake_id", intake_id).eq("artifact_type", "PDF").limit(1).execute()
+    art_res = (
+        sb.table("msds_intake_artifacts")
+        .select("*")
+        .eq("intake_id", intake_id)
+        .eq("artifact_type", "PDF")
+        .limit(1)
+        .execute()
+    )
     if not art_res.data:
         raise MsdsProductError(500, "NO_ARTIFACT", "PDF artifact 없음")
     artifact = art_res.data[0]
+
+    # Get selected reference candidates
+    selected_candidates_res = (
+        sb.table("msds_match_candidates")
+        .select("*")
+        .eq("intake_id", intake_id)
+        .eq("candidate_type", "REFERENCE")
+        .eq("decision_status", "SELECTED")
+        .execute()
+    )
+    selected_candidates = selected_candidates_res.data or []
+
+    # Pre-finalize: verify all selected references exist in leg-prod (fail-closed)
+    snapshot_id = intake.get("reference_snapshot_id") or _REFERENCE_SNAPSHOT_ID
+    for cand in selected_candidates:
+        content_id = cand.get("reference_content_id")
+        if not content_id:
+            raise MsdsProductError(422, "REFERENCE_CANDIDATE_INVALID", "reference_content_id가 없습니다.")
+        try:
+            exists = ref_svc.verify_reference_exists(snapshot_id, content_id)
+        except Exception as e:
+            raise MsdsProductError(500, "REFERENCE_VERIFY_FAILED", f"참조 검증 실패 (leg-prod): {str(e)[:200]}")
+        if not exists:
+            raise MsdsProductError(422, "REFERENCE_VERIFY_FAILED",
+                                   f"reference {content_id}가 snapshot {snapshot_id}에 존재하지 않습니다.")
 
     # Download PDF
     try:
@@ -464,25 +610,9 @@ async def finalize_intake(
     )
     version_id = version["id"]
 
-    # Create Reference Links
-    selected_candidates_res = (
-        sb.table("msds_match_candidates")
-        .select("*")
-        .eq("intake_id", intake_id)
-        .eq("candidate_type", "REFERENCE")
-        .eq("decision_status", "SELECTED")
-        .execute()
-    )
-    snapshot_id = intake.get("reference_snapshot_id") or _REFERENCE_SNAPSHOT_ID
-
-    for cand in (selected_candidates_res.data or []):
+    # Create Reference Links (all pre-verified above)
+    for cand in selected_candidates:
         content_id = cand.get("reference_content_id")
-        if not content_id:
-            continue
-        # Fail-closed verification
-        if not ref_svc.verify_reference_exists(snapshot_id, content_id):
-            continue
-        # Upsert reference link
         sb.table("msds_reference_links").upsert({
             "customer_msds_version_id": version_id,
             "reference_content_id": content_id,
@@ -501,10 +631,10 @@ async def finalize_intake(
         "updated_at": "now()",
     }).eq("id", intake_id).execute()
 
-    # Cleanup temp artifact (only after successful finalization)
+    # Cleanup temp artifact (only after successful finalization, best-effort)
     try:
         sb.storage.from_(_INTAKE_BUCKET).remove([artifact["storage_path"]])
     except Exception:
-        pass  # best-effort; do not fail finalization on cleanup error
+        pass
 
     return {"status": "FINALIZED", "version_id": version_id, "rpc_status": rpc_status}

@@ -1,10 +1,20 @@
-"""leg-prod msds_ref.identity_projection read client — WO-MSDS-04A."""
+"""leg-prod MSDS Reference read client — WO-MSDS-04A-PATCH-001.
+
+Queries public.msds_ref_identity_projection_v (PostgREST-accessible view over
+msds_ref.identity_projection). TAI backend uses service_role credentials to the
+leg-prod Supabase instance (LEG_SUPABASE_URL + LEG_SUPABASE_SERVICE_ROLE_KEY).
+
+Exceptions propagate — callers are responsible for REFERENCE_LOOKUP_FAILED handling.
+"""
 from __future__ import annotations
 
 import os
 from typing import Any, Dict, List, Optional
 
 from supabase import create_client
+
+# Public view name — queries this, not the private msds_ref schema table directly
+_VIEW = "msds_ref_identity_projection_v"
 
 
 def _get_leg_client():
@@ -22,10 +32,11 @@ def find_reference_candidates(
     substance_name_normalized: Optional[str],
     alias_normalized: Optional[str],
 ) -> List[Dict[str, Any]]:
-    """Query identity_projection for matching reference candidates.
+    """Query msds_ref_identity_projection_v for matching reference candidates.
 
     Returns list of dicts with: content_id, chem_id, match_reason, rank_no, evidence_json.
     No numeric confidence. Deterministic only.
+    Exceptions propagate — callers handle REFERENCE_LOOKUP_FAILED.
     """
     sb = _get_leg_client()
     candidates: List[Dict[str, Any]] = []
@@ -48,7 +59,7 @@ def find_reference_candidates(
     # Rank 1: EXACT_CAS
     for cas in cas_list:
         res = (
-            sb.table("identity_projection")
+            sb.table(_VIEW)
             .select("content_id,chem_id,cas_no,product_name")
             .eq("snapshot_id", snapshot_id)
             .eq("cas_no", cas.strip())
@@ -60,7 +71,7 @@ def find_reference_candidates(
     # Rank 2: EXACT_REFERENCE_PRODUCT_NAME
     if product_name_normalized:
         res = (
-            sb.table("identity_projection")
+            sb.table(_VIEW)
             .select("content_id,chem_id,cas_no,product_name_normalized")
             .eq("snapshot_id", snapshot_id)
             .eq("product_name_normalized", product_name_normalized)
@@ -72,7 +83,7 @@ def find_reference_candidates(
     # Rank 3: EXACT_SUBSTANCE_NAME
     if substance_name_normalized:
         res = (
-            sb.table("identity_projection")
+            sb.table(_VIEW)
             .select("content_id,chem_id,cas_no,substance_name_normalized")
             .eq("snapshot_id", snapshot_id)
             .eq("substance_name_normalized", substance_name_normalized)
@@ -84,7 +95,7 @@ def find_reference_candidates(
     # Rank 4: EXACT_ALIAS
     if alias_normalized:
         res = (
-            sb.table("identity_projection")
+            sb.table(_VIEW)
             .select("content_id,chem_id,cas_no,alias_normalized")
             .eq("snapshot_id", snapshot_id)
             .eq("alias_normalized", alias_normalized)
@@ -97,17 +108,17 @@ def find_reference_candidates(
 
 
 def verify_reference_exists(snapshot_id: str, content_id: str) -> bool:
-    """Fail-closed check that a reference_content_id exists in the snapshot."""
-    try:
-        sb = _get_leg_client()
-        res = (
-            sb.table("identity_projection")
-            .select("content_id")
-            .eq("snapshot_id", snapshot_id)
-            .eq("content_id", content_id)
-            .limit(1)
-            .execute()
-        )
-        return bool(res.data)
-    except Exception:
-        return False  # fail-closed for existence check
+    """Fail-closed check that a reference_content_id exists in the snapshot.
+
+    Exceptions propagate — caller treats as REFERENCE_VERIFY_FAILED.
+    """
+    sb = _get_leg_client()
+    res = (
+        sb.table(_VIEW)
+        .select("content_id")
+        .eq("snapshot_id", snapshot_id)
+        .eq("content_id", content_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(res.data)

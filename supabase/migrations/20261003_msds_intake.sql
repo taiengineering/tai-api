@@ -1,6 +1,7 @@
--- WO-MSDS-04A-IMPLEMENTATION-001: MSDS Document Intake & Deterministic Matching
+-- WO-MSDS-04A-PATCH-001: MSDS Document Intake & Deterministic Matching
 -- Tables: msds_intakes, msds_intake_artifacts, msds_intake_facts, msds_match_candidates, msds_reference_links
 -- RLS: anon=NO, authenticated=NO, service_role=YES
+-- TARGET DB: TAI SaaS (vwlahtguyggrhvslabax) — NOT leg-prod
 
 -- ─── msds_intakes ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.msds_intakes (
@@ -8,7 +9,7 @@ CREATE TABLE IF NOT EXISTS public.msds_intakes (
     factory_id uuid NOT NULL REFERENCES public.factories(id),
     source_type text NOT NULL,
     status text NOT NULL DEFAULT 'RECEIVED',
-    selected_product_id uuid REFERENCES public.chemical_products(id),
+    selected_product_id uuid,
     final_msds_version_id uuid REFERENCES public.customer_msds_versions(id),
     reference_snapshot_id uuid,
     created_by uuid,
@@ -19,6 +20,10 @@ CREATE TABLE IF NOT EXISTS public.msds_intakes (
     finalized_at timestamptz,
     error_code text,
     error_detail text,
+    -- Composite FK: selected_product must belong to the same factory
+    CONSTRAINT fk_mi_product_factory
+        FOREIGN KEY (selected_product_id, factory_id)
+        REFERENCES public.chemical_products(id, factory_id),
     CONSTRAINT chk_mi_source_type CHECK (source_type IN ('PDF','PHOTO','BARCODE','QR')),
     CONSTRAINT chk_mi_status CHECK (status IN (
         'RECEIVED','PROCESSING','OCR_REQUIRED','REVIEW_REQUIRED',

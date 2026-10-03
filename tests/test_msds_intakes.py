@@ -1,4 +1,4 @@
-"""WO-MSDS-04A-IMPLEMENTATION-001 — MSDS Document Intake 단위 테스트.
+"""WO-MSDS-04A-PATCH-001 — MSDS Document Intake 단위 테스트.
 
 FakeSupabase 격리 — 운영 DB/네트워크/Storage 불사용.
 leg-prod reference_svc: unittest.mock.patch 으로 격리.
@@ -17,6 +17,7 @@ import pytest
 
 from services import msds_intake_svc as svc
 from services import msds_fact_extractor as extractor
+from services import msds_reference_svc as ref_svc
 from services.msds_product_svc import MsdsProductError
 
 
@@ -169,7 +170,6 @@ class _Query:
             return _Result([dict(r) for r in matched])
 
         if self._op == "upsert":
-            # Simple upsert: try to find existing by filters, update or insert
             existing = next((r for r in rows if self._match(r)), None)
             if existing:
                 existing.update(self._payload)
@@ -327,7 +327,10 @@ _PRODUCTS = [
         "product_name": "염산",
         "product_name_normalized": "염산",
         "manufacturer_normalized": "제조사a",
+        "manufacturer_name": "제조사A",
+        "identity_status": "DRAFT",
         "status_code": "ACTIVE",
+        "created_source": "MANUAL",
     },
     {
         "id": PROD_A1_2,
@@ -335,7 +338,10 @@ _PRODUCTS = [
         "product_name": "황산",
         "product_name_normalized": "황산",
         "manufacturer_normalized": None,
+        "manufacturer_name": None,
+        "identity_status": "DRAFT",
         "status_code": "ACTIVE",
+        "created_source": "MANUAL",
     },
 ]
 
@@ -349,7 +355,7 @@ def _make_sb(extra=None):
     store = {
         "factories": list(_FACTORIES),
         "role_data_scope": list(_ROLE_DATA_SCOPE),
-        "chemical_products": list(_PRODUCTS),
+        "chemical_products": [dict(p) for p in _PRODUCTS],
         "documents": [],
         "customer_msds_versions": [],
         "msds_intakes": [],
@@ -367,18 +373,12 @@ def _make_sb(extra=None):
 # ─── Helper: make a valid intake in RECEIVED state ───────────────────────────
 
 def _make_received_intake(sb, user=None, factory_id=None, file_bytes=None):
-    """Creates an intake row + artifact row in the store, returning the intake dict."""
     user = user or USER_A
     factory_id = factory_id or FAC_A1
     file_bytes = file_bytes or PDF_BYTES
-
     result = svc.create_intake(
-        sb=sb,
-        current_user=user,
-        factory_id=factory_id,
-        file_bytes=file_bytes,
-        file_name="test.pdf",
-        mime_type="application/pdf",
+        sb=sb, current_user=user, factory_id=factory_id,
+        file_bytes=file_bytes, file_name="test.pdf", mime_type="application/pdf",
     )
     return result["intake"]
 
@@ -396,7 +396,6 @@ def test_int01_create_intake_success():
     assert result["intake"]["status"] == "RECEIVED"
     assert result["intake"]["factory_id"] == FAC_A1
     assert result["artifact"]["content_sha256"] == _sha(PDF_BYTES)
-    # Storage upload happened
     bucket = sb.storage.from_("company-docs")
     assert len(bucket.uploads) == 1
 
@@ -407,15 +406,11 @@ def test_int02_duplicate_finalized_sha_returns_duplicate():
     sha = _sha(PDF_BYTES)
     fin_id = str(uuid.uuid4())
     sb.store["msds_intakes"].append({
-        "id": fin_id,
-        "factory_id": FAC_A1,
-        "status": "FINALIZED",
+        "id": fin_id, "factory_id": FAC_A1, "status": "FINALIZED",
         "final_msds_version_id": str(uuid.uuid4()),
     })
     sb.store["msds_intake_artifacts"].append({
-        "id": str(uuid.uuid4()),
-        "intake_id": fin_id,
-        "content_sha256": sha,
+        "id": str(uuid.uuid4()), "intake_id": fin_id, "content_sha256": sha,
     })
     result = svc.create_intake(
         sb=sb, current_user=USER_A, factory_id=FAC_A1,
@@ -441,9 +436,7 @@ def test_int04_invalid_pdf_rejected():
     with pytest.raises(MsdsProductError) as exc:
         svc.create_intake(
             sb=sb, current_user=USER_A, factory_id=FAC_A1,
-            file_bytes=b"NOT A PDF",
-            file_name="msds.pdf",
-            mime_type="application/pdf",
+            file_bytes=b"NOT A PDF", file_name="msds.pdf", mime_type="application/pdf",
         )
     assert exc.value.code == "INVALID_MSDS_PDF"
 
@@ -452,7 +445,6 @@ def test_int05_factory_not_found():
     """INT05: Unknown factory_id raises 404."""
     sb = _make_sb()
     unknown_fac = str(uuid.uuid4())
-    # role_data_scope has COMPANY scope so it looks up factories
     with pytest.raises(MsdsProductError) as exc:
         svc.create_intake(
             sb=sb, current_user=USER_A, factory_id=unknown_fac,
@@ -486,18 +478,95 @@ def test_int08_get_intake_wrong_factory_denied():
     assert exc.value.status_code == 404
 
 
+# ─── STG: Storage Compensation Tests ──────────────────────────────────────────
+
+def test_stg01_storage_upload_failure_fails_intake():
+    """STG01: Storage upload failure → intake status FAILED."""
+    sb = _make_sb()
+    # Make storage upload raise
+    def _fail_upload(*a, **kw):
+        raise RuntimeError("S3 unavailable")
+
+    sb.storage.from_("company-docs").upload = _fail_upload
+
+    with pytest.raises(MsdsProductError) as exc:
+        svc.create_intake(
+            sb=sb, current_user=USER_A, factory_id=FAC_A1,
+            file_bytes=PDF_BYTES, file_name="msds.pdf", mime_type="application/pdf",
+        )
+    assert exc.value.code == "STORAGE_UPLOAD_FAILED"
+    intake = sb.store["msds_intakes"][0]
+    assert intake["status"] == "FAILED"
+    assert intake["error_code"] == "STORAGE_UPLOAD_FAILED"
+
+
+def test_stg02_artifact_insert_exception_cleans_storage():
+    """STG02: Storage success + artifact INSERT exception → storage removed + intake FAILED."""
+    sb = _make_sb()
+
+    def _raise_on_artifact(payload):
+        raise RuntimeError("DB insert failed")
+
+    sb.set_insert_hook("msds_intake_artifacts", _raise_on_artifact)
+
+    with pytest.raises(MsdsProductError) as exc:
+        svc.create_intake(
+            sb=sb, current_user=USER_A, factory_id=FAC_A1,
+            file_bytes=PDF_BYTES, file_name="msds.pdf", mime_type="application/pdf",
+        )
+    assert exc.value.code == "ARTIFACT_CREATE_FAILED"
+    # Storage should be cleaned up
+    bucket = sb.storage.from_("company-docs")
+    assert len(bucket.removes) == 1
+    assert len(bucket._store) == 0
+    # Intake marked FAILED
+    intake = sb.store["msds_intakes"][0]
+    assert intake["status"] == "FAILED"
+
+
+def test_stg03_artifact_insert_empty_cleans_storage():
+    """STG03: Storage success + artifact INSERT returns empty data → storage removed + intake FAILED."""
+    sb = _make_sb()
+
+    def _empty_insert(payload):
+        return _Result([])
+
+    sb.set_insert_hook("msds_intake_artifacts", _empty_insert)
+
+    with pytest.raises(MsdsProductError) as exc:
+        svc.create_intake(
+            sb=sb, current_user=USER_A, factory_id=FAC_A1,
+            file_bytes=PDF_BYTES, file_name="msds.pdf", mime_type="application/pdf",
+        )
+    assert exc.value.code == "ARTIFACT_CREATE_FAILED"
+    bucket = sb.storage.from_("company-docs")
+    assert len(bucket.removes) == 1
+    intake = sb.store["msds_intakes"][0]
+    assert intake["status"] == "FAILED"
+
+
+def test_stg04_no_orphan_on_success():
+    """STG04: Successful create_intake leaves no orphaned storage objects."""
+    sb = _make_sb()
+    svc.create_intake(
+        sb=sb, current_user=USER_A, factory_id=FAC_A1,
+        file_bytes=PDF_BYTES, file_name="msds.pdf", mime_type="application/pdf",
+    )
+    bucket = sb.storage.from_("company-docs")
+    assert len(bucket.removes) == 0
+    assert len(bucket._store) == 1
+
+
 # ─── TXT: Extractor Tests ─────────────────────────────────────────────────────
 
 def test_txt01_empty_bytes_ocr_required():
     """TXT01: Empty bytes (no PDF reader) should return error or ocr_required."""
     result = extractor.extract_facts(b"")
-    # Either error or ocr_required — both valid: pypdf may not be installed or may fail
     assert result.error is not None or result.ocr_required
 
 
 def test_txt02_valid_pdf_but_no_text_ocr_required():
     """TXT02: PDF with no extractable text yields ocr_required=True."""
-    # Minimal real PDF with no text layer — we simulate by mocking PdfReader
     with patch("services.msds_fact_extractor.PdfReader") as MockReader:
         mock_reader = MagicMock()
         mock_page = MagicMock()
@@ -587,9 +656,7 @@ def test_pc01_exact_name_manufacturer_match():
 def test_pc02_exact_name_only_match():
     """PC02: Exact product_name_normalized without manufacturer yields EXACT_NAME."""
     sb = _make_sb()
-    facts = [
-        {"fact_type": "PRODUCT_NAME", "normalized_value": "황산"},
-    ]
+    facts = [{"fact_type": "PRODUCT_NAME", "normalized_value": "황산"}]
     candidates = svc._find_product_candidates(sb, FAC_A1, facts)
     reasons = [c["match_reason"] for c in candidates]
     assert "EXACT_NAME" in reasons
@@ -600,34 +667,33 @@ def test_pc02_exact_name_only_match():
 def test_pc03_no_match_returns_empty():
     """PC03: No matching product in factory yields empty candidates list."""
     sb = _make_sb()
-    facts = [
-        {"fact_type": "PRODUCT_NAME", "normalized_value": "알수없는물질"},
-    ]
+    facts = [{"fact_type": "PRODUCT_NAME", "normalized_value": "알수없는물질"}]
     candidates = svc._find_product_candidates(sb, FAC_A1, facts)
     assert candidates == []
 
 
-def test_pc04_exact_identifier_via_cas():
-    """PC04: CAS found as identifier_normalized yields EXACT_IDENTIFIER candidate."""
+def test_pc04_exact_identifier_ean_typed_match():
+    """PC04: EAN fact with matching identifier_type=EAN yields EXACT_IDENTIFIER candidate."""
     sb = _make_sb()
-    # Pre-populate chemical_product_identifiers
     sb.store["chemical_product_identifiers"].append({
         "id": str(uuid.uuid4()),
         "chemical_product_id": PROD_A1_1,
         "factory_id": FAC_A1,
-        "identifier_normalized": "7647-01-0",
+        "identifier_type": "EAN",
+        "identifier_normalized": "1234567890123",
         "is_active": True,
     })
-    facts = [{"fact_type": "CAS", "normalized_value": "7647-01-0"}]
+    facts = [{"fact_type": "EAN", "normalized_value": "1234567890123"}]
     candidates = svc._find_product_candidates(sb, FAC_A1, facts)
     reasons = [c["match_reason"] for c in candidates]
     assert "EXACT_IDENTIFIER" in reasons
+    pids = [c["candidate_product_id"] for c in candidates]
+    assert PROD_A1_1 in pids
 
 
 def test_pc05_cross_factory_isolation():
     """PC05: Product in FAC_B is not returned when searching FAC_A1."""
     sb = _make_sb()
-    # Add a product in FAC_B with same name
     sb.store["chemical_products"].append({
         "id": str(uuid.uuid4()),
         "factory_id": FAC_B,
@@ -638,11 +704,82 @@ def test_pc05_cross_factory_isolation():
     })
     facts = [{"fact_type": "PRODUCT_NAME", "normalized_value": "염산"}]
     candidates = svc._find_product_candidates(sb, FAC_A1, facts)
-    # Only FAC_A1 products should be returned
     for c in candidates:
         pid = c["candidate_product_id"]
         prod = next(p for p in sb.store["chemical_products"] if p["id"] == pid)
         assert prod["factory_id"] == FAC_A1
+
+
+def test_pc06_cas_is_not_product_identifier():
+    """PC06: CAS fact does NOT produce EXACT_IDENTIFIER product candidate."""
+    sb = _make_sb()
+    sb.store["chemical_product_identifiers"].append({
+        "id": str(uuid.uuid4()),
+        "chemical_product_id": PROD_A1_1,
+        "factory_id": FAC_A1,
+        "identifier_type": "EAN",
+        "identifier_normalized": "7647-01-0",  # same value as CAS but wrong type
+        "is_active": True,
+    })
+    facts = [{"fact_type": "CAS", "normalized_value": "7647-01-0"}]
+    candidates = svc._find_product_candidates(sb, FAC_A1, facts)
+    # CAS fact must not produce EXACT_IDENTIFIER
+    exact_id_cands = [c for c in candidates if c["match_reason"] == "EXACT_IDENTIFIER"]
+    assert exact_id_cands == []
+
+
+def test_pc07_wrong_identifier_type_no_match():
+    """PC07: EAN value in DB but fact_type=BARCODE → no EXACT_IDENTIFIER match."""
+    sb = _make_sb()
+    sb.store["chemical_product_identifiers"].append({
+        "id": str(uuid.uuid4()),
+        "chemical_product_id": PROD_A1_1,
+        "factory_id": FAC_A1,
+        "identifier_type": "EAN",
+        "identifier_normalized": "1234567890123",
+        "is_active": True,
+    })
+    facts = [{"fact_type": "BARCODE", "normalized_value": "1234567890123"}]
+    candidates = svc._find_product_candidates(sb, FAC_A1, facts)
+    # BARCODE fact must only match identifier_type=BARCODE
+    eid_cands = [c for c in candidates if c["match_reason"] == "EXACT_IDENTIFIER"]
+    # No BARCODE-typed identifier in DB → no match
+    assert eid_cands == []
+
+
+def test_pc08_barcode_typed_match():
+    """PC08: BARCODE fact with matching identifier_type=BARCODE yields EXACT_IDENTIFIER."""
+    sb = _make_sb()
+    sb.store["chemical_product_identifiers"].append({
+        "id": str(uuid.uuid4()),
+        "chemical_product_id": PROD_A1_1,
+        "factory_id": FAC_A1,
+        "identifier_type": "BARCODE",
+        "identifier_normalized": "9876543210",
+        "is_active": True,
+    })
+    facts = [{"fact_type": "BARCODE", "normalized_value": "9876543210"}]
+    candidates = svc._find_product_candidates(sb, FAC_A1, facts)
+    eid_cands = [c for c in candidates if c["match_reason"] == "EXACT_IDENTIFIER"]
+    assert len(eid_cands) == 1
+    assert eid_cands[0]["candidate_product_id"] == PROD_A1_1
+
+
+def test_pc09_same_value_wrong_type_no_match():
+    """PC09: Same identifier value but mismatched identifier_type → no match."""
+    sb = _make_sb()
+    sb.store["chemical_product_identifiers"].append({
+        "id": str(uuid.uuid4()),
+        "chemical_product_id": PROD_A1_1,
+        "factory_id": FAC_A1,
+        "identifier_type": "GTIN",
+        "identifier_normalized": "00012345678905",
+        "is_active": True,
+    })
+    facts = [{"fact_type": "EAN", "normalized_value": "00012345678905"}]
+    candidates = svc._find_product_candidates(sb, FAC_A1, facts)
+    eid_cands = [c for c in candidates if c["match_reason"] == "EXACT_IDENTIFIER"]
+    assert eid_cands == []
 
 
 # ─── RC: Reference Candidate Tests ────────────────────────────────────────────
@@ -650,23 +787,15 @@ def test_pc05_cross_factory_isolation():
 SNAPSHOT_ID = "0ad73e46-d61b-474d-a90e-5b5ab8080d80"
 
 def _mock_ref_find(hits):
-    """Returns a patcher that mocks find_reference_candidates to return hits."""
-    return patch(
-        "services.msds_intake_svc.ref_svc.find_reference_candidates",
-        return_value=hits,
-    )
+    return patch("services.msds_intake_svc.ref_svc.find_reference_candidates", return_value=hits)
 
 
 def test_rc01_reference_candidate_cas_match():
     """RC01: CAS match from ref_svc is returned as REFERENCE candidate."""
     hits = [{
-        "reference_content_id": "REF-001",
-        "reference_chem_id": "CHEM-001",
-        "reference_snapshot_id": SNAPSHOT_ID,
-        "cas_no": "7647-01-0",
-        "match_reason": "EXACT_CAS",
-        "rank_no": 1,
-        "evidence_json": {"cas": "7647-01-0"},
+        "reference_content_id": "REF-001", "reference_chem_id": "CHEM-001",
+        "reference_snapshot_id": SNAPSHOT_ID, "cas_no": "7647-01-0",
+        "match_reason": "EXACT_CAS", "rank_no": 1, "evidence_json": {"cas": "7647-01-0"},
     }]
     facts = [{"fact_type": "CAS", "normalized_value": "7647-01-0"}]
     with _mock_ref_find(hits):
@@ -680,12 +809,9 @@ def test_rc01_reference_candidate_cas_match():
 def test_rc02_reference_candidate_product_name_match():
     """RC02: Product name match from ref_svc is returned."""
     hits = [{
-        "reference_content_id": "REF-002",
-        "reference_chem_id": "CHEM-002",
-        "reference_snapshot_id": SNAPSHOT_ID,
-        "cas_no": None,
-        "match_reason": "EXACT_REFERENCE_PRODUCT_NAME",
-        "rank_no": 2,
+        "reference_content_id": "REF-002", "reference_chem_id": "CHEM-002",
+        "reference_snapshot_id": SNAPSHOT_ID, "cas_no": None,
+        "match_reason": "EXACT_REFERENCE_PRODUCT_NAME", "rank_no": 2,
         "evidence_json": {"product_name_normalized": "황산"},
     }]
     facts = [{"fact_type": "PRODUCT_NAME", "normalized_value": "황산"}]
@@ -695,12 +821,12 @@ def test_rc02_reference_candidate_product_name_match():
     assert candidates[0]["match_reason"] == "EXACT_REFERENCE_PRODUCT_NAME"
 
 
-def test_rc03_reference_failure_non_fatal():
-    """RC03: ref_svc.find_reference_candidates exception returns empty list (non-fatal)."""
+def test_rc03_reference_lookup_failure_propagates():
+    """RC03: ref_svc exception propagates from _find_reference_candidates."""
     facts = [{"fact_type": "PRODUCT_NAME", "normalized_value": "황산"}]
     with patch("services.msds_intake_svc.ref_svc.find_reference_candidates", side_effect=RuntimeError("leg-prod down")):
-        candidates = svc._find_reference_candidates(facts, SNAPSHOT_ID)
-    assert candidates == []
+        with pytest.raises(RuntimeError):
+            svc._find_reference_candidates(facts, SNAPSHOT_ID)
 
 
 def test_rc04_no_facts_no_candidates():
@@ -729,7 +855,6 @@ def test_rc06_process_intake_stores_reference_candidates():
     sb = _make_sb()
     intake = _make_received_intake(sb)
     intake_id = intake["id"]
-    # Provide PDF with extractable text via mocked extractor
     text_facts = [
         {"fact_type": "PRODUCT_NAME", "raw_value": "염산", "normalized_value": "염산",
          "source_page": 1, "evidence_json": {}},
@@ -749,7 +874,7 @@ def test_rc06_process_intake_stores_reference_candidates():
 
     with patch("services.msds_intake_svc.extractor.extract_facts", return_value=mock_result), \
          _mock_ref_find(ref_hits):
-        result = svc.process_intake(sb, USER_A, FAC_A1, intake_id)
+        svc.process_intake(sb, USER_A, FAC_A1, intake_id)
 
     ref_cands = [r for r in sb.store["msds_match_candidates"] if r.get("candidate_type") == "REFERENCE"]
     assert len(ref_cands) >= 1
@@ -771,19 +896,48 @@ def test_rc07_ocr_required_status():
         result = svc.process_intake(sb, USER_A, FAC_A1, intake_id)
 
     assert result["status"] == "OCR_REQUIRED"
-    # intake status updated
     stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake_id)
     assert stored["status"] == "OCR_REQUIRED"
+
+
+# ─── REF: Reference Service Table Tests ───────────────────────────────────────
+
+def test_ref08_service_queries_public_view():
+    """REF08: msds_reference_svc queries msds_ref_identity_projection_v (not identity_projection)."""
+    import inspect
+    source = inspect.getsource(ref_svc)
+    assert "msds_ref_identity_projection_v" in source
+    assert 'table("identity_projection")' not in source
+
+
+def test_ref09_service_does_not_query_private_table():
+    """REF09: msds_reference_svc does not directly query private msds_ref schema table."""
+    import inspect
+    source = inspect.getsource(ref_svc)
+    # Should not contain direct reference to the private table name without the view prefix
+    assert '"identity_projection"' not in source or "msds_ref_identity_projection_v" in source
+
+
+def test_ref10_find_candidates_exception_propagates():
+    """REF10: find_reference_candidates lets exceptions propagate (no silent catch)."""
+    from unittest.mock import MagicMock, patch
+    with patch("services.msds_reference_svc._get_leg_client", side_effect=RuntimeError("LEG_SUPABASE_URL not set")):
+        with pytest.raises(RuntimeError):
+            ref_svc.find_reference_candidates(SNAPSHOT_ID, [], None, None, None)
+
+
+def test_ref11_verify_exception_propagates():
+    """REF11: verify_reference_exists lets exceptions propagate (fail-closed)."""
+    with patch("services.msds_reference_svc._get_leg_client", side_effect=RuntimeError("connection refused")):
+        with pytest.raises(RuntimeError):
+            ref_svc.verify_reference_exists(SNAPSHOT_ID, "REF-001")
 
 
 # ─── CF: Confirm Tests ────────────────────────────────────────────────────────
 
 def _make_review_required_intake(sb):
-    """Creates an intake in REVIEW_REQUIRED status."""
     intake = _make_received_intake(sb)
     intake_id = intake["id"]
-    sb.store["msds_intakes"][0]["status"] = "REVIEW_REQUIRED"  # patch first intake
-    # find correctly
     for r in sb.store["msds_intakes"]:
         if r["id"] == intake_id:
             r["status"] = "REVIEW_REQUIRED"
@@ -798,19 +952,18 @@ def test_cf01_confirm_existing_product():
     result = svc.confirm_intake(
         sb=sb, current_user=USER_A, factory_id=FAC_A1,
         intake_id=intake["id"],
-        existing_product_id=PROD_A1_1,
-        new_product=None,
+        existing_product_id=PROD_A1_1, new_product=None,
         selected_reference_candidate_ids=[],
     )
     assert result["status"] == "CONFIRMED"
-    assert result["existing_product_id"] == PROD_A1_1
+    assert result["selected_product_id"] == PROD_A1_1
     stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake["id"])
     assert stored["status"] == "CONFIRMED"
     assert stored["selected_product_id"] == PROD_A1_1
 
 
-def test_cf02_confirm_new_product_body():
-    """CF02: confirm_intake with new_product dict (no existing_product_id) succeeds."""
+def test_cf02_confirm_new_product_creates_product():
+    """CF02: confirm_intake with new_product creates Product via OBJ-02 contract."""
     sb = _make_sb()
     intake = _make_review_required_intake(sb)
     result = svc.confirm_intake(
@@ -821,7 +974,17 @@ def test_cf02_confirm_new_product_body():
         selected_reference_candidate_ids=[],
     )
     assert result["status"] == "CONFIRMED"
-    assert result["new_product"]["product_name"] == "신규물질"
+    new_pid = result["new_product_created"]
+    assert new_pid is not None
+    # Product row created
+    new_prod = next((p for p in sb.store["chemical_products"] if p["id"] == new_pid), None)
+    assert new_prod is not None
+    assert new_prod["product_name"] == "신규물질"
+    # identity_status updated to CONFIRMED
+    assert new_prod["identity_status"] == "CONFIRMED"
+    # intake selected_product_id points to new product
+    stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake["id"])
+    assert stored["selected_product_id"] == new_pid
 
 
 def test_cf03_confirm_conflict_existing_and_new():
@@ -847,8 +1010,7 @@ def test_cf04_confirm_no_product_raises_422():
         svc.confirm_intake(
             sb=sb, current_user=USER_A, factory_id=FAC_A1,
             intake_id=intake["id"],
-            existing_product_id=None,
-            new_product=None,
+            existing_product_id=None, new_product=None,
             selected_reference_candidate_ids=[],
         )
     assert exc.value.code == "CONFIRM_NO_PRODUCT"
@@ -857,8 +1019,6 @@ def test_cf04_confirm_no_product_raises_422():
 def test_cf05_confirm_product_not_in_factory():
     """CF05: existing_product_id from different factory raises 404."""
     sb = _make_sb()
-    intake = _make_review_required_intake(sb)
-    # PROD_A1_1 belongs to FAC_A1, but we try to confirm on FAC_A2
     intake_a2 = {"id": str(uuid.uuid4()), "factory_id": FAC_A2, "status": "REVIEW_REQUIRED",
                  "reference_snapshot_id": SNAPSHOT_ID}
     sb.store["msds_intakes"].append(intake_a2)
@@ -897,17 +1057,14 @@ def test_cf07_confirm_marks_selected_candidates():
     intake_id = intake["id"]
     cand_id = str(uuid.uuid4())
     sb.store["msds_match_candidates"].append({
-        "id": cand_id,
-        "intake_id": intake_id,
-        "candidate_type": "REFERENCE",
-        "decision_status": "PENDING",
+        "id": cand_id, "intake_id": intake_id,
+        "candidate_type": "REFERENCE", "decision_status": "PENDING",
         "match_reason": "EXACT_CAS",
     })
     svc.confirm_intake(
         sb=sb, current_user=USER_A, factory_id=FAC_A1,
         intake_id=intake_id,
-        existing_product_id=PROD_A1_1,
-        new_product=None,
+        existing_product_id=PROD_A1_1, new_product=None,
         selected_reference_candidate_ids=[cand_id],
     )
     cand = next(r for r in sb.store["msds_match_candidates"] if r["id"] == cand_id)
@@ -928,6 +1085,303 @@ def test_cf08_confirm_auth_denied_cross_company():
     assert exc.value.status_code in (403, 404)
 
 
+def test_cf09_confirm_invalid_reference_candidate_id_raises_422():
+    """CF09: selected_reference_candidate_ids with nonexistent ID raises 422."""
+    sb = _make_sb()
+    intake = _make_review_required_intake(sb)
+    bad_cand_id = str(uuid.uuid4())
+    with pytest.raises(MsdsProductError) as exc:
+        svc.confirm_intake(
+            sb=sb, current_user=USER_A, factory_id=FAC_A1,
+            intake_id=intake["id"],
+            existing_product_id=PROD_A1_1, new_product=None,
+            selected_reference_candidate_ids=[bad_cand_id],
+        )
+    assert exc.value.code == "REFERENCE_CANDIDATE_INVALID"
+
+
+def test_cf10_confirm_customer_product_candidate_as_reference_raises_422():
+    """CF10: Passing a CUSTOMER_PRODUCT candidate ID as reference raises 422."""
+    sb = _make_sb()
+    intake = _make_review_required_intake(sb)
+    intake_id = intake["id"]
+    cand_id = str(uuid.uuid4())
+    sb.store["msds_match_candidates"].append({
+        "id": cand_id, "intake_id": intake_id,
+        "candidate_type": "CUSTOMER_PRODUCT",  # wrong type
+        "decision_status": "PENDING", "match_reason": "EXACT_NAME",
+    })
+    with pytest.raises(MsdsProductError) as exc:
+        svc.confirm_intake(
+            sb=sb, current_user=USER_A, factory_id=FAC_A1,
+            intake_id=intake_id,
+            existing_product_id=PROD_A1_1, new_product=None,
+            selected_reference_candidate_ids=[cand_id],
+        )
+    assert exc.value.code == "REFERENCE_CANDIDATE_INVALID"
+
+
+# ─── NP: New Product End-to-End Tests ─────────────────────────────────────────
+
+def test_np01_new_product_confirm_calls_create_product():
+    """NP01: new_product confirm calls OBJ-02 create_product."""
+    sb = _make_sb()
+    intake = _make_review_required_intake(sb)
+    initial_count = len(sb.store["chemical_products"])
+    svc.confirm_intake(
+        sb=sb, current_user=USER_A, factory_id=FAC_A1,
+        intake_id=intake["id"],
+        existing_product_id=None,
+        new_product={"product_name": "벤젠", "manufacturer_name": "화학사"},
+        selected_reference_candidate_ids=[],
+    )
+    assert len(sb.store["chemical_products"]) == initial_count + 1
+
+
+def test_np02_new_product_identity_status_confirmed():
+    """NP02: New Product from intake confirm has identity_status=CONFIRMED."""
+    sb = _make_sb()
+    intake = _make_review_required_intake(sb)
+    result = svc.confirm_intake(
+        sb=sb, current_user=USER_A, factory_id=FAC_A1,
+        intake_id=intake["id"],
+        existing_product_id=None,
+        new_product={"product_name": "벤젠", "manufacturer_name": None},
+        selected_reference_candidate_ids=[],
+    )
+    new_pid = result["new_product_created"]
+    prod = next(p for p in sb.store["chemical_products"] if p["id"] == new_pid)
+    assert prod["identity_status"] == "CONFIRMED"
+
+
+def test_np03_new_product_selected_product_id_set():
+    """NP03: intake.selected_product_id is set to new product ID."""
+    sb = _make_sb()
+    intake = _make_review_required_intake(sb)
+    result = svc.confirm_intake(
+        sb=sb, current_user=USER_A, factory_id=FAC_A1,
+        intake_id=intake["id"],
+        existing_product_id=None,
+        new_product={"product_name": "톨루엔", "manufacturer_name": None},
+        selected_reference_candidate_ids=[],
+    )
+    new_pid = result["new_product_created"]
+    stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake["id"])
+    assert stored["selected_product_id"] == new_pid
+
+
+def test_np04_new_product_finalize_succeeds():
+    """NP04: New Product confirm → finalize succeeds (not NO_PRODUCT_SELECTED)."""
+    sb = _make_sb()
+    intake = _make_review_required_intake(sb)
+    confirm_result = svc.confirm_intake(
+        sb=sb, current_user=USER_A, factory_id=FAC_A1,
+        intake_id=intake["id"],
+        existing_product_id=None,
+        new_product={"product_name": "아세톤", "manufacturer_name": "신규사"},
+        selected_reference_candidate_ids=[],
+    )
+    new_pid = confirm_result["new_product_created"]
+
+    with patch("services.msds_intake_svc.create_version", side_effect=_mock_create_version), \
+         patch("services.msds_intake_svc.ref_svc.verify_reference_exists", return_value=True):
+        result = _run(svc.finalize_intake(
+            sb=sb, current_user=USER_A, factory_id=FAC_A1,
+            intake_id=intake["id"],
+        ))
+
+    assert result["status"] == "FINALIZED"
+
+
+def test_np05_new_product_finalize_creates_version_for_new_product():
+    """NP05: Finalized MSDS version is linked to the newly created product."""
+    sb = _make_sb()
+    intake = _make_review_required_intake(sb)
+    confirm_result = svc.confirm_intake(
+        sb=sb, current_user=USER_A, factory_id=FAC_A1,
+        intake_id=intake["id"],
+        existing_product_id=None,
+        new_product={"product_name": "메탄올", "manufacturer_name": None},
+        selected_reference_candidate_ids=[],
+    )
+    new_pid = confirm_result["new_product_created"]
+
+    create_version_calls = []
+    async def _spy_create_version(sb, current_user, factory_id, product_id, **kw):
+        create_version_calls.append(product_id)
+        return await _mock_create_version(sb, current_user, factory_id, product_id, **kw)
+
+    with patch("services.msds_intake_svc.create_version", side_effect=_spy_create_version), \
+         patch("services.msds_intake_svc.ref_svc.verify_reference_exists", return_value=True):
+        _run(svc.finalize_intake(
+            sb=sb, current_user=USER_A, factory_id=FAC_A1,
+            intake_id=intake["id"],
+        ))
+
+    assert len(create_version_calls) == 1
+    assert create_version_calls[0] == new_pid
+
+
+# ─── RF: Reference Fail-Closed Tests ──────────────────────────────────────────
+
+def _build_confirmed_intake_for_finalize(sb, product_id=None):
+    intake = _make_received_intake(sb)
+    intake_id = intake["id"]
+    for r in sb.store["msds_intakes"]:
+        if r["id"] == intake_id:
+            r["status"] = "CONFIRMED"
+            r["selected_product_id"] = product_id or PROD_A1_1
+            r["reference_snapshot_id"] = SNAPSHOT_ID
+            break
+    return intake_id
+
+
+async def _mock_create_version(sb, current_user, factory_id, product_id, file_bytes, file_name, mime_type, **kwargs):
+    from datetime import datetime
+    doc_id = str(uuid.uuid4())
+    sha = hashlib.sha256(file_bytes).hexdigest()
+    doc = {
+        "id": doc_id, "factory_id": factory_id, "company_id": CO_A,
+        "category": "msds", "linked_table": "chemical_products", "linked_id": product_id,
+        "bucket_id": "company-docs", "storage_path": f"{CO_A}/msds/2026-10/{doc_id}.pdf",
+        "is_active": True, "deleted_at": None, "file_name": file_name,
+        "mime_type": mime_type, "file_size": len(file_bytes),
+        "uploaded_at": datetime.utcnow().isoformat(),
+    }
+    sb.store.setdefault("documents", []).append(doc)
+    ver_id = str(uuid.uuid4())
+    ver = {
+        "id": ver_id, "factory_id": factory_id, "chemical_product_id": product_id,
+        "document_id": doc_id, "version_no": 1, "content_sha256": sha,
+        "is_current": True, "record_status": "ACTIVE",
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    sb.store.setdefault("customer_msds_versions", []).append(ver)
+    return (ver, "NEW_VERSION")
+
+
+def test_rf01_selected_ref_exists_finalize_succeeds():
+    """RF01: Selected reference exists in leg-prod → finalize succeeds with link."""
+    sb = _make_sb()
+    intake_id = _build_confirmed_intake_for_finalize(sb)
+    cand_id = str(uuid.uuid4())
+    sb.store["msds_match_candidates"].append({
+        "id": cand_id, "intake_id": intake_id,
+        "candidate_type": "REFERENCE", "decision_status": "SELECTED",
+        "match_reason": "EXACT_CAS", "reference_content_id": "REF-001",
+        "reference_chem_id": "CHEM-001", "evidence_json": {"cas": "7647-01-0"},
+    })
+
+    with patch("services.msds_intake_svc.create_version", side_effect=_mock_create_version), \
+         patch("services.msds_intake_svc.ref_svc.verify_reference_exists", return_value=True):
+        result = _run(svc.finalize_intake(sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=intake_id))
+
+    assert result["status"] == "FINALIZED"
+    links = sb.store.get("msds_reference_links", [])
+    assert len(links) == 1
+    assert links[0]["reference_content_id"] == "REF-001"
+
+
+def test_rf02_selected_ref_missing_raises_reference_verify_failed():
+    """RF02: verify_reference_exists returns False → REFERENCE_VERIFY_FAILED (no version created)."""
+    sb = _make_sb()
+    intake_id = _build_confirmed_intake_for_finalize(sb)
+    sb.store["msds_match_candidates"].append({
+        "id": str(uuid.uuid4()), "intake_id": intake_id,
+        "candidate_type": "REFERENCE", "decision_status": "SELECTED",
+        "match_reason": "EXACT_CAS", "reference_content_id": "REF-GONE",
+        "reference_chem_id": "CHEM-GONE", "evidence_json": {},
+    })
+
+    with patch("services.msds_intake_svc.ref_svc.verify_reference_exists", return_value=False):
+        with pytest.raises(MsdsProductError) as exc:
+            _run(svc.finalize_intake(sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=intake_id))
+
+    assert exc.value.code == "REFERENCE_VERIFY_FAILED"
+
+
+def test_rf03_leg_prod_unavailable_raises_reference_verify_failed():
+    """RF03: verify_reference_exists raises exception → REFERENCE_VERIFY_FAILED."""
+    sb = _make_sb()
+    intake_id = _build_confirmed_intake_for_finalize(sb)
+    sb.store["msds_match_candidates"].append({
+        "id": str(uuid.uuid4()), "intake_id": intake_id,
+        "candidate_type": "REFERENCE", "decision_status": "SELECTED",
+        "match_reason": "EXACT_CAS", "reference_content_id": "REF-001",
+        "reference_chem_id": "CHEM-001", "evidence_json": {},
+    })
+
+    with patch("services.msds_intake_svc.ref_svc.verify_reference_exists", side_effect=RuntimeError("connection refused")):
+        with pytest.raises(MsdsProductError) as exc:
+            _run(svc.finalize_intake(sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=intake_id))
+
+    assert exc.value.code == "REFERENCE_VERIFY_FAILED"
+
+
+def test_rf04_verify_failure_create_version_not_called():
+    """RF04: verify failure → create_version must not be called."""
+    sb = _make_sb()
+    intake_id = _build_confirmed_intake_for_finalize(sb)
+    sb.store["msds_match_candidates"].append({
+        "id": str(uuid.uuid4()), "intake_id": intake_id,
+        "candidate_type": "REFERENCE", "decision_status": "SELECTED",
+        "match_reason": "EXACT_CAS", "reference_content_id": "REF-MISSING",
+        "reference_chem_id": "CHEM-MISSING", "evidence_json": {},
+    })
+
+    create_version_called = []
+    async def _spy(*a, **kw):
+        create_version_called.append(True)
+        return await _mock_create_version(*a, **kw)
+
+    with patch("services.msds_intake_svc.create_version", side_effect=_spy), \
+         patch("services.msds_intake_svc.ref_svc.verify_reference_exists", return_value=False):
+        with pytest.raises(MsdsProductError):
+            _run(svc.finalize_intake(sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=intake_id))
+
+    assert create_version_called == []
+
+
+def test_rf05_verify_failure_temp_storage_preserved():
+    """RF05: verify failure → temp storage artifact is preserved (not cleaned up)."""
+    sb = _make_sb()
+    intake_id = _build_confirmed_intake_for_finalize(sb)
+    sb.store["msds_match_candidates"].append({
+        "id": str(uuid.uuid4()), "intake_id": intake_id,
+        "candidate_type": "REFERENCE", "decision_status": "SELECTED",
+        "match_reason": "EXACT_CAS", "reference_content_id": "REF-BAD",
+        "reference_chem_id": "CHEM-BAD", "evidence_json": {},
+    })
+    # Count removes before
+    bucket = sb.storage.from_("company-docs")
+    removes_before = len(bucket.removes)
+
+    with patch("services.msds_intake_svc.ref_svc.verify_reference_exists", return_value=False):
+        with pytest.raises(MsdsProductError):
+            _run(svc.finalize_intake(sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=intake_id))
+
+    assert len(bucket.removes) == removes_before
+
+
+def test_rf06_verify_failure_intake_not_finalized():
+    """RF06: verify failure → intake status is NOT FINALIZED."""
+    sb = _make_sb()
+    intake_id = _build_confirmed_intake_for_finalize(sb)
+    sb.store["msds_match_candidates"].append({
+        "id": str(uuid.uuid4()), "intake_id": intake_id,
+        "candidate_type": "REFERENCE", "decision_status": "SELECTED",
+        "match_reason": "EXACT_CAS", "reference_content_id": "REF-BAD",
+        "reference_chem_id": "CHEM-BAD", "evidence_json": {},
+    })
+
+    with patch("services.msds_intake_svc.ref_svc.verify_reference_exists", return_value=False):
+        with pytest.raises(MsdsProductError):
+            _run(svc.finalize_intake(sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=intake_id))
+
+    stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake_id)
+    assert stored["status"] != "FINALIZED"
+
+
 # ─── Process + Finalize integration ──────────────────────────────────────────
 
 def test_process_already_processed_raises_409():
@@ -944,9 +1398,7 @@ def test_finalize_intake_not_confirmed_raises_409():
     sb = _make_sb()
     intake = _make_review_required_intake(sb)
     with pytest.raises(MsdsProductError) as exc:
-        _run(svc.finalize_intake(
-            sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=intake["id"],
-        ))
+        _run(svc.finalize_intake(sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=intake["id"]))
     assert exc.value.code == "INTAKE_NOT_CONFIRMED"
 
 
@@ -959,9 +1411,7 @@ def test_finalize_no_product_selected_raises_409():
         "selected_product_id": None, "reference_snapshot_id": SNAPSHOT_ID,
     })
     with pytest.raises(MsdsProductError) as exc:
-        _run(svc.finalize_intake(
-            sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=cfm_id,
-        ))
+        _run(svc.finalize_intake(sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=cfm_id))
     assert exc.value.code == "NO_PRODUCT_SELECTED"
 
 
@@ -973,116 +1423,62 @@ def test_finalize_already_finalized_returns_noop():
         "id": fin_id, "factory_id": FAC_A1, "status": "FINALIZED",
         "selected_product_id": PROD_A1_1, "reference_snapshot_id": SNAPSHOT_ID,
     })
-    result = _run(svc.finalize_intake(
-        sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=fin_id,
-    ))
+    result = _run(svc.finalize_intake(sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=fin_id))
     assert result["status"] == "ALREADY_FINALIZED"
-
-
-def _build_confirmed_intake_for_finalize(sb):
-    """Sets up an intake in CONFIRMED state with an artifact + PDF in storage."""
-    intake = _make_received_intake(sb)
-    intake_id = intake["id"]
-    # Transition to CONFIRMED
-    for r in sb.store["msds_intakes"]:
-        if r["id"] == intake_id:
-            r["status"] = "CONFIRMED"
-            r["selected_product_id"] = PROD_A1_1
-            r["reference_snapshot_id"] = SNAPSHOT_ID
-            break
-    return intake_id
-
-
-async def _mock_create_version(sb, current_user, factory_id, product_id, file_bytes, file_name, mime_type, **kwargs):
-    """Fake create_version that registers a document and version."""
-    from datetime import datetime
-    doc_id = str(uuid.uuid4())
-    sha = hashlib.sha256(file_bytes).hexdigest()
-    doc = {
-        "id": doc_id, "factory_id": factory_id, "company_id": CO_A,
-        "category": "msds", "linked_table": "chemical_products",
-        "linked_id": product_id, "bucket_id": "company-docs",
-        "storage_path": f"{CO_A}/msds/2026-10/{doc_id}.pdf",
-        "is_active": True, "deleted_at": None,
-        "file_name": file_name, "mime_type": mime_type, "file_size": len(file_bytes),
-        "uploaded_at": datetime.utcnow().isoformat(),
-    }
-    sb.store.setdefault("documents", []).append(doc)
-    ver_id = str(uuid.uuid4())
-    ver = {
-        "id": ver_id, "factory_id": factory_id, "chemical_product_id": product_id,
-        "document_id": doc_id, "version_no": 1, "content_sha256": sha,
-        "is_current": True, "record_status": "ACTIVE",
-        "created_at": datetime.utcnow().isoformat(),
-    }
-    sb.store.setdefault("customer_msds_versions", []).append(ver)
-    return (ver, "NEW_VERSION")
 
 
 def test_finalize_success_creates_version_and_link():
     """Finalize creates MSDS version and reference link, transitions to FINALIZED."""
     sb = _make_sb()
     intake_id = _build_confirmed_intake_for_finalize(sb)
-
-    # Add a SELECTED reference candidate
     cand_id = str(uuid.uuid4())
     sb.store["msds_match_candidates"].append({
-        "id": cand_id,
-        "intake_id": intake_id,
-        "candidate_type": "REFERENCE",
-        "decision_status": "SELECTED",
-        "match_reason": "EXACT_CAS",
-        "reference_content_id": "REF-001",
-        "reference_chem_id": "CHEM-001",
-        "evidence_json": {"cas": "7647-01-0"},
+        "id": cand_id, "intake_id": intake_id,
+        "candidate_type": "REFERENCE", "decision_status": "SELECTED",
+        "match_reason": "EXACT_CAS", "reference_content_id": "REF-001",
+        "reference_chem_id": "CHEM-001", "evidence_json": {"cas": "7647-01-0"},
     })
 
     with patch("services.msds_intake_svc.create_version", side_effect=_mock_create_version), \
          patch("services.msds_intake_svc.ref_svc.verify_reference_exists", return_value=True):
-        result = _run(svc.finalize_intake(
-            sb=sb, current_user=USER_A, factory_id=FAC_A1,
-            intake_id=intake_id,
-        ))
+        result = _run(svc.finalize_intake(sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=intake_id))
 
     assert result["status"] == "FINALIZED"
     assert result["rpc_status"] == "NEW_VERSION"
-
-    # intake should be FINALIZED
     stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake_id)
     assert stored["status"] == "FINALIZED"
     assert stored["final_msds_version_id"] == result["version_id"]
-
-    # reference link created
     links = sb.store.get("msds_reference_links", [])
     assert len(links) >= 1
     assert links[0]["reference_content_id"] == "REF-001"
 
 
-def test_finalize_skips_link_if_verify_fails():
-    """Reference link is skipped if verify_reference_exists returns False."""
+# ─── Reference lookup failure in process_intake ───────────────────────────────
+
+def test_process_reference_lookup_failed_transitions_to_failed():
+    """Reference lookup failure during process_intake → intake FAILED with REFERENCE_LOOKUP_FAILED."""
     sb = _make_sb()
-    intake_id = _build_confirmed_intake_for_finalize(sb)
-    sb.store["msds_match_candidates"].append({
-        "id": str(uuid.uuid4()),
-        "intake_id": intake_id,
-        "candidate_type": "REFERENCE",
-        "decision_status": "SELECTED",
-        "match_reason": "EXACT_CAS",
-        "reference_content_id": "REF-BAD",
-        "reference_chem_id": "CHEM-BAD",
-        "evidence_json": {},
-    })
+    intake = _make_received_intake(sb)
+    intake_id = intake["id"]
+    text_facts = [
+        {"fact_type": "PRODUCT_NAME", "raw_value": "염산", "normalized_value": "염산",
+         "source_page": 1, "evidence_json": {}},
+    ]
+    mock_result = MagicMock()
+    mock_result.page_count = 1
+    mock_result.facts = text_facts
+    mock_result.ocr_required = False
+    mock_result.error = None
 
-    with patch("services.msds_intake_svc.create_version", side_effect=_mock_create_version), \
-         patch("services.msds_intake_svc.ref_svc.verify_reference_exists", return_value=False):
-        result = _run(svc.finalize_intake(
-            sb=sb, current_user=USER_A, factory_id=FAC_A1, intake_id=intake_id,
-        ))
+    with patch("services.msds_intake_svc.extractor.extract_facts", return_value=mock_result), \
+         patch("services.msds_intake_svc.ref_svc.find_reference_candidates", side_effect=RuntimeError("leg-prod timeout")):
+        with pytest.raises(MsdsProductError) as exc:
+            svc.process_intake(sb, USER_A, FAC_A1, intake_id)
 
-    # Should still finalize (no link is non-blocking)
-    assert result["status"] == "FINALIZED"
-    links = sb.store.get("msds_reference_links", [])
-    assert links == []
+    assert exc.value.code == "REFERENCE_LOOKUP_FAILED"
+    stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake_id)
+    assert stored["status"] == "FAILED"
+    assert stored["error_code"] == "REFERENCE_LOOKUP_FAILED"
 
 
 # ─── List endpoints ───────────────────────────────────────────────────────────
