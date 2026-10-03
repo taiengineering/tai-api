@@ -625,9 +625,9 @@ tr:last-child td { border-bottom: none; }
     {% if v5_actor_map %}
     <div>
       <div class="vis-section-head">법령상 수행주체</div>
-      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px;">
+      <div class="vis-actor-grid" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px;">
         {% for am in v5_actor_map %}
-        <div style="background: var(--gray-bg); border: 1px solid var(--border); border-radius: 5px; padding: 7px 8px; text-align: center;">
+        <div class="vis-actor-card" style="background: var(--gray-bg); border: 1px solid var(--border); border-radius: 5px; padding: 7px 8px; text-align: center;">
           <div style="font-size: 7pt; color: var(--sub); font-weight: 700; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ am.actor or '—' }}</div>
           <div style="font-size: 13pt; font-weight: 900; color: var(--blue); line-height: 1;">{{ am.count }}</div>
         </div>

@@ -334,30 +334,36 @@ def test_pv23_v3_six_laws_bars():
     assert "ring_gradient" not in result
 
 
-# ── PV24: V5 — [:8] 절단 없음 — 10개 전부 렌더 ───────────────────────────────
+# ── PV24: V5 — [:8] 절단 없음 — 10개 전부 V5 카드 영역에 렌더 ─────────────────
 
 def test_pv24_v5_no_truncation_all_actors_in_html():
     actors = [{"actor": f"주체{i:02d}", "count": i + 1} for i in range(10)]
-    html = _render(legal_actor_map=actors)
+    v5 = _build_v5_actor_map(actors)
+    html = _render(legal_actor_map=actors, v5_actor_map=v5)
+    assert "vis-actor-grid" in html, "V5 actor grid 컨테이너 없음"
     for i in range(10):
         assert f"주체{i:02d}" in html, f"주체{i:02d} 누락"
 
 
-# ── PV25: V5 — 모든 actor count 렌더 ─────────────────────────────────────────
+# ── PV25: V5 — 모든 actor count V5 카드에 렌더 ───────────────────────────────
 
 def test_pv25_v5_all_actor_counts_rendered():
     actors = [{"actor": f"주체{i:02d}", "count": i + 1} for i in range(10)]
-    html = _render(legal_actor_map=actors)
+    v5 = _build_v5_actor_map(actors)
+    html = _render(legal_actor_map=actors, v5_actor_map=v5)
+    assert "vis-actor-grid" in html, "V5 actor grid 컨테이너 없음"
     rendered = sum(1 for i in range(10) if f"주체{i:02d}" in html)
     assert rendered == 10
 
 
-# ── PV26: V5 — card grid 구조 확인 ───────────────────────────────────────────
+# ── PV26: V5 — vis-actor-grid/card 구조 + actor 2건 존재 ─────────────────────
 
 def test_pv26_v5_card_grid_structure():
     actors = [{"actor": "사업주", "count": 7}, {"actor": "관리감독자", "count": 3}]
-    html = _render(legal_actor_map=actors)
-    assert "grid-template-columns" in html
+    v5 = _build_v5_actor_map(actors)
+    html = _render(legal_actor_map=actors, v5_actor_map=v5)
+    assert "vis-actor-grid" in html, "vis-actor-grid class 없음"
+    assert html.count("vis-actor-card") == 2, "vis-actor-card 개수가 actor 수와 다름"
     assert "사업주" in html
     assert "관리감독자" in html
 
