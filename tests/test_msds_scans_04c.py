@@ -76,6 +76,8 @@ class _Query:
 
     def execute(self):
         self.log.append((self.table_name, self._op))
+        if hasattr(self, "_forced_exc") and self._forced_exc is not None:
+            raise self._forced_exc
         if self._op == "select":
             rows = self.store.get(self.table_name, [])
             matched = [self._project(r) for r in rows if self._match(r)]
@@ -100,9 +102,17 @@ class FakeSB:
     def __init__(self, store=None):
         self.store = store if store is not None else {}
         self.log: list = []
+        self._raise_on: dict = {}  # {table_name: Exception}
 
     def table(self, name):
-        return _Query(self.store, name, self.log)
+        q = _Query(self.store, name, self.log)
+        exc = self._raise_on.get(name)
+        if exc is not None:
+            q._forced_exc = exc
+        return q
+
+    def set_raise_on(self, table_name: str, exc: Exception) -> None:
+        self._raise_on[table_name] = exc
 
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -635,3 +645,89 @@ class TestAuthGuard:
         with pytest.raises(MsdsProductError) as exc:
             svc.resolve_scan(sb, user, FAC_A, "BARCODE", BARCODE_VAL)
         assert exc.value.status_code == 404
+
+
+# ─── FC: Fail-Closed (PATCH-001) ─────────────────────────────────────────────
+
+class TestFailClosed:
+    """FC01-FC06: DB read exceptions must NOT be silently downgraded.
+
+    DB error != NOT_FOUND
+    DB error != MISSING
+    DB error must not cause wrong MATCHED from partial ambiguous set
+    """
+
+    def test_fc01_product_lookup_exception_raises_500(self):
+        """FC01: _get_active_product DB exception → SCAN_PRODUCT_LOOKUP_FAILED 500."""
+        sb = _make_sb(identifiers=[_IDENT_A_EAN])
+        sb.set_raise_on("chemical_products", RuntimeError("db conn lost"))
+        with pytest.raises(MsdsProductError) as exc:
+            svc.resolve_scan(sb, USER_A, FAC_A, "BARCODE", BARCODE_VAL, "EAN_13")
+        assert exc.value.status_code == 500
+        assert exc.value.code == "SCAN_PRODUCT_LOOKUP_FAILED"
+
+    def test_fc02_product_lookup_exception_not_not_found(self):
+        """FC02: _get_active_product DB exception must not produce NOT_FOUND state."""
+        sb = _make_sb(identifiers=[_IDENT_A_EAN])
+        sb.set_raise_on("chemical_products", RuntimeError("timeout"))
+        with pytest.raises(MsdsProductError) as exc:
+            svc.resolve_scan(sb, USER_A, FAC_A, "BARCODE", BARCODE_VAL, "EAN_13")
+        assert exc.value.code != "NOT_FOUND"
+
+    def test_fc03_product_lookup_exception_not_ambiguous_matched(self):
+        """FC03: When ambiguous candidates exist and product lookup raises,
+        the remaining candidate must NOT become auto-MATCHED."""
+        prod_c = {
+            "id": PROD_C_ID, "factory_id": FAC_A, "product_name": "제품 C",
+            "manufacturer_name": None, "identity_status": "CONFIRMED",
+            "status_code": "ACTIVE",
+        }
+        ident_c = {
+            "id": str(uuid.uuid4()), "chemical_product_id": PROD_C_ID,
+            "factory_id": FAC_A, "identifier_type": "BARCODE",
+            "identifier_value": BARCODE_VAL, "identifier_normalized": BARCODE_VAL,
+            "is_active": True,
+        }
+        sb = _make_sb(
+            products=list(_BASE_PRODUCTS) + [prod_c],
+            identifiers=[_IDENT_A_BARCODE, ident_c],
+        )
+        # Force _get_active_product to raise — simulates partial DB failure
+        sb.set_raise_on("chemical_products", RuntimeError("partial failure"))
+        with pytest.raises(MsdsProductError) as exc:
+            svc.resolve_scan(sb, USER_A, FAC_A, "BARCODE", BARCODE_VAL)
+        assert exc.value.status_code == 500
+        assert exc.value.code == "SCAN_PRODUCT_LOOKUP_FAILED"
+
+    def test_fc04_msds_lookup_exception_raises_500(self):
+        """FC04: _get_current_msds_summary DB exception → SCAN_MSDS_LOOKUP_FAILED 500."""
+        sb = _make_sb(identifiers=[_IDENT_A_EAN])
+        sb.set_raise_on("customer_msds_versions", RuntimeError("db unavailable"))
+        with pytest.raises(MsdsProductError) as exc:
+            svc.resolve_scan(sb, USER_A, FAC_A, "BARCODE", BARCODE_VAL, "EAN_13")
+        assert exc.value.status_code == 500
+        assert exc.value.code == "SCAN_MSDS_LOOKUP_FAILED"
+
+    def test_fc05_msds_lookup_exception_not_missing(self):
+        """FC05: _get_current_msds_summary DB exception must not silently return MISSING."""
+        sb = _make_sb(identifiers=[_IDENT_A_EAN])
+        sb.set_raise_on("customer_msds_versions", RuntimeError("connection reset"))
+        with pytest.raises(MsdsProductError) as exc:
+            svc.resolve_scan(sb, USER_A, FAC_A, "BARCODE", BARCODE_VAL, "EAN_13")
+        assert exc.value.code != "MSDS_MISSING"
+
+    def test_fc06_identifier_lookup_exception_raises_500(self):
+        """FC06: _lookup_identifiers DB exception → SCAN_LOOKUP_FAILED 500 (regression)."""
+        sb = _make_sb(identifiers=[_IDENT_A_EAN])
+        sb.set_raise_on("chemical_product_identifiers", RuntimeError("query failed"))
+        with pytest.raises(MsdsProductError) as exc:
+            svc.resolve_scan(sb, USER_A, FAC_A, "BARCODE", BARCODE_VAL, "EAN_13")
+        assert exc.value.status_code == 500
+        assert exc.value.code == "SCAN_LOOKUP_FAILED"
+
+    def test_fc07_no_version_row_is_missing_not_error(self):
+        """FC07: Normal 'no current version' path stays MISSING (not an error)."""
+        sb = _make_sb(identifiers=[_IDENT_A_EAN], versions=[])
+        result = svc.resolve_scan(sb, USER_A, FAC_A, "BARCODE", BARCODE_VAL, "EAN_13")
+        assert result["state"] == "MATCHED"
+        assert result["msds"]["status"] == "MISSING"

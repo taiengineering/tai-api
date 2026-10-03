@@ -93,7 +93,11 @@ def _lookup_identifiers(
 
 
 def _get_active_product(sb, factory_id: str, product_id: str) -> Optional[Dict[str, Any]]:
-    """Return ACTIVE product row or None. Never raise."""
+    """Return ACTIVE product row or None (query succeeded but no matching row).
+
+    Raises MsdsProductError(500) on DB exception.
+    DB read failure != product not found — callers must not silently downgrade to NOT_FOUND.
+    """
     try:
         res = (
             sb.table("chemical_products")
@@ -104,13 +108,18 @@ def _get_active_product(sb, factory_id: str, product_id: str) -> Optional[Dict[s
             .limit(1)
             .execute()
         )
-        return res.data[0] if res.data else None
-    except Exception:
-        return None
+    except Exception as e:
+        raise MsdsProductError(500, "SCAN_PRODUCT_LOOKUP_FAILED", f"제품 조회 중 오류가 발생했습니다: {str(e)[:200]}")
+    return res.data[0] if res.data else None
 
 
 def _get_current_msds_summary(sb, factory_id: str, product_id: str) -> Dict[str, Any]:
-    """Return {status, current_version_id, version_no} without raising."""
+    """Return {status, current_version_id, version_no}.
+
+    status='MISSING' means query succeeded but no current ACTIVE version exists.
+    Raises MsdsProductError(500) on DB exception.
+    DB read failure != MSDS missing.
+    """
     try:
         res = (
             sb.table("customer_msds_versions")
@@ -122,11 +131,11 @@ def _get_current_msds_summary(sb, factory_id: str, product_id: str) -> Dict[str,
             .limit(1)
             .execute()
         )
-        if res.data:
-            row = res.data[0]
-            return {"status": "AVAILABLE", "current_version_id": row["id"], "version_no": row["version_no"]}
-    except Exception:
-        pass
+    except Exception as e:
+        raise MsdsProductError(500, "SCAN_MSDS_LOOKUP_FAILED", f"MSDS 버전 조회 중 오류가 발생했습니다: {str(e)[:200]}")
+    if res.data:
+        row = res.data[0]
+        return {"status": "AVAILABLE", "current_version_id": row["id"], "version_no": row["version_no"]}
     return {"status": "MISSING", "current_version_id": None, "version_no": None}
 
 
