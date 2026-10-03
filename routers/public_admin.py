@@ -10,9 +10,16 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
 from services.time import now_kst, serialize_business_datetime, serialize_external_utc
 
 router = APIRouter(prefix="/admin/public-diagnosis-requests", tags=["관리 - 비회원진단"])
+
+
+def _require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    if current_user.get("role_code") != "001":
+        raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
+    return current_user
 
 STATUS_LABELS = {
     "NEW": "신규",
@@ -37,6 +44,7 @@ def list_requests(
     request_type: Optional[str] = None,
     status_code:  Optional[str] = None,
     search:       Optional[str] = None,
+    _admin: dict = Depends(_require_admin),
 ):
     supabase = get_supabase()
     offset = (page - 1) * size
@@ -78,7 +86,7 @@ def list_requests(
 # ──────────────────────────────────────────────────────────────
 
 @router.get("/stats")
-def get_stats():
+def get_stats(_admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
     res = supabase.table("public_diagnosis_requests") \
         .select("status_code, request_type") \
@@ -105,7 +113,7 @@ def get_stats():
 # ──────────────────────────────────────────────────────────────
 
 @router.get("/{req_id}")
-def get_request(req_id: str):
+def get_request(req_id: str, _admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
     res = supabase.table("public_diagnosis_requests") \
         .select("*") \
@@ -127,7 +135,7 @@ class StatusUpdateBody(BaseModel):
 
 
 @router.patch("/{req_id}/status")
-def update_status(req_id: str, body: StatusUpdateBody):
+def update_status(req_id: str, body: StatusUpdateBody, _admin: dict = Depends(_require_admin)):
     if body.status_code not in STATUS_LABELS:
         raise HTTPException(status_code=422, detail=f"status_code는 {list(STATUS_LABELS.keys())} 중 하나여야 합니다.")
     supabase = get_supabase()
@@ -145,7 +153,7 @@ def update_status(req_id: str, body: StatusUpdateBody):
 # ──────────────────────────────────────────────────────────────
 
 @router.post("/{req_id}/run-diagnosis")
-def run_diagnosis(req_id: str):
+def run_diagnosis(req_id: str, _admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
 
     res = supabase.table("public_diagnosis_requests") \
@@ -354,7 +362,7 @@ class ResultHtmlBody(BaseModel):
 
 
 @router.patch("/{req_id}/result-html")
-def update_result_html(req_id: str, body: ResultHtmlBody):
+def update_result_html(req_id: str, body: ResultHtmlBody, _admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
     res = supabase.table("public_diagnosis_requests").update({
         "result_html": body.result_html,
@@ -368,7 +376,7 @@ def update_result_html(req_id: str, body: ResultHtmlBody):
 # ──────────────────────────────────────────────────────────────
 
 @router.post("/{req_id}/mark-sent")
-def mark_sent(req_id: str):
+def mark_sent(req_id: str, _admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
     now = _now()
     res = supabase.table("public_diagnosis_requests").update({

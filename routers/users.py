@@ -16,18 +16,25 @@ v2.1.0: APPOINTMENT 이벤트 트리거 추가
 v2.0.0: 퍼사자 일정 미배정 처리
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, date
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
 from services.time import business_today, now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-VERSION = "2.3.1"
+VERSION = "2.4.0"
 
 DEACTIVATE_STATUSES = {"INACTIVE", "DELETED", "SUSPENDED"}
+
+
+def _require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    if current_user.get("role_code") != "001":
+        raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
+    return current_user
 
 
 # ============================================================
@@ -135,6 +142,7 @@ def get_users(
     factory_id:  Optional[str] = Query(default=None),
     role_code:   Optional[str] = Query(default=None),
     status_code: Optional[str] = Query(default=None),
+    _admin: dict = Depends(_require_admin),
 ):
     supabase = get_supabase()
     query = supabase.table("users").select("*", count="exact")
@@ -165,7 +173,7 @@ def get_users(
 # ============================================================
 
 @router.post("")
-def create_user(req: UserCreate):
+def create_user(req: UserCreate, _admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
     dup = supabase.table("users").select("id").eq("email", req.email).limit(1).execute()
     if dup.data:
@@ -194,7 +202,7 @@ def create_user(req: UserCreate):
 # ============================================================
 
 @router.get("/{user_id}")
-def get_user(user_id: str):
+def get_user(user_id: str, _admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
     res = supabase.table("users").select("*").eq("id", user_id).single().execute()
     if not res.data:
@@ -207,7 +215,7 @@ def get_user(user_id: str):
 # ============================================================
 
 @router.patch("/{user_id}")
-def update_user(user_id: str, req: UserUpdate):
+def update_user(user_id: str, req: UserUpdate, _admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
     existing = supabase.table("users").select("id").eq("id", user_id).single().execute()
     if not existing.data:
@@ -223,7 +231,7 @@ def update_user(user_id: str, req: UserUpdate):
 # ============================================================
 
 @router.delete("/{user_id}")
-def delete_user(user_id: str):
+def delete_user(user_id: str, _admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
     existing = supabase.table("users").select("id").eq("id", user_id).single().execute()
     if not existing.data:
@@ -242,7 +250,7 @@ def delete_user(user_id: str):
 # ============================================================
 
 @router.patch("/{user_id}/status")
-def update_user_status(user_id: str, req: StatusUpdate):
+def update_user_status(user_id: str, req: StatusUpdate, _admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
     existing = supabase.table("users").select("id").eq("id", user_id).single().execute()
     if not existing.data:
@@ -268,7 +276,7 @@ def update_user_status(user_id: str, req: StatusUpdate):
 # ============================================================
 
 @router.patch("/{user_id}/role")
-async def update_user_role(user_id: str, req: RoleUpdate):
+async def update_user_role(user_id: str, req: RoleUpdate, _admin: dict = Depends(_require_admin)):
     """
     v2.1.0: role_code='002'(안전관리자) 설정 시 factory_id 있으면
     APPOINTMENT 이벤트 트리거 자동 호출.
@@ -314,7 +322,7 @@ async def update_user_role(user_id: str, req: RoleUpdate):
 # ============================================================
 
 @router.get("/{user_id}/factories")
-def get_user_factories(user_id: str):
+def get_user_factories(user_id: str, _admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
     user = supabase.table("users").select(
         "factory_id, company_id"
