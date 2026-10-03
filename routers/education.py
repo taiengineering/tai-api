@@ -101,7 +101,7 @@ def _merge_master_company_row(m: dict, srow: Optional[dict]) -> dict:
         "education_id": str(mid) if mid is not None else None,
         "education_code": m.get("education_code"),
         "education_name": m.get("education_name") or m.get("education_code"),
-        "min_hours": m.get("min_hours"),
+        "min_hours": m.get("required_hours") or m.get("min_hours"),
         "cycle_trigger_code": m.get("cycle_trigger_code"),
         "cycle_value": m.get("cycle_value"),
         "cycle_unit_code": m.get("cycle_unit_code"),
@@ -125,6 +125,108 @@ def _ensure_history_own(supabase, history_id, current):
 
 
 # ─────────────────────────────────────────────────────────────
+# Schema adapter helpers
+# DB canonical columns ↔ legacy API field names
+# DB: status_code, completed_at, institution, method, location, required_hours, education_group
+# API: status,     completed_date, institution_name, education_method, education_place, min_hours, category
+# ─────────────────────────────────────────────────────────────
+
+_STATUS_DB_TO_API: dict = {
+    "COMPLETED": "completed",
+    "PENDING": "pending",
+    "OVERDUE": "overdue",
+}
+_STATUS_API_TO_DB: dict = {
+    "completed": "COMPLETED",
+    "pending": "PENDING",
+    "overdue": "OVERDUE",
+}
+
+
+def _status_db_to_api(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    return _STATUS_DB_TO_API.get(value.upper(), value.lower())
+
+
+def _status_api_to_db(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    return _STATUS_API_TO_DB.get(value.lower(), value.upper())
+
+
+# education_master.education_group (Korean) ⇔ API category code
+# duty fans out to two DB values; reverse uses _category_api_to_db_filter()
+_EDUCATION_GROUP_DB_TO_API: dict = {
+    "근로자 안전보건교육": "worker_safety",
+    "직무교육": "duty",
+    "양성교육": "duty",
+}
+
+
+def _education_group_db_to_api(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    return _EDUCATION_GROUP_DB_TO_API.get(value, value)
+
+
+def _category_api_to_db_filter(q, category: str):
+    """Apply education_group DB filter for an API ?category= value."""
+    if category == "worker_safety":
+        return q.eq("education_group", "근로자 안전보건교육")
+    if category == "duty":
+        return q.in_("education_group", ["직무교육", "양성교육"])
+    return q.eq("education_group", category)
+
+
+def _map_master_row(row: Optional[dict]) -> Optional[dict]:
+    """education_master nested row: DB column names → API field names."""
+    if not row:
+        return row
+    out = dict(row)
+    if "required_hours" in out and "min_hours" not in out:
+        out["min_hours"] = out.pop("required_hours")
+    if "education_group" in out:
+        out["category"] = _education_group_db_to_api(out.pop("education_group"))
+    return out
+
+
+def _map_history_row(row: dict) -> dict:
+    """education_history row: DB column names → API field names."""
+    out = dict(row)
+    if "status_code" in out:
+        out["status"] = _status_db_to_api(out.pop("status_code"))
+    if "completed_at" in out:
+        out["completed_date"] = out.pop("completed_at")
+    if "institution" in out:
+        out["institution_name"] = out.pop("institution")
+    if "method" in out:
+        out["education_method"] = out.pop("method")
+    if "location" in out:
+        out["education_place"] = out.pop("location")
+    if "education_master" in out:
+        out["education_master"] = _map_master_row(out["education_master"])
+    return out
+
+
+def _history_api_to_db(payload: dict) -> dict:
+    """API input fields → DB column names for create/update."""
+    out = dict(payload)
+    if "status" in out:
+        out["status_code"] = _status_api_to_db(out.pop("status"))
+    if "completed_date" in out:
+        val = out.pop("completed_date")
+        out["completed_at"] = str(val) if val else None
+    if "institution_name" in out:
+        out["institution"] = out.pop("institution_name")
+    if "education_method" in out:
+        out["method"] = out.pop("education_method")
+    if "education_place" in out:
+        out["location"] = out.pop("education_place")
+    return out
+
+
+# ─────────────────────────────────────────────────────────────
 # 1. 교육 마스터 (읽기 전용)
 # ─────────────────────────────────────────────────────────────
 
@@ -137,9 +239,9 @@ def get_education_master(
     """법정교육 마스터 목록 조회 (20개)"""
     q = supabase.table("education_master").select("*").eq("is_active", True)
     if category:
-        q = q.eq("category", category)
+        q = _category_api_to_db_filter(q, category)
     res = q.order("education_code").execute()
-    return {"success": True, "data": res.data}
+    return {"success": True, "data": [_map_master_row(r) for r in (res.data or [])]}
 
 
 @router.get("/education-master/{education_code}", tags=["교육관리"])
@@ -148,7 +250,7 @@ def get_education_master_detail(education_code: str, supabase: Client = Depends(
     res = supabase.table("education_master").select("*").eq("education_code", education_code).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="교육 마스터를 찾을 수 없습니다.")
-    return {"success": True, "data": res.data}
+    return {"success": True, "data": _map_master_row(res.data)}
 
 
 @router.get("/education/company-effective-link", tags=["교육관리"])
@@ -486,7 +588,7 @@ def get_education_history(
     offset = (page - 1) * size
     q = supabase.table("education_history") \
         .select(
-            "*, education_master(education_name, category, min_hours, due_rule), users(name, job_type, department, position), education_files(id)",
+            "*, education_master(education_name, education_group, required_hours, due_rule), users(name, job_type, department, position), education_files(id)",
             count="exact",
         )
 
@@ -499,9 +601,10 @@ def get_education_history(
     if education_code:
         q = q.eq("education_code", education_code)
     if status:
-        q = q.eq("status", status)
+        q = q.eq("status_code", _status_api_to_db(status))
     if category:
-        mres = supabase.table("education_master").select("education_code").eq("category", category).eq("is_active", True).execute()
+        mq = supabase.table("education_master").select("education_code").eq("is_active", True)
+        mres = _category_api_to_db_filter(mq, category).execute()
         codes = [x["education_code"] for x in (mres.data or [])]
         if not codes:
             return {
@@ -515,7 +618,7 @@ def get_education_history(
         rows = _filter_education_rows_by_search(res.data or [], search)
         total = len(rows)
         pages = (total + size - 1) // size if size else 1
-        sliced = rows[offset : offset + size]
+        sliced = [_map_history_row(r) for r in rows[offset : offset + size]]
         return {
             "success": True,
             "data": {
@@ -533,7 +636,7 @@ def get_education_history(
     return {
         "success": True,
         "data": {
-            "items": res.data,
+            "items": [_map_history_row(r) for r in (res.data or [])],
             "total": total,
             "page": page,
             "size": size,
@@ -554,7 +657,7 @@ def get_education_history_summary(
         if not factory_id:
             raise HTTPException(status_code=400, detail="factory_id가 필요합니다.")
         _ensure_factory_own(supabase, factory_id, current)
-    q = supabase.table("education_history").select("status")
+    q = supabase.table("education_history").select("status_code")
     if factory_id:
         q = q.eq("factory_id", factory_id)
     if user_id:
@@ -564,9 +667,9 @@ def get_education_history_summary(
     rows = res.data or []
 
     total = len(rows)
-    completed = sum(1 for r in rows if r["status"] == "completed")
-    pending = sum(1 for r in rows if r["status"] == "pending")
-    overdue = sum(1 for r in rows if r["status"] == "overdue")
+    completed = sum(1 for r in rows if r["status_code"] == "COMPLETED")
+    pending = sum(1 for r in rows if r["status_code"] == "PENDING")
+    overdue = sum(1 for r in rows if r["status_code"] == "OVERDUE")
 
     return {
         "success": True,
@@ -585,21 +688,21 @@ def create_education_history(body: EducationHistoryCreate, supabase: Client = De
     _ensure_factory_own(supabase, body.factory_id, current)
     # 법정 기준시간 검증
     master = supabase.table("education_master") \
-        .select("min_hours, education_name") \
+        .select("required_hours, education_name") \
         .eq("education_code", body.education_code) \
         .single().execute()
 
     if not master.data:
         raise HTTPException(status_code=404, detail="교육 마스터를 찾을 수 없습니다.")
 
-    min_hours = master.data.get("min_hours", 0)
+    min_hours = master.data.get("required_hours", 0)
     if body.completed_hours < min_hours:
         raise HTTPException(
             status_code=400,
             detail=f"법정 기준시간을 충족하지 않습니다. (기준: {min_hours}시간 이상)"
         )
 
-    payload = {
+    raw = {
         **body.dict(),
         "completed_date": str(body.completed_date) if body.completed_date else None,
         "due_date": str(body.due_date) if body.due_date else None,
@@ -607,12 +710,13 @@ def create_education_history(body: EducationHistoryCreate, supabase: Client = De
         "created_at": serialize_business_datetime(now_kst()),
         "updated_at": serialize_business_datetime(now_kst()),
     }
+    payload = _history_api_to_db(raw)
 
     res = supabase.table("education_history").insert(payload).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="이수 이력 등록에 실패했습니다.")
 
-    return {"success": True, "data": res.data[0]}
+    return {"success": True, "data": _map_history_row(res.data[0])}
 
 
 @router.post("/education-history/pending", tags=["교육관리"])
@@ -635,7 +739,7 @@ def create_pending_education_history(body: EducationPendingCreate, supabase: Cli
         .eq("factory_id", body.factory_id)
         .eq("user_id", body.user_id)
         .eq("education_code", body.education_code)
-        .in_("status", ["pending", "overdue"])
+        .in_("status_code", ["PENDING", "OVERDUE"])
         .limit(1)
         .execute()
     )
@@ -647,9 +751,9 @@ def create_pending_education_history(body: EducationPendingCreate, supabase: Cli
         "factory_id": body.factory_id,
         "user_id": body.user_id,
         "education_code": body.education_code,
-        "status": "pending",
+        "status_code": "PENDING",
         "due_date": str(body.due_date) if body.due_date else None,
-        "completed_date": None,
+        "completed_at": None,
         "completed_hours": 0,
         "memo": body.memo,
         "created_at": now,
@@ -658,7 +762,7 @@ def create_pending_education_history(body: EducationPendingCreate, supabase: Cli
     res = supabase.table("education_history").insert(payload).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="교육 배정에 실패했습니다.")
-    return {"success": True, "data": res.data[0]}
+    return {"success": True, "data": _map_history_row(res.data[0])}
 
 
 @router.get("/education-history/{history_id}", tags=["교육관리"])
@@ -673,7 +777,7 @@ def get_education_history_detail(history_id: str, supabase: Client = Depends(get
     if not res.data:
         raise HTTPException(status_code=404, detail="이수 이력을 찾을 수 없습니다.")
 
-    return {"success": True, "data": res.data}
+    return {"success": True, "data": _map_history_row(res.data)}
 
 
 @router.patch("/education-history/{history_id}", tags=["교육관리"])
@@ -692,23 +796,24 @@ def update_education_history(
     # 시간 변경 시 기준 재검증
     if body.completed_hours is not None:
         master = supabase.table("education_master") \
-            .select("min_hours") \
+            .select("required_hours") \
             .eq("education_code", existing.data["education_code"]) \
             .single().execute()
-        min_hours = master.data.get("min_hours", 0) if master.data else 0
+        min_hours = master.data.get("required_hours", 0) if master.data else 0
         if body.completed_hours < min_hours:
             raise HTTPException(
                 status_code=400,
                 detail=f"법정 기준시간을 충족하지 않습니다. (기준: {min_hours}시간 이상)"
             )
 
-    payload = {k: v for k, v in body.dict().items() if v is not None}
-    if "completed_date" in payload and payload["completed_date"]:
-        payload["completed_date"] = str(payload["completed_date"])
+    raw = {k: v for k, v in body.dict().items() if v is not None}
+    if "completed_date" in raw and raw["completed_date"]:
+        raw["completed_date"] = str(raw["completed_date"])
+    payload = _history_api_to_db(raw)
     payload["updated_at"] = serialize_business_datetime(now_kst())
 
     res = supabase.table("education_history").update(payload).eq("id", history_id).execute()
-    return {"success": True, "data": res.data[0] if res.data else {}}
+    return {"success": True, "data": _map_history_row(res.data[0]) if res.data else {}}
 
 
 # ─────────────────────────────────────────────────────────────
