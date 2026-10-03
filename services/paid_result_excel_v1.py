@@ -25,8 +25,8 @@ CANONICAL_UNAVAILABLE = "법령 원문 확인 필요"
 SHEET_NAMES: Tuple[str, ...] = (
     "Summary",
     "Obligations",
-    "Schedule",
-    "Assignments",
+    "Legal Timing",
+    "Legal Actors",
     "Evidence",
 )
 SUMMARY_FIELDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
@@ -59,6 +59,7 @@ OBLIGATION_COLUMNS: Tuple[str, ...] = (
     "law_article",
     "content_type",
     "obligation_type",
+    "action",
     "who",
     "recipient",
     "condition",
@@ -252,6 +253,7 @@ def _flatten_legal_time_normalized(ob: Dict[str, Any]) -> Dict[str, Any]:
 def _obligation_base(ob: Dict[str, Any]) -> Dict[str, Any]:
     legal = _as_dict(ob.get("legal"))
     classification = _as_dict(ob.get("classification"))
+    presentation = _as_dict(ob.get("presentation"))
     duty = _as_dict(ob.get("duty"))
     timing = _as_dict(ob.get("timing"))
     applicability = _as_dict(ob.get("applicability"))
@@ -262,6 +264,7 @@ def _obligation_base(ob: Dict[str, Any]) -> Dict[str, Any]:
         "law_article": legal.get("law_article"),
         "content_type": classification.get("content_type"),
         "obligation_type": classification.get("obligation_type"),
+        "action": presentation.get("action"),
         "who": duty.get("who"),
         "recipient": duty.get("recipient"),
         "condition": applicability.get("condition"),

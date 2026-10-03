@@ -357,7 +357,6 @@ def test_tmpl01_render_html_contains_key_values():
 
     template_vars = {
         "report_date": "2026년 10월 03일",
-        "receipt_no": "ABCDEF01",
         "diagnosed_at": view["diagnosed_at"],
         "profile": view["profile"],
         "total_obligation_count": view["total_obligation_count"],
@@ -407,7 +406,6 @@ def test_sg02_no_raw_enum_in_rendered_html():
 
     template_vars = {
         "report_date": "2026년 10월 03일",
-        "receipt_no": "ABCDEF01",
         "diagnosed_at": view["diagnosed_at"],
         "profile": view["profile"],
         "total_obligation_count": view["total_obligation_count"],
@@ -436,7 +434,6 @@ def test_sg03_no_legacy_fields_in_html():
 
     template_vars = {
         "report_date": "2026년 10월 03일",
-        "receipt_no": "ABCDEF01",
         "diagnosed_at": view["diagnosed_at"],
         "profile": view["profile"],
         "total_obligation_count": view["total_obligation_count"],

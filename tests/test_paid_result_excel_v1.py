@@ -495,12 +495,12 @@ def test_filename_uses_stored_values_only():
     assert "attachment;" in content_disposition(name)
 
 
-def test_schedule_and_assignments_are_1to1():
+def test_legal_timing_and_actors_are_1to1():
     p = _premium()
     wb = _load(build_paid_result_excel_v1(p))
-    assert len(_rows(wb["Schedule"])) == 2
-    assert len(_rows(wb["Assignments"])) == 2
-    sched = _header(wb["Schedule"])
+    assert len(_rows(wb["Legal Timing"])) == 2
+    assert len(_rows(wb["Legal Actors"])) == 2
+    sched = _header(wb["Legal Timing"])
     assert sched[:7] == [
         "ref", "law_name", "law_article", "when", "inspection_cycle", "raw_cycle", "conflict",
     ]
