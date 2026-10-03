@@ -155,6 +155,30 @@ def _status_api_to_db(value: Optional[str]) -> Optional[str]:
     return _STATUS_API_TO_DB.get(value.lower(), value.upper())
 
 
+# education_master.education_group (Korean) ⇔ API category code
+# duty fans out to two DB values; reverse uses _category_api_to_db_filter()
+_EDUCATION_GROUP_DB_TO_API: dict = {
+    "근로자 안전보건교육": "worker_safety",
+    "직무교육": "duty",
+    "양성교육": "duty",
+}
+
+
+def _education_group_db_to_api(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    return _EDUCATION_GROUP_DB_TO_API.get(value, value)
+
+
+def _category_api_to_db_filter(q, category: str):
+    """Apply education_group DB filter for an API ?category= value."""
+    if category == "worker_safety":
+        return q.eq("education_group", "근로자 안전보건교육")
+    if category == "duty":
+        return q.in_("education_group", ["직무교육", "양성교육"])
+    return q.eq("education_group", category)
+
+
 def _map_master_row(row: Optional[dict]) -> Optional[dict]:
     """education_master nested row: DB column names → API field names."""
     if not row:
@@ -162,8 +186,8 @@ def _map_master_row(row: Optional[dict]) -> Optional[dict]:
     out = dict(row)
     if "required_hours" in out and "min_hours" not in out:
         out["min_hours"] = out.pop("required_hours")
-    if "education_group" in out and "category" not in out:
-        out["category"] = out.pop("education_group")
+    if "education_group" in out:
+        out["category"] = _education_group_db_to_api(out.pop("education_group"))
     return out
 
 
@@ -215,7 +239,7 @@ def get_education_master(
     """법정교육 마스터 목록 조회 (20개)"""
     q = supabase.table("education_master").select("*").eq("is_active", True)
     if category:
-        q = q.eq("education_group", category)
+        q = _category_api_to_db_filter(q, category)
     res = q.order("education_code").execute()
     return {"success": True, "data": res.data}
 
@@ -579,7 +603,8 @@ def get_education_history(
     if status:
         q = q.eq("status_code", _status_api_to_db(status))
     if category:
-        mres = supabase.table("education_master").select("education_code").eq("education_group", category).eq("is_active", True).execute()
+        mq = supabase.table("education_master").select("education_code").eq("is_active", True)
+        mres = _category_api_to_db_filter(mq, category).execute()
         codes = [x["education_code"] for x in (mres.data or [])]
         if not codes:
             return {

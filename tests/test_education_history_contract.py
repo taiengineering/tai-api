@@ -281,7 +281,7 @@ def test_t6_map_history_row_conversion():
         "location": "서울",
         "education_master": {
             "required_hours": 8,
-            "education_group": "worker_safety",
+            "education_group": "근로자 안전보건교육",
         },
     }
     out = edu_mod._map_history_row(db_row)
@@ -300,3 +300,61 @@ def test_t6_map_history_row_conversion():
     assert m["min_hours"] == 8
     assert "education_group" not in m
     assert m["category"] == "worker_safety"
+
+# ── C1-C5: education_group (Korean) ↔ API category canonical mapping ──────────
+
+def test_c1_근로자안전보건교육_maps_to_worker_safety():
+    assert edu_mod._education_group_db_to_api("근로자 안전보건교육") == "worker_safety"
+
+
+def test_c2_직무교육_maps_to_duty():
+    assert edu_mod._education_group_db_to_api("직무교육") == "duty"
+
+
+def test_c3_양성교육_maps_to_duty():
+    assert edu_mod._education_group_db_to_api("양성교육") == "duty"
+
+
+def test_c4_category_worker_safety_filters_correct_group():
+    """GET ?category=worker_safety must only return '근로자 안전보건교육' rows."""
+    fake_sb = FakeSB()
+    _seed_factory(fake_sb)
+    fake_sb.tables["education_master"] = [
+        {"id": "m1", "education_code": "WS-001", "education_group": "근로자 안전보건교육", "is_active": True, "education_name": "안전보건교육"},
+        {"id": "m2", "education_code": "DU-001", "education_group": "직무교육", "is_active": True, "education_name": "직무교육"},
+    ]
+    fake_sb.tables["education_history"] = [
+        {"id": "h1", "factory_id": FAC, "education_code": "WS-001", "status_code": "PENDING", "due_date": TODAY},
+        {"id": "h2", "factory_id": FAC, "education_code": "DU-001", "status_code": "PENDING", "due_date": TODAY},
+    ]
+    client = _make_app(fake_sb)
+    r = client.get(f"/education-history?factory_id={FAC}&category=worker_safety", headers={"Authorization": "Bearer x"})
+    assert r.status_code == 200, r.text
+    items = r.json()["data"]["items"]
+    codes = [i["education_code"] for i in items]
+    assert "WS-001" in codes
+    assert "DU-001" not in codes
+
+
+def test_c5_category_duty_filters_두가지_group():
+    """GET ?category=duty must return '직무교육' and '양성교육' rows but not '근로자 안전보건교육'."""
+    fake_sb = FakeSB()
+    _seed_factory(fake_sb)
+    fake_sb.tables["education_master"] = [
+        {"id": "m1", "education_code": "WS-001", "education_group": "근로자 안전보건교육", "is_active": True, "education_name": "안전보건교육"},
+        {"id": "m2", "education_code": "DU-001", "education_group": "직무교육", "is_active": True, "education_name": "직무교육"},
+        {"id": "m3", "education_code": "TR-001", "education_group": "양성교육", "is_active": True, "education_name": "양성교육"},
+    ]
+    fake_sb.tables["education_history"] = [
+        {"id": "h1", "factory_id": FAC, "education_code": "WS-001", "status_code": "PENDING", "due_date": TODAY},
+        {"id": "h2", "factory_id": FAC, "education_code": "DU-001", "status_code": "PENDING", "due_date": TODAY},
+        {"id": "h3", "factory_id": FAC, "education_code": "TR-001", "status_code": "PENDING", "due_date": TODAY},
+    ]
+    client = _make_app(fake_sb)
+    r = client.get(f"/education-history?factory_id={FAC}&category=duty", headers={"Authorization": "Bearer x"})
+    assert r.status_code == 200, r.text
+    items = r.json()["data"]["items"]
+    codes = [i["education_code"] for i in items]
+    assert "DU-001" in codes
+    assert "TR-001" in codes
+    assert "WS-001" not in codes
