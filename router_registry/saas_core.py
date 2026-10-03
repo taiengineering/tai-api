@@ -49,4 +49,6 @@ ROUTERS = [
     {"module": "routers.msds_versions"},
     # WO-MSDS-04A: MSDS Document Intake
     {"module": "routers.msds_intakes"},
+    # WO-MSDS-04C: Barcode / QR Scan Resolver
+    {"module": "routers.msds_scans"},
 ]
