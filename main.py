@@ -59,7 +59,7 @@ app.add_middleware(
         "http://localhost:5050", "http://127.0.0.1:5050",
         "http://localhost:4321", "http://127.0.0.1:4321",
     ],
-    allow_origin_regex=r"https://([a-z0-9-]+\.)*taieng\.co\.kr|https://([a-z0-9-]+\.)?(tai-admin-vue3|taieng-tadmin|tai-www)\.pages\.dev",
+    allow_origin_regex=r"https://([a-z0-9-]+\.)*taieng\.co\.kr|https://([a-z0-9-]+\.)?(tai-admin-vue3|taieng-tadmin)\.pages\.dev",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
