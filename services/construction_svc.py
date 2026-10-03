@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Optional
 
 import httpx
@@ -7,13 +8,36 @@ from services.construction_helpers import map_site_type_to_construction_type
 from utils.logger import get_logger
 from services.time import business_today, now_kst, serialize_business_datetime
 
+_EOK_TO_WON = Decimal("100000000")
+
+
+def _contract_eok_to_won(value) -> int:
+    """Convert contract_amount (억원, numeric(15,2)) to exact WON integer.
+
+    Binary float multiplication of EOK × 100,000,000 produces residue for
+    values like 8.3, 20.4, 316.1 (CL-F10 / WO-026). This helper uses Decimal
+    arithmetic so the result is always an exact integer.
+
+    Raises ValueError on invalid or non-integral input.
+    """
+    if value is None:
+        return 0
+    try:
+        eok = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError(f"INVALID_CONTRACT_AMOUNT: {value!r}") from exc
+    won = eok * _EOK_TO_WON
+    if won != won.to_integral_value():
+        raise ValueError(f"NON_INTEGER_WON_AMOUNT: eok={value!r} → won={won}")
+    return int(won)
+
 log = get_logger(__name__)
 FCM_URL = "https://fcm.googleapis.com/fcm/send"
 
 
 def create_factory_for_site(supabase, site: dict, now_iso_fn) -> Optional[str]:
     try:
-        contract_eok = float(site.get("contract_amount") or 0)
+        contract_won = _contract_eok_to_won(site.get("contract_amount"))
         site_type_raw = (site.get("site_type") or "BUILDING").upper()
         construction_type_label = map_site_type_to_construction_type(site_type_raw)
 
@@ -22,7 +46,7 @@ def create_factory_for_site(supabase, site: dict, now_iso_fn) -> Optional[str]:
             "company_id": site.get("company_id"),
             "site_type": "CONSTRUCTION",
             "sector": "CONSTRUCTION",
-            "construction_amount": contract_eok * 100_000_000,
+            "construction_amount": contract_won,
             "employee_count": site.get("direct_workers") or site.get("total_workers") or 0,
             "subcontractor_worker_count": site.get("subcon_workers") or 0,
             "construction_type": construction_type_label,
