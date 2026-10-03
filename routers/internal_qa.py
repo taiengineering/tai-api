@@ -1,6 +1,7 @@
-"""Internal QA Result Callback — WO-QA-CONTROL-PHASE2B-001 PATCH-1.
+"""Internal QA Result Callback + Catalog Sync — WO-QA-CONTROL-PHASE2B-001 PATCH-1 / WO-QA-ADMIN-EXISTING-CONSOLE-AUTOSYNC-001 STEP C.
 
 /internal/qa/runs/{run_id}/results   POST — 실행 결과 수신 + lifecycle 전이
+/internal/qa/catalog/sync            POST — tai-qa Scenario → qa_items 동기화
 
 인증: X-Internal-Secret 헤더 (INTERNAL_API_SECRET env).
 
@@ -39,6 +40,37 @@ log = logging.getLogger("internal_qa")
 router = APIRouter(prefix="/internal/qa", tags=["internal-qa"])
 
 
+def _check_secret(x_internal_secret: Optional[str]) -> None:
+    expected = os.environ.get("INTERNAL_API_SECRET")
+    if not expected or x_internal_secret != expected:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="invalid internal secret",
+        )
+
+
+# ── Catalog Sync models ───────────────────────────────────────────────────────
+
+class ScenarioItem(BaseModel):
+    scenario_id:      str
+    name:             str
+    description:      Optional[str] = None
+    expected_summary: Optional[str] = None
+    site_code:        str
+    priority:         str
+    runner_type:      str
+    service_code:     str
+    area_code:        str
+    qa_type:          str
+
+
+class CatalogSyncRequest(BaseModel):
+    dry_run:   bool           = True
+    scenarios: List[ScenarioItem]
+
+
+# ── Result callback models ────────────────────────────────────────────────────
+
 class ResultItem(BaseModel):
     scenario_id:   str                  # tai-qa SoT identifier
     result_status: str                  # PASS / FAIL / BLOCKED / SKIPPED
@@ -66,6 +98,28 @@ class RunResultsPayload(BaseModel):
     results:            List[ResultItem] = []
 
 
+@router.post("/catalog/sync")
+def catalog_sync(
+    body: CatalogSyncRequest,
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
+):
+    """tai-qa Scenario → qa_items 동기화.
+
+    dry_run=True: DB 변경 없음. would_create / would_update 분류만 반환.
+    dry_run=False: INSERT (새 항목 + MANUAL 스케줄) + UPDATE (변경 필드).
+    DELETE 없음 — 제거된 scenario는 DB 유지.
+    """
+    _check_secret(x_internal_secret)
+    supabase = get_supabase()
+    from services import qa_catalog_sync_svc as sync_svc
+    data = sync_svc.sync_catalog(
+        supabase,
+        [s.model_dump() for s in body.scenarios],
+        body.dry_run,
+    )
+    return {"status": "success", "data": data}
+
+
 @router.post("/runs/{run_id}/results")
 async def post_run_results(
     run_id: str,
@@ -77,13 +131,7 @@ async def post_run_results(
     scenario_id → qa_item_id resolve. canonical evidence 전체 비교 idempotency.
     Slack 실패는 callback 결과에 영향 없음 (fail-safe).
     """
-    expected = os.environ.get("INTERNAL_API_SECRET")
-    if not expected or x_internal_secret != expected:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="invalid internal secret",
-        )
-
+    _check_secret(x_internal_secret)
     supabase = get_supabase()
     results_dicts: List[Dict[str, Any]] = [r.model_dump() for r in body.results]
 
