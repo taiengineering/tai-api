@@ -1,7 +1,7 @@
 ---
 title: QA Slack Alert V1
-version: 1.1.0
-work_order: WO-QA-CONTROL-PHASE2C-001 / WO-QA-LIVE-HOURLY-OPS-001
+version: 1.2.0
+work_order: WO-QA-CONTROL-PHASE2C-001 / WO-QA-LIVE-HOURLY-OPS-001 / WO-QA-SLACK-DIAGNOSTIC-CONTEXT-001
 status: IMPLEMENTED
 ---
 
@@ -104,7 +104,58 @@ Notification is suppressed when `prev_eff == new_eff`:
 }
 ```
 
-Block text includes (per-item): severity header, site_code, scenario_id, name, status transition, trigger_type, run_id, github_run_id, head_sha (first 8 chars), duration_ms, error_summary.
+### Item Alert Block Structure (updated: WO-QA-SLACK-DIAGNOSTIC-CONTEXT-001)
+
+```
+🔴 [HIGH] QA 이상 감지
+
+위치        {service_label} > {area_label}
+실행 Host   {site_code}
+
+QA ID       {scenario_id}
+테스트      {name}
+종류        {qa_type label}
+
+검증 대상
+{description}
+
+기대 결과
+{expected_summary}
+
+실제 오류         ← FAIL / BLOCKED / FLAKY only; skipped for RECOVERED
+{error_summary}
+HTTP        {http_status}   ← optional; shown when present
+Error Code  {error_code}    ← optional; shown when present
+
+상태        {prev} → {new}
+소요시간    {duration_ms / 1000:.1f}s
+Trigger     {trigger_type}
+Run ID      {run_id}
+GitHub Run  {github_run_id}
+HEAD        {head_sha[:8]}
+```
+
+**FLAKY 오류 보존 원칙**: effective status = FLAKY일 때 최종 attempt는 PASS이므로,
+`error_summary / http_status / error_code`는 가장 최근의 non-PASS attempt에서 읽는다.
+실패 원인을 잃지 않는다.
+
+**API 실패 표시**: `error_summary`가 없어도 `http_status` 또는 `error_code`가 있으면
+`실제 오류` 섹션을 생성한다.
+
+### QA_RUN_ERROR Block Structure (infrastructure failure)
+
+```
+🔴 [HIGH] QA 실행 시스템 오류
+
+구간        Scheduler → GitHub Actions
+Trigger     {trigger_type}
+Run ID      {run_id}
+
+오류
+{error_summary}
+```
+
+테스트 실패(item alert)와 인프라 실패(`QA_RUN_ERROR`)를 Slack에서 구분할 수 있다.
 
 ## Security / Redaction
 
