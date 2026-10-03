@@ -1776,3 +1776,195 @@ def test_cf16_new_product_valid_candidate_confirms_successfully():
     assert cand["decision_status"] == "SELECTED"
     stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake_id)
     assert stored["status"] == "CONFIRMED"
+
+
+# ─── RT-PATCH-003: Process Cleanup Closure Tests ──────────────────────────────
+
+def test_rt05_failed_stale_retry_reference_failure_cleanup():
+    """RT05: FAILED + stale rows → retry → reference lookup failure → facts=0 / candidates=0."""
+    sb = _make_sb()
+    intake_id = _make_failed_with_data(sb, n_facts=3, n_candidates=2)
+
+    text_facts = [
+        {"fact_type": "PRODUCT_NAME", "raw_value": "염산", "normalized_value": "염산",
+         "source_page": 1, "evidence_json": {}},
+    ]
+    mock_result = MagicMock()
+    mock_result.page_count = 1
+    mock_result.facts = text_facts
+    mock_result.ocr_required = False
+    mock_result.error = None
+
+    with patch("services.msds_intake_svc.extractor.extract_facts", return_value=mock_result), \
+         patch("services.msds_intake_svc.ref_svc.find_reference_candidates",
+               side_effect=RuntimeError("leg-prod down")):
+        with pytest.raises(MsdsProductError) as exc:
+            svc.process_intake(sb, USER_A, FAC_A1, intake_id)
+
+    assert exc.value.code == "REFERENCE_LOOKUP_FAILED"
+    stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake_id)
+    assert stored["status"] == "FAILED"
+    assert stored["error_code"] == "REFERENCE_LOOKUP_FAILED"
+    assert len([r for r in sb.store["msds_intake_facts"] if r["intake_id"] == intake_id]) == 0
+    assert len([r for r in sb.store["msds_match_candidates"] if r["intake_id"] == intake_id]) == 0
+
+
+def test_rt06_fact_insert_partial_failure_cleanup():
+    """RT06: Partial fact INSERT failure → facts=0 / candidates=0 after cleanup."""
+    sb = _make_sb()
+    intake = _make_received_intake(sb)
+    intake_id = intake["id"]
+
+    text_facts = [
+        {"fact_type": "PRODUCT_NAME", "raw_value": "염산", "normalized_value": "염산",
+         "source_page": 1, "evidence_json": {}},
+        {"fact_type": "CAS", "raw_value": "7647-01-0", "normalized_value": "7647-01-0",
+         "source_page": 1, "evidence_json": {}},
+    ]
+    mock_result = MagicMock()
+    mock_result.page_count = 1
+    mock_result.facts = text_facts
+    mock_result.ocr_required = False
+    mock_result.error = None
+
+    call_count = [0]
+
+    def _partial_fact_insert(payload):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            row = dict(payload)
+            row.setdefault("id", str(uuid.uuid4()))
+            sb.store["msds_intake_facts"].append(row)
+            return _Result([dict(row)])
+        raise RuntimeError("DB error on second INSERT")
+
+    sb.set_insert_hook("msds_intake_facts", _partial_fact_insert)
+
+    with patch("services.msds_intake_svc.extractor.extract_facts", return_value=mock_result), \
+         _mock_ref_find([]):
+        with pytest.raises(MsdsProductError):
+            svc.process_intake(sb, USER_A, FAC_A1, intake_id)
+
+    assert len([r for r in sb.store["msds_intake_facts"] if r["intake_id"] == intake_id]) == 0
+    assert len([r for r in sb.store["msds_match_candidates"] if r["intake_id"] == intake_id]) == 0
+
+
+def test_rt07_candidate_insert_partial_failure_cleanup():
+    """RT07: Partial candidate INSERT failure → facts=0 / candidates=0 after cleanup."""
+    sb = _make_sb()
+    intake = _make_received_intake(sb)
+    intake_id = intake["id"]
+
+    text_facts = [
+        {"fact_type": "CAS", "raw_value": "7647-01-0", "normalized_value": "7647-01-0",
+         "source_page": 1, "evidence_json": {}},
+    ]
+    ref_hits = [
+        {"reference_content_id": "REF-A", "reference_chem_id": "CHEM-A",
+         "reference_snapshot_id": SNAPSHOT_ID, "cas_no": "7647-01-0",
+         "match_reason": "EXACT_CAS", "rank_no": 1, "evidence_json": {}},
+        {"reference_content_id": "REF-B", "reference_chem_id": "CHEM-B",
+         "reference_snapshot_id": SNAPSHOT_ID, "cas_no": "7647-01-0",
+         "match_reason": "EXACT_CAS", "rank_no": 1, "evidence_json": {}},
+    ]
+    mock_result = MagicMock()
+    mock_result.page_count = 1
+    mock_result.facts = text_facts
+    mock_result.ocr_required = False
+    mock_result.error = None
+
+    call_count = [0]
+
+    def _partial_cand_insert(payload):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            row = dict(payload)
+            row.setdefault("id", str(uuid.uuid4()))
+            sb.store["msds_match_candidates"].append(row)
+            return _Result([dict(row)])
+        raise RuntimeError("DB error on second candidate INSERT")
+
+    sb.set_insert_hook("msds_match_candidates", _partial_cand_insert)
+
+    with patch("services.msds_intake_svc.extractor.extract_facts", return_value=mock_result), \
+         _mock_ref_find(ref_hits):
+        with pytest.raises(MsdsProductError):
+            svc.process_intake(sb, USER_A, FAC_A1, intake_id)
+
+    assert len([r for r in sb.store["msds_intake_facts"] if r["intake_id"] == intake_id]) == 0
+    assert len([r for r in sb.store["msds_match_candidates"] if r["intake_id"] == intake_id]) == 0
+
+
+def test_rt08_failed_processing_preserves_temp_artifact():
+    """RT08: Processing failure preserves temp artifact in storage."""
+    sb = _make_sb()
+    intake = _make_received_intake(sb)
+    intake_id = intake["id"]
+
+    artifact = sb.store["msds_intake_artifacts"][0]
+    storage_path = artifact["storage_path"]
+    bucket = sb.storage.from_("company-docs")
+    assert storage_path in bucket._store
+
+    removes_before = len(bucket.removes)
+
+    text_facts = [{"fact_type": "PRODUCT_NAME", "raw_value": "염산", "normalized_value": "염산",
+                   "source_page": 1, "evidence_json": {}}]
+    mock_result = MagicMock()
+    mock_result.page_count = 1
+    mock_result.facts = text_facts
+    mock_result.ocr_required = False
+    mock_result.error = None
+
+    with patch("services.msds_intake_svc.extractor.extract_facts", return_value=mock_result), \
+         patch("services.msds_intake_svc.ref_svc.find_reference_candidates",
+               side_effect=RuntimeError("leg-prod down")):
+        with pytest.raises(MsdsProductError):
+            svc.process_intake(sb, USER_A, FAC_A1, intake_id)
+
+    assert storage_path in bucket._store
+    assert len(bucket.removes) == removes_before
+
+
+def test_rt09_failed_stale_retry_ocr_required_clears_stale():
+    """RT09: FAILED + stale rows → retry → OCR_REQUIRED → stale facts/candidates removed."""
+    sb = _make_sb()
+    intake_id = _make_failed_with_data(sb, n_facts=2, n_candidates=2)
+
+    mock_result = MagicMock()
+    mock_result.page_count = 1
+    mock_result.facts = []
+    mock_result.ocr_required = True
+    mock_result.error = None
+
+    with patch("services.msds_intake_svc.extractor.extract_facts", return_value=mock_result):
+        result = svc.process_intake(sb, USER_A, FAC_A1, intake_id)
+
+    assert result["status"] == "OCR_REQUIRED"
+    assert len([r for r in sb.store["msds_intake_facts"] if r["intake_id"] == intake_id]) == 0
+    assert len([r for r in sb.store["msds_match_candidates"] if r["intake_id"] == intake_id]) == 0
+
+
+def test_rt10_review_required_process_retry_409_preserves_data():
+    """RT10: REVIEW_REQUIRED process retry → 409 → existing facts/candidates unchanged."""
+    sb = _make_sb()
+    intake = _make_review_required_intake(sb)
+    intake_id = intake["id"]
+
+    for i in range(2):
+        sb.store["msds_intake_facts"].append({
+            "id": str(uuid.uuid4()), "intake_id": intake_id,
+            "fact_type": "PRODUCT_NAME", "normalized_value": f"fact{i}",
+        })
+    sb.store["msds_match_candidates"].append({
+        "id": str(uuid.uuid4()), "intake_id": intake_id,
+        "candidate_type": "REFERENCE", "decision_status": "PENDING",
+        "match_reason": "EXACT_CAS",
+    })
+
+    with pytest.raises(MsdsProductError) as exc:
+        svc.process_intake(sb, USER_A, FAC_A1, intake_id)
+
+    assert exc.value.code == "INTAKE_ALREADY_PROCESSED"
+    assert len([r for r in sb.store["msds_intake_facts"] if r["intake_id"] == intake_id]) == 2
+    assert len([r for r in sb.store["msds_match_candidates"] if r["intake_id"] == intake_id]) == 1

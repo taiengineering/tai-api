@@ -1,4 +1,4 @@
-"""MSDS Document Intake Service — WO-MSDS-04A-PATCH-002."""
+"""MSDS Document Intake Service — WO-MSDS-04A-PATCH-003."""
 from __future__ import annotations
 
 import hashlib
@@ -166,11 +166,16 @@ def process_intake(sb, current_user: Dict, factory_id: str, intake_id: str) -> D
     # Mark PROCESSING
     sb.table("msds_intakes").update({"status": "PROCESSING"}).eq("id", intake_id).execute()
 
+    # Remove stale transient data from any previous failed attempt before this one starts
+    _reset_process_data(sb, intake_id)
+
     try:
         return _do_process(sb, current_user, factory_id, intake_id, intake)
     except MsdsProductError:
+        _reset_process_data(sb, intake_id)  # clean up any partial writes from this attempt
         raise
     except Exception as e:
+        _reset_process_data(sb, intake_id)
         _fail_intake(sb, intake_id, "PROCESS_UNEXPECTED_FAILURE", str(e)[:500])
         raise MsdsProductError(500, "PROCESS_UNEXPECTED_FAILURE", "처리 중 예기치 않은 오류가 발생했습니다.")
 
@@ -223,9 +228,6 @@ def _do_process(sb, current_user, factory_id, intake_id, intake) -> Dict[str, An
     except Exception as e:
         _fail_intake(sb, intake_id, "REFERENCE_LOOKUP_FAILED", str(e)[:500])
         raise MsdsProductError(500, "REFERENCE_LOOKUP_FAILED", "참조 DB 조회에 실패했습니다.")
-
-    # Clear any prior data from a previous failed process attempt, then write fresh
-    _reset_process_data(sb, intake_id)
 
     fact_rows = []
     for f in result.facts:
