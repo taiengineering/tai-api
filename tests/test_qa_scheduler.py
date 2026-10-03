@@ -1,4 +1,4 @@
-"""QA Scheduler tests — WO-QA-CONTROL-PHASE2E-001.
+"""QA Scheduler tests — WO-QA-CONTROL-PHASE2E-001 / WO-QA-ADMIN-EXISTING-CONSOLE-AUTOSYNC-001 STEP B.
 
 SC-01: enabled schedule 조회 → QUEUED 상태 run 생성
 SC-02: next_run_at 미도달 → run 생성 없음
@@ -8,6 +8,19 @@ SC-05: frequency HOURLY 계산
 SC-06: frequency DAILY 계산
 SC-07: 중복 QUEUED/RUNNING 방지
 SC-08: disabled schedule skip
+
+B1-01: NULL next_run_at → bootstrap 실행, run 생성 없음
+B1-02: MINUTES bootstrap = now + frequency_value minutes
+B1-03: HOURLY bootstrap = now + frequency_value hours
+B1-04: DAILY bootstrap anchor 미도달 → 오늘 anchor
+B1-05: DAILY bootstrap anchor 지남 → 내일 anchor
+B1-06: WEEKLY bootstrap → 다음 해당 요일 anchor
+
+B2-01: compute_next_run_at WEEKLY = from_dt + 7 days
+B2-02: WEEKLY tick due schedule → run 생성
+
+SR-01: 기존 DAILY schedule cadence 보존 (compute_next_run_at 회귀)
+SR-02: NULL bootstrap이 기존 non-NULL schedule 실행에 영향 없음
 
 MR-01: enabled QA → MANUAL run 생성
 MR-02: disabled QA → 422
@@ -443,3 +456,246 @@ def test_MR04b_dispatch_connected():
     assert len(dispatched) == 1
     assert dispatched[0]["run_id"] == "run-dispatch-test"
     assert "P0-DISP-001" in dispatched[0]["scenario_ids"]
+
+
+# ── B2-01/02: WEEKLY compute_next_run_at ─────────────────────────────────────
+
+def test_B2_01_weekly_compute_adds_7_days():
+    """B2-01: WEEKLY compute_next_run_at = from_dt + 7 days."""
+    from services.qa_scheduler_svc import compute_next_run_at
+    base = datetime(2026, 10, 5, 8, 0, tzinfo=timezone.utc)  # Monday
+    result = compute_next_run_at("WEEKLY", None, base)
+    assert result == datetime(2026, 10, 12, 8, 0, tzinfo=timezone.utc)
+
+
+def test_B2_01b_weekly_compute_preserves_time():
+    """B2-01b: WEEKLY next run은 동일 시각 다음 주."""
+    from services.qa_scheduler_svc import compute_next_run_at
+    base = datetime(2026, 10, 3, 23, 0, tzinfo=timezone.utc)
+    result = compute_next_run_at("WEEKLY", None, base)
+    assert result == base + timedelta(days=7)
+
+
+def test_B2_02_weekly_tick_creates_run():
+    """B2-02: WEEKLY due schedule → run 생성."""
+    sched = _sched("item-w1", "P1-W-001", ft="WEEKLY", fv=None, next_run_offset=-1)
+    sb = _make_supabase(schedules=[sched])
+
+    async def _dispatch(run_id, scenario_ids, **kwargs): pass
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_null_schedules", return_value=[]), \
+             patch.object(mod, "dispatch_qa_run", _dispatch):
+            return await scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["created"] == 1
+    assert "P1-W-001" in result["items"]
+
+
+# ── B1-01~06: bootstrap_next_run_at ──────────────────────────────────────────
+
+def test_B1_01_null_schedule_bootstrapped_no_run():
+    """B1-01: NULL next_run_at → bootstrap 업데이트, run 미생성."""
+    null_sched = {
+        "id": "sched-null-1",
+        "qa_item_id": "item-null-1",
+        "frequency_type": "DAILY",
+        "frequency_value": None,
+        "anchor_time": "08:00:00",
+        "day_of_week": None,
+        "timezone": "Asia/Seoul",
+    }
+    # due_schedules 는 비어 있으므로 run 생성 없음
+    sb = _make_supabase(schedules=[])
+    updated_ids: list = []
+
+    def _table(name):
+        m = MagicMock()
+        if name == "qa_schedules":
+            def _update(data):
+                inner = MagicMock()
+                def _eq(col, val):
+                    updated_ids.append(val)
+                    mm = MagicMock()
+                    mm.execute.return_value = MagicMock(data=[{}])
+                    return mm
+                inner.eq = _eq
+                return inner
+            m.update = _update
+
+            def _select2(*a, **k):
+                inner = MagicMock()
+                inner.eq.return_value.lte.return_value = MagicMock(
+                    execute=MagicMock(return_value=MagicMock(data=[]))
+                )
+                inner.eq.return_value.is_.return_value.neq.return_value = MagicMock(
+                    execute=MagicMock(return_value=MagicMock(data=[null_sched]))
+                )
+                return inner
+            m.select.side_effect = _select2
+        elif name == "qa_runs":
+            m.select.return_value.in_.return_value.execute.return_value = MagicMock(data=[])
+        elif name == "qa_run_targets":
+            m.select.return_value.in_.return_value.execute.return_value = MagicMock(data=[])
+        return m
+
+    sb.table.side_effect = _table
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_null_schedules", return_value=[null_sched]), \
+             patch.object(mod, "_due_schedules", return_value=[]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()):
+            return await scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["created"] == 0
+    assert result["bootstrapped"] == 1
+
+
+def test_B1_02_minutes_bootstrap():
+    """B1-02: MINUTES bootstrap = now + frequency_value minutes."""
+    from services.qa_scheduler_svc import bootstrap_next_run_at
+    now = datetime(2026, 10, 3, 9, 0, tzinfo=timezone.utc)
+    sched = {"frequency_type": "MINUTES", "frequency_value": 30, "timezone": "Asia/Seoul"}
+    result = bootstrap_next_run_at(sched, now)
+    assert result == datetime(2026, 10, 3, 9, 30, tzinfo=timezone.utc)
+
+
+def test_B1_03_hourly_bootstrap():
+    """B1-03: HOURLY bootstrap = now + frequency_value hours."""
+    from services.qa_scheduler_svc import bootstrap_next_run_at
+    now = datetime(2026, 10, 3, 9, 0, tzinfo=timezone.utc)
+    sched = {"frequency_type": "HOURLY", "frequency_value": 2, "timezone": "Asia/Seoul"}
+    result = bootstrap_next_run_at(sched, now)
+    assert result == datetime(2026, 10, 3, 11, 0, tzinfo=timezone.utc)
+
+
+def test_B1_04_daily_bootstrap_anchor_future():
+    """B1-04: DAILY bootstrap anchor 미도달 → 오늘 anchor (KST 08:00 = UTC 23:00 전날)."""
+    from services.qa_scheduler_svc import bootstrap_next_run_at
+    # KST 07:00 = UTC 22:00 (전날). anchor=08:00 KST → 아직 안 됨 → 오늘 anchor
+    now_kst_07 = datetime(2026, 10, 3, 22, 0, tzinfo=timezone.utc)  # 10-04 07:00 KST
+    sched = {
+        "frequency_type": "DAILY",
+        "frequency_value": None,
+        "anchor_time": "08:00:00",
+        "timezone": "Asia/Seoul",
+    }
+    result = bootstrap_next_run_at(sched, now_kst_07)
+    # 10-04 08:00 KST = UTC 23:00 (10-03)
+    assert result == datetime(2026, 10, 3, 23, 0, tzinfo=timezone.utc)
+
+
+def test_B1_05_daily_bootstrap_anchor_past():
+    """B1-05: DAILY bootstrap anchor 지남 → 내일 anchor."""
+    from services.qa_scheduler_svc import bootstrap_next_run_at
+    # KST 09:00 = UTC 00:00. anchor=08:00 KST → 이미 지남 → 내일
+    now_kst_09 = datetime(2026, 10, 4, 0, 0, tzinfo=timezone.utc)  # 10-04 09:00 KST
+    sched = {
+        "frequency_type": "DAILY",
+        "frequency_value": None,
+        "anchor_time": "08:00:00",
+        "timezone": "Asia/Seoul",
+    }
+    result = bootstrap_next_run_at(sched, now_kst_09)
+    # 10-05 08:00 KST = UTC 10-04 23:00
+    assert result == datetime(2026, 10, 4, 23, 0, tzinfo=timezone.utc)
+
+
+def test_B1_06_weekly_bootstrap_next_occurrence():
+    """B1-06: WEEKLY bootstrap → day_of_week(1=월) anchor 다음 발생일.
+
+    기준: 2026-10-03 (토, 10:00 KST). 다음 월요일 = 2026-10-05.
+    anchor=09:00 KST, day_of_week=1(월).
+    """
+    from services.qa_scheduler_svc import bootstrap_next_run_at
+    import zoneinfo
+    KST = zoneinfo.ZoneInfo("Asia/Seoul")
+    # 2026-10-03 토요일 10:00 KST = UTC 01:00
+    now = datetime(2026, 10, 3, 1, 0, tzinfo=timezone.utc)
+    sched = {
+        "frequency_type": "WEEKLY",
+        "frequency_value": None,
+        "anchor_time": "09:00:00",
+        "day_of_week": 1,  # 월요일
+        "timezone": "Asia/Seoul",
+    }
+    result = bootstrap_next_run_at(sched, now)
+    # 2026-10-05 (월) 09:00 KST = UTC 00:00
+    expected = datetime(2026, 10, 5, 0, 0, tzinfo=timezone.utc)
+    assert result == expected
+
+
+def test_B1_06b_weekly_bootstrap_same_day_anchor_future():
+    """B1-06b: 오늘이 target 요일이고 anchor 아직 안 됨 → 오늘 anchor."""
+    from services.qa_scheduler_svc import bootstrap_next_run_at
+    # 2026-10-05 월요일 08:00 KST = UTC 10-04 23:00. anchor=09:00 KST → 아직 안 됨
+    now = datetime(2026, 10, 4, 23, 0, tzinfo=timezone.utc)  # 10-05 08:00 KST
+    sched = {
+        "frequency_type": "WEEKLY",
+        "frequency_value": None,
+        "anchor_time": "09:00:00",
+        "day_of_week": 1,  # 월요일
+        "timezone": "Asia/Seoul",
+    }
+    result = bootstrap_next_run_at(sched, now)
+    # 10-05 09:00 KST = UTC 00:00
+    expected = datetime(2026, 10, 5, 0, 0, tzinfo=timezone.utc)
+    assert result == expected
+
+
+def test_B1_06c_weekly_bootstrap_same_day_anchor_past():
+    """B1-06c: 오늘이 target 요일이고 anchor 지남 → 다음 주 동일 요일."""
+    from services.qa_scheduler_svc import bootstrap_next_run_at
+    # 2026-10-05 월요일 10:00 KST = UTC 01:00. anchor=09:00 KST → 이미 지남
+    now = datetime(2026, 10, 5, 1, 0, tzinfo=timezone.utc)  # 10-05 10:00 KST
+    sched = {
+        "frequency_type": "WEEKLY",
+        "frequency_value": None,
+        "anchor_time": "09:00:00",
+        "day_of_week": 1,  # 월요일
+        "timezone": "Asia/Seoul",
+    }
+    result = bootstrap_next_run_at(sched, now)
+    # 10-12 09:00 KST = UTC 00:00
+    expected = datetime(2026, 10, 12, 0, 0, tzinfo=timezone.utc)
+    assert result == expected
+
+
+# ── SR-01/02: Schedule Regression ────────────────────────────────────────────
+
+def test_SR01_daily_cadence_preserved():
+    """SR-01: 기존 DAILY compute_next_run_at — anchor 보존 (회귀)."""
+    base = datetime(2026, 10, 3, 23, 0, tzinfo=timezone.utc)  # 08:00 KST
+    result = compute_next_run_at("DAILY", None, base)
+    assert result == datetime(2026, 10, 4, 23, 0, tzinfo=timezone.utc)  # 익일 08:00 KST
+
+
+def test_SR02_null_bootstrap_no_run_in_same_tick():
+    """SR-02: NULL bootstrap은 해당 틱에서 run 생성 없음 (다음 틱부터 실행 가능)."""
+    null_sched = {
+        "id": "sched-sr-1",
+        "qa_item_id": "item-sr-1",
+        "frequency_type": "MINUTES",
+        "frequency_value": 30,
+        "anchor_time": None,
+        "day_of_week": None,
+        "timezone": "Asia/Seoul",
+    }
+    sb = _make_supabase(schedules=[])
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_null_schedules", return_value=[null_sched]), \
+             patch.object(mod, "_due_schedules", return_value=[]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()):
+            return await scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["created"] == 0
+    assert result["bootstrapped"] == 1
