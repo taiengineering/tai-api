@@ -1,7 +1,8 @@
-"""WO-MSDS-02-PATCH-003 chemical_products / identifiers 단위·통합 테스트.
+"""WO-MSDS-02-PATCH-004 chemical_products / identifiers 단위·통합 테스트.
 
 FakeSupabase 격리 — 운영 DB/네트워크 불사용.
 Canonical Scope: factory_id (factories.id). company_id 는 factory 귀속 검증용.
+Authorization: role_data_scope tier 기반 (ALL/COMPANY/FACTORY/TEAM/ASSIGNED).
 Site 격리(동일회사 다른 시설), Tenant 격리(BOLA), Duplicate Candidate, Identifier 생명주기 검증.
 """
 from __future__ import annotations
@@ -178,15 +179,45 @@ CALLER_A  = {"id": "user-a", "company_id": CO_A, "role_code": "010"}
 CALLER_B  = {"id": "user-b", "company_id": CO_B, "role_code": "010"}
 NO_CO     = {"id": "user-nocompany", "company_id": None, "role_code": "010"}
 
+# ─── AUTH fixtures ─────────────────────────────────────────────────────────────
+# role_code 매핑 (role_data_scope 테이블과 동기)
+ROLE_COMPANY  = "010"
+ROLE_FACTORY  = "012"
+ROLE_TEAM     = "013"
+ROLE_ASSIGNED = "020"
+ROLE_ALL      = "099"
+ROLE_PLATFORM = "090"   # PLATFORM scope (알 수 없는 tier → fail-closed)
+
+AUTH_COMPANY_A    = {"id": "auth-co-a",    "company_id": CO_A, "role_code": ROLE_COMPANY}
+AUTH_FACTORY_A1   = {"id": "auth-fac-a1",  "company_id": CO_A, "role_code": ROLE_FACTORY, "factory_id": FAC_A1}
+AUTH_FACTORY_A2   = {"id": "auth-fac-a2",  "company_id": CO_A, "role_code": ROLE_FACTORY, "factory_id": FAC_A2}
+AUTH_FACTORY_NOFID = {"id": "auth-fac-nofid", "company_id": CO_A, "role_code": ROLE_FACTORY}  # factory_id 미배정
+AUTH_TEAM_A1      = {"id": "auth-team-a1", "company_id": CO_A, "role_code": ROLE_TEAM,    "factory_id": FAC_A1}
+AUTH_TEAM_NOFID   = {"id": "auth-team-nofid", "company_id": CO_A, "role_code": ROLE_TEAM}  # factory_id 미배정
+AUTH_ALL          = {"id": "auth-all",     "role_code": ROLE_ALL}  # 플랫폼 관리자 (company_id 없어도 됨)
+AUTH_ASSIGNED_A1  = {"id": "auth-asgn-a1", "company_id": CO_A, "role_code": ROLE_ASSIGNED, "factory_id": FAC_A1}
+AUTH_ASSIGNED_NOFID = {"id": "auth-asgn-nofid", "company_id": CO_A, "role_code": ROLE_ASSIGNED}  # company fallback
+AUTH_PLATFORM     = {"id": "auth-platform", "company_id": CO_A, "role_code": ROLE_PLATFORM}
+AUTH_UNKNOWN_ROLE = {"id": "auth-unknown",  "company_id": CO_A, "role_code": "999"}  # role_data_scope 미존재
+
 _FACTORIES = [
     {"id": FAC_A1, "company_id": CO_A, "name": "A사 1공장"},
     {"id": FAC_A2, "company_id": CO_A, "name": "A사 2공장"},
     {"id": FAC_B,  "company_id": CO_B, "name": "B사 공장"},
 ]
 
+_ROLE_DATA_SCOPE = [
+    {"role_code": ROLE_COMPANY,  "scope_type": "COMPANY"},
+    {"role_code": ROLE_FACTORY,  "scope_type": "FACTORY"},
+    {"role_code": ROLE_TEAM,     "scope_type": "TEAM"},
+    {"role_code": ROLE_ASSIGNED, "scope_type": "ASSIGNED"},
+    {"role_code": ROLE_ALL,      "scope_type": "ALL"},
+    {"role_code": ROLE_PLATFORM, "scope_type": "PLATFORM"},
+]
+
 
 def _make_sb(extra=None):
-    store = {"factories": list(_FACTORIES)}
+    store = {"factories": list(_FACTORIES), "role_data_scope": list(_ROLE_DATA_SCOPE)}
     if extra:
         store.update(extra)
     return FakeSB(store)
@@ -194,9 +225,12 @@ def _make_sb(extra=None):
 
 def _client(current_user, store=None):
     if store is None:
-        store = {"factories": list(_FACTORIES)}
-    elif "factories" not in store:
-        store["factories"] = list(_FACTORIES)
+        store = {"factories": list(_FACTORIES), "role_data_scope": list(_ROLE_DATA_SCOPE)}
+    else:
+        if "factories" not in store:
+            store["factories"] = list(_FACTORIES)
+        if "role_data_scope" not in store:
+            store["role_data_scope"] = list(_ROLE_DATA_SCOPE)
     app = FastAPI()
     app.include_router(mp.router)
     app.dependency_overrides[mp.get_current_user] = lambda: current_user
@@ -849,3 +883,129 @@ def test_prov05_product_created_source_server_owned_manual():
     r = c.post(f"/me/msds/factories/{FAC_A1}/products", json={"product_name": "Manual Product"})
     assert r.status_code == 201
     assert r.json()["data"]["created_source"] == "MANUAL"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AUTH — role_data_scope tier 기반 Factory 접근 권한
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_auth01_company_scope_can_access_site_a1():
+    sb = _make_sb()
+    result = svc.list_products(sb, AUTH_COMPANY_A, FAC_A1)
+    assert "items" in result
+
+
+def test_auth02_company_scope_can_access_site_a2():
+    sb = _make_sb()
+    result = svc.list_products(sb, AUTH_COMPANY_A, FAC_A2)
+    assert "items" in result
+
+
+def test_auth03_company_scope_cannot_access_other_company_site():
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_COMPANY_A, FAC_B)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth04_factory_scope_can_access_own_factory():
+    sb = _make_sb()
+    result = svc.list_products(sb, AUTH_FACTORY_A1, FAC_A1)
+    assert "items" in result
+
+
+def test_auth05_factory_scope_cannot_access_same_company_other_factory():
+    """핵심 회귀: FACTORY 사용자가 같은 회사 다른 시설에 접근 불가."""
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_FACTORY_A1, FAC_A2)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth06_factory_scope_cannot_access_other_company_factory():
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_FACTORY_A1, FAC_B)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth07_factory_scope_with_no_factory_id_fail_closed():
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_FACTORY_NOFID, FAC_A1)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth08_team_scope_can_access_own_factory():
+    sb = _make_sb()
+    result = svc.list_products(sb, AUTH_TEAM_A1, FAC_A1)
+    assert "items" in result
+
+
+def test_auth09_team_scope_cannot_access_same_company_other_factory():
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_TEAM_A1, FAC_A2)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth10_team_scope_with_no_factory_id_fail_closed():
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_TEAM_NOFID, FAC_A1)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth11_unknown_role_code_fail_closed():
+    """role_data_scope에 없는 role_code → _scope() 반환값 없음(TEAM fallback) → factory_id 없으면 DENY."""
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_UNKNOWN_ROLE, FAC_A1)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth12_platform_scope_fail_closed():
+    """PLATFORM scope_type은 알 수 없는 tier → fail-closed.
+    GAP: company_scope.py에 PLATFORM 처리 없음 — DENY와 동일 취급 기록."""
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_PLATFORM, FAC_A1)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth_assigned_with_factory_id_can_access_own():
+    sb = _make_sb()
+    result = svc.list_products(sb, AUTH_ASSIGNED_A1, FAC_A1)
+    assert "items" in result
+
+
+def test_auth_assigned_with_factory_id_cannot_access_other_factory():
+    sb = _make_sb()
+    with pytest.raises(svc.MsdsProductError) as exc:
+        svc.list_products(sb, AUTH_ASSIGNED_A1, FAC_A2)
+    assert exc.value.status_code == 404
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+def test_auth_assigned_no_factory_id_company_fallback():
+    """ASSIGNED + factory_id 미배정 → company fallback (기존 company_scope 계약 유지)."""
+    sb = _make_sb()
+    result = svc.list_products(sb, AUTH_ASSIGNED_NOFID, FAC_A1)
+    assert "items" in result
+
+
+def test_auth_all_scope_can_access_any_factory():
+    """ALL(플랫폼 관리자) — company_id 없어도 factory 존재하면 허용."""
+    sb = _make_sb()
+    result_a1 = svc.list_products(sb, AUTH_ALL, FAC_A1)
+    result_b  = svc.list_products(sb, AUTH_ALL, FAC_B)
+    assert "items" in result_a1
+    assert "items" in result_b

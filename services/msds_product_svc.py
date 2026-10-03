@@ -1,6 +1,6 @@
 """MSDS Chemical Product orchestration — /me/msds/factories/{factory_id}/products.
 
-factory_id 는 URL path에서 수신. company 귀속은 factories.company_id 를 통해 검증.
+factory_id 는 URL path에서 수신. factory 접근 권한은 role_data_scope tier 기반.
 company_id 는 Product/Identifier field 아님 — factories 테이블을 통해 역참조.
 기존 factory_materials / material_legal_master / leg-prod 불변.
 """
@@ -10,6 +10,7 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+from services.company_scope import _scope as _get_scope
 from services.time import now_kst, serialize_external_utc
 
 VALID_IDENTITY_STATUS = frozenset(["DRAFT", "CONFIRMED", "REVIEW_REQUIRED"])
@@ -65,21 +66,75 @@ def normalize_identifier(raw: str) -> str:
 # ─── Factory Scope Guard ──────────────────────────────────────────────────────
 
 def _require_factory_scope(sb, current_user: Dict[str, Any], factory_id: str) -> str:
-    """factory_id 가 current_user 의 company 에 귀속되는지 검증. 검증된 factory_id 반환."""
+    """기존 role_data_scope tier 기반으로 factory 접근을 검증. 검증된 factory_id 반환.
+
+    tier 별 계약:
+      ALL      — factory 존재 확인만 (플랫폼 관리자)
+      COMPANY  — factory.company_id == user.company_id
+      FACTORY  — factory_id == user.factory_id AND 동일 company
+      TEAM     — factory_id == user.factory_id AND 동일 company (chemical_products에 team_id 없음)
+      ASSIGNED — user.factory_id 배정 시 exact 일치; 미배정 시 company fallback
+      그 외    — fail-closed (404)
+    """
+    tier = _get_scope(sb, current_user.get("role_code"))
+
+    if tier == "ALL":
+        res = sb.table("factories").select("id").eq("id", factory_id).limit(1).execute()
+        if not res.data:
+            raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
+        return factory_id
+
     company_id = current_user.get("company_id")
     if not company_id:
         raise MsdsProductError(403, "NO_COMPANY", "회사 정보가 없습니다.")
-    res = (
-        sb.table("factories")
-        .select("id")
-        .eq("id", factory_id)
-        .eq("company_id", company_id)
-        .limit(1)
-        .execute()
-    )
-    if not res.data:
-        raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
-    return factory_id
+
+    if tier == "COMPANY":
+        res = (
+            sb.table("factories")
+            .select("id")
+            .eq("id", factory_id)
+            .eq("company_id", company_id)
+            .limit(1)
+            .execute()
+        )
+        if not res.data:
+            raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
+        return factory_id
+
+    if tier in ("FACTORY", "TEAM"):
+        user_fid = current_user.get("factory_id")
+        if not user_fid or factory_id != user_fid:
+            raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
+        res = (
+            sb.table("factories")
+            .select("id")
+            .eq("id", factory_id)
+            .eq("company_id", company_id)
+            .limit(1)
+            .execute()
+        )
+        if not res.data:
+            raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
+        return factory_id
+
+    if tier == "ASSIGNED":
+        user_fid = current_user.get("factory_id")
+        if user_fid and factory_id != user_fid:
+            raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
+        res = (
+            sb.table("factories")
+            .select("id")
+            .eq("id", factory_id)
+            .eq("company_id", company_id)
+            .limit(1)
+            .execute()
+        )
+        if not res.data:
+            raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
+        return factory_id
+
+    # 알 수 없는 tier (PLATFORM 포함) → fail-closed
+    raise MsdsProductError(404, "FACTORY_NOT_FOUND", "시설을 찾을 수 없습니다.")
 
 
 # ─── Duplicate Candidate Detection ───────────────────────────────────────────
