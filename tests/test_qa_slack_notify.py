@@ -1,4 +1,4 @@
-"""WO-QA-CONTROL-PHASE2C-001 — QA Slack Notification 계약 테스트.
+"""WO-QA-CONTROL-PHASE2C-001 / WO-QA-SLACK-DIAGNOSTIC-CONTEXT-001 — QA Slack Notification 계약 테스트.
 
 Production QA table write = 0. Real Slack dispatch = 0.
 
@@ -6,6 +6,7 @@ QC-01..14  item status transition events
 QR-01..04  run error notification
 QS-01..07  channel routing + admin link
 QF-01..05  fail-safe + source static checks
+QN-01..05  diagnostic context — new Slack fields (WO-QA-SLACK-DIAGNOSTIC-CONTEXT-001)
 """
 from __future__ import annotations
 
@@ -880,3 +881,210 @@ def test_QS11_all_qa_events_route_to_channel_qa():
     for evt, sev in qa_events:
         result = _resolve_channel(evt, sev)
         assert result == CHANNEL_QA, f"{evt}/{sev} → {result!r} (expected CHANNEL_QA)"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-01: 풍부한 컨텍스트가 모두 주어진 FAIL → Slack 텍스트에 위치/테스트/오류 표시
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN01_full_context_fail_message():
+    notif = {
+        "event_type":       "QA_FAIL_DETECTED",
+        "qa_item_id":       "item-1",
+        "scenario_id":      "P1-SAAS-CON-AVL-003",
+        "site_code":        "SAFE",
+        "service_code":     "SAAS",
+        "area_code":        "CONSTRUCTION",
+        "qa_type":          "AVAILABILITY",
+        "name":             "인력 명부 정상 진입",
+        "description":      "인증 계정으로 인력 명부 페이지에 접속한다.",
+        "expected_summary": "인력 명부 정상 로드, fatal error 없음.",
+        "previous_status":  "PASS",
+        "new_status":       "FAIL",
+        "run_id":           "run-abc",
+        "trigger_type":     "SCHEDULE",
+        "github_run_id":    None,
+        "head_sha":         None,
+        "error_summary":    "locator.waitFor: Timeout 10000ms exceeded",
+        "duration_ms":      12431,
+        "http_status":      None,
+        "error_code":       None,
+    }
+    from services.qa_notify_svc import build_qa_slack_payload
+    payload = build_qa_slack_payload(notif)
+    text = payload["blocks"][0]["text"]["text"]
+
+    assert "SaaS > 건설" in text, "위치 레이블 누락"
+    assert "SAFE" in text, "실행 Host 누락"
+    assert "P1-SAAS-CON-AVL-003" in text, "QA ID 누락"
+    assert "인력 명부 정상 진입" in text, "테스트명 누락"
+    assert "가용성/진입" in text, "qa_type 레이블 누락"
+    assert "인증 계정으로 인력 명부 페이지에 접속한다." in text, "description 누락"
+    assert "인력 명부 정상 로드, fatal error 없음." in text, "expected_summary 누락"
+    assert "locator.waitFor: Timeout 10000ms exceeded" in text, "error_summary 누락"
+    assert "PASS → FAIL" in text, "상태 전이 누락"
+    assert "12.4s" in text, "소요시간 누락"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-02: QA_RECOVERED → error_summary 섹션 없음
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN02_recovered_no_error_section():
+    notif = {
+        "event_type":       "QA_RECOVERED",
+        "qa_item_id":       "item-1",
+        "scenario_id":      "P1-SAAS-CON-AVL-003",
+        "site_code":        "SAFE",
+        "service_code":     "SAAS",
+        "area_code":        "CONSTRUCTION",
+        "qa_type":          "AVAILABILITY",
+        "name":             "인력 명부 정상 진입",
+        "description":      "인증 계정으로 접속.",
+        "expected_summary": "정상 로드.",
+        "previous_status":  "FAIL",
+        "new_status":       "PASS",
+        "run_id":           "run-abc",
+        "trigger_type":     "SCHEDULE",
+        "github_run_id":    None,
+        "head_sha":         None,
+        "error_summary":    "이전 실패 오류 (복구됨)",
+        "duration_ms":      9000,
+        "http_status":      None,
+        "error_code":       None,
+    }
+    from services.qa_notify_svc import build_qa_slack_payload
+    payload = build_qa_slack_payload(notif)
+    text = payload["blocks"][0]["text"]["text"]
+
+    assert "실제 오류" not in text, "QA_RECOVERED에 실제 오류 섹션이 있으면 안 됨"
+    assert "FAIL → PASS" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-03: QA_RUN_ERROR is_run=True → "Scheduler → GitHub Actions" 포함
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN03_run_error_infra_format():
+    notif = {
+        "event_type":    "QA_RUN_ERROR",
+        "trigger_type":  "SCHEDULE",
+        "run_id":        "run-xyz",
+        "error_summary": "GitHub dispatch failed: HTTP 403",
+    }
+    from services.qa_notify_svc import build_qa_slack_payload
+    payload = build_qa_slack_payload(notif, is_run=True)
+    text = payload["blocks"][0]["text"]["text"]
+
+    assert "Scheduler → GitHub Actions" in text, "인프라 구간 표시 누락"
+    assert "GitHub dispatch failed: HTTP 403" in text, "오류 메시지 누락"
+    assert "QA 실행 시스템 오류" in text, "타이틀 변경 미반영"
+    # 위치/테스트 섹션이 없어야 함
+    assert "위치" not in text
+    assert "QA ID" not in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-04: 빈 옵셔널 필드 → 해당 줄 없음 ("없음", "unknown" 생성 금지)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN04_missing_optional_fields_no_placeholder():
+    notif = {
+        "event_type":       "QA_FAIL_DETECTED",
+        "scenario_id":      "P0-WWW-001",
+        "previous_status":  "PASS",
+        "new_status":       "FAIL",
+    }
+    from services.qa_notify_svc import build_qa_slack_payload
+    payload = build_qa_slack_payload(notif)
+    text = payload["blocks"][0]["text"]["text"]
+
+    # 없는 필드에 대한 빈 줄/플레이스홀더 없음
+    assert "없음" not in text
+    assert "unknown" not in text.lower()
+    # 필수: 상태 전이
+    assert "PASS → FAIL" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-05: service_code / area_code → 한국어 taxonomy 레이블로 변환
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN05_taxonomy_label_translation():
+    from services.qa_notify_svc import build_qa_slack_payload
+
+    cases = [
+        ("WWW",    "AUTH",         "웹사이트 > 인증"),
+        ("SAAS",   "DASHBOARD",    "SaaS > 대시보드"),
+        ("ADMIN",  "OPERATIONS",   "Admin > 운영"),
+        ("WORKER", "INSPECTION",   "작업자앱 > 점검"),
+    ]
+    for svc, area, expected_label in cases:
+        notif = {
+            "event_type":      "QA_FAIL_DETECTED",
+            "service_code":    svc,
+            "area_code":       area,
+            "previous_status": "PASS",
+            "new_status":      "FAIL",
+        }
+        payload = build_qa_slack_payload(notif)
+        text = payload["blocks"][0]["text"]["text"]
+        assert expected_label in text, f"{svc}/{area} → '{expected_label}' 미표시, got: {text[:200]}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-06: notification payload에 새 필드가 포함됨 (apply_results 계약)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN06_notification_payload_new_fields():
+    """apply_results가 반환하는 notification에 새 필드들이 포함되는지 확인."""
+    class _FullItemQ(_Q):
+        def execute(self):
+            return type("R", (), {"data": [{
+                "id": "item-1", "scenario_id": "P0-WWW-001",
+                "site_code": "WWW", "service_code": "WWW",
+                "area_code": "AUTH", "qa_type": "AVAILABILITY",
+                "name": "Login flow",
+                "description": "로그인 검증",
+                "expected_summary": "200 응답 + 토큰",
+                "enabled": True,
+            }]})()
+
+    sb = _Supabase({
+        "qa_runs":        _mutable_run_q(),
+        "qa_items":       _FullItemQ(),
+        "qa_run_targets": _targets_q(),
+        "qa_run_results": _ResultsQ(current=[], history=[]),
+    })
+    data = _call(sb, results=[_new_result("FAIL")])
+    assert data["notifications"], "알림이 없음"
+    notif = data["notifications"][0]
+
+    assert notif.get("service_code") == "WWW"
+    assert notif.get("area_code") == "AUTH"
+    assert notif.get("qa_type") == "AVAILABILITY"
+    assert notif.get("description") == "로그인 검증"
+    assert notif.get("expected_summary") == "200 응답 + 토큰"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-07: http_status / error_code 존재 시 Slack 표시
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN07_http_status_and_error_code_displayed():
+    notif = {
+        "event_type":      "QA_FAIL_DETECTED",
+        "scenario_id":     "P0-API-001",
+        "previous_status": "PASS",
+        "new_status":      "FAIL",
+        "error_summary":   "Expected 200, received 500",
+        "http_status":     500,
+        "error_code":      "INTERNAL_SERVER_ERROR",
+        "duration_ms":     None,
+    }
+    from services.qa_notify_svc import build_qa_slack_payload
+    payload = build_qa_slack_payload(notif)
+    text = payload["blocks"][0]["text"]["text"]
+
+    assert "HTTP" in text and "500" in text, "http_status 미표시"
+    assert "INTERNAL_SERVER_ERROR" in text, "error_code 미표시"

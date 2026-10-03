@@ -853,7 +853,10 @@ def apply_results(
     if scenario_ids:
         items_res = (
             supabase.table("qa_items")
-            .select("id, scenario_id, site_code, name, enabled")
+            .select(
+                "id, scenario_id, site_code, service_code, area_code, "
+                "qa_type, name, description, expected_summary, enabled"
+            )
             .in_("scenario_id", scenario_ids)
             .execute()
         )
@@ -977,19 +980,26 @@ def apply_results(
                 sorted_new = sorted(new_by_item[item_id], key=lambda a: a.get("attempt", 1))
                 last = sorted_new[-1] if sorted_new else {}
                 notifications.append({
-                    "event_type":      event_type,
-                    "qa_item_id":      item_id,
-                    "scenario_id":     item_meta.get("scenario_id"),
-                    "site_code":       item_meta.get("site_code"),
-                    "name":            item_meta.get("name"),
-                    "previous_status": prev_eff,
-                    "new_status":      new_eff,
-                    "run_id":          run_id,
-                    "trigger_type":    run.get("trigger_type"),
-                    "github_run_id":   github_run_id if github_run_id is not None else run.get("github_run_id"),
-                    "head_sha":        head_sha or run.get("head_sha"),
-                    "error_summary":   last.get("error_summary"),
-                    "duration_ms":     last.get("duration_ms"),
+                    "event_type":       event_type,
+                    "qa_item_id":       item_id,
+                    "scenario_id":      item_meta.get("scenario_id"),
+                    "site_code":        item_meta.get("site_code"),
+                    "service_code":     item_meta.get("service_code"),
+                    "area_code":        item_meta.get("area_code"),
+                    "qa_type":          item_meta.get("qa_type"),
+                    "name":             item_meta.get("name"),
+                    "description":      item_meta.get("description"),
+                    "expected_summary": item_meta.get("expected_summary"),
+                    "previous_status":  prev_eff,
+                    "new_status":       new_eff,
+                    "run_id":           run_id,
+                    "trigger_type":     run.get("trigger_type"),
+                    "github_run_id":    github_run_id if github_run_id is not None else run.get("github_run_id"),
+                    "head_sha":         head_sha or run.get("head_sha"),
+                    "error_summary":    last.get("error_summary"),
+                    "duration_ms":      last.get("duration_ms"),
+                    "http_status":      last.get("http_status"),
+                    "error_code":       last.get("error_code"),
                 })
 
     if to_insert:
