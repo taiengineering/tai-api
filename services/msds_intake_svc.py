@@ -1,4 +1,4 @@
-"""MSDS Document Intake Service — WO-MSDS-04A-PATCH-001."""
+"""MSDS Document Intake Service — WO-MSDS-04A-PATCH-002."""
 from __future__ import annotations
 
 import hashlib
@@ -213,7 +213,18 @@ def _do_process(sb, current_user, factory_id, intake_id, intake) -> Dict[str, An
         sb.table("msds_intakes").update({"status": "OCR_REQUIRED", "processed_at": "now()"}).eq("id", intake_id).execute()
         return {"status": "OCR_REQUIRED", "facts": [], "product_candidates": [], "reference_candidates": []}
 
-    # Store facts (reset any prior partial facts from a re-process)
+    # Compute candidates in memory — all DB writes come AFTER reference lookup succeeds
+    snapshot_id = intake.get("reference_snapshot_id") or _REFERENCE_SNAPSHOT_ID
+    product_candidates = _find_product_candidates(sb, factory_id, result.facts)
+
+    # Reference lookup — failure → FAILED (no facts/candidates in DB yet)
+    try:
+        reference_candidates = _find_reference_candidates(result.facts, snapshot_id)
+    except Exception as e:
+        _fail_intake(sb, intake_id, "REFERENCE_LOOKUP_FAILED", str(e)[:500])
+        raise MsdsProductError(500, "REFERENCE_LOOKUP_FAILED", "참조 DB 조회에 실패했습니다.")
+
+    # Clear any prior data from a previous failed process attempt, then write fresh
     _reset_process_data(sb, intake_id)
 
     fact_rows = []
@@ -231,18 +242,6 @@ def _do_process(sb, current_user, factory_id, intake_id, intake) -> Dict[str, An
         if fact_res.data:
             fact_rows.append(fact_res.data[0])
 
-    # Generate product candidates
-    snapshot_id = intake.get("reference_snapshot_id") or _REFERENCE_SNAPSHOT_ID
-    product_candidates = _find_product_candidates(sb, factory_id, result.facts)
-
-    # Generate reference candidates — failure → FAILED
-    try:
-        reference_candidates = _find_reference_candidates(result.facts, snapshot_id)
-    except Exception as e:
-        _fail_intake(sb, intake_id, "REFERENCE_LOOKUP_FAILED", str(e)[:500])
-        raise MsdsProductError(500, "REFERENCE_LOOKUP_FAILED", "참조 DB 조회에 실패했습니다.")
-
-    # Store candidates
     for c in product_candidates + reference_candidates:
         sb.table("msds_match_candidates").insert({"intake_id": intake_id, **c}).execute()
 
@@ -260,12 +259,8 @@ def _do_process(sb, current_user, factory_id, intake_id, intake) -> Dict[str, An
 
 
 def _reset_process_data(sb, intake_id: str):
-    """Reset transient process data to allow safe re-processing."""
-    # Facts and candidates for this intake are cleared before re-insertion.
-    # Supabase service_role has UPDATE but not DELETE — mark existing rows stale via update.
-    # (In production these tables have no DELETE grant; this is a no-op in practice
-    # since process can only re-run from RECEIVED/FAILED state which means no prior rows exist.)
-    pass
+    sb.table("msds_match_candidates").delete().eq("intake_id", intake_id).execute()
+    sb.table("msds_intake_facts").delete().eq("intake_id", intake_id).execute()
 
 
 def _find_product_candidates(sb, factory_id: str, facts: List[Dict]) -> List[Dict]:
@@ -426,7 +421,8 @@ def confirm_intake(
 ) -> Dict:
     """Human confirmation: select product + reference candidates → CONFIRMED.
 
-    If new_product is given: create Product via OBJ-02 create_product + set identity_status=CONFIRMED.
+    Validates ALL reference candidates before any product side effects.
+    Idempotent: CONFIRMED + selected_product_id already set → NO_CHANGE.
     """
     _require_factory_scope(sb, current_user, factory_id)
     intake = _get_intake(sb, factory_id, intake_id)
@@ -434,13 +430,41 @@ def confirm_intake(
     if intake["status"] not in ("REVIEW_REQUIRED", "CONFIRMED"):
         raise MsdsProductError(409, "INTAKE_NOT_REVIEW_REQUIRED", "확인 가능한 상태가 아닙니다.")
 
+    # Idempotent: already confirmed with a product selected → no-op
+    if intake["status"] == "CONFIRMED" and intake.get("selected_product_id"):
+        return {
+            "status": "CONFIRMED",
+            "selected_product_id": intake["selected_product_id"],
+            "existing_product_id": None,
+            "new_product_created": None,
+            "no_change": True,
+        }
+
     if existing_product_id and new_product:
         raise MsdsProductError(422, "CONFIRM_PRODUCT_CONFLICT", "기존 Product 선택과 신규 Product 생성을 동시에 할 수 없습니다.")
 
     if not existing_product_id and not new_product:
         raise MsdsProductError(422, "CONFIRM_NO_PRODUCT", "Product를 선택하거나 신규 생성 정보를 제공해야 합니다.")
 
-    # Validate existing product belongs to factory
+    # Validate ALL selected reference candidates BEFORE any product side effects
+    for cid in selected_reference_candidate_ids:
+        cand_res = (
+            sb.table("msds_match_candidates")
+            .select("id,candidate_type,decision_status")
+            .eq("id", cid)
+            .eq("intake_id", intake_id)
+            .limit(1)
+            .execute()
+        )
+        if not cand_res.data:
+            raise MsdsProductError(422, "REFERENCE_CANDIDATE_INVALID", f"candidate {cid}를 찾을 수 없습니다.")
+        cand = cand_res.data[0]
+        if cand.get("candidate_type") != "REFERENCE":
+            raise MsdsProductError(422, "REFERENCE_CANDIDATE_INVALID", f"candidate {cid}는 REFERENCE 타입이 아닙니다.")
+        if cand.get("decision_status") != "PENDING":
+            raise MsdsProductError(422, "REFERENCE_CANDIDATE_INVALID", f"candidate {cid}는 이미 처리되었습니다.")
+
+    # All validation passed — now safe to create/select product
     if existing_product_id:
         prod_res = (
             sb.table("chemical_products")
@@ -479,24 +503,6 @@ def confirm_intake(
             patch={"identity_status": "CONFIRMED"},
         )
         selected_product_id = new_prod_row["id"]
-
-    # Validate selected reference candidate IDs
-    for cid in selected_reference_candidate_ids:
-        cand_res = (
-            sb.table("msds_match_candidates")
-            .select("id,candidate_type,decision_status")
-            .eq("id", cid)
-            .eq("intake_id", intake_id)
-            .limit(1)
-            .execute()
-        )
-        if not cand_res.data:
-            raise MsdsProductError(422, "REFERENCE_CANDIDATE_INVALID", f"candidate {cid}를 찾을 수 없습니다.")
-        cand = cand_res.data[0]
-        if cand.get("candidate_type") != "REFERENCE":
-            raise MsdsProductError(422, "REFERENCE_CANDIDATE_INVALID", f"candidate {cid}는 REFERENCE 타입이 아닙니다.")
-        if cand.get("decision_status") != "PENDING":
-            raise MsdsProductError(422, "REFERENCE_CANDIDATE_INVALID", f"candidate {cid}는 이미 처리되었습니다.")
 
     # Mark selected reference candidates
     for cid in selected_reference_candidate_ids:

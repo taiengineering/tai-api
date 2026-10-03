@@ -1,4 +1,4 @@
-"""WO-MSDS-04A-PATCH-001 — MSDS Document Intake 단위 테스트.
+"""WO-MSDS-04A-PATCH-002 — MSDS Document Intake 단위 테스트.
 
 FakeSupabase 격리 — 운영 DB/네트워크/Storage 불사용.
 leg-prod reference_svc: unittest.mock.patch 으로 격리.
@@ -107,6 +107,10 @@ class _Query:
         self._upsert_on_conflict = on_conflict
         return self
 
+    def delete(self):
+        self._op = "delete"
+        return self
+
     def eq(self, c, v):
         self._filters.append(("eq", c, v))
         return self
@@ -179,6 +183,10 @@ class _Query:
                 it.setdefault("id", str(uuid.uuid4()))
                 rows.append(it)
                 return _Result([dict(it)])
+
+        if self._op == "delete":
+            self.store[self.table_name] = [r for r in rows if not self._match(r)]
+            return _Result([])
 
         return _Result([])
 
@@ -1516,3 +1524,255 @@ def test_list_candidates_separates_types():
     result = svc.list_candidates(sb, USER_A, FAC_A1, intake_id)
     assert len(result["product_candidates"]) == 1
     assert len(result["reference_candidates"]) == 1
+
+
+# ─── RT: Retry Idempotency Tests ──────────────────────────────────────────────
+
+def _make_failed_with_data(sb, n_facts=2, n_candidates=1):
+    """FAILED intake with pre-existing facts and candidates to simulate prior run."""
+    intake = _make_received_intake(sb)
+    intake_id = intake["id"]
+    for r in sb.store["msds_intakes"]:
+        if r["id"] == intake_id:
+            r["status"] = "FAILED"
+            r["error_code"] = "REFERENCE_LOOKUP_FAILED"
+            break
+    for i in range(n_facts):
+        sb.store["msds_intake_facts"].append({
+            "id": str(uuid.uuid4()), "intake_id": intake_id,
+            "fact_type": "PRODUCT_NAME", "raw_value": f"stale{i}",
+            "normalized_value": f"stale{i}", "extraction_method": "PDF_NATIVE",
+        })
+    for i in range(n_candidates):
+        sb.store["msds_match_candidates"].append({
+            "id": str(uuid.uuid4()), "intake_id": intake_id,
+            "candidate_type": "REFERENCE", "decision_status": "PENDING",
+            "match_reason": "EXACT_CAS", "reference_content_id": f"OLD-REF-{i}",
+        })
+    return intake_id
+
+
+def test_rt01_reset_deletes_facts():
+    """RT01: _reset_process_data deletes msds_intake_facts for the given intake."""
+    sb = _make_sb()
+    intake = _make_received_intake(sb)
+    intake_id = intake["id"]
+    for i in range(2):
+        sb.store["msds_intake_facts"].append({
+            "id": str(uuid.uuid4()), "intake_id": intake_id,
+            "fact_type": "PRODUCT_NAME", "normalized_value": f"old-{i}",
+        })
+    assert len([r for r in sb.store["msds_intake_facts"] if r["intake_id"] == intake_id]) == 2
+    svc._reset_process_data(sb, intake_id)
+    assert len([r for r in sb.store["msds_intake_facts"] if r["intake_id"] == intake_id]) == 0
+
+
+def test_rt02_reset_deletes_candidates():
+    """RT02: _reset_process_data deletes msds_match_candidates for the given intake."""
+    sb = _make_sb()
+    intake = _make_received_intake(sb)
+    intake_id = intake["id"]
+    for i in range(3):
+        sb.store["msds_match_candidates"].append({
+            "id": str(uuid.uuid4()), "intake_id": intake_id,
+            "candidate_type": "REFERENCE", "decision_status": "PENDING",
+        })
+    assert len([r for r in sb.store["msds_match_candidates"] if r["intake_id"] == intake_id]) == 3
+    svc._reset_process_data(sb, intake_id)
+    assert len([r for r in sb.store["msds_match_candidates"] if r["intake_id"] == intake_id]) == 0
+
+
+def test_rt03_reprocess_facts_not_duplicated():
+    """RT03: Re-processing a FAILED intake replaces facts — does not accumulate."""
+    sb = _make_sb()
+    intake_id = _make_failed_with_data(sb, n_facts=2, n_candidates=0)
+
+    text_facts = [
+        {"fact_type": "PRODUCT_NAME", "raw_value": "염산", "normalized_value": "염산",
+         "source_page": 1, "evidence_json": {}},
+    ]
+    mock_result = MagicMock()
+    mock_result.page_count = 1
+    mock_result.facts = text_facts
+    mock_result.ocr_required = False
+    mock_result.error = None
+
+    with patch("services.msds_intake_svc.extractor.extract_facts", return_value=mock_result), \
+         _mock_ref_find([]):
+        svc.process_intake(sb, USER_A, FAC_A1, intake_id)
+
+    facts = [r for r in sb.store["msds_intake_facts"] if r["intake_id"] == intake_id]
+    assert len(facts) == 1  # 2 stale deleted + 1 fresh inserted
+
+
+def test_rt04_reprocess_candidates_not_duplicated():
+    """RT04: Re-processing a FAILED intake replaces candidates — does not accumulate."""
+    sb = _make_sb()
+    intake_id = _make_failed_with_data(sb, n_facts=0, n_candidates=2)
+
+    ref_hits = [{
+        "reference_content_id": "REF-NEW", "reference_chem_id": "CHEM-NEW",
+        "reference_snapshot_id": SNAPSHOT_ID, "cas_no": "7647-01-0",
+        "match_reason": "EXACT_CAS", "rank_no": 1, "evidence_json": {},
+    }]
+    text_facts = [
+        {"fact_type": "CAS", "raw_value": "7647-01-0", "normalized_value": "7647-01-0",
+         "source_page": 1, "evidence_json": {"cas": "7647-01-0"}},
+    ]
+    mock_result = MagicMock()
+    mock_result.page_count = 1
+    mock_result.facts = text_facts
+    mock_result.ocr_required = False
+    mock_result.error = None
+
+    with patch("services.msds_intake_svc.extractor.extract_facts", return_value=mock_result), \
+         _mock_ref_find(ref_hits):
+        svc.process_intake(sb, USER_A, FAC_A1, intake_id)
+
+    candidates = [r for r in sb.store["msds_match_candidates"] if r["intake_id"] == intake_id]
+    assert len(candidates) == 1  # 2 stale deleted + 1 fresh inserted
+    assert candidates[0]["reference_content_id"] == "REF-NEW"
+
+
+# ─── CF-PATCH-002: Confirm Side-Effect Ordering Tests ─────────────────────────
+
+def test_cf11_idempotent_confirmed_returns_no_change():
+    """CF11: Already CONFIRMED with selected_product_id → no_change=True, no new product."""
+    sb = _make_sb()
+    intake = _make_received_intake(sb)
+    intake_id = intake["id"]
+    for r in sb.store["msds_intakes"]:
+        if r["id"] == intake_id:
+            r["status"] = "CONFIRMED"
+            r["selected_product_id"] = PROD_A1_1
+            break
+    initial_count = len(sb.store["chemical_products"])
+
+    result = svc.confirm_intake(
+        sb=sb, current_user=USER_A, factory_id=FAC_A1,
+        intake_id=intake_id,
+        existing_product_id=None,
+        new_product={"product_name": "새물질", "manufacturer_name": None},
+        selected_reference_candidate_ids=[],
+    )
+    assert result["status"] == "CONFIRMED"
+    assert result.get("no_change") is True
+    assert len(sb.store["chemical_products"]) == initial_count
+
+
+def test_cf12_new_product_invalid_ref_candidate_no_product_created():
+    """CF12: new_product + nonexistent reference candidate → 422, product NOT created in DB."""
+    sb = _make_sb()
+    intake = _make_review_required_intake(sb)
+    bad_cand_id = str(uuid.uuid4())
+    initial_count = len(sb.store["chemical_products"])
+
+    with pytest.raises(MsdsProductError) as exc:
+        svc.confirm_intake(
+            sb=sb, current_user=USER_A, factory_id=FAC_A1,
+            intake_id=intake["id"],
+            existing_product_id=None,
+            new_product={"product_name": "신규물질", "manufacturer_name": None},
+            selected_reference_candidate_ids=[bad_cand_id],
+        )
+    assert exc.value.code == "REFERENCE_CANDIDATE_INVALID"
+    assert len(sb.store["chemical_products"]) == initial_count
+
+
+def test_cf13_existing_product_invalid_ref_candidate_intake_not_updated():
+    """CF13: existing_product + invalid reference candidate → 422, intake stays REVIEW_REQUIRED."""
+    sb = _make_sb()
+    intake = _make_review_required_intake(sb)
+    bad_cand_id = str(uuid.uuid4())
+
+    with pytest.raises(MsdsProductError) as exc:
+        svc.confirm_intake(
+            sb=sb, current_user=USER_A, factory_id=FAC_A1,
+            intake_id=intake["id"],
+            existing_product_id=PROD_A1_1,
+            new_product=None,
+            selected_reference_candidate_ids=[bad_cand_id],
+        )
+    assert exc.value.code == "REFERENCE_CANDIDATE_INVALID"
+    stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake["id"])
+    assert stored["status"] == "REVIEW_REQUIRED"
+
+
+def test_cf14_new_product_customer_product_candidate_no_product_created():
+    """CF14: new_product + CUSTOMER_PRODUCT candidate passed as reference → 422, no product created."""
+    sb = _make_sb()
+    intake = _make_review_required_intake(sb)
+    intake_id = intake["id"]
+    wrong_cand_id = str(uuid.uuid4())
+    sb.store["msds_match_candidates"].append({
+        "id": wrong_cand_id, "intake_id": intake_id,
+        "candidate_type": "CUSTOMER_PRODUCT",
+        "decision_status": "PENDING", "match_reason": "EXACT_NAME",
+    })
+    initial_count = len(sb.store["chemical_products"])
+
+    with pytest.raises(MsdsProductError) as exc:
+        svc.confirm_intake(
+            sb=sb, current_user=USER_A, factory_id=FAC_A1,
+            intake_id=intake_id,
+            existing_product_id=None,
+            new_product={"product_name": "신규물질", "manufacturer_name": None},
+            selected_reference_candidate_ids=[wrong_cand_id],
+        )
+    assert exc.value.code == "REFERENCE_CANDIDATE_INVALID"
+    assert len(sb.store["chemical_products"]) == initial_count
+
+
+def test_cf15_new_product_not_pending_candidate_no_product_created():
+    """CF15: new_product + already-SELECTED candidate → 422, no product created."""
+    sb = _make_sb()
+    intake = _make_review_required_intake(sb)
+    intake_id = intake["id"]
+    already_selected_id = str(uuid.uuid4())
+    sb.store["msds_match_candidates"].append({
+        "id": already_selected_id, "intake_id": intake_id,
+        "candidate_type": "REFERENCE",
+        "decision_status": "SELECTED",
+        "match_reason": "EXACT_CAS",
+    })
+    initial_count = len(sb.store["chemical_products"])
+
+    with pytest.raises(MsdsProductError) as exc:
+        svc.confirm_intake(
+            sb=sb, current_user=USER_A, factory_id=FAC_A1,
+            intake_id=intake_id,
+            existing_product_id=None,
+            new_product={"product_name": "신규물질", "manufacturer_name": None},
+            selected_reference_candidate_ids=[already_selected_id],
+        )
+    assert exc.value.code == "REFERENCE_CANDIDATE_INVALID"
+    assert len(sb.store["chemical_products"]) == initial_count
+
+
+def test_cf16_new_product_valid_candidate_confirms_successfully():
+    """CF16: new_product + valid REFERENCE candidate → product created + candidate SELECTED + CONFIRMED."""
+    sb = _make_sb()
+    intake = _make_review_required_intake(sb)
+    intake_id = intake["id"]
+    cand_id = str(uuid.uuid4())
+    sb.store["msds_match_candidates"].append({
+        "id": cand_id, "intake_id": intake_id,
+        "candidate_type": "REFERENCE", "decision_status": "PENDING",
+        "match_reason": "EXACT_CAS", "reference_content_id": "REF-001",
+    })
+    initial_count = len(sb.store["chemical_products"])
+
+    result = svc.confirm_intake(
+        sb=sb, current_user=USER_A, factory_id=FAC_A1,
+        intake_id=intake_id,
+        existing_product_id=None,
+        new_product={"product_name": "신규물질", "manufacturer_name": "신규사"},
+        selected_reference_candidate_ids=[cand_id],
+    )
+    assert result["status"] == "CONFIRMED"
+    assert result["new_product_created"] is not None
+    assert len(sb.store["chemical_products"]) == initial_count + 1
+    cand = next(r for r in sb.store["msds_match_candidates"] if r["id"] == cand_id)
+    assert cand["decision_status"] == "SELECTED"
+    stored = next(r for r in sb.store["msds_intakes"] if r["id"] == intake_id)
+    assert stored["status"] == "CONFIRMED"

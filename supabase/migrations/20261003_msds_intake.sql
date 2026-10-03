@@ -87,8 +87,8 @@ ALTER TABLE public.msds_intake_facts ENABLE ROW LEVEL SECURITY;
 CREATE POLICY mif_no_anon ON public.msds_intake_facts AS RESTRICTIVE FOR ALL TO anon USING (false);
 CREATE POLICY mif_no_authenticated ON public.msds_intake_facts AS RESTRICTIVE FOR ALL TO authenticated USING (false);
 REVOKE ALL ON public.msds_intake_facts FROM PUBLIC, anon, authenticated;
-GRANT SELECT, INSERT, UPDATE ON public.msds_intake_facts TO service_role;
-REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER ON public.msds_intake_facts FROM service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.msds_intake_facts TO service_role;
+REVOKE TRUNCATE, REFERENCES, TRIGGER ON public.msds_intake_facts FROM service_role;
 
 -- ─── msds_match_candidates ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.msds_match_candidates (
@@ -118,8 +118,8 @@ ALTER TABLE public.msds_match_candidates ENABLE ROW LEVEL SECURITY;
 CREATE POLICY mmc_no_anon ON public.msds_match_candidates AS RESTRICTIVE FOR ALL TO anon USING (false);
 CREATE POLICY mmc_no_authenticated ON public.msds_match_candidates AS RESTRICTIVE FOR ALL TO authenticated USING (false);
 REVOKE ALL ON public.msds_match_candidates FROM PUBLIC, anon, authenticated;
-GRANT SELECT, INSERT, UPDATE ON public.msds_match_candidates TO service_role;
-REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER ON public.msds_match_candidates FROM service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.msds_match_candidates TO service_role;
+REVOKE TRUNCATE, REFERENCES, TRIGGER ON public.msds_match_candidates FROM service_role;
 
 -- ─── msds_reference_links ─────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.msds_reference_links (
