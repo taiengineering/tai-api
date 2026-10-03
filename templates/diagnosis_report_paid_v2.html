@@ -625,11 +625,11 @@ tr:last-child td { border-bottom: none; }
     {% if legal_actor_map %}
     <div>
       <div class="vis-section-head">법령상 수행주체</div>
-      <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
-        {% for am in legal_actor_map[:8] %}
-        <div class="vis-actor-row">
-          <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ am.actor or '—' }}</span>
-          <span class="vis-actor-count" style="margin-left: 6px;">{{ am.count }}</span>
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px;">
+        {% for am in legal_actor_map %}
+        <div style="background: var(--gray-bg); border: 1px solid var(--border); border-radius: 5px; padding: 7px 8px; text-align: center;">
+          <div style="font-size: 7pt; color: var(--sub); font-weight: 700; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ am.actor or '—' }}</div>
+          <div style="font-size: 13pt; font-weight: 900; color: var(--blue); line-height: 1;">{{ am.count }}</div>
         </div>
         {% endfor %}
       </div>
@@ -760,8 +760,13 @@ tr:last-child td { border-bottom: none; }
   <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; padding: 4px 8px;">
     {% for ab in article_bundles %}
     <div class="vis-dense-row">
-      <div class="vis-dense-label" style="width: 120px;">
+      <div class="vis-dense-label" style="width: 130px;">
+        {% if distinct_law_count >= 2 and ab.law_name %}
+        <span style="color: var(--sub);">{{ ab.law_name }}</span>
+        <span style="color: var(--ink); font-weight: 600; display: block;">{{ ab.law_article or '—' }}</span>
+        {% else %}
         <span style="color: var(--ink); font-weight: 600;">{{ ab.law_article or '—' }}</span>
+        {% endif %}
       </div>
       <div class="vis-dense-track">
         {% if total_obligation_count and total_obligation_count > 0 %}

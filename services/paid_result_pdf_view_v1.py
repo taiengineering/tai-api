@@ -1,7 +1,7 @@
 """
 services/paid_result_pdf_view_v1.py
 WO-WP04-PDF-PREMIUM-CONTRACT-REPOINT-001
-WO-MAIN-PAID-PDF-VISUAL-04
+WO-MAIN-PAID-PDF-VISUAL-04 + PATCH-1
 
 public premium_result_v1 → PDF Presentation ViewModel.
 
@@ -32,34 +32,17 @@ _SECTOR_LABELS: Dict[str, str] = {
 }
 
 _DUTY_LABELS: Dict[str, str] = {
-    "OBLIGATION": "의무",
-    "PROHIBITION": "금지",
-    "UNKNOWN":     "미분류",
+    "OBLIGATION":  "해야 하는 의무",
+    "PROHIBITION": "금지·제한사항",
+    "UNKNOWN":     "구분 정보 확인 필요",
 }
 
-_OB_TYPE_LABELS: Dict[str, str] = {
-    "INSPECTION":    "점검·검사",
-    "REPORTING":     "신고·보고",
-    "MANAGEMENT":    "관리·운용",
-    "INSTALLATION":  "설치·비치",
-    "TRAINING":      "교육·훈련",
-    "DOCUMENTATION": "서류·기록",
-    "DESIGNATION":   "지정·선임",
-    "PROHIBITION":   "금지사항",
-    "SAFETY":        "안전조치",
-    "HEALTH":        "보건조치",
-    "WELFARE":       "복리후생",
-    "MEASUREMENT":   "측정·평가",
-    "CERTIFICATION": "인증·허가",
-    "NOTIFICATION":  "통지·알림",
-    "SUPERVISION":   "감독·지도",
-}
-
+# V4 timing labels aligned with Web canonical meaning.
 _TIMING_LABELS: Dict[str, str] = {
-    "CONTINUOUS":   "상시이행",
+    "CONTINUOUS":   "상시",
     "PERIODIC":     "주기적",
-    "BEFORE_EVENT": "사전이행",
-    "AFTER_EVENT":  "사후이행",
+    "BEFORE_EVENT": "작업 전",
+    "AFTER_EVENT":  "작업 후",
 }
 
 _RING_COLORS = [
@@ -67,12 +50,13 @@ _RING_COLORS = [
     "#6366F1", "#A78BFA",
 ]
 
+# Ring threshold: 2–5 laws → ring, 6+ laws → bars.
 _RING_THRESHOLD = 6
 
 _DUTY_COLORS: Dict[str, str] = {
-    "OBLIGATION": "#1A5FD4",
+    "OBLIGATION":  "#1A5FD4",
     "PROHIBITION": "#ef4444",
-    "UNKNOWN": "#94a3b8",
+    "UNKNOWN":     "#94a3b8",
 }
 
 
@@ -219,7 +203,7 @@ def _build_evidence_rows(evidence: Any) -> List[Dict[str, Any]]:
     return rows
 
 
-# ── Visual builders (V1–V4) ──────────────────────────────────────────────────
+# ── Visual builders (V1, V3, V4) ─────────────────────────────────────────────
 
 def _conic_gradient(segments: List[Dict[str, Any]]) -> str:
     """Build CSS conic-gradient string from share-annotated segments."""
@@ -236,7 +220,7 @@ def _conic_gradient(segments: List[Dict[str, Any]]) -> str:
 
 
 def _build_v1_band(duty_vs_prohibition: Any) -> Optional[List[Dict[str, Any]]]:
-    """V1 Composition Band — OBLIGATION / PROHIBITION / UNKNOWN share segments."""
+    """V1 Composition Band. Requires non-zero count in ≥2 categories."""
     dvp = _as_dict(duty_vs_prohibition)
     raw = []
     for key in ("OBLIGATION", "PROHIBITION", "UNKNOWN"):
@@ -245,10 +229,11 @@ def _build_v1_band(duty_vs_prohibition: Any) -> Optional[List[Dict[str, Any]]]:
     total = sum(r["count"] for r in raw)
     if total == 0:
         return None
+    non_zero = [r for r in raw if r["count"] > 0]
+    if len(non_zero) < 2:
+        return None
     result = []
-    for r in raw:
-        if r["count"] == 0:
-            continue
+    for r in non_zero:
         result.append({
             "key": r["key"],
             "label": _DUTY_LABELS.get(r["key"], r["key"]),
@@ -256,35 +241,23 @@ def _build_v1_band(duty_vs_prohibition: Any) -> Optional[List[Dict[str, Any]]]:
             "share": round(r["count"] / total * 100, 1),
             "color": _DUTY_COLORS.get(r["key"], "#94a3b8"),
         })
-    return result if result else None
+    return result
 
 
 def _build_v2_bars(obligation_type_counts: Any) -> Optional[List[Dict[str, Any]]]:
-    """V2 Bars — obligation_type_counts sorted descending by count."""
-    otc = _as_dict(obligation_type_counts)
-    if not otc:
-        return None
-    total = sum(int(v or 0) for v in otc.values())
-    if total == 0:
-        return None
-    rows = []
-    for key, val in sorted(otc.items(), key=lambda x: -(x[1] or 0)):
-        count = int(val or 0)
-        if count == 0:
-            continue
-        rows.append({
-            "key": key,
-            "label": _OB_TYPE_LABELS.get(key, key),
-            "count": count,
-            "share": round(count / total * 100, 1),
-        })
-    return rows if rows else None
+    """V2 Bars — OMITTED: no approved canonical label source in repo.
+
+    Raw enum fallback is prohibited; until a canonical mapping is approved
+    and merged, this builder always returns None so no customer-visible
+    obligation-type chart is rendered.
+    """
+    return None  # noqa: canonical label source absent
 
 
 def _build_v3_data(law_portfolio: Any) -> Optional[Dict[str, Any]]:
-    """V3 Ring (≤5 laws) or Bars (≥6 laws) — law_portfolio obligation share."""
+    """V3 Ring (2–5 laws) or Bars (≥6 laws). Returns None when < 2 laws."""
     portfolio = [lp for lp in _as_list(law_portfolio) if isinstance(lp, dict)]
-    if not portfolio:
+    if len(portfolio) < 2:
         return None
     total = sum(int(lp.get("obligation_count") or 0) for lp in portfolio)
     if total == 0:
@@ -298,7 +271,7 @@ def _build_v3_data(law_portfolio: Any) -> Optional[Dict[str, Any]]:
             "share": round(count / total * 100, 1),
             "color": _RING_COLORS[i % len(_RING_COLORS)],
         })
-    mode = "ring" if len(portfolio) <= _RING_THRESHOLD else "bars"
+    mode = "ring" if len(portfolio) < _RING_THRESHOLD else "bars"
     result: Dict[str, Any] = {"mode": mode, "segments": segments}
     if mode == "ring":
         result["ring_gradient"] = _conic_gradient(segments)
@@ -306,7 +279,7 @@ def _build_v3_data(law_portfolio: Any) -> Optional[Dict[str, Any]]:
 
 
 def _build_v4_grid(timing_summary: Any) -> Optional[List[Dict[str, Any]]]:
-    """V4 Timing Grid — show when ≥2 non-zero TIMING_PUBLIC_KEYS categories."""
+    """V4 Timing Grid. Show only when ≥2 non-zero TIMING_PUBLIC_KEYS categories."""
     counts = _as_dict(_as_dict(timing_summary).get("counts"))
     timing_keys = ("CONTINUOUS", "PERIODIC", "BEFORE_EVENT", "AFTER_EVENT")
     total = sum(int(counts.get(k) or 0) for k in timing_keys)
