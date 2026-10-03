@@ -544,6 +544,34 @@ def update_education_setting(
 # 3. 교육 이수 이력
 # ─────────────────────────────────────────────────────────────
 
+def _fetch_master_for_rows(supabase: Client, rows: list) -> None:
+    codes = list({r["education_code"] for r in rows if r.get("education_code")})
+    if not codes:
+        for r in rows:
+            r.setdefault("education_master", None)
+        return
+    mres = supabase.table("education_master") \
+        .select("education_code,education_name,education_group,required_hours,due_rule") \
+        .in_("education_code", codes).execute()
+    master_map = {m["education_code"]: m for m in (mres.data or [])}
+    for r in rows:
+        r["education_master"] = master_map.get(r.get("education_code"))
+
+
+def _fetch_users_for_rows(supabase: Client, rows: list) -> None:
+    uids = list({r["user_id"] for r in rows if r.get("user_id")})
+    if not uids:
+        for r in rows:
+            r.setdefault("users", None)
+        return
+    ures = supabase.table("users") \
+        .select("id,name,department,position,email") \
+        .in_("id", uids).execute()
+    user_map = {u["id"]: u for u in (ures.data or [])}
+    for r in rows:
+        r["users"] = user_map.get(r.get("user_id"))
+
+
 def _filter_education_rows_by_search(rows: list, search: Optional[str]) -> list:
     if not search or not str(search).strip():
         return rows
@@ -588,7 +616,7 @@ def get_education_history(
     offset = (page - 1) * size
     q = supabase.table("education_history") \
         .select(
-            "*, education_master(education_name, education_group, required_hours, due_rule), users(name, job_type, department, position), education_files(id)",
+            "*, education_files(id)",
             count="exact",
         )
 
@@ -615,7 +643,10 @@ def get_education_history(
 
     if search and str(search).strip():
         res = q.order("due_date", desc=False).execute()
-        rows = _filter_education_rows_by_search(res.data or [], search)
+        rows = res.data or []
+        _fetch_master_for_rows(supabase, rows)
+        _fetch_users_for_rows(supabase, rows)
+        rows = _filter_education_rows_by_search(rows, search)
         total = len(rows)
         pages = (total + size - 1) // size if size else 1
         sliced = [_map_history_row(r) for r in rows[offset : offset + size]]
@@ -631,12 +662,15 @@ def get_education_history(
         }
 
     res = q.order("due_date", desc=False).range(offset, offset + size - 1).execute()
+    rows = res.data or []
+    _fetch_master_for_rows(supabase, rows)
+    _fetch_users_for_rows(supabase, rows)
     total = res.count or 0
 
     return {
         "success": True,
         "data": {
-            "items": [_map_history_row(r) for r in (res.data or [])],
+            "items": [_map_history_row(r) for r in rows],
             "total": total,
             "page": page,
             "size": size,
@@ -770,12 +804,27 @@ def get_education_history_detail(history_id: str, supabase: Client = Depends(get
     """교육 이수 이력 상세 조회"""
     _ensure_history_own(supabase, history_id, current)
     res = supabase.table("education_history") \
-        .select("*, education_master(*), users(name, job_type, email), education_files(*)") \
+        .select("*, education_files(*)") \
         .eq("id", history_id) \
         .single().execute()
 
     if not res.data:
         raise HTTPException(status_code=404, detail="이수 이력을 찾을 수 없습니다.")
+
+    if res.data.get("education_code"):
+        mres = supabase.table("education_master").select("*") \
+            .eq("education_code", res.data["education_code"]).maybe_single().execute()
+        res.data["education_master"] = mres.data
+    else:
+        res.data["education_master"] = None
+
+    if res.data.get("user_id"):
+        ures = supabase.table("users") \
+            .select("id,name,department,position,email") \
+            .eq("id", res.data["user_id"]).maybe_single().execute()
+        res.data["users"] = ures.data
+    else:
+        res.data["users"] = None
 
     return {"success": True, "data": _map_history_row(res.data)}
 

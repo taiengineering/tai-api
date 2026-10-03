@@ -1,11 +1,14 @@
-"""PATCH-001 contract tests — education_history DB column alignment.
+"""PATCH-001/002 contract tests — education_history DB column alignment.
 
 T1: summary endpoint fetches status_code (not status)
-T2: list endpoint nested select uses education_group + required_hours
+T2: list endpoint uses separate helpers, no nested join for master/users (PATCH-002)
 T3: status filter converts API "pending" → DB "PENDING"
 T4: create endpoint writes status_code=COMPLETED and completed_at (not status/completed_date)
 T5: pending create writes status_code=PENDING and completed_at=None
 T6: _map_history_row converts DB fields → API fields
+T7: list endpoint returns education_master data via _fetch_master_for_rows
+T8: list endpoint returns users data via _fetch_users_for_rows
+T9: detail endpoint uses separate fetch for master + users (no nested join)
 """
 from __future__ import annotations
 
@@ -184,18 +187,25 @@ def test_t1_summary_uses_status_code():
     assert d["overdue"] == 1
 
 
-# ── T2: list nested select uses education_group + required_hours ───────────────
+# ── T2: list uses separate helpers, no nested join (PATCH-002) ────────────────
 
-def test_t2_list_nested_select_columns():
-    """List endpoint select string must reference education_group and required_hours."""
+def test_t2_list_no_nested_join():
+    """PATCH-002: list endpoint must not use education_master( or users( nested joins."""
     import inspect
     src = inspect.getsource(edu_mod.get_education_history)
-    assert "education_group" in src, "education_group missing from list nested select"
-    assert "required_hours" in src, "required_hours missing from list nested select"
-    assert "category," not in src.split("education_master(")[1].split(")")[0], \
-        "stale 'category' still in education_master nested select"
-    assert "min_hours," not in src.split("education_master(")[1].split(")")[0], \
-        "stale 'min_hours' still in education_master nested select"
+    assert "education_master(" not in src, \
+        "education_master nested join must be removed from education_history list query"
+    assert "users(" not in src, \
+        "users nested join must be removed from education_history list query"
+    assert "_fetch_master_for_rows" in src, \
+        "_fetch_master_for_rows must be called in get_education_history"
+    assert "_fetch_users_for_rows" in src, \
+        "_fetch_users_for_rows must be called in get_education_history"
+    helper_src = inspect.getsource(edu_mod._fetch_master_for_rows)
+    assert "education_group" in helper_src
+    assert "required_hours" in helper_src
+    users_src = inspect.getsource(edu_mod._fetch_users_for_rows)
+    assert "job_type" not in users_src, "job_type must not be queried (not in production DB)"
 
 
 # ── T3: status filter converts API → DB ───────────────────────────────────────
@@ -418,3 +428,76 @@ def test_c8_pending_create_response_maps_history_fields():
     assert d.get("status") == "pending"
     assert "completed_at" not in d, "stale completed_at must not be in response"
     assert "completed_date" in d
+
+
+# ── T7: list returns education_master via separate fetch ──────────────────────
+
+def test_t7_list_returns_mapped_master_data():
+    """PATCH-002: GET /education-history returns education_master via _fetch_master_for_rows."""
+    fake_sb = FakeSB()
+    _seed_factory(fake_sb)
+    fake_sb.tables["education_history"] = [
+        {"id": "h1", "factory_id": FAC, "education_code": "SAFETY-001",
+         "status_code": "PENDING", "due_date": TODAY},
+    ]
+    fake_sb.tables["education_master"] = [
+        {"education_code": "SAFETY-001", "education_name": "근로자안전보건교육",
+         "education_group": "근로자 안전보건교육", "required_hours": 8, "due_rule": "annual"},
+    ]
+    client = _make_app(fake_sb)
+    r = client.get(f"/education-history?factory_id={FAC}", headers={"Authorization": "Bearer x"})
+    assert r.status_code == 200, r.text
+    items = r.json()["data"]["items"]
+    assert len(items) == 1
+    m = items[0].get("education_master")
+    assert m is not None, "education_master must be populated via separate fetch"
+    assert m.get("category") == "worker_safety"
+    assert m.get("min_hours") == 8
+
+
+# ── T8: list returns users via separate fetch ─────────────────────────────────
+
+def test_t8_list_returns_users_data():
+    """PATCH-002: GET /education-history returns users data via _fetch_users_for_rows."""
+    fake_sb = FakeSB()
+    _seed_factory(fake_sb)
+    fake_sb.tables["education_history"] = [
+        {"id": "h1", "factory_id": FAC, "education_code": "SAFETY-001",
+         "status_code": "PENDING", "due_date": TODAY, "user_id": USER_ID},
+    ]
+    fake_sb.tables["education_master"] = [
+        {"education_code": "SAFETY-001", "education_name": "안전교육",
+         "education_group": "근로자 안전보건교육", "required_hours": 4, "due_rule": "annual"},
+    ]
+    fake_sb.tables["users"] = [
+        {"id": USER_ID, "name": "홍길동", "department": "안전팀",
+         "position": "담당자", "email": "hong@test.com"},
+    ]
+    client = _make_app(fake_sb)
+    r = client.get(f"/education-history?factory_id={FAC}", headers={"Authorization": "Bearer x"})
+    assert r.status_code == 200, r.text
+    items = r.json()["data"]["items"]
+    assert len(items) == 1
+    u = items[0].get("users")
+    assert u is not None, "users must be populated via separate fetch"
+    assert u.get("name") == "홍길동"
+    assert u.get("department") == "안전팀"
+    assert "job_type" not in u, "job_type must not be in users response (not in production DB)"
+
+
+# ── T9: detail endpoint uses separate fetch for master + users ────────────────
+
+def test_t9_detail_no_nested_join():
+    """PATCH-002: GET /education-history/{id} must not use nested join for master/users."""
+    import inspect
+    src = inspect.getsource(edu_mod.get_education_history_detail)
+    assert "education_master(" not in src, \
+        "education_master nested join must be removed from detail endpoint"
+    assert "users(" not in src, \
+        "users nested join must be removed from detail endpoint"
+    assert "education_files(" in src, \
+        "education_files nested join must be retained (FK exists)"
+    assert "education_master" in src, \
+        "detail endpoint must still fetch education_master separately"
+    assert "users" in src, \
+        "detail endpoint must still fetch users separately"
