@@ -243,6 +243,8 @@ jobs:
         run: pytest tests/test_saas_recurring_billing_scheduler.py tests/test_saas_recurring_billing_scheduler_patch1.py tests/test_saas_recurring_billing_scheduler_patch2.py tests/test_saas_recurring_billing_scheduler_patch3.py tests/test_saas_recurring_billing_scheduler_patch4.py -q --tb=short
       - name: Paid PDF premium contract tests (WP-04)
         run: pytest tests/test_paid_result_pdf_contract_v1.py tests/test_paid_result_pdf_router_v1.py -q --tb=short
+      - name: Paid artifact contract tests (ART-03)
+        run: pytest tests/test_paid_result_artifact_v1.py tests/test_paid_result_excel_v1.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"

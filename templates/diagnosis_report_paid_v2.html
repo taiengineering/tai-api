@@ -219,7 +219,6 @@ tr:last-child td { border-bottom: none; }
   <div style="font-size: 8pt; opacity: 0.6; line-height: 2.1;">
     <div>회사명: <strong style="opacity: 1;">{{ profile.company_name or '—' }}</strong></div>
     <div>발행일: {{ report_date }}</div>
-    <div>접수번호: {{ receipt_no }}</div>
   </div>
 
   <div style="position: absolute; bottom: 13mm; left: 0; right: 0; text-align: center; font-size: 7pt; opacity: 0.4; padding: 0 18mm;">
@@ -235,7 +234,7 @@ tr:last-child td { border-bottom: none; }
       <span class="logo-text">TAI</span>
       <span style="font-size: 8pt; color: var(--sub); margin-left: 7px;">법적의무 상세 진단 리포트</span>
     </div>
-    <div class="doc-meta">{{ profile.company_name or '사업장' }}<br>접수번호 {{ receipt_no }}</div>
+    <div class="doc-meta">{{ profile.company_name or '사업장' }}</div>
   </div>
 
   <div class="sec-tag">SECTION 01</div>
@@ -335,7 +334,7 @@ tr:last-child td { border-bottom: none; }
       <span class="logo-text">TAI</span>
       <span style="font-size: 8pt; color: var(--sub); margin-left: 7px;">법적의무 상세 진단 리포트</span>
     </div>
-    <div class="doc-meta">{{ profile.company_name or '사업장' }}<br>접수번호 {{ receipt_no }}</div>
+    <div class="doc-meta">{{ profile.company_name or '사업장' }}</div>
   </div>
 
   <div class="sec-tag">SECTION 03</div>
@@ -403,7 +402,7 @@ tr:last-child td { border-bottom: none; }
       <span class="logo-text">TAI</span>
       <span style="font-size: 8pt; color: var(--sub); margin-left: 7px;">법적의무 상세 진단 리포트</span>
     </div>
-    <div class="doc-meta">{{ profile.company_name or '사업장' }}<br>접수번호 {{ receipt_no }}</div>
+    <div class="doc-meta">{{ profile.company_name or '사업장' }}</div>
   </div>
 
   <div class="sec-tag">SECTION 04</div>
@@ -497,7 +496,7 @@ tr:last-child td { border-bottom: none; }
       <span class="logo-text">TAI</span>
       <span style="font-size: 8pt; color: var(--sub); margin-left: 7px;">법적의무 상세 진단 리포트</span>
     </div>
-    <div class="doc-meta">{{ profile.company_name or '사업장' }}<br>접수번호 {{ receipt_no }}</div>
+    <div class="doc-meta">{{ profile.company_name or '사업장' }}</div>
   </div>
 
   <div class="sec-tag">SECTION 05</div>
@@ -534,7 +533,7 @@ tr:last-child td { border-bottom: none; }
       <span class="logo-text">TAI</span>
       <span style="font-size: 8pt; color: var(--sub); margin-left: 7px;">법적의무 상세 진단 리포트</span>
     </div>
-    <div class="doc-meta">{{ profile.company_name or '사업장' }}<br>접수번호 {{ receipt_no }}</div>
+    <div class="doc-meta">{{ profile.company_name or '사업장' }}</div>
   </div>
 
   <div class="sec-tag">SECTION 06</div>
@@ -554,10 +553,6 @@ tr:last-child td { border-bottom: none; }
     <div style="font-size: 9pt; font-weight: 800; margin-bottom: 9px;">문서 정보</div>
     <table style="margin-bottom: 0;">
       <tbody>
-        <tr>
-          <td style="width: 130px; font-weight: 700; color: var(--sub); background: var(--gray-bg);">접수번호</td>
-          <td>{{ receipt_no }}</td>
-        </tr>
         <tr>
           <td style="font-weight: 700; color: var(--sub); background: var(--gray-bg);">발행일</td>
           <td>{{ report_date }}</td>

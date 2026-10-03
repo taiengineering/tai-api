@@ -27,6 +27,7 @@ from typing import Any, Dict
 import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
+from urllib.parse import quote as _url_quote
 
 from db.supabase_client import get_supabase
 from services.paid_result_product_svc import build_paid_result_product_v1
@@ -143,7 +144,7 @@ async def get_paid_report_pdf(public_token: str):
         product = build_paid_result_product_v1(rec)
         premium = build_public_premium_result_v1(product)
     except Exception:
-        log.exception("[REPORT PDF] premium product 생성 실패 — token=%s", public_token[:8].upper())
+        log.exception("[REPORT PDF] premium product 생성 실패")
         raise HTTPException(status_code=503, detail="유료 진단 법령 결과를 불러오지 못했습니다.")
 
     # 5. PDF View Model 생성 (pure function)
@@ -152,11 +153,9 @@ async def get_paid_report_pdf(public_token: str):
     # 6. 문서 등록용 운영 metadata (비법적 — §11 허용)
     input_data = rec.get("input_data") or {}
     full_result = rec.get("full_result") or {}
-    receipt_no = public_token[:8].upper()
 
     template_vars: Dict[str, Any] = {
         "report_date":              _report_date_str(),
-        "receipt_no":               receipt_no,
         "diagnosed_at":             view["diagnosed_at"],
         "profile":                  view["profile"],
         "total_obligation_count":   view["total_obligation_count"],
@@ -186,8 +185,8 @@ async def get_paid_report_pdf(public_token: str):
         raise HTTPException(status_code=500, detail=f"PDF 변환 실패: {e}")
 
     log.info(
-        "[REPORT PDF] 생성 완료 — token=%s tier=%s size=%d bytes",
-        receipt_no, tier_code, len(pdf_bytes),
+        "[REPORT PDF] 생성 완료 — tier=%s size=%d bytes",
+        tier_code, len(pdf_bytes),
     )
 
     # 9. 문서 등록 (운영 metadata — 실패해도 PDF 반환)
@@ -208,7 +207,7 @@ async def get_paid_report_pdf(public_token: str):
         except Exception:
             pass
 
-    filename = f"tai_diagnosis_{receipt_no}.pdf"
+    filename = "TAI_법령진단_상세보고서.pdf"
     try:
         from services.document_svc import register_generated
         if company_id:
@@ -222,7 +221,7 @@ async def get_paid_report_pdf(public_token: str):
                 factory_id=factory_id,
                 linked_table="diagnosis_results",
                 linked_id=diagnosis_id,
-                title=f"법령진단 리포트 {receipt_no}",
+                title="법령진단 상세 보고서",
             )
     except Exception as _doc_err:
         log.warning("documents 기록 실패 (PDF는 정상 반환): %s", _doc_err)
@@ -231,9 +230,11 @@ async def get_paid_report_pdf(public_token: str):
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition": (
+                f"attachment; filename=\"TAI_diagnosis.pdf\"; "
+                f"filename*=UTF-8''{_url_quote(filename, safe='')}"
+            ),
             "Content-Length": str(len(pdf_bytes)),
-            "X-Report-Token": receipt_no,
             "X-Tier-Code": tier_code,
         },
     )
