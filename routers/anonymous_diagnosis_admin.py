@@ -28,6 +28,12 @@ router = APIRouter(prefix="/anonymous-diagnosis", tags=["익명 무료진단 (�
 ADMIN_ALLOWED_STATUS = frozenset({"ACTIVE", "CLAIMED", "EXPIRED"})
 
 
+def _require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    if current_user.get("role_code") != "001":
+        raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
+    return current_user
+
+
 def _now() -> datetime:
     return now_kst()
 
@@ -67,7 +73,7 @@ class AdminAnonDiagPatch(BaseModel):
 def list_anonymous_diagnoses(
     page: int = 1, size: int = 20,
     status: Optional[str] = None, keyword: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    _admin: dict = Depends(_require_admin),
 ):
     supabase = get_supabase()
     q = supabase.table("anonymous_diagnosis_results").select(
@@ -87,7 +93,7 @@ def list_anonymous_diagnoses(
 
 
 @router.get("/admin/detail/{record_id}")
-def admin_get_anonymous_diagnosis_detail(record_id: str, current_user: dict = Depends(get_current_user)):
+def admin_get_anonymous_diagnosis_detail(record_id: str, _admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
     res = supabase.table("anonymous_diagnosis_results").select("*").eq("id", record_id).limit(1).execute()
     if not res.data:
@@ -97,7 +103,7 @@ def admin_get_anonymous_diagnosis_detail(record_id: str, current_user: dict = De
 
 
 @router.patch("/admin/{record_id}")
-def admin_patch_anonymous_diagnosis(record_id: str, body: AdminAnonDiagPatch, current_user: dict = Depends(get_current_user)):
+def admin_patch_anonymous_diagnosis(record_id: str, body: AdminAnonDiagPatch, _admin: dict = Depends(_require_admin)):
     if body.status is None:
         raise HTTPException(status_code=422, detail="변경할 status가 필요합니다.")
     if body.status not in ADMIN_ALLOWED_STATUS:
@@ -110,7 +116,7 @@ def admin_patch_anonymous_diagnosis(record_id: str, body: AdminAnonDiagPatch, cu
 
 
 @router.post("/admin/expire-stale")
-def expire_stale_records():
+def expire_stale_records(_admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
     now_iso = _now().isoformat()
     res = (supabase.table("anonymous_diagnosis_results")
@@ -121,7 +127,7 @@ def expire_stale_records():
 
 
 @router.delete("/admin/{record_id}")
-def delete_anonymous_diagnosis(record_id: str, current_user: dict = Depends(get_current_user)):
+def delete_anonymous_diagnosis(record_id: str, _admin: dict = Depends(_require_admin)):
     supabase = get_supabase()
     res = supabase.table("anonymous_diagnosis_results").delete().eq("id", record_id).execute()
     if not res.data:

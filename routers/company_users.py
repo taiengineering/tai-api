@@ -16,7 +16,7 @@ import hashlib
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 # PATCH-1 : Inicis CI 계약을 register(routers/auth.py) 와 정확히 동일하게 맞춘다.
@@ -192,13 +192,30 @@ def get_company_access(current: dict = Depends(get_current_user)):
 # GET /me/company/users
 # ═══════════════════════════════════════════════════════════════════
 @router.get("/me/company/users")
-def list_users(current: dict = Depends(get_current_user)):
+def list_users(
+    factory_id: Optional[str] = Query(default=None),
+    current: dict = Depends(get_current_user),
+):
     sb = get_supabase()
     svc._require_company_user_admin(current, sb, "LIST")
     # WP-A FINAL POLICY : READ 는 entitlement 만료 후에도 허용 (AUTH ≠ ENTITLEMENT).
     # capability + company boundary + RBAC 는 계속 적용.
     company_id = current["company_id"]
+    if factory_id:
+        try:
+            f = (sb.table("factories").select("id")
+                 .eq("id", factory_id).eq("company_id", company_id)
+                 .limit(1).execute()).data or []
+        except Exception:
+            f = []
+        if not f:
+            raise HTTPException(status_code=422, detail={
+                "code": "FACTORY_OUT_OF_SCOPE",
+                "message": "다른 회사의 시설을 조회할 수 없습니다.",
+            })
     users = svc.list_company_users(sb, company_id)
+    if factory_id:
+        users = [u for u in users if u.get("factory_id") == factory_id]
     return {"status": "success", "data": {"items": users, "total": len(users)}}
 
 
