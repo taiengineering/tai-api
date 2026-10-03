@@ -1,11 +1,12 @@
-"""PATCH-001 contract tests — education_history DB column alignment.
+"""PATCH-001/002 contract tests — education_history DB column alignment.
 
 T1: summary endpoint fetches status_code (not status)
-T2: list endpoint nested select uses education_group + required_hours
+T2: list endpoint uses _fetch_master_for_rows (no nested join, PATCH-002)
 T3: status filter converts API "pending" → DB "PENDING"
 T4: create endpoint writes status_code=COMPLETED and completed_at (not status/completed_date)
 T5: pending create writes status_code=PENDING and completed_at=None
 T6: _map_history_row converts DB fields → API fields
+T7: list endpoint returns education_master data via separate fetch
 """
 from __future__ import annotations
 
@@ -184,18 +185,19 @@ def test_t1_summary_uses_status_code():
     assert d["overdue"] == 1
 
 
-# ── T2: list nested select uses education_group + required_hours ───────────────
+# ── T2: list uses _fetch_master_for_rows (PATCH-002 no nested join) ───────────
 
-def test_t2_list_nested_select_columns():
-    """List endpoint select string must reference education_group and required_hours."""
+def test_t2_list_no_nested_master_join():
+    """PATCH-002: list endpoint must use _fetch_master_for_rows, not nested join."""
     import inspect
     src = inspect.getsource(edu_mod.get_education_history)
-    assert "education_group" in src, "education_group missing from list nested select"
-    assert "required_hours" in src, "required_hours missing from list nested select"
-    assert "category," not in src.split("education_master(")[1].split(")")[0], \
-        "stale 'category' still in education_master nested select"
-    assert "min_hours," not in src.split("education_master(")[1].split(")")[0], \
-        "stale 'min_hours' still in education_master nested select"
+    assert "education_master(" not in src, \
+        "education_master nested select must be removed from education_history list query"
+    assert "_fetch_master_for_rows" in src, \
+        "_fetch_master_for_rows must be called in get_education_history"
+    helper_src = inspect.getsource(edu_mod._fetch_master_for_rows)
+    assert "education_group" in helper_src, "education_group missing from _fetch_master_for_rows"
+    assert "required_hours" in helper_src, "required_hours missing from _fetch_master_for_rows"
 
 
 # ── T3: status filter converts API → DB ───────────────────────────────────────
@@ -418,3 +420,28 @@ def test_c8_pending_create_response_maps_history_fields():
     assert d.get("status") == "pending"
     assert "completed_at" not in d, "stale completed_at must not be in response"
     assert "completed_date" in d
+
+
+# ── T7: list endpoint returns education_master via separate fetch ──────────────
+
+def test_t7_list_returns_mapped_master_data():
+    """PATCH-002: GET /education-history returns education_master data via _fetch_master_for_rows."""
+    fake_sb = FakeSB()
+    _seed_factory(fake_sb)
+    fake_sb.tables["education_history"] = [
+        {"id": "h1", "factory_id": FAC, "education_code": "SAFETY-001",
+         "status_code": "PENDING", "due_date": TODAY},
+    ]
+    fake_sb.tables["education_master"] = [
+        {"education_code": "SAFETY-001", "education_name": "근로자안전보건교육",
+         "education_group": "근로자 안전보건교육", "required_hours": 8, "due_rule": "annual"},
+    ]
+    client = _make_app(fake_sb)
+    r = client.get(f"/education-history?factory_id={FAC}", headers={"Authorization": "Bearer x"})
+    assert r.status_code == 200, r.text
+    items = r.json()["data"]["items"]
+    assert len(items) == 1
+    m = items[0].get("education_master")
+    assert m is not None, "education_master must be populated via separate fetch"
+    assert m.get("category") == "worker_safety"
+    assert m.get("min_hours") == 8
