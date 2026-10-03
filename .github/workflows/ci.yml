@@ -245,6 +245,8 @@ jobs:
         run: pytest tests/test_paid_result_pdf_contract_v1.py tests/test_paid_result_pdf_router_v1.py -q --tb=short
       - name: Paid artifact contract tests (ART-03)
         run: pytest tests/test_paid_result_artifact_v1.py tests/test_paid_result_excel_v1.py -q --tb=short
+      - name: Paid PDF visual tests (VIS-04)
+        run: pytest tests/test_paid_result_pdf_visual_v1.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"

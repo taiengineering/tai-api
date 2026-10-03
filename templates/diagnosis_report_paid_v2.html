@@ -174,6 +174,187 @@ tr:last-child td { border-bottom: none; }
 .divider { border: none; border-top: 1px solid var(--border); margin: 11px 0; }
 .no-break { page-break-inside: avoid; }
 
+/* ── Visualization CSS (V1–V6) ── */
+.vis-section-head {
+  font-size: 8.5pt;
+  font-weight: 800;
+  color: var(--ink);
+  margin-bottom: 7px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* V1 Band */
+.vis-band-track {
+  display: flex;
+  height: 18px;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.vis-band-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 7.5pt;
+  color: var(--ink);
+}
+.vis-band-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.vis-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* V2 Bars */
+.vis-bar-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 5px;
+  gap: 6px;
+}
+.vis-bar-label {
+  width: 64px;
+  font-size: 7pt;
+  color: var(--sub);
+  text-align: right;
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+.vis-bar-track {
+  flex: 1;
+  background: var(--gray-bg);
+  border-radius: 2px;
+  height: 13px;
+  overflow: hidden;
+}
+.vis-bar-fill {
+  height: 100%;
+  background: var(--blue);
+  border-radius: 2px;
+}
+.vis-bar-count {
+  width: 22px;
+  font-size: 7.5pt;
+  font-weight: 700;
+  text-align: right;
+  flex-shrink: 0;
+  color: var(--ink);
+}
+
+/* V3 Ring */
+.vis-ring-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.vis-ring-donut {
+  width: 76px;
+  height: 76px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  -webkit-mask: radial-gradient(circle at 50%, transparent 33%, black 34%);
+  mask: radial-gradient(circle at 50%, transparent 33%, black 34%);
+}
+.vis-ring-legend { flex: 1; }
+.vis-ring-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 7pt;
+  margin-bottom: 4px;
+  line-height: 1.3;
+}
+.vis-ring-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* V4 Timing Grid */
+.vis-timing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 5px;
+}
+.vis-timing-cell {
+  background: var(--gray-bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px 8px 7px;
+  text-align: center;
+}
+.vis-timing-num {
+  font-size: 16pt;
+  font-weight: 900;
+  color: var(--blue);
+  line-height: 1;
+}
+.vis-timing-label {
+  font-size: 7pt;
+  color: var(--sub);
+  font-weight: 700;
+  margin-top: 3px;
+}
+
+/* V5 Actor Cards */
+.vis-actor-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 7px;
+  border-bottom: 1px solid var(--border);
+  font-size: 7.5pt;
+}
+.vis-actor-row:last-child { border-bottom: none; }
+.vis-actor-count {
+  font-weight: 700;
+  color: var(--blue);
+  flex-shrink: 0;
+}
+
+/* V6 Dense Bars */
+.vis-dense-row {
+  display: flex;
+  align-items: center;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+  gap: 6px;
+}
+.vis-dense-row:last-child { border-bottom: none; }
+.vis-dense-label {
+  font-size: 7pt;
+  color: var(--sub);
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vis-dense-track {
+  flex: 1;
+  background: var(--blue-light);
+  border-radius: 2px;
+  height: 9px;
+  overflow: hidden;
+}
+.vis-dense-fill {
+  background: var(--blue);
+  height: 100%;
+}
+.vis-dense-count {
+  font-size: 7pt;
+  font-weight: 700;
+  text-align: right;
+  flex-shrink: 0;
+  width: 18px;
+}
+
 @media print {
   body { background: #fff; }
   .page { page-break-after: always; }
@@ -327,7 +508,7 @@ tr:last-child td { border-bottom: none; }
 </div>
 
 
-<!-- ── 확인된 법적 의무 목록 ─────────────────────────── -->
+<!-- ── 데이터 분析 (V1–V5) ────────────────────────────── -->
 <div class="page">
   <div class="rpt-header">
     <div>
@@ -338,6 +519,143 @@ tr:last-child td { border-bottom: none; }
   </div>
 
   <div class="sec-tag">SECTION 03</div>
+  <div class="sec-title">데이터 분석</div>
+  <div class="sec-subtitle">의무 성격·법령 구성·법적 시점·수행주체 분석</div>
+
+  <!-- V1 Composition Band -->
+  {% if v1_band %}
+  <div style="margin-bottom: 14px;">
+    <div class="vis-section-head">의무 성격 구성</div>
+    <div class="vis-band-track">
+      {% for seg in v1_band %}
+      <div style="width: {{ seg.share }}%; background: {{ seg.color }};"></div>
+      {% endfor %}
+    </div>
+    <div class="vis-band-legend">
+      {% for seg in v1_band %}
+      <div class="vis-band-legend-item">
+        <span class="vis-legend-dot" style="background: {{ seg.color }};"></span>
+        <span>{{ seg.label }} {{ seg.count }}건</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- V2 Obligation Type Bars + V3 Law Composition (2-column) -->
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px;">
+
+    <!-- V2 Obligation Type Bars -->
+    {% if v2_bars %}
+    <div>
+      <div class="vis-section-head">의무 유형 분포</div>
+      {% for row in v2_bars %}
+      <div class="vis-bar-row">
+        <div class="vis-bar-label">{{ row.label }}</div>
+        <div class="vis-bar-track">
+          <div class="vis-bar-fill" style="width: {{ row.share }}%;"></div>
+        </div>
+        <div class="vis-bar-count">{{ row.count }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div></div>
+    {% endif %}
+
+    <!-- V3 Law Composition Ring or Bars -->
+    {% if v3_data %}
+    <div>
+      <div class="vis-section-head">법령 구성</div>
+      {% if v3_data.mode == 'ring' %}
+      <div class="vis-ring-wrap">
+        <div class="vis-ring-donut" style="background: {{ v3_data.ring_gradient | safe }};"></div>
+        <div class="vis-ring-legend">
+          {% for seg in v3_data.segments %}
+          <div class="vis-ring-legend-row">
+            <span class="vis-ring-dot" style="background: {{ seg.color }};"></span>
+            <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ seg.law_name }}</span>
+            <span style="color: var(--sub); flex-shrink: 0; margin-left: 3px;">{{ seg.count }}건</span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% else %}
+      {% for seg in v3_data.segments %}
+      <div style="display: flex; align-items: center; margin-bottom: 5px; gap: 5px;">
+        <div style="width: 4px; border-radius: 2px; background: {{ seg.color }}; flex-shrink: 0; align-self: stretch;"></div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-size: 7pt; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ seg.law_name }}</div>
+          <div class="vis-bar-track" style="height: 10px; margin-top: 2px;">
+            <div style="width: {{ seg.share }}%; background: {{ seg.color }}; height: 100%;"></div>
+          </div>
+        </div>
+        <div style="font-size: 7pt; font-weight: 700; flex-shrink: 0; width: 20px; text-align: right;">{{ seg.count }}</div>
+      </div>
+      {% endfor %}
+      {% endif %}
+    </div>
+    {% else %}
+    <div></div>
+    {% endif %}
+
+  </div>
+
+  <!-- V4 Timing Grid + V5 Actor Cards (2-column) -->
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 8px;">
+
+    <!-- V4 Timing Grid -->
+    {% if v4_grid %}
+    <div>
+      <div class="vis-section-head">법적 시점 분포</div>
+      <div class="vis-timing-grid">
+        {% for row in v4_grid %}
+        <div class="vis-timing-cell">
+          <div class="vis-timing-num">{{ row.count }}</div>
+          <div class="vis-timing-label">{{ row.label }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}
+    <div></div>
+    {% endif %}
+
+    <!-- V5 Actor Cards (sentinel-filtered) -->
+    {% if v5_actor_map %}
+    <div>
+      <div class="vis-section-head">법령상 수행주체</div>
+      <div class="vis-actor-grid" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px;">
+        {% for am in v5_actor_map %}
+        <div class="vis-actor-card" style="background: var(--gray-bg); border: 1px solid var(--border); border-radius: 5px; padding: 7px 8px; text-align: center;">
+          <div style="font-size: 7pt; color: var(--sub); font-weight: 700; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ am.actor or '—' }}</div>
+          <div style="font-size: 13pt; font-weight: 900; color: var(--blue); line-height: 1;">{{ am.count }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <div class="rpt-footer">
+    <span>본 리포트는 참고용이며 법적 효력이 없습니다.</span>
+    <span>p.3</span>
+  </div>
+</div>
+
+
+<!-- ── 확인된 법적 의무 목록 ─────────────────────────── -->
+<div class="page">
+  <div class="rpt-header">
+    <div>
+      <span class="logo-text">TAI</span>
+      <span style="font-size: 8pt; color: var(--sub); margin-left: 7px;">법적의무 상세 진단 리포트</span>
+    </div>
+    <div class="doc-meta">{{ profile.company_name or '사업장' }}</div>
+  </div>
+
+  <div class="sec-tag">SECTION 04</div>
   <div class="sec-title">확인된 법적 의무</div>
   <div class="sec-subtitle">사업장에 적용되는 법령상 의무 전체 목록 (총 {{ total_obligation_count }}건)</div>
 
@@ -390,7 +708,7 @@ tr:last-child td { border-bottom: none; }
 
   <div class="rpt-footer">
     <span>본 리포트는 참고용이며 법적 효력이 없습니다.</span>
-    <span>p.3</span>
+    <span>p.4</span>
   </div>
 </div>
 
@@ -405,7 +723,7 @@ tr:last-child td { border-bottom: none; }
     <div class="doc-meta">{{ profile.company_name or '사업장' }}</div>
   </div>
 
-  <div class="sec-tag">SECTION 04</div>
+  <div class="sec-tag">SECTION 05</div>
   <div class="sec-title">적용 법령 포트폴리오</div>
   <div class="sec-subtitle">의무 건수 기준 내림차순 정렬</div>
 
@@ -432,35 +750,41 @@ tr:last-child td { border-bottom: none; }
   <div style="color: var(--sub); font-size: 8pt; margin-bottom: 12px;">적용 법령 정보 없음</div>
   {% endif %}
 
+  <!-- V6 Dense Bars — article_bundles -->
   {% if article_bundles %}
   <div class="divider"></div>
-  <div class="sec-tag" style="background: #475569;">SECTION 04-B</div>
+  <div class="sec-tag" style="background: #475569;">SECTION 05-B</div>
   <div style="font-size: 10pt; font-weight: 800; margin-bottom: 3px; margin-top: 4px;">조문별 의무 분포</div>
   <div class="sec-subtitle">법령·조문 단위 의무 건수</div>
 
-  <table>
-    <thead>
-      <tr>
-        <th>법령명</th>
-        <th>조문</th>
-        <th style="width: 65px; text-align: right;">의무 건수</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for ab in article_bundles %}
-      <tr>
-        <td style="font-size: 7.5pt;">{{ ab.law_name or '—' }}</td>
-        <td style="font-size: 7.5pt; font-weight: 700;">{{ ab.law_article or '—' }}</td>
-        <td style="text-align: right; font-weight: 700;">{{ ab.count }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; padding: 4px 8px;">
+    {% for ab in article_bundles if ab.law_article != 'UNSPECIFIED' %}
+    <div class="vis-dense-row">
+      <div class="vis-dense-label" style="width: 130px;">
+        {% if distinct_law_count >= 2 and ab.law_name and ab.law_name != 'UNSPECIFIED' %}
+        <span style="color: var(--sub);">{{ ab.law_name }}</span>
+        <span style="color: var(--ink); font-weight: 600; display: block;">{{ ab.law_article or '—' }}</span>
+        {% else %}
+        <span style="color: var(--ink); font-weight: 600;">{{ ab.law_article or '—' }}</span>
+        {% endif %}
+      </div>
+      <div class="vis-dense-track">
+        {% if total_obligation_count and total_obligation_count > 0 %}
+        {% set _pct = (ab.count * 100 // total_obligation_count) %}
+        <div class="vis-dense-fill" style="width: {{ _pct if _pct <= 100 else 100 }}%;"></div>
+        {% else %}
+        <div class="vis-dense-fill" style="width: 100%;"></div>
+        {% endif %}
+      </div>
+      <div class="vis-dense-count">{{ ab.count }}</div>
+    </div>
+    {% endfor %}
+  </div>
   {% endif %}
 
   {% if legal_actor_map %}
   <div class="divider"></div>
-  <div class="sec-tag" style="background: #475569;">SECTION 04-C</div>
+  <div class="sec-tag" style="background: #475569;">SECTION 05-C</div>
   <div style="font-size: 10pt; font-weight: 800; margin-bottom: 3px; margin-top: 4px;">법령상 수행 주체 분포</div>
   <div class="sec-subtitle">의무별 법령상 수행·책임 주체 (실제 담당자 지정과 다를 수 있음)</div>
 
@@ -472,7 +796,7 @@ tr:last-child td { border-bottom: none; }
       </tr>
     </thead>
     <tbody>
-      {% for am in legal_actor_map %}
+      {% for am in legal_actor_map if am.actor != 'UNKNOWN' %}
       <tr>
         <td style="font-size: 8pt;">{{ am.actor or '—' }}</td>
         <td style="text-align: right; font-weight: 700;">{{ am.count }}</td>
@@ -484,7 +808,7 @@ tr:last-child td { border-bottom: none; }
 
   <div class="rpt-footer">
     <span>본 리포트는 참고용이며 법적 효력이 없습니다.</span>
-    <span>p.4</span>
+    <span>p.5</span>
   </div>
 </div>
 
@@ -499,7 +823,7 @@ tr:last-child td { border-bottom: none; }
     <div class="doc-meta">{{ profile.company_name or '사업장' }}</div>
   </div>
 
-  <div class="sec-tag">SECTION 05</div>
+  <div class="sec-tag">SECTION 06</div>
   <div class="sec-title">법적 근거 원문</div>
   <div class="sec-subtitle">진단에 사용된 법령 조문 원문 (총 {{ evidence | length }}건)</div>
 
@@ -521,7 +845,7 @@ tr:last-child td { border-bottom: none; }
 
   <div class="rpt-footer">
     <span>본 리포트는 참고용이며 법적 효력이 없습니다.</span>
-    <span>p.5</span>
+    <span>p.6</span>
   </div>
 </div>
 
@@ -536,7 +860,7 @@ tr:last-child td { border-bottom: none; }
     <div class="doc-meta">{{ profile.company_name or '사업장' }}</div>
   </div>
 
-  <div class="sec-tag">SECTION 06</div>
+  <div class="sec-tag">SECTION 07</div>
   <div class="sec-title">면책 및 문서 정보</div>
 
   <div class="card" style="margin-bottom: 14px; border-color: #fca5a5; background: #fff5f5;">
@@ -589,7 +913,7 @@ tr:last-child td { border-bottom: none; }
 
   <div class="rpt-footer">
     <span>© TAI Engineering. 무단 배포·상업적 이용 금지.</span>
-    <span>p.6</span>
+    <span>p.7</span>
   </div>
 </div>
 

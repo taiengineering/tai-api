@@ -1,6 +1,7 @@
 """
 services/paid_result_pdf_view_v1.py
 WO-WP04-PDF-PREMIUM-CONTRACT-REPOINT-001
+WO-MAIN-PAID-PDF-VISUAL-04 + PATCH-1
 
 public premium_result_v1 → PDF Presentation ViewModel.
 
@@ -19,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-PDF_VIEW_VERSION = 1
+PDF_VIEW_VERSION = 2
 
 _SECTOR_LABELS: Dict[str, str] = {
     "BUILDING":         "건물",
@@ -29,6 +30,39 @@ _SECTOR_LABELS: Dict[str, str] = {
     "CONSTRUCTION":     "건설",
     "SPECIAL_FACILITY": "특정시설",
 }
+
+_DUTY_LABELS: Dict[str, str] = {
+    "OBLIGATION":  "해야 하는 의무",
+    "PROHIBITION": "금지·제한사항",
+    "UNKNOWN":     "구분 정보 확인 필요",
+}
+
+# V4 timing labels aligned with Web canonical meaning.
+_TIMING_LABELS: Dict[str, str] = {
+    "CONTINUOUS":   "상시",
+    "PERIODIC":     "주기적",
+    "BEFORE_EVENT": "작업 전",
+    "AFTER_EVENT":  "작업 후",
+}
+
+_RING_COLORS = [
+    "#1A5FD4", "#3B82F6", "#60A5FA", "#2DD4BF",
+    "#6366F1", "#A78BFA",
+]
+
+# Ring threshold: 2–5 laws → ring, 6+ laws → bars.
+_RING_THRESHOLD = 6
+
+_DUTY_COLORS: Dict[str, str] = {
+    "OBLIGATION":  "#1A5FD4",
+    "PROHIBITION": "#ef4444",
+    "UNKNOWN":     "#94a3b8",
+}
+
+# Materializer sentinels — must not be exposed raw to customers.
+_SENTINEL_UNKNOWN = "UNKNOWN"
+_SENTINEL_UNSPECIFIED = "UNSPECIFIED"
+_UNSPECIFIED_LAW_LABEL = "법령 정보 확인 필요"
 
 
 # ── 내부 헬퍼 ────────────────────────────────────────────────────────────────
@@ -174,6 +208,112 @@ def _build_evidence_rows(evidence: Any) -> List[Dict[str, Any]]:
     return rows
 
 
+# ── Visual builders (V1, V3, V4) ─────────────────────────────────────────────
+
+def _conic_gradient(segments: List[Dict[str, Any]]) -> str:
+    """Build CSS conic-gradient string from share-annotated segments."""
+    parts = []
+    acc = 0.0
+    for seg in segments:
+        share = float(seg.get("share") or 0)
+        color = seg.get("color", "#ccc")
+        parts.append(f"{color} {acc:.1f}% {acc + share:.1f}%")
+        acc += share
+    if acc < 100.0:
+        parts.append(f"#e2e8f0 {acc:.1f}% 100%")
+    return f"conic-gradient(from -90deg, {', '.join(parts)})"
+
+
+def _build_v1_band(duty_vs_prohibition: Any) -> Optional[List[Dict[str, Any]]]:
+    """V1 Composition Band. Requires non-zero count in ≥2 categories."""
+    dvp = _as_dict(duty_vs_prohibition)
+    raw = []
+    for key in ("OBLIGATION", "PROHIBITION", "UNKNOWN"):
+        count = int(_as_dict(dvp.get(key)).get("count") or 0)
+        raw.append({"key": key, "count": count})
+    total = sum(r["count"] for r in raw)
+    if total == 0:
+        return None
+    non_zero = [r for r in raw if r["count"] > 0]
+    if len(non_zero) < 2:
+        return None
+    result = []
+    for r in non_zero:
+        result.append({
+            "key": r["key"],
+            "label": _DUTY_LABELS.get(r["key"], r["key"]),
+            "count": r["count"],
+            "share": round(r["count"] / total * 100, 1),
+            "color": _DUTY_COLORS.get(r["key"], "#94a3b8"),
+        })
+    return result
+
+
+def _build_v2_bars(obligation_type_counts: Any) -> Optional[List[Dict[str, Any]]]:
+    """V2 Bars — OMITTED: no approved canonical label source in repo.
+
+    Raw enum fallback is prohibited; until a canonical mapping is approved
+    and merged, this builder always returns None so no customer-visible
+    obligation-type chart is rendered.
+    """
+    return None  # noqa: canonical label source absent
+
+
+def _build_v3_data(law_portfolio: Any) -> Optional[Dict[str, Any]]:
+    """V3 Ring (2–5 laws) or Bars (≥6 laws). Returns None when < 2 laws."""
+    portfolio = [lp for lp in _as_list(law_portfolio) if isinstance(lp, dict)]
+    if len(portfolio) < 2:
+        return None
+    total = sum(int(lp.get("obligation_count") or 0) for lp in portfolio)
+    if total == 0:
+        return None
+    segments = []
+    for i, lp in enumerate(portfolio):
+        count = int(lp.get("obligation_count") or 0)
+        raw_name = lp.get("law_name")
+        display_name = (
+            _UNSPECIFIED_LAW_LABEL if raw_name == _SENTINEL_UNSPECIFIED
+            else (raw_name or "—")
+        )
+        segments.append({
+            "law_name": display_name,
+            "count": count,
+            "share": round(count / total * 100, 1),
+            "color": _RING_COLORS[i % len(_RING_COLORS)],
+        })
+    mode = "ring" if len(portfolio) < _RING_THRESHOLD else "bars"
+    result: Dict[str, Any] = {"mode": mode, "segments": segments}
+    if mode == "ring":
+        result["ring_gradient"] = _conic_gradient(segments)
+    return result
+
+
+def _build_v4_grid(timing_summary: Any) -> Optional[List[Dict[str, Any]]]:
+    """V4 Timing Grid. Show only when ≥2 non-zero TIMING_PUBLIC_KEYS categories."""
+    counts = _as_dict(_as_dict(timing_summary).get("counts"))
+    timing_keys = ("CONTINUOUS", "PERIODIC", "BEFORE_EVENT", "AFTER_EVENT")
+    total = sum(int(counts.get(k) or 0) for k in timing_keys)
+    rows = []
+    for key in timing_keys:
+        count = int(counts.get(key) or 0)
+        if count > 0:
+            rows.append({
+                "key": key,
+                "label": _TIMING_LABELS.get(key, key),
+                "count": count,
+                "share": round(count / total * 100, 1) if total > 0 else 0,
+            })
+    return rows if len(rows) >= 2 else None
+
+
+def _build_v5_actor_map(legal_actor_map: Any) -> List[Dict[str, Any]]:
+    """V5 visual actor list — UNKNOWN sentinel excluded."""
+    return [
+        a for a in _as_list(legal_actor_map)
+        if isinstance(a, dict) and a.get("actor") != _SENTINEL_UNKNOWN
+    ]
+
+
 # ── 공개 진입점 ──────────────────────────────────────────────────────────────
 
 def build_paid_result_pdf_view_v1(premium: Any) -> Dict[str, Any]:
@@ -195,6 +335,12 @@ def build_paid_result_pdf_view_v1(premium: Any) -> Dict[str, Any]:
         _as_list(materials.get("obligations")), source_index
     )
     evidence_rows = _build_evidence_rows(src.get("evidence"))
+
+    v1_band = _build_v1_band(materials.get("duty_vs_prohibition"))
+    v2_bars = _build_v2_bars(_as_dict(overview.get("obligation_type_counts")))
+    v3_data = _build_v3_data(materials.get("law_portfolio"))
+    v4_grid = _build_v4_grid(materials.get("timing_character_summary"))
+    v5_actor_map = _build_v5_actor_map(materials.get("legal_actor_map"))
 
     return {
         "pdf_view_version": PDF_VIEW_VERSION,
@@ -220,6 +366,12 @@ def build_paid_result_pdf_view_v1(premium: Any) -> Dict[str, Any]:
         ],
         # 법적 근거 원문
         "evidence": evidence_rows,
+        # Adaptive Visualizations V1–V4 + V5 actor (sentinel-safe)
+        "v1_band":      v1_band,
+        "v2_bars":      v2_bars,
+        "v3_data":      v3_data,
+        "v4_grid":      v4_grid,
+        "v5_actor_map": v5_actor_map,
     }
 
 
