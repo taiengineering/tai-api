@@ -166,11 +166,12 @@ async def get_paid_report_pdf(public_token: str):
         "article_bundles":          view["article_bundles"],
         "legal_actor_map":          view["legal_actor_map"],
         "evidence":                 view["evidence"],
-        # Adaptive Visualizations V1–V4
+        # Adaptive Visualizations V1–V4 + V5 actor
         "v1_band":                  view["v1_band"],
         "v2_bars":                  view["v2_bars"],
         "v3_data":                  view["v3_data"],
         "v4_grid":                  view["v4_grid"],
+        "v5_actor_map":             view["v5_actor_map"],
     }
 
     # 7. HTML 렌더링

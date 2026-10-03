@@ -520,7 +520,7 @@ tr:last-child td { border-bottom: none; }
 
   <div class="sec-tag">SECTION 03</div>
   <div class="sec-title">데이터 분석</div>
-  <div class="sec-subtitle">의무 성격·유형·법령 구성·시점·수행주체 시각화</div>
+  <div class="sec-subtitle">의무 성격·법령 구성·법적 시점·수행주체 분석</div>
 
   <!-- V1 Composition Band -->
   {% if v1_band %}
@@ -621,12 +621,12 @@ tr:last-child td { border-bottom: none; }
     <div></div>
     {% endif %}
 
-    <!-- V5 Actor Cards -->
-    {% if legal_actor_map %}
+    <!-- V5 Actor Cards (sentinel-filtered) -->
+    {% if v5_actor_map %}
     <div>
       <div class="vis-section-head">법령상 수행주체</div>
       <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px;">
-        {% for am in legal_actor_map %}
+        {% for am in v5_actor_map %}
         <div style="background: var(--gray-bg); border: 1px solid var(--border); border-radius: 5px; padding: 7px 8px; text-align: center;">
           <div style="font-size: 7pt; color: var(--sub); font-weight: 700; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ am.actor or '—' }}</div>
           <div style="font-size: 13pt; font-weight: 900; color: var(--blue); line-height: 1;">{{ am.count }}</div>
@@ -758,10 +758,10 @@ tr:last-child td { border-bottom: none; }
   <div class="sec-subtitle">법령·조문 단위 의무 건수</div>
 
   <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; padding: 4px 8px;">
-    {% for ab in article_bundles %}
+    {% for ab in article_bundles if ab.law_article != 'UNSPECIFIED' %}
     <div class="vis-dense-row">
       <div class="vis-dense-label" style="width: 130px;">
-        {% if distinct_law_count >= 2 and ab.law_name %}
+        {% if distinct_law_count >= 2 and ab.law_name and ab.law_name != 'UNSPECIFIED' %}
         <span style="color: var(--sub);">{{ ab.law_name }}</span>
         <span style="color: var(--ink); font-weight: 600; display: block;">{{ ab.law_article or '—' }}</span>
         {% else %}
@@ -796,7 +796,7 @@ tr:last-child td { border-bottom: none; }
       </tr>
     </thead>
     <tbody>
-      {% for am in legal_actor_map %}
+      {% for am in legal_actor_map if am.actor != 'UNKNOWN' %}
       <tr>
         <td style="font-size: 8pt;">{{ am.actor or '—' }}</td>
         <td style="text-align: right; font-weight: 700;">{{ am.count }}</td>

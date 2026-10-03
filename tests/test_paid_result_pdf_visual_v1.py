@@ -18,6 +18,7 @@ from services.paid_result_pdf_view_v1 import (
     _build_v2_bars,
     _build_v3_data,
     _build_v4_grid,
+    _build_v5_actor_map,
     build_paid_result_pdf_view_v1,
 )
 
@@ -108,6 +109,7 @@ def _render(
     v2_bars: Optional[List] = None,
     v3_data: Optional[Dict] = None,
     v4_grid: Optional[List] = None,
+    v5_actor_map: Optional[List] = None,
 ) -> str:
     """Render the PDF template for contract/regression tests."""
     from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -137,6 +139,7 @@ def _render(
         v2_bars=v2_bars,
         v3_data=v3_data,
         v4_grid=v4_grid,
+        v5_actor_map=v5_actor_map if v5_actor_map is not None else [],
     )
 
 
@@ -391,3 +394,67 @@ def test_pv28_v6_all_article_bundles_rendered():
     html = _render(article_bundles=bundles, distinct_law_count=1, total_obligation_count=36)
     for i in range(1, 9):
         assert f"제{i}조" in html, f"제{i}조 누락"
+
+
+# ── PV29: V3 — UNSPECIFIED law_name → "법령 정보 확인 필요" (raw sentinel 0) ──
+
+def test_pv29_v3_unspecified_law_name_mapped():
+    result = _build_v3_data([_lp("UNSPECIFIED", 5), _lp("산업안전보건법", 5)])
+    assert result is not None
+    names = {s["law_name"] for s in result["segments"]}
+    assert "UNSPECIFIED" not in names, "raw UNSPECIFIED 노출 금지"
+    assert "법령 정보 확인 필요" in names
+
+
+# ── PV30: V5 — UNKNOWN actor 제외 ────────────────────────────────────────────
+
+def test_pv30_v5_unknown_actor_excluded():
+    result = _build_v5_actor_map([
+        {"actor": "UNKNOWN", "count": 3},
+        {"actor": "사업주", "count": 5},
+    ])
+    actors = [a["actor"] for a in result]
+    assert "UNKNOWN" not in actors
+    assert "사업주" in actors
+
+
+# ── PV31: V5 — UNKNOWN 단독 → 빈 목록 ───────────────────────────────────────
+
+def test_pv31_v5_unknown_only_empty():
+    result = _build_v5_actor_map([{"actor": "UNKNOWN", "count": 5}])
+    assert result == []
+
+
+# ── PV32: V6 — UNSPECIFIED article → 렌더 HTML에 raw 미노출 ──────────────────
+
+def test_pv32_v6_unspecified_article_excluded_in_html():
+    bundles = [
+        {"law_name": "산업안전보건법", "law_article": "UNSPECIFIED", "count": 3},
+        {"law_name": "소방시설법", "law_article": "제9조", "count": 2},
+    ]
+    html = _render(article_bundles=bundles, distinct_law_count=2)
+    assert "UNSPECIFIED" not in html, "raw UNSPECIFIED이 V6 렌더에 노출됨"
+    assert "제9조" in html
+
+
+# ── PV33: 렌더 HTML — sentinel raw 문자열 시각 영역 미노출 ───────────────────
+
+def test_pv33_no_raw_sentinels_in_visual_html():
+    """UNKNOWN/UNSPECIFIED raw sentinel이 고객 시각 HTML에 노출되지 않아야 한다."""
+    actors_with_unknown = [
+        {"actor": "UNKNOWN", "count": 4},
+        {"actor": "사업주", "count": 6},
+    ]
+    bundles_with_unspecified = [
+        {"law_name": "UNSPECIFIED", "law_article": "UNSPECIFIED", "count": 5},
+        {"law_name": "산업안전보건법", "law_article": "제15조", "count": 5},
+    ]
+    v5 = _build_v5_actor_map(actors_with_unknown)
+    html = _render(
+        legal_actor_map=actors_with_unknown,
+        article_bundles=bundles_with_unspecified,
+        distinct_law_count=2,
+        v5_actor_map=v5,
+    )
+    assert "UNKNOWN" not in html, "raw UNKNOWN이 시각 HTML에 노출됨"
+    assert "UNSPECIFIED" not in html, "raw UNSPECIFIED이 시각 HTML에 노출됨"

@@ -59,6 +59,11 @@ _DUTY_COLORS: Dict[str, str] = {
     "UNKNOWN":     "#94a3b8",
 }
 
+# Materializer sentinels — must not be exposed raw to customers.
+_SENTINEL_UNKNOWN = "UNKNOWN"
+_SENTINEL_UNSPECIFIED = "UNSPECIFIED"
+_UNSPECIFIED_LAW_LABEL = "법령 정보 확인 필요"
+
 
 # ── 내부 헬퍼 ────────────────────────────────────────────────────────────────
 
@@ -265,8 +270,13 @@ def _build_v3_data(law_portfolio: Any) -> Optional[Dict[str, Any]]:
     segments = []
     for i, lp in enumerate(portfolio):
         count = int(lp.get("obligation_count") or 0)
+        raw_name = lp.get("law_name")
+        display_name = (
+            _UNSPECIFIED_LAW_LABEL if raw_name == _SENTINEL_UNSPECIFIED
+            else (raw_name or "—")
+        )
         segments.append({
-            "law_name": lp.get("law_name") or "—",
+            "law_name": display_name,
             "count": count,
             "share": round(count / total * 100, 1),
             "color": _RING_COLORS[i % len(_RING_COLORS)],
@@ -296,6 +306,14 @@ def _build_v4_grid(timing_summary: Any) -> Optional[List[Dict[str, Any]]]:
     return rows if len(rows) >= 2 else None
 
 
+def _build_v5_actor_map(legal_actor_map: Any) -> List[Dict[str, Any]]:
+    """V5 visual actor list — UNKNOWN sentinel excluded."""
+    return [
+        a for a in _as_list(legal_actor_map)
+        if isinstance(a, dict) and a.get("actor") != _SENTINEL_UNKNOWN
+    ]
+
+
 # ── 공개 진입점 ──────────────────────────────────────────────────────────────
 
 def build_paid_result_pdf_view_v1(premium: Any) -> Dict[str, Any]:
@@ -322,6 +340,7 @@ def build_paid_result_pdf_view_v1(premium: Any) -> Dict[str, Any]:
     v2_bars = _build_v2_bars(_as_dict(overview.get("obligation_type_counts")))
     v3_data = _build_v3_data(materials.get("law_portfolio"))
     v4_grid = _build_v4_grid(materials.get("timing_character_summary"))
+    v5_actor_map = _build_v5_actor_map(materials.get("legal_actor_map"))
 
     return {
         "pdf_view_version": PDF_VIEW_VERSION,
@@ -347,11 +366,12 @@ def build_paid_result_pdf_view_v1(premium: Any) -> Dict[str, Any]:
         ],
         # 법적 근거 원문
         "evidence": evidence_rows,
-        # Adaptive Visualizations V1–V4
-        "v1_band": v1_band,
-        "v2_bars": v2_bars,
-        "v3_data": v3_data,
-        "v4_grid": v4_grid,
+        # Adaptive Visualizations V1–V4 + V5 actor (sentinel-safe)
+        "v1_band":      v1_band,
+        "v2_bars":      v2_bars,
+        "v3_data":      v3_data,
+        "v4_grid":      v4_grid,
+        "v5_actor_map": v5_actor_map,
     }
 
 
