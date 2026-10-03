@@ -241,7 +241,7 @@ def get_education_master(
     if category:
         q = _category_api_to_db_filter(q, category)
     res = q.order("education_code").execute()
-    return {"success": True, "data": res.data}
+    return {"success": True, "data": [_map_master_row(r) for r in (res.data or [])]}
 
 
 @router.get("/education-master/{education_code}", tags=["교육관리"])
@@ -250,7 +250,7 @@ def get_education_master_detail(education_code: str, supabase: Client = Depends(
     res = supabase.table("education_master").select("*").eq("education_code", education_code).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="교육 마스터를 찾을 수 없습니다.")
-    return {"success": True, "data": res.data}
+    return {"success": True, "data": _map_master_row(res.data)}
 
 
 @router.get("/education/company-effective-link", tags=["교육관리"])
@@ -762,7 +762,7 @@ def create_pending_education_history(body: EducationPendingCreate, supabase: Cli
     res = supabase.table("education_history").insert(payload).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="교육 배정에 실패했습니다.")
-    return {"success": True, "data": res.data[0]}
+    return {"success": True, "data": _map_history_row(res.data[0])}
 
 
 @router.get("/education-history/{history_id}", tags=["교육관리"])

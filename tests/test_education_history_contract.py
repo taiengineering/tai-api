@@ -358,3 +358,63 @@ def test_c5_category_duty_filters_두가지_group():
     assert "DU-001" in codes
     assert "TR-001" in codes
     assert "WS-001" not in codes
+
+# ── C6-C8: master API response compatibility + pending response ───────────────
+
+def test_c6_education_master_list_response_compatibility():
+    """GET /education-master must return API-compatible fields (min_hours, category)."""
+    fake_sb = FakeSB()
+    _seed_factory(fake_sb)
+    fake_sb.tables["education_master"] = [
+        {"id": "m1", "education_code": "WS-001", "education_group": "근로자 안전보건교육",
+         "required_hours": 8, "is_active": True, "education_name": "안전보건교육"},
+    ]
+    client = _make_app(fake_sb)
+    r = client.get("/education-master", headers={"Authorization": "Bearer x"})
+    assert r.status_code == 200, r.text
+    row = r.json()["data"][0]
+    assert "education_group" not in row, "stale education_group must not be in response"
+    assert row.get("category") == "worker_safety"
+    assert "required_hours" not in row, "stale required_hours must not be in response"
+    assert row.get("min_hours") == 8
+
+
+def test_c7_education_master_detail_response_compatibility():
+    """GET /education-master/{code} must return API-compatible fields."""
+    fake_sb = FakeSB()
+    _seed_factory(fake_sb)
+    fake_sb.tables["education_master"] = [
+        {"id": "m1", "education_code": "DU-001", "education_group": "직무교육",
+         "required_hours": 4, "is_active": True, "education_name": "직무교육"},
+    ]
+    client = _make_app(fake_sb)
+    r = client.get("/education-master/DU-001", headers={"Authorization": "Bearer x"})
+    assert r.status_code == 200, r.text
+    row = r.json()["data"]
+    assert "education_group" not in row
+    assert row.get("category") == "duty"
+    assert "required_hours" not in row
+    assert row.get("min_hours") == 4
+
+
+def test_c8_pending_create_response_maps_history_fields():
+    """POST /education-history/pending response must use API field names (status, not status_code)."""
+    fake_sb = FakeSB()
+    _seed_factory(fake_sb)
+    fake_sb.tables["education_master"] = [
+        {"id": "m1", "education_code": "SAFETY-001", "education_name": "안전교육"}
+    ]
+    client = _make_app(fake_sb)
+    body = {
+        "factory_id": FAC,
+        "user_id": USER_ID,
+        "education_code": "SAFETY-001",
+        "due_date": TODAY,
+    }
+    r = client.post("/education-history/pending", json=body, headers={"Authorization": "Bearer x"})
+    assert r.status_code == 200, r.text
+    d = r.json()["data"]
+    assert "status_code" not in d, "stale status_code must not be in response"
+    assert d.get("status") == "pending"
+    assert "completed_at" not in d, "stale completed_at must not be in response"
+    assert "completed_date" in d
