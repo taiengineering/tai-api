@@ -2,7 +2,7 @@
 
 POST /internal/qa/catalog/sync 로직.
 
-dry_run=True  → DB 변경 없음. would_create/would_update 분류만 반환.
+dry_run=True  → DB 변경 없음. would_create/would_update 분류 + 실제 counts 반환.
 dry_run=False → qa_items INSERT (새 항목) + UPDATE (변경 필드).
                새 항목: enabled=false, qa_schedules(MANUAL/disabled/next_run_at NULL).
 
@@ -30,6 +30,8 @@ _VALID_QA_TYPES      = frozenset({
     'PERFORMANCE', 'SECURITY', 'DATA', 'ACCESSIBILITY', 'VISUAL',
 })
 _AREA_CODE_RE       = re.compile(r'^[A-Z][A-Z0-9_]*$')
+# canonical: P0-API-QA-001, P1-WWW-LANDING-AVL-001, …
+_SCENARIO_ID_RE     = re.compile(r'^P[0-3](?:-[A-Z0-9]+)+$')
 _PRIORITY_PREFIX_RE = re.compile(r'^(P\d)-')
 
 # category omitted: LEGACY field, not managed by sync
@@ -46,6 +48,8 @@ def _validate(s: Dict[str, Any]) -> Optional[str]:
         return 'scenario_id is required'
     if not str(s.get('name', '')).strip():
         return f'{sid}: name is required'
+    if not _SCENARIO_ID_RE.fullmatch(sid):
+        return f'{sid}: invalid scenario_id format'
     if s.get('site_code') not in _VALID_SITE_CODES:
         return f'{sid}: invalid site_code={s.get("site_code")!r}'
     priority = s.get('priority')
@@ -74,11 +78,20 @@ def _empty_result(dry_run: bool, total: int, errors: List[Dict[str, str]]) -> Di
         'total_input':        total,
         'existing_unchanged': [],
         'errors':             errors,
-        'counts':             {'created': 0, 'updated': 0, 'unchanged': 0, 'errors': len(errors)},
     }
     if dry_run:
-        return {**base, 'would_create': [], 'would_update': []}
-    return {**base, 'created': [], 'existing_updated': []}
+        return {
+            **base,
+            'would_create': [],
+            'would_update': [],
+            'counts': {'would_create': 0, 'would_update': 0, 'unchanged': 0, 'errors': len(errors)},
+        }
+    return {
+        **base,
+        'created':          [],
+        'existing_updated': [],
+        'counts': {'created': 0, 'updated': 0, 'unchanged': 0, 'errors': len(errors)},
+    }
 
 
 def sync_catalog(
@@ -89,9 +102,11 @@ def sync_catalog(
     """Sync scenarios into qa_items.
 
     dry_run=True returns {dry_run, total_input, would_create, would_update,
-                          existing_unchanged, errors, counts}.
+                          existing_unchanged, errors,
+                          counts: {would_create, would_update, unchanged, errors}}.
     dry_run=False returns {dry_run, total_input, created, existing_updated,
-                           existing_unchanged, errors, counts}.
+                           existing_unchanged, errors,
+                           counts: {created, updated, unchanged, errors}}.
     """
     errors: List[Dict[str, str]] = []
     valid: List[Dict[str, Any]] = []
@@ -165,10 +180,10 @@ def sync_catalog(
             'would_update':       would_update_ids,
             'errors':             [],
             'counts':             {
-                'created':   0,
-                'updated':   0,
-                'unchanged': len(unchanged),
-                'errors':    0,
+                'would_create': len(would_create_ids),
+                'would_update': len(would_update_ids),
+                'unchanged':    len(unchanged),
+                'errors':       0,
             },
         }
 
@@ -197,6 +212,28 @@ def sync_catalog(
         insert_res = supabase.table('qa_items').insert(insert_rows).execute()
         inserted = insert_res.data or []
 
+        if len(inserted) != len(to_create):
+            # Partial or zero insert: compensate what was written
+            if inserted:
+                inserted_ids = [row['id'] for row in inserted]
+                try:
+                    supabase.table('qa_items').delete().in_('id', inserted_ids).execute()
+                    raise RuntimeError(
+                        f'item insert count mismatch ({len(inserted)}/{len(to_create)}); '
+                        f'inserted items rolled back'
+                    )
+                except RuntimeError:
+                    raise
+                except Exception as del_e:
+                    log.error('[qa_catalog_sync] rollback delete failed: %s', del_e)
+                    raise RuntimeError(
+                        f'item insert count mismatch ({len(inserted)}/{len(to_create)}) '
+                        f'AND rollback failed; reconciliation required'
+                    ) from del_e
+            raise RuntimeError(
+                f'item insert count mismatch: expected {len(to_create)}, got {len(inserted)}'
+            )
+
         if inserted:
             sched_rows = [
                 {
@@ -213,12 +250,18 @@ def sync_catalog(
                 log.info('[qa_catalog_sync] created %d items + schedules', len(inserted))
             except Exception as e:
                 inserted_ids = [row['id'] for row in inserted]
+                rollback_ok = False
                 try:
                     supabase.table('qa_items').delete().in_('id', inserted_ids).execute()
+                    rollback_ok = True
                 except Exception as del_e:
                     log.error('[qa_catalog_sync] rollback delete failed: %s', del_e)
+                if rollback_ok:
+                    raise RuntimeError(
+                        f'schedule insert failed; created items rolled back: {e}'
+                    ) from e
                 raise RuntimeError(
-                    f'schedule insert failed, items rolled back: {e}'
+                    f'schedule insert failed AND rollback failed; reconciliation required'
                 ) from e
 
     # UPDATE changed items

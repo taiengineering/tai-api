@@ -1,6 +1,6 @@
 """QA Catalog Sync tests — WO-QA-ADMIN-EXISTING-CONSOLE-AUTOSYNC-001 STEP C.
 
-CS-01: dry_run=True, all new → would_create populated, counts.created=0
+CS-01: dry_run=True, all new → would_create populated, counts.would_create=N
 CS-02: dry_run=False, new scenarios → created=N, schedules inserted
 CS-03: idempotent — same manifest → unchanged=N, created=0, updated=0
 CS-04: dry_run=False + mutable field changed → updated=1
@@ -9,7 +9,7 @@ CS-06: invalid site_code → validation error, not inserted
 CS-07: duplicate scenario_id in input → fail-close, zero writes
 CS-08: invalid area_code → error reported
 CS-09: new item schedule: MANUAL / enabled=false / no next_run_at
-CS-10: dry_run=True + mutable field changed → would_update populated, counts.updated=0
+CS-10: dry_run=True + mutable field changed → would_update populated, counts.would_update=N
 CS-11: empty input → created=0, unchanged=0, updated=0
 CS-12: invalid qa_type → error reported
 CS-13: any validation error + valid scenario in same batch → fail-close, zero writes
@@ -22,6 +22,9 @@ CS-19: updating existing item does not touch qa_schedules
 CS-20: missing X-Internal-Secret → 403
 CS-21: wrong X-Internal-Secret → 403
 CS-22: valid secret + dry_run=True → 200
+CS-23: non-canonical scenario_id format → validation error, zero writes
+CS-24: qa_items.insert result count mismatch → RuntimeError
+CS-25: schedule insert fails + rollback delete fails → reconciliation required
 """
 from __future__ import annotations
 
@@ -94,14 +97,14 @@ def _make_sb(existing_items=None, insert_ids=None, schedule_fail=False):
 # ── tests ─────────────────────────────────────────────────────────────────────
 
 def test_cs01_dry_run_new_scenarios():
-    """CS-01: dry_run=True, all new → would_create populated, counts.created=0."""
+    """CS-01: dry_run=True, all new → would_create populated, counts.would_create=N."""
     sb = _make_sb(existing_items=[])
     s = _scenario()
     result = sync_catalog(sb, [s], dry_run=True)
 
     assert result['dry_run'] is True
     assert result['would_create'] == ['P1-TEST-001']
-    assert result['counts']['created'] == 0
+    assert result['counts']['would_create'] == 1
     assert result['counts']['unchanged'] == 0
     # No INSERT or UPDATE in dry_run
     items_mock = sb._cache.get('qa_items')
@@ -232,7 +235,7 @@ def test_cs09_new_item_schedule_no_next_run_at():
 
 
 def test_cs10_dry_run_detects_update():
-    """CS-10: dry_run=True + field changed → would_update populated, counts.updated=0."""
+    """CS-10: dry_run=True + field changed → would_update populated, counts.would_update=N."""
     existing = {
         'id': 'item-uuid-1', 'scenario_id': 'P1-TEST-001',
         'name': '구 이름', 'description': None, 'expected_summary': None,
@@ -246,7 +249,7 @@ def test_cs10_dry_run_detects_update():
 
     assert result['dry_run'] is True
     assert result['would_update'] == ['P1-TEST-001']
-    assert result['counts']['updated'] == 0  # dry_run → no actual update
+    assert result['counts']['would_update'] == 1  # classified, no actual write
 
 
 def test_cs11_empty_input():
@@ -410,3 +413,37 @@ def test_cs22_valid_secret_dry_run_returns_200(monkeypatch):
             headers={"X-Internal-Secret": "correct"},
         )
     assert resp.status_code == 200
+
+
+def test_cs23_invalid_scenario_id_format():
+    """CS-23: non-canonical scenario_id format → validation error, zero writes."""
+    bad_ids = ['abc', 'p1-test-001', 'P1_TEST_001', 'P1-']
+    for bad_sid in bad_ids:
+        sb = _make_sb()
+        result = sync_catalog(sb, [_scenario(scenario_id=bad_sid)], dry_run=False)
+        assert len(result['errors']) == 1, f"expected error for {bad_sid!r}"
+        assert 'scenario_id' in result['errors'][0]['reason'], (
+            f"unexpected reason for {bad_sid!r}: {result['errors'][0]['reason']}"
+        )
+        assert result['counts']['created'] == 0
+
+
+def test_cs24_item_insert_count_mismatch_raises():
+    """CS-24: qa_items.insert returns fewer rows than inserted → RuntimeError."""
+    # insert_ids=[] → DB returns 0 rows, but 1 row was sent
+    sb = _make_sb(existing_items=[], insert_ids=[])
+    with pytest.raises(Exception):
+        sync_catalog(sb, [_scenario()], dry_run=False)
+
+
+def test_cs25_schedule_failure_and_rollback_failure_reconciliation():
+    """CS-25: schedule insert fails + rollback delete fails → reconciliation required."""
+    new_item = {'id': 'item-uuid-1', 'scenario_id': 'P1-TEST-001'}
+    sb = _make_sb(existing_items=[], insert_ids=[new_item], schedule_fail=True)
+    # Force delete to also fail
+    sb.table('qa_items')  # pre-create the mock in _cache
+    sb._cache['qa_items'].delete.return_value.in_.return_value.execute.side_effect = (
+        Exception("delete failed")
+    )
+    with pytest.raises(RuntimeError, match='reconciliation required'):
+        sync_catalog(sb, [_scenario()], dry_run=False)
