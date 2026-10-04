@@ -166,7 +166,7 @@ Wave4 (commit 5870a8b): P1-API-DIAG-API-001 추가 — tai-qa PR #9 OPEN/HOLD (f
 | P1-ADMIN-BILL-DATA-001 | ADMIN | DATA | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /payments 결제 목록 tai-admin 내부운영 콘솔 페이지 미존재 |
 | P1-ADMIN-BILL-FNC-008 | ADMIN | FUNCTIONAL | MANUAL_ONLY | SAFE_N_REAL_REFUND | POST /payments/{id}/refund (SAFE=N) — 실환불 자동화 불가 |
 | P1-ADMIN-SVC-AVL-001 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | WAVE6_GPT_CONFIRMED | GET /anonymous-diagnosis/admin/list — admin console 페이지 drift Wave6 GPT 확정 |
-| P1-ADMIN-SVC-AVL-002 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /legal-engine/result/{id} tai-api 미확인 + tai-admin 법령엔진 결과 콘솔 페이지 미존재 |
+| P1-ADMIN-SVC-AVL-002 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /legal-engine/result/{factory_id} tai-api endpoint 존재; tai-admin 법령진단 결과 viewer 페이지 미존재 (compliance-report는 다른 semantic) |
 | P1-ADMIN-SVC-FNC-001 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | FORM_SUBMIT_WRITE | 진단 연결 처리 폼 제출 포함 → DB write 발생 |
 | P1-ADMIN-SVC-AVL-003 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /companies (MOCK 포함) tai-admin 고객사 목록 콘솔 페이지 미존재 |
 | P1-ADMIN-SVC-FNC-002 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | PATCH_PERMISSIONS | PATCH /permissions → permissions UPDATE |
