@@ -1,0 +1,42 @@
+{
+  "header": {
+    "resultCode": "00",
+    "resultMsg": "NORMAL SERVICE."
+  },
+  "body": {
+    "items": [
+      {
+        "sbstnId": "KE-01-2-0001",
+        "casNo": "7664-41-7",
+        "korexst": "KE-01-2-0001",
+        "sbstnNmKor": "암모니아",
+        "sbstnNmEng": "Ammonia",
+        "sbstnNm2Kor": null,
+        "sbstnNm2Eng": null,
+        "mlcfrm": "H3N",
+        "mlcwgt": "17.031",
+        "typeList": [
+          {
+            "sbstnClsfTypeNm": "유독물질",
+            "unqNo": "97-1-1",
+            "contInfo": "암모니아의 함유량이 0.1% 이상인 혼합물",
+            "excpInfo": null,
+            "ancmntYmd": "19970101",
+            "ancmntInfo": "고시 제1997-001호"
+          },
+          {
+            "sbstnClsfTypeNm": "사고대비물질",
+            "unqNo": null,
+            "contInfo": null,
+            "excpInfo": null,
+            "ancmntYmd": "20100101",
+            "ancmntInfo": null
+          }
+        ]
+      }
+    ],
+    "numOfRows": "10",
+    "pageNo": "1",
+    "totalCount": "1"
+  }
+}
