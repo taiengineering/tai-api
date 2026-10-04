@@ -155,13 +155,15 @@ EXTERNAL: tai-api / Inicis / Supabase OAuth
 | QA_ID | PRI | TYPE | QA_NAME | SOURCE | AUTO | SAFE | RUNNER | MODULE_PATTERN | EXISTING | STATUS |
 |-------|-----|------|---------|--------|------|------|--------|----------------|----------|--------|
 | P0-DIAG-001 | P0 | AVAILABILITY | 무료 법령진단 정상 진입 | GET /free-diagnosis | Y | Y | PW | PAGE_OPEN | P0-DIAG-001 | EXISTING |
-| P1-WWW-DIAG-FNC-001 | P1 | FUNCTIONAL | 무료진단 마법사 Step 완주 | GET /free-diagnosis → POST /diagnosis/run | Y | Y | PW | E2E_FLOW + FORM_SUBMIT | — | NEW |
+| P1-WWW-DIAG-FNC-001 | P1 | FUNCTIONAL | 무료진단 마법사 Step 완주 | GET /free-diagnosis → POST /diagnosis/run | Y | N | PW | E2E_FLOW + FORM_SUBMIT | — | NEW |
 | P1-WWW-DIAG-FNC-002 | P1 | FUNCTIONAL | 무료진단 결과 정상 표시 | GET /free-diagnosis-result | Y | Y | PW | PAGE_OPEN + DETAIL_LOAD | — | NEW |
 | P1-WWW-DIAG-AVL-001 | P1 | AVAILABILITY | 유료진단 안내 정상 진입 | GET /paid-diagnosis | Y | C | PW | AUTH_LOGIN + PAGE_OPEN | — | NEW |
 | P1-WWW-DIAG-FNC-003 | P1 | FUNCTIONAL | 유료진단 결과 정상 조회 | GET /paid-diagnosis-result | Y | C | PW | DETAIL_LOAD | — | NEW |
-| P1-WWW-DIAG-API-001 | P1 | API | 무료진단 실행 API 정상 응답 | POST /diagnosis/run | Y | Y | API | API_CONTRACT | — | NEW |
+| P1-WWW-DIAG-API-001 | P1 | API | 무료진단 실행 API 정상 응답 | POST /diagnosis/run | Y | N | API | API_CONTRACT | — | NEW |
 
 > **P0-DIAG-001 EXPECTED**: GET /free-diagnosis 응답 200, 진단 마법사 Step1 요소 렌더링, API fatal error 없음  
+> **SAFE=N (P1-WWW-DIAG-FNC-001)**: POST /diagnosis/run — phone verification auth_token 필수 + anonymous_diagnosis_results INSERT + diagnosis_auth_log.free_count UPDATE. production mutation 불가피. (Wave12 source 조사 확정)  
+> **SAFE=N (P1-WWW-DIAG-API-001)**: POST /diagnosis/run — FNC-001과 동일 엔드포인트. RUNNER=API이나 동일 production mutation 발생. (Wave12 source 조사 확정)  
 > **SAFE=C (P1-WWW-DIAG-AVL-001)**: /paid-diagnosis 회원 전용 — memberGate 비로그인 → /log-in redirect. AUTH_LOGIN 선행 필요.  
 > **SAFE=C (P1-WWW-DIAG-FNC-003)**: 진단 토큰이 존재하는 계정 사전 조건 필요
 
