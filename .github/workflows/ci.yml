@@ -259,6 +259,8 @@ jobs:
         run: pytest tests/test_free_result_review_required_projection.py -q
       - name: KECO Reference Foundation tests (CHEM-WO-DATA-KECO-002)
         run: pytest tests/test_keco_chemical.py -q --tb=short
+      - name: KECO Collection Runtime tests (CHEM-WO-DATA-KECO-003)
+        run: pytest tests/test_keco_collection.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"

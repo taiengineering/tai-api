@@ -44,6 +44,7 @@ class KecoChemicalItem:
     mlcfrm: Optional[str]
     mlcwgt: Optional[str]
     type_list: list[KecoRegulatoryFact] = field(default_factory=list)
+    raw_payload: Optional[dict] = field(default=None)   # 원본 API item dict — raw_records 보존용
 
 
 @dataclass
@@ -93,6 +94,7 @@ def _parse_chemical_item(raw: dict) -> KecoChemicalItem:
         mlcfrm=_optional_str(raw.get("mlcfrm")),
         mlcwgt=_optional_str(raw.get("mlcwgt")),
         type_list=type_list,
+        raw_payload=raw,
     )
 
 
