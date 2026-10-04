@@ -25,8 +25,8 @@ ALLOWED_SEARCH_GUBUN = frozenset({"1", "2", "3"})
 RETURN_TYPE_JSON = "JSON"
 RETURN_TYPE_XML = "XML"
 
-# 기관 에러 코드 (KECO 자체)
-SUCCESS_RESULT_CODES = frozenset({"00", "0000"})
+# 공식 성공 코드 (KECO Swagger evidence: 200 = 성공)
+SUCCESS_RESULT_CODES = frozenset({"200"})
 
 # GW 에러 코드 분류
 RATE_LIMIT_DAILY_CODES = frozenset({"22"})

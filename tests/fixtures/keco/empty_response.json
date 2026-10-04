@@ -1,6 +1,6 @@
 {
   "header": {
-    "resultCode": "00",
+    "resultCode": "200",
     "resultMsg": "NORMAL SERVICE."
   },
   "body": {

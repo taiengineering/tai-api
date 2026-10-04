@@ -9,12 +9,16 @@ from services.keco_chemical.parse import KecoChemicalItem, KecoRegulatoryFact
 
 
 def _fact_sort_key(fact: KecoRegulatoryFact) -> tuple:
-    """Semantic ordering key — typeList 배열 순서 변경에도 동일 hash 보장."""
+    """Semantic ordering key — typeList 배열 순서 변경에도 동일 hash 보장.
+    모든 6개 필드 포함 (excp_info / ancmnt_info tie-break 포함).
+    """
     return (
         fact.sbstn_clsf_type_nm or "",
         fact.unq_no or "",
         fact.ancmnt_ymd or "",
         fact.cont_info or "",
+        fact.excp_info or "",
+        fact.ancmnt_info or "",
     )
 
 

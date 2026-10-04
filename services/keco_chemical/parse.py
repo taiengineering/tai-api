@@ -97,7 +97,12 @@ def _parse_chemical_item(raw: dict) -> KecoChemicalItem:
 
 
 def parse_keco_response(text: str) -> KecoSearchResponse:
-    """JSON 응답 → KecoSearchResponse. items absent/null/[] 모두 0건으로 처리."""
+    """JSON 응답 → KecoSearchResponse. items absent/null/[] 모두 0건으로 처리.
+
+    fail-closed:
+      - header 없거나 object 아님 → KecoParseError(JSON_HEADER_MISSING)
+      - resultCode 없거나 blank  → KecoParseError(RESULT_CODE_MISSING)
+    """
     if not (text or "").strip():
         raise KecoParseError("JSON_EMPTY", "empty response body")
 
@@ -109,16 +114,17 @@ def parse_keco_response(text: str) -> KecoSearchResponse:
     if not isinstance(data, dict):
         raise KecoParseError("JSON_ROOT_NOT_OBJECT", "root must be JSON object")
 
-    header = data.get("header") or {}
+    header = data.get("header")
     if not isinstance(header, dict):
         raise KecoParseError("JSON_HEADER_MISSING", "header field missing or not object")
 
     result_code = _optional_str(header.get("resultCode")) or ""
+    if not result_code:
+        raise KecoParseError("RESULT_CODE_MISSING", "resultCode missing or blank in header")
     result_msg = _optional_str(header.get("resultMsg")) or ""
 
     body = data.get("body") or {}
     if not isinstance(body, dict):
-        # body 없는 경우 — 빈 결과로 처리
         return KecoSearchResponse(
             result_code=result_code,
             result_msg=result_msg,
@@ -133,7 +139,6 @@ def parse_keco_response(text: str) -> KecoSearchResponse:
     total_count = _optional_str(body.get("totalCount"))
 
     raw_items = body.get("items")
-    # items absent, null, [] 모두 0건으로 처리
     if raw_items is None or not isinstance(raw_items, list):
         items = []
     else:

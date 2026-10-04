@@ -81,18 +81,24 @@ def _get_service_key() -> str:
 
 
 def _classify_error_code(code: str) -> str:
-    """GW/기관 에러 코드 → error classification 레이블."""
-    if code in {"91", "93"}:
-        return ERROR_AUTH
-    if code in {"95", "97"}:
+    """GW/기관 에러 코드 → error classification 레이블.
+
+    91/93/95/10 = VALIDATION
+    97/20/30/31 = AUTH
+    22/23       = RATE_LIMIT
+    05          = TIMEOUT
+    12/01/04    = UPSTREAM
+    200 = SUCCESS (에러 처리 금지)
+    """
+    if code in {"91", "93", "95", "10"}:
         return ERROR_VALIDATION
+    if code in {"97", "20", "30", "31"}:
+        return ERROR_AUTH
     if code in RATE_LIMIT_DAILY_CODES | RATE_LIMIT_SECOND_CODES:
         return ERROR_RATE_LIMIT
-    if code in {"10", "12"}:
-        return ERROR_UPSTREAM
-    if code in {"20", "30", "31"}:
-        return ERROR_UPSTREAM
-    if code in {"200"}:
+    if code == "05":
+        return ERROR_TIMEOUT
+    if code in {"12", "01", "04"}:
         return ERROR_UPSTREAM
     return ERROR_UNKNOWN
 
@@ -155,13 +161,14 @@ class KecoChemicalClient:
 
         Args:
             search_gubun: "1"=영문명, "2"=CAS번호, "3"=고유번호 (국문명 없음)
-            search_nm: 검색어
+            search_nm: 검색어 (blank 금지)
             page_no: 페이지번호 (default 1)
             num_of_rows: 페이지당 결과 수 (default 10)
-            return_type: "JSON" 또는 "XML"
+            return_type: "JSON" 전용 (XML parser 미구현)
 
         Raises:
             ValueError: searchGubun이 ALLOWED_SEARCH_GUBUN에 없을 때
+            KecoChemicalClientError(VALIDATION): searchNm blank / returnType != JSON
             KecoNoServiceKeyError: 키 미설정
             KecoChemicalClientError: API 에러
         """
@@ -169,6 +176,16 @@ class KecoChemicalClient:
             raise ValueError(
                 f"searchGubun '{search_gubun}'은 허용되지 않습니다. "
                 f"허용값: {sorted(ALLOWED_SEARCH_GUBUN)} (국문명 코드 없음)"
+            )
+        if not (search_nm or "").strip():
+            raise KecoChemicalClientError(
+                ERROR_VALIDATION,
+                "searchNm must not be blank — blank search is not allowed",
+            )
+        if return_type != RETURN_TYPE_JSON:
+            raise KecoChemicalClientError(
+                ERROR_VALIDATION,
+                f"returnType must be JSON (got {return_type!r}) — XML parser not implemented",
             )
         if page_no < 1:
             raise KecoChemicalClientError(ERROR_VALIDATION, "pageNo must be >= 1")
@@ -195,11 +212,9 @@ class KecoChemicalClient:
         except KecoParseError as exc:
             raise KecoChemicalClientError(exc.code, redact_key(exc.message, key)) from exc
 
-        if parsed.result_code and parsed.result_code not in SUCCESS_RESULT_CODES:
+        if parsed.result_code not in SUCCESS_RESULT_CODES:
             err_class = _classify_error_code(parsed.result_code)
             msg = redact_key(parsed.result_msg or parsed.result_code, key)
-            if err_class == ERROR_RATE_LIMIT:
-                raise KecoChemicalClientError(ERROR_RATE_LIMIT, msg)
             raise KecoChemicalClientError(err_class, msg)
 
         return parsed
