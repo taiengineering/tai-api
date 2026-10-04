@@ -11,6 +11,14 @@ Change detection:
   NEW       — source_record_id 없음
   UNCHANGED — source_content_hash 동일
   CHANGED   — source_content_hash 다름 → last_changed_at update
+
+Collection target state machine (KECO-003):
+  bootstrap_targets   — identity_projection CAS → keco_collection_targets PENDING
+  claim_targets       — PENDING/RETRY/stale-RUNNING → RUNNING (claim)
+  mark_target_*       — RUNNING → DONE / EMPTY / RETRY / FAILED / CONFLICT
+  get_status_summary  — 현재 상태 집계
+  get_due_targets     — next_refresh_at <= now 대상
+  has_active_run      — lock check (중복 실행 방지)
 """
 from __future__ import annotations
 
@@ -19,10 +27,24 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from datetime import timedelta
+from typing import List, Optional, Tuple
 
 from services.time import now_kst, serialize_business_datetime
-from services.keco_chemical.contract import SOURCE_CONTRACT_VERSION, SOURCE_ID
+from services.keco_chemical.contract import (
+    SOURCE_CONTRACT_VERSION,
+    SOURCE_ID,
+    TARGET_TYPE_CAS,
+    TARGET_STATUS_PENDING,
+    TARGET_STATUS_RUNNING,
+    TARGET_STATUS_DONE,
+    TARGET_STATUS_EMPTY,
+    TARGET_STATUS_RETRY,
+    TARGET_STATUS_FAILED,
+    TARGET_STATUS_CONFLICT,
+    DEFAULT_STALE_RUNNING_MINUTES,
+    DEFAULT_REFRESH_INTERVAL_DAYS,
+)
 from services.keco_chemical.hash import chemical_content_hash, regulatory_fact_hash
 from services.keco_chemical.parse import KecoChemicalItem, KecoRegulatoryFact
 
@@ -297,3 +319,330 @@ class KecoReferenceStore:
             chemical_id=chemical_id,
             inserted_fact_count=inserted_fact_count,
         )
+
+    # ──────────────────────────────────────────
+    # Collection Target Table (KECO-003)
+    # ──────────────────────────────────────────
+
+    def bootstrap_targets(self, dry_run: bool = False) -> int:
+        """identity_projection CAS → keco_collection_targets PENDING 생성.
+
+        이미 target이 있으면 skip (idempotent).
+        dry_run=True: DB write 없이 대상 수만 반환.
+        반환: 새로 생성된(될) target 수.
+        """
+        client = _get_supabase_client()
+        db = client.schema("msds_ref")
+
+        # Read all CAS from identity_projection (paginated)
+        all_cas: set = set()
+        page_size = 1000
+        offset = 0
+        while True:
+            rows = (
+                db.table("identity_projection")
+                .select("cas_no")
+                .not_.is_("cas_no", "null")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            if not rows.data:
+                break
+            for row in rows.data:
+                cas = (row.get("cas_no") or "").strip()
+                if cas:
+                    all_cas.add(cas)
+            if len(rows.data) < page_size:
+                break
+            offset += page_size
+
+        distinct_cas = sorted(all_cas)
+        if dry_run:
+            return len(distinct_cas)
+
+        # Find already-existing targets
+        existing: set = set()
+        page_size_ex = 1000
+        ex_offset = 0
+        while True:
+            ex_rows = (
+                db.table("keco_collection_targets")
+                .select("target_value")
+                .eq("target_type", TARGET_TYPE_CAS)
+                .range(ex_offset, ex_offset + page_size_ex - 1)
+                .execute()
+            )
+            if not ex_rows.data:
+                break
+            for row in ex_rows.data:
+                existing.add(row["target_value"])
+            if len(ex_rows.data) < page_size_ex:
+                break
+            ex_offset += page_size_ex
+
+        new_cas = [c for c in distinct_cas if c not in existing]
+        now = _now_iso()
+        batch_size = 500
+        for i in range(0, len(new_cas), batch_size):
+            batch = new_cas[i : i + batch_size]
+            rows_to_insert = [
+                {
+                    "target_type": TARGET_TYPE_CAS,
+                    "target_value": cas,
+                    "status": TARGET_STATUS_PENDING,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                for cas in batch
+            ]
+            db.table("keco_collection_targets").insert(rows_to_insert).execute()
+
+        return len(new_cas)
+
+    def claim_targets(
+        self,
+        limit: int,
+        stale_minutes: int = DEFAULT_STALE_RUNNING_MINUTES,
+    ) -> List[dict]:
+        """PENDING / RETRY / stale RUNNING → RUNNING に変換して返す.
+
+        stale RUNNING: last_attempted_at < (now - stale_minutes) → RETRY로 회수.
+        """
+        client = _get_supabase_client()
+        db = client.schema("msds_ref")
+        now = _now_iso()
+
+        # Recover stale RUNNING first
+        stale_threshold = serialize_business_datetime(
+            now_kst() - timedelta(minutes=stale_minutes)
+        )
+        db.table("keco_collection_targets").update({
+            "status": TARGET_STATUS_RETRY,
+            "updated_at": now,
+        }).eq("status", TARGET_STATUS_RUNNING).lt("last_attempted_at", stale_threshold).execute()
+
+        # Claim PENDING then RETRY
+        claimed = []
+        for status in (TARGET_STATUS_PENDING, TARGET_STATUS_RETRY):
+            if len(claimed) >= limit:
+                break
+            need = limit - len(claimed)
+            rows = (
+                db.table("keco_collection_targets")
+                .select("id,target_type,target_value,attempt_count")
+                .eq("status", status)
+                .order("created_at")
+                .limit(need)
+                .execute()
+            )
+            claimed.extend(rows.data or [])
+
+        if not claimed:
+            return []
+
+        ids = [r["id"] for r in claimed]
+        # Mark all claimed as RUNNING
+        db.table("keco_collection_targets").update({
+            "status": TARGET_STATUS_RUNNING,
+            "last_attempted_at": now,
+            "updated_at": now,
+        }).in_("id", ids).execute()
+
+        return claimed
+
+    def mark_target_running(self, target_id: str, run_id: str) -> None:
+        """target을 RUNNING으로 마크 (claim_targets 이후 per-target 확정용)."""
+        client = _get_supabase_client()
+        db = client.schema("msds_ref")
+        now = _now_iso()
+        db.table("keco_collection_targets").update({
+            "status": TARGET_STATUS_RUNNING,
+            "last_run_id": run_id,
+            "last_attempted_at": now,
+            "updated_at": now,
+        }).eq("id", target_id).execute()
+
+    def _mark_target(
+        self,
+        target_id: str,
+        run_id: str,
+        status: str,
+        api_requests: int = 0,
+        source_items: int = 0,
+        error_code: Optional[str] = None,
+        error_msg: Optional[str] = None,
+        set_success: bool = False,
+        set_refresh: bool = False,
+        refresh_days: int = DEFAULT_REFRESH_INTERVAL_DAYS,
+    ) -> None:
+        client = _get_supabase_client()
+        db = client.schema("msds_ref")
+        now = _now_iso()
+        updates: dict = {
+            "status": status,
+            "last_run_id": run_id,
+            "last_attempted_at": now,
+            "updated_at": now,
+        }
+        if api_requests:
+            updates["api_request_count"] = api_requests
+        if source_items:
+            updates["source_item_count"] = source_items
+        if error_code is not None:
+            updates["last_error_code"] = error_code
+        if error_msg is not None:
+            updates["last_error_message"] = error_msg[:500] if error_msg else None
+        if set_success:
+            updates["last_success_at"] = now
+        if set_refresh:
+            refresh_at = serialize_business_datetime(
+                now_kst() + timedelta(days=refresh_days)
+            )
+            updates["next_refresh_at"] = refresh_at
+
+        # Increment attempt_count
+        existing = (
+            db.table("keco_collection_targets")
+            .select("attempt_count,first_attempted_at")
+            .eq("id", target_id)
+            .execute()
+        )
+        if existing.data:
+            row = existing.data[0]
+            updates["attempt_count"] = (row.get("attempt_count") or 0) + 1
+            if not row.get("first_attempted_at"):
+                updates["first_attempted_at"] = now
+
+        db.table("keco_collection_targets").update(updates).eq("id", target_id).execute()
+
+    def mark_target_done(
+        self,
+        target_id: str,
+        run_id: str,
+        api_requests: int,
+        source_items: int,
+        refresh_days: int = DEFAULT_REFRESH_INTERVAL_DAYS,
+    ) -> None:
+        self._mark_target(
+            target_id, run_id, TARGET_STATUS_DONE,
+            api_requests=api_requests, source_items=source_items,
+            set_success=True, set_refresh=True, refresh_days=refresh_days,
+        )
+
+    def mark_target_empty(
+        self,
+        target_id: str,
+        run_id: str,
+        api_requests: int,
+        refresh_days: int = DEFAULT_REFRESH_INTERVAL_DAYS,
+    ) -> None:
+        self._mark_target(
+            target_id, run_id, TARGET_STATUS_EMPTY,
+            api_requests=api_requests,
+            set_success=True, set_refresh=True, refresh_days=refresh_days,
+        )
+
+    def mark_target_conflict(
+        self,
+        target_id: str,
+        run_id: str,
+        api_requests: int,
+        source_items: int,
+        msg: str,
+    ) -> None:
+        self._mark_target(
+            target_id, run_id, TARGET_STATUS_CONFLICT,
+            api_requests=api_requests, source_items=source_items,
+            error_code="CAS_MISMATCH", error_msg=msg,
+        )
+
+    def mark_target_retry(
+        self,
+        target_id: str,
+        run_id: str,
+        error_code: str,
+        error_msg: str,
+    ) -> None:
+        self._mark_target(
+            target_id, run_id, TARGET_STATUS_RETRY,
+            error_code=error_code, error_msg=error_msg,
+        )
+
+    def mark_target_failed(
+        self,
+        target_id: str,
+        run_id: str,
+        error_code: str,
+        error_msg: str,
+    ) -> None:
+        self._mark_target(
+            target_id, run_id, TARGET_STATUS_FAILED,
+            error_code=error_code, error_msg=error_msg,
+        )
+
+    def get_status_summary(self) -> dict:
+        """target status 별 카운트 집계."""
+        client = _get_supabase_client()
+        db = client.schema("msds_ref")
+        rows = db.table("keco_collection_targets").select("status").execute()
+        counts: dict = {
+            TARGET_STATUS_PENDING: 0,
+            TARGET_STATUS_RUNNING: 0,
+            TARGET_STATUS_DONE: 0,
+            TARGET_STATUS_EMPTY: 0,
+            TARGET_STATUS_RETRY: 0,
+            TARGET_STATUS_FAILED: 0,
+            TARGET_STATUS_CONFLICT: 0,
+        }
+        for row in (rows.data or []):
+            s = row.get("status", "")
+            if s in counts:
+                counts[s] += 1
+        counts["total"] = sum(counts.values())
+        return counts
+
+    def get_due_targets(self, max_targets: int) -> List[dict]:
+        """next_refresh_at <= now のtarget を返す (DONE/EMPTY のみ)."""
+        client = _get_supabase_client()
+        db = client.schema("msds_ref")
+        now = _now_iso()
+        rows = (
+            db.table("keco_collection_targets")
+            .select("id,target_type,target_value,attempt_count")
+            .in_("status", [TARGET_STATUS_DONE, TARGET_STATUS_EMPTY])
+            .lte("next_refresh_at", now)
+            .order("next_refresh_at")
+            .limit(max_targets)
+            .execute()
+        )
+        return rows.data or []
+
+    def has_active_run(self, run_type: Optional[str] = None) -> bool:
+        """RUNNING run이 존재하면 True (lock check용).
+
+        run_type 지정 시 해당 type만 확인. None이면 모든 RUNNING run.
+        """
+        client = _get_supabase_client()
+        db = client.schema("msds_ref")
+        q = (
+            db.table("keco_ingestion_runs")
+            .select("id")
+            .eq("status", "RUNNING")
+        )
+        if run_type:
+            q = q.eq("run_type", run_type)
+        rows = q.limit(1).execute()
+        return bool(rows.data)
+
+    def get_run(self, run_id: str) -> Optional[dict]:
+        """run_id로 단일 run row 반환. 없으면 None."""
+        client = _get_supabase_client()
+        db = client.schema("msds_ref")
+        rows = (
+            db.table("keco_ingestion_runs")
+            .select("*")
+            .eq("id", run_id)
+            .limit(1)
+            .execute()
+        )
+        return rows.data[0] if rows.data else None
