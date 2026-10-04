@@ -146,10 +146,20 @@ def sync_single_cas(
         store.fail_run(run_id, "STORE_ERROR", str(exc))
         raise HTTPException(status_code=500, detail="target lookup failed") from exc
 
+    # target status(DONE/EMPTY/CONFLICT/RETRY/FAILED) → run status(COMPLETED/PARTIAL/FAILED)
+    _TARGET_TO_RUN_STATUS = {
+        "DONE": "COMPLETED",
+        "EMPTY": "COMPLETED",
+        "CONFLICT": "COMPLETED",
+        "RETRY": "PARTIAL",
+        "FAILED": "FAILED",
+    }
+
     try:
         result = sync_one_target(client, store, target, run_id, budget)
-        store.finish_run(run_id, result.status, result.api_requests, result.source_items, {
-            "status": result.status,
+        run_status = _TARGET_TO_RUN_STATUS.get(result.status, "COMPLETED")
+        store.finish_run(run_id, run_status, result.api_requests, result.source_items, {
+            "target_status": result.status,
             "new": result.new_count,
             "unchanged": result.unchanged_count,
             "changed": result.changed_count,

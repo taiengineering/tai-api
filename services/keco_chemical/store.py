@@ -197,7 +197,8 @@ class KecoReferenceStore:
         error_code: str,
         error_message: str,
     ) -> None:
-        """run을 FAILED로 마감. serviceKey가 error_message에 코드되면 실제로 제거한 후 저장."""
+        """run을 FAILED로 마감. serviceKey가 error_message에 코드되면 실제로 제거한 후 저장.
+        해당 run에 남은 RUNNING targets도 RETRY로 해제해 orphan 방지."""
         from services.keco_chemical.client import redact_key
         api_key = (os.getenv("KECO_API_SERVICE_KEY") or "").strip()
         safe_msg = redact_key(error_message or "", api_key)
@@ -209,6 +210,7 @@ class KecoReferenceStore:
             "error_code": error_code,
             "error_message": safe_msg,
         }).eq("id", run_id).execute()
+        self.release_running_targets(run_id)
 
     # ──────────────────────────────────────────
     # Item Persistence
@@ -587,6 +589,29 @@ class KecoReferenceStore:
         db.table("keco_ingestion_runs").update({
             "heartbeat_at": _now_iso(),
         }).eq("id", run_id).execute()
+
+    def release_running_targets(self, run_id: str) -> int:
+        """run_id에 속한 미처리 RUNNING targets → RETRY 해제. 다음 실행에서 즉시 재처리 가능."""
+        client = _get_supabase_client()
+        db = client.schema("msds_ref")
+        now = _now_iso()
+        result = (
+            db.table("keco_collection_targets")
+            .update({
+                "status": TARGET_STATUS_RETRY,
+                "updated_at": now,
+            })
+            .eq("status", TARGET_STATUS_RUNNING)
+            .eq("last_run_id", run_id)
+            .execute()
+        )
+        count = len(result.data or [])
+        if count:
+            logger.info(
+                "[KECO-STORE] release_running_targets(run_id=%s): released %d targets → RETRY",
+                run_id, count,
+            )
+        return count
 
     def mark_target_running(self, target_id: str, run_id: str) -> None:
         """target을 RUNNING으로 마크 (claim_targets 이후 per-target 확정용)."""

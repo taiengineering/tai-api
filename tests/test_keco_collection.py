@@ -465,32 +465,24 @@ class TestRateLimit:
 
 class TestSchedulerLock:
     def test_active_bulk_lock_skips_refresh(self):
-        """INITIAL_BULK active → refresh skipped"""
+        """start_exclusive_run locked=True → refresh skipped, no DB run created"""
         from services.keco_chemical.sync import refresh_due_targets
         client = MagicMock()
         store = MagicMock()
-        store.has_active_run.side_effect = lambda t=None: t == RUN_TYPE_INITIAL_BULK
-        store.start_run.return_value = "run-skip"
+        store.start_exclusive_run.return_value = (None, True)  # locked
         budget = RequestBudget(limit=100)
 
         result = refresh_due_targets(client, store, budget)
         assert result.targets_selected == 0
         client.search.assert_not_called()
+        store.start_run.assert_not_called()
 
     def test_active_refresh_lock_skips(self):
-        """SCHEDULED_REFRESH already running → skip"""
+        """start_exclusive_run locked=True (any active runtime) → skip"""
         from services.keco_chemical.sync import refresh_due_targets
         client = MagicMock()
         store = MagicMock()
-
-        def _has_active(run_type=None):
-            if run_type == RUN_TYPE_INITIAL_BULK:
-                return False
-            if run_type == RUN_TYPE_SCHEDULED_REFRESH:
-                return True
-            return False
-        store.has_active_run.side_effect = _has_active
-        store.start_run.return_value = "run-lock"
+        store.start_exclusive_run.return_value = (None, True)  # locked
         budget = RequestBudget(limit=100)
 
         result = refresh_due_targets(client, store, budget)
@@ -502,8 +494,7 @@ class TestSchedulerLock:
         from services.keco_chemical.sync import refresh_due_targets
         client = MagicMock()
         store = MagicMock()
-        store.has_active_run.return_value = False
-        store.start_run.return_value = "run-nodue"
+        store.start_exclusive_run.return_value = ("run-nodue", False)
         store.claim_due_targets.return_value = []
         budget = RequestBudget(limit=100)
 
@@ -516,8 +507,7 @@ class TestSchedulerLock:
         from services.keco_chemical.sync import refresh_due_targets
         client = MagicMock()
         store = MagicMock()
-        store.has_active_run.return_value = False
-        store.start_run.return_value = "run-due"
+        store.start_exclusive_run.return_value = ("run-due", False)
         store.claim_due_targets.return_value = [_make_target(status=TARGET_STATUS_DONE)]
         client.search.return_value = _make_search_response([_make_parsed_item()], total_count="1")
         store.persist_item.return_value = _make_persist_result("UNCHANGED")
@@ -636,10 +626,8 @@ class TestInternalKecoSyncAPI:
         with patch("routers.internal_keco_sync._make_store") as mock_store_fn, \
              patch("routers.internal_keco_sync._make_client") as mock_client_fn, \
              patch("routers.internal_keco_sync._make_budget") as mock_budget_fn:
-            from services.keco_chemical.sync import _empty_batch_result, SyncBatchResult
             mock_store = MagicMock()
-            mock_store.has_active_run.return_value = False
-            mock_store.start_run.return_value = "run-ref"
+            mock_store.start_exclusive_run.return_value = ("run-ref", False)
             mock_store.claim_due_targets.return_value = []
             mock_store_fn.return_value = mock_store
             mock_client_fn.return_value = MagicMock()
@@ -1733,3 +1721,278 @@ class TestPatch002MarkTarget:
         # source_item_count must be written as 0 (not omitted)
         assert "source_item_count" in captured_updates
         assert captured_updates["source_item_count"] == 0
+
+
+# ─────────────────────────────────────────────────────────────
+# PATCH-003 — P301-P314: Runtime Blockers Final Closeout
+# ─────────────────────────────────────────────────────────────
+
+class TestPatch003BulkFinalStatus:
+    """P301-P302: mode_bulk final_status correctness."""
+
+    def test_p301_bulk_partial_batch_stores_partial(self, monkeypatch):
+        """P301: sync_batch returns PARTIAL → finish_run receives 'PARTIAL'"""
+        import argparse
+        from services.keco_chemical import collect
+        from services.keco_chemical.sync import SyncBatchResult
+
+        monkeypatch.setenv("KECO_API_SERVICE_KEY", "fake-key")
+        monkeypatch.setenv("LEG_SUPABASE_URL", "http://fake")
+        monkeypatch.setenv("LEG_SUPABASE_SERVICE_ROLE_KEY", "fake-key")
+
+        mock_store = MagicMock()
+        budget = RequestBudget(limit=100)
+        mock_store.start_exclusive_run.return_value = ("run-p301", False)
+        mock_store.claim_targets.return_value = [_make_target()]
+
+        partial_result = SyncBatchResult(
+            run_id="run-p301", run_type=RUN_TYPE_INITIAL_BULK,
+            targets_selected=1, targets_processed=0,
+            requests=0, new=0, unchanged=0, changed=0,
+            empty=0, conflict=0, retry=1, failed=0,
+            source_items=0, facts_inserted=0,
+            budget_used=0, budget_remaining=100,
+            status="PARTIAL",
+        )
+
+        with patch.object(collect, "_make_store", return_value=mock_store), \
+             patch.object(collect, "_make_client", return_value=MagicMock()), \
+             patch.object(collect, "_make_budget", return_value=budget), \
+             patch("services.keco_chemical.sync.sync_batch", return_value=partial_result):
+            collect.mode_bulk(argparse.Namespace(max_targets=None))
+
+        finish_status = mock_store.finish_run.call_args[0][1]
+        assert finish_status == "PARTIAL"
+
+    def test_p302_bulk_targets_exhausted_stores_completed(self, monkeypatch):
+        """P302: claim_targets returns [] → finish_run receives 'COMPLETED'"""
+        import argparse
+        from services.keco_chemical import collect
+
+        monkeypatch.setenv("KECO_API_SERVICE_KEY", "fake-key")
+        monkeypatch.setenv("LEG_SUPABASE_URL", "http://fake")
+        monkeypatch.setenv("LEG_SUPABASE_SERVICE_ROLE_KEY", "fake-key")
+
+        mock_store = MagicMock()
+        budget = RequestBudget(limit=100)
+        mock_store.start_exclusive_run.return_value = ("run-p302", False)
+        mock_store.claim_targets.return_value = []  # no targets → targets exhausted
+
+        with patch.object(collect, "_make_store", return_value=mock_store), \
+             patch.object(collect, "_make_client", return_value=MagicMock()), \
+             patch.object(collect, "_make_budget", return_value=budget):
+            collect.mode_bulk(argparse.Namespace(max_targets=None))
+
+        finish_status = mock_store.finish_run.call_args[0][1]
+        assert finish_status == "COMPLETED"
+
+
+class TestPatch003UnprocessedRelease:
+    """P303-P304: partial/fail → RUNNING targets released to RETRY."""
+
+    def test_p303_partial_stop_releases_running_targets(self):
+        """P303: sync_batch PARTIAL (stop_batch) → release_running_targets(run_id)"""
+        from services.keco_chemical.sync import sync_batch
+        from services.keco_chemical.client import KecoChemicalClientError
+        from services.keco_chemical.contract import ERROR_RATE_LIMIT
+
+        client = MagicMock()
+        store = MagicMock()
+        client.search.side_effect = KecoChemicalClientError(ERROR_RATE_LIMIT, "daily quota")
+
+        targets = [_make_target("7664-41-7"), _make_target("64-17-5")]
+        result = sync_batch(client, store, targets, "run-p303", RequestBudget(limit=10))
+
+        assert result.status == "PARTIAL"
+        store.release_running_targets.assert_called_once_with("run-p303")
+
+    def test_p304_fail_run_calls_release_running_targets(self):
+        """P304: fail_run() must call release_running_targets to prevent RUNNING orphans"""
+        from services.keco_chemical.store import KecoReferenceStore
+        store = KecoReferenceStore()
+
+        with patch("services.keco_chemical.store._get_supabase_client") as mock_get, \
+             patch.object(store, "release_running_targets") as mock_release:
+            db = MagicMock()
+            mock_get.return_value = db
+            db.schema.return_value = db
+            db.table.return_value = db
+            db.update.return_value = db
+            db.eq.return_value = db
+            db.execute.return_value = MagicMock(data=[])
+
+            store.fail_run("run-p304", "UNEXPECTED_ERROR", "something failed")
+
+        mock_release.assert_called_once_with("run-p304")
+
+
+class TestPatch003RefreshExclusiveLock:
+    """P305-P306: refresh_due_targets uses start_exclusive_run."""
+
+    def test_p305_refresh_uses_start_exclusive_run(self):
+        """P305: refresh_due_targets calls start_exclusive_run, not has_active_run+start_run"""
+        from services.keco_chemical.sync import refresh_due_targets
+
+        client = MagicMock()
+        store = MagicMock()
+        store.start_exclusive_run.return_value = ("run-p305", False)
+        store.claim_due_targets.return_value = []
+        budget = RequestBudget(limit=100)
+
+        refresh_due_targets(client, store, budget)
+
+        store.start_exclusive_run.assert_called_once()
+        store.has_active_run.assert_not_called()
+        store.start_run.assert_not_called()
+
+    def test_p306_active_runtime_refresh_noop(self):
+        """P306: locked=True → no claim, no API, no secondary start_run"""
+        from services.keco_chemical.sync import refresh_due_targets
+
+        client = MagicMock()
+        store = MagicMock()
+        store.start_exclusive_run.return_value = (None, True)  # locked
+        budget = RequestBudget(limit=100)
+
+        result = refresh_due_targets(client, store, budget)
+
+        assert result.targets_selected == 0
+        client.search.assert_not_called()
+        store.start_run.assert_not_called()
+        store.claim_due_targets.assert_not_called()
+
+
+class TestPatch003ManualSingleRunStatus:
+    """P307-P311: /sync/{cas} target status → run status mapping."""
+
+    @pytest.fixture
+    def http_client(self, monkeypatch):
+        monkeypatch.setenv("INTERNAL_API_SECRET", "test-secret")
+        monkeypatch.setenv("LEG_SUPABASE_URL", "http://fake")
+        monkeypatch.setenv("LEG_SUPABASE_SERVICE_ROLE_KEY", "fake-key")
+        monkeypatch.setenv("KECO_API_SERVICE_KEY", "fake-api-key")
+        from fastapi.testclient import TestClient
+        from fastapi import FastAPI
+        from routers.internal_keco_sync import router
+        app = FastAPI()
+        app.include_router(router)
+        return TestClient(app)
+
+    def _do_sync_and_capture_run_status(self, http_client, target_status: str) -> str:
+        from services.keco_chemical.sync import SyncTargetResult
+
+        captured_status = [None]
+        mock_store = MagicMock()
+        mock_store.start_exclusive_run.return_value = ("run-manual", False)
+
+        def capture_finish(*args, **kwargs):
+            captured_status[0] = args[1]  # finish_run(run_id, status, ...)
+        mock_store.finish_run.side_effect = capture_finish
+
+        fake_db = MagicMock()
+        fake_db.schema.return_value = fake_db
+        fake_db.table.return_value = fake_db
+        fake_db.select.return_value = fake_db
+        fake_db.eq.return_value = fake_db
+        fake_db.limit.return_value = fake_db
+        fake_db.execute.return_value = MagicMock(data=[{
+            "id": "tgt-1", "target_type": "CAS",
+            "target_value": "7664-41-7", "attempt_count": 0,
+        }])
+
+        fake_result = SyncTargetResult(
+            target_id="tgt-1", target_type="CAS", target_value="7664-41-7",
+            status=target_status, api_requests=1, source_items=0,
+            new_count=0, unchanged_count=0, changed_count=0, fact_insert_count=0,
+        )
+
+        with patch("routers.internal_keco_sync._make_store", return_value=mock_store), \
+             patch("routers.internal_keco_sync._make_client"), \
+             patch("routers.internal_keco_sync._make_budget", return_value=RequestBudget(limit=100)), \
+             patch("services.keco_chemical.store._get_supabase_client", return_value=fake_db), \
+             patch("services.keco_chemical.sync.sync_one_target", return_value=fake_result):
+            http_client.post(
+                "/internal/reference/keco/sync/7664-41-7",
+                headers={"X-Internal-Secret": "test-secret"},
+            )
+        return captured_status[0]
+
+    def test_p307_done_maps_to_completed(self, http_client):
+        """P307: target DONE → run COMPLETED"""
+        assert self._do_sync_and_capture_run_status(http_client, "DONE") == "COMPLETED"
+
+    def test_p308_empty_maps_to_completed(self, http_client):
+        """P308: target EMPTY → run COMPLETED"""
+        assert self._do_sync_and_capture_run_status(http_client, "EMPTY") == "COMPLETED"
+
+    def test_p309_conflict_maps_to_completed(self, http_client):
+        """P309: target CONFLICT → run COMPLETED"""
+        assert self._do_sync_and_capture_run_status(http_client, "CONFLICT") == "COMPLETED"
+
+    def test_p310_retry_maps_to_partial(self, http_client):
+        """P310: target RETRY → run PARTIAL"""
+        assert self._do_sync_and_capture_run_status(http_client, "RETRY") == "PARTIAL"
+
+    def test_p311_failed_maps_to_failed(self, http_client):
+        """P311: target FAILED → run FAILED"""
+        assert self._do_sync_and_capture_run_status(http_client, "FAILED") == "FAILED"
+
+
+class TestPatch003SharedHeartbeat:
+    """P312: sync_batch calls heartbeat per target."""
+
+    def test_p312_sync_batch_heartbeat_per_target(self):
+        """P312: sync_batch calls store.heartbeat_run once per processed target"""
+        from services.keco_chemical.sync import sync_batch
+
+        client = MagicMock()
+        store = MagicMock()
+
+        def _search(search_gubun, search_nm, **_kw):
+            return _make_search_response([_make_parsed_item(search_nm, "K")], total_count="1")
+        client.search.side_effect = _search
+        store.persist_item.return_value = _make_persist_result("NEW")
+
+        targets = [_make_target("7664-41-7"), _make_target("64-17-5")]
+        sync_batch(client, store, targets, "run-p312", RequestBudget(limit=10))
+
+        assert store.heartbeat_run.call_count == 2
+        store.heartbeat_run.assert_any_call("run-p312")
+
+
+class TestPatch003RunningTargetInvariant:
+    """P313-P314: finished run has 0 RUNNING targets."""
+
+    def test_p313_budget_exhausted_partial_releases_running_targets(self):
+        """P313: budget pre-exhausted → PARTIAL → release_running_targets called"""
+        from services.keco_chemical.sync import sync_batch
+
+        client = MagicMock()
+        store = MagicMock()
+        budget = RequestBudget(limit=0)  # already exhausted
+
+        targets = [_make_target("7664-41-7"), _make_target("64-17-5")]
+        result = sync_batch(client, store, targets, "run-p313", budget)
+
+        assert result.status == "PARTIAL"
+        store.release_running_targets.assert_called_once_with("run-p313")
+        client.search.assert_not_called()  # budget exhausted before any fetch
+
+    def test_p314_fail_run_ensures_no_running_orphans(self):
+        """P314: fail_run() invariant — release_running_targets called unconditionally"""
+        from services.keco_chemical.store import KecoReferenceStore
+        store = KecoReferenceStore()
+
+        with patch("services.keco_chemical.store._get_supabase_client") as mock_get, \
+             patch.object(store, "release_running_targets") as mock_release:
+            db = MagicMock()
+            mock_get.return_value = db
+            db.schema.return_value = db
+            db.table.return_value = db
+            db.update.return_value = db
+            db.eq.return_value = db
+            db.execute.return_value = MagicMock(data=[])
+
+            store.fail_run("run-p314", "UNEXPECTED_ERROR", "unexpected failure")
+
+        mock_release.assert_called_once_with("run-p314")

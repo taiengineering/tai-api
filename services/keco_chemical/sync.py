@@ -326,6 +326,7 @@ def sync_batch(
         r = sync_one_target(client, store, target, run_id, budget)
         results.append(r)
         processed += 1
+        store.heartbeat_run(run_id)
         if r.stop_batch:
             logger.info("[KECO-SYNC] stop_batch signal from target %s — halting", target.get("target_value"))
             break
@@ -333,6 +334,9 @@ def sync_batch(
     run_status = "COMPLETED"
     if processed < len(targets) or any(r.stop_batch for r in results):
         run_status = "PARTIAL"
+
+    if run_status == "PARTIAL":
+        store.release_running_targets(run_id)
 
     total_requests = sum(r.api_requests for r in results)
     total_items = sum(r.source_items for r in results)
@@ -382,19 +386,19 @@ def refresh_due_targets(
 ) -> SyncBatchResult:
     """next_refresh_at <= now のtarget を最大 max_targets 件処理.
 
-    lock: INITIAL_BULK or SCHEDULED_REFRESH already RUNNING → NOOP.
+    start_exclusive_run으로 atomic lock 보장 — 다른 runtime run(BULK/RETRY/MANUAL_SINGLE/REFRESH)
+    이 RUNNING이면 DB insert 없이 LOCKED로 NOOP 반환.
     """
-    if store.has_active_run(RUN_TYPE_INITIAL_BULK):
-        logger.info("[KECO-REFRESH] INITIAL_BULK active — skipping scheduled refresh")
-        run_id = store.start_run(RUN_TYPE_SCHEDULED_REFRESH)
-        store.complete_run(run_id, 0, 0, {"skipped": "INITIAL_BULK_ACTIVE"})
-        return _empty_batch_result(run_id, RUN_TYPE_SCHEDULED_REFRESH, "COMPLETED")
+    raw_stale = (os.getenv(STALE_RUNNING_MINUTES_ENV) or "").strip()
+    try:
+        stale_min = int(raw_stale) if raw_stale else DEFAULT_STALE_RUNNING_MINUTES
+    except ValueError:
+        stale_min = DEFAULT_STALE_RUNNING_MINUTES
 
-    if store.has_active_run(RUN_TYPE_SCHEDULED_REFRESH):
-        logger.info("[KECO-REFRESH] SCHEDULED_REFRESH already RUNNING — skipping")
-        run_id = store.start_run(RUN_TYPE_SCHEDULED_REFRESH)
-        store.complete_run(run_id, 0, 0, {"skipped": "REFRESH_ACTIVE"})
-        return _empty_batch_result(run_id, RUN_TYPE_SCHEDULED_REFRESH, "COMPLETED")
+    run_id, locked = store.start_exclusive_run(RUN_TYPE_SCHEDULED_REFRESH, stale_minutes=stale_min)
+    if locked:
+        logger.info("[KECO-REFRESH] Runtime lock active — skipping scheduled refresh (LOCKED)")
+        return _empty_batch_result("LOCKED", RUN_TYPE_SCHEDULED_REFRESH, "COMPLETED")
 
     raw_batch_size = (os.getenv(REFRESH_BATCH_SIZE_ENV) or "").strip()
     try:
@@ -404,7 +408,6 @@ def refresh_due_targets(
     if max_targets is not None:
         batch_size = min(batch_size, max_targets)
 
-    run_id = store.start_run(RUN_TYPE_SCHEDULED_REFRESH)
     try:
         due_targets = store.claim_due_targets(run_id, batch_size)
         if not due_targets:

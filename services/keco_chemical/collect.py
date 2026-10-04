@@ -190,6 +190,7 @@ def mode_bulk(args) -> None:
     try:
         total_processed = 0
         total_source_items = 0
+        final_status = "PARTIAL"   # 기본 PARTIAL; targets 소진 시에만 COMPLETED로 변경
         from services.keco_chemical.sync import sync_batch
 
         while not budget.exhausted:
@@ -203,26 +204,26 @@ def mode_bulk(args) -> None:
             targets = store.claim_targets(run_id, batch_size, stale_min, mode="bulk")
             if not targets:
                 logger.info("[BULK] No more claimable targets")
+                final_status = "COMPLETED"
                 break
 
             result = sync_batch(client, store, targets, run_id, budget)
             total_processed += result.targets_processed
             total_source_items += result.source_items
-            store.heartbeat_run(run_id)
             _log_result(result)
 
             if result.status == "PARTIAL":
                 logger.info("[BULK] Partial stop (budget/rate-limit) after %d total processed", total_processed)
                 break
 
-        store.finish_run(run_id, "COMPLETED", budget.used, total_source_items, {
+        store.finish_run(run_id, final_status, budget.used, total_source_items, {
             "total_processed": total_processed,
             "total_source_items": total_source_items,
             "budget_used": budget.used,
             "budget_remaining": budget.remaining,
         })
-        logger.info("[BULK] DONE — run_id=%s processed=%d source_items=%d budget_used=%d",
-                    run_id, total_processed, total_source_items, budget.used)
+        logger.info("[BULK] DONE — run_id=%s status=%s processed=%d source_items=%d budget_used=%d",
+                    run_id, final_status, total_processed, total_source_items, budget.used)
 
     except Exception as exc:
         store.fail_run(run_id, "UNEXPECTED_ERROR", str(exc))
