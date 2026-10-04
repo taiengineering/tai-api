@@ -33,6 +33,10 @@ SUCCESS_RESULT_CODES = frozenset({"200"})
 RATE_LIMIT_DAILY_CODES = frozenset({"22"})
 RATE_LIMIT_SECOND_CODES = frozenset({"23"})
 
+# String constants for exact source_code comparison in sync.py
+RATE_LIMIT_DAILY_CODE = "22"   # daily quota — stop_batch=True
+RATE_LIMIT_SECOND_CODE = "23"  # per-second throttle — bounded backoff, stop_batch=False
+
 RETRY_CODES = frozenset({"05", "22", "23"})
 NON_RETRY_CODES = frozenset({"10", "12", "20", "29", "30", "31", "91", "93", "95", "97"})
 
@@ -62,6 +66,14 @@ RUN_TYPE_INITIAL_BULK = "INITIAL_BULK"
 RUN_TYPE_MANUAL_SINGLE = "MANUAL_SINGLE"
 RUN_TYPE_RETRY = "RETRY"
 RUN_TYPE_SCHEDULED_REFRESH = "SCHEDULED_REFRESH"
+
+# Run types that participate in the atomic runtime lock (only one may be RUNNING at a time)
+LOCK_RUNTIME_RUN_TYPES = (
+    RUN_TYPE_INITIAL_BULK,
+    RUN_TYPE_MANUAL_SINGLE,
+    RUN_TYPE_RETRY,
+    RUN_TYPE_SCHEDULED_REFRESH,
+)
 
 # Collection target
 TARGET_TYPE_CAS = "CAS"

@@ -44,6 +44,7 @@ from services.keco_chemical.contract import (
     TARGET_STATUS_CONFLICT,
     DEFAULT_STALE_RUNNING_MINUTES,
     DEFAULT_REFRESH_INTERVAL_DAYS,
+    LOCK_RUNTIME_RUN_TYPES,
 )
 from services.keco_chemical.hash import chemical_content_hash, regulatory_fact_hash
 from services.keco_chemical.parse import KecoChemicalItem, KecoRegulatoryFact
@@ -117,6 +118,7 @@ class KecoReferenceStore:
         search_nm: Optional[str] = None,
     ) -> str:
         """RUNNING 상태 ingestion run 생성. run_id(uuid) 반환. serviceKey 저장 금지."""
+        now = _now_iso()
         client = _get_supabase_client()
         db = client.schema("msds_ref")
         result = db.table("keco_ingestion_runs").insert({
@@ -128,9 +130,56 @@ class KecoReferenceStore:
             "search_nm": search_nm,
             "request_count": 0,
             "record_count": 0,
-            "started_at": _now_iso(),
+            "started_at": now,
+            "heartbeat_at": now,
         }).execute()
         return result.data[0]["id"]
+
+    def start_exclusive_run(
+        self,
+        run_type: str,
+        search_gubun: Optional[str] = None,
+        search_nm: Optional[str] = None,
+        stale_minutes: int = DEFAULT_STALE_RUNNING_MINUTES,
+    ) -> tuple:
+        """Recover stale runs → atomic INSERT → returns (run_id, locked).
+
+        locked=False: insert succeeded, run_id is valid.
+        locked=True:  DB unique violation — another runtime run is RUNNING.
+        Callers must check locked before proceeding.
+        """
+        self.recover_stale_runs(stale_minutes)
+        try:
+            run_id = self.start_run(run_type, search_gubun=search_gubun, search_nm=search_nm)
+            return run_id, False
+        except Exception as exc:
+            msg = str(exc)
+            if "23505" in msg or "unique" in msg.lower() or "duplicate" in msg.lower():
+                logger.info(
+                    "[KECO-STORE] start_exclusive_run(%s): locked — another runtime run is RUNNING",
+                    run_type,
+                )
+                return None, True
+            raise
+
+    def finish_run(
+        self,
+        run_id: str,
+        status: str,
+        request_count: int,
+        record_count: int,
+        metrics_json: Optional[dict] = None,
+    ) -> None:
+        """run을 status("COMPLETED" 또는 "PARTIAL")로 마감."""
+        client = _get_supabase_client()
+        db = client.schema("msds_ref")
+        db.table("keco_ingestion_runs").update({
+            "status": status,
+            "completed_at": _now_iso(),
+            "request_count": request_count,
+            "record_count": record_count,
+            "metrics_json": metrics_json,
+        }).eq("id", run_id).execute()
 
     def complete_run(
         self,
@@ -139,16 +188,8 @@ class KecoReferenceStore:
         record_count: int,
         metrics_json: Optional[dict] = None,
     ) -> None:
-        """run을 COMPLETED로 마감."""
-        client = _get_supabase_client()
-        db = client.schema("msds_ref")
-        db.table("keco_ingestion_runs").update({
-            "status": "COMPLETED",
-            "completed_at": _now_iso(),
-            "request_count": request_count,
-            "record_count": record_count,
-            "metrics_json": metrics_json,
-        }).eq("id", run_id).execute()
+        """run을 COMPLETED로 마감. finish_run("COMPLETED", ...) wrapper."""
+        self.finish_run(run_id, "COMPLETED", request_count, record_count, metrics_json)
 
     def fail_run(
         self,
@@ -401,11 +442,12 @@ class KecoReferenceStore:
 
     def claim_targets(
         self,
+        run_id: str,
         limit: int,
         stale_minutes: int = DEFAULT_STALE_RUNNING_MINUTES,
         mode: str = "bulk",
     ) -> List[dict]:
-        """target을 RUNNING으로 claim해서 반환.
+        """target을 RUNNING으로 claim해서 반환. last_run_id = run_id로 기록.
 
         mode="bulk"  → PENDING + RETRY (초기 전수수집 / batch)
         mode="retry" → RETRY + FAILED only (재처리 전용 — PENDING 포함 안함)
@@ -442,19 +484,50 @@ class KecoReferenceStore:
         ids = [r["id"] for r in claimed]
         db.table("keco_collection_targets").update({
             "status": TARGET_STATUS_RUNNING,
+            "last_run_id": run_id,
             "last_attempted_at": now,
             "updated_at": now,
         }).in_("id", ids).execute()
 
         return claimed
 
+    def claim_due_targets(
+        self,
+        run_id: str,
+        limit: int,
+    ) -> List[dict]:
+        """next_refresh_at <= now の DONE/EMPTY targets を RUNNING に claim して返す."""
+        client = _get_supabase_client()
+        db = client.schema("msds_ref")
+        now = _now_iso()
+        rows = (
+            db.table("keco_collection_targets")
+            .select("id,target_type,target_value,attempt_count")
+            .in_("status", [TARGET_STATUS_DONE, TARGET_STATUS_EMPTY])
+            .lte("next_refresh_at", now)
+            .order("next_refresh_at")
+            .limit(limit)
+            .execute()
+        )
+        due = rows.data or []
+        if not due:
+            return []
+        ids = [r["id"] for r in due]
+        db.table("keco_collection_targets").update({
+            "status": TARGET_STATUS_RUNNING,
+            "last_run_id": run_id,
+            "last_attempted_at": now,
+            "updated_at": now,
+        }).in_("id", ids).execute()
+        return due
+
     def recover_stale_runs(
         self,
         stale_minutes: int = DEFAULT_STALE_RUNNING_MINUTES,
     ) -> int:
-        """RUNNING 상태로 stale_minutes 이상 방치된 ingestion run → FAILED 처리.
+        """COALESCE(heartbeat_at, started_at) 기준으로 stale RUNNING run → PARTIAL 처리.
 
-        Mac 프로세스 강제 종료로 RUNNING이 영구 잔류하는 경우 해제.
+        Stale run에 last_run_id로 연결된 RUNNING target도 RETRY로 복구.
         반환: 처리된 run 수.
         """
         client = _get_supabase_client()
@@ -463,21 +536,48 @@ class KecoReferenceStore:
         threshold = serialize_business_datetime(
             now_kst() - timedelta(minutes=stale_minutes)
         )
-        result = (
+        error_msg = f"Run RUNNING for >{stale_minutes}m without heartbeat — auto-recovered"
+
+        # heartbeat_at이 있으면 heartbeat_at 기준, 없으면 started_at 기준
+        q1 = (
             db.table("keco_ingestion_runs")
-            .update({
-                "status": "FAILED",
-                "completed_at": now,
-                "error_code": "STALE_RUNNING",
-                "error_message": f"Run RUNNING for >{stale_minutes}m without heartbeat — auto-recovered",
-            })
+            .select("id")
             .eq("status", "RUNNING")
+            .not_.is_("heartbeat_at", "null")
+            .lt("heartbeat_at", threshold)
+            .execute()
+        )
+        q2 = (
+            db.table("keco_ingestion_runs")
+            .select("id")
+            .eq("status", "RUNNING")
+            .is_("heartbeat_at", "null")
             .lt("started_at", threshold)
             .execute()
         )
-        count = len(result.data or [])
-        if count:
-            logger.info("[KECO-STORE] recover_stale_runs: marked %d stale RUNNING run(s) FAILED", count)
+
+        stale_ids = [r["id"] for r in (q1.data or [])] + [r["id"] for r in (q2.data or [])]
+        if not stale_ids:
+            return 0
+
+        db.table("keco_ingestion_runs").update({
+            "status": "PARTIAL",
+            "completed_at": now,
+            "error_code": "STALE_RUN_RECOVERED",
+            "error_message": error_msg,
+        }).in_("id", stale_ids).execute()
+
+        # stale run에 속했던 RUNNING targets → RETRY
+        db.table("keco_collection_targets").update({
+            "status": TARGET_STATUS_RETRY,
+            "updated_at": now,
+        }).eq("status", TARGET_STATUS_RUNNING).in_("last_run_id", stale_ids).execute()
+
+        count = len(stale_ids)
+        logger.info(
+            "[KECO-STORE] recover_stale_runs: recovered %d stale run(s) → PARTIAL, RUNNING targets → RETRY",
+            count,
+        )
         return count
 
     def heartbeat_run(self, run_id: str) -> None:
@@ -512,6 +612,7 @@ class KecoReferenceStore:
         set_success: bool = False,
         set_refresh: bool = False,
         refresh_days: int = DEFAULT_REFRESH_INTERVAL_DAYS,
+        clear_errors: bool = False,
     ) -> None:
         client = _get_supabase_client()
         db = client.schema("msds_ref")
@@ -521,15 +622,17 @@ class KecoReferenceStore:
             "last_run_id": run_id,
             "last_attempted_at": now,
             "updated_at": now,
+            "api_request_count": api_requests,
+            "source_item_count": source_items,
         }
-        if api_requests:
-            updates["api_request_count"] = api_requests
-        if source_items:
-            updates["source_item_count"] = source_items
-        if error_code is not None:
-            updates["last_error_code"] = error_code
-        if error_msg is not None:
-            updates["last_error_message"] = error_msg[:500] if error_msg else None
+        if clear_errors:
+            updates["last_error_code"] = None
+            updates["last_error_message"] = None
+        else:
+            if error_code is not None:
+                updates["last_error_code"] = error_code
+            if error_msg is not None:
+                updates["last_error_message"] = error_msg[:500] if error_msg else None
         if set_success:
             updates["last_success_at"] = now
         if set_refresh:
@@ -565,6 +668,7 @@ class KecoReferenceStore:
             target_id, run_id, TARGET_STATUS_DONE,
             api_requests=api_requests, source_items=source_items,
             set_success=True, set_refresh=True, refresh_days=refresh_days,
+            clear_errors=True,
         )
 
     def mark_target_empty(
@@ -576,8 +680,9 @@ class KecoReferenceStore:
     ) -> None:
         self._mark_target(
             target_id, run_id, TARGET_STATUS_EMPTY,
-            api_requests=api_requests,
+            api_requests=api_requests, source_items=0,
             set_success=True, set_refresh=True, refresh_days=refresh_days,
+            clear_errors=True,
         )
 
     def mark_target_conflict(

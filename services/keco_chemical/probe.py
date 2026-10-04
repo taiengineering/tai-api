@@ -19,7 +19,6 @@ PROBE_OK = "OK"
 PROBE_BLOCKED_NO_KEY = "BLOCKED_NO_KEY"
 PROBE_FAILED = "FAILED"
 
-# 0건 확인용 sentinel: 유효한 영문명 형식, 실제 데이터 없는 값으로 기대
 PROBE_NORESULT_SENTINEL = "TAI-PROBE-NORESULT-001"
 
 
@@ -51,10 +50,12 @@ def run_probe(
     client,
     store=None,
     max_calls: int = PROBE_MAX_CALLS,
+    budget=None,
 ) -> ProbeResult:
-    """Controlled probe — CAS 검색 → 영문명 검색 → 0건 sentinel(유효한 영문명 형식).
+    """Controlled probe — CAS 검색 → 영문명 검색 → 0건 sentinel.
 
-    환경에 KECO_API_SERVICE_KEY 없으면 BLOCKED_NO_KEY 반환.
+    budget: RequestBudget 전달 시 attempt_hook으로 physical 시도 차감.
+            전달 안 하면 hook 없이 실행 (기존 동작).
     max_calls는 하드코딩 PROBE_MAX_CALLS(3)이 상한.
     """
     if not _has_service_key():
@@ -63,13 +64,14 @@ def run_probe(
 
     effective_max = min(max_calls, PROBE_MAX_CALLS)
     probe_targets = [
-        (SEARCH_CAS, "7664-41-7"),                      # 암모니아 CAS
-        (SEARCH_ENGLISH_NAME, "Ammonia"),               # 영문명
-        (SEARCH_ENGLISH_NAME, PROBE_NORESULT_SENTINEL), # 유효 요청 + 0건 예상
+        (SEARCH_CAS, "7664-41-7"),
+        (SEARCH_ENGLISH_NAME, "Ammonia"),
+        (SEARCH_ENGLISH_NAME, PROBE_NORESULT_SENTINEL),
     ][:effective_max]
 
     calls: list[ProbeCall] = []
     for search_gubun, search_nm in probe_targets:
+        attempt_hook = budget.consume_or_raise if budget is not None else None
         try:
             from services.keco_chemical.client import KecoNoServiceKeyError
             response = client.search(
@@ -77,6 +79,7 @@ def run_probe(
                 search_nm=search_nm,
                 page_no=1,
                 num_of_rows=3,
+                attempt_hook=attempt_hook,
             )
             call = ProbeCall(
                 search_gubun=search_gubun,
@@ -102,3 +105,37 @@ def run_probe(
     errors = [c for c in calls if c.error is not None]
     status = PROBE_FAILED if errors else PROBE_OK
     return ProbeResult(status=status, calls=calls)
+
+
+def run_preflight_probe() -> None:
+    """collect.py --mode preflight 진입점.
+
+    physical HTTP attempts <= PROBE_MAX_CALLS (3) hard cap.
+    RequestBudget(limit=3)을 budget hook으로 주입 — timeout retry 포함.
+    """
+    from services.keco_chemical.client import KecoChemicalClient
+    from services.keco_chemical.budget import RequestBudget
+
+    client = KecoChemicalClient()
+    budget = RequestBudget(limit=PROBE_MAX_CALLS)
+
+    result = run_probe(client, budget=budget)
+
+    if result.status == PROBE_BLOCKED_NO_KEY:
+        logger.warning("[PREFLIGHT] BLOCKED_NO_KEY — KECO_API_SERVICE_KEY not set")
+        raise RuntimeError("KECO_API_SERVICE_KEY not set — cannot run preflight")
+
+    for c in result.calls:
+        if c.error:
+            logger.error("[PREFLIGHT] FAIL: %s %s → %s", c.search_gubun, c.search_nm, c.error)
+        else:
+            logger.info(
+                "[PREFLIGHT] OK: %s %s → totalCount=%s items=%d",
+                c.search_gubun, c.search_nm, c.total_count, c.item_count,
+            )
+
+    if result.status == PROBE_FAILED:
+        errors = [c.error for c in result.calls if c.error]
+        raise RuntimeError(f"Preflight probe FAILED: {errors}")
+
+    logger.info("[PREFLIGHT] PASS — %d calls OK, budget_used=%d/%d", len(result.calls), budget.used, budget.limit)

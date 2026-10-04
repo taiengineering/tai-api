@@ -109,7 +109,9 @@ def sync_single_cas(
     store = _make_store()
     budget = _make_budget()
 
-    run_id = store.start_run(RUN_TYPE_MANUAL_SINGLE, search_gubun="2", search_nm=cas.strip())
+    run_id, locked = store.start_exclusive_run(RUN_TYPE_MANUAL_SINGLE, search_gubun="2", search_nm=cas.strip())
+    if locked:
+        raise HTTPException(status_code=409, detail="another KECO runtime run is already active")
 
     # Ensure target exists (create PENDING if not)
     db = None
@@ -146,7 +148,7 @@ def sync_single_cas(
 
     try:
         result = sync_one_target(client, store, target, run_id, budget)
-        store.complete_run(run_id, result.api_requests, result.source_items, {
+        store.finish_run(run_id, result.status, result.api_requests, result.source_items, {
             "status": result.status,
             "new": result.new_count,
             "unchanged": result.unchanged_count,
@@ -204,12 +206,15 @@ def retry_targets(
     except ValueError:
         stale_min = DEFAULT_STALE_RUNNING_MINUTES
 
-    run_id = store.start_run(RUN_TYPE_RETRY)
+    run_id, locked = store.start_exclusive_run(RUN_TYPE_RETRY, stale_minutes=stale_min)
+    if locked:
+        raise HTTPException(status_code=409, detail="another KECO runtime run is already active")
+
     try:
-        targets = store.claim_targets(limit, stale_min, mode="retry")
+        targets = store.claim_targets(run_id, limit, stale_min, mode="retry")
         result = sync_batch(client, store, targets, run_id, budget)
         result.run_type = RUN_TYPE_RETRY
-        store.complete_run(run_id, result.requests, result.source_items, {
+        store.finish_run(run_id, result.status, result.requests, result.source_items, {
             "targets_selected": result.targets_selected,
             "targets_processed": result.targets_processed,
             "budget_used": result.budget_used,
@@ -227,6 +232,8 @@ def retry_targets(
             "retry": result.retry,
             "failed": result.failed,
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         store.fail_run(run_id, "UNEXPECTED_ERROR", str(exc))
         raise HTTPException(status_code=500, detail="retry failed") from exc

@@ -498,13 +498,13 @@ class TestSchedulerLock:
         client.search.assert_not_called()
 
     def test_not_due_targets_skip(self):
-        """get_due_targets returns [] → COMPLETED with 0 processed"""
+        """claim_due_targets returns [] → COMPLETED with 0 processed"""
         from services.keco_chemical.sync import refresh_due_targets
         client = MagicMock()
         store = MagicMock()
         store.has_active_run.return_value = False
         store.start_run.return_value = "run-nodue"
-        store.get_due_targets.return_value = []
+        store.claim_due_targets.return_value = []
         budget = RequestBudget(limit=100)
 
         result = refresh_due_targets(client, store, budget)
@@ -518,7 +518,7 @@ class TestSchedulerLock:
         store = MagicMock()
         store.has_active_run.return_value = False
         store.start_run.return_value = "run-due"
-        store.get_due_targets.return_value = [_make_target(status=TARGET_STATUS_DONE)]
+        store.claim_due_targets.return_value = [_make_target(status=TARGET_STATUS_DONE)]
         client.search.return_value = _make_search_response([_make_parsed_item()], total_count="1")
         store.persist_item.return_value = _make_persist_result("UNCHANGED")
         budget = RequestBudget(limit=100)
@@ -610,7 +610,7 @@ class TestInternalKecoSyncAPI:
              patch("routers.internal_keco_sync._make_client") as mock_client_fn, \
              patch("routers.internal_keco_sync._make_budget") as mock_budget_fn:
             mock_store = MagicMock()
-            mock_store.start_run.return_value = "run-retry"
+            mock_store.start_exclusive_run.return_value = ("run-retry", False)
             mock_store.claim_targets.return_value = []
             mock_store_fn.return_value = mock_store
             mock_client_fn.return_value = MagicMock()
@@ -622,8 +622,8 @@ class TestInternalKecoSyncAPI:
                 headers={"X-Internal-Secret": "test-secret"},
             )
         assert resp.status_code == 200
-        # claim_targets called with capped limit ≤ _MAX_SINGLE_REQUEST_TARGETS (100)
-        called_limit = mock_store.claim_targets.call_args[0][0]
+        # claim_targets(run_id, limit, ...) — limit is arg[1] (0-indexed)
+        called_limit = mock_store.claim_targets.call_args[0][1]
         assert called_limit <= 100
 
     def test_refresh_requires_auth(self, client):
@@ -640,7 +640,7 @@ class TestInternalKecoSyncAPI:
             mock_store = MagicMock()
             mock_store.has_active_run.return_value = False
             mock_store.start_run.return_value = "run-ref"
-            mock_store.get_due_targets.return_value = []
+            mock_store.claim_due_targets.return_value = []
             mock_store_fn.return_value = mock_store
             mock_client_fn.return_value = MagicMock()
             mock_budget_fn.return_value = RequestBudget(limit=100)
@@ -651,8 +651,8 @@ class TestInternalKecoSyncAPI:
                 headers={"X-Internal-Secret": "test-secret"},
             )
         assert resp.status_code == 200
-        # get_due_targets called with capped max_targets ≤ 100
-        called_max = mock_store.get_due_targets.call_args[0][0]
+        # claim_due_targets(run_id, batch_size) — batch_size is arg[1]
+        called_max = mock_store.claim_due_targets.call_args[0][1]
         assert called_max <= 100
 
 
@@ -1065,7 +1065,7 @@ class TestPatch001ClaimMode:
              patch("routers.internal_keco_sync._make_client") as mc, \
              patch("routers.internal_keco_sync._make_budget") as mb:
             mock_store = MagicMock()
-            mock_store.start_run.return_value = "run-retry"
+            mock_store.start_exclusive_run.return_value = ("run-retry", False)
             mock_store.claim_targets.return_value = []
             ms.return_value = mock_store
             mc.return_value = MagicMock()
@@ -1170,3 +1170,566 @@ class TestPatch001Recovery:
         assert result.status == TARGET_STATUS_CONFLICT
         store.mark_target_conflict.assert_called_once()
         store.persist_item.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────
+# PATCH-002 — P201-P223: Final Runtime Closeout
+# ─────────────────────────────────────────────────────────────
+
+class TestPatch002Preflight:
+    """P201-P205: probe.py run_preflight_probe 진입점 + budget 연동."""
+
+    def test_p201_run_preflight_probe_importable(self):
+        """P201: run_preflight_probe is importable from probe.py without ImportError"""
+        from services.keco_chemical.probe import run_preflight_probe
+        assert callable(run_preflight_probe)
+
+    def test_p202_run_preflight_probe_callable(self):
+        """P202: run_preflight_probe() is callable with no required args"""
+        import inspect
+        from services.keco_chemical.probe import run_preflight_probe
+        sig = inspect.signature(run_preflight_probe)
+        # all params should have defaults
+        for param in sig.parameters.values():
+            assert param.default is not inspect.Parameter.empty or param.kind in (
+                inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD
+            )
+
+    def test_p203_run_probe_passes_attempt_hook_via_budget(self):
+        """P203: run_probe() with budget passes budget.consume_or_raise as attempt_hook"""
+        from services.keco_chemical.probe import run_probe
+        from services.keco_chemical.budget import RequestBudget
+        from services.keco_chemical.parse import KecoSearchResponse
+
+        client = MagicMock()
+        budget = RequestBudget(limit=3)
+        hook_calls = []
+
+        def _search(**kwargs):
+            hook = kwargs.get("attempt_hook")
+            if hook:
+                hook_calls.append(True)
+                hook()
+            return KecoSearchResponse(
+                result_code="200", result_msg="OK",
+                page_no="1", num_of_rows="3", total_count="0", items=[],
+            )
+
+        client.search.side_effect = _search
+        run_probe(client, budget=budget)
+
+        # attempt_hook must have been called (at least once)
+        assert len(hook_calls) > 0
+        # budget must have been consumed
+        assert budget.used > 0
+
+    def test_p204_run_probe_caps_at_3_physical_attempts(self):
+        """P204: run_probe with budget(limit=3) triggers ≤ 3 hook fires"""
+        from services.keco_chemical.probe import run_probe
+        from services.keco_chemical.budget import RequestBudget
+        from services.keco_chemical.parse import KecoSearchResponse
+
+        client = MagicMock()
+        budget = RequestBudget(limit=3)
+
+        def _search(**kwargs):
+            hook = kwargs.get("attempt_hook")
+            if hook:
+                hook()
+            return KecoSearchResponse(
+                result_code="200", result_msg="OK",
+                page_no="1", num_of_rows="3", total_count="0", items=[],
+            )
+
+        client.search.side_effect = _search
+        run_probe(client, budget=budget)
+
+        assert budget.used <= 3
+
+    def test_p205_run_preflight_probe_raises_on_failed(self):
+        """P205: run_preflight_probe() raises RuntimeError when probe FAILS"""
+        from services.keco_chemical.probe import run_preflight_probe
+        from unittest.mock import patch
+
+        with patch("services.keco_chemical.probe._has_service_key", return_value=True), \
+             patch("services.keco_chemical.probe.run_probe") as mock_run_probe:
+            from services.keco_chemical.probe import PROBE_FAILED, ProbeResult, ProbeCall
+            mock_run_probe.return_value = ProbeResult(
+                status=PROBE_FAILED,
+                calls=[ProbeCall(
+                    search_gubun="2", search_nm="test",
+                    status_code=None, total_count=None, item_count=0,
+                    error="connection error",
+                )],
+            )
+            with pytest.raises(RuntimeError, match="FAILED"):
+                run_preflight_probe()
+
+
+class TestPatch002ExclusiveLock:
+    """P206-P215: start_exclusive_run + heartbeat_at + stale recovery."""
+
+    def test_p206_start_exclusive_run_returns_run_id_and_false(self):
+        """P206: start_exclusive_run() inserts run with heartbeat_at, returns (run_id, False)"""
+        from services.keco_chemical.store import KecoReferenceStore
+        store = KecoReferenceStore()
+        fake_run_id = "run-exclusive-001"
+
+        with patch.object(store, "recover_stale_runs", return_value=0), \
+             patch.object(store, "start_run", return_value=fake_run_id):
+            run_id, locked = store.start_exclusive_run(RUN_TYPE_INITIAL_BULK)
+
+        assert locked is False
+        assert run_id == fake_run_id
+
+    def test_p207_recent_heartbeat_not_stale(self):
+        """P207: recover_stale_runs() does not touch runs with recent heartbeat"""
+        from services.keco_chemical.store import KecoReferenceStore
+        store = KecoReferenceStore()
+
+        with patch("services.keco_chemical.store._get_supabase_client") as mock_client:
+            mock_db = MagicMock()
+            mock_client.return_value.schema.return_value = mock_db
+
+            # heartbeat_at is recent (after threshold): q1 returns []
+            mock_db.table.return_value.select.return_value.eq.return_value\
+                .not_.return_value.is_.return_value.lt.return_value.execute.return_value\
+                .data = []
+            # started_at stale but heartbeat IS NOT NULL: q2 also returns []
+            mock_db.table.return_value.select.return_value.eq.return_value\
+                .is_.return_value.lt.return_value.execute.return_value.data = []
+
+            count = store.recover_stale_runs(stale_minutes=60)
+
+        assert count == 0
+
+    def test_p208_stale_heartbeat_marks_partial(self):
+        """P208: stale heartbeat → run status PARTIAL (not FAILED)"""
+        from services.keco_chemical.store import KecoReferenceStore
+        store = KecoReferenceStore()
+
+        with patch("services.keco_chemical.store._get_supabase_client") as mock_client:
+            mock_db = MagicMock()
+            mock_client.return_value.schema.return_value = mock_db
+
+            # q1: stale heartbeat run found
+            q1_result = MagicMock()
+            q1_result.data = [{"id": "stale-run-001"}]
+
+            # q2: no null-heartbeat stale runs
+            q2_result = MagicMock()
+            q2_result.data = []
+
+            table_mock = MagicMock()
+            mock_db.table.return_value = table_mock
+
+            # Wire up the query chain for q1 and q2
+            select_mock = MagicMock()
+            table_mock.select.return_value = select_mock
+            eq1 = MagicMock()
+            select_mock.eq.return_value = eq1
+            not_mock = MagicMock()
+            eq1.not_ = not_mock
+            is_mock = MagicMock()
+            not_mock.is_ = MagicMock(return_value=is_mock)
+            lt1 = MagicMock()
+            is_mock.lt = MagicMock(return_value=lt1)
+            lt1.execute.return_value = q1_result
+
+            eq2 = MagicMock()
+            # For q2: .is_("heartbeat_at", "null") chain
+            eq1.is_ = MagicMock(return_value=MagicMock())
+            eq1.is_.return_value.lt = MagicMock(return_value=MagicMock())
+            eq1.is_.return_value.lt.return_value.execute.return_value = q2_result
+
+            # update call
+            update_mock = MagicMock()
+            table_mock.update.return_value = update_mock
+            update_mock.in_ = MagicMock(return_value=MagicMock())
+            update_mock.eq = MagicMock(return_value=MagicMock())
+
+            store.recover_stale_runs(stale_minutes=60)
+
+        # Check that update was called with status="PARTIAL"
+        update_calls = table_mock.update.call_args_list
+        statuses = [c[0][0].get("status") for c in update_calls if isinstance(c[0][0], dict)]
+        assert "PARTIAL" in statuses
+
+    def test_p209_stale_run_targets_marked_retry(self):
+        """P209: recover_stale_runs() marks RUNNING targets with stale last_run_id as RETRY"""
+        from services.keco_chemical.store import KecoReferenceStore
+        store = KecoReferenceStore()
+
+        with patch("services.keco_chemical.store._get_supabase_client") as mock_client:
+            mock_db = MagicMock()
+            mock_client.return_value.schema.return_value = mock_db
+
+            stale_run_id = "stale-run-002"
+            q1_result = MagicMock()
+            q1_result.data = [{"id": stale_run_id}]
+            q2_result = MagicMock()
+            q2_result.data = []
+
+            table_mock = MagicMock()
+            mock_db.table.return_value = table_mock
+            select_mock = MagicMock()
+            table_mock.select.return_value = select_mock
+            eq_mock = MagicMock()
+            select_mock.eq.return_value = eq_mock
+            not_mock = MagicMock()
+            eq_mock.not_ = not_mock
+            is_mock = MagicMock()
+            not_mock.is_ = MagicMock(return_value=is_mock)
+            lt_mock = MagicMock()
+            is_mock.lt = MagicMock(return_value=lt_mock)
+            lt_mock.execute.return_value = q1_result
+            eq_mock.is_ = MagicMock(return_value=MagicMock())
+            eq_mock.is_.return_value.lt = MagicMock(return_value=MagicMock())
+            eq_mock.is_.return_value.lt.return_value.execute.return_value = q2_result
+
+            update_mock = MagicMock()
+            table_mock.update.return_value = update_mock
+            update_mock.in_ = MagicMock(return_value=MagicMock())
+            update_mock.eq = MagicMock(return_value=MagicMock())
+
+            store.recover_stale_runs(stale_minutes=60)
+
+        # Should have called update at least twice: once for runs (PARTIAL), once for targets (RETRY)
+        assert table_mock.update.call_count >= 2
+        update_payloads = [c[0][0] for c in table_mock.update.call_args_list if isinstance(c[0][0], dict)]
+        statuses = [p.get("status") for p in update_payloads]
+        assert "PARTIAL" in statuses
+        assert TARGET_STATUS_RETRY in statuses
+
+    def test_p211_first_start_exclusive_run_not_locked(self):
+        """P211: first start_exclusive_run returns (run_id, locked=False)"""
+        from services.keco_chemical.store import KecoReferenceStore
+        store = KecoReferenceStore()
+
+        with patch.object(store, "recover_stale_runs", return_value=0), \
+             patch.object(store, "start_run", return_value="run-first"):
+            run_id, locked = store.start_exclusive_run(RUN_TYPE_INITIAL_BULK)
+
+        assert run_id == "run-first"
+        assert locked is False
+
+    def test_p212_unique_violation_returns_locked_true(self):
+        """P212: start_exclusive_run catches unique violation → (None, True)"""
+        from services.keco_chemical.store import KecoReferenceStore
+        store = KecoReferenceStore()
+
+        def _raise_unique(*args, **kwargs):
+            raise Exception("ERROR: duplicate key value violates unique constraint (code 23505)")
+
+        with patch.object(store, "recover_stale_runs", return_value=0), \
+             patch.object(store, "start_run", side_effect=_raise_unique):
+            run_id, locked = store.start_exclusive_run(RUN_TYPE_INITIAL_BULK)
+
+        assert run_id is None
+        assert locked is True
+
+    def test_p213_bulk_blocks_refresh_exclusive(self):
+        """P213: INITIAL_BULK unique violation → SCHEDULED_REFRESH blocked"""
+        from services.keco_chemical.store import KecoReferenceStore
+        store = KecoReferenceStore()
+
+        def _raise_unique(*args, **kwargs):
+            raise Exception("23505 duplicate key")
+
+        with patch.object(store, "recover_stale_runs", return_value=0), \
+             patch.object(store, "start_run", side_effect=_raise_unique):
+            _, locked = store.start_exclusive_run(RUN_TYPE_SCHEDULED_REFRESH)
+
+        assert locked is True
+
+    def test_p214_bulk_blocks_retry_exclusive(self):
+        """P214: existing RUNNING run → RETRY blocked"""
+        from services.keco_chemical.store import KecoReferenceStore
+        store = KecoReferenceStore()
+
+        def _raise_unique(*args, **kwargs):
+            raise Exception("unique constraint violation 23505")
+
+        with patch.object(store, "recover_stale_runs", return_value=0), \
+             patch.object(store, "start_run", side_effect=_raise_unique):
+            _, locked = store.start_exclusive_run(RUN_TYPE_RETRY)
+
+        assert locked is True
+
+    def test_p215_bulk_blocks_manual_exclusive(self):
+        """P215: existing RUNNING run → MANUAL_SINGLE blocked"""
+        from services.keco_chemical.store import KecoReferenceStore
+        store = KecoReferenceStore()
+
+        def _raise_unique(*args, **kwargs):
+            raise Exception("duplicate 23505")
+
+        with patch.object(store, "recover_stale_runs", return_value=0), \
+             patch.object(store, "start_run", side_effect=_raise_unique):
+            _, locked = store.start_exclusive_run(RUN_TYPE_MANUAL_SINGLE)
+
+        assert locked is True
+
+
+class TestPatch002PhysicalRequests:
+    """P216-P219: physical request count + record_count + PARTIAL persistence."""
+
+    def test_p216_physical_request_count_includes_retries(self):
+        """P216: hook fired twice (simulate retry) → api_requests=2"""
+        from services.keco_chemical.sync import sync_one_target
+
+        budget = RequestBudget(limit=10)
+        call_count = [0]
+
+        def _search(**kwargs):
+            hook = kwargs.get("attempt_hook")
+            call_count[0] += 1
+            if hook:
+                hook()  # first attempt
+                if call_count[0] == 1:
+                    hook()  # retry — second physical attempt
+            return _make_search_response([_make_parsed_item()], total_count="1")
+
+        client = MagicMock()
+        client.search.side_effect = _search
+        store = MagicMock()
+        store.persist_item.return_value = _make_persist_result("NEW")
+
+        result = sync_one_target(client, store, _make_target(), "run", budget)
+
+        assert result.status == TARGET_STATUS_DONE
+        assert result.api_requests == 2
+        assert budget.used == 2
+
+    def test_p217_record_count_is_source_items_in_bulk(self):
+        """P217: collect.py mode_bulk passes source_items as record_count, not targets_processed"""
+        import argparse
+        from services.keco_chemical import collect
+        from unittest.mock import patch as _patch
+
+        call_count = [0]
+
+        def claim_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            return [_make_target()] if call_count[0] == 1 else []
+
+        budget = RequestBudget(limit=100)
+
+        batch_result = MagicMock()
+        batch_result.targets_processed = 1
+        batch_result.source_items = 5
+        batch_result.requests = 2
+        batch_result.status = "COMPLETED"
+        batch_result.budget_used = 2
+        batch_result.budget_remaining = 98
+        batch_result.new = 5
+        batch_result.unchanged = 0
+        batch_result.changed = 0
+        batch_result.empty = 0
+        batch_result.conflict = 0
+        batch_result.retry = 0
+        batch_result.failed = 0
+        batch_result.targets_selected = 1
+
+        with _patch.object(collect, "_make_store") as ms, \
+             _patch.object(collect, "_make_client") as mc, \
+             _patch.object(collect, "_make_budget", return_value=budget), \
+             _patch("services.keco_chemical.sync.sync_batch", return_value=batch_result):
+            mock_store = MagicMock()
+            mock_store.start_exclusive_run.return_value = ("run-bulk", False)
+            mock_store.claim_targets.side_effect = claim_side_effect
+            ms.return_value = mock_store
+            mc.return_value = MagicMock()
+
+            args = argparse.Namespace(max_targets=None)
+            collect.mode_bulk(args)
+
+        # finish_run(run_id, status, request_count, record_count, metrics)
+        mock_store.finish_run.assert_called_once()
+        call_args = mock_store.finish_run.call_args[0]
+        record_count = call_args[3]
+        assert record_count == 5
+
+    def test_p218_metrics_json_contains_targets_processed(self):
+        """P218: finish_run metrics_json includes targets_processed"""
+        import argparse
+        from services.keco_chemical import collect
+        from unittest.mock import patch as _patch
+
+        call_count = [0]
+
+        def claim_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            return [_make_target()] if call_count[0] == 1 else []
+
+        budget = RequestBudget(limit=100)
+
+        batch_result = MagicMock()
+        batch_result.targets_processed = 1
+        batch_result.source_items = 3
+        batch_result.requests = 1
+        batch_result.status = "COMPLETED"
+        batch_result.budget_used = 1
+        batch_result.budget_remaining = 99
+        batch_result.new = 3
+        batch_result.unchanged = 0
+        batch_result.changed = 0
+        batch_result.empty = 0
+        batch_result.conflict = 0
+        batch_result.retry = 0
+        batch_result.failed = 0
+        batch_result.targets_selected = 1
+
+        with _patch.object(collect, "_make_store") as ms, \
+             _patch.object(collect, "_make_client") as mc, \
+             _patch.object(collect, "_make_budget", return_value=budget), \
+             _patch("services.keco_chemical.sync.sync_batch", return_value=batch_result):
+            mock_store = MagicMock()
+            mock_store.start_exclusive_run.return_value = ("run-bulk", False)
+            mock_store.claim_targets.side_effect = claim_side_effect
+            ms.return_value = mock_store
+            mc.return_value = MagicMock()
+
+            args = argparse.Namespace(max_targets=None)
+            collect.mode_bulk(args)
+
+        call_args = mock_store.finish_run.call_args[0]
+        metrics_json = call_args[4]
+        assert "total_processed" in metrics_json
+
+    def test_p219_partial_batch_result_stored_as_partial(self):
+        """P219: PARTIAL SyncBatchResult → DB status PARTIAL via finish_run"""
+        from services.keco_chemical.sync import sync_batch
+        from services.keco_chemical.client import KecoChemicalClientError
+        from services.keco_chemical.contract import ERROR_RATE_LIMIT
+
+        client = MagicMock()
+        store = MagicMock()
+        client.search.side_effect = KecoChemicalClientError(ERROR_RATE_LIMIT, "daily quota")
+
+        targets = [_make_target("7664-41-7"), _make_target("64-17-5")]
+        budget = RequestBudget(limit=10)
+        result = sync_batch(client, store, targets, "run-partial", budget)
+
+        assert result.status == "PARTIAL"
+        # Callers should use finish_run(result.status, ...) — test the result correctly signals PARTIAL
+        assert result.status == "PARTIAL"
+
+
+class TestPatch002RateLimit2223:
+    """P220-P221: source_code 22/23 분리."""
+
+    def test_p220_source_code_22_stop_batch_true(self):
+        """P220: source_code='22' (daily quota) → stop_batch=True"""
+        from services.keco_chemical.sync import sync_one_target
+        from services.keco_chemical.client import KecoChemicalClientError
+        from services.keco_chemical.contract import ERROR_RATE_LIMIT, RATE_LIMIT_DAILY_CODE
+
+        client = MagicMock()
+        store = MagicMock()
+        client.search.side_effect = KecoChemicalClientError(
+            ERROR_RATE_LIMIT, "daily quota exceeded", source_code=RATE_LIMIT_DAILY_CODE
+        )
+
+        result = sync_one_target(client, store, _make_target(), "run", RequestBudget(limit=100))
+
+        assert result.status == TARGET_STATUS_RETRY
+        assert result.stop_batch is True
+
+    def test_p221_source_code_23_bounded_backoff_stop_batch_false(self, monkeypatch):
+        """P221: source_code='23' (per-second throttle) → bounded backoff + stop_batch=False"""
+        from services.keco_chemical.sync import sync_one_target
+        from services.keco_chemical.client import KecoChemicalClientError
+        from services.keco_chemical.contract import ERROR_RATE_LIMIT, RATE_LIMIT_SECOND_CODE
+
+        monkeypatch.setenv("KECO_RATE_RETRY_MAX", "2")
+        sleep_calls = []
+        monkeypatch.setattr("services.keco_chemical.sync.time.sleep", lambda s: sleep_calls.append(s))
+
+        client = MagicMock()
+        store = MagicMock()
+        client.search.side_effect = KecoChemicalClientError(
+            ERROR_RATE_LIMIT, "per-second rate limit", source_code=RATE_LIMIT_SECOND_CODE
+        )
+
+        result = sync_one_target(client, store, _make_target(), "run", RequestBudget(limit=100))
+
+        assert result.status == TARGET_STATUS_RETRY
+        assert result.stop_batch is False
+        assert len(sleep_calls) == 2  # 2 retries → 2 sleeps
+
+
+class TestPatch002MarkTarget:
+    """P222-P223: _mark_target clear_errors + source_item_count always written."""
+
+    def test_p222_done_clears_previous_error_fields(self):
+        """P222: mark_target_done calls _mark_target with clear_errors=True"""
+        from services.keco_chemical.store import KecoReferenceStore
+        store = KecoReferenceStore()
+
+        captured_updates = {}
+
+        with patch("services.keco_chemical.store._get_supabase_client") as mock_client:
+            mock_db = MagicMock()
+            mock_client.return_value.schema.return_value = mock_db
+            table_mock = MagicMock()
+            mock_db.table.return_value = table_mock
+
+            select_mock = MagicMock()
+            table_mock.select.return_value = select_mock
+            select_mock.eq.return_value.execute.return_value.data = [
+                {"attempt_count": 2, "first_attempted_at": "2026-01-01T00:00:00+09:00"}
+            ]
+
+            update_mock = MagicMock()
+            table_mock.update.return_value = update_mock
+            update_mock.eq.return_value.execute.return_value.data = []
+
+            def capture_update(payload):
+                captured_updates.update(payload)
+                return update_mock
+
+            table_mock.update.side_effect = capture_update
+
+            store.mark_target_done("target-1", "run-1", api_requests=2, source_items=3)
+
+        # clear_errors=True → last_error_code and last_error_message set to None
+        assert "last_error_code" in captured_updates
+        assert captured_updates["last_error_code"] is None
+        assert "last_error_message" in captured_updates
+        assert captured_updates["last_error_message"] is None
+
+    def test_p223_empty_writes_source_item_count_zero(self):
+        """P223: mark_target_empty writes source_item_count=0"""
+        from services.keco_chemical.store import KecoReferenceStore
+        store = KecoReferenceStore()
+
+        captured_updates = {}
+
+        with patch("services.keco_chemical.store._get_supabase_client") as mock_client:
+            mock_db = MagicMock()
+            mock_client.return_value.schema.return_value = mock_db
+            table_mock = MagicMock()
+            mock_db.table.return_value = table_mock
+
+            select_mock = MagicMock()
+            table_mock.select.return_value = select_mock
+            select_mock.eq.return_value.execute.return_value.data = [
+                {"attempt_count": 0, "first_attempted_at": None}
+            ]
+
+            update_mock = MagicMock()
+            table_mock.update.return_value = update_mock
+            update_mock.eq.return_value.execute.return_value.data = []
+
+            def capture_update(payload):
+                captured_updates.update(payload)
+                return update_mock
+
+            table_mock.update.side_effect = capture_update
+
+            store.mark_target_empty("target-1", "run-1", api_requests=1)
+
+        # source_item_count must be written as 0 (not omitted)
+        assert "source_item_count" in captured_updates
+        assert captured_updates["source_item_count"] == 0

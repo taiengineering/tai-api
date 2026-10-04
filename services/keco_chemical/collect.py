@@ -6,8 +6,8 @@ Railway 환경변수는 `railway run` 명령으로 주입.
 사용:
   python -m services.keco_chemical.collect --mode preflight
   python -m services.keco_chemical.collect --mode bootstrap [--dry-run]
-  python -m services.keco_chemical.collect --mode batch [--max-targets N] [--resume]
-  python -m services.keco_chemical.collect --mode bulk [--resume]
+  python -m services.keco_chemical.collect --mode batch [--max-targets N]
+  python -m services.keco_chemical.collect --mode bulk [--max-targets N]
   python -m services.keco_chemical.collect --mode retry [--max-targets N]
   python -m services.keco_chemical.collect --mode refresh [--max-targets N]
   python -m services.keco_chemical.collect --mode status
@@ -123,8 +123,15 @@ def mode_batch(args) -> None:
     store = _make_store()
 
     if dry:
-        count = store.bootstrap_targets(dry_run=True)
-        logger.info("[BATCH][DRY-RUN] pending/retry target count = %s, would claim %d", count, max_targets)
+        from services.keco_chemical.contract import TARGET_STATUS_PENDING, TARGET_STATUS_RETRY
+        summary = store.get_status_summary()
+        pending = summary.get(TARGET_STATUS_PENDING, 0)
+        retry = summary.get(TARGET_STATUS_RETRY, 0)
+        claimable = pending + retry
+        logger.info(
+            "[BATCH][DRY-RUN] PENDING=%d RETRY=%d claimable=%d, would_claim=%d",
+            pending, retry, claimable, min(claimable, max_targets),
+        )
         return
 
     stale_min = _stale_minutes()
@@ -132,17 +139,21 @@ def mode_batch(args) -> None:
     budget = _make_budget()
 
     from services.keco_chemical.contract import RUN_TYPE_INITIAL_BULK
-    run_id = store.start_run(RUN_TYPE_INITIAL_BULK)
+    run_id, locked = store.start_exclusive_run(RUN_TYPE_INITIAL_BULK, stale_minutes=stale_min)
+    if locked:
+        logger.warning("[BATCH] Another KECO runtime run is RUNNING — skipping")
+        return
+
     logger.info("[BATCH] run_id=%s max_targets=%d budget=%d", run_id, max_targets, budget.limit)
 
     try:
-        targets = store.claim_targets(max_targets, stale_min)
+        targets = store.claim_targets(run_id, max_targets, stale_min)
         logger.info("[BATCH] claimed %d targets", len(targets))
 
         from services.keco_chemical.sync import sync_batch
         result = sync_batch(client, store, targets, run_id, budget)
 
-        store.complete_run(run_id, result.requests, result.source_items, _metrics(result))
+        store.finish_run(run_id, result.status, result.requests, result.source_items, _metrics(result))
         _log_result(result)
     except Exception as exc:
         store.fail_run(run_id, "UNEXPECTED_ERROR", str(exc))
@@ -155,37 +166,30 @@ def mode_batch(args) -> None:
 # ─────────────────────────────────────────────────────────────
 
 def mode_bulk(args) -> None:
-    """전수 초기 적재. PENDING/RETRY 전체를 budget 소진까지 처리. --resume 지원."""
+    """전수 초기 적재. PENDING/RETRY 전체를 budget 소진까지 처리."""
     _require_env("KECO_API_SERVICE_KEY")
     _require_env("LEG_SUPABASE_URL")
     _require_env("LEG_SUPABASE_SERVICE_ROLE_KEY")
 
     store = _make_store()
-
-    # 강제 종료된 stale RUNNING run을 FAILED로 해제한 후 lock 체크
     stale_min = _stale_minutes()
-    recovered = store.recover_stale_runs(stale_min)
-    if recovered:
-        logger.info("[BULK] Recovered %d stale RUNNING run(s) before lock check", recovered)
 
-    if store.has_active_run("INITIAL_BULK"):
-        logger.warning("[BULK] INITIAL_BULK already RUNNING — skipping to prevent double run")
+    # start_exclusive_run: recover stale + atomic INSERT
+    from services.keco_chemical.contract import RUN_TYPE_INITIAL_BULK, DEFAULT_CLAIM_BATCH_SIZE
+    run_id, locked = store.start_exclusive_run(RUN_TYPE_INITIAL_BULK, stale_minutes=stale_min)
+    if locked:
+        logger.warning("[BULK] Another KECO runtime run is RUNNING — skipping to prevent double run")
         return
 
     budget = _make_budget()
-    stale_min = _stale_minutes()
     client = _make_client()
-
-    from services.keco_chemical.contract import (
-        DEFAULT_CLAIM_BATCH_SIZE,
-        RUN_TYPE_INITIAL_BULK,
-    )
     max_targets = getattr(args, "max_targets", None)
-    run_id = store.start_run(RUN_TYPE_INITIAL_BULK)
+
     logger.info("[BULK] run_id=%s budget=%d", run_id, budget.limit)
 
     try:
         total_processed = 0
+        total_source_items = 0
         from services.keco_chemical.sync import sync_batch
 
         while not budget.exhausted:
@@ -196,25 +200,29 @@ def mode_bulk(args) -> None:
                     break
                 batch_size = min(batch_size, remaining_allowed)
 
-            targets = store.claim_targets(batch_size, stale_min, mode="bulk")
+            targets = store.claim_targets(run_id, batch_size, stale_min, mode="bulk")
             if not targets:
                 logger.info("[BULK] No more claimable targets")
                 break
 
             result = sync_batch(client, store, targets, run_id, budget)
             total_processed += result.targets_processed
+            total_source_items += result.source_items
+            store.heartbeat_run(run_id)
             _log_result(result)
 
             if result.status == "PARTIAL":
                 logger.info("[BULK] Partial stop (budget/rate-limit) after %d total processed", total_processed)
                 break
 
-        store.complete_run(run_id, budget.used, total_processed, {
+        store.finish_run(run_id, "COMPLETED", budget.used, total_source_items, {
             "total_processed": total_processed,
+            "total_source_items": total_source_items,
             "budget_used": budget.used,
             "budget_remaining": budget.remaining,
         })
-        logger.info("[BULK] DONE — run_id=%s processed=%d budget_used=%d", run_id, total_processed, budget.used)
+        logger.info("[BULK] DONE — run_id=%s processed=%d source_items=%d budget_used=%d",
+                    run_id, total_processed, total_source_items, budget.used)
 
     except Exception as exc:
         store.fail_run(run_id, "UNEXPECTED_ERROR", str(exc))
@@ -234,19 +242,23 @@ def mode_retry(args) -> None:
     _require_env("LEG_SUPABASE_SERVICE_ROLE_KEY")
 
     store = _make_store()
-    budget = _make_budget()
     stale_min = _stale_minutes()
-    client = _make_client()
 
     from services.keco_chemical.contract import RUN_TYPE_RETRY
-    run_id = store.start_run(RUN_TYPE_RETRY)
+    run_id, locked = store.start_exclusive_run(RUN_TYPE_RETRY, stale_minutes=stale_min)
+    if locked:
+        logger.warning("[RETRY] Another KECO runtime run is RUNNING — skipping")
+        return
+
+    budget = _make_budget()
+    client = _make_client()
     logger.info("[RETRY] run_id=%s max_targets=%d", run_id, max_targets)
 
     try:
-        targets = store.claim_targets(max_targets, stale_min, mode="retry")
+        targets = store.claim_targets(run_id, max_targets, stale_min, mode="retry")
         from services.keco_chemical.sync import sync_batch
         result = sync_batch(client, store, targets, run_id, budget)
-        store.complete_run(run_id, result.requests, result.source_items, _metrics(result))
+        store.finish_run(run_id, result.status, result.requests, result.source_items, _metrics(result))
         _log_result(result)
     except Exception as exc:
         store.fail_run(run_id, "UNEXPECTED_ERROR", str(exc))
@@ -332,9 +344,7 @@ def main() -> None:
         help="실행 모드",
     )
     parser.add_argument("--max-targets", type=int, default=None, help="처리 대상 상한")
-    parser.add_argument("--resume", action="store_true", help="중단된 작업 이어서 처리 (bulk 기본 동작)")
     parser.add_argument("--dry-run", action="store_true", help="DB write 없이 예상 결과만 출력")
-    parser.add_argument("--cas", type=str, default=None, help="단일 CAS 처리 (--mode batch와 조합)")
 
     args = parser.parse_args()
 

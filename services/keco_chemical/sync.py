@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -21,12 +22,17 @@ from services.keco_chemical.budget import RequestBudget, RequestBudgetExceeded
 from services.keco_chemical.client import KecoChemicalClient, KecoChemicalClientError
 from services.keco_chemical.contract import (
     DEFAULT_CLAIM_BATCH_SIZE,
+    DEFAULT_RATE_RETRY_BASE_SECONDS,
+    DEFAULT_RATE_RETRY_MAX,
     DEFAULT_REFRESH_BATCH_SIZE,
     DEFAULT_REQUEST_BUDGET,
     DEFAULT_STALE_RUNNING_MINUTES,
     ERROR_RATE_LIMIT,
     MAX_PAGES_SAFETY_CAP,
     NON_RETRY_CODES,
+    RATE_LIMIT_SECOND_CODE,
+    RATE_RETRY_BASE_SECONDS_ENV,
+    RATE_RETRY_MAX_ENV,
     REFRESH_BATCH_SIZE_ENV,
     REQUEST_BUDGET_ENV,
     RUN_TYPE_INITIAL_BULK,
@@ -57,7 +63,7 @@ class SyncTargetResult:
     target_type: str
     target_value: str
     status: str          # DONE | EMPTY | CONFLICT | RETRY | FAILED
-    api_requests: int
+    api_requests: int    # physical HTTP attempts (including retries)
     source_items: int
     new_count: int
     unchanged_count: int
@@ -104,19 +110,35 @@ def sync_one_target(
 
     Pagination 전체를 읽고 → CAS match 확인 → persist_item 호출.
     budget 소진 시 RETRY로 마크하고 stop_batch=True 반환.
-    rate limit (daily) 시 RETRY + stop_batch=True.
+    rate limit daily (22) 시 RETRY + stop_batch=True.
+    rate limit per-second (23) 시 bounded backoff retry, stop_batch=False.
     CAS mismatch 1건이라도 → CONFLICT (partial persist 금지).
     Pagination safety cap 초과 → RETRY (totalCount 미달시).
+
+    api_requests = physical HTTP attempts (budget 차감 횟수). 재시도 포함.
     """
     target_id = target["id"]
     target_type = target["target_type"]
     target_value = target["target_value"]
 
-    api_requests = 0
+    request_start = budget.used
+    page_call_count = 0   # successful client.search() calls (floor for api_requests)
     new_count = 0
     unchanged_count = 0
     changed_count = 0
     fact_insert_count = 0
+
+    rate_retry_max_raw = (os.getenv(RATE_RETRY_MAX_ENV) or "").strip()
+    try:
+        rate_retry_max = int(rate_retry_max_raw) if rate_retry_max_raw else DEFAULT_RATE_RETRY_MAX
+    except ValueError:
+        rate_retry_max = DEFAULT_RATE_RETRY_MAX
+
+    rate_retry_base_raw = (os.getenv(RATE_RETRY_BASE_SECONDS_ENV) or "").strip()
+    try:
+        rate_retry_base = float(rate_retry_base_raw) if rate_retry_base_raw else DEFAULT_RATE_RETRY_BASE_SECONDS
+    except ValueError:
+        rate_retry_base = DEFAULT_RATE_RETRY_BASE_SECONDS
 
     def _budget_hook() -> None:
         budget.consume_or_raise(1)
@@ -129,34 +151,46 @@ def sync_one_target(
 
         while page_no <= MAX_PAGES_SAFETY_CAP:
             if not budget.check_available():
+                phys = max(page_call_count, budget.used - request_start)
                 store.mark_target_retry(target_id, run_id, "BUDGET_EXHAUSTED", "Request budget exhausted before page fetch")
                 return SyncTargetResult(
                     target_id=target_id, target_type=target_type, target_value=target_value,
-                    status=TARGET_STATUS_RETRY, api_requests=api_requests,
+                    status=TARGET_STATUS_RETRY, api_requests=phys,
                     source_items=len(all_items), new_count=0, unchanged_count=0,
                     changed_count=0, fact_insert_count=0,
                     error="BUDGET_EXHAUSTED", stop_batch=True,
                 )
 
-            try:
-                resp = client.search(
-                    search_gubun=SEARCH_CAS,
-                    search_nm=target_value,
-                    page_no=page_no,
-                    num_of_rows=SYNC_PAGE_SIZE,
-                    attempt_hook=_budget_hook,
-                )
-            except RequestBudgetExceeded:
-                store.mark_target_retry(target_id, run_id, "BUDGET_EXHAUSTED", "Budget exhausted during HTTP attempt")
-                return SyncTargetResult(
-                    target_id=target_id, target_type=target_type, target_value=target_value,
-                    status=TARGET_STATUS_RETRY, api_requests=api_requests,
-                    source_items=len(all_items), new_count=0, unchanged_count=0,
-                    changed_count=0, fact_insert_count=0,
-                    error="BUDGET_EXHAUSTED", stop_batch=True,
-                )
+            resp = None
+            for retry_23 in range(rate_retry_max + 1):
+                try:
+                    resp = client.search(
+                        search_gubun=SEARCH_CAS,
+                        search_nm=target_value,
+                        page_no=page_no,
+                        num_of_rows=SYNC_PAGE_SIZE,
+                        attempt_hook=_budget_hook,
+                    )
+                    break
+                except RequestBudgetExceeded:
+                    phys = max(page_call_count, budget.used - request_start)
+                    store.mark_target_retry(target_id, run_id, "BUDGET_EXHAUSTED", "Budget exhausted during HTTP attempt")
+                    return SyncTargetResult(
+                        target_id=target_id, target_type=target_type, target_value=target_value,
+                        status=TARGET_STATUS_RETRY, api_requests=phys,
+                        source_items=len(all_items), new_count=0, unchanged_count=0,
+                        changed_count=0, fact_insert_count=0,
+                        error="BUDGET_EXHAUSTED", stop_batch=True,
+                    )
+                except KecoChemicalClientError as _exc:
+                    sc = getattr(_exc, "source_code", None) or ""
+                    if sc == RATE_LIMIT_SECOND_CODE and retry_23 < rate_retry_max:
+                        time.sleep(rate_retry_base * (2 ** retry_23))
+                        continue
+                    raise _exc
 
-            api_requests += 1
+            # resp is set successfully; count this logical page
+            page_call_count += 1
 
             if total_count is None:
                 try:
@@ -176,13 +210,14 @@ def sync_one_target(
 
         # Pagination safety cap reached with unread pages → RETRY
         if cap_reached:
+            phys = max(page_call_count, budget.used - request_start)
             store.mark_target_retry(
                 target_id, run_id, "PAGINATION_CAP",
                 f"Safety cap {MAX_PAGES_SAFETY_CAP} reached: totalCount={total_count} fetched={len(all_items)}",
             )
             return SyncTargetResult(
                 target_id=target_id, target_type=target_type, target_value=target_value,
-                status=TARGET_STATUS_RETRY, api_requests=api_requests,
+                status=TARGET_STATUS_RETRY, api_requests=phys,
                 source_items=len(all_items), new_count=0, unchanged_count=0,
                 changed_count=0, fact_insert_count=0, error="PAGINATION_CAP",
             )
@@ -190,10 +225,11 @@ def sync_one_target(
         source_items_total = len(all_items)
 
         if not all_items:
-            store.mark_target_empty(target_id, run_id, api_requests)
+            phys = max(page_call_count, budget.used - request_start)
+            store.mark_target_empty(target_id, run_id, phys)
             return SyncTargetResult(
                 target_id=target_id, target_type=target_type, target_value=target_value,
-                status=TARGET_STATUS_EMPTY, api_requests=api_requests,
+                status=TARGET_STATUS_EMPTY, api_requests=phys,
                 source_items=0, new_count=0, unchanged_count=0,
                 changed_count=0, fact_insert_count=0,
             )
@@ -204,13 +240,14 @@ def sync_one_target(
         matched = [item for item in all_items if (item.cas_no or "").strip() == target_cas]
 
         if mismatched:
+            phys = max(page_call_count, budget.used - request_start)
             store.mark_target_conflict(
-                target_id, run_id, api_requests, source_items_total,
+                target_id, run_id, phys, source_items_total,
                 f"CAS mismatch: {len(mismatched)}/{source_items_total} items differ",
             )
             return SyncTargetResult(
                 target_id=target_id, target_type=target_type, target_value=target_value,
-                status=TARGET_STATUS_CONFLICT, api_requests=api_requests,
+                status=TARGET_STATUS_CONFLICT, api_requests=phys,
                 source_items=source_items_total, new_count=0, unchanged_count=0,
                 changed_count=0, fact_insert_count=0, error="CAS_MISMATCH",
             )
@@ -226,37 +263,44 @@ def sync_one_target(
                 changed_count += 1
             fact_insert_count += result.inserted_fact_count
 
-        store.mark_target_done(target_id, run_id, api_requests, source_items_total)
+        phys = max(page_call_count, budget.used - request_start)
+        store.mark_target_done(target_id, run_id, phys, source_items_total)
         return SyncTargetResult(
             target_id=target_id, target_type=target_type, target_value=target_value,
-            status=TARGET_STATUS_DONE, api_requests=api_requests,
+            status=TARGET_STATUS_DONE, api_requests=phys,
             source_items=source_items_total, new_count=new_count,
             unchanged_count=unchanged_count, changed_count=changed_count,
             fact_insert_count=fact_insert_count,
         )
 
     except KecoChemicalClientError as exc:
-        # Use raw source_code for retry/fail classification
-        source_code = getattr(exc, "source_code", None) or exc.code
+        source_code = getattr(exc, "source_code", None) or ""
         is_non_retry = source_code in NON_RETRY_CODES
+        is_per_second = (source_code == RATE_LIMIT_SECOND_CODE)
         is_rate_limit = (exc.code == ERROR_RATE_LIMIT)
+        phys = max(page_call_count, budget.used - request_start)
 
         if is_non_retry:
             store.mark_target_failed(target_id, run_id, exc.code, exc.message)
             return SyncTargetResult(
                 target_id=target_id, target_type=target_type, target_value=target_value,
-                status=TARGET_STATUS_FAILED, api_requests=api_requests,
+                status=TARGET_STATUS_FAILED, api_requests=phys,
                 source_items=0, new_count=0, unchanged_count=0,
                 changed_count=0, fact_insert_count=0, error=exc.message,
             )
 
+        # code 22 → stop_batch=True (daily quota)
+        # code 23 → stop_batch=False (per-second throttle, retries already exhausted)
+        # no source_code, exc.code=RATE_LIMIT → stop_batch=True (fallback)
+        stop_batch = is_rate_limit and not is_per_second
+
         store.mark_target_retry(target_id, run_id, exc.code, exc.message)
         return SyncTargetResult(
             target_id=target_id, target_type=target_type, target_value=target_value,
-            status=TARGET_STATUS_RETRY, api_requests=api_requests,
+            status=TARGET_STATUS_RETRY, api_requests=phys,
             source_items=0, new_count=0, unchanged_count=0,
             changed_count=0, fact_insert_count=0, error=exc.message,
-            stop_batch=is_rate_limit,
+            stop_batch=stop_batch,
         )
 
 
@@ -362,7 +406,7 @@ def refresh_due_targets(
 
     run_id = store.start_run(RUN_TYPE_SCHEDULED_REFRESH)
     try:
-        due_targets = store.get_due_targets(batch_size)
+        due_targets = store.claim_due_targets(run_id, batch_size)
         if not due_targets:
             store.complete_run(run_id, 0, 0, {"due_targets": 0})
             return _empty_batch_result(run_id, RUN_TYPE_SCHEDULED_REFRESH, "COMPLETED")
@@ -370,7 +414,7 @@ def refresh_due_targets(
         result = sync_batch(client, store, due_targets, run_id, budget)
         result.run_type = RUN_TYPE_SCHEDULED_REFRESH
 
-        store.complete_run(run_id, result.requests, result.source_items, {
+        store.finish_run(run_id, result.status, result.requests, result.source_items, {
             "targets_selected": result.targets_selected,
             "targets_processed": result.targets_processed,
             "new": result.new, "unchanged": result.unchanged, "changed": result.changed,
