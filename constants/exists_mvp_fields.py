@@ -61,6 +61,7 @@ FIELD_CODE_TO_FACTORY_COLUMN: Dict[str, str] = {
     "has_excavation": "has_excavation_work",
     "has_scaffold": "has_scaffold_work",
     "has_welding": "has_welding_work",
+    "has_demolition": "has_demolition_work",
     "has_high_place_work": "has_high_place_work",
 }
 
