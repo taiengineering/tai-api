@@ -411,11 +411,11 @@ NOTE: qa/dashboard.vue = GET /admin/qa/summary / qa/settings.vue = GET /admin/qa
 | P0-ADMIN-BILL-FNC-002 | P0 | FUNCTIONAL | 구독/계약 목록 정상 로드 | GET /contracts | Y | C | PW | AUTH_LOGIN + LIST_LOAD | — | NEW |
 | P1-ADMIN-BILL-AVL-001 | P1 | AVAILABILITY | 경영지표 정상 진입 | GET /stats/business | Y | C | PW | AUTH_LOGIN + PAGE_OPEN | — | NEW |
 | P1-ADMIN-BILL-FNC-001 | P1 | FUNCTIONAL | 결제원장 상세/원장 조회 | GET /payments/{id}/ledger | Y | C | PW | AUTH_LOGIN + DETAIL_LOAD | — | NEW |
-| P1-ADMIN-BILL-FNC-002 | P1 | FUNCTIONAL | 계약 활성화 처리 | PATCH /contracts/{id}/activate | Y | C | HYB | AUTH_LOGIN + SAVE_UPDATE | — | NEW |
+| P1-ADMIN-BILL-FNC-002 | P1 | FUNCTIONAL | 계약 활성화 처리 | POST /contracts/{id}/activate | Y | C | HYB | AUTH_LOGIN + SAVE_UPDATE | — | NEW |
 | P1-ADMIN-BILL-FNC-003 | P1 | FUNCTIONAL | 세금계산서 관리 목록 | GET /payments/admin/tax-invoices | Y | C | PW | AUTH_LOGIN + LIST_LOAD | — | NEW |
 | P1-ADMIN-BILL-FNC-004 | P1 | FUNCTIONAL | 실행 게이트 상태 조회 | GET /payments/ops/gate-readiness | Y | C | PW | AUTH_LOGIN + DETAIL_LOAD | — | NEW |
 | P1-ADMIN-BILL-FNC-005 | P1 | FUNCTIONAL | 견적서 목록/상세 정상 로드 | GET /admin/quotes | Y | C | PW | AUTH_LOGIN + LIST_LOAD | — | NEW |
-| P1-ADMIN-BILL-FNC-006 | P1 | FUNCTIONAL | 견적서 발행 정상 처리 | POST /admin/quotes/{id}/issue | Y | C | HYB | AUTH_LOGIN + FORM_SUBMIT | — | NEW |
+| P1-ADMIN-BILL-FNC-006 | P1 | FUNCTIONAL | 견적서 발행 정상 처리 | POST /admin/quotes/{id}/custom/issue | Y | C | HYB | AUTH_LOGIN + FORM_SUBMIT | — | NEW |
 | P1-ADMIN-BILL-FNC-007 | P1 | FUNCTIONAL | 가격 설정 조회 | GET /price/summary-cards | Y | C | PW | AUTH_LOGIN + DETAIL_LOAD | — | NEW |
 | P1-ADMIN-BILL-SEC-001 | P1 | SECURITY | 결제 취소/환불 비인증 접근 차단 | POST /payments/{id}/cancel (role check) | Y | C | HYB | ACCESS_DENY | — | NEW |
 | P1-ADMIN-BILL-DATA-001 | P1 | DATA | 결제원장 화면/API 금액 정합 | GET /payments → 화면 표시 금액 | Y | C | PW | AUTH_LOGIN + DATA_MATCH | — | NEW |

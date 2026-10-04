@@ -21,7 +21,7 @@ P1 Universe 전체 139건 blocker 분류 대장. Wave13 확정본 PATCH-001.
 | 항목 | 값 |
 |------|-----|
 | tai-api main | `5f815532` |
-| tai-api PR HEAD | `d3aca5e7` (docs/qa-p1-wave13-closeout) |
+| tai-api PR branch | `docs/qa-p1-wave13-closeout` |
 | tai-qa main | `9ab06f00` |
 | 기준일 | 2026-10-04 |
 | base catalog | `QA_UNIVERSE_CATALOG_V1.md` (docs/qa-p1-wave13-closeout) |
@@ -33,11 +33,11 @@ P1 Universe 전체 139건 blocker 분류 대장. Wave13 확정본 PATCH-001.
 | status | 건수 | 설명 |
 |--------|------|------|
 | COVERED | 38 | 자동화 완료 (tai-qa 수록) |
-| BLOCKED_SOURCE_DRIFT | 21 | 소스 증거 기반 확정 (Wave6 GPT 7건 + MKT grep 14건) |
+| BLOCKED_SOURCE_DRIFT | 22 | 소스 증거 기반 확정 (Wave6 GPT 7건 + MKT grep 14건 + route 미존재 1건) |
 | NEEDS_DEEPER_REVIEW | 26 | admin 콘솔 페이지 상태 미검증 — Wave13 이후 조사 필요 |
 | BLOCKED_TAXONOMY_COLLISION | 7 | ADMIN 시나리오와 중복 (SAAS/ADMIN 이중 UI) |
 | BLOCKED_FIXTURE | 10 | 필수 테스트 픽스처 없음 |
-| BLOCKED_SIDE_EFFECT | 34 | production DB write 발생 (거버넌스: 0 write) |
+| BLOCKED_SIDE_EFFECT | 33 | production DB write 발생 (거버넌스: 0 write) |
 | MANUAL_ONLY | 2 | 자동화 불가 |
 | PR_OPEN_HOLD_FIXTURE | 1 | tai-qa PR #9 OPEN/HOLD — fixture 미비 |
 | **합계** | **139** | |
@@ -154,13 +154,13 @@ Wave4 (commit 5870a8b): P1-API-DIAG-API-001 추가 — tai-qa PR #9 OPEN/HOLD (f
 | P1-ADMIN-CUST-FNC-005 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /admin/inquiries — admin 콘솔 페이지 상태 미검증 |
 | P1-ADMIN-BILL-AVL-001 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /stats/business — admin 콘솔 페이지 상태 미검증 |
 | P1-ADMIN-BILL-FNC-001 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /payments/{id}/ledger — admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-BILL-FNC-002 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | POST_CONTRACT_ACTIVATE | PATCH /contracts/{id}/activate → ACTIVE 전환 비가역 (Wave12 확정) |
+| P1-ADMIN-BILL-FNC-002 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | POST_CONTRACT_ACTIVATE | POST /contracts/{id}/activate → ACTIVE 전환 비가역 (Wave12 확정) |
 | P1-ADMIN-BILL-FNC-003 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /payments/admin/tax-invoices — admin 콘솔 페이지 상태 미검증 |
 | P1-ADMIN-BILL-FNC-004 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /payments/ops/gate-readiness — admin 콘솔 페이지 상태 미검증 |
 | P1-ADMIN-BILL-FNC-005 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /admin/quotes — admin 콘솔 페이지 상태 미검증 |
 | P1-ADMIN-BILL-FNC-006 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | POST_QUOTE_ISSUE | POST /admin/quotes/{id}/custom/issue → ISSUED 전환 비가역 (Wave12 확정) |
 | P1-ADMIN-BILL-FNC-007 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | WAVE6_GPT_CONFIRMED | GET /price/summary-cards — admin console 페이지 drift Wave6 GPT 확정 |
-| P1-ADMIN-BILL-SEC-001 | ADMIN | SECURITY | BLOCKED_SIDE_EFFECT | MUTATION_ENDPOINT | POST /payments/{id}/cancel 접근 — mutation endpoint 호출 포함 |
+| P1-ADMIN-BILL-SEC-001 | ADMIN | SECURITY | BLOCKED_SOURCE_DRIFT | PAYMENT_CANCEL_ROUTE_NOT_FOUND | Universe target POST /payments/{id}/cancel absent from current tai-api; /refund and /partial-refund exist instead |
 | P1-ADMIN-BILL-DATA-001 | ADMIN | DATA | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /payments 화면 정합 — admin 콘솔 페이지 상태 미검증 |
 | P1-ADMIN-BILL-FNC-008 | ADMIN | FUNCTIONAL | MANUAL_ONLY | SAFE_N_REAL_REFUND | POST /payments/{id}/refund (SAFE=N) — 실환불 자동화 불가 |
 | P1-ADMIN-SVC-AVL-001 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | WAVE6_GPT_CONFIRMED | GET /anonymous-diagnosis/admin/list — admin console 페이지 drift Wave6 GPT 확정 |
@@ -215,11 +215,11 @@ Wave4 (commit 5870a8b): P1-API-DIAG-API-001 추가 — tai-qa PR #9 OPEN/HOLD (f
 
 ```
 COVERED              =  38 (WWW:10 + SAAS:17 + ADMIN:11)
-BLOCKED_SOURCE_DRIFT =  21 (WAVE6_GPT_CONFIRMED:7 + MKT_ROUTE_NOT_FOUND:14)
+BLOCKED_SOURCE_DRIFT =  22 (WAVE6_GPT_CONFIRMED:7 + MKT_ROUTE_NOT_FOUND:14 + PAYMENT_CANCEL_ROUTE_NOT_FOUND:1)
 NEEDS_DEEPER_REVIEW  =  26 (ADMIN:26)
 BLOCKED_TAXONOMY_COLLISION =   7 (SAAS-QA-* 7건)
 BLOCKED_FIXTURE      =  10 (WWW:6 + SAAS:4)
-BLOCKED_SIDE_EFFECT  =  34 (WWW:5 + SAAS:13 + ADMIN:16)
+BLOCKED_SIDE_EFFECT  =  33 (WWW:5 + SAAS:13 + ADMIN:15)
 MANUAL_ONLY          =   2 (SAAS:1 + ADMIN:1)
 PR_OPEN_HOLD_FIXTURE =   1 (WWW:1 — tai-qa PR #9)
 합계                 = 139 ✓
