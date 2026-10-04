@@ -255,6 +255,8 @@ jobs:
         run: pytest tests/test_qa_slack_notify.py tests/test_qa_auto_ops.py -q --tb=short
       - name: FREE C1→C3 Contract Guard
         run: pytest tests/test_free_consumer_c1_c3_guard.py -q
+      - name: FREE C9 review_required count projection (PHASE 5A)
+        run: pytest tests/test_free_result_review_required_projection.py -q
 
   db-integrity:
     name: "DB Integrity"

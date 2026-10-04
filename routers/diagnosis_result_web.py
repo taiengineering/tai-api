@@ -513,6 +513,18 @@ def _build_free_obligations(rules_table: List[Dict[str, Any]]) -> List[Dict[str,
     return [_project_free_obligation(r) for r in rules_table]
 
 
+def _review_required_count(full_result: Any) -> int:
+    """C8 full_result.review_required 배열의 단순 길이 반환.
+
+    C9 FREE-only safe count projection. 배열이면 len, 아니면 0.
+    내부 scalar(review_required_count/unconfirmed_count) 재사용 금지.
+    """
+    if not isinstance(full_result, dict):
+        return 0
+    value = full_result.get("review_required")
+    return len(value) if isinstance(value, list) else 0
+
+
 
 @router.get("/result/{public_token}")
 def get_diagnosis_result_web(public_token: str):
@@ -716,6 +728,7 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
     }
     if is_free:
         payload["data"]["additional_information"] = project_additional_information(full_result)
+        payload["data"]["review_required_count"] = _review_required_count(full_result)
     # v1.3.1: LEG top-level contract (입력 부족 고지용) — 비어있지 않을 때만 add-only.
     if leg_contract is not None:
         payload["data"]["contract"] = leg_contract
