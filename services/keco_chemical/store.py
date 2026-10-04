@@ -19,9 +19,9 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Optional, Tuple
 
+from services.time import now_kst, serialize_business_datetime
 from services.keco_chemical.contract import SOURCE_CONTRACT_VERSION, SOURCE_ID
 from services.keco_chemical.hash import chemical_content_hash, regulatory_fact_hash
 from services.keco_chemical.parse import KecoChemicalItem, KecoRegulatoryFact
@@ -47,8 +47,9 @@ class KecoStoreSourceRecordIdError(KecoStoreError):
         super().__init__("SOURCE_RECORD_ID_REQUIRED: sbstnId is blank or missing — identity contamination prevented")
 
 
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _now_iso() -> str:
+    """TAI Time Contract 승인 ISO 시리얼: KST +09:00."""
+    return serialize_business_datetime(now_kst())
 
 
 def _get_supabase_client():
@@ -105,7 +106,7 @@ class KecoReferenceStore:
             "search_nm": search_nm,
             "request_count": 0,
             "record_count": 0,
-            "started_at": _utcnow_iso(),
+            "started_at": _now_iso(),
         }).execute()
         return result.data[0]["id"]
 
@@ -121,7 +122,7 @@ class KecoReferenceStore:
         db = client.schema("msds_ref")
         db.table("keco_ingestion_runs").update({
             "status": "COMPLETED",
-            "completed_at": _utcnow_iso(),
+            "completed_at": _now_iso(),
             "request_count": request_count,
             "record_count": record_count,
             "metrics_json": metrics_json,
@@ -133,14 +134,17 @@ class KecoReferenceStore:
         error_code: str,
         error_message: str,
     ) -> None:
-        """run을 FAILED로 마감. serviceKey error_message에 포함 금지."""
+        """run을 FAILED로 마감. serviceKey가 error_message에 코드되면 실제로 제거한 후 저장."""
+        from services.keco_chemical.client import redact_key
+        api_key = (os.getenv("KECO_API_SERVICE_KEY") or "").strip()
+        safe_msg = redact_key(error_message or "", api_key)
         client = _get_supabase_client()
         db = client.schema("msds_ref")
         db.table("keco_ingestion_runs").update({
             "status": "FAILED",
-            "completed_at": _utcnow_iso(),
+            "completed_at": _now_iso(),
             "error_code": error_code,
-            "error_message": error_message,
+            "error_message": safe_msg,
         }).eq("id", run_id).execute()
 
     # ──────────────────────────────────────────
@@ -167,7 +171,7 @@ class KecoReferenceStore:
         db = client.schema("msds_ref")
         content_hash = chemical_content_hash(item)
         raw_hash = _raw_payload_hash(raw_payload)
-        now = _utcnow_iso()
+        now = _now_iso()
 
         # --- keco_raw_records upsert ---
         existing_raw = (
@@ -283,11 +287,7 @@ class KecoReferenceStore:
         item: KecoChemicalItem,
         run_id: str,
     ) -> PersistItemResult:
-        """단일 항목 저장 orchestration: raw → chemical → facts 순서 보장.
-
-        Returns:
-            PersistItemResult(status, chemical_id, inserted_fact_count)
-        """
+        """단일 항목 저장 orchestration: raw → chemical → facts 순서 보장."""
         status, chemical_id = self.upsert_chemical(raw_payload, item, run_id)
         inserted_fact_count = 0
         if chemical_id is not None:

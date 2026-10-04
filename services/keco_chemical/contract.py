@@ -26,6 +26,7 @@ RETURN_TYPE_JSON = "JSON"
 RETURN_TYPE_XML = "XML"
 
 # 공식 성공 코드 (KECO Swagger evidence: 200 = 성공)
+# EXPECTED: 200 / LIVE_WIRE 미확정 — Live Gate에서 확정
 SUCCESS_RESULT_CODES = frozenset({"200"})
 
 # GW 에러 코드 분류
@@ -33,7 +34,7 @@ RATE_LIMIT_DAILY_CODES = frozenset({"22"})
 RATE_LIMIT_SECOND_CODES = frozenset({"23"})
 
 RETRY_CODES = frozenset({"05", "22", "23"})
-NON_RETRY_CODES = frozenset({"10", "12", "20", "30", "31", "91", "93", "95", "97"})
+NON_RETRY_CODES = frozenset({"10", "12", "20", "29", "30", "31", "91", "93", "95", "97"})
 
 # Error classification 레이블
 ERROR_AUTH = "AUTH"

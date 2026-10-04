@@ -62,7 +62,7 @@ class KecoTransportError(KecoChemicalClientError):
 
 
 def redact_key(text: str, key: str) -> str:
-    """serviceKey를 [REDACTED]로 치환. 로깅·에러메시지 전용."""
+    """serviceKey를 [REDACTED]로 치환. 로깅·에러메시지·DB 기록 전용."""
     if not text:
         return text
     out = text
@@ -84,15 +84,15 @@ def _classify_error_code(code: str) -> str:
     """GW/기관 에러 코드 → error classification 레이블.
 
     91/93/95/10 = VALIDATION
-    97/20/30/31 = AUTH
+    97/20/29/30/31 = AUTH
     22/23       = RATE_LIMIT
     05          = TIMEOUT
     12/01/04    = UPSTREAM
-    200 = SUCCESS (에러 처리 금지)
+    200         = SUCCESS (에러 처리 금지)
     """
     if code in {"91", "93", "95", "10"}:
         return ERROR_VALIDATION
-    if code in {"97", "20", "30", "31"}:
+    if code in {"97", "20", "29", "30", "31"}:
         return ERROR_AUTH
     if code in RATE_LIMIT_DAILY_CODES | RATE_LIMIT_SECOND_CODES:
         return ERROR_RATE_LIMIT

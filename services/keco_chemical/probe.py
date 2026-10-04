@@ -19,6 +19,9 @@ PROBE_OK = "OK"
 PROBE_BLOCKED_NO_KEY = "BLOCKED_NO_KEY"
 PROBE_FAILED = "FAILED"
 
+# 0건 확인용 sentinel: 유효한 영문명 형식, 실제 데이터 없는 값으로 기대
+PROBE_NORESULT_SENTINEL = "TAI-PROBE-NORESULT-001"
+
 
 @dataclass
 class ProbeCall:
@@ -49,7 +52,7 @@ def run_probe(
     store=None,
     max_calls: int = PROBE_MAX_CALLS,
 ) -> ProbeResult:
-    """Controlled probe — CAS search → name search → no-result.
+    """Controlled probe — CAS 검색 → 영문명 검색 → 0건 sentinel(유효한 영문명 형식).
 
     환경에 KECO_API_SERVICE_KEY 없으면 BLOCKED_NO_KEY 반환.
     max_calls는 하드코딩 PROBE_MAX_CALLS(3)이 상한.
@@ -60,9 +63,9 @@ def run_probe(
 
     effective_max = min(max_calls, PROBE_MAX_CALLS)
     probe_targets = [
-        (SEARCH_CAS, "7664-41-7"),          # 암모니아 CAS
-        (SEARCH_ENGLISH_NAME, "Ammonia"),   # 영문명
-        (SEARCH_CAS, "NORESULT-00000000"),  # 결과 없음 케이스
+        (SEARCH_CAS, "7664-41-7"),                      # 암모니아 CAS
+        (SEARCH_ENGLISH_NAME, "Ammonia"),               # 영문명
+        (SEARCH_ENGLISH_NAME, PROBE_NORESULT_SENTINEL), # 유효 요청 + 0건 예상
     ][:effective_max]
 
     calls: list[ProbeCall] = []
