@@ -260,3 +260,23 @@ def test_ra11_reference_write_operations_zero():
     src = inspect.getsource(svc_mod)
     for forbidden in (".insert(", ".update(", ".delete(", ".upsert("):
         assert forbidden not in src, f"Write operation '{forbidden}' found in reference query service"
+
+
+# ─── RA12: DB query exception → 503 ──────────────────────────────────────────
+
+def test_ra12_find_candidates_exception_returns_503(monkeypatch):
+    """Any exception from find_candidates → HTTP 503 (not 200 / not empty list)."""
+    monkeypatch.setenv("INTERNAL_API_SECRET", _SECRET)
+    import services.msds_reference_query_svc as svc_mod
+
+    vp, _ = _patch_svc()
+    with vp, patch.object(svc_mod, "find_candidates", side_effect=RuntimeError("DB_CONNECTION_LOST")):
+        resp = _client(_app()).post(
+            "/internal/reference/msds/candidates",
+            headers=_headers(),
+            json=_body(cas_list=["7664-41-7"]),
+        )
+    assert resp.status_code == 503
+    assert resp.status_code != 200
+    body = resp.json()
+    assert "items" not in body
