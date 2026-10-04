@@ -1,8 +1,8 @@
 ---
 title: QA P1 Expansion Status v1
-version: 1.0.1
-work_order: WO-QA-P1-WAVE13-CLOSEOUT-PATCH-001
-status: COMPLETE
+version: 1.1.0
+work_order: WO-QA-P1-WAVE15-FINAL-LEDGER-CLOSEOUT-001
+status: CLOSED_WITH_BLOCKERS
 authored_at: 2026-10-04
 code_change: 0
 db_change: 0
@@ -11,7 +11,7 @@ production_mutation: 0
 
 # QA P1 Expansion Status v1
 
-P1 Universe 전체 139건 blocker 분류 대장. Wave13 확정본 PATCH-001.  
+P1 Universe 전체 139건 blocker 분류 대장. Wave15 최종 확정본 — NDR 26건 Wave14 소스 검증 반영.  
 구현 코드 없음. Source 직접 조사 기반 분류.
 
 ---
@@ -20,11 +20,11 @@ P1 Universe 전체 139건 blocker 분류 대장. Wave13 확정본 PATCH-001.
 
 | 항목 | 값 |
 |------|-----|
-| tai-api main | `5f815532` |
-| tai-api PR branch | `docs/qa-p1-wave13-closeout` |
+| tai-api main | `8b485801` |
+| tai-api PR branch | `docs/qa-p1-wave15-final-closeout` |
 | tai-qa main | `9ab06f00` |
 | 기준일 | 2026-10-04 |
-| base catalog | `QA_UNIVERSE_CATALOG_V1.md` (docs/qa-p1-wave13-closeout) |
+| base catalog | `QA_UNIVERSE_CATALOG_V1.md` (8b485801) |
 
 ---
 
@@ -33,16 +33,18 @@ P1 Universe 전체 139건 blocker 분류 대장. Wave13 확정본 PATCH-001.
 | status | 건수 | 설명 |
 |--------|------|------|
 | COVERED | 38 | 자동화 완료 (tai-qa 수록) |
-| BLOCKED_SOURCE_DRIFT | 22 | 소스 증거 기반 확정 (Wave6 GPT 7건 + MKT grep 14건 + route 미존재 1건) |
-| NEEDS_DEEPER_REVIEW | 26 | admin 콘솔 페이지 상태 미검증 — Wave13 이후 조사 필요 |
+| BLOCKED_SOURCE_DRIFT | 47 | 소스 증거 기반 확정 (Wave6 GPT 7건 + MKT grep 14건 + route 미존재 1건 + Wave14 admin 페이지 미존재 22건 + Wave14 API 미존재 3건) |
 | BLOCKED_TAXONOMY_COLLISION | 7 | ADMIN 시나리오와 중복 (SAAS/ADMIN 이중 UI) |
-| BLOCKED_FIXTURE | 10 | 필수 테스트 픽스처 없음 |
+| BLOCKED_FIXTURE | 11 | 필수 테스트 픽스처 없음 |
 | BLOCKED_SIDE_EFFECT | 33 | production DB write 발생 (거버넌스: 0 write) |
 | MANUAL_ONLY | 2 | 자동화 불가 |
 | PR_OPEN_HOLD_FIXTURE | 1 | tai-qa PR #9 OPEN/HOLD — fixture 미비 |
+| NEEDS_DEEPER_REVIEW | 0 | Wave14 전량 분류 완료 (SD 25건 + BF 1건 흡수) |
 | **합계** | **139** | |
 
 Wave별 COVERED 이력: Wave1(16) + Wave2(14) + Wave3(3) + Wave5(2) + Wave8(1) + Wave11(2) = 38
+
+P1 SAFE EXPANSION = CLOSED_WITH_BLOCKERS — 즉시 구현 가능한 P1 시나리오 소진 완료
 
 ---
 
@@ -134,7 +136,7 @@ Wave4 (commit 5870a8b): P1-API-DIAG-API-001 추가 — tai-qa PR #9 OPEN/HOLD (f
 | scenario_id | service_code | qa_type | status | reason_code | note |
 |-------------|-------------|---------|--------|-------------|------|
 | P1-ADMIN-DASH-AVL-001 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | WAVE6_GPT_CONFIRMED | admin console 페이지 drift — Wave6 GPT 확정 |
-| P1-ADMIN-DASH-FNC-001 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | 다중 API 집계 — admin 콘솔 페이지 상태 미검증 |
+| P1-ADMIN-DASH-FNC-001 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — 다중 API 집계 대시보드 tai-admin 내부운영 콘솔 페이지 미존재 |
 | P1-ADMIN-DASH-SEC-001 | ADMIN | SECURITY | COVERED | WAVE1 | PR #4 |
 | P1-ADMIN-OPS-AVL-001 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | WAVE6_GPT_CONFIRMED | GET /ops/home — admin console 페이지 drift Wave6 GPT 확정 |
 | P1-ADMIN-OPS-AVL-002 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | WAVE6_GPT_CONFIRMED | GET /admin/audit-logs — admin console 페이지 drift Wave6 GPT 확정 |
@@ -146,33 +148,33 @@ Wave4 (commit 5870a8b): P1-API-DIAG-API-001 추가 — tai-qa PR #9 OPEN/HOLD (f
 | P1-ADMIN-OPS-AVL-003 | ADMIN | AVAILABILITY | COVERED | WAVE5 | PR #10 |
 | P1-ADMIN-OPS-AVL-004 | ADMIN | AVAILABILITY | COVERED | WAVE5 | PR #10 |
 | P1-ADMIN-OPS-FNC-006 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | PATCH_QA_SCHEDULE_WRITE | PATCH /admin/qa/items/{id}/schedule → qa_schedules UPDATE; CM-002 선결 미해결 병존 |
-| P1-ADMIN-CUST-AVL-001 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /companies/{id}/360 — admin 콘솔 페이지 상태 미검증 |
+| P1-ADMIN-CUST-AVL-001 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /companies/{id}/360 tai-admin 고객 상세 콘솔 페이지 미존재 |
 | P1-ADMIN-CUST-FNC-001 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | WAVE6_GPT_CONFIRMED | GET /companies — admin console 페이지 drift Wave6 GPT 확정 |
 | P1-ADMIN-CUST-FNC-002 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | POST_COMPANIES | POST/PATCH /companies → company INSERT/UPDATE |
-| P1-ADMIN-CUST-FNC-003 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /factories — admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-CUST-FNC-004 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /users — admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-CUST-FNC-005 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /admin/inquiries — admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-BILL-AVL-001 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /stats/business — admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-BILL-FNC-001 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /payments/{id}/ledger — admin 콘솔 페이지 상태 미검증 |
+| P1-ADMIN-CUST-FNC-003 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /factories tai-admin 공장 목록 콘솔 페이지 미존재 |
+| P1-ADMIN-CUST-FNC-004 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /users tai-admin 사용자 목록 콘솔 페이지 미존재 |
+| P1-ADMIN-CUST-FNC-005 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /admin/inquiries tai-admin 문의 목록 콘솔 페이지 미존재 |
+| P1-ADMIN-BILL-AVL-001 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /stats/business tai-admin 결제 현황 콘솔 페이지 미존재 |
+| P1-ADMIN-BILL-FNC-001 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /payments/{id}/ledger tai-admin 결제원장 상세 콘솔 페이지 미존재 |
 | P1-ADMIN-BILL-FNC-002 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | POST_CONTRACT_ACTIVATE | POST /contracts/{id}/activate → ACTIVE 전환 비가역 (Wave12 확정) |
-| P1-ADMIN-BILL-FNC-003 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /payments/admin/tax-invoices — admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-BILL-FNC-004 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /payments/ops/gate-readiness — admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-BILL-FNC-005 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /admin/quotes — admin 콘솔 페이지 상태 미검증 |
+| P1-ADMIN-BILL-FNC-003 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /payments/admin/tax-invoices tai-admin 세금계산서 콘솔 페이지 미존재 |
+| P1-ADMIN-BILL-FNC-004 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /payments/ops/gate-readiness tai-admin 결제 게이트 콘솔 페이지 미존재 |
+| P1-ADMIN-BILL-FNC-005 | ADMIN | FUNCTIONAL | BLOCKED_FIXTURE | QUOTE_COMPANY_CONTEXT_REQUIRED | Wave14 확정 — commercial-console 존재, API 존재, 그러나 company 선택 선행 필요; is_demo=true 계약사 GET /companies 제외로 QA-safe fixture 경로 없음 |
 | P1-ADMIN-BILL-FNC-006 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | POST_QUOTE_ISSUE | POST /admin/quotes/{id}/custom/issue → ISSUED 전환 비가역 (Wave12 확정) |
 | P1-ADMIN-BILL-FNC-007 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | WAVE6_GPT_CONFIRMED | GET /price/summary-cards — admin console 페이지 drift Wave6 GPT 확정 |
 | P1-ADMIN-BILL-SEC-001 | ADMIN | SECURITY | BLOCKED_SOURCE_DRIFT | PAYMENT_CANCEL_ROUTE_NOT_FOUND | Universe target POST /payments/{id}/cancel absent from current tai-api; /refund and /partial-refund exist instead |
-| P1-ADMIN-BILL-DATA-001 | ADMIN | DATA | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /payments 화면 정합 — admin 콘솔 페이지 상태 미검증 |
+| P1-ADMIN-BILL-DATA-001 | ADMIN | DATA | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /payments 결제 목록 tai-admin 내부운영 콘솔 페이지 미존재 |
 | P1-ADMIN-BILL-FNC-008 | ADMIN | FUNCTIONAL | MANUAL_ONLY | SAFE_N_REAL_REFUND | POST /payments/{id}/refund (SAFE=N) — 실환불 자동화 불가 |
 | P1-ADMIN-SVC-AVL-001 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | WAVE6_GPT_CONFIRMED | GET /anonymous-diagnosis/admin/list — admin console 페이지 drift Wave6 GPT 확정 |
-| P1-ADMIN-SVC-AVL-002 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /legal-engine/result/{id} — admin 콘솔 페이지 상태 미검증 |
+| P1-ADMIN-SVC-AVL-002 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /legal-engine/result/{id} tai-api 미확인 + tai-admin 법령엔진 결과 콘솔 페이지 미존재 |
 | P1-ADMIN-SVC-FNC-001 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | FORM_SUBMIT_WRITE | 진단 연결 처리 폼 제출 포함 → DB write 발생 |
-| P1-ADMIN-SVC-AVL-003 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /companies (MOCK 포함) — admin 콘솔 페이지 상태 미검증 |
+| P1-ADMIN-SVC-AVL-003 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /companies (MOCK 포함) tai-admin 고객사 목록 콘솔 페이지 미존재 |
 | P1-ADMIN-SVC-FNC-002 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | PATCH_PERMISSIONS | PATCH /permissions → permissions UPDATE |
 | P1-ADMIN-SVC-FNC-003 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | PATCH_PERMISSIONS_PLATFORM | PATCH /permissions/platform → permissions UPDATE |
-| P1-ADMIN-SVC-FNC-004 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /admin/site-faqs — admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-COMM-AVL-001 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /mail/list — tai-api mail.py 존재; admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-COMM-FNC-001 | ADMIN | FUNCTIONAL | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /mail/{id} — tai-api mail.py 존재; admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-COMM-AVL-002 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /notices — admin 콘솔 페이지 상태 미검증 |
+| P1-ADMIN-SVC-FNC-004 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /admin/site-faqs tai-admin FAQ 콘솔 페이지 미존재 |
+| P1-ADMIN-COMM-AVL-001 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /mail/list tai-api 존재, tai-admin 메일 목록 콘솔 페이지 미존재 |
+| P1-ADMIN-COMM-FNC-001 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /mail/{id} tai-api 존재, tai-admin 메일 상세 콘솔 페이지 미존재 |
+| P1-ADMIN-COMM-AVL-002 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /notices tai-admin 공지사항 목록 콘솔 페이지 미존재 |
 | P1-ADMIN-COMM-FNC-002 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | POST_NOTICES | POST /notices → notice INSERT |
 | P1-ADMIN-MKT-AVL-001 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | MKT_ROUTE_NOT_FOUND | GET /admin/marketing/dashboard — tai-api grep 미존재 확정 (Wave13) |
 | P1-ADMIN-MKT-AVL-002 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | MKT_ROUTE_NOT_FOUND | Supabase naver_kin_log — tai-api /admin/marketing/* 라우터 없음 |
@@ -189,18 +191,18 @@ Wave4 (commit 5870a8b): P1-API-DIAG-API-001 추가 — tai-qa PR #9 OPEN/HOLD (f
 | P1-ADMIN-MKT-FNC-005 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | MKT_ROUTE_NOT_FOUND | POST /admin/marketing/scheduler/run-once — 미존재 확정 |
 | P1-ADMIN-MKT-FNC-006 | ADMIN | FUNCTIONAL | BLOCKED_SOURCE_DRIFT | MKT_ROUTE_NOT_FOUND | GET /admin/marketing/audit — 미존재 확정 |
 | P1-ADMIN-STAT-AVL-001 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | WAVE6_GPT_CONFIRMED | GET /stats/overview — admin console 페이지 drift Wave6 GPT 확정 |
-| P1-ADMIN-STAT-AVL-002 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /stats/funnel — admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-STAT-AVL-003 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /stats/customers — admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-STAT-AVL-004 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /stats/revenue — admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-STAT-AVL-005 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /stats/fulfillment — admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-STAT-AVL-006 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /stats/workers — admin 콘솔 페이지 상태 미검증 |
-| P1-ADMIN-STAT-DATA-001 | ADMIN | DATA | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /stats/overview 화면 정합 — admin 콘솔 페이지 상태 미검증 |
+| P1-ADMIN-STAT-AVL-002 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /stats/funnel tai-admin 통계 퍼널 콘솔 페이지 미존재 |
+| P1-ADMIN-STAT-AVL-003 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /stats/customers tai-admin 고객 통계 콘솔 페이지 미존재 |
+| P1-ADMIN-STAT-AVL-004 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /stats/revenue tai-admin 매출 통계 콘솔 페이지 미존재 |
+| P1-ADMIN-STAT-AVL-005 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /stats/fulfillment tai-admin 이행 통계 콘솔 페이지 미존재 |
+| P1-ADMIN-STAT-AVL-006 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /stats/workers tai-admin 작업자 통계 콘솔 페이지 미존재 |
+| P1-ADMIN-STAT-DATA-001 | ADMIN | DATA | BLOCKED_SOURCE_DRIFT | ADMIN_PAGE_NOT_FOUND | Wave14 확정 — GET /stats/overview 화면 정합 tai-admin 통계 콘솔 페이지 미존재 |
 | P1-ADMIN-DEV-FNC-001 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | PATCH_SYSTEM_CODES | PATCH /system-codes → system_codes UPDATE |
-| P1-ADMIN-DEV-AVL-001 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /legal-engine/dashboard — admin 콘솔 페이지 상태 미검증 |
+| P1-ADMIN-DEV-AVL-001 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | API_NOT_FOUND | Wave14 확정 — GET /legal-engine/dashboard tai-api 미존재 + tai-admin 콘솔 페이지 미존재 |
 | P1-ADMIN-DEV-FNC-002 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | POST_LEGAL_PARSE | POST /legal-engine/parse → AI rule draft INSERT |
-| P1-ADMIN-DEV-AVL-002 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /control-runtime/health — admin 콘솔 페이지 상태 미검증 |
+| P1-ADMIN-DEV-AVL-002 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | API_NOT_FOUND | Wave14 확정 — GET /control-runtime/health tai-api 미존재 + tai-admin 콘솔 페이지 미존재 |
 | P1-ADMIN-DEV-FNC-003 | ADMIN | FUNCTIONAL | BLOCKED_SIDE_EFFECT | POST_CRON_RUN | POST /cron/jobs/{code}/run → cron action 실행 |
-| P1-ADMIN-DEV-AVL-003 | ADMIN | AVAILABILITY | NEEDS_DEEPER_REVIEW | NDR_CONSOLE_UNVERIFIED | GET /watch-engine/* — admin 콘솔 페이지 상태 미검증 |
+| P1-ADMIN-DEV-AVL-003 | ADMIN | AVAILABILITY | BLOCKED_SOURCE_DRIFT | API_NOT_FOUND | Wave14 확정 — GET /watch-engine/* tai-api 미존재 + tai-admin 콘솔 페이지 미존재 |
 | P1-API-QA-API-001 | ADMIN | API | COVERED | WAVE1 | PR #4 |
 | P1-API-QA-API-002 | ADMIN | API | COVERED | WAVE3 | commit 6dcfaa0 |
 | P1-API-QA-API-003 | ADMIN | API | COVERED | WAVE1 | PR #4 |
@@ -214,17 +216,17 @@ Wave4 (commit 5870a8b): P1-API-DIAG-API-001 추가 — tai-qa PR #9 OPEN/HOLD (f
 ## 검증
 
 ```
-COVERED              =  38 (WWW:10 + SAAS:17 + ADMIN:11)
-BLOCKED_SOURCE_DRIFT =  22 (WAVE6_GPT_CONFIRMED:7 + MKT_ROUTE_NOT_FOUND:14 + PAYMENT_CANCEL_ROUTE_NOT_FOUND:1)
-NEEDS_DEEPER_REVIEW  =  26 (ADMIN:26)
+COVERED                    =  38 (WWW:10 + SAAS:17 + ADMIN:11)
+BLOCKED_SOURCE_DRIFT       =  47 (WAVE6_GPT_CONFIRMED:7 + MKT_ROUTE_NOT_FOUND:14 + PAYMENT_CANCEL_ROUTE_NOT_FOUND:1 + ADMIN_PAGE_NOT_FOUND:22 + API_NOT_FOUND:3)
+NEEDS_DEEPER_REVIEW        =   0
 BLOCKED_TAXONOMY_COLLISION =   7 (SAAS-QA-* 7건)
-BLOCKED_FIXTURE      =  10 (WWW:6 + SAAS:4)
-BLOCKED_SIDE_EFFECT  =  33 (WWW:5 + SAAS:13 + ADMIN:15)
-MANUAL_ONLY          =   2 (SAAS:1 + ADMIN:1)
-PR_OPEN_HOLD_FIXTURE =   1 (WWW:1 — tai-qa PR #9)
-합계                 = 139 ✓
+BLOCKED_FIXTURE            =  11 (WWW:6 + SAAS:4 + ADMIN:1)
+BLOCKED_SIDE_EFFECT        =  33 (WWW:5 + SAAS:13 + ADMIN:15)
+MANUAL_ONLY                =   2 (SAAS:1 + ADMIN:1)
+PR_OPEN_HOLD_FIXTURE       =   1 (WWW:1 — tai-qa PR #9)
+합계                       = 139 ✓
 ```
 
 READY confirmed = 0  
-NEEDS_DEEPER_REVIEW = 26 (Wave14 조사 대상)  
-P1 closeout = PENDING (NDR 26건 + PH 1건 잔여)
+NEEDS_DEEPER_REVIEW = 0 (Wave14 전량 분류 완료)  
+P1 SAFE EXPANSION = CLOSED_WITH_BLOCKERS
