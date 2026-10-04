@@ -1,0 +1,50 @@
+{
+  "header": {
+    "resultCode": "200",
+    "resultMsg": "NORMAL SERVICE."
+  },
+  "body": {
+    "items": [
+      {
+        "sbstnId": "KE-01-2-0002",
+        "casNo": "75-09-2",
+        "korexst": "KE-01-2-0002",
+        "sbstnNmKor": "이염화메틸렌",
+        "sbstnNmEng": "Methylene chloride",
+        "sbstnNm2Kor": "다이클로로메테인",
+        "sbstnNm2Eng": "Dichloromethane",
+        "mlcfrm": "CH2Cl2",
+        "mlcwgt": "84.933",
+        "typeList": [
+          {
+            "sbstnClsfTypeNm": "유독물질",
+            "unqNo": "97-1-2",
+            "contInfo": "이염화메틸렌 함유량 0.1% 이상",
+            "excpInfo": null,
+            "ancmntYmd": "19970101",
+            "ancmntInfo": "고시 제1997-001호"
+          },
+          {
+            "sbstnClsfTypeNm": "허가물질",
+            "unqNo": "2016-1-1",
+            "contInfo": null,
+            "excpInfo": "작업장 외부 사용 제외",
+            "ancmntYmd": "20160101",
+            "ancmntInfo": "고시 제2016-001호"
+          },
+          {
+            "sbstnClsfTypeNm": "제한물질",
+            "unqNo": null,
+            "contInfo": "세척용 사용 제한",
+            "excpInfo": null,
+            "ancmntYmd": "20200601",
+            "ancmntInfo": null
+          }
+        ]
+      }
+    ],
+    "numOfRows": "10",
+    "pageNo": "1",
+    "totalCount": "1"
+  }
+}

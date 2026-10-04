@@ -257,6 +257,8 @@ jobs:
         run: pytest tests/test_free_consumer_c1_c3_guard.py -q
       - name: FREE C9 review_required count projection (PHASE 5A)
         run: pytest tests/test_free_result_review_required_projection.py -q
+      - name: KECO Reference Foundation tests (CHEM-WO-DATA-KECO-002)
+        run: pytest tests/test_keco_chemical.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"
