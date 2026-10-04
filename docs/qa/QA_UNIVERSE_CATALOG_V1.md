@@ -155,13 +155,15 @@ EXTERNAL: tai-api / Inicis / Supabase OAuth
 | QA_ID | PRI | TYPE | QA_NAME | SOURCE | AUTO | SAFE | RUNNER | MODULE_PATTERN | EXISTING | STATUS |
 |-------|-----|------|---------|--------|------|------|--------|----------------|----------|--------|
 | P0-DIAG-001 | P0 | AVAILABILITY | 무료 법령진단 정상 진입 | GET /free-diagnosis | Y | Y | PW | PAGE_OPEN | P0-DIAG-001 | EXISTING |
-| P1-WWW-DIAG-FNC-001 | P1 | FUNCTIONAL | 무료진단 마법사 Step 완주 | GET /free-diagnosis → POST /diagnosis/run | Y | Y | PW | E2E_FLOW + FORM_SUBMIT | — | NEW |
+| P1-WWW-DIAG-FNC-001 | P1 | FUNCTIONAL | 무료진단 마법사 Step 완주 | GET /free-diagnosis → POST /diagnosis/run | Y | N | PW | E2E_FLOW + FORM_SUBMIT | — | NEW |
 | P1-WWW-DIAG-FNC-002 | P1 | FUNCTIONAL | 무료진단 결과 정상 표시 | GET /free-diagnosis-result | Y | Y | PW | PAGE_OPEN + DETAIL_LOAD | — | NEW |
 | P1-WWW-DIAG-AVL-001 | P1 | AVAILABILITY | 유료진단 안내 정상 진입 | GET /paid-diagnosis | Y | C | PW | AUTH_LOGIN + PAGE_OPEN | — | NEW |
 | P1-WWW-DIAG-FNC-003 | P1 | FUNCTIONAL | 유료진단 결과 정상 조회 | GET /paid-diagnosis-result | Y | C | PW | DETAIL_LOAD | — | NEW |
-| P1-WWW-DIAG-API-001 | P1 | API | 무료진단 실행 API 정상 응답 | POST /diagnosis/run | Y | Y | API | API_CONTRACT | — | NEW |
+| P1-WWW-DIAG-API-001 | P1 | API | 무료진단 실행 API 정상 응답 | POST /diagnosis/run | Y | N | API | API_CONTRACT | — | NEW |
 
 > **P0-DIAG-001 EXPECTED**: GET /free-diagnosis 응답 200, 진단 마법사 Step1 요소 렌더링, API fatal error 없음  
+> **SAFE=N (P1-WWW-DIAG-FNC-001)**: POST /diagnosis/run — phone verification auth_token 필수 + anonymous_diagnosis_results INSERT + diagnosis_auth_log.free_count UPDATE. production mutation 불가피. (Wave12 source 조사 확정)  
+> **SAFE=N (P1-WWW-DIAG-API-001)**: POST /diagnosis/run — FNC-001과 동일 엔드포인트. RUNNER=API이나 동일 production mutation 발생. (Wave12 source 조사 확정)  
 > **SAFE=C (P1-WWW-DIAG-AVL-001)**: /paid-diagnosis 회원 전용 — memberGate 비로그인 → /log-in redirect. AUTH_LOGIN 선행 필요.  
 > **SAFE=C (P1-WWW-DIAG-FNC-003)**: 진단 토큰이 존재하는 계정 사전 조건 필요
 
@@ -409,11 +411,11 @@ NOTE: qa/dashboard.vue = GET /admin/qa/summary / qa/settings.vue = GET /admin/qa
 | P0-ADMIN-BILL-FNC-002 | P0 | FUNCTIONAL | 구독/계약 목록 정상 로드 | GET /contracts | Y | C | PW | AUTH_LOGIN + LIST_LOAD | — | NEW |
 | P1-ADMIN-BILL-AVL-001 | P1 | AVAILABILITY | 경영지표 정상 진입 | GET /stats/business | Y | C | PW | AUTH_LOGIN + PAGE_OPEN | — | NEW |
 | P1-ADMIN-BILL-FNC-001 | P1 | FUNCTIONAL | 결제원장 상세/원장 조회 | GET /payments/{id}/ledger | Y | C | PW | AUTH_LOGIN + DETAIL_LOAD | — | NEW |
-| P1-ADMIN-BILL-FNC-002 | P1 | FUNCTIONAL | 계약 활성화 처리 | PATCH /contracts/{id}/activate | Y | C | HYB | AUTH_LOGIN + SAVE_UPDATE | — | NEW |
+| P1-ADMIN-BILL-FNC-002 | P1 | FUNCTIONAL | 계약 활성화 처리 | POST /contracts/{id}/activate | Y | C | HYB | AUTH_LOGIN + SAVE_UPDATE | — | NEW |
 | P1-ADMIN-BILL-FNC-003 | P1 | FUNCTIONAL | 세금계산서 관리 목록 | GET /payments/admin/tax-invoices | Y | C | PW | AUTH_LOGIN + LIST_LOAD | — | NEW |
 | P1-ADMIN-BILL-FNC-004 | P1 | FUNCTIONAL | 실행 게이트 상태 조회 | GET /payments/ops/gate-readiness | Y | C | PW | AUTH_LOGIN + DETAIL_LOAD | — | NEW |
 | P1-ADMIN-BILL-FNC-005 | P1 | FUNCTIONAL | 견적서 목록/상세 정상 로드 | GET /admin/quotes | Y | C | PW | AUTH_LOGIN + LIST_LOAD | — | NEW |
-| P1-ADMIN-BILL-FNC-006 | P1 | FUNCTIONAL | 견적서 발행 정상 처리 | POST /admin/quotes/{id}/issue | Y | C | HYB | AUTH_LOGIN + FORM_SUBMIT | — | NEW |
+| P1-ADMIN-BILL-FNC-006 | P1 | FUNCTIONAL | 견적서 발행 정상 처리 | POST /admin/quotes/{id}/custom/issue | Y | C | HYB | AUTH_LOGIN + FORM_SUBMIT | — | NEW |
 | P1-ADMIN-BILL-FNC-007 | P1 | FUNCTIONAL | 가격 설정 조회 | GET /price/summary-cards | Y | C | PW | AUTH_LOGIN + DETAIL_LOAD | — | NEW |
 | P1-ADMIN-BILL-SEC-001 | P1 | SECURITY | 결제 취소/환불 비인증 접근 차단 | POST /payments/{id}/cancel (role check) | Y | C | HYB | ACCESS_DENY | — | NEW |
 | P1-ADMIN-BILL-DATA-001 | P1 | DATA | 결제원장 화면/API 금액 정합 | GET /payments → 화면 표시 금액 | Y | C | PW | AUTH_LOGIN + DATA_MATCH | — | NEW |
