@@ -403,27 +403,26 @@ class KecoReferenceStore:
         self,
         limit: int,
         stale_minutes: int = DEFAULT_STALE_RUNNING_MINUTES,
+        mode: str = "bulk",
     ) -> List[dict]:
-        """PENDING / RETRY / stale RUNNING → RUNNING に変換して返す.
+        """target을 RUNNING으로 claim해서 반환.
 
-        stale RUNNING: last_attempted_at < (now - stale_minutes) → RETRY로 회수.
+        mode="bulk"  → PENDING + RETRY (초기 전수수집 / batch)
+        mode="retry" → RETRY + FAILED only (재처리 전용 — PENDING 포함 안함)
+
+        stale RUNNING recovery는 recover_stale_runs()로 분리. claim_targets에서는 처리 안함.
         """
         client = _get_supabase_client()
         db = client.schema("msds_ref")
         now = _now_iso()
 
-        # Recover stale RUNNING first
-        stale_threshold = serialize_business_datetime(
-            now_kst() - timedelta(minutes=stale_minutes)
-        )
-        db.table("keco_collection_targets").update({
-            "status": TARGET_STATUS_RETRY,
-            "updated_at": now,
-        }).eq("status", TARGET_STATUS_RUNNING).lt("last_attempted_at", stale_threshold).execute()
+        if mode == "retry":
+            candidate_statuses = (TARGET_STATUS_RETRY, TARGET_STATUS_FAILED)
+        else:
+            candidate_statuses = (TARGET_STATUS_PENDING, TARGET_STATUS_RETRY)
 
-        # Claim PENDING then RETRY
         claimed = []
-        for status in (TARGET_STATUS_PENDING, TARGET_STATUS_RETRY):
+        for status in candidate_statuses:
             if len(claimed) >= limit:
                 break
             need = limit - len(claimed)
@@ -441,7 +440,6 @@ class KecoReferenceStore:
             return []
 
         ids = [r["id"] for r in claimed]
-        # Mark all claimed as RUNNING
         db.table("keco_collection_targets").update({
             "status": TARGET_STATUS_RUNNING,
             "last_attempted_at": now,
@@ -449,6 +447,46 @@ class KecoReferenceStore:
         }).in_("id", ids).execute()
 
         return claimed
+
+    def recover_stale_runs(
+        self,
+        stale_minutes: int = DEFAULT_STALE_RUNNING_MINUTES,
+    ) -> int:
+        """RUNNING 상태로 stale_minutes 이상 방치된 ingestion run → FAILED 처리.
+
+        Mac 프로세스 강제 종료로 RUNNING이 영구 잔류하는 경우 해제.
+        반환: 처리된 run 수.
+        """
+        client = _get_supabase_client()
+        db = client.schema("msds_ref")
+        now = _now_iso()
+        threshold = serialize_business_datetime(
+            now_kst() - timedelta(minutes=stale_minutes)
+        )
+        result = (
+            db.table("keco_ingestion_runs")
+            .update({
+                "status": "FAILED",
+                "completed_at": now,
+                "error_code": "STALE_RUNNING",
+                "error_message": f"Run RUNNING for >{stale_minutes}m without heartbeat — auto-recovered",
+            })
+            .eq("status", "RUNNING")
+            .lt("started_at", threshold)
+            .execute()
+        )
+        count = len(result.data or [])
+        if count:
+            logger.info("[KECO-STORE] recover_stale_runs: marked %d stale RUNNING run(s) FAILED", count)
+        return count
+
+    def heartbeat_run(self, run_id: str) -> None:
+        """진행 중 run의 heartbeat_at 갱신. stale recovery에서 최근 활성 증명용."""
+        client = _get_supabase_client()
+        db = client.schema("msds_ref")
+        db.table("keco_ingestion_runs").update({
+            "heartbeat_at": _now_iso(),
+        }).eq("id", run_id).execute()
 
     def mark_target_running(self, target_id: str, run_id: str) -> None:
         """target을 RUNNING으로 마크 (claim_targets 이후 per-target 확정용)."""
@@ -581,24 +619,24 @@ class KecoReferenceStore:
         )
 
     def get_status_summary(self) -> dict:
-        """target status 별 카운트 집계."""
+        """target status 별 카운트 집계 (exact count 쿼리 사용)."""
         client = _get_supabase_client()
         db = client.schema("msds_ref")
-        rows = db.table("keco_collection_targets").select("status").execute()
-        counts: dict = {
-            TARGET_STATUS_PENDING: 0,
-            TARGET_STATUS_RUNNING: 0,
-            TARGET_STATUS_DONE: 0,
-            TARGET_STATUS_EMPTY: 0,
-            TARGET_STATUS_RETRY: 0,
-            TARGET_STATUS_FAILED: 0,
-            TARGET_STATUS_CONFLICT: 0,
-        }
-        for row in (rows.data or []):
-            s = row.get("status", "")
-            if s in counts:
-                counts[s] += 1
-        counts["total"] = sum(counts.values())
+        statuses = [
+            TARGET_STATUS_PENDING, TARGET_STATUS_RUNNING, TARGET_STATUS_DONE,
+            TARGET_STATUS_EMPTY, TARGET_STATUS_RETRY, TARGET_STATUS_FAILED,
+            TARGET_STATUS_CONFLICT,
+        ]
+        counts: dict = {}
+        for status in statuses:
+            result = (
+                db.table("keco_collection_targets")
+                .select("id", count="exact")
+                .eq("status", status)
+                .execute()
+            )
+            counts[status] = result.count or 0
+        counts["total"] = sum(counts[s] for s in statuses)
         return counts
 
     def get_due_targets(self, max_targets: int) -> List[dict]:

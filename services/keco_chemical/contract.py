@@ -89,3 +89,9 @@ DEFAULT_CLAIM_BATCH_SIZE = 100       # targets claimed per bulk batch
 
 SYNC_PAGE_SIZE = 100                 # numOfRows per KECO API page request
 MAX_PAGES_SAFETY_CAP = 50            # prevent infinite pagination loop
+
+# Rate-limit backoff for code 23 (per-second throttle)
+RATE_RETRY_MAX_ENV = "KECO_RATE_RETRY_MAX"
+RATE_RETRY_BASE_SECONDS_ENV = "KECO_RATE_RETRY_BASE_SECONDS"
+DEFAULT_RATE_RETRY_MAX = 3
+DEFAULT_RATE_RETRY_BASE_SECONDS = 2.0

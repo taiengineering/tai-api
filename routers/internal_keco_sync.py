@@ -206,7 +206,7 @@ def retry_targets(
 
     run_id = store.start_run(RUN_TYPE_RETRY)
     try:
-        targets = store.claim_targets(limit, stale_min)
+        targets = store.claim_targets(limit, stale_min, mode="retry")
         result = sync_batch(client, store, targets, run_id, budget)
         result.run_type = RUN_TYPE_RETRY
         store.complete_run(run_id, result.requests, result.source_items, {

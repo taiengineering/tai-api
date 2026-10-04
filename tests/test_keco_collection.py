@@ -233,10 +233,17 @@ class TestSyncOneTarget:
         client.search.assert_not_called()
 
     def test_budget_consumed_per_request(self):
-        """each API call consumes 1 budget unit"""
+        """each API call consumes 1 budget unit via attempt_hook"""
         client = MagicMock()
         store = MagicMock()
-        client.search.return_value = _make_search_response([_make_parsed_item()], total_count="1")
+
+        def _search_with_hook(**kwargs):
+            hook = kwargs.get("attempt_hook")
+            if hook:
+                hook()
+            return _make_search_response([_make_parsed_item()], total_count="1")
+
+        client.search.side_effect = _search_with_hook
         store.persist_item.return_value = _make_persist_result("NEW")
         budget = RequestBudget(limit=10)
 
@@ -250,7 +257,16 @@ class TestSyncOneTarget:
         items = [_make_parsed_item("7664-41-7", f"K-{i}") for i in range(2)]
         resp1 = _make_search_response(items, total_count="3", num_of_rows="2")
         resp2 = _make_search_response([_make_parsed_item("7664-41-7", "K-2")], total_count="3", num_of_rows="2")
-        client.search.side_effect = [resp1, resp2]
+
+        responses = iter([resp1, resp2])
+
+        def _search_paged(**kwargs):
+            hook = kwargs.get("attempt_hook")
+            if hook:
+                hook()
+            return next(responses)
+
+        client.search.side_effect = _search_paged
         store.persist_item.return_value = _make_persist_result("NEW")
         budget = RequestBudget(limit=10)
 
@@ -258,12 +274,12 @@ class TestSyncOneTarget:
         assert budget.used == 2
 
     def test_non_retry_error_marks_failed(self):
-        """AUTH error → FAILED"""
+        """AUTH source_code=97 (NON_RETRY_CODES) → FAILED"""
         from services.keco_chemical.client import KecoChemicalClientError
         from services.keco_chemical.contract import ERROR_AUTH
         client = MagicMock()
         store = MagicMock()
-        client.search.side_effect = KecoChemicalClientError(ERROR_AUTH, "auth failed")
+        client.search.side_effect = KecoChemicalClientError(ERROR_AUTH, "auth failed", source_code="97")
 
         result = self._run(client, store)
         assert result.status == TARGET_STATUS_FAILED
@@ -336,12 +352,15 @@ class TestSyncBatch:
         assert result.retry == 1
 
     def test_stops_on_budget_exhaustion(self):
-        """budget=1 → first target ok, second target RETRY+stop"""
+        """budget=1 → first target ok (hook consumes 1), second target pre-check → PARTIAL"""
         from services.keco_chemical.sync import sync_batch
         client = MagicMock()
         store = MagicMock()
 
         def _search(search_gubun, search_nm, **_kw):
+            hook = _kw.get("attempt_hook")
+            if hook:
+                hook()
             return _make_search_response([_make_parsed_item(search_nm, "K")], total_count="1")
         client.search.side_effect = _search
         store.persist_item.return_value = _make_persist_result("NEW")
@@ -758,3 +777,396 @@ class TestNoLiveApiCalls:
         """Importing scheduled_refresh does not trigger network call."""
         from services.keco_chemical import scheduled_refresh
         assert scheduled_refresh is not None
+
+    def test_budget_import_no_api_call(self):
+        """Importing budget does not trigger network call."""
+        from services.keco_chemical.budget import RequestBudget, RequestBudgetExceeded
+        assert RequestBudget is not None
+
+
+# ─────────────────────────────────────────────────────────────
+# PATCH-001 — T001-T025: Runtime Safety Fixes
+# ─────────────────────────────────────────────────────────────
+
+class TestPatch001BudgetExceeded:
+    """T001-T005: RequestBudgetExceeded + physical attempt hook."""
+
+    def test_t001_consume_or_raise_raises_when_exhausted(self):
+        """T001: consume_or_raise() raises RequestBudgetExceeded when at limit"""
+        from services.keco_chemical.budget import RequestBudget, RequestBudgetExceeded
+        b = RequestBudget(limit=2)
+        b.consume_or_raise(1)
+        b.consume_or_raise(1)
+        with pytest.raises(RequestBudgetExceeded):
+            b.consume_or_raise(1)
+
+    def test_t002_consume_or_raise_succeeds_within_limit(self):
+        """T002: consume_or_raise() succeeds when budget available"""
+        from services.keco_chemical.budget import RequestBudget
+        b = RequestBudget(limit=5)
+        b.consume_or_raise(3)
+        assert b.used == 3
+
+    def test_t003_budget_exceeded_attrs(self):
+        """T003: RequestBudgetExceeded carries .used and .limit"""
+        from services.keco_chemical.budget import RequestBudget, RequestBudgetExceeded
+        b = RequestBudget(limit=1)
+        b.consume_or_raise(1)
+        try:
+            b.consume_or_raise(1)
+            assert False, "should have raised"
+        except RequestBudgetExceeded as exc:
+            assert exc.used == 1
+            assert exc.limit == 1
+
+    def test_t004_attempt_hook_fires_before_get_fn(self):
+        """T004: attempt_hook fires before get_fn() in client._get()"""
+        from unittest.mock import patch
+        from services.keco_chemical.parse import KecoSearchResponse
+        order = []
+
+        def tracking_hook():
+            order.append("hook")
+
+        def tracking_get_fn(url, params, timeout):
+            order.append("get_fn")
+            return 200, "mock-text"
+
+        with patch("services.keco_chemical.client.parse_keco_response") as mock_parse:
+            mock_parse.return_value = KecoSearchResponse(
+                result_code="200", result_msg="OK",
+                page_no="1", num_of_rows="10", total_count="0", items=[],
+            )
+            from services.keco_chemical.client import KecoChemicalClient
+            client = KecoChemicalClient(get_fn=tracking_get_fn, _service_key="fake-key")
+            client.search("2", "test-cas", attempt_hook=tracking_hook)
+
+        assert order[0] == "hook", "hook must fire BEFORE get_fn"
+        assert order[1] == "get_fn"
+
+    def test_t005_timeout_retry_counts_budget(self):
+        """T005: physical timeout retry = 2 separate budget units via hook"""
+        from unittest.mock import patch
+        from services.keco_chemical.parse import KecoSearchResponse
+        from services.keco_chemical.budget import RequestBudget
+
+        call_count = [0]
+
+        def flaky_get_fn(url, params, timeout):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise ConnectionError("temporary failure")
+            return 200, "mock-text"
+
+        with patch("services.keco_chemical.client.parse_keco_response") as mock_parse:
+            mock_parse.return_value = KecoSearchResponse(
+                result_code="200", result_msg="OK",
+                page_no="1", num_of_rows="10", total_count="0", items=[],
+            )
+            from services.keco_chemical.client import KecoChemicalClient
+            budget = RequestBudget(limit=10)
+            client = KecoChemicalClient(
+                get_fn=flaky_get_fn, max_attempts=3, _service_key="fake-key"
+            )
+            client.search("2", "test-cas", attempt_hook=lambda: budget.consume_or_raise(1))
+
+        assert call_count[0] == 2
+        assert budget.used == 2
+
+
+class TestPatch001SourceCode:
+    """T006-T013: source_code attribute + retry/fail classification."""
+
+    def test_t006_client_error_source_code_attr(self):
+        """T006: KecoChemicalClientError has source_code attribute"""
+        from services.keco_chemical.client import KecoChemicalClientError
+        exc = KecoChemicalClientError("AUTH", "msg", source_code="97")
+        assert exc.source_code == "97"
+
+    def test_t007_client_error_source_code_default_none(self):
+        """T007: source_code defaults to None for backward compat"""
+        from services.keco_chemical.client import KecoChemicalClientError
+        exc = KecoChemicalClientError("AUTH", "msg")
+        assert exc.source_code is None
+
+    def test_t008_client_search_accepts_attempt_hook(self):
+        """T008: client.search() signature includes attempt_hook param"""
+        import inspect
+        from services.keco_chemical.client import KecoChemicalClient
+        sig = inspect.signature(KecoChemicalClient.search)
+        assert "attempt_hook" in sig.parameters
+
+    def test_t009_validation_91_marks_failed(self):
+        """T009: KECO code 91 (VALIDATION, NON_RETRY) → target FAILED"""
+        from services.keco_chemical.client import KecoChemicalClientError
+        from services.keco_chemical.contract import ERROR_VALIDATION
+        from services.keco_chemical.sync import sync_one_target
+        client = MagicMock()
+        store = MagicMock()
+        client.search.side_effect = KecoChemicalClientError(
+            ERROR_VALIDATION, "invalid param", source_code="91"
+        )
+        result = sync_one_target(client, store, _make_target(), "run", RequestBudget(limit=100))
+        assert result.status == TARGET_STATUS_FAILED
+        store.mark_target_failed.assert_called_once()
+
+    def test_t010_auth_97_marks_failed(self):
+        """T010: KECO code 97 (AUTH, NON_RETRY) → target FAILED"""
+        from services.keco_chemical.client import KecoChemicalClientError
+        from services.keco_chemical.contract import ERROR_AUTH
+        from services.keco_chemical.sync import sync_one_target
+        client = MagicMock()
+        store = MagicMock()
+        client.search.side_effect = KecoChemicalClientError(
+            ERROR_AUTH, "auth error", source_code="97"
+        )
+        result = sync_one_target(client, store, _make_target(), "run", RequestBudget(limit=100))
+        assert result.status == TARGET_STATUS_FAILED
+
+    def test_t011_upstream_12_marks_failed(self):
+        """T011: KECO code 12 (in NON_RETRY_CODES) → target FAILED"""
+        from services.keco_chemical.client import KecoChemicalClientError
+        from services.keco_chemical.contract import ERROR_UPSTREAM
+        from services.keco_chemical.sync import sync_one_target
+        client = MagicMock()
+        store = MagicMock()
+        client.search.side_effect = KecoChemicalClientError(
+            ERROR_UPSTREAM, "upstream error", source_code="12"
+        )
+        result = sync_one_target(client, store, _make_target(), "run", RequestBudget(limit=100))
+        assert result.status == TARGET_STATUS_FAILED
+
+    def test_t012_upstream_01_marks_retry(self):
+        """T012: KECO code 01 (UPSTREAM, NOT in NON_RETRY_CODES) → target RETRY"""
+        from services.keco_chemical.client import KecoChemicalClientError
+        from services.keco_chemical.contract import ERROR_UPSTREAM
+        from services.keco_chemical.sync import sync_one_target
+        client = MagicMock()
+        store = MagicMock()
+        client.search.side_effect = KecoChemicalClientError(
+            ERROR_UPSTREAM, "upstream transient", source_code="01"
+        )
+        result = sync_one_target(client, store, _make_target(), "run", RequestBudget(limit=100))
+        assert result.status == TARGET_STATUS_RETRY
+        assert result.stop_batch is False
+
+    def test_t013_no_source_code_rate_limit_retry_stop(self):
+        """T013: exc.code=RATE_LIMIT without source_code → RETRY+stop (fallback path)"""
+        from services.keco_chemical.client import KecoChemicalClientError
+        from services.keco_chemical.contract import ERROR_RATE_LIMIT
+        from services.keco_chemical.sync import sync_one_target
+        client = MagicMock()
+        store = MagicMock()
+        client.search.side_effect = KecoChemicalClientError(ERROR_RATE_LIMIT, "quota exceeded")
+        result = sync_one_target(client, store, _make_target(), "run", RequestBudget(limit=100))
+        assert result.status == TARGET_STATUS_RETRY
+        assert result.stop_batch is True
+
+
+class TestPatch001Pagination:
+    """T014-T015: Pagination safety cap → RETRY."""
+
+    def _run(self, client, store, cas="7664-41-7", budget=None):
+        from services.keco_chemical.sync import sync_one_target
+        budget = budget or RequestBudget(limit=200)
+        return sync_one_target(client, store, _make_target(cas), "run-001", budget)
+
+    def test_t014_pagination_cap_marks_retry(self, monkeypatch):
+        """T014: safety cap reached with unread pages → RETRY"""
+        monkeypatch.setattr("services.keco_chemical.sync.MAX_PAGES_SAFETY_CAP", 2)
+        client = MagicMock()
+        store = MagicMock()
+
+        def _search(**kwargs):
+            hook = kwargs.get("attempt_hook")
+            if hook:
+                hook()
+            return _make_search_response(
+                [_make_parsed_item("7664-41-7", "K-a"), _make_parsed_item("7664-41-7", "K-b")],
+                total_count="6", num_of_rows="2",
+            )
+
+        client.search.side_effect = _search
+        result = self._run(client, store)
+        assert result.status == TARGET_STATUS_RETRY
+        assert result.error == "PAGINATION_CAP"
+        store.mark_target_retry.assert_called_once()
+
+    def test_t015_natural_pagination_completion_is_done(self):
+        """T015: pagination completes within cap → DONE, no false RETRY"""
+        client = MagicMock()
+        store = MagicMock()
+
+        def _search(**kwargs):
+            hook = kwargs.get("attempt_hook")
+            if hook:
+                hook()
+            return _make_search_response([_make_parsed_item()], total_count="1")
+
+        client.search.side_effect = _search
+        store.persist_item.return_value = _make_persist_result("NEW")
+        result = self._run(client, store)
+        assert result.status == TARGET_STATUS_DONE
+        assert result.error is None
+
+
+class TestPatch001CasConflict:
+    """T016-T017: Mixed CAS → CONFLICT, nothing persisted."""
+
+    def _run(self, client, store, cas="7664-41-7"):
+        from services.keco_chemical.sync import sync_one_target
+        return sync_one_target(client, store, _make_target(cas), "run-001", RequestBudget(limit=100))
+
+    def test_t016_mixed_cas_is_conflict(self):
+        """T016: matched + mismatched items → CONFLICT"""
+        client = MagicMock()
+        store = MagicMock()
+        matched = _make_parsed_item(cas="7664-41-7", sbstn_id="K-1")
+        mismatched = _make_parsed_item(cas="1234-56-7", sbstn_id="K-2")
+        client.search.return_value = _make_search_response(
+            [matched, mismatched], total_count="2"
+        )
+        result = self._run(client, store)
+        assert result.status == TARGET_STATUS_CONFLICT
+        assert result.error == "CAS_MISMATCH"
+        store.mark_target_conflict.assert_called_once()
+
+    def test_t017_mixed_cas_nothing_persisted(self):
+        """T017: any CAS mismatch → persist_item never called"""
+        client = MagicMock()
+        store = MagicMock()
+        matched = _make_parsed_item(cas="7664-41-7", sbstn_id="K-1")
+        mismatched = _make_parsed_item(cas="9999-99-9", sbstn_id="K-2")
+        client.search.return_value = _make_search_response([matched, mismatched], total_count="2")
+        self._run(client, store)
+        store.persist_item.assert_not_called()
+
+
+class TestPatch001ClaimMode:
+    """T018-T019: claim_targets mode + /retry endpoint."""
+
+    def test_t018_retry_endpoint_uses_retry_mode(self):
+        """T018: POST /retry calls claim_targets with mode='retry'"""
+        import os as _os
+        _os.environ["INTERNAL_API_SECRET"] = "test-secret"
+        _os.environ["LEG_SUPABASE_URL"] = "http://fake"
+        _os.environ["LEG_SUPABASE_SERVICE_ROLE_KEY"] = "fake-key"
+        _os.environ["KECO_API_SERVICE_KEY"] = "fake-api-key"
+
+        from fastapi.testclient import TestClient
+        from fastapi import FastAPI
+        from routers.internal_keco_sync import router
+
+        app = FastAPI()
+        app.include_router(router)
+        tc = TestClient(app)
+
+        with patch("routers.internal_keco_sync._make_store") as ms, \
+             patch("routers.internal_keco_sync._make_client") as mc, \
+             patch("routers.internal_keco_sync._make_budget") as mb:
+            mock_store = MagicMock()
+            mock_store.start_run.return_value = "run-retry"
+            mock_store.claim_targets.return_value = []
+            ms.return_value = mock_store
+            mc.return_value = MagicMock()
+            mb.return_value = RequestBudget(limit=100)
+
+            resp = tc.post(
+                "/internal/reference/keco/retry",
+                json={"limit": 10},
+                headers={"X-Internal-Secret": "test-secret"},
+            )
+
+        assert resp.status_code == 200
+        call_kwargs = mock_store.claim_targets.call_args.kwargs
+        assert call_kwargs.get("mode") == "retry"
+
+    def test_t019_budget_imported_from_budget_module(self):
+        """T019: RequestBudget importable from both budget.py and sync.py"""
+        from services.keco_chemical.budget import RequestBudget as BudgetFromBudget
+        from services.keco_chemical.sync import RequestBudget as BudgetFromSync
+        assert BudgetFromBudget is BudgetFromSync
+
+
+class TestPatch001Recovery:
+    """T020-T025: Store recovery methods + budget hook mechanics."""
+
+    def test_t020_recover_stale_runs_method_exists(self):
+        """T020: KecoReferenceStore.recover_stale_runs() exists"""
+        from services.keco_chemical.store import KecoReferenceStore
+        assert callable(getattr(KecoReferenceStore, "recover_stale_runs", None))
+
+    def test_t021_heartbeat_run_method_exists(self):
+        """T021: KecoReferenceStore.heartbeat_run() exists"""
+        from services.keco_chemical.store import KecoReferenceStore
+        assert callable(getattr(KecoReferenceStore, "heartbeat_run", None))
+
+    def test_t022_budget_hook_callable_in_sync(self):
+        """T022: attempt_hook passed to client.search() is callable and increments budget"""
+        client = MagicMock()
+        store = MagicMock()
+        client.search.return_value = _make_search_response([_make_parsed_item()], total_count="1")
+        store.persist_item.return_value = _make_persist_result("NEW")
+        budget = RequestBudget(limit=10)
+
+        from services.keco_chemical.sync import sync_one_target
+        sync_one_target(client, store, _make_target(), "run-001", budget)
+
+        call_kwargs = client.search.call_args.kwargs
+        hook = call_kwargs.get("attempt_hook")
+        assert hook is not None and callable(hook)
+        prev_used = budget.used
+        hook()
+        assert budget.used == prev_used + 1
+
+    def test_t023_budget_exhausted_via_hook_is_retry_stop(self):
+        """T023: RequestBudgetExceeded from hook inside search → RETRY + stop_batch"""
+        from services.keco_chemical.sync import sync_one_target
+
+        client = MagicMock()
+        store = MagicMock()
+        budget = RequestBudget(limit=1)
+
+        def _search_that_consumes_budget(**kwargs):
+            hook = kwargs.get("attempt_hook")
+            if hook:
+                hook()
+                hook()  # second call → raises RequestBudgetExceeded
+
+        client.search.side_effect = _search_that_consumes_budget
+        result = sync_one_target(client, store, _make_target(), "run", budget)
+
+        assert result.status == TARGET_STATUS_RETRY
+        assert result.stop_batch is True
+        assert result.error == "BUDGET_EXHAUSTED"
+
+    def test_t024_budget_consumed_per_physical_page(self):
+        """T024: budget.used increments once per logical page via hook"""
+        client = MagicMock()
+        store = MagicMock()
+
+        def _search(**kwargs):
+            hook = kwargs.get("attempt_hook")
+            if hook:
+                hook()
+            return _make_search_response([_make_parsed_item()], total_count="1")
+
+        client.search.side_effect = _search
+        store.persist_item.return_value = _make_persist_result("NEW")
+        budget = RequestBudget(limit=10)
+
+        from services.keco_chemical.sync import sync_one_target
+        sync_one_target(client, store, _make_target(), "run", budget)
+        assert budget.used == 1
+
+    def test_t025_all_cas_mismatch_is_conflict(self):
+        """T025: all items mismatch CAS (original CONFLICT case) still works post-refactor"""
+        from services.keco_chemical.sync import sync_one_target
+        client = MagicMock()
+        store = MagicMock()
+        wrong_item = _make_parsed_item(cas="9999-00-0")
+        client.search.return_value = _make_search_response([wrong_item], total_count="1")
+        result = sync_one_target(client, store, _make_target("7664-41-7"), "run", RequestBudget(limit=100))
+        assert result.status == TARGET_STATUS_CONFLICT
+        store.mark_target_conflict.assert_called_once()
+        store.persist_item.assert_not_called()

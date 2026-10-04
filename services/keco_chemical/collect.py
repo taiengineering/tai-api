@@ -162,6 +162,12 @@ def mode_bulk(args) -> None:
 
     store = _make_store()
 
+    # 강제 종료된 stale RUNNING run을 FAILED로 해제한 후 lock 체크
+    stale_min = _stale_minutes()
+    recovered = store.recover_stale_runs(stale_min)
+    if recovered:
+        logger.info("[BULK] Recovered %d stale RUNNING run(s) before lock check", recovered)
+
     if store.has_active_run("INITIAL_BULK"):
         logger.warning("[BULK] INITIAL_BULK already RUNNING — skipping to prevent double run")
         return
@@ -190,7 +196,7 @@ def mode_bulk(args) -> None:
                     break
                 batch_size = min(batch_size, remaining_allowed)
 
-            targets = store.claim_targets(batch_size, stale_min)
+            targets = store.claim_targets(batch_size, stale_min, mode="bulk")
             if not targets:
                 logger.info("[BULK] No more claimable targets")
                 break
@@ -221,7 +227,7 @@ def mode_bulk(args) -> None:
 # ─────────────────────────────────────────────────────────────
 
 def mode_retry(args) -> None:
-    """FAILED/RETRY 대상 재처리."""
+    """FAILED/RETRY 대상 재처리 (PENDING 포함 안함)."""
     max_targets = getattr(args, "max_targets", None) or 50
     _require_env("KECO_API_SERVICE_KEY")
     _require_env("LEG_SUPABASE_URL")
@@ -237,7 +243,7 @@ def mode_retry(args) -> None:
     logger.info("[RETRY] run_id=%s max_targets=%d", run_id, max_targets)
 
     try:
-        targets = store.claim_targets(max_targets, stale_min)
+        targets = store.claim_targets(max_targets, stale_min, mode="retry")
         from services.keco_chemical.sync import sync_batch
         result = sync_batch(client, store, targets, run_id, budget)
         store.complete_run(run_id, result.requests, result.source_items, _metrics(result))

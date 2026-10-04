@@ -17,6 +17,7 @@ import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from services.keco_chemical.budget import RequestBudget, RequestBudgetExceeded
 from services.keco_chemical.client import KecoChemicalClient, KecoChemicalClientError
 from services.keco_chemical.contract import (
     DEFAULT_CLAIM_BATCH_SIZE,
@@ -47,41 +48,6 @@ logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────
-# Budget
-# ─────────────────────────────────────────────────────────────
-
-@dataclass
-class RequestBudget:
-    """API request hard budget — 초과 시 run을 PARTIAL로 안전 종료."""
-    limit: int
-    used: int = 0
-
-    def consume(self, n: int = 1) -> None:
-        self.used += n
-
-    @property
-    def remaining(self) -> int:
-        return max(0, self.limit - self.used)
-
-    @property
-    def exhausted(self) -> bool:
-        return self.used >= self.limit
-
-    def check_available(self) -> bool:
-        return not self.exhausted
-
-    @classmethod
-    def from_env(cls) -> "RequestBudget":
-        """KECO_REQUEST_BUDGET 환경변수에서 읽기. 미설정 시 DEFAULT_REQUEST_BUDGET."""
-        raw = (os.getenv(REQUEST_BUDGET_ENV) or "").strip()
-        try:
-            limit = int(raw) if raw else DEFAULT_REQUEST_BUDGET
-        except ValueError:
-            limit = DEFAULT_REQUEST_BUDGET
-        return cls(limit=limit)
-
-
-# ─────────────────────────────────────────────────────────────
 # Result types
 # ─────────────────────────────────────────────────────────────
 
@@ -98,7 +64,7 @@ class SyncTargetResult:
     changed_count: int
     fact_insert_count: int
     error: Optional[str] = None
-    stop_batch: bool = False   # True = rate limit daily quota → caller should halt
+    stop_batch: bool = False   # True = rate limit daily quota or budget exhausted → halt batch
 
 
 @dataclass
@@ -139,22 +105,27 @@ def sync_one_target(
     Pagination 전체를 읽고 → CAS match 확인 → persist_item 호출.
     budget 소진 시 RETRY로 마크하고 stop_batch=True 반환.
     rate limit (daily) 시 RETRY + stop_batch=True.
+    CAS mismatch 1건이라도 → CONFLICT (partial persist 금지).
+    Pagination safety cap 초과 → RETRY (totalCount 미달시).
     """
     target_id = target["id"]
     target_type = target["target_type"]
     target_value = target["target_value"]
 
     api_requests = 0
-    source_items_total = 0
     new_count = 0
     unchanged_count = 0
     changed_count = 0
     fact_insert_count = 0
 
+    def _budget_hook() -> None:
+        budget.consume_or_raise(1)
+
     try:
         all_items = []
         page_no = 1
         total_count = None
+        cap_reached = False
 
         while page_no <= MAX_PAGES_SAFETY_CAP:
             if not budget.check_available():
@@ -162,19 +133,30 @@ def sync_one_target(
                 return SyncTargetResult(
                     target_id=target_id, target_type=target_type, target_value=target_value,
                     status=TARGET_STATUS_RETRY, api_requests=api_requests,
-                    source_items=source_items_total, new_count=0, unchanged_count=0,
+                    source_items=len(all_items), new_count=0, unchanged_count=0,
                     changed_count=0, fact_insert_count=0,
                     error="BUDGET_EXHAUSTED", stop_batch=True,
                 )
 
-            resp = client.search(
-                search_gubun=SEARCH_CAS,
-                search_nm=target_value,
-                page_no=page_no,
-                num_of_rows=SYNC_PAGE_SIZE,
-            )
+            try:
+                resp = client.search(
+                    search_gubun=SEARCH_CAS,
+                    search_nm=target_value,
+                    page_no=page_no,
+                    num_of_rows=SYNC_PAGE_SIZE,
+                    attempt_hook=_budget_hook,
+                )
+            except RequestBudgetExceeded:
+                store.mark_target_retry(target_id, run_id, "BUDGET_EXHAUSTED", "Budget exhausted during HTTP attempt")
+                return SyncTargetResult(
+                    target_id=target_id, target_type=target_type, target_value=target_value,
+                    status=TARGET_STATUS_RETRY, api_requests=api_requests,
+                    source_items=len(all_items), new_count=0, unchanged_count=0,
+                    changed_count=0, fact_insert_count=0,
+                    error="BUDGET_EXHAUSTED", stop_batch=True,
+                )
+
             api_requests += 1
-            budget.consume(1)
 
             if total_count is None:
                 try:
@@ -187,6 +169,23 @@ def sync_one_target(
             if total_count == 0 or len(all_items) >= total_count:
                 break
             page_no += 1
+        else:
+            # while-condition false → page_no > MAX_PAGES_SAFETY_CAP
+            if total_count is not None and len(all_items) < total_count:
+                cap_reached = True
+
+        # Pagination safety cap reached with unread pages → RETRY
+        if cap_reached:
+            store.mark_target_retry(
+                target_id, run_id, "PAGINATION_CAP",
+                f"Safety cap {MAX_PAGES_SAFETY_CAP} reached: totalCount={total_count} fetched={len(all_items)}",
+            )
+            return SyncTargetResult(
+                target_id=target_id, target_type=target_type, target_value=target_value,
+                status=TARGET_STATUS_RETRY, api_requests=api_requests,
+                source_items=len(all_items), new_count=0, unchanged_count=0,
+                changed_count=0, fact_insert_count=0, error="PAGINATION_CAP",
+            )
 
         source_items_total = len(all_items)
 
@@ -199,15 +198,24 @@ def sync_one_target(
                 changed_count=0, fact_insert_count=0,
             )
 
-        cas_matched = 0
-        cas_mismatched = 0
+        # Pre-check CAS — ANY mismatch = CONFLICT (partial persist 금지)
+        target_cas = target_value.strip()
+        mismatched = [item for item in all_items if (item.cas_no or "").strip() != target_cas]
+        matched = [item for item in all_items if (item.cas_no or "").strip() == target_cas]
 
-        for item in all_items:
-            item_cas = (item.cas_no or "").strip()
-            if item_cas != target_value.strip():
-                cas_mismatched += 1
-                continue
-            cas_matched += 1
+        if mismatched:
+            store.mark_target_conflict(
+                target_id, run_id, api_requests, source_items_total,
+                f"CAS mismatch: {len(mismatched)}/{source_items_total} items differ",
+            )
+            return SyncTargetResult(
+                target_id=target_id, target_type=target_type, target_value=target_value,
+                status=TARGET_STATUS_CONFLICT, api_requests=api_requests,
+                source_items=source_items_total, new_count=0, unchanged_count=0,
+                changed_count=0, fact_insert_count=0, error="CAS_MISMATCH",
+            )
+
+        for item in matched:
             raw = item.raw_payload or {}
             result = store.persist_item(raw, item, run_id)
             if result.status == "NEW":
@@ -217,15 +225,6 @@ def sync_one_target(
             elif result.status == "CHANGED":
                 changed_count += 1
             fact_insert_count += result.inserted_fact_count
-
-        if cas_matched == 0 and cas_mismatched > 0:
-            store.mark_target_conflict(target_id, run_id, api_requests, source_items_total, "All items CAS mismatch")
-            return SyncTargetResult(
-                target_id=target_id, target_type=target_type, target_value=target_value,
-                status=TARGET_STATUS_CONFLICT, api_requests=api_requests,
-                source_items=source_items_total, new_count=0, unchanged_count=0,
-                changed_count=0, fact_insert_count=0, error="CAS_MISMATCH",
-            )
 
         store.mark_target_done(target_id, run_id, api_requests, source_items_total)
         return SyncTargetResult(
@@ -237,7 +236,9 @@ def sync_one_target(
         )
 
     except KecoChemicalClientError as exc:
-        is_non_retry = (exc.code in NON_RETRY_CODES or exc.code == "AUTH")
+        # Use raw source_code for retry/fail classification
+        source_code = getattr(exc, "source_code", None) or exc.code
+        is_non_retry = source_code in NON_RETRY_CODES
         is_rate_limit = (exc.code == ERROR_RATE_LIMIT)
 
         if is_non_retry:

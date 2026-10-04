@@ -43,10 +43,11 @@ GetFn = Callable[..., tuple[int, str]]
 
 
 class KecoChemicalClientError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, source_code: Optional[str] = None):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.source_code = source_code  # raw KECO result_code (retry classification용)
 
 
 class KecoNoServiceKeyError(KecoChemicalClientError):
@@ -118,14 +119,19 @@ class KecoChemicalClient:
             raise KecoNoServiceKeyError()
         return key
 
-    def _get(self, params: dict[str, str]) -> tuple[int, str, str]:
-        """HTTP GET 실행. (http_status, response_text, key) 반환."""
+    def _get(self, params: dict[str, str], attempt_hook=None) -> tuple[int, str, str]:
+        """HTTP GET 실행. (http_status, response_text, key) 반환.
+
+        attempt_hook: 물리적 HTTP 시도 직전 호출되는 callable. budget.consume_or_raise() 전달용.
+        """
         key = self._key()
         query = dict(params)
         query["serviceKey"] = key
         url = f"{BASE_URL}/{OPERATION}"
         last_exc: Optional[Exception] = None
         for attempt in range(1, self.max_attempts + 1):
+            if attempt_hook is not None:
+                attempt_hook()  # 물리적 HTTP 시도 직전 — budget 차감 포함
             try:
                 status, text = self.get_fn(url, params=query, timeout=self.timeout_seconds)
             except Exception as exc:
@@ -156,6 +162,7 @@ class KecoChemicalClient:
         page_no: int = DEFAULT_PAGE_NO,
         num_of_rows: int = DEFAULT_NUM_OF_ROWS,
         return_type: str = RETURN_TYPE_JSON,
+        attempt_hook=None,
     ) -> KecoSearchResponse:
         """KECO chemSbstnList 검색.
 
@@ -205,7 +212,7 @@ class KecoChemicalClient:
             search_gubun, search_nm, page_no, num_of_rows,
         )
 
-        _, text, key = self._get(params)
+        _, text, key = self._get(params, attempt_hook=attempt_hook)
 
         try:
             parsed = parse_keco_response(text)
@@ -215,6 +222,6 @@ class KecoChemicalClient:
         if parsed.result_code not in SUCCESS_RESULT_CODES:
             err_class = _classify_error_code(parsed.result_code)
             msg = redact_key(parsed.result_msg or parsed.result_code, key)
-            raise KecoChemicalClientError(err_class, msg)
+            raise KecoChemicalClientError(err_class, msg, source_code=parsed.result_code)
 
         return parsed
