@@ -1,7 +1,8 @@
-"""Internal QA Result Callback + Catalog Sync — WO-QA-CONTROL-PHASE2B-001 PATCH-1 / WO-QA-ADMIN-EXISTING-CONSOLE-AUTOSYNC-001 STEP C.
+"""Internal QA Result Callback + Catalog Sync + Targeted Dispatch — WO-QA-CONTROL-PHASE2B-001 PATCH-1 / WO-QA-ADMIN-EXISTING-CONSOLE-AUTOSYNC-001 STEP C / WO-QA-H2A-TARGETED-DISPATCH-API-001.
 
 /internal/qa/runs/{run_id}/results   POST — 실행 결과 수신 + lifecycle 전이
 /internal/qa/catalog/sync            POST — tai-qa Scenario → qa_items 동기화
+/internal/qa/targeted-dispatch       POST — Phase H2A targeted PR-triggered dispatch
 
 인증: X-Internal-Secret 헤더 (INTERNAL_API_SECRET env).
 
@@ -28,6 +29,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Header, HTTPException, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
@@ -189,4 +191,70 @@ async def post_run_results(
             "sent":      slack_sent,
             "failed":    slack_attempted - slack_sent,
         },
+    }
+
+
+# ── Targeted Dispatch models ──────────────────────────────────────────────────
+
+class TargetedDispatchRequest(BaseModel):
+    scenario_ids: List[str]
+
+
+@router.post("/targeted-dispatch", status_code=201)
+async def targeted_dispatch(
+    body: TargetedDispatchRequest,
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
+):
+    """Phase H2A — PR-triggered targeted QA dispatch.
+
+    scenario_ids → create_targeted_run (trigger_type=PR, requested_by=targeted-qa)
+    → dispatch_qa_run(allow_conditional=False) → RUNNING or ERROR.
+    """
+    from services.github_dispatch_svc import dispatch_qa_run
+    from services.time import now_kst, serialize_external_utc
+
+    _check_secret(x_internal_secret)
+    supabase = get_supabase()
+
+    run_data = svc.create_targeted_run(supabase, body.scenario_ids)
+    run_id      = run_data["id"]
+    scenario_ids: List[str] = run_data["scenario_ids"]
+
+    dispatch_status = "SKIPPED"
+    if scenario_ids:
+        try:
+            await dispatch_qa_run(run_id, scenario_ids, allow_conditional=False)
+            dispatch_status = "OK"
+            now_iso = serialize_external_utc(now_kst())
+            supabase.table("qa_runs").update({
+                "run_status": "RUNNING",
+                "started_at": now_iso,
+                "updated_at": now_iso,
+            }).eq("id", run_id).execute()
+            run_data["run_status"] = "RUNNING"
+        except Exception as exc:
+            log.error("[internal_qa] targeted dispatch failed run=%s: %s", run_id, exc)
+            sanitized = svc.redact_error_summary(str(exc))[:500]
+            now_iso = serialize_external_utc(now_kst())
+            supabase.table("qa_runs").update({
+                "run_status":    "ERROR",
+                "error_summary": sanitized,
+                "finished_at":   now_iso,
+                "updated_at":    now_iso,
+            }).eq("id", run_id).execute()
+            run_data["run_status"]    = "ERROR"
+            run_data["error_summary"] = sanitized
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "status":   "error",
+                    "data":     run_data,
+                    "dispatch": "ERROR",
+                },
+            )
+
+    return {
+        "status":   "success",
+        "data":     run_data,
+        "dispatch": dispatch_status,
     }

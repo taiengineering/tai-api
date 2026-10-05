@@ -263,6 +263,8 @@ jobs:
         run: pytest tests/test_keco_collection.py -q --tb=short
       - name: Internal MSDS Reference Query tests (CHEM-WO-OBJ04-003-PATCH-05)
         run: pytest tests/test_internal_reference_query.py -q --tb=short
+      - name: QA Targeted Dispatch tests (WO-QA-H2A-TARGETED-DISPATCH-API-001)
+        run: pytest tests/test_targeted_dispatch.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"
