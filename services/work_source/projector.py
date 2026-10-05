@@ -211,10 +211,39 @@ def project_work_row(row: Mapping[str, Any]) -> Dict[str, bool]:
 
 
 def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, bool]:
-    """Union of projected facts. True stays True. Missing stays absent."""
+    """Union of projected facts. True stays True. Missing stays absent.
+
+    performs_work_with_fall_risk (A01b) uses tri-state multi-row aggregation
+    (LFR-013 §8-3): ANY explicit TRUE → TRUE; ALL relevant rows explicit FALSE → FALSE;
+    mixed/missing/null → key ABSENT (UNKNOWN). Relevant = active HIGH_PLACE rows only.
+    """
     out: Dict[str, bool] = {}
+
+    # A01b tri-state aggregation state (active HIGH_PLACE rows only)
+    a01b_relevant_count = 0
+    a01b_any_true = False
+    a01b_explicit_false_count = 0
+
     for row in rows or ():
         for key, val in project_work_row(row).items():
             if val is True:
                 out[key] = True
+
+        # A01b: multi-row aggregation tracking (separate from single-row projection)
+        if row.get("active") is True and row.get("work_type") == "HIGH_PLACE":
+            a01b_relevant_count += 1
+            fall_risk = _attrs(row).get("fall_risk")
+            if fall_risk is True:
+                a01b_any_true = True
+            elif fall_risk is False:
+                a01b_explicit_false_count += 1
+            # else: missing/None/non-bool → unresolved, not counted as explicit FALSE
+
+    # A01b final decision (applies only when TRUE-union did not already set True)
+    if a01b_any_true:
+        pass  # already set to True via TRUE-union above
+    elif a01b_relevant_count > 0 and a01b_explicit_false_count == a01b_relevant_count:
+        out["performs_work_with_fall_risk"] = False
+    # else: key absent (UNKNOWN) — 0 relevant rows, mixed, or all unresolved
+
     return out
