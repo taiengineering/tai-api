@@ -125,4 +125,8 @@ def root():
     }
 
 
+# Deployment identity — MUST be registered after module groups but before permission guard
+from routers.build_identity import router as _build_identity_router
+app.include_router(_build_identity_router)
+
 mount_permission_guard(app)
