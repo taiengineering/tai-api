@@ -98,6 +98,24 @@ def _build_legal_supabase_client():
     return create_client(url, key)
 
 
+def _build_mkt_supabase_client():
+    """MKT production Supabase client (45cm-mkt-db).
+
+    Returns None on missing env vars — MARKETING_KNOWLEDGE is omitted from
+    rebuild when MKT_SUPABASE_URL / MKT_SUPABASE_SERVICE_ROLE_KEY are not set.
+    """
+    from supabase import create_client
+    url = os.environ.get("MKT_SUPABASE_URL")
+    key = os.environ.get("MKT_SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        logger.warning(
+            "MKT_SUPABASE_URL / MKT_SUPABASE_SERVICE_ROLE_KEY not set — "
+            "MARKETING_KNOWLEDGE domain will be skipped in this rebuild"
+        )
+        return None
+    return create_client(url, key)
+
+
 # ---------------------------------------------------------------------------
 # Rebuild fence helpers (§39-§44 INCREMENTAL-001)
 # ---------------------------------------------------------------------------
@@ -377,7 +395,9 @@ def dry_run() -> None:
     """
     supabase = _build_supabase_client()
     legal_supabase = _build_legal_supabase_client()
-    adapters = build_production_adapters(supabase, legal_client=legal_supabase)
+    mkt_supabase = _build_mkt_supabase_client()
+    adapters = build_production_adapters(
+        supabase, legal_client=legal_supabase, marketing_client=mkt_supabase)
 
     print("=== DRY RUN CENSUS ===")
     print(f"  {'Domain':20s} {'yielded':>8s} {'published':>10s} {'hold':>6s} "
@@ -476,7 +496,9 @@ def full_rebuild() -> None:
     """
     supabase = _build_supabase_client()
     legal_supabase = _build_legal_supabase_client()
-    adapters = build_production_adapters(supabase, legal_client=legal_supabase)
+    mkt_supabase = _build_mkt_supabase_client()
+    adapters = build_production_adapters(
+        supabase, legal_client=legal_supabase, marketing_client=mkt_supabase)
     client   = get_client()
     store    = OpenSearchSearchStore(client)
 
