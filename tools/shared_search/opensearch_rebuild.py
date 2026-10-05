@@ -101,18 +101,19 @@ def _build_legal_supabase_client():
 def _build_mkt_supabase_client():
     """MKT production Supabase client (45cm-mkt-db).
 
-    Returns None on missing env vars — MARKETING_KNOWLEDGE is omitted from
-    rebuild when MKT_SUPABASE_URL / MKT_SUPABASE_SERVICE_ROLE_KEY are not set.
+    Hard-fails on missing env vars — rebuild must never silently omit
+    MARKETING_KNOWLEDGE: 6,000+ documents would be absent from the promoted index.
+    Same safety level as LEG client.
     """
     from supabase import create_client
     url = os.environ.get("MKT_SUPABASE_URL")
     key = os.environ.get("MKT_SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
-        logger.warning(
-            "MKT_SUPABASE_URL / MKT_SUPABASE_SERVICE_ROLE_KEY not set — "
-            "MARKETING_KNOWLEDGE domain will be skipped in this rebuild"
+        raise EnvironmentError(
+            "MARKETING_KNOWLEDGE_BINDING_UNAVAILABLE: MKT_SUPABASE_URL and "
+            "MKT_SUPABASE_SERVICE_ROLE_KEY must be set — "
+            "cannot run rebuild without MKT production client"
         )
-        return None
     return create_client(url, key)
 
 

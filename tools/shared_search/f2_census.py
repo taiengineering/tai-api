@@ -60,14 +60,18 @@ def _build_legal_supabase_client():
 def _build_mkt_supabase_client():
     """MKT production Supabase client (45cm-mkt-db).
 
-    Returns None on missing env vars — MARKETING_KNOWLEDGE domain is
-    omitted from census when MKT_SUPABASE_URL is not set.
+    Hard-fails on missing env vars — census must never silently omit
+    MARKETING_KNOWLEDGE (silent omit looks like a full census but is misleading).
     """
     from supabase import create_client
     url = os.environ.get("MKT_SUPABASE_URL")
     key = os.environ.get("MKT_SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
-        return None
+        raise EnvironmentError(
+            "MARKETING_KNOWLEDGE_BINDING_UNAVAILABLE: MKT_SUPABASE_URL and "
+            "MKT_SUPABASE_SERVICE_ROLE_KEY must be set — "
+            "cannot run census without MKT production client"
+        )
     return create_client(url, key)
 
 

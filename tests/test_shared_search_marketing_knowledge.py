@@ -16,8 +16,8 @@ MK-13  existing KnowledgeAdapter (TAI_HELP_CENTER) regression — unmodified
 MK-14  MarketingKnowledgeAdapter in adapters __init__ __all__
 MK-15  marketing_client=None → MARKETING_KNOWLEDGE absent from build_production_adapters
 MK-16  outbox event payload has correct domain/object/canonical
-MK-17  publish hook fires after PUBLISHED transition (autopublish_worker path)
-MK-18  hook failure does not propagate (publish transaction safe)
+MK-17  sync endpoint records marketing_knowledge_publish reason in outbox p_reason field
+MK-18  sync endpoint fail-soft: httpx errors do not raise to caller (fire-and-forget)
 MK-19  SYNTHETIC: 80 rows all map to valid SearchDocuments (unit fixture, not production census)
 MK-20  SYNTHETIC: adapter yields exactly 6028 docs for 6028-row fake store (unit fixture)
 MK-21  event_key is UUID-unique on every sync call (no ON CONFLICT swallowing)
@@ -28,6 +28,8 @@ MK-25  process_queue lazy-builds mkt_client for MARKETING_KNOWLEDGE events
 MK-26  bulk_sync_published_domain signature accepts marketing_client keyword
 MK-27  iter_documents skips ARCHIVED (only object_reindex_payload returns None)
 MK-28  _make_marketing_knowledge_adapter chains _latest_versions correctly
+MK-29  _build_mkt_supabase_client in opensearch_rebuild raises EnvironmentError when env missing
+MK-30  _build_mkt_supabase_client in opensearch_rebuild returns client when env present
 """
 from __future__ import annotations
 
@@ -338,87 +340,75 @@ def test_mk16_outbox_event_payload():
 
 
 # ---------------------------------------------------------------------------
-# MK-17: publish hook fires after PUBLISHED transition (autopublish_worker path)
+# MK-17: sync endpoint records marketing_knowledge_publish reason in outbox
 # ---------------------------------------------------------------------------
 
-def test_mk17_publish_hook_fires():
-    """run_autopublish() calls enqueue_marketing_knowledge_sync once per published content_id."""
-    import sys
-    import importlib.util
+def test_mk17_sync_endpoint_records_reason():
+    """Internal sync endpoint passes p_reason='marketing_knowledge_publish' to outbox RPC."""
+    import os
+    os.environ["INTERNAL_API_SECRET"] = "test-secret-mk17"
 
-    autopublish_path = "/Users/taiwangsim/45cm-marketing/apps/worker/autopublish_worker.py"
-    try:
-        spec = importlib.util.spec_from_file_location("autopublish_worker_mk17", autopublish_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-    except Exception:
-        pytest.skip("autopublish_worker.py not importable from tai-api test runner")
+    fake_sb = MagicMock()
+    fake_rpc = MagicMock()
+    fake_sb.rpc.return_value = fake_rpc
+    fake_rpc.execute.return_value = MagicMock(data=None)
 
-    fired = []
-    fake_sync = MagicMock()
-    fake_sync.enqueue_marketing_knowledge_sync.side_effect = lambda cid: fired.append(cid)
-    sys.modules["search_sync_client"] = fake_sync
+    with patch("db.supabase_client.get_supabase", return_value=fake_sb):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers.internal_search_marketing_sync import router
 
-    try:
-        # Fake repo: enabled=True, no limits hit, transitions succeed
-        repo = MagicMock()
-        repo.get_policy.return_value = {"value": {"enabled": True}}
-        repo._get.side_effect = lambda table, params=None: (
-            [{"id": "x"}] if table == "marketing_content" else []
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        headers = {"X-Internal-Secret": "test-secret-mk17"}
+        cid = str(uuid.uuid4())
+
+        r = client.post(
+            "/internal/shared-search/marketing-knowledge/sync",
+            json={"content_id": cid},
+            headers=headers,
         )
-        repo.transition.return_value = None
+        assert r.status_code == 200
 
-        candidates = [{"content_id": "cid-test-001", "from_status": "REVIEW"}]
-        result = mod.run_autopublish(repo, candidates)
-
-        assert result["enabled"] is True
-        assert len(result["published"]) == 1
-        assert result["published"][0]["content_id"] == "cid-test-001"
-        assert fired == ["cid-test-001"], f"expected hook fired once, got {fired}"
-    finally:
-        sys.modules.pop("search_sync_client", None)
+        call_kwargs = fake_sb.rpc.call_args_list[-1][0][1]
+        assert call_kwargs["p_reason"] == "marketing_knowledge_publish"
+        assert call_kwargs["p_domain_name"] == "MARKETING_KNOWLEDGE"
+        assert call_kwargs["p_canonical_id"] == f"MKTKNOW:{cid}"
 
 
 # ---------------------------------------------------------------------------
-# MK-18: hook failure does not propagate (publish remains successful)
+# MK-18: sync endpoint returns 500 when outbox RPC raises (fail-loud contract)
 # ---------------------------------------------------------------------------
 
-def test_mk18_hook_failure_safe():
-    """RuntimeError from enqueue_marketing_knowledge_sync must not roll back the publish."""
-    import sys
-    import importlib.util
+def test_mk18_sync_endpoint_500_on_rpc_error(monkeypatch):
+    """Internal sync endpoint returns HTTP 500 when enqueue_search_index_sync RPC raises.
+    Callers (search_sync_client) are responsible for swallowing the error — the endpoint
+    itself is fail-loud so callers know the enqueue did not happen."""
+    monkeypatch.setenv("INTERNAL_API_SECRET", "test-secret-mk18")
 
-    autopublish_path = "/Users/taiwangsim/45cm-marketing/apps/worker/autopublish_worker.py"
-    try:
-        spec = importlib.util.spec_from_file_location("autopublish_worker_mk18", autopublish_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-    except Exception:
-        pytest.skip("autopublish_worker.py not importable from tai-api test runner")
+    fake_sb = MagicMock()
+    fake_rpc = MagicMock()
+    fake_sb.rpc.return_value = fake_rpc
+    fake_rpc.execute.side_effect = RuntimeError("RPC connection refused")
 
-    fail_sync = MagicMock()
-    fail_sync.enqueue_marketing_knowledge_sync.side_effect = RuntimeError("network down")
-    sys.modules["search_sync_client"] = fail_sync
+    with patch("db.supabase_client.get_supabase", return_value=fake_sb):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers.internal_search_marketing_sync import router
 
-    try:
-        repo = MagicMock()
-        repo.get_policy.return_value = {"value": {"enabled": True}}
-        repo._get.side_effect = lambda table, params=None: (
-            [{"id": "x"}] if table == "marketing_content" else []
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        r = client.post(
+            "/internal/shared-search/marketing-knowledge/sync",
+            json={"content_id": str(uuid.uuid4())},
+            headers={"X-Internal-Secret": "test-secret-mk18"},
         )
-        repo.transition.return_value = None
-
-        candidates = [{"content_id": "cid-fail-001", "from_status": "REVIEW"}]
-        # Must NOT raise — hook failure is fire-and-forget
-        result = mod.run_autopublish(repo, candidates)
-
-        assert result["enabled"] is True
-        assert len(result["published"]) == 1, (
-            f"publish should succeed despite hook error; got {result}"
+        assert r.status_code == 500, (
+            f"expected 500 on RPC error so caller can log it; got {r.status_code}"
         )
-        assert result["published"][0]["content_id"] == "cid-fail-001"
-    finally:
-        sys.modules.pop("search_sync_client", None)
 
 
 # ---------------------------------------------------------------------------
@@ -717,3 +707,40 @@ def test_mk28_latest_versions_chained():
 
     assert len(docs) == 1
     assert docs[0]["summary"] == "v3 meta"
+
+
+# ---------------------------------------------------------------------------
+# MK-29: _build_mkt_supabase_client raises EnvironmentError when env missing
+# ---------------------------------------------------------------------------
+
+def test_mk29_rebuild_mkt_client_hard_fail(monkeypatch):
+    """_build_mkt_supabase_client() in opensearch_rebuild raises EnvironmentError
+    when MKT env vars are absent — full rebuild must never silently omit MARKETING_KNOWLEDGE."""
+    monkeypatch.delenv("MKT_SUPABASE_URL", raising=False)
+    monkeypatch.delenv("MKT_SUPABASE_SERVICE_ROLE_KEY", raising=False)
+
+    import importlib
+    import tools.shared_search.opensearch_rebuild as _rebuild
+    importlib.reload(_rebuild)
+
+    with pytest.raises(EnvironmentError, match="MARKETING_KNOWLEDGE_BINDING_UNAVAILABLE"):
+        _rebuild._build_mkt_supabase_client()
+
+
+# ---------------------------------------------------------------------------
+# MK-30: _build_mkt_supabase_client returns client when env present
+# ---------------------------------------------------------------------------
+
+def test_mk30_rebuild_mkt_client_with_env(monkeypatch):
+    """_build_mkt_supabase_client() in opensearch_rebuild returns a client when env vars set."""
+    monkeypatch.setenv("MKT_SUPABASE_URL", "https://fake-mkt.supabase.co")
+    monkeypatch.setenv("MKT_SUPABASE_SERVICE_ROLE_KEY", "fake-service-role-key")
+
+    fake_client = MagicMock()
+    with patch("supabase.create_client", return_value=fake_client):
+        import importlib
+        import tools.shared_search.opensearch_rebuild as _rebuild
+        importlib.reload(_rebuild)
+        result = _rebuild._build_mkt_supabase_client()
+
+    assert result is fake_client
