@@ -76,11 +76,11 @@ def test_s01_iter_documents_valid_row():
 
 
 # ---------------------------------------------------------------------------
-# S02: Row with no title (no ko/en name) → skipped
+# S02: Row with no title (no ko/en/cas) → skipped
 # ---------------------------------------------------------------------------
 
 def test_s02_no_title_skipped():
-    row = _row(chemical_name_ko="", chemical_name_en="")
+    row = _row(chemical_name_ko="", chemical_name_en="", cas_no=None)
     docs = list(_adapter([row]).iter_documents())
     assert docs == []
 
@@ -106,12 +106,14 @@ def test_s04_canonical_id_is_source_record_id():
 
 
 # ---------------------------------------------------------------------------
-# S05: source_id = "KECO_NCISS"
+# S05: source_id = KECO_15149420 (official contract constant)
 # ---------------------------------------------------------------------------
 
 def test_s05_source_id():
+    from services.keco_chemical.contract import SOURCE_ID
     docs = list(_adapter([_row()]).iter_documents())
-    assert docs[0]["source_id"] == "KECO_NCISS"
+    assert docs[0]["source_id"] == SOURCE_ID
+    assert docs[0]["source_id"] == "KECO_15149420"
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +291,7 @@ def _chem_reg_doc(
         "object_type":        "CHEM_REGULATION",
         "canonical_id":       canonical_id,
         "title":              title,
-        "source_id":          "KECO_NCISS",
+        "source_id":          "KECO_15149420",
         "source_key":         canonical_id,
         "summary":            None,
         "aliases":            ["50-00-0"],
@@ -420,3 +422,157 @@ def test_r07_type_chem_regulation_alias(monkeypatch):
         params={"q": "포름알데히드", "type": "chem_regulation"},
     )
     assert resp.status_code == 200
+
+
+# ===========================================================================
+# PATCH-001 tests (P01, P05-P14)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# P01: Search adapter source_id == KECO_15149420
+# ---------------------------------------------------------------------------
+
+def test_p01_search_source_id_official():
+    from services.keco_chemical.contract import SOURCE_ID
+    docs = list(_adapter([_row()]).iter_documents())
+    assert docs[0]["source_id"] == SOURCE_ID
+    assert docs[0]["source_id"] == "KECO_15149420"
+
+
+# ---------------------------------------------------------------------------
+# P05: unique_no is searchable
+# ---------------------------------------------------------------------------
+
+def test_p05_unique_no_in_search_text():
+    fact = {"classification_type": "유독물질", "unique_no": "UN-2024-001",
+            "content_info": None, "exception_info": None, "notice_info": None}
+    row = _row(regulatory_facts=[fact])
+    docs = list(_adapter([row]).iter_documents())
+    assert "UN-2024-001" in docs[0]["search_text"]
+
+
+# ---------------------------------------------------------------------------
+# P06: classification_type is searchable
+# ---------------------------------------------------------------------------
+
+def test_p06_classification_type_in_search_text():
+    fact = {"classification_type": "사고대비물질", "unique_no": None,
+            "content_info": None, "exception_info": None, "notice_info": None}
+    row = _row(regulatory_facts=[fact])
+    docs = list(_adapter([row]).iter_documents())
+    assert "사고대비물질" in docs[0]["search_text"]
+
+
+# ---------------------------------------------------------------------------
+# P07: content_info is in search_text
+# ---------------------------------------------------------------------------
+
+def test_p07_content_info_in_search_text():
+    fact = {"classification_type": None, "unique_no": None,
+            "content_info": "취급제한물질", "exception_info": None, "notice_info": None}
+    row = _row(regulatory_facts=[fact])
+    docs = list(_adapter([row]).iter_documents())
+    assert "취급제한물질" in docs[0]["search_text"]
+
+
+# ---------------------------------------------------------------------------
+# P08: exception_info is in search_text
+# ---------------------------------------------------------------------------
+
+def test_p08_exception_info_in_search_text():
+    fact = {"classification_type": None, "unique_no": None,
+            "content_info": None, "exception_info": "시험연구 제외", "notice_info": None}
+    row = _row(regulatory_facts=[fact])
+    docs = list(_adapter([row]).iter_documents())
+    assert "시험연구 제외" in docs[0]["search_text"]
+
+
+# ---------------------------------------------------------------------------
+# P09: notice_info is in search_text
+# ---------------------------------------------------------------------------
+
+def test_p09_notice_info_in_search_text():
+    fact = {"classification_type": None, "unique_no": None,
+            "content_info": None, "exception_info": None, "notice_info": "고시 2024-01"}
+    row = _row(regulatory_facts=[fact])
+    docs = list(_adapter([row]).iter_documents())
+    assert "고시 2024-01" in docs[0]["search_text"]
+
+
+# ---------------------------------------------------------------------------
+# P10: unique_no appears in aliases
+# ---------------------------------------------------------------------------
+
+def test_p10_unique_no_in_aliases():
+    fact = {"classification_type": "유독물질", "unique_no": "UN-9999",
+            "content_info": None, "exception_info": None, "notice_info": None}
+    row = _row(regulatory_facts=[fact])
+    docs = list(_adapter([row]).iter_documents())
+    assert "UN-9999" in docs[0]["aliases"]
+
+
+# ---------------------------------------------------------------------------
+# P11: classification_type appears in aliases
+# ---------------------------------------------------------------------------
+
+def test_p11_classification_type_in_aliases():
+    fact = {"classification_type": "허가물질", "unique_no": None,
+            "content_info": None, "exception_info": None, "notice_info": None}
+    row = _row(regulatory_facts=[fact])
+    docs = list(_adapter([row]).iter_documents())
+    assert "허가물질" in docs[0]["aliases"]
+
+
+# ---------------------------------------------------------------------------
+# P12: ko/en both blank + CAS exists → title = "CAS {cas}" (not dropped)
+# ---------------------------------------------------------------------------
+
+def test_p12_cas_fallback_title_not_dropped():
+    row = _row(chemical_name_ko="", chemical_name_en="", cas_no="50-00-0")
+    docs = list(_adapter([row]).iter_documents())
+    assert len(docs) == 1
+    assert docs[0]["title"] == "CAS 50-00-0"
+
+
+# ---------------------------------------------------------------------------
+# P13: No-match CAS remains HTTP 200 + chemicals=[]
+# ---------------------------------------------------------------------------
+
+def test_p13_no_match_cas_is_200_empty(monkeypatch):
+    import routers.public_keco_chemical as keco_mod
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(keco_mod.router)
+    monkeypatch.setattr(
+        "services.keco_chemical.read._get_leg_client",
+        lambda: _mock_leg_client_empty(),
+    )
+    client = TestClient(app)
+    resp = client.get("/public/keco/chemicals/by-cas/7732-18-5")
+    assert resp.status_code == 200
+    assert resp.json()["chemicals"] == []
+
+
+def _mock_leg_client_empty():
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    db = MagicMock()
+    db.table.return_value.select.return_value.eq.return_value.execute.return_value = (
+        MagicMock(data=[])
+    )
+    client.schema.return_value = db
+    return client
+
+
+# ---------------------------------------------------------------------------
+# P14: context_type=chemical remains unchanged
+# ---------------------------------------------------------------------------
+
+def test_p14_context_type_chemical():
+    row = _row(cas_no="50-00-0")
+    docs = list(_adapter([row]).iter_documents())
+    ctx = docs[0]["context"]
+    assert len(ctx) == 1
+    assert ctx[0]["context_type"] == "chemical"
+    assert ctx[0]["context_key"] == "50-00-0"

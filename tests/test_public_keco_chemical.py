@@ -250,3 +250,50 @@ def test_a12_response_shape(monkeypatch):
     }
     for k in required_keys:
         assert k in chem, f"Missing key: {k}"
+
+
+# ===========================================================================
+# PATCH-001 tests (P02-P04)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# P02: Public API source_id == KECO_15149420
+# ---------------------------------------------------------------------------
+
+def test_p02_public_api_source_id(monkeypatch):
+    from services.keco_chemical.contract import SOURCE_ID
+    _patch_leg_client(monkeypatch, [_SAMPLE_CHEMICAL], [])
+    client = TestClient(_make_app())
+    resp = client.get("/public/keco/chemicals/by-cas/50-00-0")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["source_id"] == SOURCE_ID
+    assert data["source_id"] == "KECO_15149420"
+
+
+# ---------------------------------------------------------------------------
+# P03: Public API provider == 한국환경공단
+# ---------------------------------------------------------------------------
+
+def test_p03_public_api_provider(monkeypatch):
+    from services.keco_chemical.contract import PROVIDER
+    _patch_leg_client(monkeypatch, [_SAMPLE_CHEMICAL], [])
+    client = TestClient(_make_app())
+    resp = client.get("/public/keco/chemicals/by-cas/50-00-0")
+    assert resp.status_code == 200
+    assert resp.json()["provider"] == PROVIDER
+    assert resp.json()["provider"] == "한국환경공단"
+
+
+# ---------------------------------------------------------------------------
+# P04: Public API source_dataset_url == official dataset URL
+# ---------------------------------------------------------------------------
+
+def test_p04_public_api_source_dataset_url(monkeypatch):
+    from services.keco_chemical.contract import DATASET_URL
+    _patch_leg_client(monkeypatch, [_SAMPLE_CHEMICAL], [])
+    client = TestClient(_make_app())
+    resp = client.get("/public/keco/chemicals/by-cas/50-00-0")
+    assert resp.status_code == 200
+    assert resp.json()["source_dataset_url"] == DATASET_URL
+    assert resp.json()["source_dataset_url"] == "https://www.data.go.kr/data/15149420/openapi.do"

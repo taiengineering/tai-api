@@ -5,6 +5,7 @@ Public URL resolved via msds_ref.identity_projection (CAS→KOSHA chem_id).
 
 canonical_id  = source_record_id (KECO sbstnId).
 object_type   = "CHEM_REGULATION".
+source_id     = KECO_15149420 (services.keco_chemical.contract.SOURCE_ID).
 visibility_scopes = ["PUBLIC", "SAAS", "PAID"] always (no mode gate).
 
 public_url logic (injected via _cas_to_chem_ids):
@@ -12,6 +13,7 @@ public_url logic (injected via _cas_to_chem_ids):
   1 match         → /msds/{chem_id}#keco
   ≥2 matches      → /msds?q={cas}
 
+title fallback: chemical_name_ko → chemical_name_en → "CAS {cas}" → drop.
 source_updated_at = first_present_iso(updated_at, last_seen_at).
 MISSING_TIMESTAMP rows are skipped (Foundation §34).
 
@@ -24,6 +26,7 @@ from __future__ import annotations
 from typing import Callable, Iterable, Iterator, Optional
 from urllib.parse import quote
 
+from services.keco_chemical.contract import SOURCE_ID as _KECO_SOURCE_ID
 from services.shared_search.adapters._common import (
     MISSING_TIMESTAMP,
     as_str_list,
@@ -71,30 +74,46 @@ def _normalize_chem_regulation(row: dict) -> Optional[dict]:
 
     ko = (row.get("chemical_name_ko") or "").strip() or None
     en = (row.get("chemical_name_en") or "").strip() or None
-    title = ko or en
-    if not title:
+    cas = row.get("cas_no")
+
+    # Title fallback: ko → en → "CAS {cas}" → drop
+    if ko:
+        title = ko
+    elif en:
+        title = en
+    elif cas:
+        title = f"CAS {cas}"
+    else:
         return None
 
     ts = first_present_iso(row.get("updated_at"), row.get("last_seen_at"))
     if ts is MISSING_TIMESTAMP:
         return None
 
-    cas = row.get("cas_no")
     korexst = row.get("korexst_raw")
     alias_ko = row.get("alias_name_ko")
     alias_en = row.get("alias_name_en")
     formula = row.get("molecular_formula")
 
-    aliases = as_str_list([en, alias_ko, alias_en, cas, korexst])
-    search_parts = as_str_list([title, ko, en, alias_ko, alias_en, cas, korexst, formula])
-
     facts = row.get("_regulatory_facts") or []
-    reg_texts = as_str_list([
-        f.get("classification_type") for f in facts
-        if f.get("classification_type")
-    ])
-    if reg_texts:
-        search_parts.extend(reg_texts)
+
+    # aliases: name variants + CAS + korexst + unique_no + classification_type per fact
+    reg_alias_parts = []
+    for f in facts:
+        reg_alias_parts.append(f.get("unique_no"))
+        reg_alias_parts.append(f.get("classification_type"))
+    aliases = as_str_list([en, alias_ko, alias_en, cas, korexst] + reg_alias_parts)
+
+    # search_text: name fields + all regulatory text fields (deterministic concat)
+    search_parts = as_str_list([title, ko, en, alias_ko, alias_en, cas, korexst, formula])
+    for f in facts:
+        search_parts.extend(as_str_list([
+            f.get("classification_type"),
+            f.get("unique_no"),
+            f.get("content_info"),
+            f.get("exception_info"),
+            f.get("notice_info"),
+        ]))
 
     public_url: Optional[str] = None
     cas_to_chem_ids: dict = row.get("_cas_to_chem_ids") or {}
@@ -108,7 +127,7 @@ def _normalize_chem_regulation(row: dict) -> Optional[dict]:
     return {
         "object_type": ChemRegulationAdapter.object_type,
         "canonical_id": str(source_record_id),
-        "source_id": "KECO_NCISS",
+        "source_id": _KECO_SOURCE_ID,
         "source_key": str(source_record_id),
         "title": str(title),
         "summary": str(en) if en else None,

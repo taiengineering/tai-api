@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from services.keco_chemical.contract import DATASET_URL, PROVIDER, SOURCE_ID
 from services.keco_chemical.read import (
     KecoLegUnavailable,
     get_chemicals_by_cas,
@@ -23,7 +24,7 @@ router = APIRouter(prefix="/public/keco", tags=["Public KECO chemical"])
 async def public_keco_chemicals_by_cas(cas_no: str):
     """공개 KECO 화학물질 규제정보 조회 (CAS 번호 기준).
 
-    Returns: {cas_no, chemicals: [...]}
+    Returns: {cas_no, source_id, provider, source_dataset_url, chemicals: [...]}
     chemicals=[] 는 정상 응답 (CAS가 수집 DB에 없음).
     422: CAS 형식 오류 (N-NN-N 패턴 아님).
     503: LEG DB 미설정.
@@ -44,4 +45,10 @@ async def public_keco_chemicals_by_cas(cas_no: str):
             detail={"code": "KECO_LEG_UNAVAILABLE", "message": str(exc)},
         ) from exc
 
-    return {"cas_no": cas, "chemicals": chemicals}
+    return {
+        "cas_no": cas,
+        "source_id": SOURCE_ID,
+        "provider": PROVIDER,
+        "source_dataset_url": DATASET_URL,
+        "chemicals": chemicals,
+    }
