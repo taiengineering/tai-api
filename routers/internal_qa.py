@@ -29,6 +29,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Header, HTTPException, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
@@ -233,16 +234,24 @@ async def targeted_dispatch(
             run_data["run_status"] = "RUNNING"
         except Exception as exc:
             log.error("[internal_qa] targeted dispatch failed run=%s: %s", run_id, exc)
+            sanitized = svc.redact_error_summary(str(exc))[:500]
             now_iso = serialize_external_utc(now_kst())
             supabase.table("qa_runs").update({
                 "run_status":    "ERROR",
-                "error_summary": str(exc)[:500],
+                "error_summary": sanitized,
                 "finished_at":   now_iso,
                 "updated_at":    now_iso,
             }).eq("id", run_id).execute()
             run_data["run_status"]    = "ERROR"
-            run_data["error_summary"] = str(exc)[:500]
-            dispatch_status = "ERROR"
+            run_data["error_summary"] = sanitized
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "status":   "error",
+                    "data":     run_data,
+                    "dispatch": "ERROR",
+                },
+            )
 
     return {
         "status":   "success",
