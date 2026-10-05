@@ -258,3 +258,20 @@ async def targeted_dispatch(
         "data":     run_data,
         "dispatch": dispatch_status,
     }
+
+
+# ── Run Detail Read (H3B1) ────────────────────────────────────────────────────
+
+@router.get("/runs/{run_id}")
+def get_internal_run(
+    run_id: str,
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
+):
+    """Read-only QA run detail — H3B verification finalizer.
+
+    Reuses qa_control_svc.get_run(). No INSERT / UPDATE / DELETE.
+    """
+    _check_secret(x_internal_secret)
+    supabase = get_supabase()
+    run_data = svc.get_run(supabase, run_id)
+    return {"status": "success", "data": run_data}
