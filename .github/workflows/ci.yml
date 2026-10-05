@@ -261,6 +261,8 @@ jobs:
         run: pytest tests/test_keco_chemical.py -q --tb=short
       - name: KECO Collection Runtime tests (CHEM-WO-DATA-KECO-003)
         run: pytest tests/test_keco_collection.py -q --tb=short
+      - name: Internal MSDS Reference Query tests (CHEM-WO-OBJ04-003-PATCH-05)
+        run: pytest tests/test_internal_reference_query.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"
