@@ -22,6 +22,7 @@ import asyncio
 import logging
 import os
 import zoneinfo
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -35,9 +36,9 @@ log = logging.getLogger("qa_scheduler")
 _ACTIVE_STATUSES   = frozenset({"QUEUED", "RUNNING"})
 _SUPPORTED_FREQ    = frozenset({"MINUTES", "HOURLY", "DAILY", "WEEKLY"})
 
-# Cooldown: statuses that count as "successfully dispatched" for dedup purposes.
-# FAIL/ERROR do NOT count — a failed run should be retried.
-_COOLDOWN_SUCCESS_STATUSES = frozenset({"QUEUED", "RUNNING", "COMPLETED"})
+# Cooldown: only COMPLETED runs count. QUEUED/RUNNING handled by active guard.
+# FAIL/ERROR/CANCELED/BLOCKED runs never block re-dispatch.
+_COOLDOWN_SUCCESS_STATUSES = frozenset({"COMPLETED"})
 _DEFAULT_COOLDOWN_MINUTES  = 60
 _MIN_COOLDOWN_MINUTES      = 15
 
@@ -57,13 +58,20 @@ def _recent_equivalent_run_exists(
     cooldown_minutes: int,
     now: datetime,
 ) -> bool:
-    """Return True if an equivalent SCHEDULE run (same sorted item set, success status) exists
-    within the cooldown window. FAIL/ERROR runs do not count.
+    """Return True iff a recent SCHEDULE COMPLETED run with the exact same item set
+    AND all qa_run_results = PASS (no FAIL/BLOCKED/SKIPPED/FLAKY/missing) exists
+    within cooldown_minutes.
 
-    PR / MANUAL / RETRY runs are excluded — only SCHEDULE trigger is checked.
+    Conservative policy — any of the following → False:
+      FAIL / BLOCKED / SKIPPED in any result row (including retry flap)
+      Missing result for any item
+    QUEUED/RUNNING are handled separately by _active_item_ids.
+    PR/MANUAL/RETRY excluded by trigger_type=SCHEDULE filter.
+    Uses bulk queries (no per-run N+1).
     """
     cutoff = (now - timedelta(minutes=cooldown_minutes)).isoformat()
 
+    # Step 1: recent COMPLETED SCHEDULE runs in cooldown window
     recent_res = (
         supabase.table("qa_runs")
         .select("id")
@@ -76,16 +84,46 @@ def _recent_equivalent_run_exists(
     if not recent_run_ids:
         return False
 
+    # Step 2: bulk-fetch targets for all candidate runs (no N+1)
+    targets_res = (
+        supabase.table("qa_run_targets")
+        .select("run_id, qa_item_id")
+        .in_("run_id", recent_run_ids)
+        .execute()
+    )
+    targets_by_run: defaultdict = defaultdict(list)
+    for row in (targets_res.data or []):
+        targets_by_run[row["run_id"]].append(row["qa_item_id"])
+
+    # Step 3: find runs with the exact same item set
     target_sorted = sorted(qa_item_ids)
-    for rid in recent_run_ids:
-        tgt_res = (
-            supabase.table("qa_run_targets")
-            .select("qa_item_id")
-            .eq("run_id", rid)
-            .execute()
-        )
-        run_items = sorted(r["qa_item_id"] for r in (tgt_res.data or []))
-        if run_items == target_sorted:
+    matching_run_ids = [
+        rid for rid in recent_run_ids
+        if sorted(targets_by_run.get(rid, [])) == target_sorted
+    ]
+    if not matching_run_ids:
+        return False
+
+    # Step 4: bulk-fetch results for matching runs (no N+1)
+    results_res = (
+        supabase.table("qa_run_results")
+        .select("run_id, qa_item_id, result_status")
+        .in_("run_id", matching_run_ids)
+        .execute()
+    )
+    results_by_run: defaultdict = defaultdict(list)
+    for row in (results_res.data or []):
+        results_by_run[row["run_id"]].append(row)
+
+    # Step 5: require complete all-PASS coverage — any non-PASS or missing item → no cooldown
+    expected_items = set(qa_item_ids)
+    for rid in matching_run_ids:
+        rows = results_by_run.get(rid, [])
+        if not rows:
+            continue
+        if any(r["result_status"] != "PASS" for r in rows):
+            continue
+        if {r["qa_item_id"] for r in rows} == expected_items:
             return True
 
     return False
@@ -300,8 +338,8 @@ async def scheduler_tick(supabase) -> Dict[str, Any]:
     qa_item_ids  = [s["qa_item_id"] for s in eligible]
     scenario_ids = [s["qa_items"]["scenario_id"] for s in eligible]
 
-    # 2b. Cooldown check: 동일 item set의 최근 SCHEDULE run이 cooldown 창 내 존재하면 skip.
-    # FAIL/ERROR run은 성공으로 취급하지 않음 — 실패한 run은 재실행 대상.
+    # 2b. Cooldown: 동일 item set의 최근 COMPLETED SCHEDULE run이 모두 PASS이면 skip.
+    # FAIL/ERROR/BLOCKED/SKIPPED/FLAKY → cooldown 대상 아님 (항상 재실행).
     # PR/MANUAL targeted dispatch는 이 cooldown에 영향받지 않음.
     cooldown_mins = _get_cooldown_minutes()
     if _recent_equivalent_run_exists(supabase, qa_item_ids, cooldown_mins, now):

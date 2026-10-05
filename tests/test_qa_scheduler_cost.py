@@ -1,7 +1,7 @@
 """WO-QA-COST-001A — Scheduler cooldown / dispatch dedup tests.
 
 COST-S01  recent equivalent run 없음 → dispatch
-COST-S02  동일 batch COMPLETED 5분 전 → SKIPPED_COOLDOWN, GitHub dispatch=0
+COST-S02  동일 batch COMPLETED + all PASS → SKIPPED_COOLDOWN, GitHub dispatch=0
 COST-S03  동일 batch FAIL/ERROR 5분 전 → dispatch (실패는 cooldown 제외)
 COST-S04  다른 item set 최근 run → dispatch
 COST-S05  최근 PR trigger run → scheduled cooldown 영향 없음 → dispatch
@@ -10,6 +10,13 @@ COST-S07  active QUEUED/RUNNING → 기존 active guard 유지
 COST-S08  cooldown skip 시 next_run_at 정상 전진
 COST-S09  production DB fixture = 0 (모든 assert가 mock 기반)
 COST-S10  GitHub dispatch = 0 on cooldown (mock 확인)
+COST-S11  COMPLETED + all PASS → cooldown TRUE
+COST-S12  COMPLETED + one FAIL → dispatch
+COST-S13  COMPLETED + BLOCKED → dispatch
+COST-S14  COMPLETED + SKIPPED → dispatch
+COST-S15  COMPLETED + FLAKY (attempt1 FAIL, attempt2 PASS) → dispatch
+COST-S16  COMPLETED + target result missing → dispatch
+COST-S17  ERROR/CANCELED not in _COOLDOWN_SUCCESS_STATUSES (constant assertion)
 """
 from __future__ import annotations
 
@@ -36,14 +43,17 @@ def _make_cooldown_supabase(
     *,
     recent_schedule_run_ids: list[str] | None = None,
     run_targets: dict[str, list[str]] | None = None,
+    run_results: dict[str, list[dict]] | None = None,
 ) -> MagicMock:
     """Focused supabase mock for _recent_equivalent_run_exists testing.
 
     recent_schedule_run_ids: list of run IDs returned by the cooldown query
-    run_targets: {run_id: [qa_item_ids]}
+    run_targets: {run_id: [qa_item_ids]}  — bulk .in_() response
+    run_results: {run_id: [{"qa_item_id": ..., "result_status": ...}]}
     """
     recent_schedule_run_ids = recent_schedule_run_ids or []
     run_targets = run_targets or {}
+    run_results = run_results or {}
 
     sb = MagicMock()
 
@@ -56,20 +66,39 @@ def _make_cooldown_supabase(
                 data=[{"id": rid} for rid in recent_schedule_run_ids]
             )
             m.select.return_value.eq.return_value.in_.return_value.gte.return_value = chain
+
         elif name == "qa_run_targets":
-            # per-run target query: .select().eq().execute()
-            def _targets_select(*a, **k):
+            # bulk query: .select("run_id, qa_item_id").in_("run_id", [...]).execute()
+            def _tgt_select(*a, **k):
                 inner = MagicMock()
-                def _eq(col, val):
-                    items = run_targets.get(val, [])
-                    eq_chain = MagicMock()
-                    eq_chain.execute.return_value = MagicMock(
-                        data=[{"qa_item_id": item_id} for item_id in items]
-                    )
-                    return eq_chain
-                inner.eq.side_effect = _eq
+                def _in(col, vals):
+                    rows = []
+                    for rid in vals:
+                        for item_id in run_targets.get(rid, []):
+                            rows.append({"run_id": rid, "qa_item_id": item_id})
+                    ch = MagicMock()
+                    ch.execute.return_value = MagicMock(data=rows)
+                    return ch
+                inner.in_.side_effect = _in
                 return inner
-            m.select.side_effect = _targets_select
+            m.select.side_effect = _tgt_select
+
+        elif name == "qa_run_results":
+            # bulk query: .select().in_("run_id", [...]).execute()
+            def _res_select(*a, **k):
+                inner = MagicMock()
+                def _in(col, vals):
+                    rows = []
+                    for rid in vals:
+                        for result_row in run_results.get(rid, []):
+                            rows.append({"run_id": rid, **result_row})
+                    ch = MagicMock()
+                    ch.execute.return_value = MagicMock(data=rows)
+                    return ch
+                inner.in_.side_effect = _in
+                return inner
+            m.select.side_effect = _res_select
+
         return m
 
     sb.table.side_effect = _table
@@ -82,15 +111,20 @@ def _make_tick_supabase(
     active_targets: list | None = None,
     recent_run_ids: list | None = None,
     run_targets_map: dict | None = None,
+    run_results_map: dict | None = None,
     run_insert_id: str = "run-cost-001",
     next_run_update_store: list | None = None,
 ):
-    """Full scheduler_tick supabase mock with cooldown support."""
-    schedules       = schedules or []
-    active_runs     = active_runs or []
-    active_targets  = active_targets or []
-    recent_run_ids  = recent_run_ids or []
-    run_targets_map = run_targets_map or {}
+    """Full scheduler_tick supabase mock with cooldown support.
+
+    run_results_map: {run_id: [{"qa_item_id": ..., "result_status": ...}]}
+    """
+    schedules        = schedules or []
+    active_runs      = active_runs or []
+    active_targets   = active_targets or []
+    recent_run_ids   = recent_run_ids or []
+    run_targets_map  = run_targets_map or {}
+    run_results_map  = run_results_map or {}
 
     sb = MagicMock()
 
@@ -139,26 +173,50 @@ def _make_tick_supabase(
             m.delete.return_value = del_chain
 
         elif name == "qa_run_targets":
-            # active target query: .select().in_() → active_targets
-            act_chain = MagicMock()
-            act_chain.execute.return_value = MagicMock(data=active_targets)
-
-            # cooldown per-run target query: .select().eq()
+            # Distinguish active guard vs cooldown bulk query by select string:
+            #   active guard: .select("qa_item_id")        — no "run_id," prefix
+            #   cooldown:     .select("run_id, qa_item_id") — contains "run_id,"
             def _tgt_select(*a, **k):
+                select_str = a[0] if a else ""
                 inner = MagicMock()
-                inner.in_.return_value = act_chain
-                def _eq(col, val):
-                    items = run_targets_map.get(val, [])
-                    eq_chain = MagicMock()
-                    eq_chain.execute.return_value = MagicMock(
-                        data=[{"qa_item_id": i} for i in items]
-                    )
-                    return eq_chain
-                inner.eq.side_effect = _eq
+
+                if "run_id," in select_str:
+                    # Cooldown bulk targets: .select("run_id, qa_item_id").in_("run_id", ...)
+                    def _in_cooldown(col, vals):
+                        rows = []
+                        for rid in vals:
+                            for item_id in run_targets_map.get(rid, []):
+                                rows.append({"run_id": rid, "qa_item_id": item_id})
+                        ch = MagicMock()
+                        ch.execute.return_value = MagicMock(data=rows)
+                        return ch
+                    inner.in_.side_effect = _in_cooldown
+                else:
+                    # Active guard: .select("qa_item_id").in_("run_id", active_ids)
+                    act_chain = MagicMock()
+                    act_chain.execute.return_value = MagicMock(data=active_targets)
+                    inner.in_.return_value = act_chain
+
                 return inner
 
             m.select.side_effect = _tgt_select
             m.insert.return_value = target_insert_chain
+
+        elif name == "qa_run_results":
+            # Cooldown results: .select().in_("run_id", [...]).execute()
+            def _res_select(*a, **k):
+                inner = MagicMock()
+                def _in(col, vals):
+                    rows = []
+                    for rid in vals:
+                        for result_row in run_results_map.get(rid, []):
+                            rows.append({"run_id": rid, **result_row})
+                    ch = MagicMock()
+                    ch.execute.return_value = MagicMock(data=rows)
+                    return ch
+                inner.in_.side_effect = _in
+                return inner
+            m.select.side_effect = _res_select
 
         elif name == "qa_schedules":
             def _sched_select(*a, **k):
@@ -202,6 +260,10 @@ async def _run_tick(sb, dispatch_ok: bool = True) -> dict:
         return await svc.scheduler_tick(sb)
 
 
+def _all_pass_results(run_id: str, item_ids: list[str]) -> list[dict]:
+    return [{"qa_item_id": iid, "result_status": "PASS"} for iid in item_ids]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Unit tests: _recent_equivalent_run_exists
 # ─────────────────────────────────────────────────────────────────────────────
@@ -216,7 +278,8 @@ def test_COST_S01_no_recent_run_returns_false():
 def test_COST_S02_equivalent_completed_run_returns_true():
     sb = _make_cooldown_supabase(
         recent_schedule_run_ids=["run-recent-1"],
-        run_targets={"run-recent-1": ["item-2", "item-1"]},  # different order — set match
+        run_targets={"run-recent-1": ["item-2", "item-1"]},   # different order — set match
+        run_results={"run-recent-1": _all_pass_results("run-recent-1", ["item-1", "item-2"])},
     )
     now = datetime.now(timezone.utc)
     result = _recent_equivalent_run_exists(sb, ["item-1", "item-2"], 60, now)
@@ -226,7 +289,7 @@ def test_COST_S02_equivalent_completed_run_returns_true():
 def test_COST_S04_different_item_set_returns_false():
     sb = _make_cooldown_supabase(
         recent_schedule_run_ids=["run-recent-2"],
-        run_targets={"run-recent-2": ["item-3", "item-4"]},  # different items
+        run_targets={"run-recent-2": ["item-3", "item-4"]},   # different items
     )
     now = datetime.now(timezone.utc)
     result = _recent_equivalent_run_exists(sb, ["item-1", "item-2"], 60, now)
@@ -249,11 +312,12 @@ def test_COST_S01_dispatch_when_no_recent():
 
 
 def test_COST_S02_skip_when_cooldown_active():
-    """Equivalent SCHEDULE run in cooldown window → SKIPPED_COOLDOWN, created=0."""
+    """Equivalent SCHEDULE COMPLETED run with all-PASS results → SKIPPED_COOLDOWN, created=0."""
     sb = _make_tick_supabase(
         schedules=[_sched_item("item-1", "P0-AAA-001")],
         recent_run_ids=["run-recent"],
         run_targets_map={"run-recent": ["item-1"]},
+        run_results_map={"run-recent": _all_pass_results("run-recent", ["item-1"])},
     )
     result = asyncio.run(_run_tick(sb))
     assert result["dispatch"] == "SKIPPED_COOLDOWN"
@@ -263,13 +327,13 @@ def test_COST_S02_skip_when_cooldown_active():
 def test_COST_S03_dispatch_when_recent_run_is_fail():
     """Recent SCHEDULE run was FAIL/ERROR — cooldown query returns no match.
 
-    The cooldown mock only returns run IDs for success statuses.
+    The cooldown mock only returns run IDs for COMPLETED status.
     Since FAIL runs don't appear in _COOLDOWN_SUCCESS_STATUSES query results,
-    we simulate this by returning empty recent_run_ids (no success-status runs).
+    we simulate this by returning empty recent_run_ids.
     """
     sb = _make_tick_supabase(
         schedules=[_sched_item("item-1", "P0-AAA-001")],
-        recent_run_ids=[],  # FAIL run not in cooldown query result
+        recent_run_ids=[],  # FAIL run not in COMPLETED cooldown query result
     )
     result = asyncio.run(_run_tick(sb))
     assert result["dispatch"] == "OK"
@@ -281,7 +345,7 @@ def test_COST_S04_dispatch_when_different_item_set():
     sb = _make_tick_supabase(
         schedules=[_sched_item("item-1", "P0-AAA-001")],
         recent_run_ids=["run-other"],
-        run_targets_map={"run-other": ["item-99"]},  # different items
+        run_targets_map={"run-other": ["item-99"]},   # different items
     )
     result = asyncio.run(_run_tick(sb))
     assert result["dispatch"] == "OK"
@@ -319,7 +383,7 @@ def test_COST_S07_active_guard_still_applies():
     sb = _make_tick_supabase(
         schedules=[_sched_item("item-1", "P0-AAA-001")],
         active_runs=[{"id": "run-active"}],
-        active_targets=[{"qa_item_id": "item-1"}],  # item-1 is busy
+        active_targets=[{"qa_item_id": "item-1"}],   # item-1 is busy
     )
     result = asyncio.run(_run_tick(sb))
     # All items busy → skipped (not a cooldown skip)
@@ -334,11 +398,11 @@ def test_COST_S08_next_run_at_advances_on_cooldown_skip():
         schedules=[_sched_item("item-1", "P0-AAA-001")],
         recent_run_ids=["run-recent"],
         run_targets_map={"run-recent": ["item-1"]},
+        run_results_map={"run-recent": _all_pass_results("run-recent", ["item-1"])},
         next_run_update_store=next_run_update_store,
     )
     result = asyncio.run(_run_tick(sb))
     assert result["dispatch"] == "SKIPPED_COOLDOWN"
-    # next_run_at update must have been called at least once
     assert any("next_run_at" in u for u in next_run_update_store), (
         f"next_run_at was not advanced on cooldown skip. updates={next_run_update_store}"
     )
@@ -348,7 +412,7 @@ def test_COST_S09_no_production_db():
     """All assertions are based on mock data — no real DB connection needed."""
     sb = _make_tick_supabase(schedules=[])
     result = asyncio.run(_run_tick(sb))
-    assert result["created"] == 0  # trivial: empty schedules
+    assert result["created"] == 0
 
 
 def test_COST_S10_no_github_dispatch_on_cooldown():
@@ -362,6 +426,7 @@ def test_COST_S10_no_github_dispatch_on_cooldown():
         schedules=[_sched_item("item-1", "P0-AAA-001")],
         recent_run_ids=["run-recent"],
         run_targets_map={"run-recent": ["item-1"]},
+        run_results_map={"run-recent": _all_pass_results("run-recent", ["item-1"])},
     )
 
     async def _run():
@@ -371,6 +436,106 @@ def test_COST_S10_no_github_dispatch_on_cooldown():
     result = asyncio.run(_run())
     assert result["dispatch"] == "SKIPPED_COOLDOWN"
     assert len(dispatch_called) == 0, f"dispatch_qa_run was called: {dispatch_called}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COST-S11~S17 — result-aware cooldown contract
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_COST_S11_all_pass_triggers_cooldown():
+    """COMPLETED run + all targets PASS → cooldown TRUE."""
+    sb = _make_cooldown_supabase(
+        recent_schedule_run_ids=["run-ok"],
+        run_targets={"run-ok": ["item-A", "item-B"]},
+        run_results={"run-ok": [
+            {"qa_item_id": "item-A", "result_status": "PASS"},
+            {"qa_item_id": "item-B", "result_status": "PASS"},
+        ]},
+    )
+    now = datetime.now(timezone.utc)
+    assert _recent_equivalent_run_exists(sb, ["item-A", "item-B"], 60, now) is True
+
+
+def test_COST_S12_one_fail_dispatches():
+    """COMPLETED run + one FAIL → cooldown FALSE → dispatch."""
+    sb = _make_cooldown_supabase(
+        recent_schedule_run_ids=["run-partial"],
+        run_targets={"run-partial": ["item-A", "item-B"]},
+        run_results={"run-partial": [
+            {"qa_item_id": "item-A", "result_status": "PASS"},
+            {"qa_item_id": "item-B", "result_status": "FAIL"},
+        ]},
+    )
+    now = datetime.now(timezone.utc)
+    assert _recent_equivalent_run_exists(sb, ["item-A", "item-B"], 60, now) is False
+
+
+def test_COST_S13_blocked_dispatches():
+    """COMPLETED run + BLOCKED result → cooldown FALSE → dispatch."""
+    sb = _make_cooldown_supabase(
+        recent_schedule_run_ids=["run-blocked"],
+        run_targets={"run-blocked": ["item-A"]},
+        run_results={"run-blocked": [
+            {"qa_item_id": "item-A", "result_status": "BLOCKED"},
+        ]},
+    )
+    now = datetime.now(timezone.utc)
+    assert _recent_equivalent_run_exists(sb, ["item-A"], 60, now) is False
+
+
+def test_COST_S14_skipped_dispatches():
+    """COMPLETED run + SKIPPED result → cooldown FALSE → dispatch."""
+    sb = _make_cooldown_supabase(
+        recent_schedule_run_ids=["run-skipped"],
+        run_targets={"run-skipped": ["item-A"]},
+        run_results={"run-skipped": [
+            {"qa_item_id": "item-A", "result_status": "SKIPPED"},
+        ]},
+    )
+    now = datetime.now(timezone.utc)
+    assert _recent_equivalent_run_exists(sb, ["item-A"], 60, now) is False
+
+
+def test_COST_S15_flaky_dispatches():
+    """COMPLETED + attempt1=FAIL then attempt2=PASS (FLAKY) → cooldown FALSE → dispatch."""
+    sb = _make_cooldown_supabase(
+        recent_schedule_run_ids=["run-flaky"],
+        run_targets={"run-flaky": ["item-A"]},
+        run_results={"run-flaky": [
+            {"qa_item_id": "item-A", "result_status": "FAIL"},   # attempt 1
+            {"qa_item_id": "item-A", "result_status": "PASS"},   # attempt 2
+        ]},
+    )
+    now = datetime.now(timezone.utc)
+    assert _recent_equivalent_run_exists(sb, ["item-A"], 60, now) is False
+
+
+def test_COST_S16_missing_result_dispatches():
+    """COMPLETED run + no qa_run_results row for one item → cooldown FALSE → dispatch."""
+    sb = _make_cooldown_supabase(
+        recent_schedule_run_ids=["run-miss"],
+        run_targets={"run-miss": ["item-A", "item-B"]},
+        run_results={"run-miss": [
+            {"qa_item_id": "item-A", "result_status": "PASS"},
+            # item-B result missing
+        ]},
+    )
+    now = datetime.now(timezone.utc)
+    assert _recent_equivalent_run_exists(sb, ["item-A", "item-B"], 60, now) is False
+
+
+def test_COST_S17_error_canceled_not_in_cooldown_statuses():
+    """ERROR and CANCELED must NOT appear in _COOLDOWN_SUCCESS_STATUSES.
+    QUEUED and RUNNING also excluded — handled by active guard, not cooldown.
+    """
+    from services.qa_scheduler_svc import _COOLDOWN_SUCCESS_STATUSES
+    assert "COMPLETED" in _COOLDOWN_SUCCESS_STATUSES
+    assert "ERROR"     not in _COOLDOWN_SUCCESS_STATUSES
+    assert "CANCELED"  not in _COOLDOWN_SUCCESS_STATUSES
+    assert "QUEUED"    not in _COOLDOWN_SUCCESS_STATUSES
+    assert "RUNNING"   not in _COOLDOWN_SUCCESS_STATUSES
+    assert "FAIL"      not in _COOLDOWN_SUCCESS_STATUSES
+    assert len(_COOLDOWN_SUCCESS_STATUSES) == 1   # exactly {"COMPLETED"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
