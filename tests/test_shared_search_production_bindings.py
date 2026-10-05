@@ -123,6 +123,12 @@ class FakeSupabase:
         # for READ-only tests we only need query methods below.
         return _Query(tables=self.tables, table_name=name)
 
+    def schema(self, _name: str):
+        # CHEM_REGULATION and other LEG-schema adapters call
+        # legal_client.schema("msds_ref"). Return self so the same
+        # tables dict is reused (msds_ref tables live in same fake space).
+        return self
+
     def rpc(self, name, params):
         return _RPC(name, params, self.rpc_handlers.get(name, lambda p: []))
 
@@ -158,7 +164,7 @@ def test_registry_builds_all_eight_adapters():
     names = [a.domain_name for a in adapters]
     assert names == [
         "GUIDE", "SAFETY_MATERIAL", "CSI_ACCIDENT", "CHEM",
-        "KNOWLEDGE", "PRECEDENT", "LEGAL", "RISK",
+        "KNOWLEDGE", "PRECEDENT", "LEGAL", "RISK", "CHEM_REGULATION",
     ]
 
 

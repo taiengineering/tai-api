@@ -38,7 +38,7 @@ from __future__ import annotations
 from typing import Any, Callable, Iterable, Iterator, Optional
 
 from services.shared_search.adapters import (
-    ChemAdapter, CsiAccidentAdapter, GuideAdapter,
+    ChemAdapter, ChemRegulationAdapter, CsiAccidentAdapter, GuideAdapter,
     KnowledgeAdapter, LegalAdapter, PrecedentAdapter,
     RiskAdapter, SafetyMaterialAdapter,
 )
@@ -694,6 +694,98 @@ def _make_risk_adapter(_client: SupabaseClient) -> RiskAdapter:
     return RiskAdapter()
 
 
+def _make_chem_regulation_adapter(
+    legal_client: Optional[SupabaseClient] = None,
+) -> ChemRegulationAdapter:
+    """CHEM_REGULATION binds to msds_ref.keco_chemicals via legal_client (leg-prod).
+
+    If legal_client is None the adapter yields nothing — no exception,
+    because CHEM_REGULATION is optional enrichment (unlike LEGAL which is
+    fail-closed by design). The identity_projection CAS→chem_id map and
+    per-chemical regulatory_facts are pre-loaded once at iter time and
+    injected into each row as _cas_to_chem_ids / _regulatory_facts.
+    """
+    if legal_client is None:
+        return ChemRegulationAdapter(fetch_current=iter, fetch_by_id=lambda _: None)
+
+    _CHEM_SELECT = (
+        "id,source_record_id,cas_no,korexst_raw,"
+        "chemical_name_ko,chemical_name_en,"
+        "alias_name_ko,alias_name_en,"
+        "molecular_formula,molecular_weight_raw,"
+        "last_seen_at,updated_at"
+    )
+    _FACTS_SELECT = (
+        "keco_chemical_id,classification_type,unique_no,"
+        "content_info,exception_info,notice_date_raw,notice_info,source_ordinal"
+    )
+    _IDENTITY_SELECT = "cas_no,chem_id"
+
+    def _build_cas_to_chem_ids() -> dict[str, list[str]]:
+        leg_db = legal_client.schema("msds_ref")
+        out: dict[str, list[str]] = {}
+        for row in paginate_supabase(
+            leg_db,
+            table="identity_projection",
+            select=_IDENTITY_SELECT,
+            order_column="cas_no",
+        ):
+            cas = row.get("cas_no")
+            cid = row.get("chem_id")
+            if cas and cid:
+                out.setdefault(cas, []).append(str(cid))
+        return out
+
+    def _build_facts_by_chem_id() -> dict[str, list[dict]]:
+        leg_db = legal_client.schema("msds_ref")
+        out: dict[str, list[dict]] = {}
+        for row in paginate_supabase(
+            leg_db,
+            table="keco_regulatory_facts",
+            select=_FACTS_SELECT,
+            order_column="source_ordinal",
+        ):
+            key = row.get("keco_chemical_id")
+            if key:
+                out.setdefault(key, []).append(row)
+        return out
+
+    def _iter_current() -> Iterator[dict]:
+        leg_db = legal_client.schema("msds_ref")
+        cas_map = _build_cas_to_chem_ids()
+        facts_map = _build_facts_by_chem_id()
+        for row in paginate_supabase(
+            leg_db,
+            table="keco_chemicals",
+            select=_CHEM_SELECT,
+            order_column="id",
+        ):
+            row["_cas_to_chem_ids"] = cas_map
+            row["_regulatory_facts"] = facts_map.get(row.get("id"), [])
+            yield row
+
+    def _by_id(source_record_id: str) -> Optional[dict]:
+        leg_db = legal_client.schema("msds_ref")
+        q = (
+            leg_db.table("keco_chemicals")
+            .select(_CHEM_SELECT)
+            .eq("source_record_id", source_record_id)
+            .limit(1)
+        )
+        r = q.execute()
+        rows = list(getattr(r, "data", None) or [])
+        if not rows:
+            return None
+        row = dict(rows[0])
+        cas_map = _build_cas_to_chem_ids()
+        facts_map = _build_facts_by_chem_id()
+        row["_cas_to_chem_ids"] = cas_map
+        row["_regulatory_facts"] = facts_map.get(row.get("id"), [])
+        return row
+
+    return ChemRegulationAdapter(fetch_current=_iter_current, fetch_by_id=_by_id)
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -708,8 +800,8 @@ def build_production_adapters(
 
     Caller responsibilities:
       - hand in a Supabase-py client (or duck-typed equivalent)
-      - supply legal_client (leg-prod) to enable LEGAL content;
-        without it the LEGAL adapter is fail-closed (raises LegalBindingUnavailable)
+      - supply legal_client (leg-prod) to enable LEGAL and CHEM_REGULATION
+        content; without it LEGAL is fail-closed and CHEM_REGULATION yields nothing
       - decide when to run the Indexer (this function performs zero
         I/O by itself)
     """
@@ -722,4 +814,5 @@ def build_production_adapters(
         _make_precedent_adapter(client),
         _make_legal_adapter(client, legal_client=legal_client),
         _make_risk_adapter(client),
+        _make_chem_regulation_adapter(legal_client=legal_client),
     ]

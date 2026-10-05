@@ -9,6 +9,7 @@ ROUTERS = [
     {"module": "routers.kosha_public_materials"},  # WP-2 read-only stored material + signed GET
     {"module": "routers.kosha_public_msds"},  # WO-CHEM-SEO-PREVIEW-EXECUTE-001 — dormant unless KOSHA_MSDS_PUBLIC_MODE is set
     {"module": "routers.public_safety_search"},  # WAVE2 KOSHA Smart Search public provider
+    {"module": "routers.public_keco_chemical"},  # CHEM-004A KECO public chemical read
     {"module": "routers.public_knowledge_graph"},  # WAVE3 OBJ-GRAPH public read
     {"module": "routers.public_csi_accidents"},  # OBJ-CSI public READY-only read
     # WO-ISOLATE-001: 축3 익명진단 생성/조회/claim 격리.
