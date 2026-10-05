@@ -44,31 +44,35 @@ _PUBLIC_OBJECT_TYPES: list[str] = [
     "SAFETY_MATERIAL",
     "CSI_ACCIDENT",
     "CHEM",
+    "CHEM_REGULATION",
     "KNOWLEDGE",
     "PRECEDENT",
     "LEGAL",
 ]
 
 _TYPE_MAP: dict[str, list[str]] = {
-    "guide":     ["GUIDE"],
-    "material":  ["SAFETY_MATERIAL"],
-    "accident":  ["CSI_ACCIDENT"],
-    "chem":      ["CHEM"],
-    "knowledge": ["KNOWLEDGE"],
-    "precedent": ["PRECEDENT"],
-    "law":       ["LEGAL"],
-    "legal":     ["LEGAL"],
+    "guide":            ["GUIDE"],
+    "material":         ["SAFETY_MATERIAL"],
+    "accident":         ["CSI_ACCIDENT"],
+    "chem":             ["CHEM"],
+    "keco":             ["CHEM_REGULATION"],
+    "chem_regulation":  ["CHEM_REGULATION"],
+    "knowledge":        ["KNOWLEDGE"],
+    "precedent":        ["PRECEDENT"],
+    "law":              ["LEGAL"],
+    "legal":            ["LEGAL"],
 }
 
 # Section order for /sections endpoint (§12 fixed presentation order)
 _SECTION_TYPES: list[tuple[str, str]] = [
-    ("knowledge", "KNOWLEDGE"),
-    ("guide",     "GUIDE"),
-    ("law",       "LEGAL"),
-    ("accident",  "CSI_ACCIDENT"),
-    ("material",  "SAFETY_MATERIAL"),
-    ("chem",      "CHEM"),
-    ("precedent", "PRECEDENT"),
+    ("knowledge",      "KNOWLEDGE"),
+    ("guide",          "GUIDE"),
+    ("law",            "LEGAL"),
+    ("accident",       "CSI_ACCIDENT"),
+    ("material",       "SAFETY_MATERIAL"),
+    ("chem",           "CHEM"),
+    ("keco",           "CHEM_REGULATION"),
+    ("precedent",      "PRECEDENT"),
 ]
 
 

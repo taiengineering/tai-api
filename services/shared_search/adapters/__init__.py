@@ -19,6 +19,7 @@ from services.shared_search.adapters.guide import GuideAdapter
 from services.shared_search.adapters.safety_material import SafetyMaterialAdapter
 from services.shared_search.adapters.csi_accident import CsiAccidentAdapter
 from services.shared_search.adapters.chem import ChemAdapter
+from services.shared_search.adapters.chem_regulation import ChemRegulationAdapter
 from services.shared_search.adapters.knowledge import KnowledgeAdapter
 from services.shared_search.adapters.precedent import PrecedentAdapter
 from services.shared_search.adapters.legal import LegalAdapter
@@ -27,6 +28,6 @@ from services.shared_search.adapters.risk import RiskAdapter
 __all__ = [
     "DomainAdapter", "AdapterBlockedSubtype",
     "GuideAdapter", "SafetyMaterialAdapter", "CsiAccidentAdapter",
-    "ChemAdapter", "KnowledgeAdapter", "PrecedentAdapter",
+    "ChemAdapter", "ChemRegulationAdapter", "KnowledgeAdapter", "PrecedentAdapter",
     "LegalAdapter", "RiskAdapter",
 ]

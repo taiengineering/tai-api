@@ -22,12 +22,13 @@ from services.shared_search.retrieval import MemorySearchReader
 # Helpers
 # ---------------------------------------------------------------------------
 
-_SECTION_ORDER = ["knowledge", "guide", "law", "accident", "material", "chem", "precedent"]
+_SECTION_ORDER = ["knowledge", "guide", "law", "accident", "material", "chem", "keco", "precedent"]
 _SECTION_OBJECT_TYPES = {
     "guide":     "GUIDE",
     "material":  "SAFETY_MATERIAL",
     "accident":  "CSI_ACCIDENT",
     "chem":      "CHEM",
+    "keco":      "CHEM_REGULATION",
     "knowledge": "KNOWLEDGE",
     "precedent": "PRECEDENT",
     "law":       "LEGAL",
@@ -94,7 +95,7 @@ def test_s01_seven_sections_correct_order(monkeypatch):
         r = c.get("/public/safety-search/sections?q=지게차")
     assert r.status_code == 200
     sections = r.json()["sections"]
-    assert len(sections) == 7
+    assert len(sections) == 8
     assert [s["type"] for s in sections] == _SECTION_ORDER
 
 
