@@ -1,9 +1,10 @@
-"""QA Scheduler Service — WO-QA-CONTROL-PHASE2E-001 / WO-QA-ADMIN-EXISTING-CONSOLE-AUTOSYNC-001 STEP B.
+"""QA Scheduler Service — WO-QA-CONTROL-PHASE2E-001 / WO-QA-ADMIN-EXISTING-CONSOLE-AUTOSYNC-001 STEP B / WO-QA-COST-001A.
 
 scheduler_tick():
   0. Bootstrap: next_run_at IS NULL인 enabled schedule에 초기 실행시각 부여 (실행 없음)
   1. enabled schedules where next_run_at <= now 조회
   2. 이미 QUEUED/RUNNING run이 있는 item 제외 (중복 방지)
+  2b. Cooldown: 동일 item set의 최근 SCHEDULE run이 cooldown 창 내에 있으면 skip (GitHub dispatch 0)
   3. qa_run (SCHEDULE) + qa_run_targets 생성
   4. next_run_at 갱신 (기준: 기존 next_run_at, not now — cadence drift 방지)
   5. GitHub Actions dispatch
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import zoneinfo
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -30,8 +32,63 @@ from services.time import now_kst
 
 log = logging.getLogger("qa_scheduler")
 
-_ACTIVE_STATUSES = frozenset({"QUEUED", "RUNNING"})
-_SUPPORTED_FREQ = frozenset({"MINUTES", "HOURLY", "DAILY", "WEEKLY"})
+_ACTIVE_STATUSES   = frozenset({"QUEUED", "RUNNING"})
+_SUPPORTED_FREQ    = frozenset({"MINUTES", "HOURLY", "DAILY", "WEEKLY"})
+
+# Cooldown: statuses that count as "successfully dispatched" for dedup purposes.
+# FAIL/ERROR do NOT count — a failed run should be retried.
+_COOLDOWN_SUCCESS_STATUSES = frozenset({"QUEUED", "RUNNING", "COMPLETED"})
+_DEFAULT_COOLDOWN_MINUTES  = 60
+_MIN_COOLDOWN_MINUTES      = 15
+
+
+def _get_cooldown_minutes() -> int:
+    """Read QA_SCHEDULE_DISPATCH_COOLDOWN_MINUTES from env. Min 15."""
+    try:
+        v = int(os.environ.get("QA_SCHEDULE_DISPATCH_COOLDOWN_MINUTES", _DEFAULT_COOLDOWN_MINUTES))
+        return max(_MIN_COOLDOWN_MINUTES, v)
+    except (ValueError, TypeError):
+        return _DEFAULT_COOLDOWN_MINUTES
+
+
+def _recent_equivalent_run_exists(
+    supabase,
+    qa_item_ids: List[str],
+    cooldown_minutes: int,
+    now: datetime,
+) -> bool:
+    """Return True if an equivalent SCHEDULE run (same sorted item set, success status) exists
+    within the cooldown window. FAIL/ERROR runs do not count.
+
+    PR / MANUAL / RETRY runs are excluded — only SCHEDULE trigger is checked.
+    """
+    cutoff = (now - timedelta(minutes=cooldown_minutes)).isoformat()
+
+    recent_res = (
+        supabase.table("qa_runs")
+        .select("id")
+        .eq("trigger_type", "SCHEDULE")
+        .in_("run_status", list(_COOLDOWN_SUCCESS_STATUSES))
+        .gte("created_at", cutoff)
+        .execute()
+    )
+    recent_run_ids = [r["id"] for r in (recent_res.data or [])]
+    if not recent_run_ids:
+        return False
+
+    target_sorted = sorted(qa_item_ids)
+    for rid in recent_run_ids:
+        tgt_res = (
+            supabase.table("qa_run_targets")
+            .select("qa_item_id")
+            .eq("run_id", rid)
+            .execute()
+        )
+        run_items = sorted(r["qa_item_id"] for r in (tgt_res.data or []))
+        if run_items == target_sorted:
+            return True
+
+    return False
 
 
 def compute_next_run_at(
@@ -242,6 +299,38 @@ async def scheduler_tick(supabase) -> Dict[str, Any]:
     # 3. qa_run 생성 (enabled items만, 하나의 run으로 묶음)
     qa_item_ids  = [s["qa_item_id"] for s in eligible]
     scenario_ids = [s["qa_items"]["scenario_id"] for s in eligible]
+
+    # 2b. Cooldown check: 동일 item set의 최근 SCHEDULE run이 cooldown 창 내 존재하면 skip.
+    # FAIL/ERROR run은 성공으로 취급하지 않음 — 실패한 run은 재실행 대상.
+    # PR/MANUAL targeted dispatch는 이 cooldown에 영향받지 않음.
+    cooldown_mins = _get_cooldown_minutes()
+    if _recent_equivalent_run_exists(supabase, qa_item_ids, cooldown_mins, now):
+        log.info(
+            "[qa_scheduler] tick: cooldown — equivalent SCHEDULE run within %d min, skip dispatch",
+            cooldown_mins,
+        )
+        # next_run_at은 정상 전진 (schedule 자체를 죽이지 않음)
+        for sched in eligible:
+            ft = sched.get("frequency_type", "DAILY")
+            fv = sched.get("frequency_value")
+            try:
+                if ft in _SUPPORTED_FREQ:
+                    base_dt = _parse_dt(sched.get("next_run_at")) or now
+                    next_dt = compute_next_run_at(ft, fv, base_dt)
+                    supabase.table("qa_schedules").update({
+                        "next_run_at": next_dt.isoformat(),
+                        "updated_at":  now_iso,
+                    }).eq("id", sched["id"]).execute()
+            except Exception as e:
+                log.warning("[qa_scheduler] cooldown next_run_at update failed sched=%s: %s", sched["id"], e)
+        return {
+            "skipped":      len(schedules) - len(eligible),
+            "created":      0,
+            "error":        0,
+            "bootstrapped": bootstrapped,
+            "items":        scenario_ids,
+            "dispatch":     "SKIPPED_COOLDOWN",
+        }
 
     run_row = {
         "trigger_type": "SCHEDULE",
