@@ -204,9 +204,14 @@ def _run_shared_search_reconcile(p):
     """OpenSearch ↔ Domain SoT reconcile — safety net (§35-§37)."""
     from services.shared_search.opensearch_reconcile import run_reconcile
     from services.shared_search.production_bindings import build_production_adapters
+    from services.shared_search.incremental import _try_build_legal_client, _try_build_mkt_client
     from services.shared_search.opensearch_client import get_client, CURRENT_ALIAS
     sb = _sb()
-    adapters = build_production_adapters(sb)
+    adapters = build_production_adapters(
+        sb,
+        legal_client=_try_build_legal_client(),
+        marketing_client=_try_build_mkt_client(),
+    )
     client = get_client()
     return run_reconcile(
         adapters=adapters,

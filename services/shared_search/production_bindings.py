@@ -39,8 +39,8 @@ from typing import Any, Callable, Iterable, Iterator, Optional
 
 from services.shared_search.adapters import (
     ChemAdapter, ChemRegulationAdapter, CsiAccidentAdapter, GuideAdapter,
-    KnowledgeAdapter, LegalAdapter, PrecedentAdapter,
-    RiskAdapter, SafetyMaterialAdapter,
+    KnowledgeAdapter, LegalAdapter, MarketingKnowledgeAdapter,
+    PrecedentAdapter, RiskAdapter, SafetyMaterialAdapter,
 )
 from services.shared_search.source_reader import (
     SupabaseClient, paginate_supabase,
@@ -786,6 +786,82 @@ def _make_chem_regulation_adapter(
     return ChemRegulationAdapter(fetch_current=_iter_current, fetch_by_id=_by_id)
 
 
+def _make_marketing_knowledge_adapter(
+    marketing_client: SupabaseClient,
+) -> MarketingKnowledgeAdapter:
+    """MARKETING_KNOWLEDGE binds to 45cm-mkt-db marketing_content + version.
+
+    Requires a dedicated MKT Supabase client (separate project from
+    the main tai-api Supabase). If marketing_client is None the adapter
+    is not registered — callers must supply it explicitly.
+    """
+    from services.shared_search.adapters.marketing_knowledge import (
+        CONTENT_SELECT, VERSION_SELECT, PAGE_SIZE,
+        from_canonical,
+    )
+
+    def _latest_versions(content_ids: list[str]) -> dict[str, dict]:
+        if not content_ids:
+            return {}
+        r = (marketing_client.table("marketing_content_version")
+                 .select(VERSION_SELECT)
+                 .in_("content_id", content_ids)
+                 .order("version", desc=True)
+                 .execute())
+        rows = list(getattr(r, "data", None) or [])
+        best: dict[str, dict] = {}
+        for row in rows:
+            cid = row.get("content_id")
+            if cid and cid not in best:
+                best[cid] = dict(row)
+        return best
+
+    def _iter_current() -> Iterator[dict]:
+        offset = 0
+        while True:
+            r = (marketing_client.table("marketing_content")
+                     .select(CONTENT_SELECT)
+                     .eq("engine_code", "know")
+                     .eq("status", "PUBLISHED")
+                     .order("id")
+                     .range(offset, offset + PAGE_SIZE - 1)
+                     .execute())
+            rows = list(getattr(r, "data", None) or [])
+            if not rows:
+                break
+            ids = [row["id"] for row in rows if row.get("id")]
+            versions = _latest_versions(ids)
+            for row in rows:
+                merged = dict(row)
+                merged["_version"] = versions.get(row.get("id"), {})
+                yield merged
+            if len(rows) < PAGE_SIZE:
+                break
+            offset += PAGE_SIZE
+
+    def _by_id(canonical_id: str) -> Optional[dict]:
+        content_id = from_canonical(canonical_id)
+        if not content_id:
+            return None
+        r = (marketing_client.table("marketing_content")
+                 .select(CONTENT_SELECT)
+                 .eq("id", content_id)
+                 .eq("engine_code", "know")
+                 .limit(1)
+                 .execute())
+        rows = list(getattr(r, "data", None) or [])
+        if not rows:
+            return None
+        row = dict(rows[0])
+        versions = _latest_versions([content_id])
+        row["_version"] = versions.get(content_id, {})
+        return row
+
+    return MarketingKnowledgeAdapter(
+        fetch_current=_iter_current, fetch_by_id=_by_id
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -794,6 +870,7 @@ def _make_chem_regulation_adapter(
 def build_production_adapters(
     client: SupabaseClient,
     legal_client: Optional[SupabaseClient] = None,
+    marketing_client: Optional[SupabaseClient] = None,
 ) -> list:
     """Return the full set of production Domain adapters, ordered
     for a full rebuild. The Consumer does NOT build fetchers itself.
@@ -802,10 +879,12 @@ def build_production_adapters(
       - hand in a Supabase-py client (or duck-typed equivalent)
       - supply legal_client (leg-prod) to enable LEGAL and CHEM_REGULATION
         content; without it LEGAL is fail-closed and CHEM_REGULATION yields nothing
+      - supply marketing_client (45cm-mkt-db) to enable MARKETING_KNOWLEDGE;
+        without it the domain is omitted (fail-closed / not registered)
       - decide when to run the Indexer (this function performs zero
         I/O by itself)
     """
-    return [
+    adapters: list = [
         _make_guide_adapter(client),
         _make_safety_material_adapter(client),
         _make_csi_adapter(client),
@@ -816,3 +895,6 @@ def build_production_adapters(
         _make_risk_adapter(client),
         _make_chem_regulation_adapter(legal_client=legal_client),
     ]
+    if marketing_client is not None:
+        adapters.append(_make_marketing_knowledge_adapter(marketing_client))
+    return adapters

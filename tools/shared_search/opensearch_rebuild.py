@@ -98,6 +98,25 @@ def _build_legal_supabase_client():
     return create_client(url, key)
 
 
+def _build_mkt_supabase_client():
+    """MKT production Supabase client (45cm-mkt-db).
+
+    Hard-fails on missing env vars — rebuild must never silently omit
+    MARKETING_KNOWLEDGE: 6,000+ documents would be absent from the promoted index.
+    Same safety level as LEG client.
+    """
+    from supabase import create_client
+    url = os.environ.get("MKT_SUPABASE_URL")
+    key = os.environ.get("MKT_SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        raise EnvironmentError(
+            "MARKETING_KNOWLEDGE_BINDING_UNAVAILABLE: MKT_SUPABASE_URL and "
+            "MKT_SUPABASE_SERVICE_ROLE_KEY must be set — "
+            "cannot run rebuild without MKT production client"
+        )
+    return create_client(url, key)
+
+
 # ---------------------------------------------------------------------------
 # Rebuild fence helpers (§39-§44 INCREMENTAL-001)
 # ---------------------------------------------------------------------------
@@ -377,7 +396,9 @@ def dry_run() -> None:
     """
     supabase = _build_supabase_client()
     legal_supabase = _build_legal_supabase_client()
-    adapters = build_production_adapters(supabase, legal_client=legal_supabase)
+    mkt_supabase = _build_mkt_supabase_client()
+    adapters = build_production_adapters(
+        supabase, legal_client=legal_supabase, marketing_client=mkt_supabase)
 
     print("=== DRY RUN CENSUS ===")
     print(f"  {'Domain':20s} {'yielded':>8s} {'published':>10s} {'hold':>6s} "
@@ -476,7 +497,9 @@ def full_rebuild() -> None:
     """
     supabase = _build_supabase_client()
     legal_supabase = _build_legal_supabase_client()
-    adapters = build_production_adapters(supabase, legal_client=legal_supabase)
+    mkt_supabase = _build_mkt_supabase_client()
+    adapters = build_production_adapters(
+        supabase, legal_client=legal_supabase, marketing_client=mkt_supabase)
     client   = get_client()
     store    = OpenSearchSearchStore(client)
 

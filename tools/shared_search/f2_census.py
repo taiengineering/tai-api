@@ -57,6 +57,24 @@ def _build_legal_supabase_client():
     return create_client(url, key)
 
 
+def _build_mkt_supabase_client():
+    """MKT production Supabase client (45cm-mkt-db).
+
+    Hard-fails on missing env vars — census must never silently omit
+    MARKETING_KNOWLEDGE (silent omit looks like a full census but is misleading).
+    """
+    from supabase import create_client
+    url = os.environ.get("MKT_SUPABASE_URL")
+    key = os.environ.get("MKT_SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        raise EnvironmentError(
+            "MARKETING_KNOWLEDGE_BINDING_UNAVAILABLE: MKT_SUPABASE_URL and "
+            "MKT_SUPABASE_SERVICE_ROLE_KEY must be set — "
+            "cannot run census without MKT production client"
+        )
+    return create_client(url, key)
+
+
 def main(argv: list | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--json", action="store_true",
@@ -65,7 +83,8 @@ def main(argv: list | None = None) -> int:
 
     client = _build_supabase_client()
     legal_client = _build_legal_supabase_client()
-    adapters = build_production_adapters(client, legal_client=legal_client)
+    mkt_client = _build_mkt_supabase_client()
+    adapters = build_production_adapters(client, legal_client=legal_client, marketing_client=mkt_client)
     results = [run_census(a).to_dict() for a in adapters]
 
     if args.json:

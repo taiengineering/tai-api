@@ -44,6 +44,7 @@ ROUTERS = [
     {"module": "routers.internal_scheduler"},   # WO-QA-CONTROL-PHASE2E-001 QA Scheduler tick
     {"module": "routers.internal_keco_sync"},   # CHEM-WO-DATA-KECO-003 KECO Reference Sync API
     {"module": "routers.internal_reference_query"},  # CHEM-WO-OBJ04-003-PATCH-05 MSDS Reference Candidate Query
+    {"module": "routers.internal_search_marketing_sync"},  # WO-MKT-KNOWLEDGE-OPENSEARCH-AUTO-INDEX-001
 
     # ── SaaS 대시보드 의존 모듈 (유지) ──
     {"module": "routers.situation_dashboard_api"},
