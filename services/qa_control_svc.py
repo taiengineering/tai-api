@@ -697,6 +697,82 @@ def create_run(
     return run
 
 
+def create_targeted_run(
+    supabase,
+    scenario_ids: List[str],
+) -> Dict[str, Any]:
+    """Targeted (PR-triggered) run 생성.
+
+    client authority 고정:
+      trigger_type    = PR
+      requested_by    = targeted-qa
+      allow_conditional = False (호출자가 보장)
+      ordinal         = input order 보존 (1..N)
+
+    scenario_id 입력 → qa_item_id resolve → run + targets 생성.
+    """
+    if not scenario_ids:
+        raise HTTPException(422, "scenario_ids가 비어있습니다")
+    if len(scenario_ids) > 100:
+        raise HTTPException(422, "scenario_ids는 최대 100건입니다")
+    if len(scenario_ids) != len(set(scenario_ids)):
+        raise HTTPException(422, "scenario_ids에 중복이 있습니다")
+
+    # Resolve scenario_id → qa_items row (id, enabled)
+    items_res = (
+        supabase.table("qa_items")
+        .select("id, scenario_id, enabled")
+        .in_("scenario_id", scenario_ids)
+        .execute()
+    )
+    sid_to_item = {r["scenario_id"]: r for r in (items_res.data or [])}
+
+    missing = [sid for sid in scenario_ids if sid not in sid_to_item]
+    if missing:
+        raise HTTPException(422, f"존재하지 않는 scenario_ids: {missing}")
+
+    disabled = [sid for sid in scenario_ids if not sid_to_item[sid]["enabled"]]
+    if disabled:
+        raise HTTPException(422, f"disabled scenario는 run에 포함할 수 없습니다: {disabled}")
+
+    now = now_kst().isoformat()
+    run_row = {
+        "trigger_type": "PR",
+        "run_status":   "QUEUED",
+        "requested_by": "targeted-qa",
+        "requested_at": now,
+        "created_at":   now,
+        "updated_at":   now,
+    }
+    run_res = supabase.table("qa_runs").insert(run_row).execute()
+    if not run_res.data:
+        raise HTTPException(500, "qa_run 생성 실패")
+    run = run_res.data[0]
+    run_id = run["id"]
+
+    # Preserve input order for ordinal assignment
+    target_rows = [
+        {
+            "run_id":     run_id,
+            "qa_item_id": sid_to_item[sid]["id"],
+            "ordinal":    idx + 1,
+            "created_at": now,
+        }
+        for idx, sid in enumerate(scenario_ids)
+    ]
+
+    try:
+        supabase.table("qa_run_targets").insert(target_rows).execute()
+    except Exception as e:
+        log.error("[qa_control] target insert failed for run %s, compensating: %s", run_id, e)
+        supabase.table("qa_runs").delete().eq("id", run_id).execute()
+        raise HTTPException(500, "qa_run_targets 생성 실패 — run 롤백됨")
+
+    run["targets"] = target_rows
+    run["scenario_ids"] = scenario_ids
+    return run
+
+
 # ── Status transition event matrix ───────────────────────────────────────────
 
 _TRANSITION_EVENTS: Dict[tuple, str] = {
