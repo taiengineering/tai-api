@@ -3,6 +3,12 @@
 LEG DB (msds_ref schema) 에서 CAS 번호로 화학물질 정보 조회.
 Write=0. raw_payload 미노출. regulatory_facts 포함.
 CAS format: 1-7 digits, dash, 2 digits, dash, 1 digit  (e.g. 50-00-0).
+
+Error contract:
+  validate_cas()           → ValueError   (caller converts to 422)
+  _get_leg_client() miss   → KecoLegUnavailable (env not set)
+  any DB query exception   → KecoLegUnavailable (runtime DB failure)
+  ValueError from CAS      → propagates as-is (NOT wrapped)
 """
 from __future__ import annotations
 
@@ -46,72 +52,82 @@ def get_chemicals_by_cas(cas_no: str) -> List[Dict[str, Any]]:
 
     Returns list of dicts with safe public fields only.
     raw_payload is never exposed.
+
+    Raises:
+      ValueError         — invalid CAS format (caller → 422)
+      KecoLegUnavailable — LEG not configured or DB query failure (caller → 503)
     """
     cas = validate_cas(cas_no)
-    client = _get_leg_client()
-    db = client.schema("msds_ref")
+    try:
+        client = _get_leg_client()
+        db = client.schema("msds_ref")
 
-    res = (
-        db.table("keco_chemicals")
-        .select(
-            "id,source_record_id,cas_no,korexst_raw,"
-            "chemical_name_ko,chemical_name_en,"
-            "alias_name_ko,alias_name_en,"
-            "molecular_formula,molecular_weight_raw,"
-            "last_seen_at,last_changed_at"
-        )
-        .eq("cas_no", cas)
-        .execute()
-    )
-    chemicals = list(res.data or [])
-    if not chemicals:
-        return []
-
-    chem_ids = [c["id"] for c in chemicals if c.get("id")]
-    facts_by_chem: Dict[str, list] = {cid: [] for cid in chem_ids}
-    if chem_ids:
-        for start in range(0, len(chem_ids), 100):
-            batch = chem_ids[start:start + 100]
-            facts_res = (
-                db.table("keco_regulatory_facts")
-                .select(
-                    "keco_chemical_id,classification_type,unique_no,"
-                    "content_info,exception_info,notice_date_raw,notice_info,"
-                    "source_ordinal"
-                )
-                .in_("keco_chemical_id", batch)
-                .order("source_ordinal")
-                .execute()
+        res = (
+            db.table("keco_chemicals")
+            .select(
+                "id,source_record_id,cas_no,korexst_raw,"
+                "chemical_name_ko,chemical_name_en,"
+                "alias_name_ko,alias_name_en,"
+                "molecular_formula,molecular_weight_raw,"
+                "last_seen_at,last_changed_at"
             )
-            for f in (facts_res.data or []):
-                cid = f.get("keco_chemical_id")
-                if cid in facts_by_chem:
-                    facts_by_chem[cid].append({
-                        "classification_type": f.get("classification_type"),
-                        "unique_no": f.get("unique_no"),
-                        "content_info": f.get("content_info"),
-                        "exception_info": f.get("exception_info"),
-                        "notice_date_raw": f.get("notice_date_raw"),
-                        "notice_info": f.get("notice_info"),
-                        "source_ordinal": f.get("source_ordinal"),
-                    })
+            .eq("cas_no", cas)
+            .execute()
+        )
+        chemicals = list(res.data or [])
+        if not chemicals:
+            return []
 
-    result = []
-    for c in chemicals:
-        cid = c.get("id")
-        result.append({
-            "source_record_id": c.get("source_record_id"),
-            "cas_no": c.get("cas_no"),
-            "korexst_raw": c.get("korexst_raw"),
-            "chemical_name_ko": c.get("chemical_name_ko"),
-            "chemical_name_en": c.get("chemical_name_en"),
-            "alias_name_ko": c.get("alias_name_ko"),
-            "alias_name_en": c.get("alias_name_en"),
-            "molecular_formula": c.get("molecular_formula"),
-            "molecular_weight_raw": c.get("molecular_weight_raw"),
-            "last_seen_at": c.get("last_seen_at"),
-            "last_changed_at": c.get("last_changed_at"),
-            "regulatory_facts": facts_by_chem.get(cid, []),
-        })
+        chem_ids = [c["id"] for c in chemicals if c.get("id")]
+        facts_by_chem: Dict[str, list] = {cid: [] for cid in chem_ids}
+        if chem_ids:
+            for start in range(0, len(chem_ids), 100):
+                batch = chem_ids[start:start + 100]
+                facts_res = (
+                    db.table("keco_regulatory_facts")
+                    .select(
+                        "keco_chemical_id,classification_type,unique_no,"
+                        "content_info,exception_info,notice_date_raw,notice_info,"
+                        "source_ordinal"
+                    )
+                    .in_("keco_chemical_id", batch)
+                    .order("source_ordinal")
+                    .execute()
+                )
+                for f in (facts_res.data or []):
+                    cid = f.get("keco_chemical_id")
+                    if cid in facts_by_chem:
+                        facts_by_chem[cid].append({
+                            "classification_type": f.get("classification_type"),
+                            "unique_no": f.get("unique_no"),
+                            "content_info": f.get("content_info"),
+                            "exception_info": f.get("exception_info"),
+                            "notice_date_raw": f.get("notice_date_raw"),
+                            "notice_info": f.get("notice_info"),
+                            "source_ordinal": f.get("source_ordinal"),
+                        })
 
-    return result
+        result = []
+        for c in chemicals:
+            cid = c.get("id")
+            result.append({
+                "source_record_id": c.get("source_record_id"),
+                "cas_no": c.get("cas_no"),
+                "korexst_raw": c.get("korexst_raw"),
+                "chemical_name_ko": c.get("chemical_name_ko"),
+                "chemical_name_en": c.get("chemical_name_en"),
+                "alias_name_ko": c.get("alias_name_ko"),
+                "alias_name_en": c.get("alias_name_en"),
+                "molecular_formula": c.get("molecular_formula"),
+                "molecular_weight_raw": c.get("molecular_weight_raw"),
+                "last_seen_at": c.get("last_seen_at"),
+                "last_changed_at": c.get("last_changed_at"),
+                "regulatory_facts": facts_by_chem.get(cid, []),
+            })
+
+        return result
+
+    except KecoLegUnavailable:
+        raise
+    except Exception as exc:
+        raise KecoLegUnavailable("KECO_LEG_QUERY_FAILED") from exc

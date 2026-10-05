@@ -297,3 +297,124 @@ def test_p04_public_api_source_dataset_url(monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["source_dataset_url"] == DATASET_URL
     assert resp.json()["source_dataset_url"] == "https://www.data.go.kr/data/15149420/openapi.do"
+
+
+# ===========================================================================
+# PATCH-002 tests (P15-P18)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# P15: chemical query .execute() raises exception → HTTP 503
+# ---------------------------------------------------------------------------
+
+def test_p15_chemical_query_failure_is_503(monkeypatch):
+    """DB execute() exception during chemicals query → KecoLegUnavailable → 503."""
+    from unittest.mock import MagicMock
+
+    def _bad_client():
+        client = MagicMock()
+        db = MagicMock()
+        db.table.return_value.select.return_value.eq.return_value.execute.side_effect = (
+            RuntimeError("PostgREST connection error")
+        )
+        client.schema.return_value = db
+        return client
+
+    monkeypatch.setattr("services.keco_chemical.read._get_leg_client", _bad_client)
+    client = TestClient(_make_app())
+    resp = client.get("/public/keco/chemicals/by-cas/50-00-0")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "KECO_LEG_UNAVAILABLE"
+
+
+# ---------------------------------------------------------------------------
+# P16: regulatory_facts query .execute() raises exception → HTTP 503
+# ---------------------------------------------------------------------------
+
+def test_p16_facts_query_failure_is_503(monkeypatch):
+    """DB execute() exception during regulatory_facts query → KecoLegUnavailable → 503."""
+    from unittest.mock import MagicMock
+
+    call_count = {"n": 0}
+
+    def _partial_fail_client():
+        client = MagicMock()
+        db = MagicMock()
+
+        def _table_dispatch(name):
+            t = MagicMock()
+            if name == "keco_chemicals":
+                # First query succeeds: returns one chemical
+                t.select.return_value.eq.return_value.execute.return_value = MagicMock(
+                    data=[_SAMPLE_CHEMICAL]
+                )
+            elif name == "keco_regulatory_facts":
+                # Facts query fails
+                t.select.return_value.in_.return_value.order.return_value.execute.side_effect = (
+                    RuntimeError("DB timeout")
+                )
+            return t
+
+        db.table.side_effect = _table_dispatch
+        client.schema.return_value = db
+        return client
+
+    monkeypatch.setattr("services.keco_chemical.read._get_leg_client", _partial_fail_client)
+    client = TestClient(_make_app())
+    resp = client.get("/public/keco/chemicals/by-cas/50-00-0")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "KECO_LEG_UNAVAILABLE"
+
+
+# ---------------------------------------------------------------------------
+# P17: missing LEG configuration → 503, no env var names in public response
+# ---------------------------------------------------------------------------
+
+def test_p17_missing_leg_config_no_env_leak(monkeypatch):
+    """LEG env vars not set → 503. Response must not contain env var names."""
+    monkeypatch.delenv("LEG_SUPABASE_URL", raising=False)
+    monkeypatch.delenv("LEG_SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    # Ensure _get_leg_client sees no env vars (don't mock, use real function)
+    monkeypatch.setattr(
+        "services.keco_chemical.read._get_leg_client",
+        lambda: (_ for _ in ()).throw(
+            KecoLegUnavailable("KECO_LEG_UNAVAILABLE: LEG_SUPABASE_URL and LEG_SUPABASE_SERVICE_ROLE_KEY must be set")
+        ),
+    )
+    client = TestClient(_make_app())
+    resp = client.get("/public/keco/chemicals/by-cas/50-00-0")
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    response_text = str(detail)
+    assert "LEG_SUPABASE_URL" not in response_text
+    assert "LEG_SUPABASE_SERVICE_ROLE_KEY" not in response_text
+    assert detail["code"] == "KECO_LEG_UNAVAILABLE"
+
+
+# ---------------------------------------------------------------------------
+# P18: DB internal exception message not exposed in public response
+# ---------------------------------------------------------------------------
+
+def test_p18_db_exception_message_not_in_response(monkeypatch):
+    """Internal exception message must not appear in public 503 response."""
+    from unittest.mock import MagicMock
+
+    _INTERNAL_MSG = "INTERNAL: supabase_secret_token=abc123 host=db.internal.supabase.co"
+
+    def _fail_client():
+        client = MagicMock()
+        db = MagicMock()
+        db.table.return_value.select.return_value.eq.return_value.execute.side_effect = (
+            RuntimeError(_INTERNAL_MSG)
+        )
+        client.schema.return_value = db
+        return client
+
+    monkeypatch.setattr("services.keco_chemical.read._get_leg_client", _fail_client)
+    client = TestClient(_make_app())
+    resp = client.get("/public/keco/chemicals/by-cas/50-00-0")
+    assert resp.status_code == 503
+    response_text = resp.text
+    assert _INTERNAL_MSG not in response_text
+    assert "supabase_secret_token" not in response_text
+    assert resp.json()["detail"]["message"] == "KECO reference data is temporarily unavailable"
