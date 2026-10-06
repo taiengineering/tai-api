@@ -14,6 +14,7 @@ ROUTERS = [
     {"module": "routers.factory_work_facts"},  # WO-E2E-OBS009-COMMON-WORK-SOURCE-IMPLEMENT-001
     {"module": "routers.material_source"},  # WO-E2E-OBS009-COMMON-MATERIAL-SOURCE-IMPLEMENT-001
     {"module": "routers.hazardous_material_events"},  # WO-LFR-OBJ-B03-P4A: 유해물질 반출입 기록
+    {"module": "routers.occupancy_capacity_assessments"},  # OBJ-H02-P1: 수용인원 법정산정
     {"module": "routers.system_codes"},
     # {"module": "routers.file_upload"},  # 모듈 삭제됨 — 필요 시 재생성
     {"module": "routers.notifications"},

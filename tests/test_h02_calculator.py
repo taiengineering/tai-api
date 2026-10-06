@@ -35,6 +35,11 @@ class TestTableA:
         with pytest.raises(ValueError, match="seat_count"):
             calculate_segment(seg, lookup)
 
+    def test_A1_ga_1_rejects_area_m2(self, lookup):
+        seg = {"scope": "UNDERGROUND", "row_id": "A-1-가-1", "seat_count": 100, "area_m2": 200.0}
+        with pytest.raises(ValueError, match="must not receive area_m2"):
+            calculate_segment(seg, lookup)
+
     def test_A5_ga_apartment(self, lookup):
         # (room_count=3 + 1) × dwelling_unit_count=200 = 800
         seg = {"scope": "UNDERGROUND", "row_id": "A-5-가", "room_count": 3, "dwelling_unit_count": 200}
@@ -46,29 +51,43 @@ class TestTableA:
         with pytest.raises(ValueError, match="room_count"):
             calculate_segment(seg, lookup)
 
+    def test_A5_ga_rejects_area_m2(self, lookup):
+        seg = {"scope": "UNDERGROUND", "row_id": "A-5-가", "room_count": 2, "dwelling_unit_count": 50, "area_m2": 100.0}
+        with pytest.raises(ValueError, match="must not receive area_m2"):
+            calculate_segment(seg, lookup)
+
     def test_A2_ga_standard_multiply(self, lookup):
         # density 0.50, area 1000 → 500 persons
         seg = {"scope": "UNDERGROUND", "row_id": "A-2-가", "area_m2": 1000.0}
         r = calculate_segment(seg, lookup)
         assert Fraction(r["persons_num"], r["persons_den"]) == Fraction(500)
 
-    def test_A1_ga_2_movable_seat(self, lookup):
-        # density 1.30, area 200 → 260
-        seg = {"scope": "UNDERGROUND", "row_id": "A-1-가-2", "area_m2": 200.0}
+    def test_A4_ga_office_above_60m_valid(self, lookup):
+        # density 1.25, area 800, height 80m → 1000
+        seg = {"scope": "UNDERGROUND", "row_id": "A-4-가", "area_m2": 800.0, "office_location_height_m": 80.0}
         r = calculate_segment(seg, lookup)
-        assert Fraction(r["persons_num"], r["persons_den"]) == Fraction(260)
+        assert Fraction(r["persons_num"], r["persons_den"]) == Fraction(1000)
 
-    def test_A4_ga_office_above_60m(self, lookup):
-        # density 1.25, area 800 → 1000
+    def test_A4_ga_missing_height_raises(self, lookup):
         seg = {"scope": "UNDERGROUND", "row_id": "A-4-가", "area_m2": 800.0}
+        with pytest.raises(ValueError, match="office_location_height_m"):
+            calculate_segment(seg, lookup)
+
+    def test_A4_ga_height_not_above_60_raises(self, lookup):
+        seg = {"scope": "UNDERGROUND", "row_id": "A-4-가", "area_m2": 800.0, "office_location_height_m": 55.0}
+        with pytest.raises(ValueError, match="A-4-나"):
+            calculate_segment(seg, lookup)
+
+    def test_A4_na_office_below_60m_valid(self, lookup):
+        # density 0.25, area 4000, height 40m → 1000
+        seg = {"scope": "UNDERGROUND", "row_id": "A-4-나", "area_m2": 4000.0, "office_location_height_m": 40.0}
         r = calculate_segment(seg, lookup)
         assert Fraction(r["persons_num"], r["persons_den"]) == Fraction(1000)
 
-    def test_A4_na_office_below_60m(self, lookup):
-        # density 0.25, area 4000 → 1000
-        seg = {"scope": "UNDERGROUND", "row_id": "A-4-나", "area_m2": 4000.0}
-        r = calculate_segment(seg, lookup)
-        assert Fraction(r["persons_num"], r["persons_den"]) == Fraction(1000)
+    def test_A4_na_height_above_60_raises(self, lookup):
+        seg = {"scope": "UNDERGROUND", "row_id": "A-4-나", "area_m2": 4000.0, "office_location_height_m": 70.0}
+        with pytest.raises(ValueError, match="A-4-가"):
+            calculate_segment(seg, lookup)
 
     def test_underground_missing_area_raises(self, lookup):
         seg = {"scope": "UNDERGROUND", "row_id": "A-2-가"}
@@ -76,13 +95,44 @@ class TestTableA:
             calculate_segment(seg, lookup)
 
     def test_unknown_row_id_raises(self, lookup):
+        # NONEXISTENT doesn't start with "A-" so scope firewall fires first
         seg = {"scope": "UNDERGROUND", "row_id": "NONEXISTENT", "area_m2": 100.0}
+        with pytest.raises(ValueError):
+            calculate_segment(seg, lookup)
+
+    def test_unknown_a_row_id_raises(self, lookup):
+        # Passes scope check (A- prefix) but unknown in lookup
+        seg = {"scope": "UNDERGROUND", "row_id": "A-99-unknown", "area_m2": 100.0}
         with pytest.raises(ValueError, match="Unknown row_id"):
             calculate_segment(seg, lookup)
 
     def test_invalid_scope_raises(self, lookup):
         seg = {"scope": "INVALID", "row_id": "A-2-가", "area_m2": 100.0}
         with pytest.raises(ValueError, match="scope"):
+            calculate_segment(seg, lookup)
+
+    def test_negative_area_raises(self, lookup):
+        seg = {"scope": "UNDERGROUND", "row_id": "A-2-가", "area_m2": -1.0}
+        with pytest.raises(ValueError, match="area_m2"):
+            calculate_segment(seg, lookup)
+
+    def test_negative_seat_count_raises(self, lookup):
+        seg = {"scope": "UNDERGROUND", "row_id": "A-1-가-1", "seat_count": -5}
+        with pytest.raises(ValueError, match="seat_count"):
+            calculate_segment(seg, lookup)
+
+
+# ─── Scope firewall (cross-table row_id rejection) ──────────────────────────
+
+class TestScopeFirewall:
+    def test_underground_scope_with_b_row_id_raises(self, lookup):
+        seg = {"scope": "UNDERGROUND", "row_id": "B-나-업무", "area_m2": 100.0}
+        with pytest.raises(ValueError, match="TABLE A row_id"):
+            calculate_segment(seg, lookup)
+
+    def test_above_ground_scope_with_a_row_id_raises(self, lookup):
+        seg = {"scope": "ABOVE_GROUND", "row_id": "A-2-가", "area_m2": 100.0}
+        with pytest.raises(ValueError, match="TABLE B나목 row_id"):
             calculate_segment(seg, lookup)
 
 
@@ -95,6 +145,11 @@ class TestTableBna:
         r = calculate_segment(seg, lookup)
         assert Fraction(r["persons_num"], r["persons_den"]) == Fraction(10)
 
+    def test_B_na_문화_3_rejects_area_m2(self, lookup):
+        seg = {"scope": "ABOVE_GROUND", "row_id": "B-나-문화-3", "bench_length_cm": 455.0, "area_m2": 100.0}
+        with pytest.raises(ValueError, match="must not receive area_m2"):
+            calculate_segment(seg, lookup)
+
     def test_B_na_문화_3_missing_bench_length_raises(self, lookup):
         seg = {"scope": "ABOVE_GROUND", "row_id": "B-나-문화-3"}
         with pytest.raises(ValueError, match="bench_length_cm"):
@@ -106,6 +161,12 @@ class TestTableBna:
                "wheelchair_space_count": 5, "fixed_seat_count": 200}
         r = calculate_segment(seg, lookup)
         assert Fraction(r["persons_num"], r["persons_den"]) == Fraction(205)
+
+    def test_B_na_문화_4_rejects_area_m2(self, lookup):
+        seg = {"scope": "ABOVE_GROUND", "row_id": "B-나-문화-4",
+               "wheelchair_space_count": 5, "fixed_seat_count": 200, "area_m2": 100.0}
+        with pytest.raises(ValueError, match="must not receive area_m2"):
+            calculate_segment(seg, lookup)
 
     def test_B_na_문화_4_missing_wheelchair_raises(self, lookup):
         seg = {"scope": "ABOVE_GROUND", "row_id": "B-나-문화-4", "fixed_seat_count": 200}
@@ -124,15 +185,14 @@ class TestTableBna:
         r = calculate_segment(seg, lookup)
         assert Fraction(r["persons_num"], r["persons_den"]) == Fraction(1000)
 
-    def test_B_na_주거_1_divide(self, lookup):
-        # density 18.6, area 1860 → 100
-        seg = {"scope": "ABOVE_GROUND", "row_id": "B-나-주거-1", "area_m2": 1860.0}
-        r = calculate_segment(seg, lookup)
-        assert Fraction(r["persons_num"], r["persons_den"]) == Fraction(100)
-
     def test_above_ground_missing_area_raises(self, lookup):
         seg = {"scope": "ABOVE_GROUND", "row_id": "B-나-업무"}
         with pytest.raises(ValueError, match="area_m2"):
+            calculate_segment(seg, lookup)
+
+    def test_negative_bench_length_raises(self, lookup):
+        seg = {"scope": "ABOVE_GROUND", "row_id": "B-나-문화-3", "bench_length_cm": -10.0}
+        with pytest.raises(ValueError, match="bench_length_cm"):
             calculate_segment(seg, lookup)
 
 
@@ -175,8 +235,8 @@ class TestCalculateTotal:
         result = calculate_total(segments, get_table_a_rows(), get_table_b_na_rows())
         assert Fraction(result["total_num"], result["total_den"]) == Fraction(500)
 
-    def test_exact_rational_bench_seat(self):
-        # bench_length_cm=100 / 45.5 = 2000/91 (non-integer)
+    def test_exact_rational_bench_seat_stored_as_fraction(self):
+        # bench_length_cm=100 / 45.5 = 2000/91 (non-integer) — stored as exact fraction
         segments = [
             {"scope": "ABOVE_GROUND", "row_id": "B-나-문화-3", "bench_length_cm": 100.0},
         ]
@@ -184,3 +244,5 @@ class TestCalculateTotal:
         f = Fraction(result["total_num"], result["total_den"])
         assert f == Fraction(100) / Fraction("45.5")
         assert result["meets_5000_threshold"] is False
+        # denominator != 1 (non-integer) — canonical_adapter will raise SourceUnresolved
+        assert result["total_den"] != 1

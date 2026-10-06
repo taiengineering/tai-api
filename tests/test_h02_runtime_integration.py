@@ -13,7 +13,6 @@ from services.occupancy_capacity.canonical_adapter import SourceUnresolved
 
 def _make_supabase_stub(factory_row: dict | None = None):
     sub = MagicMock()
-    # factories table read
     fac_exec = MagicMock()
     fac_exec.data = [factory_row] if factory_row else []
     chain = MagicMock()
@@ -30,16 +29,6 @@ _MINIMAL_FACTORY = {
     "bdmgtsn": None,
     "mgm_bldrgst_pk": None,
 }
-
-
-_HEAVY_PATCHES = [
-    "services.safe_building_leg_runtime.build_saas_leg_step1",
-    "services.safe_building_leg_runtime.run_leg_diagnosis",
-    # lazy-imported inside function body — patch at source module
-    "services.work_source.store.load_work_rows_optional",
-    "services.material_source.store.load_factory_material_rows_optional",
-    "services.equipment_source.store.load_equipment_rows_optional",
-]
 
 
 class TestH02RuntimeBinding:
@@ -130,8 +119,41 @@ class TestH02FirewallPreservation:
 
     def test_leg_body_has_occupancy_assessment_id_field(self):
         from schemas.legal_engine import SafeBuildingLegBody
-        import inspect
         fields = SafeBuildingLegBody.model_fields
         assert "occupancy_assessment_id" in fields
-        # must be optional (default None)
         assert fields["occupancy_assessment_id"].default is None
+
+
+class TestH02VoidLifecycleFirewall:
+    """DRAFT→VOID must be forbidden; only CONFIRMED→VOID allowed."""
+
+    def test_draft_cannot_be_voided(self):
+        from services.occupancy_capacity.store import void_assessment
+        sub = MagicMock()
+        draft_row = {
+            "id": "asmnt-1",
+            "factory_id": "fac-1",
+            "status": "DRAFT",
+            "result_numerator": None,
+        }
+        with patch("services.occupancy_capacity.store.get_assessment", return_value=draft_row):
+            with pytest.raises(ValueError, match="CONFIRMED"):
+                void_assessment(sub, "asmnt-1")
+
+    def test_confirmed_can_be_voided(self):
+        from services.occupancy_capacity.store import void_assessment
+        sub = MagicMock()
+        confirmed_row = {
+            "id": "asmnt-1",
+            "factory_id": "fac-1",
+            "status": "CONFIRMED",
+            "result_numerator": "5000",
+        }
+        update_resp = MagicMock()
+        update_resp.data = [{"id": "asmnt-1", "status": "VOID"}]
+        (sub.table.return_value.update.return_value
+         .eq.return_value.eq.return_value.execute.return_value) = update_resp
+
+        with patch("services.occupancy_capacity.store.get_assessment", return_value=confirmed_row):
+            result = void_assessment(sub, "asmnt-1")
+        assert result["status"] == "VOID"

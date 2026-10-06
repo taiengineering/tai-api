@@ -17,12 +17,6 @@ from services.occupancy_capacity.legal_registry import (
 )
 
 
-def _mock_supabase(row_override: dict | None = None):
-    """Build a supabase mock that returns row_override via get_assessment path."""
-    supabase = MagicMock()
-    return supabase, row_override
-
-
 def _confirmed_row(factory_id="fac-1", assessment_id="asmnt-1",
                    num=5000, den=1, sha=None):
     return {
@@ -111,6 +105,19 @@ class TestLoadConfirmedAssessmentContext:
         row["result_numerator"] = None
         with patch("services.occupancy_capacity.canonical_adapter.get_assessment", return_value=row):
             with pytest.raises(SourceUnresolved, match="calculation"):
+                load_confirmed_assessment_context(
+                    MagicMock(), assessment_id="asmnt-1", factory_id="fac-1"
+                )
+
+    def test_non_whole_fraction_raises_no_rounding(self):
+        """
+        Non-integer result must raise SourceUnresolved.
+        ROUNDING_RULE_NOT_FOUND — floor/ceil/int() truncation prohibited.
+        """
+        # 200/91 is non-integer (100cm / 45.5 = 2000/91)
+        row = _confirmed_row(num=2000, den=91)
+        with patch("services.occupancy_capacity.canonical_adapter.get_assessment", return_value=row):
+            with pytest.raises(SourceUnresolved, match="not a whole number"):
                 load_confirmed_assessment_context(
                     MagicMock(), assessment_id="asmnt-1", factory_id="fac-1"
                 )

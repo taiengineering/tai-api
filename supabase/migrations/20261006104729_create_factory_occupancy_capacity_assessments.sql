@@ -1,5 +1,6 @@
 -- OBJ-H02-P1: factory_occupancy_capacity_assessments
 -- Lifecycle: DRAFT → CONFIRMED → VOID (no hard DELETE)
+-- Lifecycle contract: DRAFT→CONFIRMED only; CONFIRMED→VOID only; DRAFT→VOID forbidden
 -- RLS: ENABLED; anon/authenticated REVOKED; service_role only
 
 CREATE TABLE public.factory_occupancy_capacity_assessments (
@@ -17,7 +18,58 @@ CREATE TABLE public.factory_occupancy_capacity_assessments (
     confirmed_at timestamptz,
     voided_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+
+    -- result_denominator must be positive when present
+    CONSTRAINT chk_result_denominator_positive
+        CHECK (result_denominator IS NULL OR result_denominator > 0),
+
+    -- result pair: both must be set or both NULL
+    CONSTRAINT chk_result_pair
+        CHECK (
+            (result_numerator IS NULL AND result_denominator IS NULL)
+            OR (result_numerator IS NOT NULL AND result_denominator IS NOT NULL)
+        ),
+
+    -- input_segments must be a JSON array
+    CONSTRAINT chk_input_segments_array
+        CHECK (jsonb_typeof(input_segments) = 'array'),
+
+    -- calculation_trace must be a JSON object when present
+    CONSTRAINT chk_calculation_trace_object
+        CHECK (calculation_trace IS NULL OR jsonb_typeof(calculation_trace) = 'object'),
+
+    -- DRAFT invariant: no result, not attested, no timestamps
+    CONSTRAINT chk_draft_invariant
+        CHECK (
+            status != 'DRAFT' OR (
+                result_numerator IS NULL
+                AND coverage_attested = false
+                AND confirmed_at IS NULL
+                AND voided_at IS NULL
+            )
+        ),
+
+    -- CONFIRMED invariant: result present, attested, confirmed_at set, not voided
+    CONSTRAINT chk_confirmed_invariant
+        CHECK (
+            status != 'CONFIRMED' OR (
+                result_numerator IS NOT NULL
+                AND coverage_attested = true
+                AND confirmed_at IS NOT NULL
+                AND confirmed_by_user_id IS NOT NULL
+                AND voided_at IS NULL
+            )
+        ),
+
+    -- VOID invariant: came from CONFIRMED, so confirmed_at and voided_at both present
+    CONSTRAINT chk_void_invariant
+        CHECK (
+            status != 'VOID' OR (
+                confirmed_at IS NOT NULL
+                AND voided_at IS NOT NULL
+            )
+        )
 );
 
 ALTER TABLE public.factory_occupancy_capacity_assessments ENABLE ROW LEVEL SECURITY;
@@ -32,6 +84,7 @@ COMMENT ON TABLE public.factory_occupancy_capacity_assessments IS
     'H02 occupancy_capacity legal calculation snapshots. '
     'Canonical source per 초고층재난관리법 시행령 제2조②항. '
     'Direct numeric input prohibited (WO-LFR-OBJ-H02-P0). '
+    'Lifecycle: DRAFT→CONFIRMED→VOID; DRAFT→VOID is forbidden. '
     'Only CONFIRMED assessments with current ruleset may feed the LEG runtime.';
 
 COMMENT ON COLUMN public.factory_occupancy_capacity_assessments.ruleset_sha256 IS
@@ -39,4 +92,4 @@ COMMENT ON COLUMN public.factory_occupancy_capacity_assessments.ruleset_sha256 I
 
 COMMENT ON COLUMN public.factory_occupancy_capacity_assessments.result_numerator IS
     'Exact rational result: persons = result_numerator / result_denominator. '
-    'Stored as integer (no float); threshold comparison must use exact arithmetic.';
+    'Stored as integer (no float); threshold comparison uses exact arithmetic.';

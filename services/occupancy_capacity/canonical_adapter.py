@@ -6,14 +6,19 @@ Firewall rules (historical scan strictly prohibited):
   - No "get latest CONFIRMED for factory_id" scan.
   - No "get any CONFIRMED" scan.
 
+No-rounding contract (ROUNDING_RULE_NOT_FOUND):
+  - If the exact Fraction result is not a whole number, SourceUnresolved is raised.
+  - floor / ceil / round / int() truncation are ALL prohibited.
+  - Caller must ensure segments produce whole-number results, or the assessment
+    cannot be used as a canonical source.
+
 Threshold preservation guard:
   - exact ≥ 5000 (Fraction comparison) must equal float ≥ 5000.
-  - If they differ (boundary edge case), raise SOURCE_UNRESOLVED instead of injecting a wrong value.
+  - If they differ (boundary edge case), raise SOURCE_UNRESOLVED instead of injecting.
 
 Return:
-  occupancy_capacity: int | None
-    int  = exact person count (float transport to LEG; int is safe since persons are always whole)
-    None = assessment not found or SOURCE_UNRESOLVED
+  occupancy_capacity: int
+    Whole-number persons count, exact (denominator == 1 verified).
 """
 
 from __future__ import annotations
@@ -65,8 +70,17 @@ def load_confirmed_assessment_context(
     num = int(row["result_numerator"])
     den = int(row["result_denominator"])
     exact = Fraction(num, den)
-    threshold = Fraction(5000)
 
+    # No-rounding contract: non-whole result cannot be emitted as canonical integer.
+    # Rounding rule is NOT_FOUND in both law texts — truncation/rounding is prohibited.
+    if exact.denominator != 1:
+        raise SourceUnresolved(
+            f"Assessment result {exact} is not a whole number. "
+            "Rounding rule is NOT_FOUND in law texts — cannot emit canonical integer. "
+            "Re-calculate with segments that produce whole-number results."
+        )
+
+    threshold = Fraction(5000)
     exact_meets = exact >= threshold
     float_val = float(exact)
     float_meets = float_val >= 5000.0
@@ -77,18 +91,9 @@ def load_confirmed_assessment_context(
             f"for value {exact}. Cannot safely inject occupancy_capacity."
         )
 
-    occupancy_capacity = int(exact) if exact.denominator == 1 else _round_exact(exact)
-
     return {
-        "occupancy_capacity": occupancy_capacity,
+        "occupancy_capacity": int(exact),
         "assessment_id": assessment_id,
         "meets_5000_threshold": exact_meets,
         "exact_fraction": str(exact),
     }
-
-
-def _round_exact(value: Fraction) -> int:
-    # Rounding rule NOT_FOUND in law texts.
-    # We floor-truncate to preserve the threshold guard (undercount is safer than overcount).
-    # This is a defensive fallback; ideally segments always produce whole-number results.
-    return int(value)

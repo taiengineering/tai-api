@@ -12,22 +12,30 @@ Special formulas:
   B-가-2    (above-ground, fixed seat): persons = wheelchair_space_count + fixed_seat_count
 
 SM-03 guard (TABLE A 업무용도 60m 분기):
-  floor_height_above_ground_m is required for A-4 rows; caller must supply correct row_id.
+  A-4-가 requires office_location_height_m > 60
+  A-4-나 requires office_location_height_m <= 60
+
+Scope firewall:
+  UNDERGROUND segments must use TABLE A row_ids (prefix "A-")
+  ABOVE_GROUND segments must use TABLE B나목 row_ids (prefix "B-나-")
 
 Rounding rule: NOT_FOUND in both law texts → result returned as exact Fraction.
+  If the final fraction is not a whole number, SourceUnresolved is raised —
+  no floor/ceil/round/int() truncation is permitted.
   Threshold comparison must use exact arithmetic before any float conversion.
 
 Input segment schema (per segment):
   {
     "scope": "UNDERGROUND" | "ABOVE_GROUND",
-    "row_id": str,           # e.g. "A-1-가-1", "B-나-업무"
-    "area_m2": float | null, # null for pure-count specials
-    "seat_count": int | null,
-    "room_count": int | null,
-    "dwelling_unit_count": int | null,
-    "bench_length_cm": float | null,
-    "wheelchair_space_count": int | null,
-    "fixed_seat_count": int | null
+    "row_id": str,                         # e.g. "A-1-가-1", "B-나-업무"
+    "area_m2": float | null,               # must be >= 0; null for pure-count specials
+    "seat_count": int | null,              # must be >= 0
+    "room_count": int | null,              # must be >= 0
+    "dwelling_unit_count": int | null,     # must be >= 0
+    "bench_length_cm": float | null,       # must be >= 0
+    "wheelchair_space_count": int | null,  # must be >= 0
+    "fixed_seat_count": int | null,        # must be >= 0
+    "office_location_height_m": float | null  # required for A-4-가 and A-4-나
   }
 """
 
@@ -36,11 +44,54 @@ from __future__ import annotations
 from fractions import Fraction
 from typing import Any
 
+_TABLE_A_PREFIX = "A-"
+_TABLE_B_PREFIX = "B-나-"
+
 
 def _frac(v: float | int | str) -> Fraction:
     if isinstance(v, float):
         return Fraction(v).limit_denominator(10**9)
     return Fraction(v)
+
+
+def _require_non_negative(name: str, value: float | int | None) -> None:
+    if value is not None and value < 0:
+        raise ValueError(f"{name} must be >= 0, got {value}")
+
+
+def _validate_segment_inputs(segment: dict[str, Any]) -> None:
+    """Reject negative values and scope↔table mismatches."""
+    scope = segment.get("scope", "")
+    row_id = segment.get("row_id", "")
+
+    # Scope firewall
+    if scope == "UNDERGROUND" and not row_id.startswith(_TABLE_A_PREFIX):
+        raise ValueError(
+            f"UNDERGROUND segment must use a TABLE A row_id (prefix 'A-'), got {row_id!r}"
+        )
+    if scope == "ABOVE_GROUND" and not row_id.startswith(_TABLE_B_PREFIX):
+        raise ValueError(
+            f"ABOVE_GROUND segment must use a TABLE B나목 row_id (prefix 'B-나-'), got {row_id!r}"
+        )
+
+    # Negative value rejection
+    _require_non_negative("area_m2", segment.get("area_m2"))
+    _require_non_negative("seat_count", segment.get("seat_count"))
+    _require_non_negative("room_count", segment.get("room_count"))
+    _require_non_negative("dwelling_unit_count", segment.get("dwelling_unit_count"))
+    _require_non_negative("bench_length_cm", segment.get("bench_length_cm"))
+    _require_non_negative("wheelchair_space_count", segment.get("wheelchair_space_count"))
+    _require_non_negative("fixed_seat_count", segment.get("fixed_seat_count"))
+
+    # Field exclusivity: special-formula rows must NOT receive area_m2
+    if row_id == "A-1-가-1" and segment.get("area_m2") is not None:
+        raise ValueError("A-1-가-1 (seat_count formula) must not receive area_m2")
+    if row_id == "A-5-가" and segment.get("area_m2") is not None:
+        raise ValueError("A-5-가 (R+1 formula) must not receive area_m2")
+    if row_id == "B-나-문화-3" and segment.get("area_m2") is not None:
+        raise ValueError("B-나-문화-3 (bench_length formula) must not receive area_m2")
+    if row_id == "B-나-문화-4" and segment.get("area_m2") is not None:
+        raise ValueError("B-나-문화-4 (fixed_seat formula) must not receive area_m2")
 
 
 def calculate_segment(segment: dict[str, Any], row_lookup: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -49,6 +100,8 @@ def calculate_segment(segment: dict[str, Any], row_lookup: dict[str, dict[str, A
     Returns {"persons_num": int, "persons_den": int, "trace": {...}}.
     Raises ValueError for missing required fields or unknown row_id.
     """
+    _validate_segment_inputs(segment)
+
     row_id: str = segment["row_id"]
     row = row_lookup.get(row_id)
     if row is None:
@@ -95,6 +148,27 @@ def _calc_underground(
         if room_count is None or dwelling_unit_count is None:
             raise ValueError("A-5-가 requires room_count and dwelling_unit_count")
         return Fraction(int(room_count) + 1) * Fraction(int(dwelling_unit_count))
+
+    # SM-03 guard: A-4-가/나 require office_location_height_m for validation
+    if row_id == "A-4-가":
+        h = seg.get("office_location_height_m")
+        if h is None:
+            raise ValueError("A-4-가 (above 60m office) requires office_location_height_m")
+        if h <= 60:
+            raise ValueError(
+                f"A-4-가 requires office_location_height_m > 60m, got {h}m. "
+                "Use A-4-나 for <= 60m office."
+            )
+
+    if row_id == "A-4-나":
+        h = seg.get("office_location_height_m")
+        if h is None:
+            raise ValueError("A-4-나 (at or below 60m office) requires office_location_height_m")
+        if h > 60:
+            raise ValueError(
+                f"A-4-나 requires office_location_height_m <= 60m, got {h}m. "
+                "Use A-4-가 for > 60m office."
+            )
 
     area_m2 = seg.get("area_m2")
     if area_m2 is None:

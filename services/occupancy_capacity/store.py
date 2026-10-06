@@ -1,6 +1,7 @@
 """
 H02 occupancy capacity assessment CRUD — service_role only.
 Lifecycle: DRAFT → CONFIRMED → VOID (no hard DELETE).
+Lifecycle contract: DRAFT→CONFIRMED only; CONFIRMED→VOID only; DRAFT→VOID forbidden.
 """
 
 from __future__ import annotations
@@ -31,6 +32,34 @@ def create_draft(
     resp = supabase.table("factory_occupancy_capacity_assessments").insert(row).execute()
     if not resp.data:
         raise RuntimeError("create_draft: insert returned no data")
+    return resp.data[0]
+
+
+def update_assessment_draft(
+    supabase,
+    assessment_id: str,
+    input_segments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Replace input_segments on a DRAFT assessment and clear any attached calculation."""
+    sha = get_ruleset_sha256()
+    resp = (
+        supabase.table("factory_occupancy_capacity_assessments")
+        .update({
+            "input_segments": json.dumps(input_segments),
+            "ruleset_version": RULESET_VERSION,
+            "ruleset_sha256": sha,
+            # clear any previously attached calculation — segments changed
+            "result_numerator": None,
+            "result_denominator": None,
+            "calculation_trace": None,
+            "updated_at": serialize_external_utc(now_kst()),
+        })
+        .eq("id", assessment_id)
+        .eq("status", "DRAFT")
+        .execute()
+    )
+    if not resp.data:
+        raise RuntimeError("update_assessment_draft: no matching DRAFT row or update failed")
     return resp.data[0]
 
 
@@ -102,6 +131,14 @@ def void_assessment(
     supabase,
     assessment_id: str,
 ) -> dict[str, Any]:
+    row = _get_exact(supabase, assessment_id)
+    # DRAFT→VOID is forbidden; only CONFIRMED→VOID allowed
+    if row["status"] != "CONFIRMED":
+        raise ValueError(
+            f"Only CONFIRMED assessments can be voided, got {row['status']!r}. "
+            "Lifecycle contract: DRAFT→CONFIRMED→VOID only."
+        )
+
     now = serialize_external_utc(now_kst())
     resp = (
         supabase.table("factory_occupancy_capacity_assessments")
@@ -111,11 +148,11 @@ def void_assessment(
             "updated_at": now,
         })
         .eq("id", assessment_id)
-        .neq("status", "VOID")
+        .eq("status", "CONFIRMED")
         .execute()
     )
     if not resp.data:
-        raise RuntimeError("void_assessment: no matching non-VOID row")
+        raise RuntimeError("void_assessment: update returned no data")
     return resp.data[0]
 
 
