@@ -6,7 +6,6 @@ Lifecycle contract: DRAFT→CONFIRMED only; CONFIRMED→VOID only; DRAFT→VOID 
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from uuid import uuid4
 
@@ -26,7 +25,7 @@ def create_draft(
         "status": "DRAFT",
         "ruleset_version": RULESET_VERSION,
         "ruleset_sha256": sha,
-        "input_segments": json.dumps(input_segments),
+        "input_segments": input_segments,
         "coverage_attested": False,
     }
     resp = supabase.table("factory_occupancy_capacity_assessments").insert(row).execute()
@@ -45,7 +44,7 @@ def update_assessment_draft(
     resp = (
         supabase.table("factory_occupancy_capacity_assessments")
         .update({
-            "input_segments": json.dumps(input_segments),
+            "input_segments": input_segments,
             "ruleset_version": RULESET_VERSION,
             "ruleset_sha256": sha,
             # clear any previously attached calculation — segments changed
@@ -75,7 +74,7 @@ def attach_calculation(
         .update({
             "result_numerator": str(result_num),
             "result_denominator": str(result_den),
-            "calculation_trace": json.dumps(calculation_trace),
+            "calculation_trace": calculation_trace,
             "updated_at": serialize_external_utc(now_kst()),
         })
         .eq("id", assessment_id)
