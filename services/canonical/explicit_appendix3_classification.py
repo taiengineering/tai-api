@@ -53,7 +53,9 @@ ERROR_SUBTYPE_CONFLICT = "APPENDIX3_SUBTYPE_CONFLICT"
 ERROR_REQUIRED = "APPENDIX3_EXPLICIT_CLASSIFICATION_REQUIRED"
 
 # Completeness gate scope only. Not a legal-item inference from sector.
-GATED_NORMALIZED_SECTORS = frozenset({"BUILDING", "INDUSTRIAL"})
+# WO-LFR-OBJ-S01-P1-001: CONSTRUCTION added — S01 norms require appendix3_item_no=49
+# as the C4 classification source. sector=CONSTRUCTION without explicit item_no → 422.
+GATED_NORMALIZED_SECTORS = frozenset({"BUILDING", "INDUSTRIAL", "CONSTRUCTION"})
 
 
 class Appendix3SourceError(ValueError):
