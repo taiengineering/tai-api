@@ -465,6 +465,47 @@ class TestKoshaSafetyMaterial:
         assert "SUPER_SECRET_123" not in (result.error_message or "")
         assert "SUPER_SECRET_123" not in str(result.details)
 
+    def test_s29_raw_bearer_failure_code_not_in_error_code(self):
+        """Raw Authorization header in failure_code must not reach error_code.
+        Falls back to stable final_status."""
+        SECRET = "Authorization: Bearer SUPER_SECRET_123"
+
+        async def daily_stub():
+            report, _ = _sm_report("SNAPSHOT_FAILED", failure_code=SECRET)
+            return report, 1
+
+        result = _sm_adapter(daily_fn=daily_stub).run(_ctx())
+        assert result.status == RunStatus.FAILED
+        assert result.error_code == "SNAPSHOT_FAILED"
+        assert result.error_message == "SNAPSHOT_FAILED"
+        assert "SUPER_SECRET_123" not in (result.error_code or "")
+        assert "SUPER_SECRET_123" not in (result.error_message or "")
+        assert "SUPER_SECRET_123" not in str(result.details)
+
+    def test_s30_service_key_in_failure_code_not_in_error_code(self):
+        """serviceKey=... in failure_code must not reach error_code."""
+        async def daily_stub():
+            report, _ = _sm_report(
+                "SNAPSHOT_FAILED",
+                failure_code="FETCH_HTTP serviceKey=SECRET_456",
+            )
+            return report, 1
+
+        result = _sm_adapter(daily_fn=daily_stub).run(_ctx())
+        assert result.status == RunStatus.FAILED
+        assert result.error_code == "SNAPSHOT_FAILED"
+        assert "SECRET_456" not in (result.error_code or "")
+        assert "SECRET_456" not in (result.error_message or "")
+        assert "SECRET_456" not in str(result.details)
+
+    def test_s31_stable_auth_failure_code_preserved(self):
+        """A stable domain code like AUTH must be preserved as error_code."""
+        async def daily_stub():
+            return _sm_report("NETWORK_PREFLIGHT_FAIL", failure_code="AUTH")
+
+        result = _sm_adapter(daily_fn=daily_stub).run(_ctx())
+        assert result.error_code == "AUTH"
+
 
 # ---------------------------------------------------------------------------
 # G — KoshaGuideAdapter

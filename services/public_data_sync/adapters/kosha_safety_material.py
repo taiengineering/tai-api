@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine
 
@@ -11,6 +12,25 @@ from services.public_data_sync.errors import PreflightError
 
 _FINAL_SUCCESS = "SUCCESS"
 _SNAPSHOT_NO_CHANGE = "SNAPSHOT_NO_CHANGE"
+
+# Stable domain error code: uppercase letter followed by up to 63 uppercase/digit/underscore chars.
+_STABLE_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+_FALLBACK_ERROR_CODE = "SAFETY_MATERIAL_FAILED"
+
+
+def _safe_error_code(failure_code: str | None, final_status: str | None) -> str:
+    """Return a stable error code, never raw exception text."""
+    for candidate in (failure_code, final_status):
+        if candidate and _STABLE_CODE_RE.match(candidate):
+            return candidate
+    return _FALLBACK_ERROR_CODE
+
+
+def _safe_error_message(final_status: str | None) -> str:
+    """Return a stable error message string."""
+    if final_status and _STABLE_CODE_RE.match(final_status):
+        return final_status
+    return _FALLBACK_ERROR_CODE
 
 # Keys allowed in RunResult.details for the daily (non-dry-run) path.
 _SM_DAILY_DETAILS_KEYS = (
@@ -139,8 +159,8 @@ class KoshaSafetyMaterialAdapter(SourceAdapter):
             status=RunStatus.FAILED,
             started_at=ctx.started_at,
             finished_at=datetime.now(timezone.utc),
-            error_code=report.get("failure_code") or final_status,
-            error_message=final_status,
+            error_code=_safe_error_code(report.get("failure_code"), final_status),
+            error_message=_safe_error_message(final_status),
             details=_pick(report, _SM_DAILY_DETAILS_KEYS),
         )
 
