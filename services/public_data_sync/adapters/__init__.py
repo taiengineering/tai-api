@@ -27,4 +27,20 @@ class AdapterRegistry:
 
 adapter_registry = AdapterRegistry()
 
-__all__ = ["SourceAdapter", "AdapterRegistry", "adapter_registry"]
+
+def register_builtin_adapters() -> None:
+    """Register built-in KOSHA adapters into the global adapter_registry (idempotent).
+
+    Only affects the module-level adapter_registry singleton.
+    Tests that create their own AdapterRegistry instances are unaffected.
+    """
+    from services.public_data_sync.adapters.kosha_guide import KoshaGuideAdapter
+    from services.public_data_sync.adapters.kosha_safety_material import KoshaSafetyMaterialAdapter
+
+    for adapter_cls in (KoshaSafetyMaterialAdapter, KoshaGuideAdapter):
+        adapter = adapter_cls()
+        if adapter.adapter_key not in adapter_registry.registered_keys():
+            adapter_registry.register(adapter)
+
+
+__all__ = ["SourceAdapter", "AdapterRegistry", "adapter_registry", "register_builtin_adapters"]

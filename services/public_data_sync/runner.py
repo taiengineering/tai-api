@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from services.public_data_sync.adapters import adapter_registry
+from services.public_data_sync.adapters import adapter_registry, register_builtin_adapters
 from services.public_data_sync.contracts import (
     RunContext,
     RunResult,
@@ -43,6 +43,7 @@ def run_source(
     When omitted, both are generated here (backward-compatible).
     """
     spec = registry.get(source_id)       # raises SourceNotFoundError
+    register_builtin_adapters()           # idempotent — builtins always available
     adapter = adapter_registry.get(spec.adapter_key)  # raises AdapterNotRegisteredError
 
     run_id = run_id or str(uuid4())
