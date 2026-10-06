@@ -1,28 +1,38 @@
 """
 H02 canonical adapter: load a CONFIRMED assessment → occupancy_capacity for LEG runtime.
 
-Firewall rules (historical scan strictly prohibited):
-  - Only exact assessment_id lookup is allowed.
-  - No "get latest CONFIRMED for factory_id" scan.
-  - No "get any CONFIRMED" scan.
+C1 Source → C2 Canonical transport contract:
+  Source-of-truth: result_numerator / result_denominator (exact Fraction)
+  Transport to LEG evaluator:
+    denominator == 1  → int(exact)
+    denominator != 1  → float(exact)   [fractional legal result IS valid]
+  No rounding / floor / ceil / truncation allowed.
 
-No-rounding contract (ROUNDING_RULE_NOT_FOUND):
-  - If the exact Fraction result is not a whole number, SourceUnresolved is raised.
-  - floor / ceil / round / int() truncation are ALL prohibited.
-  - Caller must ensure segments produce whole-number results, or the assessment
-    cannot be used as a canonical source.
+No-floor/ceil/round contract:
+  A fractional result (e.g. 200/91 from bench_length_cm=100/45.5) is a valid canonical
+  legal source. It must be transported as float(exact), not discarded or truncated.
+
+Float validity guard:
+  math.isfinite(float_value) must be True. Infinite/NaN → SourceUnresolved.
 
 Threshold preservation guard:
-  - exact ≥ 5000 (Fraction comparison) must equal float ≥ 5000.
-  - If they differ (boundary edge case), raise SOURCE_UNRESOLVED instead of injecting.
+  exact >= Fraction(5000)  must equal  float(exact) >= 5000.0
+  If they disagree (boundary edge case) → SourceUnresolved.
+
+Historical scan firewall (strictly enforced):
+  Only exact assessment_id lookup is allowed.
+  No "get latest CONFIRMED for factory_id" scan.
+  No "get any CONFIRMED" scan.
 
 Return:
-  occupancy_capacity: int
-    Whole-number persons count, exact (denominator == 1 verified).
+  occupancy_capacity: int | float
+    int   if exact.denominator == 1 (whole-number result)
+    float if exact.denominator != 1 (fractional result, exact transport)
 """
 
 from __future__ import annotations
 
+import math
 from fractions import Fraction
 from typing import Any
 
@@ -71,19 +81,21 @@ def load_confirmed_assessment_context(
     den = int(row["result_denominator"])
     exact = Fraction(num, den)
 
-    # No-rounding contract: non-whole result cannot be emitted as canonical integer.
-    # Rounding rule is NOT_FOUND in both law texts — truncation/rounding is prohibited.
-    if exact.denominator != 1:
-        raise SourceUnresolved(
-            f"Assessment result {exact} is not a whole number. "
-            "Rounding rule is NOT_FOUND in law texts — cannot emit canonical integer. "
-            "Re-calculate with segments that produce whole-number results."
-        )
+    # C1→C2 transport: whole number → int, fractional → float (no rounding/truncation)
+    if exact.denominator == 1:
+        occupancy_capacity: int | float = int(exact)
+    else:
+        float_val = float(exact)
+        if not math.isfinite(float_val):
+            raise SourceUnresolved(
+                f"Assessment result {exact} produces non-finite float — cannot transport"
+            )
+        occupancy_capacity = float_val
 
+    # Threshold preservation guard
     threshold = Fraction(5000)
     exact_meets = exact >= threshold
-    float_val = float(exact)
-    float_meets = float_val >= 5000.0
+    float_meets = float(exact) >= 5000.0
 
     if exact_meets != float_meets:
         raise SourceUnresolved(
@@ -92,7 +104,7 @@ def load_confirmed_assessment_context(
         )
 
     return {
-        "occupancy_capacity": int(exact),
+        "occupancy_capacity": occupancy_capacity,
         "assessment_id": assessment_id,
         "meets_5000_threshold": exact_meets,
         "exact_fraction": str(exact),

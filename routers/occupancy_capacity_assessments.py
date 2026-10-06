@@ -14,17 +14,24 @@ Routes:
   POST   /factories/{factory_id}/occupancy-assessments/{id}/confirm   confirm
   POST   /factories/{factory_id}/occupancy-assessments/{id}/void      void (CONFIRMED→VOID only)
   GET    /occupancy-assessments/ruleset-version                   current ruleset meta
+
+DELETE is intentionally absent — lifecycle ends at VOID (no hard delete).
 """
 
+from decimal import Decimal
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own
-from services.occupancy_capacity.calculator import calculate_total
+from services.occupancy_capacity.calculator import (
+    calculate_total,
+    deserialize_input_segments_from_storage,
+    serialize_input_segments_for_storage,
+)
 from services.occupancy_capacity.canonical_adapter import SourceUnresolved
 from services.occupancy_capacity.legal_registry import (
     RULESET_VERSION,
@@ -48,14 +55,16 @@ router = APIRouter(tags=["H02 — 수용인원 법정산정"])
 class SegmentInput(BaseModel):
     scope: str = Field(..., description="UNDERGROUND or ABOVE_GROUND")
     row_id: str = Field(..., description="e.g. A-1-가-1, B-나-업무")
-    area_m2: Optional[float] = None
-    seat_count: Optional[int] = None
-    room_count: Optional[int] = None
-    dwelling_unit_count: Optional[int] = None
-    bench_length_cm: Optional[float] = None
-    wheelchair_space_count: Optional[int] = None
-    fixed_seat_count: Optional[int] = None
-    office_location_height_m: Optional[float] = Field(
+    # Decimal for exact arithmetic — float is rejected
+    area_m2: Optional[Decimal] = None
+    # StrictInt: rejects bool (True/False) which Python treats as int
+    seat_count: Optional[StrictInt] = None
+    room_count: Optional[StrictInt] = None
+    dwelling_unit_count: Optional[StrictInt] = None
+    bench_length_cm: Optional[Decimal] = None
+    wheelchair_space_count: Optional[StrictInt] = None
+    fixed_seat_count: Optional[StrictInt] = None
+    office_location_height_m: Optional[Decimal] = Field(
         None,
         description="Required for A-4-가 (>60m) and A-4-나 (<=60m) SM-03 guard"
     )
@@ -76,6 +85,11 @@ class ConfirmAssessmentRequest(BaseModel):
     )
 
 
+def _segments_to_dict(input_segments: list[SegmentInput]) -> list[dict[str, Any]]:
+    """Convert Pydantic SegmentInput list to dict list for calculator."""
+    return [s.model_dump() for s in input_segments]
+
+
 @router.post("/factories/{factory_id}/occupancy-assessments")
 def create_assessment(
     factory_id: str,
@@ -85,14 +99,15 @@ def create_assessment(
     supabase = get_supabase()
     _ensure_factory_own(supabase, factory_id, current)
 
-    segments = [s.model_dump() for s in body.input_segments]
+    segments = _segments_to_dict(body.input_segments)
 
     try:
         calc = calculate_total(segments, get_table_a_rows(), get_table_b_na_rows())
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    row = create_draft(supabase, factory_id, segments)
+    storage_segments = serialize_input_segments_for_storage(segments)
+    row = create_draft(supabase, factory_id, storage_segments)
     row = attach_calculation(
         supabase,
         row["id"],
@@ -147,16 +162,22 @@ def patch_assessment_draft(
     row = get_assessment(supabase, assessment_id)
     if row is None or row["factory_id"] != factory_id:
         raise HTTPException(status_code=404, detail="Assessment not found")
+    if row["status"] != "DRAFT":
+        raise HTTPException(
+            status_code=422,
+            detail=f"Only DRAFT assessments can be patched, got {row['status']!r}"
+        )
 
-    segments = [s.model_dump() for s in body.input_segments]
+    segments = _segments_to_dict(body.input_segments)
 
     try:
         calc = calculate_total(segments, get_table_a_rows(), get_table_b_na_rows())
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
     try:
-        row = update_assessment_draft(supabase, assessment_id, segments)
+        storage_segments = serialize_input_segments_for_storage(segments)
+        row = update_assessment_draft(supabase, assessment_id, storage_segments)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

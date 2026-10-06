@@ -100,6 +100,11 @@ def confirm_assessment(
     row = _get_exact(supabase, assessment_id)
     if row["status"] != "DRAFT":
         raise ValueError(f"Only DRAFT assessments can be confirmed, got {row['status']!r}")
+    if row["ruleset_version"] != RULESET_VERSION:
+        raise ValueError(
+            f"Ruleset version mismatch: assessment has {row['ruleset_version']!r}, "
+            f"current code is {RULESET_VERSION!r}. Re-calculate with current ruleset."
+        )
     if row["ruleset_sha256"] != current_sha:
         raise ValueError(
             f"Ruleset SHA mismatch: assessment has {row['ruleset_sha256']!r}, "

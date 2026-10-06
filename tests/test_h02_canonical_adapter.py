@@ -109,18 +109,52 @@ class TestLoadConfirmedAssessmentContext:
                     MagicMock(), assessment_id="asmnt-1", factory_id="fac-1"
                 )
 
-    def test_non_whole_fraction_raises_no_rounding(self):
+    def test_non_whole_fraction_transport_as_float(self):
         """
-        Non-integer result must raise SourceUnresolved.
-        ROUNDING_RULE_NOT_FOUND — floor/ceil/int() truncation prohibited.
+        Non-integer result must be transported as float(exact), NOT SourceUnresolved.
+        Fractional legal result (bench_length_cm/45.5) is valid — no truncation.
+        WO §19 regression: 200/91 → SourceUnresolved is prohibited.
         """
-        # 200/91 is non-integer (100cm / 45.5 = 2000/91)
+        # 100cm / 45.5 = 2000/91 — non-integer
         row = _confirmed_row(num=2000, den=91)
         with patch("services.occupancy_capacity.canonical_adapter.get_assessment", return_value=row):
-            with pytest.raises(SourceUnresolved, match="not a whole number"):
-                load_confirmed_assessment_context(
-                    MagicMock(), assessment_id="asmnt-1", factory_id="fac-1"
-                )
+            ctx = load_confirmed_assessment_context(
+                MagicMock(), assessment_id="asmnt-1", factory_id="fac-1"
+            )
+        expected = float(Fraction(2000, 91))
+        assert ctx["occupancy_capacity"] == expected
+        assert isinstance(ctx["occupancy_capacity"], float)
+        assert ctx["meets_5000_threshold"] is False  # 2000/91 ≈ 21.98, well below 5000
+
+    def test_fractional_above_5000_meets_threshold(self):
+        # 10001/2 = 5000.5 — fractional, above 5000
+        row = _confirmed_row(num=10001, den=2)
+        with patch("services.occupancy_capacity.canonical_adapter.get_assessment", return_value=row):
+            ctx = load_confirmed_assessment_context(
+                MagicMock(), assessment_id="asmnt-1", factory_id="fac-1"
+            )
+        assert ctx["meets_5000_threshold"] is True
+        assert isinstance(ctx["occupancy_capacity"], float)
+        assert ctx["occupancy_capacity"] == float(Fraction(10001, 2))
+
+    def test_fractional_below_5000_does_not_meet_threshold(self):
+        # 9999/2 = 4999.5 — fractional, below 5000
+        row = _confirmed_row(num=9999, den=2)
+        with patch("services.occupancy_capacity.canonical_adapter.get_assessment", return_value=row):
+            ctx = load_confirmed_assessment_context(
+                MagicMock(), assessment_id="asmnt-1", factory_id="fac-1"
+            )
+        assert ctx["meets_5000_threshold"] is False
+        assert isinstance(ctx["occupancy_capacity"], float)
+
+    def test_exact_fraction_key_in_context(self):
+        row = _confirmed_row(num=5000, den=1)
+        with patch("services.occupancy_capacity.canonical_adapter.get_assessment", return_value=row):
+            ctx = load_confirmed_assessment_context(
+                MagicMock(), assessment_id="asmnt-1", factory_id="fac-1"
+            )
+        assert "exact_fraction" in ctx
+        assert ctx["exact_fraction"] == "5000"
 
     def test_historical_scan_firewall(self):
         """

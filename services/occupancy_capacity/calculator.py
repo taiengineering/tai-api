@@ -1,6 +1,15 @@
 """
 H02 occupancy capacity calculator — pure function, exact arithmetic.
 
+Input contract:
+  area_m2, bench_length_cm, office_location_height_m: Decimal (not float)
+  count fields (seat_count, room_count, dwelling_unit_count,
+                wheelchair_space_count, fixed_seat_count): int (bool rejected)
+  Density values from legal_registry are loaded as Decimal (parse_float=Decimal).
+
+float is FORBIDDEN as input to _frac(). Decimal/str/int → Fraction is exact.
+Binary float → Fraction introduces representation error and is banned.
+
 Unit directions (CRITICAL):
   TABLE A  (UNDERGROUND):   명/㎡  → persons = area_m2 × density      (MULTIPLY)
   TABLE B나목 (ABOVE_GROUND): ㎡/명  → persons = area_m2 / density      (DIVIDE)
@@ -8,59 +17,89 @@ Unit directions (CRITICAL):
 Special formulas:
   A-1-가-1  (underground, fixed seat):  persons = seat_count
   A-5-가    (underground, apartment):   persons = (room_count + 1) × dwelling_unit_count
-  B-가-1    (above-ground, bench seat): persons = bench_length_cm / 45.5
+  B-가-1    (above-ground, bench seat): persons = bench_length_cm / Decimal("45.5")
   B-가-2    (above-ground, fixed seat): persons = wheelchair_space_count + fixed_seat_count
 
 SM-03 guard (TABLE A 업무용도 60m 분기):
-  A-4-가 requires office_location_height_m > 60
-  A-4-나 requires office_location_height_m <= 60
+  A-4-가 requires office_location_height_m > Decimal("60")
+  A-4-나 requires office_location_height_m <= Decimal("60")
 
 Scope firewall:
   UNDERGROUND segments must use TABLE A row_ids (prefix "A-")
   ABOVE_GROUND segments must use TABLE B나목 row_ids (prefix "B-나-")
 
-Rounding rule: NOT_FOUND in both law texts → result returned as exact Fraction.
-  If the final fraction is not a whole number, SourceUnresolved is raised —
-  no floor/ceil/round/int() truncation is permitted.
-  Threshold comparison must use exact arithmetic before any float conversion.
+Rounding rule: NOT_FOUND in law texts → result returned as exact Fraction.
+  No floor/ceil/round/int() truncation on non-integer results.
+  Calculator stores numerator/denominator; canonical_adapter handles C2 transport.
 
-Input segment schema (per segment):
-  {
-    "scope": "UNDERGROUND" | "ABOVE_GROUND",
-    "row_id": str,                         # e.g. "A-1-가-1", "B-나-업무"
-    "area_m2": float | null,               # must be >= 0; null for pure-count specials
-    "seat_count": int | null,              # must be >= 0
-    "room_count": int | null,              # must be >= 0
-    "dwelling_unit_count": int | null,     # must be >= 0
-    "bench_length_cm": float | null,       # must be >= 0
-    "wheelchair_space_count": int | null,  # must be >= 0
-    "fixed_seat_count": int | null,        # must be >= 0
-    "office_location_height_m": float | null  # required for A-4-가 and A-4-나
-  }
+dwelling_unit_count must be >= 1 (zero apartments yields 0 occupants, invalid).
 """
 
 from __future__ import annotations
 
+import json
+from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from typing import Any
 
 _TABLE_A_PREFIX = "A-"
 _TABLE_B_PREFIX = "B-나-"
+_BENCH_45_5 = Fraction(Decimal("45.5"))
+_60M = Decimal("60")
+
+# Special formula row_ids and their exclusively-allowed fields
+_SPECIAL_ALLOWED: dict[str, set[str]] = {
+    "A-1-가-1": {"seat_count"},
+    "A-5-가": {"room_count", "dwelling_unit_count"},
+    "B-나-문화-3": {"bench_length_cm"},
+    "B-나-문화-4": {"wheelchair_space_count", "fixed_seat_count"},
+}
+
+_FORMULA_FIELDS = {
+    "seat_count", "room_count", "dwelling_unit_count",
+    "bench_length_cm", "wheelchair_space_count", "fixed_seat_count",
+}
+
+# Scalar fields that are decimal (not int)
+_DECIMAL_FIELDS = {"area_m2", "bench_length_cm", "office_location_height_m"}
+
+# Count fields — must be int, not bool
+_COUNT_FIELDS = {
+    "seat_count", "room_count", "dwelling_unit_count",
+    "wheelchair_space_count", "fixed_seat_count",
+}
 
 
-def _frac(v: float | int | str) -> Fraction:
+def _frac(v: Decimal | str | int) -> Fraction:
+    """Exact conversion: Decimal/str/int only. float is forbidden."""
     if isinstance(v, float):
-        return Fraction(v).limit_denominator(10**9)
-    return Fraction(v)
+        raise TypeError(
+            f"float is forbidden as calculator input (binary float is not exact). "
+            f"Use Decimal or str instead. Got: {v!r}"
+        )
+    if isinstance(v, Decimal):
+        return Fraction(v)
+    if isinstance(v, int) and not isinstance(v, bool):
+        return Fraction(v)
+    if isinstance(v, str):
+        return Fraction(Decimal(v))
+    raise TypeError(f"Unsupported type for exact fraction: {type(v).__name__!r}")
 
 
-def _require_non_negative(name: str, value: float | int | None) -> None:
+def _require_non_negative(name: str, value: Any) -> None:
     if value is not None and value < 0:
         raise ValueError(f"{name} must be >= 0, got {value}")
 
 
+def _reject_bool(name: str, value: Any) -> None:
+    if isinstance(value, bool):
+        raise ValueError(
+            f"{name} must be int, not bool (True/False are not valid occupancy counts)"
+        )
+
+
 def _validate_segment_inputs(segment: dict[str, Any]) -> None:
-    """Reject negative values and scope↔table mismatches."""
+    """Reject invalid inputs: scope↔table mismatches, negatives, bools, field exclusivity."""
     scope = segment.get("scope", "")
     row_id = segment.get("row_id", "")
 
@@ -74,6 +113,10 @@ def _validate_segment_inputs(segment: dict[str, Any]) -> None:
             f"ABOVE_GROUND segment must use a TABLE B나목 row_id (prefix 'B-나-'), got {row_id!r}"
         )
 
+    # Bool rejection for count fields
+    for f in _COUNT_FIELDS:
+        _reject_bool(f, segment.get(f))
+
     # Negative value rejection
     _require_non_negative("area_m2", segment.get("area_m2"))
     _require_non_negative("seat_count", segment.get("seat_count"))
@@ -83,15 +126,49 @@ def _validate_segment_inputs(segment: dict[str, Any]) -> None:
     _require_non_negative("wheelchair_space_count", segment.get("wheelchair_space_count"))
     _require_non_negative("fixed_seat_count", segment.get("fixed_seat_count"))
 
-    # Field exclusivity: special-formula rows must NOT receive area_m2
-    if row_id == "A-1-가-1" and segment.get("area_m2") is not None:
-        raise ValueError("A-1-가-1 (seat_count formula) must not receive area_m2")
-    if row_id == "A-5-가" and segment.get("area_m2") is not None:
-        raise ValueError("A-5-가 (R+1 formula) must not receive area_m2")
-    if row_id == "B-나-문화-3" and segment.get("area_m2") is not None:
-        raise ValueError("B-나-문화-3 (bench_length formula) must not receive area_m2")
-    if row_id == "B-나-문화-4" and segment.get("area_m2") is not None:
-        raise ValueError("B-나-문화-4 (fixed_seat formula) must not receive area_m2")
+    # dwelling_unit_count >= 1 (0 apartments is invalid)
+    duc = segment.get("dwelling_unit_count")
+    if duc is not None and duc < 1:
+        raise ValueError(f"dwelling_unit_count must be >= 1 (got {duc})")
+
+    # Float input for decimal fields → reject
+    for f in _DECIMAL_FIELDS:
+        v = segment.get(f)
+        if isinstance(v, float):
+            raise ValueError(
+                f"{f} must be Decimal (not float) — use Decimal('{v}') for exact arithmetic"
+            )
+
+    # office_location_height_m must not appear on non-A-4 rows
+    if segment.get("office_location_height_m") is not None:
+        if row_id not in ("A-4-가", "A-4-나"):
+            raise ValueError(
+                f"office_location_height_m is only valid for A-4-가 and A-4-나, "
+                f"got row_id={row_id!r}"
+            )
+
+    # Formula field exclusivity
+    if row_id in _SPECIAL_ALLOWED:
+        allowed = _SPECIAL_ALLOWED[row_id]
+        disallowed = _FORMULA_FIELDS - allowed
+        for f in disallowed:
+            if segment.get(f) is not None:
+                raise ValueError(
+                    f"Row {row_id!r} uses formula {allowed}; "
+                    f"field {f!r} is not allowed (formula field contamination)"
+                )
+        # Also reject area_m2 for all special rows
+        if segment.get("area_m2") is not None:
+            raise ValueError(
+                f"Row {row_id!r} (special formula) must not receive area_m2"
+            )
+    else:
+        # General density row: must not receive formula-specific fields
+        for f in _FORMULA_FIELDS:
+            if segment.get(f) is not None:
+                raise ValueError(
+                    f"General density row {row_id!r} must not receive formula field {f!r}"
+                )
 
 
 def calculate_segment(segment: dict[str, Any], row_lookup: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -149,12 +226,14 @@ def _calc_underground(
             raise ValueError("A-5-가 requires room_count and dwelling_unit_count")
         return Fraction(int(room_count) + 1) * Fraction(int(dwelling_unit_count))
 
-    # SM-03 guard: A-4-가/나 require office_location_height_m for validation
+    # SM-03 guard: A-4-가/나 require office_location_height_m for Decimal comparison
     if row_id == "A-4-가":
         h = seg.get("office_location_height_m")
         if h is None:
             raise ValueError("A-4-가 (above 60m office) requires office_location_height_m")
-        if h <= 60:
+        if not isinstance(h, Decimal):
+            raise ValueError("office_location_height_m must be Decimal for A-4-가")
+        if h <= _60M:
             raise ValueError(
                 f"A-4-가 requires office_location_height_m > 60m, got {h}m. "
                 "Use A-4-나 for <= 60m office."
@@ -164,7 +243,9 @@ def _calc_underground(
         h = seg.get("office_location_height_m")
         if h is None:
             raise ValueError("A-4-나 (at or below 60m office) requires office_location_height_m")
-        if h > 60:
+        if not isinstance(h, Decimal):
+            raise ValueError("office_location_height_m must be Decimal for A-4-나")
+        if h > _60M:
             raise ValueError(
                 f"A-4-나 requires office_location_height_m <= 60m, got {h}m. "
                 "Use A-4-가 for > 60m office."
@@ -173,7 +254,7 @@ def _calc_underground(
     area_m2 = seg.get("area_m2")
     if area_m2 is None:
         raise ValueError(f"TABLE A row {row_id!r} requires area_m2")
-    if density is None or not isinstance(density, (int, float)):
+    if density is None:
         raise ValueError(f"TABLE A row {row_id!r} has no numeric density (special_formula={special})")
     return _frac(area_m2) * _frac(density)
 
@@ -189,7 +270,7 @@ def _calc_above_ground(
         bench_length_cm = seg.get("bench_length_cm")
         if bench_length_cm is None:
             raise ValueError("B-나-문화-3 (bench seat) requires bench_length_cm")
-        return _frac(bench_length_cm) / _frac("45.5")
+        return _frac(bench_length_cm) / _BENCH_45_5
 
     if row_id == "B-나-문화-4":
         wheelchair = seg.get("wheelchair_space_count")
@@ -201,7 +282,7 @@ def _calc_above_ground(
     area_m2 = seg.get("area_m2")
     if area_m2 is None:
         raise ValueError(f"TABLE B나목 row {row_id!r} requires area_m2")
-    if density is None or not isinstance(density, (int, float)):
+    if density is None:
         raise ValueError(f"TABLE B나목 row {row_id!r} has no numeric density (special_formula={special})")
     return _frac(area_m2) / _frac(density)
 
@@ -250,7 +331,7 @@ def calculate_total(
         "segment_results": [...],
         "meets_5000_threshold": bool,  # exact comparison (no float)
       }
-    No rounding applied (NOT_FOUND in law texts).
+    No rounding. Decimal/int inputs only — float forbidden.
     """
     lookup = build_row_lookup(table_a_rows, table_b_na_rows)
     total = Fraction(0)
@@ -271,3 +352,48 @@ def calculate_total(
         "segment_results": segment_results,
         "meets_5000_threshold": meets_5000,
     }
+
+
+def serialize_input_segments_for_storage(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Canonical DB serialization: Decimal → non-scientific decimal string, int → int, None → None.
+    Ensures stored input_segments can be reloaded and produce identical Fraction results.
+    """
+    out = []
+    for seg in segments:
+        row: dict[str, Any] = {}
+        for k, v in seg.items():
+            if isinstance(v, Decimal):
+                row[k] = str(v)
+            elif isinstance(v, bool):
+                raise ValueError(f"bool is not a valid segment value for field {k!r}")
+            elif isinstance(v, (int, str, type(None))):
+                row[k] = v
+            elif isinstance(v, float):
+                raise ValueError(
+                    f"float is not allowed in segment storage (field {k!r}). Use Decimal."
+                )
+            else:
+                row[k] = v
+        out.append(row)
+    return out
+
+
+def deserialize_input_segments_from_storage(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Reload serialized segments: decimal strings → Decimal for calculator fields.
+    int fields stay int. Ensures reload determinism.
+    """
+    out = []
+    for seg in segments:
+        row: dict[str, Any] = {}
+        for k, v in seg.items():
+            if k in _DECIMAL_FIELDS and isinstance(v, str):
+                try:
+                    row[k] = Decimal(v)
+                except InvalidOperation:
+                    row[k] = v
+            else:
+                row[k] = v
+        out.append(row)
+    return out
