@@ -166,12 +166,12 @@ class SafeBuildingConsumerInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # SEMANTIC_PROOF 9 (runtime, SAFE 저장값 아님)
+    # floor_area_sum_at_or_above_11f: H03 derivation only — direct user workaround prohibited (WO-LFR-OBJ-H03)
     worker_count: Optional[int] = None
     total_floor_area: Optional[float] = None
     building_use_type: Optional[str] = None
     building_height_m: Optional[float] = None
     occupancy_capacity: Optional[int] = None
-    floor_area_sum_at_or_above_11f: Optional[float] = None
     performance_use_floor_area_sum: Optional[float] = None
     building_use_category: Optional[str] = None
     building_activity_type: Optional[str] = None
