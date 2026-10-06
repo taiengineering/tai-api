@@ -1,0 +1,15 @@
+---
+title: Official Source Verification — has_legal_form P0 Documents
+description: Gate O1 — local HWP presence and file_url state for 6 has_legal_form=true docs
+type: evidence
+wo: WO-DOC-OBJ02-C1-SUPPLEMENTAL-CONTRACT-VERIFY-002
+status: COLLECTED
+gate: O1
+---
+doc_id,doc_type,doc_detail,has_legal_form,hwp_local_path,hwp_local_present,compiled_json_present,file_url_db_state,gap_assessment
+DOC-BLD-002,EQUIP,FIRE,true,form_originals_hwp/doc_forms/DOC-BLD-002.hwp,ABSENT,ABSENT,UNVERIFIED_NO_DB_ACCESS,CRITICAL — has_legal_form=true but no local HWP and no compiled JSON. Official form source unverifiable.
+DOC-BLD-011,EQUIP,ELEV,true,form_originals_hwp/doc_forms/DOC-BLD-011.hwp,PRESENT,PRESENT,LIKELY_SET,PARTIAL — HWP and compiled JSON on disk. file_url DB state not verified (no DB access in audit). Source traceability best among 6 legal-form docs.
+DOC-BLD-016,EQUIP,ASBESTOS,true,form_originals_hwp/doc_forms/DOC-BLD-016.hwp,ABSENT,ABSENT,UNVERIFIED_NO_DB_ACCESS,CRITICAL — has_legal_form=true but no local HWP and no compiled JSON. Also zero evidence. Official form source unverifiable.
+DOC-FAC-008,EQUIP,HAZMAT,true,form_originals_hwp/doc_forms/DOC-FAC-008.hwp,ABSENT,ABSENT,UNVERIFIED_NO_DB_ACCESS,CRITICAL — has_legal_form=true but no local HWP and no compiled JSON. Also zero evidence. Official form source unverifiable.
+DOC-FAC-013,EQUIP,BOILER,true,form_originals_hwp/doc_forms/DOC-FAC-013.hwp,ABSENT,ABSENT,UNVERIFIED_NO_DB_ACCESS,CRITICAL — has_legal_form=true but no local HWP and no compiled JSON. Also zero evidence. Official form source unverifiable.
+DOC-FAC-016,EQUIP,REFRIG,true,form_originals_hwp/doc_forms/DOC-FAC-016.hwp,ABSENT,ABSENT,UNVERIFIED_NO_DB_ACCESS,CRITICAL — has_legal_form=true but no local HWP and no compiled JSON. Also zero evidence. Official form source unverifiable.
