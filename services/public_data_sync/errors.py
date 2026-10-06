@@ -68,3 +68,19 @@ class RuntimeFencedError(PublicDataSyncError):
         )
         self.run_id = run_id
         self.source_id = source_id
+
+
+class RuntimeHeartbeatError(PublicDataSyncError):
+    """Heartbeat infrastructure failure — DB/RPC error during lease renewal.
+
+    Distinct from lease expiry (LEASE_LOST → RuntimeFencedError).
+    reason is a stable code (HEARTBEAT_INFRA_ERROR) — never a raw exception message.
+    """
+
+    def __init__(self, run_id: str, source_id: str, reason: str) -> None:
+        super().__init__(
+            f"Heartbeat failure: source={source_id!r} run={run_id!r} reason={reason!r}"
+        )
+        self.run_id = run_id
+        self.source_id = source_id
+        self.reason = reason

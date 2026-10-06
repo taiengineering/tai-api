@@ -21,6 +21,7 @@ from services.public_data_sync.errors import (
     RuntimeClaimError,
     RuntimeCompletionError,
     RuntimeFencedError,
+    RuntimeHeartbeatError,
     SourceNotFoundError,
 )
 from services.public_data_sync.registry import SourceRegistry, registry
@@ -49,6 +50,7 @@ __all__ = [
     "RuntimeClaimError",
     "RuntimeCompletionError",
     "RuntimeFencedError",
+    "RuntimeHeartbeatError",
     "SourceNotFoundError",
     # registry
     "SourceRegistry",
