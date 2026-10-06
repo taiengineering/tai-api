@@ -143,5 +143,30 @@ class InMemoryStore:
                 job.next_run_at = nxt
             return False
 
+    def heartbeat_occurrence(
+        self,
+        claim: Claim,
+        *,
+        now: datetime,
+        lease: timedelta,
+    ) -> bool:
+        """Renew the lease for a RUNNING occurrence. Returns False if fenced/expired."""
+        with self._lock:
+            key = (claim.job_code, claim.scheduled_for)
+            row = self.logs.get(key)
+            if row is None:
+                return False
+            if row["status"] != "RUNNING":
+                return False
+            if str(row["id"]) != str(claim.log_id):
+                return False
+            if int(row["attempt_no"]) != int(claim.attempt_no):
+                return False
+            existing_lease = row.get("lease_until")
+            if existing_lease is None or existing_lease <= now:
+                return False
+            row["lease_until"] = now + lease
+            return True
+
     def advance_next_run(self, job: JobRow, scheduled_for: datetime, nxt: datetime) -> None:
         raise RuntimeError("use complete_and_advance (atomic terminal+next_run)")
