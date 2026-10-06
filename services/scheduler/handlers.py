@@ -233,13 +233,11 @@ def _run_qa_scheduler_tick(p):
 
 def _run_public_data_sync_tick(p):
     from services.public_data_sync.scheduler_bridge import tick_public_data_sources
-    cadence = int(p.get("cadence_seconds", 3600))
     limit = int(p.get("limit", 2))
     lease = int(p.get("lease_seconds", 900))
     hb_interval = int(p.get("heartbeat_interval_seconds", 60))
-    retry_delay = int(p.get("retry_delay_seconds", 300))
+    retry_delay = int(p.get("retry_delay_seconds", 3600))
     results = tick_public_data_sources(
-        cadence_seconds=cadence,
         limit=limit,
         lease_seconds=lease,
         heartbeat_interval_seconds=hb_interval,
