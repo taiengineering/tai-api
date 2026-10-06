@@ -31,17 +31,22 @@ def run_source(
     request_budget: int | None = None,
     deadline: datetime | None = None,
     metadata: dict[str, Any] | None = None,
+    run_id: str | None = None,
+    started_at: datetime | None = None,
 ) -> RunResult:
     """Run a single source through the control plane.
 
     Programming errors (unknown source_id, missing adapter): raise immediately.
     Runtime errors (preflight fail, adapter exception, result mismatch): return FAILED.
+
+    run_id / started_at may be supplied by the runtime orchestrator (claim path).
+    When omitted, both are generated here (backward-compatible).
     """
     spec = registry.get(source_id)       # raises SourceNotFoundError
     adapter = adapter_registry.get(spec.adapter_key)  # raises AdapterNotRegisteredError
 
-    run_id = str(uuid4())
-    started_at = datetime.now(timezone.utc)
+    run_id = run_id or str(uuid4())
+    started_at = started_at or datetime.now(timezone.utc)
 
     ctx = RunContext(
         run_id=run_id,

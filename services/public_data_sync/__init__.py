@@ -18,10 +18,15 @@ from services.public_data_sync.errors import (
     AdapterNotRegisteredError,
     PreflightError,
     PublicDataSyncError,
+    RuntimeClaimError,
+    RuntimeCompletionError,
+    RuntimeFencedError,
     SourceNotFoundError,
 )
 from services.public_data_sync.registry import SourceRegistry, registry
 from services.public_data_sync.runner import run_source
+from services.public_data_sync.runtime import execute_due_source
+from services.public_data_sync.runtime_store import ClaimResult, PublicDataRuntimeStore
 
 __all__ = [
     # census primitives (existing contract — do not remove)
@@ -41,10 +46,18 @@ __all__ = [
     "AdapterNotRegisteredError",
     "PreflightError",
     "PublicDataSyncError",
+    "RuntimeClaimError",
+    "RuntimeCompletionError",
+    "RuntimeFencedError",
     "SourceNotFoundError",
     # registry
     "SourceRegistry",
     "registry",
     # runner
     "run_source",
+    # runtime
+    "execute_due_source",
+    # runtime_store
+    "ClaimResult",
+    "PublicDataRuntimeStore",
 ]
