@@ -188,7 +188,8 @@ class SafeBuildingConsumerInput(BaseModel):
     is_energy_intensive: Optional[bool] = None
     has_gas_boiler_heating_system: Optional[bool] = None
     has_centralized_gas_supply: Optional[bool] = None
-    has_hazardous_material_in_out_event: Optional[bool] = None
+    # has_hazardous_material_in_out_event: B03-P3 — direct user assertion prohibited;
+    #   operational event source required (OBJ-B03-P4)
     # 작업 형태 (RUNTIME/UI, 건설 검증 대칭)
     work_height_m: Optional[float] = None
     truck_loading_height_m: Optional[float] = None
