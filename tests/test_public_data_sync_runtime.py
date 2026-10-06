@@ -1,7 +1,7 @@
-"""WP-1B Runtime Foundation — P01~P15 + PATCH P16~P21 + Migration static M01~M18.
+"""WP-1B Runtime Foundation — P01~P15 + PATCH P16~P27 + Migration static M01~M22.
 
 SQL execution tests require local Supabase DB (LOCAL_DB_UNAVAILABLE).
-Migration static tests (M01~M18) run against the SQL file text only.
+Migration static tests (M01~M22) run against the SQL file text only.
 """
 from __future__ import annotations
 
@@ -22,7 +22,13 @@ from services.public_data_sync.contracts import (
     RunStatus,
     TriggerKind,
 )
-from services.public_data_sync.errors import AdapterNotRegisteredError, SourceNotFoundError
+from services.public_data_sync.errors import (
+    AdapterNotRegisteredError,
+    RuntimeClaimError,
+    RuntimeCompletionError,
+    RuntimeFencedError,
+    SourceNotFoundError,
+)
 from services.public_data_sync.registry import registry
 from services.public_data_sync.runtime import execute_due_source
 from services.public_data_sync.runtime_store import ClaimResult, PublicDataRuntimeStore
@@ -456,10 +462,10 @@ def test_p13_run_exception_complete_failed(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# P14 — fenced completion (complete_run returns False) does not raise
+# P14 — fenced completion (complete_run returns False) raises RuntimeFencedError
 # ---------------------------------------------------------------------------
 
-def test_p14_fenced_completion_does_not_raise(monkeypatch):
+def test_p14_fenced_completion_raises_runtime_fenced_error(monkeypatch):
     import services.public_data_sync.runner as runner_module
 
     spec = _spec()
@@ -470,9 +476,8 @@ def test_p14_fenced_completion_does_not_raise(monkeypatch):
     reg.register(_OkAdapter(spec.adapter_key))
     monkeypatch.setattr(runner_module, "adapter_registry", reg)
 
-    # Should NOT raise even if fenced
-    result = execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
-    assert result is not None  # result is still returned
+    with pytest.raises(RuntimeFencedError):
+        execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
 
 
 # ---------------------------------------------------------------------------
@@ -621,11 +626,11 @@ def test_p20_rate_limit_busy_reason_preserved():
 
 
 # ---------------------------------------------------------------------------
-# P21 — complete_run store exception → orchestrator returns RunResult (no propagate)
+# P21 — complete_run store exception → raises RuntimeCompletionError
 # ---------------------------------------------------------------------------
 
-def test_p21_complete_exception_does_not_propagate(monkeypatch):
-    """If store.complete_run raises, execute_due_source still returns the RunResult."""
+def test_p21_complete_exception_raises_runtime_completion_error(monkeypatch):
+    """DB failure in store.complete_run must raise RuntimeCompletionError (fail-closed)."""
     import services.public_data_sync.runner as runner_module
 
     spec = _spec()
@@ -641,13 +646,163 @@ def test_p21_complete_exception_does_not_propagate(monkeypatch):
     reg.register(_OkAdapter(spec.adapter_key))
     monkeypatch.setattr(runner_module, "adapter_registry", reg)
 
-    result = execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
-    assert result is not None
-    assert result.status == RunStatus.SUCCESS
+    with pytest.raises(RuntimeCompletionError):
+        execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
 
 
 # ---------------------------------------------------------------------------
-# Migration static contract tests — M01~M18
+# P22 — claim DB exception → raises RuntimeClaimError (fail-closed)
+# ---------------------------------------------------------------------------
+
+def test_p22_claim_db_exception_raises_runtime_claim_error(monkeypatch):
+    """DB failure in store.claim_run must raise RuntimeClaimError — not return None."""
+    import services.public_data_sync.runner as runner_module
+
+    spec = _spec()
+    sb = _fake_sb()
+    store = PublicDataRuntimeStore(supabase_client=sb)
+
+    def _raise_claim(*args, **kwargs):
+        raise RuntimeError("DB connection lost")
+
+    store.claim_run = _raise_claim
+
+    reg = AdapterRegistry()
+    reg.register(_OkAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+    with pytest.raises(RuntimeClaimError):
+        execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+
+
+# ---------------------------------------------------------------------------
+# P23 — business claim rejection → None maintained (not an infrastructure error)
+# ---------------------------------------------------------------------------
+
+def test_p23_business_claim_rejection_returns_none(monkeypatch):
+    """Normal business rejection returns None — distinct from infrastructure failure."""
+    import services.public_data_sync.runner as runner_module
+
+    spec = _spec()
+    for reason in ["DISABLED", "SOURCE_BUSY", "NOT_DUE", "CREDENTIAL_BUSY", "RATE_LIMIT_BUSY"]:
+        sb = _fake_sb(claim_data={"claimed": False, "run_id": str(uuid4()), "reason": reason})
+        store = PublicDataRuntimeStore(supabase_client=sb)
+
+        reg = AdapterRegistry()
+        reg.register(_OkAdapter(spec.adapter_key))
+        monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+        result = execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+        assert result is None, f"reason={reason!r} must return None, not raise"
+
+
+# ---------------------------------------------------------------------------
+# P24 — completion DB exception → raises RuntimeCompletionError
+# ---------------------------------------------------------------------------
+
+def test_p24_completion_db_exception_raises_runtime_completion_error(monkeypatch):
+    """DB failure in store.complete_run must raise RuntimeCompletionError."""
+    import services.public_data_sync.runner as runner_module
+
+    spec = _spec()
+    sb = _fake_sb()
+    store = PublicDataRuntimeStore(supabase_client=sb)
+
+    def _raise_complete(*args, **kwargs):
+        raise OSError("network timeout")
+
+    store.complete_run = _raise_complete
+
+    reg = AdapterRegistry()
+    reg.register(_OkAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+    with pytest.raises(RuntimeCompletionError):
+        execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+
+
+# ---------------------------------------------------------------------------
+# P25 — fenced completion (complete_run returns False) → raises RuntimeFencedError
+# ---------------------------------------------------------------------------
+
+def test_p25_fenced_completion_raises_runtime_fenced_error(monkeypatch):
+    """complete_run returning False must raise RuntimeFencedError."""
+    import services.public_data_sync.runner as runner_module
+
+    spec = _spec()
+    sb = _fake_sb(complete_data=False)
+    store = PublicDataRuntimeStore(supabase_client=sb)
+
+    reg = AdapterRegistry()
+    reg.register(_OkAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+    with pytest.raises(RuntimeFencedError):
+        execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+
+
+# ---------------------------------------------------------------------------
+# P26 — adapter raises → FAILED RunResult returned normally, complete called
+# ---------------------------------------------------------------------------
+
+def test_p26_adapter_exception_returns_failed_result(monkeypatch):
+    """Adapter exception → FAILED RunResult; complete_run called; result returned normally."""
+    import services.public_data_sync.runner as runner_module
+
+    spec = _spec()
+    sb = _fake_sb()
+    store = PublicDataRuntimeStore(supabase_client=sb)
+
+    # No adapter registered → AdapterNotRegisteredError raised inside run_source
+    reg = AdapterRegistry()
+    monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+    result = execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+    assert result is not None
+    assert result.status == RunStatus.FAILED
+    assert result.error_code == "ORCHESTRATOR_EXCEPTION"
+
+    complete_calls = [c for c in sb.rpc.call_args_list
+                      if c.args[0] == "fn_public_data_complete_run"]
+    assert len(complete_calls) == 1
+    assert complete_calls[0].args[1]["p_status"] == "FAILED"
+
+
+# ---------------------------------------------------------------------------
+# P27 — infrastructure exception log must not expose raw exception message (secrets)
+# ---------------------------------------------------------------------------
+
+def test_p27_infra_exception_log_no_raw_secret(monkeypatch, caplog):
+    """Infrastructure exceptions must log only exception type, not the raw message."""
+    import logging
+    import services.public_data_sync.runner as runner_module
+
+    spec = _spec()
+    sb = _fake_sb()
+    store = PublicDataRuntimeStore(supabase_client=sb)
+
+    secret_value = "sk_live_SUPER_SECRET_API_KEY_12345"
+
+    def _raise_claim(*args, **kwargs):
+        raise RuntimeError(f"auth failed: {secret_value}")
+
+    store.claim_run = _raise_claim
+
+    reg = AdapterRegistry()
+    reg.register(_OkAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+    with caplog.at_level(logging.ERROR, logger="services.public_data_sync.runtime"):
+        with pytest.raises(RuntimeClaimError):
+            execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+
+    for record in caplog.records:
+        assert secret_value not in record.getMessage(), \
+            f"Secret value leaked in log: {record.getMessage()!r}"
+
+
+# ---------------------------------------------------------------------------
+# Migration static contract tests — M01~M22
 # Run against SQL file text; do not require a running DB.
 # ---------------------------------------------------------------------------
 
@@ -786,6 +941,40 @@ def test_m18_unique_conflict_reason_mapping(migration_sql):
     assert "CREDENTIAL_BUSY" in body
     assert "RATE_LIMIT_BUSY" in body
     assert "CONSTRAINT_NAME" in body
+
+
+def test_m19_cross_source_runtime_state_cleared(migration_sql):
+    """Stale recovery must update public_data_source_runtime for ALL affected sources."""
+    body = _claim_body(migration_sql)
+    lease_pos = body.index("LEASE_EXPIRED")
+    # The CTE RETURNING drives a follow-up UPDATE on source_runtime
+    after_lease = body[lease_pos:]
+    assert "public_data_source_runtime" in after_lease, \
+        "stale recovery must update source_runtime for cross-source ghost current_run_id clearing"
+
+
+def test_m20_cte_returning_used(migration_sql):
+    """Claim must use CTE RETURNING to atomically terminalize runs and clear runtime pointers."""
+    body = _claim_body(migration_sql)
+    assert "RETURNING id, source_id" in body, \
+        "claim must use CTE RETURNING id, source_id for cross-source runtime cleanup"
+
+
+def test_m21_stale_recovery_sets_last_status_failed(migration_sql):
+    """Stale recovery runtime UPDATE must set last_status = 'FAILED'."""
+    body = _claim_body(migration_sql)
+    lease_pos = body.index("LEASE_EXPIRED")
+    after_lease = body[lease_pos:]
+    assert "last_status" in after_lease, \
+        "stale recovery must set last_status on source_runtime rows"
+
+
+def test_m22_stale_recovery_protects_newer_current_run(migration_sql):
+    """Stale recovery must only clear current_run_id when it matches the stale run."""
+    body = _claim_body(migration_sql)
+    # WHERE rt.current_run_id = s.id prevents clearing a newer claim's ownership
+    assert "current_run_id = s.id" in body, \
+        "stale recovery WHERE must reference current_run_id = s.id (stale run only)"
 
 
 # ---------------------------------------------------------------------------

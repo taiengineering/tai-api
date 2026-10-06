@@ -7,6 +7,11 @@ from typing import Any
 from uuid import uuid4
 
 from services.public_data_sync.contracts import RunResult, RunStatus, TriggerKind
+from services.public_data_sync.errors import (
+    RuntimeClaimError,
+    RuntimeCompletionError,
+    RuntimeFencedError,
+)
 from services.public_data_sync.registry import registry
 from services.public_data_sync.runtime_store import PublicDataRuntimeStore
 
@@ -30,11 +35,14 @@ def execute_due_source(
 ) -> RunResult | None:
     """Orchestrate a single source execution through the runtime claim path.
 
-    Returns None  → claim rejected (source disabled, not due, busy, etc.)
-    Returns RunResult → execution attempted (success or failure).
+    Returns None        → normal claim rejection (DISABLED, NOT_DUE, busy, etc.)
+    Returns RunResult   → execution attempted (SUCCESS, FAILED, NO_CHANGE, …)
 
-    Programming errors (unknown source_id): raise immediately.
-    All other errors: return FAILED RunResult + attempt complete.
+    Raises:
+        SourceNotFoundError     — unknown source_id (programming error)
+        RuntimeClaimError       — DB/RPC failure during claim_run
+        RuntimeCompletionError  — DB/RPC failure during complete_run
+        RuntimeFencedError      — complete_run rejected (source ownership lost)
     """
     from services.public_data_sync.runner import run_source
 
@@ -46,6 +54,7 @@ def execute_due_source(
     run_id = str(uuid4())
     now = datetime.now(timezone.utc)
 
+    # claim_run: DB/RPC failures must propagate — callers must not treat as SKIP.
     try:
         claim = store.claim_run(
             run_id=run_id,
@@ -60,7 +69,7 @@ def execute_due_source(
             "claim_run failed source_id=%s exception_type=%s",
             source_id, type(exc).__name__,
         )
-        return None
+        raise RuntimeClaimError(source_id=source_id) from exc
 
     if not claim.claimed:
         logger.info(
@@ -93,6 +102,8 @@ def execute_due_source(
             error_message=f"{type(exc).__name__}: {exc}",
         )
 
+    # complete_run: DB/RPC failures are infrastructure errors.
+    # A FAILED adapter result with successful persistence is still returned normally.
     try:
         completed = store.complete_run(
             run_id=run_id,
@@ -100,15 +111,18 @@ def execute_due_source(
             next_due_at=next_due_at,
             retry_not_before=retry_not_before,
         )
-        if not completed:
-            logger.warning(
-                "complete_run fenced source_id=%s run_id=%s",
-                source_id, run_id,
-            )
     except Exception as exc:
         logger.error(
-            "complete_run raised source_id=%s exception_type=%s",
-            source_id, type(exc).__name__,
+            "complete_run failed source_id=%s run_id=%s exception_type=%s",
+            source_id, run_id, type(exc).__name__,
         )
+        raise RuntimeCompletionError(run_id=run_id) from exc
+
+    if not completed:
+        logger.warning(
+            "complete_run fenced source_id=%s run_id=%s",
+            source_id, run_id,
+        )
+        raise RuntimeFencedError(run_id=run_id, source_id=source_id)
 
     return result

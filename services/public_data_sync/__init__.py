@@ -18,6 +18,9 @@ from services.public_data_sync.errors import (
     AdapterNotRegisteredError,
     PreflightError,
     PublicDataSyncError,
+    RuntimeClaimError,
+    RuntimeCompletionError,
+    RuntimeFencedError,
     SourceNotFoundError,
 )
 from services.public_data_sync.registry import SourceRegistry, registry
@@ -43,6 +46,9 @@ __all__ = [
     "AdapterNotRegisteredError",
     "PreflightError",
     "PublicDataSyncError",
+    "RuntimeClaimError",
+    "RuntimeCompletionError",
+    "RuntimeFencedError",
     "SourceNotFoundError",
     # registry
     "SourceRegistry",

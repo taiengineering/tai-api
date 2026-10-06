@@ -1,5 +1,6 @@
 -- WO-PUBLIC-DATA-SYNC-WP1B-RUNTIME-STATE-001
--- PATCH: WO-PUBLIC-DATA-SYNC-WP1B-PATCH-RUNTIME-CORRECTNESS-001
+-- PATCH-1: WO-PUBLIC-DATA-SYNC-WP1B-PATCH-RUNTIME-CORRECTNESS-001
+-- PATCH-2: WO-PUBLIC-DATA-SYNC-WP1B-PATCH-RUNTIME-FENCING-002
 -- Public Data Control Plane — runtime state + run evidence + atomic claim RPCs
 -- Production DDL: NOT applied here. Apply via: supabase db push --linked
 
@@ -130,11 +131,15 @@ GRANT SELECT, INSERT, UPDATE, DELETE
 
 -- =============================================================================
 -- RPC: fn_public_data_claim_run
--- PATCH changes vs original:
+-- PATCH-1 changes:
 --   1. Source limit guard: p_source_limit != 1 → SOURCE_LIMIT_UNSUPPORTED
---   2. Stale recovery expanded: credential_pool + rate_limit_group scope added
---   3. Stale reflect: p_source_id runtime cleared when its current_run was staled
---   4. EXCEPTION: GET STACKED DIAGNOSTICS → accurate CREDENTIAL_BUSY / RATE_LIMIT_BUSY
+--   2. Stale recovery expanded: credential_pool + rate_limit_group scope
+--   3. EXCEPTION: GET STACKED DIAGNOSTICS → accurate busy reason codes
+-- PATCH-2 changes:
+--   4. Deterministic lock ordering: all involved runtime rows locked alphabetically
+--      before any stale recovery to prevent cross-source deadlocks.
+--   5. CTE RETURNING: stale terminalization + ALL affected runtime rows updated
+--      in one statement. Prevents ghost current_run_id pointers.
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION public.fn_public_data_claim_run(
@@ -157,18 +162,49 @@ SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $fn$
 DECLARE
-    v_runtime       record;
-    v_stale_id      uuid;
-    v_source_slot   integer;
-    v_cred_slot     integer;
-    v_rl_slot       integer;
-    v_lease_until   timestamptz;
-    v_constraint    text;
+    v_all_source_ids    text[];
+    v_lid               text;
+    v_runtime           record;
+    v_source_slot       integer;
+    v_cred_slot         integer;
+    v_rl_slot           integer;
+    v_lease_until       timestamptz;
+    v_constraint        text;
 BEGIN
+    -- Step 1: Collect ALL source_ids that need runtime locking.
+    -- Includes p_source_id plus any source with a stale RUNNING run that shares
+    -- the same credential_pool or rate_limit_group (snapshot read, no lock yet).
+    SELECT ARRAY(
+        SELECT s FROM (
+            SELECT DISTINCT source_id AS s
+            FROM public.public_data_sync_runs
+            WHERE status      = 'RUNNING'
+              AND lease_until <= p_now
+              AND (
+                  source_id        = p_source_id
+                  OR credential_pool   = p_credential_pool
+                  OR rate_limit_group  = p_rate_limit_group
+              )
+            UNION
+            SELECT p_source_id AS s
+        ) sources
+        ORDER BY s
+    ) INTO v_all_source_ids;
+
+    -- Step 2: Lock ALL involved runtime rows in deterministic alphabetical order.
+    -- Both concurrent transactions will attempt locks in the same order, preventing
+    -- circular dependencies (deadlock). Each PERFORM acquires one row-level lock.
+    FOREACH v_lid IN ARRAY v_all_source_ids LOOP
+        PERFORM 1
+        FROM public.public_data_source_runtime
+        WHERE source_id = v_lid
+        FOR UPDATE;
+    END LOOP;
+
+    -- Step 3: Read p_source_id runtime (already locked above).
     SELECT * INTO v_runtime
     FROM public.public_data_source_runtime
-    WHERE source_id = p_source_id
-    FOR UPDATE;
+    WHERE source_id = p_source_id;
 
     IF NOT FOUND THEN
         RETURN jsonb_build_object(
@@ -198,43 +234,35 @@ BEGIN
         END IF;
     END IF;
 
-    -- Stale recovery: expanded scope — p_source_id + shared credential_pool + rate_limit_group.
-    -- Unblocks slots occupied by crashed/expired runs across all shared resources so that
-    -- a source sharing credential_pool or rate_limit_group is not permanently blocked by
-    -- another source's stale RUNNING row.
-    UPDATE public.public_data_sync_runs
-    SET status      = 'FAILED',
-        error_code  = 'LEASE_EXPIRED',
-        finished_at = p_now
-    WHERE status      = 'RUNNING'
-      AND lease_until <= p_now
-      AND (
-          source_id        = p_source_id
-          OR credential_pool   = p_credential_pool
-          OR rate_limit_group  = p_rate_limit_group
-      );
-
-    -- Reflect stale recovery in p_source_id runtime (we hold FOR UPDATE lock on this row).
-    -- Only update if p_source_id's current_run_id was the run just staled.
-    -- Other sources' runtimes self-heal on their next claim; touching them here
-    -- would risk deadlock with concurrent claims on those sources.
-    IF v_runtime.current_run_id IS NOT NULL THEN
-        SELECT id INTO v_stale_id
-        FROM public.public_data_sync_runs
-        WHERE id         = v_runtime.current_run_id
-          AND status     = 'FAILED'
-          AND error_code = 'LEASE_EXPIRED';
-
-        IF FOUND THEN
-            UPDATE public.public_data_source_runtime
-            SET current_run_id   = NULL,
-                last_run_id      = v_stale_id,
-                last_status      = 'FAILED',
-                last_finished_at = p_now,
-                updated_at       = p_now
-            WHERE source_id = p_source_id;
-        END IF;
-    END IF;
+    -- Step 4: Terminalize all stale runs + immediately update ALL affected runtimes.
+    -- CTE RETURNING captures the exact set of runs just terminated so that only
+    -- sources whose current_run_id points to a stale run are updated (rt.current_run_id = s.id).
+    -- All target runtime rows are already locked in alphabetical order (Step 2),
+    -- so this UPDATE acquires no new locks.
+    WITH stale AS (
+        UPDATE public.public_data_sync_runs
+        SET status      = 'FAILED',
+            error_code  = 'LEASE_EXPIRED',
+            finished_at = p_now
+        WHERE status      = 'RUNNING'
+          AND lease_until <= p_now
+          AND (
+              source_id        = p_source_id
+              OR credential_pool   = p_credential_pool
+              OR rate_limit_group  = p_rate_limit_group
+          )
+        RETURNING id, source_id
+    )
+    UPDATE public.public_data_source_runtime rt
+    SET current_run_id        = NULL,
+        last_run_id           = s.id,
+        last_status           = 'FAILED',
+        last_finished_at      = p_now,
+        consecutive_failures  = consecutive_failures + 1,
+        updated_at            = p_now
+    FROM stale s
+    WHERE rt.source_id      = s.source_id
+      AND rt.current_run_id = s.id;
 
     -- Source slot
     SELECT MIN(s) INTO v_source_slot
@@ -308,25 +336,31 @@ BEGIN
         'rate_limit_slot', v_rl_slot
     );
 
-EXCEPTION WHEN unique_violation THEN
-    -- Identify which constraint was violated to return accurate reason.
-    GET STACKED DIAGNOSTICS v_constraint = CONSTRAINT_NAME;
-    IF v_constraint = 'udx_pdsr_source_slot_running' THEN
+EXCEPTION
+    WHEN unique_violation THEN
+        -- Identify which constraint was violated to return accurate reason.
+        GET STACKED DIAGNOSTICS v_constraint = CONSTRAINT_NAME;
+        IF v_constraint = 'udx_pdsr_source_slot_running' THEN
+            RETURN jsonb_build_object(
+                'claimed', false, 'run_id', p_run_id, 'reason', 'SOURCE_BUSY');
+        ELSIF v_constraint = 'udx_pdsr_credential_slot_running' THEN
+            RETURN jsonb_build_object(
+                'claimed', false, 'run_id', p_run_id, 'reason', 'CREDENTIAL_BUSY');
+        ELSIF v_constraint = 'udx_pdsr_ratelimit_slot_running' THEN
+            RETURN jsonb_build_object(
+                'claimed', false, 'run_id', p_run_id, 'reason', 'RATE_LIMIT_BUSY');
+        ELSIF v_constraint = 'public_data_sync_runs_pkey' THEN
+            RETURN jsonb_build_object(
+                'claimed', false, 'run_id', p_run_id, 'reason', 'RUN_ID_CONFLICT');
+        ELSE
+            RETURN jsonb_build_object(
+                'claimed', false, 'run_id', p_run_id, 'reason', 'UNIQUE_CONFLICT');
+        END IF;
+    WHEN deadlock_detected THEN
+        -- Extremely rare: two concurrent claims with mutually stale shared resources.
+        -- PostgreSQL detected and resolved the deadlock. Caller should retry.
         RETURN jsonb_build_object(
-            'claimed', false, 'run_id', p_run_id, 'reason', 'SOURCE_BUSY');
-    ELSIF v_constraint = 'udx_pdsr_credential_slot_running' THEN
-        RETURN jsonb_build_object(
-            'claimed', false, 'run_id', p_run_id, 'reason', 'CREDENTIAL_BUSY');
-    ELSIF v_constraint = 'udx_pdsr_ratelimit_slot_running' THEN
-        RETURN jsonb_build_object(
-            'claimed', false, 'run_id', p_run_id, 'reason', 'RATE_LIMIT_BUSY');
-    ELSIF v_constraint = 'public_data_sync_runs_pkey' THEN
-        RETURN jsonb_build_object(
-            'claimed', false, 'run_id', p_run_id, 'reason', 'RUN_ID_CONFLICT');
-    ELSE
-        RETURN jsonb_build_object(
-            'claimed', false, 'run_id', p_run_id, 'reason', 'UNIQUE_CONFLICT');
-    END IF;
+            'claimed', false, 'run_id', p_run_id, 'reason', 'DEADLOCK_RETRY');
 END;
 $fn$;
 
@@ -341,7 +375,7 @@ GRANT EXECUTE ON FUNCTION public.fn_public_data_claim_run(
 
 -- =============================================================================
 -- RPC: fn_public_data_heartbeat_run
--- PATCH: Added current_run_id fence via EXISTS on source_runtime.
+-- PATCH-1: Added current_run_id fence via EXISTS on source_runtime.
 -- Prevents a stale/recovered run from refreshing its own lease.
 -- =============================================================================
 
@@ -382,7 +416,7 @@ GRANT EXECUTE ON FUNCTION public.fn_public_data_heartbeat_run(uuid, timestamptz,
 
 -- =============================================================================
 -- RPC: fn_public_data_complete_run
--- PATCH: Added current_run_id fence — SELECT FOR UPDATE on source_runtime
+-- PATCH-1: Added current_run_id fence — SELECT FOR UPDATE on source_runtime
 -- WHERE current_run_id = p_run_id. Returns false if source_runtime no longer
 -- points to this run (stale recovery or racing completion took over).
 -- =============================================================================
@@ -428,8 +462,7 @@ BEGIN
 
     -- Concurrency fence: source_runtime must still point to this run.
     -- With source_limit=1 enforced, if current_run_id != p_run_id, a stale
-    -- recovery or a racing completion already updated source state — do not
-    -- overwrite it.
+    -- recovery already cleared ownership — do not overwrite current state.
     SELECT * INTO v_rt
     FROM public.public_data_source_runtime
     WHERE source_id      = v_run.source_id
