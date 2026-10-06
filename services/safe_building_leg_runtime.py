@@ -53,7 +53,12 @@ def _rows(res):
     return list(getattr(res, "data", None) or [])
 
 
-def run_safe_building_leg(supabase, factory_id: str, consumer_input) -> Dict[str, Any]:
+def run_safe_building_leg(
+    supabase,
+    factory_id: str,
+    consumer_input,
+    material_inout_event_id: str = None,
+) -> Dict[str, Any]:
     """SAFE BUILDING 공식 LEG 진단. full_result 반환(저장/결제/factory 생성 없음).
     H01: floor_count / building_height provenance guard → on-demand hydration.
     H03: floor_area_sum_at_or_above_11f derivation (authoritative floor_count >= 11 시).
@@ -128,6 +133,24 @@ def run_safe_building_leg(supabase, factory_id: str, consumer_input) -> Dict[str
             _h03 = resolve_floor_area_sum_11f_plus(_bdmgtsn, _mgm_pk)
             if _h03.get("resolved"):
                 values["floor_area_sum_at_or_above_11f"] = _h03["value"]
+
+    # P4A. Hazardous material event source binding.
+    #   Exact CONFIRMED event_id + same factory → canonical TRUE only.
+    #   No event_id → 0 DB reads, fact absent.
+    #   DB failure → HazardousMaterialEventSourceLoadError propagated to router (503).
+    if material_inout_event_id is not None:
+        from services.hazardous_material_event_source.store import load_confirmed_event_context
+        from services.hazardous_material_event_source.canonical_adapter import (
+            project_hazardous_material_event_fact,
+        )
+        event_ctx = load_confirmed_event_context(
+            supabase,
+            factory_id=factory_id,
+            event_id=material_inout_event_id,
+        )
+        event_fact = project_hazardous_material_event_fact(event_ctx)
+        if event_fact:
+            values["has_hazardous_material_in_out_event"] = True
 
     # C. consumer override — non-null 만(None=미override, false/0=명시값). extra=forbid 이미 스키마 검증.
     #    consumer explicit은 항상 factory source(A+B+H01+H03)를 덮어쓴다.

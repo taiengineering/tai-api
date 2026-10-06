@@ -11,6 +11,7 @@ from services.legal_v510_svc import run_diagnose_step1_v510
 from services.safe_industrial_leg_runtime import run_safe_industrial_leg
 from services.safe_construction_leg_runtime import run_safe_construction_leg, ConstructionSiteBridgeError
 from services.safe_building_leg_runtime import run_safe_building_leg
+from services.hazardous_material_event_source.store import HazardousMaterialEventSourceLoadError
 from services.company_scope import _ensure_own_company
 from clients import leg_runtime_client
 from clients.leg_runtime_client import LegRuntimeError
@@ -252,7 +253,17 @@ async def diagnose_building_leg(body: SafeBuildingLegBody, authorization: Option
     if not leg_runtime_client.is_enabled():
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
     try:
-        out = run_safe_building_leg(supabase, body.factory_id, body.input)
+        out = run_safe_building_leg(
+            supabase,
+            body.factory_id,
+            body.input,
+            material_inout_event_id=body.material_inout_event_id,
+        )
+    except HazardousMaterialEventSourceLoadError as e:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "HAZARDOUS_MATERIAL_EVENT_SOURCE_UNAVAILABLE", "message": str(e)},
+        ) from e
     except EquipmentSourceLoadError as e:
         # WO-EQUIPMENT-A2-REMAINING-CONSUMER-PARITY-IMPLEMENT-001: Equipment read failure 503.
         raise HTTPException(
