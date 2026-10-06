@@ -1,5 +1,7 @@
-"""WP-1A Control Plane Foundation — T01~T17."""
+"""WP-1A PATCH — Control Plane Foundation T01~T30 + census regression."""
 from __future__ import annotations
+
+from datetime import datetime, timezone, timedelta
 
 import pytest
 
@@ -12,7 +14,8 @@ from services.public_data_sync.contracts import (
     SourceMode,
     SourceSpec,
     TriggerKind,
-    _sanitize,
+    _sanitize_value,
+    _redact_string,
 )
 from services.public_data_sync.errors import (
     AdapterNotRegisteredError,
@@ -22,334 +25,577 @@ from services.public_data_sync.errors import (
 from services.public_data_sync.registry import SourceRegistry, registry
 from services.public_data_sync.runner import run_source
 
+_EXPECTED_SOURCE_IDS = {
+    "KOSHA_SAFETY_MATERIAL",
+    "KOSHA_GUIDE",
+    "KOSHA_MSDS",
+    "KECO_15149420",
+    "KOSHA_ACCIDENT_CASES",
+    "KOSHA_CONSTRUCTION_ACCIDENTS",
+    "KOSHA_CONSTRUCTION_SAFETY_LIGHT",
+    "KOSHA_RISK_ASSESSMENT",
+    "CSI_ACCIDENT",
+    "KCSC",
+    "INDUSTRIAL_ACCIDENT_PRECEDENT",
+    "HOLIDAY",
+}
+
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Fake adapters
 # ---------------------------------------------------------------------------
-
-def _make_spec(**kwargs) -> SourceSpec:
-    defaults = dict(
-        source_id="TEST_SOURCE",
-        display_name="Test Source",
-        sync_mode=SourceMode.FULL_SNAPSHOT,
-        source_kind=SourceKind.REST,
-        credential_pool="POOL_A",
-        rate_limit_group="GROUP_A",
-        consumer_tags=("tag1",),
-        auto_refresh_candidate=True,
-    )
-    defaults.update(kwargs)
-    return SourceSpec(**defaults)
-
 
 class _OkAdapter(SourceAdapter):
-    def __init__(self, source_id: str, rows: int = 5) -> None:
-        self._source_id = source_id
+    def __init__(self, adapter_key: str, rows: int = 5) -> None:
+        self._adapter_key = adapter_key
         self._rows = rows
 
     @property
-    def source_id(self) -> str:
-        return self._source_id
+    def adapter_key(self) -> str:
+        return self._adapter_key
 
-    def execute(self, ctx: RunContext) -> RunResult:
-        return RunResult(source_id=self._source_id, status=RunStatus.SUCCESS, rows_affected=self._rows)
+    def run(self, ctx: RunContext) -> RunResult:
+        now = datetime.now(timezone.utc)
+        return RunResult(
+            run_id=ctx.run_id,
+            source_id=ctx.source_id,
+            status=RunStatus.SUCCESS,
+            started_at=ctx.started_at,
+            finished_at=now,
+            fetched=self._rows,
+            created=self._rows,
+        )
+
+
+class _NoChangeAdapter(SourceAdapter):
+    def __init__(self, adapter_key: str) -> None:
+        self._adapter_key = adapter_key
+
+    @property
+    def adapter_key(self) -> str:
+        return self._adapter_key
+
+    def run(self, ctx: RunContext) -> RunResult:
+        now = datetime.now(timezone.utc)
+        return RunResult(
+            run_id=ctx.run_id,
+            source_id=ctx.source_id,
+            status=RunStatus.NO_CHANGE,
+            started_at=ctx.started_at,
+            finished_at=now,
+        )
+
+
+class _PartialAdapter(SourceAdapter):
+    def __init__(self, adapter_key: str) -> None:
+        self._adapter_key = adapter_key
+
+    @property
+    def adapter_key(self) -> str:
+        return self._adapter_key
+
+    def run(self, ctx: RunContext) -> RunResult:
+        now = datetime.now(timezone.utc)
+        return RunResult(
+            run_id=ctx.run_id,
+            source_id=ctx.source_id,
+            status=RunStatus.PARTIAL,
+            started_at=ctx.started_at,
+            finished_at=now,
+            fetched=10,
+            created=7,
+            failed=3,
+        )
 
 
 class _PreflightFailAdapter(SourceAdapter):
-    def __init__(self, source_id: str) -> None:
-        self._source_id = source_id
+    def __init__(self, adapter_key: str) -> None:
+        self._adapter_key = adapter_key
 
     @property
-    def source_id(self) -> str:
-        return self._source_id
+    def adapter_key(self) -> str:
+        return self._adapter_key
 
     def preflight(self, ctx: RunContext) -> None:
         raise PreflightError("missing credential")
 
-    def execute(self, ctx: RunContext) -> RunResult:  # pragma: no cover
-        return RunResult(source_id=self._source_id, status=RunStatus.SUCCESS)
+    def run(self, ctx: RunContext) -> RunResult:  # pragma: no cover
+        raise AssertionError("run must not be called after preflight failure")
 
 
-class _ExecuteRaisesAdapter(SourceAdapter):
-    def __init__(self, source_id: str) -> None:
-        self._source_id = source_id
+class _RunRaisesAdapter(SourceAdapter):
+    def __init__(self, adapter_key: str) -> None:
+        self._adapter_key = adapter_key
 
     @property
-    def source_id(self) -> str:
-        return self._source_id
+    def adapter_key(self) -> str:
+        return self._adapter_key
 
-    def execute(self, ctx: RunContext) -> RunResult:
+    def run(self, ctx: RunContext) -> RunResult:
         raise RuntimeError("network down")
 
 
-class _WrongIdAdapter(SourceAdapter):
-    def __init__(self, source_id: str) -> None:
-        self._source_id = source_id
+class _WrongSourceIdAdapter(SourceAdapter):
+    def __init__(self, adapter_key: str) -> None:
+        self._adapter_key = adapter_key
 
     @property
-    def source_id(self) -> str:
-        return self._source_id
+    def adapter_key(self) -> str:
+        return self._adapter_key
 
-    def execute(self, ctx: RunContext) -> RunResult:
-        return RunResult(source_id="WRONG_ID", status=RunStatus.SUCCESS)
+    def run(self, ctx: RunContext) -> RunResult:
+        now = datetime.now(timezone.utc)
+        return RunResult(
+            run_id=ctx.run_id,
+            source_id="WRONG_SOURCE_ID",
+            status=RunStatus.SUCCESS,
+            started_at=ctx.started_at,
+            finished_at=now,
+        )
+
+
+class _WrongRunIdAdapter(SourceAdapter):
+    def __init__(self, adapter_key: str) -> None:
+        self._adapter_key = adapter_key
+
+    @property
+    def adapter_key(self) -> str:
+        return self._adapter_key
+
+    def run(self, ctx: RunContext) -> RunResult:
+        now = datetime.now(timezone.utc)
+        return RunResult(
+            run_id="WRONG-RUN-ID-00000000",
+            source_id=ctx.source_id,
+            status=RunStatus.SUCCESS,
+            started_at=ctx.started_at,
+            finished_at=now,
+        )
+
+
+def _make_runner_registry(adapter: SourceAdapter) -> AdapterRegistry:
+    reg = AdapterRegistry()
+    reg.register(adapter)
+    return reg
 
 
 # ---------------------------------------------------------------------------
-# T01 — SourceSpec is frozen (immutable)
+# T01 — SourceMode exact values
 # ---------------------------------------------------------------------------
 
-def test_t01_source_spec_frozen():
-    spec = _make_spec()
+def test_t01_source_mode_exact():
+    expected = {
+        "FULL_SNAPSHOT", "INCREMENTAL", "ENUMERATE_HYDRATE", "TARGET_REFRESH",
+        "FILE_SNAPSHOT", "LIVE_PROXY", "LIVE_CONTEXT", "LOOKUP",
+        "LOOKUP_PERSIST_ON_ACTION", "DISCOVERY",
+    }
+    assert {m.value for m in SourceMode} == expected
+
+
+# ---------------------------------------------------------------------------
+# T02 — SourceKind exact values
+# ---------------------------------------------------------------------------
+
+def test_t02_source_kind_exact():
+    assert {k.value for k in SourceKind} == {"API", "FILE", "EDGE", "INTERNAL"}
+
+
+# ---------------------------------------------------------------------------
+# T03 — TriggerKind exact values
+# ---------------------------------------------------------------------------
+
+def test_t03_trigger_kind_exact():
+    assert {t.value for t in TriggerKind} == {"SCHEDULED", "MANUAL", "RETRY"}
+
+
+# ---------------------------------------------------------------------------
+# T04 — RunStatus exact values
+# ---------------------------------------------------------------------------
+
+def test_t04_run_status_exact():
+    assert {s.value for s in RunStatus} == {"SUCCESS", "NO_CHANGE", "PARTIAL", "FAILED", "SKIPPED"}
+
+
+# ---------------------------------------------------------------------------
+# T05 — SourceSpec is frozen (immutable)
+# ---------------------------------------------------------------------------
+
+def test_t05_source_spec_frozen():
+    spec = registry.get("HOLIDAY")
     with pytest.raises((AttributeError, TypeError)):
         spec.source_id = "MUTATED"  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
-# T02 — SourceSpec consumer_tags is tuple (hashable)
+# T06 — SourceSpec contract fields present
 # ---------------------------------------------------------------------------
 
-def test_t02_consumer_tags_tuple():
-    spec = _make_spec(consumer_tags=("a", "b"))
-    assert isinstance(spec.consumer_tags, tuple)
-    hash(spec)  # must not raise
-
-
-# ---------------------------------------------------------------------------
-# T03 — credential_pool and rate_limit_group are independent fields
-# ---------------------------------------------------------------------------
-
-def test_t03_credential_pool_and_rate_limit_group_independent():
-    spec = _make_spec(credential_pool="POOL_X", rate_limit_group="GROUP_Y")
-    assert spec.credential_pool == "POOL_X"
-    assert spec.rate_limit_group == "GROUP_Y"
-    assert spec.credential_pool != spec.rate_limit_group
+def test_t06_source_spec_required_fields():
+    spec = registry.get("HOLIDAY")
+    for attr in (
+        "source_id", "provider", "dataset_id", "source_kind", "sync_mode",
+        "adapter_key", "credential_pool", "rate_limit_group", "refresh_policy",
+        "max_concurrency", "max_requests_per_run", "max_run_seconds",
+        "persisted", "auto_refresh_candidate", "consumer_tags",
+    ):
+        assert hasattr(spec, attr), f"missing field: {attr}"
 
 
 # ---------------------------------------------------------------------------
-# T04 — RunResult secret sanitization strips keys matching pattern
+# T07 — credential_pool and rate_limit_group are independent
 # ---------------------------------------------------------------------------
 
-def test_t04_run_result_sanitizes_secrets():
-    result = RunResult(
-        source_id="S",
-        status=RunStatus.SUCCESS,
-        detail={
-            "serviceKey": "REAL_KEY",
-            "apikey": "REAL_KEY2",
-            "service_key": "REAL_KEY3",
-            "Authorization": "Bearer abc",
-            "secret": "shh",
-            "token": "tok",
-            "password": "pw",
-            "credential": "cred",
-            "safe_field": "visible",
-        },
-    )
-    assert result.detail["serviceKey"] == "***"
-    assert result.detail["apikey"] == "***"
-    assert result.detail["service_key"] == "***"
-    assert result.detail["Authorization"] == "***"
-    assert result.detail["secret"] == "***"
-    assert result.detail["token"] == "***"
-    assert result.detail["password"] == "***"
-    assert result.detail["credential"] == "***"
-    assert result.detail["safe_field"] == "visible"
+def test_t07_credential_pool_rate_limit_group_independent():
+    keco = registry.get("KECO_15149420")
+    assert keco.credential_pool == "KECO_DEDICATED"
+    assert keco.rate_limit_group == "KECO"
+    assert keco.credential_pool != keco.rate_limit_group
 
 
 # ---------------------------------------------------------------------------
-# T05 — RunResult sanitization does not alter non-secret fields
+# T08 — Registry contains exactly the 12 approved source IDs
 # ---------------------------------------------------------------------------
 
-def test_t05_run_result_non_secret_unchanged():
-    result = RunResult(
-        source_id="S",
-        status=RunStatus.SUCCESS,
-        detail={"rows": 42, "source": "KOSHA", "url": "https://example.com"},
-    )
-    assert result.detail["rows"] == 42
-    assert result.detail["source"] == "KOSHA"
-    assert result.detail["url"] == "https://example.com"
-
-
-# ---------------------------------------------------------------------------
-# T06 — SourceRegistry.get raises SourceNotFoundError for unknown id
-# ---------------------------------------------------------------------------
-
-def test_t06_source_registry_unknown_raises():
+def test_t08_registry_exact_12_source_ids():
     reg = SourceRegistry()
-    with pytest.raises(SourceNotFoundError) as exc_info:
-        reg.get("DOES_NOT_EXIST")
-    assert exc_info.value.source_id == "DOES_NOT_EXIST"
-
-
-# ---------------------------------------------------------------------------
-# T07 — SourceRegistry contains exactly 12 persisted sources
-# ---------------------------------------------------------------------------
-
-def test_t07_registry_has_12_sources():
-    reg = SourceRegistry()
+    actual = {s.source_id for s in reg.list_all()}
+    assert actual == _EXPECTED_SOURCE_IDS
     assert len(reg.list_all()) == 12
 
 
 # ---------------------------------------------------------------------------
-# T08 — S07 and S08 have auto_refresh_candidate=False
+# T09 — LEGAL_TEXT_SYNC absent
 # ---------------------------------------------------------------------------
 
-def test_t08_s07_s08_auto_refresh_false():
+def test_t09_legal_text_sync_absent():
     reg = SourceRegistry()
-    s07 = reg.get("KOSHA_CONSTRUCTION_SAFETY_LIGHT")
-    s08 = reg.get("KOSHA_RISK_ASSESSMENT")
-    assert s07.auto_refresh_candidate is False
-    assert s08.auto_refresh_candidate is False
-
-
-# ---------------------------------------------------------------------------
-# T09 — KECO has distinct credential_pool and rate_limit_group
-# ---------------------------------------------------------------------------
-
-def test_t09_keco_dedicated_credential_pool():
-    reg = SourceRegistry()
-    keco = reg.get("KECO_CHEMICAL")
-    assert keco.credential_pool == "KECO_DEDICATED"
-    assert keco.rate_limit_group == "KECO"
-    assert keco.sync_mode == SourceMode.TARGET_REFRESH
-    assert keco.source_kind == SourceKind.REST
-
-
-# ---------------------------------------------------------------------------
-# T10 — PRECEDENT source_kind is EDGE
-# ---------------------------------------------------------------------------
-
-def test_t10_precedent_source_kind_edge():
-    reg = SourceRegistry()
-    precedent = reg.get("PRECEDENT_COLLECT")
-    assert precedent.source_kind == SourceKind.EDGE
-
-
-# ---------------------------------------------------------------------------
-# T11 — list_auto_refresh_candidates excludes S07 and S08
-# ---------------------------------------------------------------------------
-
-def test_t11_auto_refresh_candidates_exclude_s07_s08():
-    reg = SourceRegistry()
-    candidates = reg.list_auto_refresh_candidates()
-    ids = {s.source_id for s in candidates}
-    assert "KOSHA_CONSTRUCTION_SAFETY_LIGHT" not in ids
-    assert "KOSHA_RISK_ASSESSMENT" not in ids
-    assert len(candidates) == 10
-
-
-# ---------------------------------------------------------------------------
-# T12 — AdapterRegistry.get raises AdapterNotRegisteredError for missing adapter
-# ---------------------------------------------------------------------------
-
-def test_t12_adapter_registry_missing_raises():
-    reg = AdapterRegistry()
-    with pytest.raises(AdapterNotRegisteredError) as exc_info:
-        reg.get("NO_ADAPTER_HERE")
-    assert exc_info.value.source_id == "NO_ADAPTER_HERE"
-
-
-# ---------------------------------------------------------------------------
-# T13 — AdapterRegistry.register and get round-trip
-# ---------------------------------------------------------------------------
-
-def test_t13_adapter_registry_register_and_get():
-    reg = AdapterRegistry()
-    adapter = _OkAdapter("MY_SOURCE")
-    reg.register(adapter)
-    retrieved = reg.get("MY_SOURCE")
-    assert retrieved is adapter
-
-
-# ---------------------------------------------------------------------------
-# T14 — run_source raises SourceNotFoundError for unknown source_id
-# ---------------------------------------------------------------------------
-
-def test_t14_run_source_unknown_source_raises(monkeypatch):
+    ids = {s.source_id for s in reg.list_all()}
+    assert "LEGAL_TEXT_SYNC" not in ids
     with pytest.raises(SourceNotFoundError):
-        run_source("TOTALLY_UNKNOWN_XYZ")
+        reg.get("LEGAL_TEXT_SYNC")
 
 
 # ---------------------------------------------------------------------------
-# T15 — run_source raises AdapterNotRegisteredError when no adapter registered
+# T10 — KSIC_SYNC absent
 # ---------------------------------------------------------------------------
 
-def test_t15_run_source_no_adapter_raises(monkeypatch):
-    # registry has KOSHA_ACCIDENT_CASES but no adapter is registered for it
-    # Use a fresh adapter registry with no entries
-    import services.public_data_sync.runner as runner_module
-    import services.public_data_sync.adapters as adapters_module
+def test_t10_ksic_sync_absent():
+    reg = SourceRegistry()
+    ids = {s.source_id for s in reg.list_all()}
+    assert "KSIC_SYNC" not in ids
+    with pytest.raises(SourceNotFoundError):
+        reg.get("KSIC_SYNC")
 
-    fresh_reg = AdapterRegistry()
-    monkeypatch.setattr(runner_module, "adapter_registry", fresh_reg)
 
+# ---------------------------------------------------------------------------
+# T11 — KOSHA_GUIDE present
+# ---------------------------------------------------------------------------
+
+def test_t11_kosha_guide_present():
+    spec = registry.get("KOSHA_GUIDE")
+    assert spec.sync_mode == SourceMode.FULL_SNAPSHOT
+    assert spec.source_kind == SourceKind.API
+    assert spec.auto_refresh_candidate is True
+
+
+# ---------------------------------------------------------------------------
+# T12 — KOSHA_CONSTRUCTION_ACCIDENTS present
+# ---------------------------------------------------------------------------
+
+def test_t12_kosha_construction_accidents_present():
+    spec = registry.get("KOSHA_CONSTRUCTION_ACCIDENTS")
+    assert spec.sync_mode == SourceMode.INCREMENTAL
+    assert spec.source_kind == SourceKind.API
+    assert spec.auto_refresh_candidate is True
+
+
+# ---------------------------------------------------------------------------
+# T13 — CSI_ACCIDENT is FILE / FILE_SNAPSHOT
+# ---------------------------------------------------------------------------
+
+def test_t13_csi_accident_file_snapshot():
+    spec = registry.get("CSI_ACCIDENT")
+    assert spec.sync_mode == SourceMode.FILE_SNAPSHOT
+    assert spec.source_kind == SourceKind.FILE
+
+
+# ---------------------------------------------------------------------------
+# T14 — KOSHA_ACCIDENT_CASES is INCREMENTAL
+# ---------------------------------------------------------------------------
+
+def test_t14_kosha_accident_cases_incremental():
+    spec = registry.get("KOSHA_ACCIDENT_CASES")
+    assert spec.sync_mode == SourceMode.INCREMENTAL
+    assert spec.source_kind == SourceKind.API
+
+
+# ---------------------------------------------------------------------------
+# T15 — KOSHA_RISK_ASSESSMENT is INCREMENTAL + auto_refresh_candidate=False
+# ---------------------------------------------------------------------------
+
+def test_t15_kosha_risk_assessment_incremental_candidate_false():
+    spec = registry.get("KOSHA_RISK_ASSESSMENT")
+    assert spec.sync_mode == SourceMode.INCREMENTAL
+    assert spec.auto_refresh_candidate is False
+
+
+# ---------------------------------------------------------------------------
+# T16 — KOSHA_CONSTRUCTION_SAFETY_LIGHT auto_refresh_candidate=False
+# ---------------------------------------------------------------------------
+
+def test_t16_s07_candidate_false():
+    spec = registry.get("KOSHA_CONSTRUCTION_SAFETY_LIGHT")
+    assert spec.auto_refresh_candidate is False
+
+
+# ---------------------------------------------------------------------------
+# T17 — KECO_15149420 TARGET_REFRESH + KECO_DEDICATED pool
+# ---------------------------------------------------------------------------
+
+def test_t17_keco_target_refresh():
+    spec = registry.get("KECO_15149420")
+    assert spec.sync_mode == SourceMode.TARGET_REFRESH
+    assert spec.credential_pool == "KECO_DEDICATED"
+    assert spec.rate_limit_group == "KECO"
+    assert spec.source_kind == SourceKind.API
+
+
+# ---------------------------------------------------------------------------
+# T18 — INDUSTRIAL_ACCIDENT_PRECEDENT is EDGE
+# ---------------------------------------------------------------------------
+
+def test_t18_industrial_accident_precedent_edge():
+    spec = registry.get("INDUSTRIAL_ACCIDENT_PRECEDENT")
+    assert spec.source_kind == SourceKind.EDGE
+    assert spec.sync_mode == SourceMode.INCREMENTAL
+
+
+# ---------------------------------------------------------------------------
+# T19 — AdapterRegistry instances are isolated (no shared module global)
+# ---------------------------------------------------------------------------
+
+def test_t19_adapter_registry_instances_isolated():
+    reg_a = AdapterRegistry()
+    reg_b = AdapterRegistry()
+    reg_a.register(_OkAdapter("key_a"))
+    assert "key_a" in reg_a.registered_keys()
     with pytest.raises(AdapterNotRegisteredError):
-        run_source("KOSHA_ACCIDENT_CASES")
+        reg_b.get("key_a")
 
 
 # ---------------------------------------------------------------------------
-# T16 — run_source returns FAILED when preflight raises PreflightError
+# T20 — adapter_key lookup separation (SourceSpec.adapter_key ≠ source_id path)
 # ---------------------------------------------------------------------------
 
-def test_t16_run_source_preflight_fail_returns_failed(monkeypatch):
+def test_t20_adapter_key_lookup_separation(monkeypatch):
     import services.public_data_sync.runner as runner_module
 
-    fresh_reg = AdapterRegistry()
-    fresh_reg.register(_PreflightFailAdapter("KOSHA_ACCIDENT_CASES"))
+    # KOSHA_GUIDE has adapter_key="kosha_guide", not "KOSHA_GUIDE"
+    spec = registry.get("KOSHA_GUIDE")
+    assert spec.adapter_key == "kosha_guide"
+    assert spec.adapter_key != spec.source_id
+
+    fresh_reg = _make_runner_registry(_OkAdapter("kosha_guide", rows=3))
     monkeypatch.setattr(runner_module, "adapter_registry", fresh_reg)
 
-    result = run_source("KOSHA_ACCIDENT_CASES")
-    assert result.status == RunStatus.FAILED
-    assert result.source_id == "KOSHA_ACCIDENT_CASES"
-    assert "preflight" in (result.error or "")
-
-
-# ---------------------------------------------------------------------------
-# T17 — run_source returns FAILED when adapter.execute raises unexpectedly
-# ---------------------------------------------------------------------------
-
-def test_t17_run_source_execute_raises_returns_failed(monkeypatch):
-    import services.public_data_sync.runner as runner_module
-
-    fresh_reg = AdapterRegistry()
-    fresh_reg.register(_ExecuteRaisesAdapter("KOSHA_ACCIDENT_CASES"))
-    monkeypatch.setattr(runner_module, "adapter_registry", fresh_reg)
-
-    result = run_source("KOSHA_ACCIDENT_CASES")
-    assert result.status == RunStatus.FAILED
-    assert result.source_id == "KOSHA_ACCIDENT_CASES"
-    assert "execute raised" in (result.error or "")
-
-
-# ---------------------------------------------------------------------------
-# Bonus: source_id mismatch in RunResult → FAILED
-# ---------------------------------------------------------------------------
-
-def test_run_source_source_id_mismatch_returns_failed(monkeypatch):
-    import services.public_data_sync.runner as runner_module
-
-    fresh_reg = AdapterRegistry()
-    fresh_reg.register(_WrongIdAdapter("KOSHA_ACCIDENT_CASES"))
-    monkeypatch.setattr(runner_module, "adapter_registry", fresh_reg)
-
-    result = run_source("KOSHA_ACCIDENT_CASES")
-    assert result.status == RunStatus.FAILED
-    assert "mismatch" in (result.error or "")
-
-
-# ---------------------------------------------------------------------------
-# Bonus: successful run returns SUCCESS with rows_affected
-# ---------------------------------------------------------------------------
-
-def test_run_source_success(monkeypatch):
-    import services.public_data_sync.runner as runner_module
-
-    fresh_reg = AdapterRegistry()
-    fresh_reg.register(_OkAdapter("KOSHA_ACCIDENT_CASES", rows=99))
-    monkeypatch.setattr(runner_module, "adapter_registry", fresh_reg)
-
-    result = run_source("KOSHA_ACCIDENT_CASES")
+    result = run_source("KOSHA_GUIDE")
     assert result.status == RunStatus.SUCCESS
-    assert result.rows_affected == 99
+    assert result.fetched == 3
+
+
+# ---------------------------------------------------------------------------
+# T21 — missing adapter raises AdapterNotRegisteredError (fail-closed)
+# ---------------------------------------------------------------------------
+
+def test_t21_missing_adapter_raises(monkeypatch):
+    import services.public_data_sync.runner as runner_module
+
+    monkeypatch.setattr(runner_module, "adapter_registry", AdapterRegistry())
+    with pytest.raises(AdapterNotRegisteredError):
+        run_source("HOLIDAY")
+
+
+# ---------------------------------------------------------------------------
+# T22 — preflight failure → FAILED RunResult
+# ---------------------------------------------------------------------------
+
+def test_t22_preflight_failure_returns_failed(monkeypatch):
+    import services.public_data_sync.runner as runner_module
+
+    spec = registry.get("KOSHA_ACCIDENT_CASES")
+    fresh_reg = _make_runner_registry(_PreflightFailAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", fresh_reg)
+
+    result = run_source("KOSHA_ACCIDENT_CASES")
+    assert result.status == RunStatus.FAILED
+    assert result.error_code == "PREFLIGHT_ERROR"
     assert result.source_id == "KOSHA_ACCIDENT_CASES"
+
+
+# ---------------------------------------------------------------------------
+# T23 — adapter.run raises exception → FAILED RunResult
+# ---------------------------------------------------------------------------
+
+def test_t23_adapter_run_exception_returns_failed(monkeypatch):
+    import services.public_data_sync.runner as runner_module
+
+    spec = registry.get("KOSHA_ACCIDENT_CASES")
+    fresh_reg = _make_runner_registry(_RunRaisesAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", fresh_reg)
+
+    result = run_source("KOSHA_ACCIDENT_CASES")
+    assert result.status == RunStatus.FAILED
+    assert result.error_code == "EXECUTE_EXCEPTION"
+
+
+# ---------------------------------------------------------------------------
+# T24 — run_id mismatch → FAILED
+# ---------------------------------------------------------------------------
+
+def test_t24_run_id_mismatch_returns_failed(monkeypatch):
+    import services.public_data_sync.runner as runner_module
+
+    spec = registry.get("KOSHA_ACCIDENT_CASES")
+    fresh_reg = _make_runner_registry(_WrongRunIdAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", fresh_reg)
+
+    result = run_source("KOSHA_ACCIDENT_CASES")
+    assert result.status == RunStatus.FAILED
+    assert result.error_code == "RUN_ID_MISMATCH"
+
+
+# ---------------------------------------------------------------------------
+# T25 — source_id mismatch → FAILED
+# ---------------------------------------------------------------------------
+
+def test_t25_source_id_mismatch_returns_failed(monkeypatch):
+    import services.public_data_sync.runner as runner_module
+
+    spec = registry.get("KOSHA_ACCIDENT_CASES")
+    fresh_reg = _make_runner_registry(_WrongSourceIdAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", fresh_reg)
+
+    result = run_source("KOSHA_ACCIDENT_CASES")
+    assert result.status == RunStatus.FAILED
+    assert result.error_code == "SOURCE_ID_MISMATCH"
+
+
+# ---------------------------------------------------------------------------
+# T26 — NO_CHANGE status preserved through runner
+# ---------------------------------------------------------------------------
+
+def test_t26_no_change_preserved(monkeypatch):
+    import services.public_data_sync.runner as runner_module
+
+    spec = registry.get("KOSHA_ACCIDENT_CASES")
+    fresh_reg = _make_runner_registry(_NoChangeAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", fresh_reg)
+
+    result = run_source("KOSHA_ACCIDENT_CASES")
+    assert result.status == RunStatus.NO_CHANGE
+
+
+# ---------------------------------------------------------------------------
+# T27 — PARTIAL status preserved through runner
+# ---------------------------------------------------------------------------
+
+def test_t27_partial_preserved(monkeypatch):
+    import services.public_data_sync.runner as runner_module
+
+    spec = registry.get("KOSHA_ACCIDENT_CASES")
+    fresh_reg = _make_runner_registry(_PartialAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", fresh_reg)
+
+    result = run_source("KOSHA_ACCIDENT_CASES")
+    assert result.status == RunStatus.PARTIAL
+    assert result.created == 7
+    assert result.failed == 3
+
+
+# ---------------------------------------------------------------------------
+# T28 — nested dict/list/tuple secret sanitization
+# ---------------------------------------------------------------------------
+
+def test_t28_nested_secret_sanitization():
+    result = RunResult(
+        run_id="r1",
+        source_id="S",
+        status=RunStatus.SUCCESS,
+        details={
+            "top_key": "safe",
+            "serviceKey": "REAL_TOP_KEY",
+            "nested": {
+                "token": "SECRET_TOKEN",
+                "safe_field": "visible",
+            },
+            "list_data": [
+                {"password": "LIST_PW"},
+                "plain_string",
+                42,
+            ],
+            "tuple_field": ({"secret": "TUPLE_SECRET"}, "safe_elem"),
+        },
+    )
+    assert result.details["serviceKey"] == "***"
+    assert result.details["top_key"] == "safe"
+    assert result.details["nested"]["token"] == "***"
+    assert result.details["nested"]["safe_field"] == "visible"
+    assert result.details["list_data"][0]["password"] == "***"
+    assert result.details["list_data"][1] == "plain_string"
+    assert result.details["list_data"][2] == 42
+    assert result.details["tuple_field"][0]["secret"] == "***"
+    assert result.details["tuple_field"][1] == "safe_elem"
+
+
+# ---------------------------------------------------------------------------
+# T29 — error_message secret sanitization
+# ---------------------------------------------------------------------------
+
+def test_t29_error_message_sanitization():
+    result = RunResult(
+        run_id="r1",
+        source_id="S",
+        status=RunStatus.FAILED,
+        error_message="request failed: serviceKey=REALKEY123 status=404",
+    )
+    assert "REALKEY123" not in result.error_message
+    assert "serviceKey=***" in result.error_message
+
+
+# ---------------------------------------------------------------------------
+# T30 — existing census regression
+# ---------------------------------------------------------------------------
+
+def test_t30_census_regression():
+    from services.public_data_sync.census import (
+        CensusDiff,
+        CensusError,
+        diff_identity_maps,
+        validate_identity_census,
+    )
+
+    ids = validate_identity_census(["A", "B", "C"], total_count=3)
+    assert ids == ("A", "B", "C")
+
+    diff = diff_identity_maps(
+        previous={"A": "v1", "B": "v1"},
+        current={"A": "v2", "C": "v1"},
+    )
+    assert diff.new == ("C",)
+    assert diff.changed == ("A",)
+    assert diff.removed == ("B",)
+    assert diff.unchanged == ()
+    assert set(diff.hydration_identities) == {"A", "C"}
+
+    with pytest.raises(CensusError) as exc_info:
+        validate_identity_census(["A", "A"], total_count=2)
+    assert exc_info.value.code == "DUPLICATE_IDENTITY"
+
+
+# ---------------------------------------------------------------------------
+# Bonus — run_source unknown source raises SourceNotFoundError
+# ---------------------------------------------------------------------------
+
+def test_run_source_unknown_source_raises():
+    with pytest.raises(SourceNotFoundError):
+        run_source("TOTALLY_UNKNOWN_XYZ_9999")

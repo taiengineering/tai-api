@@ -17,9 +17,9 @@ class SourceNotFoundError(PublicDataSyncError):
 
 
 class AdapterNotRegisteredError(PublicDataSyncError):
-    def __init__(self, source_id: str) -> None:
-        super().__init__(f"No adapter registered for source: {source_id!r}")
-        self.source_id = source_id
+    def __init__(self, adapter_key: str) -> None:
+        super().__init__(f"No adapter registered for key: {adapter_key!r}")
+        self.adapter_key = adapter_key
 
 
 class PreflightError(PublicDataSyncError):

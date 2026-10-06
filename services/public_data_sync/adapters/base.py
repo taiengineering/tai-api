@@ -7,20 +7,20 @@ from services.public_data_sync.contracts import RunContext, RunResult
 
 
 class SourceAdapter(ABC):
-    """Every concrete adapter must implement these three methods."""
+    """Every concrete adapter must implement these two methods."""
 
     @property
     @abstractmethod
-    def source_id(self) -> str:
-        """Must match exactly the SourceSpec.source_id this adapter handles."""
+    def adapter_key(self) -> str:
+        """Must match exactly the SourceSpec.adapter_key this adapter handles."""
 
     def preflight(self, ctx: RunContext) -> None:
         """Validate configuration before any I/O.
 
         Raise PreflightError if a required credential or config is missing.
-        Default: no-op (adapter handles its own validation in execute).
+        Default: no-op.
         """
 
     @abstractmethod
-    def execute(self, ctx: RunContext) -> RunResult:
-        """Run the sync. Must return RunResult — never raise for runtime errors."""
+    def run(self, ctx: RunContext) -> RunResult:
+        """Execute the sync. Must return RunResult — never raise for runtime errors."""
