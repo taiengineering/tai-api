@@ -1,19 +1,21 @@
 """WO-BLD-FINALIZATION — SAFE BUILDING 공식 LEG 진입 (industrial/construction 대칭).
 
-경로: OWNED_EXACT 3(factories SAFE READ: floor_count/has_boiler/is_multi_use)
+경로: OWNED_EXACT 2(factories SAFE READ: has_boiler/is_multi_use)
       + VERIFIED_SOURCE 3(employee_count→worker_count / building_area→total_floor_area /
         elevator_count; WO-SAAS-BUILDING-SOURCE-AUTHORITY-RECONCILE-001 semantic proof 확정)
       + consumer override(SafeBuildingConsumerInput, non-null) → DiagnoseStep1Body(sector="BUILDING")
       → run_leg_diagnosis(build_facility -> /rtm/evaluate -> full_result).
 
-SEMANTIC-PROOF 반영: OWNED_EXACT 3 + VERIFIED_SOURCE 3. 나머지(runtime/UI) +
+SEMANTIC-PROOF 반영: OWNED_EXACT 2 + VERIFIED_SOURCE 3. 나머지(runtime/UI) +
   GAS-CHEM G1/C1 3(has_high_pressure_gas/has_chemical_substance/has_hazardous_material 별개 법령)는
   consumer 명시 override 유지(WP3-BLOCKER).
 build_facility N1 32 sector-gate(main 기존) + WP-1/WP3-BLOCKER-FIX(OVER-CLAIM 제거) 반영.
 WO-LFR-OBJ-H01-FAST-01: building_height + floor_count on-demand hydration.
-  PROVENANCE RULE: floor_count / building_height 는 building_register_updated_at non-null 일 때만
-  AUTHORITATIVE. 미연결 시 hydrate_factory_h01() 로 건물대장 API 1회 호출 → factories PATCH.
-DB WRITE: hydration path 한정(1 PATCH / leg call, 조건부). factory 생성 side effect 0.
+WO-LFR-OBJ-H03-FAST-01: floor_area_sum_at_or_above_11f derivation from 층별개요 API.
+  H01 PROVENANCE CORRECTION: floor_count는 building_register_updated_at non-null 일 때만
+  AUTHORITATIVE. timestamp 없는 기존 floor_count → LEG input 주입 금지.
+  H03 TRIGGER: authoritative floor_count >= 11 일 때만 H03 derivation 실행.
+DB WRITE: H01 hydration path 한정(1 PATCH / leg call, 조건부). factory 생성 side effect 0.
 """
 from __future__ import annotations
 from typing import Any, Dict
@@ -21,8 +23,9 @@ from typing import Any, Dict
 from services.canonical.saas_leg_source_adapter import build_saas_leg_step1
 from services.leg_diagnosis_svc import run_leg_diagnosis
 
-# SEMANTIC-PROOF OWNED_EXACT 3 — factories exact-name SAFE READ (semantic 자명).
-_SAFE_OWNED_EXACT = ("floor_count", "has_boiler", "is_multi_use")
+# SEMANTIC-PROOF OWNED_EXACT 2 — factories exact-name SAFE READ (semantic 자명).
+# floor_count는 H01 provenance block에서만 주입 (timestamp 확인 후).
+_SAFE_OWNED_EXACT = ("has_boiler", "is_multi_use")
 
 # VERIFIED_SOURCE 3 — WO-SAAS-BUILDING-SOURCE-AUTHORITY-RECONCILE-001 semantic proof 확정.
 #   employee_count = 상시근로자 수 (law_to_rules.py + safe_industrial_canonical_assembler 코드 권위)
@@ -36,12 +39,13 @@ _SAFE_VERIFIED_SOURCE_MAP = {
     "elevator_count": "elevator_count",
 }
 
-# factories READ columns = OWNED_EXACT 3 + VERIFIED_SOURCE factory columns
-# + H01 provenance columns (building_height, building_register_updated_at). select("*") 금지.
+# factories READ columns = OWNED_EXACT 2 + VERIFIED_SOURCE factory columns
+# + H01 provenance columns + H03 entity identity columns. select("*") 금지.
 _FACTORY_SELECT = (
-    "floor_count, has_boiler, is_multi_use, "
+    "has_boiler, is_multi_use, "
     "employee_count, building_area, elevator_count, "
-    "building_height, building_register_updated_at"
+    "floor_count, building_height, building_register_updated_at, "
+    "bdmgtsn, mgm_bldrgst_pk"
 )
 
 
@@ -51,12 +55,13 @@ def _rows(res):
 
 def run_safe_building_leg(supabase, factory_id: str, consumer_input) -> Dict[str, Any]:
     """SAFE BUILDING 공식 LEG 진단. full_result 반환(저장/결제/factory 생성 없음).
-    H01: building_height / floor_count provenance guard → on-demand hydration.
+    H01: floor_count / building_height provenance guard → on-demand hydration.
+    H03: floor_area_sum_at_or_above_11f derivation (authoritative floor_count >= 11 시).
     """
     values: Dict[str, Any] = {}
     unresolved: set = set()
 
-    # A. OWNED_EXACT 3 SAFE READ (factories, READ-ONLY). 값 있으면 사용, 없으면 unresolved.
+    # A. OWNED_EXACT 2 SAFE READ (factories, READ-ONLY). floor_count는 H01 provenance block.
     frow = (
         supabase.table("factories")
         .select(_FACTORY_SELECT)
@@ -77,12 +82,15 @@ def run_safe_building_leg(supabase, factory_id: str, consumer_input) -> Dict[str
         if v is not None:
             values[leg_key] = v
 
-    # H01. building_height / floor_count provenance guard.
+    # H01. floor_count + building_height provenance guard.
     #   PROVENANCE RULE: building_register_updated_at non-null → AUTHORITATIVE.
-    #   미연결(ts None) → on-demand hydration 1회 → factories PATCH → 재사용.
+    #   timestamp 없는 floor_count → LEG input 주입 금지.
+    #   미연결(ts None) → on-demand hydration 1회 → factories PATCH.
     _ts = fac.get("building_register_updated_at")
     _bh = fac.get("building_height")
-    _fc_h01 = fac.get("floor_count")  # same column as OWNED_EXACT floor_count
+    _fc_h01 = fac.get("floor_count")
+    _mgm_pk = fac.get("mgm_bldrgst_pk") or None
+    _bdmgtsn = str(fac.get("bdmgtsn") or "").strip()
 
     _h01_bh_auth = _bh is not None and _ts is not None
     _h01_fc_auth = _fc_h01 is not None and _ts is not None
@@ -97,16 +105,32 @@ def run_safe_building_leg(supabase, factory_id: str, consumer_input) -> Dict[str
             if _hyd.get("floor_count") is not None:
                 _fc_h01 = _hyd["floor_count"]
                 _h01_fc_auth = True
-                # Promote hydrated floor_count into values (overrides OWNED_EXACT absent).
-                values["floor_count"] = _fc_h01
-                unresolved.discard("floor_count")
+            if _hyd.get("mgm_bldrgst_pk"):
+                _mgm_pk = _hyd["mgm_bldrgst_pk"]
+
+    # floor_count: AUTHORITATIVE source only (provenance confirmed).
+    if _h01_fc_auth and _fc_h01 is not None:
+        values["floor_count"] = _fc_h01
+        unresolved.discard("floor_count")
+    else:
+        unresolved.add("floor_count")
 
     # building_height → building_height_m (LEG alias). AUTHORITATIVE source only.
     if _h01_bh_auth and _bh is not None:
         values["building_height_m"] = _bh
 
+    # H03. floor_area_sum_at_or_above_11f derivation.
+    #   TRIGGER: authoritative floor_count >= 11 only. H01 precondition required.
+    #   direct user input workaround closed (removed from SafeBuildingConsumerInput).
+    if _h01_fc_auth and _fc_h01 is not None and _fc_h01 >= 11:
+        if _bdmgtsn and len(_bdmgtsn) == 19:
+            from services.building_floor_hydration import resolve_floor_area_sum_11f_plus
+            _h03 = resolve_floor_area_sum_11f_plus(_bdmgtsn, _mgm_pk)
+            if _h03.get("resolved"):
+                values["floor_area_sum_at_or_above_11f"] = _h03["value"]
+
     # C. consumer override — non-null 만(None=미override, false/0=명시값). extra=forbid 이미 스키마 검증.
-    #    consumer explicit은 항상 factory source(A+B+H01)를 덮어쓴다.
+    #    consumer explicit은 항상 factory source(A+B+H01+H03)를 덮어쓴다.
     if hasattr(consumer_input, "model_dump"):
         overrides = consumer_input.model_dump(exclude_none=True)
     else:
@@ -115,11 +139,7 @@ def run_safe_building_leg(supabase, factory_id: str, consumer_input) -> Dict[str
         values[k] = v
         unresolved.discard(k)
 
-    # D. WO-010 STEP-2C : unified LEG input contract 경유. values 는 OWNED_EXACT 3 + VERIFIED_SOURCE 3
-    #    + H01(building_height_m / floor_count hydrated) + consumer override(SafeBuildingConsumerInput
-    #    extra=forbid 로 이미 검증된 축) 병합 dict.
-    #    build_saas_leg_step1 이 _LEG_INPUT_FIELDS 필터 + BUILDING alias 규약 + elevator_count
-    #    derived setattr 를 적용한다. build_facility N1 32 sector-gate 는 중앙 로직 그대로.
+    # D. WO-010 STEP-2C : unified LEG input contract 경유.
     from services.work_source.store import load_work_rows_optional
     from services.material_source.store import load_factory_material_rows_optional
     from services.equipment_source.store import load_equipment_rows_optional
@@ -128,15 +148,7 @@ def run_safe_building_leg(supabase, factory_id: str, consumer_input) -> Dict[str
         source_facts=values,
         factory_id=factory_id,
         work_rows=load_work_rows_optional(supabase, factory_id),
-        # WO-OBS009-MATERIAL-CANONICAL-RUNTIME-WIRING-PATCH-001: Common Material canonical
-        # adapter feeds is_managed_/is_permit_required_/is_special_management_hazardous_substance.
-        # BUILDING has_chemical_substance patch-A path preserved separately:
-        # the 3 new canonical booleans are DIFFERENT keys, not aliases; no collapse.
-        # READ FAILURE != EMPTY SOURCE — MaterialSourceLoadError propagates fail-closed.
         material_rows=load_factory_material_rows_optional(supabase, factory_id),
-        # WO-EQUIPMENT-A2-REMAINING-CONSUMER-PARITY-IMPLEMENT-001:
-        # Equipment A2 shared seam — same reader/projector as MANUFACTURING (PR #450).
-        # READ FAILURE != EMPTY SOURCE — EquipmentSourceLoadError propagates fail-closed.
         equipment_rows=load_equipment_rows_optional(supabase, factory_id),
     )
 

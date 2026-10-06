@@ -56,10 +56,10 @@ def _patch(monkeypatch, cap):
 
 def test_owned_exact_read(monkeypatch):
     cap = {}; _patch(monkeypatch, cap)
-    out = run_safe_building_leg(
-        _FakeSB({"floor_count": 12, "has_boiler": True, "is_multi_use": False}),
-        "F1", SafeBuildingConsumerInput(),
-    )
+    # H01 provenance: building_register_updated_at non-null for floor_count to be authoritative
+    fac = {"floor_count": 12, "has_boiler": True, "is_multi_use": False,
+           "building_register_updated_at": "2026-01-01T00:00:00+09:00"}
+    out = run_safe_building_leg(_FakeSB(fac), "F1", SafeBuildingConsumerInput())
     inp = cap["step1"].input
     assert inp["floor_count"] == 12 and inp["has_boiler"] is True and inp["is_multi_use"] is False
     assert cap["step1"].sector == "BUILDING" and cap["step1"].factory_id == "F1"

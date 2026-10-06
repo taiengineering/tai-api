@@ -42,7 +42,8 @@ def parse_bdmgtsn(bdmgtsn: str) -> Optional[Dict[str, str]]:
 
 
 def extract_h01_fields(title_items: list) -> Dict[str, Any]:
-    """표제부 리스트에서 H01 필드(building_height, floor_count)만 추출."""
+    """표제부 리스트에서 H01 필드(building_height, floor_count, mgm_bldrgst_pk)를 추출.
+    mgm_bldrgst_pk는 H03 entity identity 확보를 위해 함께 추출한다."""
     if not title_items:
         return {}
     title = next((i for i in title_items if i.get("mainAtchGbCdNm") == "주건축물"), None)
@@ -55,6 +56,9 @@ def extract_h01_fields(title_items: list) -> Dict[str, Any]:
     fc = _safe_int(title.get("grndFlrCnt"))
     if fc is not None:
         out["floor_count"] = fc
+    pk = title.get("mgmBldrgstPk")
+    if pk is not None and str(pk).strip():
+        out["mgm_bldrgst_pk"] = str(pk).strip()
     return out
 
 
@@ -154,4 +158,5 @@ def hydrate_factory_h01(supabase, factory_id: str) -> Dict[str, Any]:
         "updated": True,
         "building_height": fields.get("building_height"),
         "floor_count": fields.get("floor_count"),
+        "mgm_bldrgst_pk": fields.get("mgm_bldrgst_pk"),
     }

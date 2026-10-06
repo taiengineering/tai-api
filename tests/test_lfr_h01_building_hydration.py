@@ -208,3 +208,40 @@ def test_H10_consumer_override_wins_over_hydration(monkeypatch):
     ci = SafeBuildingConsumerInput(building_height_m=999.0)
     run_safe_building_leg(_FakeSB(fac), "F1", ci)
     assert cap["step1"].input.get("building_height_m") == 999.0
+
+
+# ── H11: H01 provenance leak regression — ts absent, hydration fail → floor_count absent ─
+
+def test_H11_fc_no_timestamp_hydration_fail_floor_count_absent(monkeypatch):
+    """H01 provenance correction: floor_count=35 + ts=None + hydration failure
+    → floor_count must NOT appear in LEG input."""
+    cap = {}
+    _patch_leg(monkeypatch, cap)
+    monkeypatch.setattr(_hyd_mod, "hydrate_factory_h01", lambda sb, fid: {
+        "updated": False, "reason": "bdmgtsn_missing_or_invalid",
+    })
+    fac = {
+        "floor_count": 35, "has_boiler": False, "is_multi_use": False,
+        "building_height": None,
+        "building_register_updated_at": None,
+    }
+    out = run_safe_building_leg(_FakeSB(fac), "F1", SafeBuildingConsumerInput())
+    assert "floor_count" not in cap["step1"].input
+    assert "floor_count" in out["unresolved_fields"]
+
+
+# ── H12: ts present + fc present → floor_count authoritative ─────────────────
+
+def test_H12_ts_present_fc_authoritative(monkeypatch):
+    """ts non-null + floor_count=35 → floor_count=35 in LEG input."""
+    cap = {}
+    _patch_leg(monkeypatch, cap)
+    called = _no_hydrate(monkeypatch)
+    fac = {
+        "floor_count": 35, "has_boiler": False, "is_multi_use": False,
+        "building_height": 80.0,
+        "building_register_updated_at": "2026-01-01T00:00:00+09:00",
+    }
+    out = run_safe_building_leg(_FakeSB(fac), "F1", SafeBuildingConsumerInput())
+    assert cap["step1"].input.get("floor_count") == 35
+    assert "floor_count" not in out["unresolved_fields"]
