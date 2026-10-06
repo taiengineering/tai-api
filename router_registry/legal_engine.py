@@ -41,4 +41,6 @@ ROUTERS = [
     {"module": "routers.pilot_safety_manager_api"},
     # WO-D-DOMAIN-001: Actor×Sector Domain Filter
     {"module": "routers.domain_filter_api"},
+    # OBJ-H02-P1: 수용인원 법정산정 API
+    {"module": "routers.occupancy_capacity_assessments"},
 ]

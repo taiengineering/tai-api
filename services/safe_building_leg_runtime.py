@@ -58,10 +58,12 @@ def run_safe_building_leg(
     factory_id: str,
     consumer_input,
     material_inout_event_id: str = None,
+    occupancy_assessment_id: str = None,
 ) -> Dict[str, Any]:
     """SAFE BUILDING 공식 LEG 진단. full_result 반환(저장/결제/factory 생성 없음).
     H01: floor_count / building_height provenance guard → on-demand hydration.
     H03: floor_area_sum_at_or_above_11f derivation (authoritative floor_count >= 11 시).
+    H02: occupancy_capacity — direct numeric input PROHIBITED; exact assessment only.
     """
     values: Dict[str, Any] = {}
     unresolved: set = set()
@@ -151,6 +153,19 @@ def run_safe_building_leg(
         event_fact = project_hazardous_material_event_fact(event_ctx)
         if event_fact:
             values["has_hazardous_material_in_out_event"] = True
+
+    # H02. occupancy_capacity — exact CONFIRMED assessment source only (no direct numeric injection).
+    #   occupancy_assessment_id absent → fact not injected (SOURCE_UNRESOLVED, LEG runs without it).
+    #   Wrong factory / not CONFIRMED / stale ruleset → SourceUnresolved propagated to caller.
+    if occupancy_assessment_id is not None:
+        from services.occupancy_capacity.canonical_adapter import load_confirmed_assessment_context
+        occ_ctx = load_confirmed_assessment_context(
+            supabase,
+            assessment_id=occupancy_assessment_id,
+            factory_id=factory_id,
+        )
+        values["occupancy_capacity"] = occ_ctx["occupancy_capacity"]
+        unresolved.discard("occupancy_capacity")
 
     # C. consumer override — non-null 만(None=미override, false/0=명시값). extra=forbid 이미 스키마 검증.
     #    consumer explicit은 항상 factory source(A+B+H01+H03)를 덮어쓴다.

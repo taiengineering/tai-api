@@ -1,0 +1,159 @@
+{
+  "_evidence_type": "LEGAL_TABLE_TRANSCRIPTION",
+  "_status": "TRANSCRIBED",
+  "_collection_date": "2026-10-06",
+  "_collector": "Claude Code (WO-LFR-OBJ-H02-P0-SOURCE-CONTRACT-FIREWALL-01)",
+  "_source_api": "law.go.kr DRF API XML",
+  "_note": "Official transcription. VALUES ARE VERBATIM FROM OFFICIAL SOURCE. Semantic mapping (legal code <-> building use) is a separate OPEN item. Runtime authority requires OBJ-H02-P1 calculator implementation.",
+
+  "table_a": {
+    "title": "초고층 및 지하연계 복합건축물 재난관리에 관한 특별법 시행령 별표 1 — 거주밀도",
+    "law": "초고층 및 지하연계 복합건축물 재난관리에 관한 특별법 시행령",
+    "promulgation": "대통령령 제36432호, 2026년 6월 23일 (타법개정)",
+    "article": "제2조제2항",
+    "scope": "UNDERGROUND",
+    "law_effective_date": "2026-07-01",
+    "unit": "명/㎡",
+    "unit_direction": "MULTIPLY: persons = area_m2 × density",
+    "rows": [
+      {"id": "A-1-가-1", "용도": "1. 문화ㆍ집회", "사용형태": "가. 좌석이 있는 극장ㆍ회의장ㆍ전시장(로비ㆍ홀ㆍ전실 포함) — 1) 고정식 좌석", "거주밀도": "n", "special_formula": true, "formula_note": "n = 좌석 수 (좌석 수를 직접 사용)"},
+      {"id": "A-1-가-2", "용도": "1. 문화ㆍ집회", "사용형태": "가. 2) 이동식 좌석", "거주밀도": 1.30, "special_formula": false},
+      {"id": "A-1-가-3", "용도": "1. 문화ㆍ집회", "사용형태": "가. 3) 입석식", "거주밀도": 2.60, "special_formula": false},
+      {"id": "A-1-나", "용도": "1. 문화ㆍ집회", "사용형태": "나. 좌석이 없는 극장ㆍ회의장ㆍ전시장(로비ㆍ홀ㆍ전실 포함)", "거주밀도": 1.80, "special_formula": false},
+      {"id": "A-1-다", "용도": "1. 문화ㆍ집회", "사용형태": "다. 회의실", "거주밀도": 1.50, "special_formula": false},
+      {"id": "A-1-라", "용도": "1. 문화ㆍ집회", "사용형태": "라. 무대", "거주밀도": 0.70, "special_formula": false},
+      {"id": "A-1-마", "용도": "1. 문화ㆍ집회", "사용형태": "마. 게임제공업", "거주밀도": 1.00, "special_formula": false},
+      {"id": "A-1-바", "용도": "1. 문화ㆍ집회", "사용형태": "바. 나이트클럽", "거주밀도": 1.70, "special_formula": false},
+      {"id": "A-1-사", "용도": "1. 문화ㆍ집회", "사용형태": "사. 전시장(산업전시장)", "거주밀도": 0.70, "special_formula": false},
+      {"id": "A-2-가", "용도": "2. 판매", "사용형태": "가. 매장", "거주밀도": 0.50, "special_formula": false},
+      {"id": "A-2-나-1", "용도": "2. 판매", "사용형태": "나. 연속식 점포 — 1) 매장", "거주밀도": 0.50, "special_formula": false},
+      {"id": "A-2-나-2", "용도": "2. 판매", "사용형태": "나. 연속식 점포 — 2) 통로", "거주밀도": 0.25, "special_formula": false},
+      {"id": "A-2-다", "용도": "2. 판매", "사용형태": "다. 창고 및 배송공간", "거주밀도": 0.37, "special_formula": false},
+      {"id": "A-2-라", "용도": "2. 판매", "사용형태": "라. 음식점(레스토랑)ㆍ바ㆍ카페", "거주밀도": 1.00, "special_formula": false},
+      {"id": "A-3", "용도": "3. 운수", "사용형태": "여객터미널, 철도시설, 공항시설, 항만시설 등", "거주밀도": 0.37, "special_formula": false},
+      {"id": "A-4-가", "용도": "4. 업무", "사용형태": "가. 사무실이 높이 60m 초과하는 부분에 위치", "거주밀도": 1.25, "special_formula": false},
+      {"id": "A-4-나", "용도": "4. 업무", "사용형태": "나. 사무실이 높이 60m 이하 부분에 위치", "거주밀도": 0.25, "special_formula": false},
+      {"id": "A-5-가", "용도": "5. 숙박", "사용형태": "가. 공동주택", "거주밀도": "R+1", "special_formula": true, "formula_note": "R = 세대별 방의 개수; 인원 = R + 1"},
+      {"id": "A-5-나", "용도": "5. 숙박", "사용형태": "나. 호텔, 숙박시설", "거주밀도": 0.05, "special_formula": false},
+      {"id": "A-6", "용도": "6. 유원", "사용형태": "종합테마파크업, 일반테마파크업, 기타테마파크업", "거주밀도": 0.50, "special_formula": false},
+      {"id": "A-7-가-1", "용도": "7. 교육", "사용형태": "가. 도서관 — 1) 서고ㆍ통로", "거주밀도": 0.10, "special_formula": false},
+      {"id": "A-7-가-2", "용도": "7. 교육", "사용형태": "가. 도서관 — 2) 열람실", "거주밀도": 0.21, "special_formula": false},
+      {"id": "A-7-나-1", "용도": "7. 교육", "사용형태": "나. 학교 — 1) 교실", "거주밀도": 0.52, "special_formula": false},
+      {"id": "A-7-나-2", "용도": "7. 교육", "사용형태": "나. 학교 — 2) 그 밖의 시설", "거주밀도": 0.21, "special_formula": false},
+      {"id": "A-8", "용도": "8. 운동", "사용형태": "운동시설", "거주밀도": 0.21, "special_formula": false},
+      {"id": "A-9-가", "용도": "9. 의료", "사용형태": "가. 입원치료구역", "거주밀도": 0.04, "special_formula": false},
+      {"id": "A-9-나", "용도": "9. 의료", "사용형태": "나. 수면구역(숙소 등)", "거주밀도": 0.09, "special_formula": false},
+      {"id": "A-10", "용도": "10. 보육", "사용형태": "보호시설(아동 관련 시설, 노인복지시설 등)", "거주밀도": 0.30, "special_formula": false}
+    ],
+    "notes": [
+      "비고1: 둘 이상 용도·사용형태로 사용되는 층의 거주밀도는 용도·사용형태별 거주밀도에 해당 면적 비율을 반영하여 각각 산정한 값을 더하여 산정",
+      "비고2: n = 좌석 수",
+      "비고3: 연속식 점포 = 벽체를 연속으로 맞대거나 복도를 공유하는 점포 수가 둘 이상인 경우",
+      "비고4: R = 세대별 방의 개수",
+      "비고5: 표의 사용형태에 해당하는 건축법 시행령 별표1 용도별 건축물의 종류는 소방청장이 고시"
+    ],
+    "transcription_status": "COMPLETE"
+  },
+
+  "table_b_section_1_ga": {
+    "title": "건축물의 피난ㆍ방화구조 등의 기준에 관한 규칙 별표 1의2 제1호 가목 — 특수 좌석 산식",
+    "law": "건축물의 피난ㆍ방화구조 등의 기준에 관한 규칙",
+    "promulgation": "국토교통부령 제1631호, 2026년 10월 6일 (일부개정)",
+    "annex": "별표 1의2 제1호 가목",
+    "scope": "ABOVE_GROUND (special seat cases)",
+    "law_effective_date": "2026-10-06",
+    "context": "피난안전구역 윗층의 재실자 수 = 해당 피난안전구역과 다음 피난안전구역 사이의 용도별 바닥면적을 사용형태별 재실자밀도로 나눈 값의 합계. 단, 문화ㆍ집회용도 중 벤치형/고정좌석 공간은 아래 산식 적용.",
+    "formulas": [
+      {
+        "id": "B-가-1",
+        "name": "벤치형 좌석",
+        "formula": "좌석길이(cm) / 45.5cm",
+        "unit": "명",
+        "note": "좌석 길이를 45.5cm로 나누어 인원 산출"
+      },
+      {
+        "id": "B-가-2",
+        "name": "고정좌석",
+        "formula": "휠체어 공간 수 + 고정좌석 수",
+        "unit": "명",
+        "note": "휠체어 공간과 고정좌석 수의 합"
+      }
+    ],
+    "transcription_status": "COMPLETE"
+  },
+
+  "table_b_section_1_na": {
+    "title": "건축물의 피난ㆍ방화구조 등의 기준에 관한 규칙 별표 1의2 제1호 나목 — 사용형태별 재실자 밀도",
+    "law": "건축물의 피난ㆍ방화구조 등의 기준에 관한 규칙",
+    "promulgation": "국토교통부령 제1631호, 2026년 10월 6일 (일부개정)",
+    "annex": "별표 1의2 제1호 나목",
+    "scope": "ABOVE_GROUND",
+    "law_effective_date": "2026-10-06",
+    "unit": "㎡/명",
+    "unit_direction": "DIVIDE: persons = area_m2 / density",
+    "unit_note": "TABLE A (명/㎡) and TABLE B나목 (㎡/명) have OPPOSITE unit directions",
+    "rows": [
+      {"id": "B-나-문화-1", "용도": "문화ㆍ집회", "사용형태": "고정좌석을 사용하지 않는 공간", "재실자밀도": 0.45, "special_formula": false},
+      {"id": "B-나-문화-2", "용도": "문화ㆍ집회", "사용형태": "고정좌석이 아닌 의자를 사용하는 공간", "재실자밀도": 1.29, "special_formula": false},
+      {"id": "B-나-문화-3", "용도": "문화ㆍ집회", "사용형태": "벤치형 좌석을 사용하는 공간", "재실자밀도": null, "special_formula": true, "formula_ref": "B-가-1 (좌석길이/45.5cm)"},
+      {"id": "B-나-문화-4", "용도": "문화ㆍ집회", "사용형태": "고정좌석을 사용하는 공간", "재실자밀도": null, "special_formula": true, "formula_ref": "B-가-2 (휠체어공간수+고정좌석수)"},
+      {"id": "B-나-문화-5", "용도": "문화ㆍ집회", "사용형태": "무대", "재실자밀도": 1.40, "special_formula": false},
+      {"id": "B-나-문화-6", "용도": "문화ㆍ집회", "사용형태": "게임제공업 등의 공간", "재실자밀도": 1.02, "special_formula": false},
+      {"id": "B-나-운동", "용도": "운동", "사용형태": "운동시설", "재실자밀도": 4.60, "special_formula": false},
+      {"id": "B-나-교육-1", "용도": "교육", "사용형태": "도서관 — 서고", "재실자밀도": 9.30, "special_formula": false},
+      {"id": "B-나-교육-2", "용도": "교육", "사용형태": "도서관 — 열람실", "재실자밀도": 4.60, "special_formula": false},
+      {"id": "B-나-교육-3", "용도": "교육", "사용형태": "학교 및 학원 — 교실", "재실자밀도": 1.90, "special_formula": false},
+      {"id": "B-나-보육", "용도": "보육", "사용형태": "보호시설", "재실자밀도": 3.30, "special_formula": false},
+      {"id": "B-나-의료-1", "용도": "의료", "사용형태": "입원치료구역", "재실자밀도": 22.3, "special_formula": false},
+      {"id": "B-나-의료-2", "용도": "의료", "사용형태": "수면구역", "재실자밀도": 11.1, "special_formula": false},
+      {"id": "B-나-교정", "용도": "교정", "사용형태": "교정시설 및 보호관찰소 등", "재실자밀도": 11.1, "special_formula": false},
+      {"id": "B-나-주거-1", "용도": "주거", "사용형태": "호텔 등 숙박시설", "재실자밀도": 18.6, "special_formula": false},
+      {"id": "B-나-주거-2", "용도": "주거", "사용형태": "공동주택", "재실자밀도": 18.6, "special_formula": false},
+      {"id": "B-나-업무", "용도": "업무", "사용형태": "업무시설, 운수시설 및 관련 시설", "재실자밀도": 9.30, "special_formula": false},
+      {"id": "B-나-판매-1", "용도": "판매", "사용형태": "지하층 및 1층", "재실자밀도": 2.80, "special_formula": false},
+      {"id": "B-나-판매-2", "용도": "판매", "사용형태": "그 외의 층", "재실자밀도": 5.60, "special_formula": false},
+      {"id": "B-나-판매-3", "용도": "판매", "사용형태": "배송공간", "재실자밀도": 27.9, "special_formula": false},
+      {"id": "B-나-저장", "용도": "저장", "사용형태": "창고, 자동차 관련 시설", "재실자밀도": 46.5, "special_formula": false},
+      {"id": "B-나-산업-1", "용도": "산업", "사용형태": "공장", "재실자밀도": 9.30, "special_formula": false},
+      {"id": "B-나-산업-2", "용도": "산업", "사용형태": "제조업 시설", "재실자밀도": 18.6, "special_formula": false}
+    ],
+    "notes": [
+      "계단실, 승강로, 복도, 화장실은 재실자밀도 산정에서 제외",
+      "취사장ㆍ조리장의 재실자밀도 = 9.30",
+      "벤치형/고정좌석 공간: 밀도값 없이 가목 산식 직접 적용"
+    ],
+    "transcription_status": "COMPLETE"
+  },
+
+  "rounding_rule": {
+    "status": "NOT_FOUND",
+    "note": "Neither 초고층재난관리법 시행령 별표1 nor 피난방화구조규칙 별표1의2 contains explicit rounding rule for final occupancy capacity calculation. Requires dedicated legal investigation."
+  },
+
+  "semantic_mapping_open_items": [
+    {
+      "id": "SM-01",
+      "label": "TABLE A 용도 ↔ TABLE B 용도 ↔ 건축물대장 mainPurpsCdNm 매핑",
+      "status": "SEMANTIC_MAPPING_REQUIRED",
+      "note": "TABLE A는 초고층재난관리법 시행령 용도체계. TABLE B는 피난방화구조규칙 용도체계. 건축물대장 mainPurpsCdNm은 건축법 용도체계. 세 체계 간 매핑은 별도 semantic object 필요."
+    },
+    {
+      "id": "SM-02",
+      "label": "사용형태 결정 — 현장 확인 필요 항목",
+      "status": "SEMANTIC_MAPPING_REQUIRED",
+      "note": "고정식 좌석 여부, 벤치형 좌석 여부, 좌석 수, 휠체어 공간 수는 건축물대장에서 제공되지 않음. 구조화된 사용자 입력 또는 현장 조사 필요."
+    },
+    {
+      "id": "SM-03",
+      "label": "TABLE A 업무용도 60m 분기 기준",
+      "status": "SEMANTIC_MAPPING_REQUIRED",
+      "note": "60m 초과(1.25)/이하(0.25) 분기는 층별 적용. 각 층의 바닥 높이 정보(건축물대장 flrNo + 층고 적산) 필요."
+    },
+    {
+      "id": "SM-04",
+      "label": "TABLE A 공동주택 R+1 산식",
+      "status": "SEMANTIC_MAPPING_REQUIRED",
+      "note": "세대별 방 개수 R은 건축물대장에서 직접 제공되지 않을 수 있음. 별도 데이터 소스 필요."
+    }
+  ]
+}

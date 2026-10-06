@@ -252,13 +252,20 @@ async def diagnose_building_leg(body: SafeBuildingLegBody, authorization: Option
     _assert_leg_site_scope_http(supabase, resolution.commercial_version_id, "factory", body.factory_id)
     if not leg_runtime_client.is_enabled():
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
+    from services.occupancy_capacity.canonical_adapter import SourceUnresolved
     try:
         out = run_safe_building_leg(
             supabase,
             body.factory_id,
             body.input,
             material_inout_event_id=body.material_inout_event_id,
+            occupancy_assessment_id=body.occupancy_assessment_id,
         )
+    except SourceUnresolved as e:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "OCCUPANCY_ASSESSMENT_SOURCE_UNRESOLVED", "message": str(e)},
+        ) from e
     except HazardousMaterialEventSourceLoadError as e:
         raise HTTPException(
             status_code=503,
