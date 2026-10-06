@@ -1,4 +1,4 @@
-"""WP-1A PATCH — Control Plane Foundation T01~T30 + census regression."""
+"""WP-1A PATCH — Control Plane Foundation T01~T35 + census regression."""
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
@@ -599,3 +599,147 @@ def test_t30_census_regression():
 def test_run_source_unknown_source_raises():
     with pytest.raises(SourceNotFoundError):
         run_source("TOTALLY_UNKNOWN_XYZ_9999")
+
+
+# ===========================================================================
+# T31~T35 — Secret logging / sanitizer PATCH
+# ===========================================================================
+
+
+class _SecretPreflightAdapter(SourceAdapter):
+    def __init__(self, adapter_key: str, secret_msg: str) -> None:
+        self._adapter_key = adapter_key
+        self._secret_msg = secret_msg
+
+    @property
+    def adapter_key(self) -> str:
+        return self._adapter_key
+
+    def preflight(self, ctx: RunContext) -> None:
+        raise PreflightError(self._secret_msg)
+
+    def run(self, ctx: RunContext) -> RunResult:  # pragma: no cover
+        raise AssertionError("run must not be called after preflight failure")
+
+
+class _SecretRunAdapter(SourceAdapter):
+    def __init__(self, adapter_key: str, exc: Exception) -> None:
+        self._adapter_key = adapter_key
+        self._exc = exc
+
+    @property
+    def adapter_key(self) -> str:
+        return self._adapter_key
+
+    def run(self, ctx: RunContext) -> RunResult:
+        raise self._exc
+
+
+# ---------------------------------------------------------------------------
+# T31 — preflight exception: secret absent from logs AND RunResult
+# ---------------------------------------------------------------------------
+
+def test_t31_preflight_exception_log_secret_absence(monkeypatch, caplog):
+    import logging
+    import services.public_data_sync.runner as runner_module
+
+    spec = registry.get("KOSHA_ACCIDENT_CASES")
+    secret_val = "TOP_SECRET_123"
+    fresh_reg = _make_runner_registry(
+        _SecretPreflightAdapter(spec.adapter_key, f"serviceKey={secret_val}")
+    )
+    monkeypatch.setattr(runner_module, "adapter_registry", fresh_reg)
+
+    with caplog.at_level(logging.DEBUG):
+        result = run_source("KOSHA_ACCIDENT_CASES")
+
+    assert secret_val not in caplog.text, "secret leaked into log"
+    assert result.error_message is not None
+    assert secret_val not in result.error_message, "secret leaked into error_message"
+
+
+# ---------------------------------------------------------------------------
+# T32 — adapter.run exception: Bearer token absent from logs AND RunResult
+# ---------------------------------------------------------------------------
+
+def test_t32_adapter_run_exception_bearer_log_absence(monkeypatch, caplog):
+    import logging
+    import services.public_data_sync.runner as runner_module
+
+    spec = registry.get("KOSHA_ACCIDENT_CASES")
+    bearer_token = "REAL_BEARER_TOKEN_456"
+    fresh_reg = _make_runner_registry(
+        _SecretRunAdapter(
+            spec.adapter_key,
+            RuntimeError(f"HTTP 401 Authorization: Bearer {bearer_token}"),
+        )
+    )
+    monkeypatch.setattr(runner_module, "adapter_registry", fresh_reg)
+
+    with caplog.at_level(logging.DEBUG):
+        result = run_source("KOSHA_ACCIDENT_CASES")
+
+    assert bearer_token not in caplog.text, "Bearer token leaked into log"
+    assert result.error_message is not None
+    assert bearer_token not in result.error_message, "Bearer token leaked into error_message"
+
+
+# ---------------------------------------------------------------------------
+# T33 — Authorization Bearer redactor
+# ---------------------------------------------------------------------------
+
+def test_t33_authorization_bearer_redaction():
+    token = "REAL_TOKEN_789"
+    original = f"Authorization: Bearer {token}"
+    redacted = _redact_string(original)
+    assert token not in redacted, "Bearer token not redacted"
+    assert f"Bearer {token}" not in redacted, "Bearer + token not redacted"
+    assert "Authorization:" in redacted, "Authorization key should remain"
+
+
+# ---------------------------------------------------------------------------
+# T34 — Authorization Basic redactor
+# ---------------------------------------------------------------------------
+
+def test_t34_authorization_basic_redaction():
+    credential = "ABCDEF123456"
+    original = f"Authorization: Basic {credential}"
+    redacted = _redact_string(original)
+    assert credential not in redacted, "Basic credential not redacted"
+    assert "Authorization:" in redacted, "Authorization key should remain"
+
+
+# ---------------------------------------------------------------------------
+# T35 — existing secret key patterns regression
+# ---------------------------------------------------------------------------
+
+def test_t35_existing_secret_regression():
+    cases = [
+        ("serviceKey=SKEY123", "SKEY123"),
+        ("apikey=AKEY456", "AKEY456"),
+        ("service_key=SKVAL", "SKVAL"),
+        ("token=TOKVAL", "TOKVAL"),
+        ("password=PWVAL", "PWVAL"),
+        ("secret=SECVAL", "SECVAL"),
+        ("credential=CREDVAL", "CREDVAL"),
+    ]
+    for original, secret_val in cases:
+        redacted = _redact_string(original)
+        assert secret_val not in redacted, f"secret not redacted in: {original!r}"
+
+    # nested dict/list/tuple via RunResult
+    result = RunResult(
+        run_id="r1",
+        source_id="S",
+        status=RunStatus.SUCCESS,
+        details={
+            "serviceKey": "TOP",
+            "nested": {"token": "NESTED_TOK"},
+            "list": [{"password": "LIST_PW"}],
+            "tup": ({"secret": "TUP_SEC"},),
+        },
+    )
+    assert result.details["serviceKey"] == "***"
+    assert result.details["nested"]["token"] == "***"
+    assert result.details["list"][0]["password"] == "***"
+    assert result.details["tup"][0]["secret"] == "***"

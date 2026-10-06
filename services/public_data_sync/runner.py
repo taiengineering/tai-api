@@ -68,16 +68,25 @@ def run_source(
     try:
         adapter.preflight(ctx)
     except PreflightError as exc:
-        logger.warning("preflight failed source_id=%s error=%s", source_id, exc)
+        logger.warning(
+            "preflight failed source_id=%s error_code=PREFLIGHT_ERROR exception_type=%s",
+            source_id, type(exc).__name__,
+        )
         return _fail("PREFLIGHT_ERROR", f"preflight: {exc}")
     except Exception as exc:
-        logger.error("preflight unexpected error source_id=%s", source_id, exc_info=True)
+        logger.error(
+            "preflight unexpected error source_id=%s exception_type=%s",
+            source_id, type(exc).__name__,
+        )
         return _fail("PREFLIGHT_UNEXPECTED", f"{type(exc).__name__}: {exc}")
 
     try:
         result = adapter.run(ctx)
     except Exception as exc:
-        logger.error("adapter.run raised source_id=%s", source_id, exc_info=True)
+        logger.error(
+            "adapter.run raised source_id=%s exception_type=%s",
+            source_id, type(exc).__name__,
+        )
         return _fail("EXECUTE_EXCEPTION", f"{type(exc).__name__}: {exc}")
 
     if result.started_at is None:

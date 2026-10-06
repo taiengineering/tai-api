@@ -55,14 +55,24 @@ _SECRET_KEY = re.compile(
     re.IGNORECASE,
 )
 
-_INLINE_SECRET = re.compile(
-    r"((?:servicekey|apikey|service_key|authorization|secret|token|password|credential)\s*[=:]\s*)([^\s,&'\"]+)",
+# Authorization headers can carry multi-word values (e.g. "Bearer TOKEN", "Basic ABC").
+# Capture everything to end of line so no credential bytes leak.
+_INLINE_SECRET_AUTH = re.compile(
+    r"(authorization\s*[=:]\s*)([^\n]+)",
+    re.IGNORECASE,
+)
+
+# All other secret keys carry single-word values — stop at whitespace/punctuation.
+_INLINE_SECRET_KEY = re.compile(
+    r"((?:servicekey|apikey|service_key|secret|token|password|credential)\s*[=:]\s*)([^\s,&'\"]+)",
     re.IGNORECASE,
 )
 
 
 def _redact_string(s: str) -> str:
-    return _INLINE_SECRET.sub(r"\1***", s)
+    s = _INLINE_SECRET_AUTH.sub(r"\1***", s)
+    s = _INLINE_SECRET_KEY.sub(r"\1***", s)
+    return s
 
 
 def _sanitize_value(value: Any) -> Any:
