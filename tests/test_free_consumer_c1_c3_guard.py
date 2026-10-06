@@ -28,13 +28,13 @@ Test groups G-01~G-14:
   G-05  EXPECTED_NON_RUNTIME fields absent from facility
   G-06  Absent key (not submitted) → absent from facility
   G-07  SECTOR_BLOCKED: floor_count BUILDING present / INDUSTRIAL absent
-  G-08  appendix3_item_no SOURCE_PROJECTED → canonical leaf projection
+  G-08  appendix3_item_no DIRECT_CANONICAL + canonical leaf projection
   G-09  project_amount SOURCE_PROJECTED → contract_amount_eok (CONSTRUCTION)
   G-10  subcontractor_work_types SOURCE_PROJECTED → domain booleans (full C1 path)
   G-11  Parent false → conditional numeric child absent from facility
   G-12  Parent true + child value → child present in facility
   G-13  is_construction explicit predicate chain
-  G-14  Matrix integrity: 58/58 FREE snapshot classified exactly once
+  G-14  Matrix integrity: 59/59 FREE snapshot classified exactly once
 """
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ BUILDING_FREE_SNAPSHOT: List[Tuple[str, str, Any]] = [
     ("built_year",                     "EXPECTED_NON_RUNTIME",              2010),
     ("main_structure",                 "EXPECTED_NON_RUNTIME",              "철근콘크리트"),
     ("worker_count",                   "DIRECT_CANONICAL",                  30),
-    ("appendix3_item_no",              "SOURCE_PROJECTED",                  28),
+    ("appendix3_item_no",              "DIRECT_CANONICAL",                  28),
     ("is_real_estate_management",      "DIRECT_CANONICAL",                  False),
     ("has_structure",                  "DIRECT_CANONICAL",                  True),
     ("structure_height_m",             "DIRECT_CANONICAL",                  8.0),
@@ -88,7 +88,7 @@ INDUSTRIAL_FREE_SNAPSHOT: List[Tuple[str, str, Any]] = [
     ("building_use_type",              "DIRECT_CANONICAL",                  "factory"),
     ("built_year",                     "EXPECTED_NON_RUNTIME",              2015),
     ("main_structure",                 "EXPECTED_NON_RUNTIME",              "철근콘크리트"),
-    ("appendix3_item_no",              "SOURCE_PROJECTED",                  28),
+    ("appendix3_item_no",              "DIRECT_CANONICAL",                  28),
     ("is_real_estate_management",      "DIRECT_CANONICAL",                  False),
     ("has_scaffold",                   "DIRECT_CANONICAL",                  True),
     ("scaffold_height_m",              "DIRECT_CANONICAL",                  4.0),
@@ -108,6 +108,7 @@ CONSTRUCTION_FREE_SNAPSHOT: List[Tuple[str, str, Any]] = [
     ("project_address",                "EXPECTED_NON_RUNTIME",              "경기도 성남시"),
     ("project_amount",                 "SOURCE_PROJECTED",                  50.0),
     ("worker_count",                   "DIRECT_CANONICAL",                  40),
+    ("appendix3_item_no",              "DIRECT_CANONICAL",                  48),
     ("is_construction",                "DIRECT_CANONICAL",                  False),
     ("is_relationship_contractor",     "DIRECT_CANONICAL",                  False),
     ("is_civil_construction",          "DIRECT_CANONICAL",                  False),
@@ -125,7 +126,7 @@ CONSTRUCTION_FREE_SNAPSHOT: List[Tuple[str, str, Any]] = [
     ("has_object_drop",                "DIRECT_CANONICAL",                  True),
     ("object_drop_height_m",           "DIRECT_CANONICAL",                  4.0),
     ("subcontractor_work_types",       "SOURCE_PROJECTED",                  ["FIRE_FACILITY"]),
-]  # 20 rows
+]  # 21 rows
 
 
 def _by_class(snapshot: List[Tuple[str, str, Any]], classification: str) -> List[Tuple[str, Any]]:
@@ -198,8 +199,8 @@ def _run(sector: str, form_data: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
       run_diagnosis(..., unified_step1_factory_func=build_unified_leg_input)
 
     Test baseline pre-conditions (NOT production defaults, NOT server synthesized):
-      CONSTRUCTION: is_construction=False required by explicit predicate gate.
-        If is_construction=True is explicitly set, is_relationship_contractor
+      CONSTRUCTION: appendix3_item_no=48 required by appendix3 validation gate.
+        If appendix3_item_no=49 is explicitly set, is_relationship_contractor
         and is_civil_construction must also be supplied.
       BUILDING/INDUSTRIAL: appendix3_item_no=28 required by appendix3 validation gate.
     """
@@ -210,8 +211,8 @@ def _run(sector: str, form_data: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
     if str(sector or "").upper() in ("BUILDING", "INDUSTRIAL", "INDUSTRY", "MANUFACTURING"):
         fd.setdefault("appendix3_item_no", 28)
     if str(sector or "").upper() == "CONSTRUCTION":
-        fd.setdefault("is_construction", False)   # TEST BASELINE REQUIRED INPUT
-        if fd.get("is_construction") is True:
+        fd.setdefault("appendix3_item_no", 48)   # TEST BASELINE REQUIRED INPUT
+        if fd.get("appendix3_item_no") == 49:
             fd.setdefault("is_relationship_contractor", False)   # TEST BASELINE REQUIRED INPUT
             fd.setdefault("is_civil_construction", False)        # TEST BASELINE REQUIRED INPUT
 
@@ -384,7 +385,7 @@ def test_g07_floor_count_absent_for_construction():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# G-08  appendix3_item_no SOURCE_PROJECTED → canonical leaf projection
+# G-08  appendix3_item_no DIRECT_CANONICAL + canonical leaf projection
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_g08_appendix3_item37_projected_building():
@@ -418,11 +419,12 @@ def test_g08_appendix3_item10_projected_industrial():
     assert fac.get("is_appendix3_28_48") is False
 
 
-def test_g08_appendix3_item_no_itself_not_in_facility():
-    """appendix3_item_no is SOURCE (not a direct LEG field) — must NOT appear in facility."""
+def test_g08_appendix3_item_no_in_facility():
+    """appendix3_item_no is DIRECT_CANONICAL (∈ _LEG_INPUT_FIELDS) — appears in facility as integer."""
     _, fac = _run("INDUSTRIAL", {"appendix3_item_no": 37, "is_real_estate_management": False})
-    assert "appendix3_item_no" not in fac, \
-        "appendix3_item_no source must not appear as raw value in facility"
+    assert "appendix3_item_no" in fac, \
+        "appendix3_item_no is DIRECT_CANONICAL — must appear in facility"
+    assert fac["appendix3_item_no"] == 37
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -593,7 +595,7 @@ def test_g13_all_construction_booleans_false_preserved():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# G-14  Matrix integrity — 58/58 FREE snapshot classified exactly once
+# G-14  Matrix integrity — 59/59 FREE snapshot classified exactly once
 # ─────────────────────────────────────────────────────────────────────────────
 
 _VALID_CLASSES = {
@@ -628,10 +630,10 @@ def test_g14_industrial_snapshot_23rows():
     _check_snapshot_integrity(INDUSTRIAL_FREE_SNAPSHOT, "INDUSTRIAL")
 
 
-def test_g14_construction_snapshot_20rows():
-    """CONSTRUCTION FREE snapshot = exactly 20 rows."""
-    assert len(CONSTRUCTION_FREE_SNAPSHOT) == 20, \
-        f"CONSTRUCTION FREE snapshot must have 20 rows, got {len(CONSTRUCTION_FREE_SNAPSHOT)}"
+def test_g14_construction_snapshot_21rows():
+    """CONSTRUCTION FREE snapshot = exactly 21 rows."""
+    assert len(CONSTRUCTION_FREE_SNAPSHOT) == 21, \
+        f"CONSTRUCTION FREE snapshot must have 21 rows, got {len(CONSTRUCTION_FREE_SNAPSHOT)}"
     _check_snapshot_integrity(CONSTRUCTION_FREE_SNAPSHOT, "CONSTRUCTION")
 
 

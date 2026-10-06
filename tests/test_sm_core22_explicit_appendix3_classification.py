@@ -116,9 +116,11 @@ def test_internal_leaves_are_not_diagnosis_run_body_fields():
 def test_allowlist_contains_published_leaves_not_source_item():
     for name in APPENDIX3_RUNTIME_LEAVES:
         assert name in _LEG_INPUT_FIELDS
-    assert "appendix3_item_no" not in _LEG_INPUT_FIELDS
+    # WO-LFR-OBJ-S01-P1-001: appendix3_item_no IS now in _LEG_INPUT_FIELDS.
+    # S01 CONSTRUCTION CORE22 norms use appendix3_item_no==49 as direct Leaf field.
+    assert "appendix3_item_no" in _LEG_INPUT_FIELDS
     assert len(_LEG_INPUT_FIELDS) == len(set(_LEG_INPUT_FIELDS))
-    assert len(_LEG_INPUT_FIELDS) == 212  # WO-...-ART57B-FASTLANE-IMPLEMENT-001: 206→207
+    assert len(_LEG_INPUT_FIELDS) == 250  # WO-LFR-OBJ-S01-P1-001: +1 appendix3_item_no
 
 
 def _proj_keys(item, subtype=None):

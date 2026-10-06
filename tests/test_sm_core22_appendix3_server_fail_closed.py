@@ -216,8 +216,20 @@ def test_F11_item49_completeness_pass_no_is_construction():
     assert "is_construction" not in proj
 
 
-def test_F12_construction_missing_appendix3_noop():
+def test_F12_construction_missing_appendix3_now_gated():
+    # WO-LFR-OBJ-S01-P1-001: CONSTRUCTION added to GATED_NORMALIZED_SECTORS.
+    # sector=CONSTRUCTION without explicit appendix3_item_no → required.
     body = DiagnosisRunBody(sector="CONSTRUCTION")
+    assert missing_explicit_appendix3_fields(body, "CONSTRUCTION") == ["appendix3_item_no"]
+    with pytest.raises(HTTPException) as exc_info:
+        validate_explicit_appendix3_classification(body, "CONSTRUCTION")
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["code"] == "APPENDIX3_EXPLICIT_CLASSIFICATION_REQUIRED"
+
+
+def test_F12b_construction_with_item_no_passes():
+    # CONSTRUCTION + explicit item_no → gate passes.
+    body = DiagnosisRunBody(sector="CONSTRUCTION", appendix3_item_no=48)
     assert missing_explicit_appendix3_fields(body, "CONSTRUCTION") == []
     validate_explicit_appendix3_classification(body, "CONSTRUCTION")
 

@@ -36,6 +36,7 @@ class FakeBody:
     def __init__(self, sector, form_data, auth_token="t"):
         fd = dict(form_data or {})
         if str(sector or "").upper() == "CONSTRUCTION":
+            fd.setdefault("appendix3_item_no", 48)
             fd.setdefault("is_construction", True)
             fd.setdefault("is_relationship_contractor", False)
             fd.setdefault("is_civil_construction", False)
