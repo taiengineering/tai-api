@@ -111,12 +111,20 @@ def test_RP04_extra_repo_422(monkeypatch):
 # RP05 — identical replay → idempotent 200
 def test_RP05_identical_replay_200(monkeypatch):
     from services import qa_control_svc as svc
-    # Same heads as stored → no conflict
-    svc._validate_tested_product_heads(VALID_HEADS)  # should not raise
-    # heads == stored → idempotent (no 409)
-    existing = VALID_HEADS
-    incoming = VALID_HEADS
-    assert existing == incoming  # idempotent
+    run = _make_run(tested_heads=VALID_HEADS)
+    run["run_status"] = "COMPLETED"
+    sb = _make_sb(run)
+    result = svc.apply_results(
+        sb, "run-001",
+        new_status="COMPLETED",
+        github_run_id=None, github_run_attempt=None,
+        head_sha=None, branch_name=None,
+        run_started_at=None, run_finished_at=None,
+        run_error_code=None, run_error_summary=None,
+        tested_product_heads=VALID_HEADS,
+        results=[],
+    )
+    assert result["run_id"] == "run-001"
 
 
 # RP06 — mismatch replay → 409
@@ -125,10 +133,62 @@ def test_RP06_mismatch_replay_409(monkeypatch):
     different = {**VALID_HEADS, "tai-api": "f"*40}
     run = _make_run(tested_heads=VALID_HEADS)
     run["run_status"] = "COMPLETED"
-    # Simulate immutable binding check inline
-    existing = run.get("tested_product_heads")
-    incoming = different
-    assert existing != incoming  # should raise 409 in real code
+    sb = _make_sb(run)
+    with pytest.raises(HTTPException) as exc:
+        svc.apply_results(
+            sb, "run-001",
+            new_status="COMPLETED",
+            github_run_id=None, github_run_attempt=None,
+            head_sha=None, branch_name=None,
+            run_started_at=None, run_finished_at=None,
+            run_error_code=None, run_error_summary=None,
+            tested_product_heads=different,
+            results=[],
+        )
+    assert exc.value.status_code == 409
+    assert "DEPLOYMENT_IDENTITY_MISMATCH" in str(exc.value.detail)
+
+
+# RP08 — finalized run with null heads + incoming heads → 409 LATE_BIND
+def test_RP08_late_bind_409(monkeypatch):
+    from services import qa_control_svc as svc
+    run = _make_run(tested_heads=None)
+    run["run_status"] = "COMPLETED"
+    sb = _make_sb(run)
+    with pytest.raises(HTTPException) as exc:
+        svc.apply_results(
+            sb, "run-001",
+            new_status="COMPLETED",
+            github_run_id=None, github_run_attempt=None,
+            head_sha=None, branch_name=None,
+            run_started_at=None, run_finished_at=None,
+            run_error_code=None, run_error_summary=None,
+            tested_product_heads=VALID_HEADS,
+            results=[],
+        )
+    assert exc.value.status_code == 409
+    assert "DEPLOYMENT_IDENTITY_LATE_BIND" in str(exc.value.detail)
+
+
+# RP09 — targeted COMPLETED without heads → 422 TESTED_PRODUCT_HEADS_REQUIRED
+def test_RP09_targeted_completed_no_heads_422(monkeypatch):
+    from services import qa_control_svc as svc
+    run = _make_run(tested_heads=None)  # trigger_type=PR, requested_by=targeted-qa
+    run["run_status"] = "RUNNING"
+    sb = _make_sb(run)
+    with pytest.raises(HTTPException) as exc:
+        svc.apply_results(
+            sb, "run-001",
+            new_status="COMPLETED",
+            github_run_id=None, github_run_attempt=None,
+            head_sha=None, branch_name=None,
+            run_started_at=None, run_finished_at=None,
+            run_error_code=None, run_error_summary=None,
+            tested_product_heads=None,
+            results=[],
+        )
+    assert exc.value.status_code == 422
+    assert "TESTED_PRODUCT_HEADS_REQUIRED" in str(exc.value.detail)
 
 
 # RP07 — get_run returns tested_product_heads

@@ -945,6 +945,18 @@ def apply_results(
             if existing_heads != tested_product_heads:
                 raise HTTPException(409, "DEPLOYMENT_IDENTITY_MISMATCH")
             # else: identical replay — idempotent, skip re-write
+        elif current_status in _FINAL_STATUSES:
+            raise HTTPException(409, "DEPLOYMENT_IDENTITY_LATE_BIND")
+
+    # Targeted COMPLETED provenance mandatory
+    if (
+        new_status == "COMPLETED"
+        and run.get("trigger_type") == "PR"
+        and run.get("requested_by") == "targeted-qa"
+    ):
+        effective_heads = tested_product_heads if tested_product_heads is not None else run.get("tested_product_heads")
+        if not effective_heads:
+            raise HTTPException(422, "TESTED_PRODUCT_HEADS_REQUIRED")
 
     # Run-level error notification
     run_notification: Optional[Dict[str, Any]] = None
