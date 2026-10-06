@@ -1,0 +1,25 @@
+doc_id,doc_type,has_legal_form,evidence_count,evidence_family,upload_type,evidence_label,status
+DOC-OSH-017,CHK,false,1,DATE,timestamp_auto,점검일시,CANDIDATE
+DOC-OSH-055,CHK,false,1,DATE,timestamp_auto,점검일시,CANDIDATE
+DOC-CON-007,INSP,false,1,DATE,timestamp_auto,점검일시,CANDIDATE
+DOC-CON-LAW-014,INSP,false,1,DATE,timestamp_auto,점검일시,CANDIDATE
+DOC-OSH-007,INSP,false,1,DATE,timestamp_auto,점검일시,CANDIDATE
+DOC-OSH-038,INSP,false,1,DATE,timestamp_auto,점검일시,CANDIDATE
+DOC-OSH-046,PPE,false,0,,,,(none)
+DOC-CON-012,TBM,false,1,SIGNATURE,signature,서명,CANDIDATE
+DOC-OSH-056,TBM,false,1,SIGNATURE,signature,서명,CANDIDATE
+DOC-BLD-002,EQUIP,true,1,SIGNATURE,signature,점검자 서명,CANDIDATE
+DOC-BLD-009,EQUIP,false,1,DATE,timestamp_auto,점검일시,CANDIDATE
+DOC-BLD-011,EQUIP,true,1,DATE,timestamp_auto,점검일자,CANDIDATE
+DOC-BLD-016,EQUIP,true,0,,,,(none)
+DOC-CHEM-003,EQUIP,false,0,,,,(none)
+DOC-CON-013,EQUIP,false,0,,,,(none)
+DOC-CON-014,EQUIP,false,0,,,,(none)
+DOC-CON-026,EQUIP,false,0,,,,(none)
+DOC-CON-032,EQUIP,false,0,,,,(none)
+DOC-CON-043,EQUIP,false,0,,,,(none)
+DOC-FAC-002,EQUIP,false,0,,,,(none)
+DOC-FAC-008,EQUIP,true,0,,,,(none)
+DOC-FAC-013,EQUIP,true,0,,,,(none)
+DOC-FAC-016,EQUIP,true,0,,,,(none)
+DOC-OSH-059,EQUIP,false,1,DATE,timestamp_auto,점검일시,CANDIDATE

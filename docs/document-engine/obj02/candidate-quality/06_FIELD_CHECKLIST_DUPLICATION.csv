@@ -1,0 +1,97 @@
+doc_id,doc_type,field_order,field_key,field_label,field_input_type,checklist_raw_text,checklist_input_type,label_match,type_mismatch_severity
+DOC-OSH-017,CHK,1,inspection_done,점검 실시 여부,text,점검 실시 여부,PASS_FAIL,EXACT,LOW
+DOC-OSH-017,CHK,2,inspection_datetime,점검일시,date,점검일시,PASS_FAIL,EXACT,HIGH
+DOC-OSH-017,CHK,3,inspector,점검자,text,점검자,PASS_FAIL,EXACT,LOW
+DOC-OSH-017,CHK,4,risk,위험요인,text,위험요인,PASS_FAIL,EXACT,LOW
+DOC-OSH-017,CHK,5,action,조치사항,textarea,조치사항,PASS_FAIL,EXACT,LOW
+DOC-OSH-055,CHK,1,inspection_done,점검 실시 여부,text,점검 실시 여부,PASS_FAIL,EXACT,LOW
+DOC-OSH-055,CHK,2,inspection_datetime,점검일시,date,점검일시,PASS_FAIL,EXACT,HIGH
+DOC-OSH-055,CHK,3,inspector,점검자,text,점검자,PASS_FAIL,EXACT,LOW
+DOC-OSH-055,CHK,4,risk,위험요인,text,위험요인,PASS_FAIL,EXACT,LOW
+DOC-OSH-055,CHK,5,action,조치사항,textarea,조치사항,PASS_FAIL,EXACT,LOW
+DOC-CON-007,INSP,1,inspection_done,점검 실시 여부,text,점검 실시 여부,PASS_FAIL,EXACT,LOW
+DOC-CON-007,INSP,2,inspection_datetime,점검일시,date,점검일시,PASS_FAIL,EXACT,HIGH
+DOC-CON-007,INSP,3,inspector,점검자,text,점검자,PASS_FAIL,EXACT,LOW
+DOC-CON-007,INSP,4,risk,위험요인,text,위험요인,PASS_FAIL,EXACT,LOW
+DOC-CON-007,INSP,5,action,조치사항,textarea,조치사항,PASS_FAIL,EXACT,LOW
+DOC-CON-LAW-014,INSP,1,inspection_done,점검 실시 여부,text,점검 실시 여부,PASS_FAIL,EXACT,LOW
+DOC-CON-LAW-014,INSP,2,inspection_datetime,점검일시,date,점검일시,PASS_FAIL,EXACT,HIGH
+DOC-CON-LAW-014,INSP,3,inspector,점검자,text,점검자,PASS_FAIL,EXACT,LOW
+DOC-CON-LAW-014,INSP,4,risk,위험요인,text,위험요인,PASS_FAIL,EXACT,LOW
+DOC-CON-LAW-014,INSP,5,action,조치사항,textarea,조치사항,PASS_FAIL,EXACT,LOW
+DOC-OSH-007,INSP,1,inspection_done,점검 실시 여부,text,점검 실시 여부,PASS_FAIL,EXACT,LOW
+DOC-OSH-007,INSP,2,inspection_datetime,점검일시,date,점검일시,PASS_FAIL,EXACT,HIGH
+DOC-OSH-007,INSP,3,inspector,점검자,text,점검자,PASS_FAIL,EXACT,LOW
+DOC-OSH-007,INSP,4,risk,위험요인,text,위험요인,PASS_FAIL,EXACT,LOW
+DOC-OSH-007,INSP,5,action,조치사항,textarea,조치사항,PASS_FAIL,EXACT,LOW
+DOC-OSH-038,INSP,1,inspection_done,점검 실시 여부,text,점검 실시 여부,PASS_FAIL,EXACT,LOW
+DOC-OSH-038,INSP,2,inspection_datetime,점검일시,date,점검일시,PASS_FAIL,EXACT,HIGH
+DOC-OSH-038,INSP,3,inspector,점검자,text,점검자,PASS_FAIL,EXACT,LOW
+DOC-OSH-038,INSP,4,risk,위험요인,text,위험요인,PASS_FAIL,EXACT,LOW
+DOC-OSH-038,INSP,5,action,조치사항,textarea,조치사항,PASS_FAIL,EXACT,LOW
+DOC-OSH-046,PPE,1,ppe_check,보호구 착용 여부,text,보호구 착용 여부,PASS_FAIL,EXACT,LOW
+DOC-OSH-046,PPE,2,worker,작업자,text,작업자,PASS_FAIL,EXACT,LOW
+DOC-OSH-046,PPE,3,non_compliance,미착용자,text,미착용자,PASS_FAIL,EXACT,LOW
+DOC-OSH-046,PPE,4,action,조치사항,textarea,조치사항,PASS_FAIL,EXACT,LOW
+DOC-CON-012,TBM,1,work_content,작업내용,textarea,작업내용,PASS_FAIL,EXACT,LOW
+DOC-CON-012,TBM,2,risk_share,위험요인 공유,text,위험요인 공유,PASS_FAIL,EXACT,LOW
+DOC-CON-012,TBM,3,participants,참석자,text,참석자,PASS_FAIL,EXACT,LOW
+DOC-CON-012,TBM,4,signatures,서명,signature,서명,PASS_FAIL,EXACT,CRITICAL
+DOC-OSH-056,TBM,1,work_content,작업내용,textarea,작업내용,PASS_FAIL,EXACT,LOW
+DOC-OSH-056,TBM,2,risk_share,위험요인 공유,text,위험요인 공유,PASS_FAIL,EXACT,LOW
+DOC-OSH-056,TBM,3,participants,참석자,text,참석자,PASS_FAIL,EXACT,LOW
+DOC-OSH-056,TBM,4,signatures,서명,signature,서명,PASS_FAIL,EXACT,CRITICAL
+DOC-BLD-002,EQUIP,1,target,점검 대상,text,점검 대상,PASS_FAIL,EXACT,LOW
+DOC-BLD-002,EQUIP,2,result,점검 결과,text,점검 결과,PASS_FAIL,EXACT,LOW
+DOC-BLD-002,EQUIP,3,defect,불량사항,textarea,불량사항,PASS_FAIL,EXACT,LOW
+DOC-BLD-002,EQUIP,4,action,조치사항,textarea,조치사항,PASS_FAIL,EXACT,LOW
+DOC-BLD-002,EQUIP,5,inspector_sign,점검자 서명,signature,점검자 서명,PASS_FAIL,EXACT,CRITICAL
+DOC-BLD-009,EQUIP,1,electrical_check,전기설비 점검,text,전기설비 점검,PASS_FAIL,EXACT,LOW
+DOC-BLD-009,EQUIP,2,inspection_datetime,점검일시,date,점검일시,PASS_FAIL,EXACT,HIGH
+DOC-BLD-009,EQUIP,3,abnormal,이상 여부,text,이상 여부,PASS_FAIL,EXACT,LOW
+DOC-BLD-011,EQUIP,1,inspection_date,점검일자,date,점검일자,PASS_FAIL,EXACT,HIGH
+DOC-BLD-011,EQUIP,2,inspection_content,점검내용,textarea,점검내용,PASS_FAIL,EXACT,LOW
+DOC-BLD-011,EQUIP,3,result,점검결과,text,점검결과,PASS_FAIL,EXACT,LOW
+DOC-BLD-011,EQUIP,4,action,조치사항,textarea,조치사항,PASS_FAIL,EXACT,LOW
+DOC-BLD-016,EQUIP,1,asbestos_status,석면 상태,text,석면 상태,PASS_FAIL,EXACT,LOW
+DOC-BLD-016,EQUIP,2,damage,손상 여부,text,손상 여부,PASS_FAIL,EXACT,LOW
+DOC-BLD-016,EQUIP,3,result,점검 결과,text,점검 결과,PASS_FAIL,EXACT,LOW
+DOC-CHEM-003,EQUIP,1,facility_check,시설 점검 실시,text,시설 점검 실시,PASS_FAIL,EXACT,LOW
+DOC-CHEM-003,EQUIP,2,leak,누출 여부,text,누출 여부,PASS_FAIL,EXACT,LOW
+DOC-CHEM-003,EQUIP,3,storage,저장 상태,text,저장 상태,PASS_FAIL,EXACT,LOW
+DOC-CHEM-003,EQUIP,4,risk,위험성 평가,text,위험성 평가,PASS_FAIL,EXACT,LOW
+DOC-CON-013,EQUIP,1,equipment_check,장비 점검,text,장비 점검,PASS_FAIL,EXACT,LOW
+DOC-CON-013,EQUIP,2,equipment_name,장비명,text,장비명,PASS_FAIL,EXACT,LOW
+DOC-CON-013,EQUIP,3,status,상태,text,상태,PASS_FAIL,EXACT,LOW
+DOC-CON-014,EQUIP,1,scaffold_check,비계 점검,text,비계 점검,PASS_FAIL,EXACT,LOW
+DOC-CON-014,EQUIP,2,install_status,설치 상태,text,설치 상태,PASS_FAIL,EXACT,LOW
+DOC-CON-014,EQUIP,3,collapse_risk,붕괴 위험,text,붕괴 위험,PASS_FAIL,EXACT,LOW
+DOC-CON-026,EQUIP,1,scaffold_check,비계 점검,text,비계 점검,PASS_FAIL,EXACT,LOW
+DOC-CON-026,EQUIP,2,binding,결속 상태,text,결속 상태,PASS_FAIL,EXACT,LOW
+DOC-CON-026,EQUIP,3,abnormal,이상 여부,text,이상 여부,PASS_FAIL,EXACT,LOW
+DOC-CON-032,EQUIP,1,crane_check,크레인 점검,text,크레인 점검,PASS_FAIL,EXACT,LOW
+DOC-CON-032,EQUIP,2,brake,브레이크 상태,text,브레이크 상태,PASS_FAIL,EXACT,LOW
+DOC-CON-032,EQUIP,3,wire,와이어 상태,text,와이어 상태,PASS_FAIL,EXACT,LOW
+DOC-CON-043,EQUIP,1,guard_check,방호장치 점검,text,방호장치 점검,PASS_FAIL,EXACT,LOW
+DOC-CON-043,EQUIP,2,removed,제거 여부,text,제거 여부,PASS_FAIL,EXACT,LOW
+DOC-CON-043,EQUIP,3,status,상태,text,상태,PASS_FAIL,EXACT,LOW
+DOC-FAC-002,EQUIP,1,gas_check,가스시설 점검,text,가스시설 점검,PASS_FAIL,EXACT,LOW
+DOC-FAC-002,EQUIP,2,leak,누출 여부,text,누출 여부,PASS_FAIL,EXACT,LOW
+DOC-FAC-002,EQUIP,3,pressure,압력 상태,text,압력 상태,PASS_FAIL,EXACT,LOW
+DOC-FAC-002,EQUIP,4,valve,밸브 상태,text,밸브 상태,PASS_FAIL,EXACT,LOW
+DOC-FAC-008,EQUIP,1,inspection_content,점검내용,textarea,점검내용,PASS_FAIL,EXACT,LOW
+DOC-FAC-008,EQUIP,2,result,점검결과,text,점검결과,PASS_FAIL,EXACT,LOW
+DOC-FAC-008,EQUIP,3,abnormal,이상 여부,text,이상 여부,PASS_FAIL,EXACT,LOW
+DOC-FAC-008,EQUIP,4,action,조치사항,textarea,조치사항,PASS_FAIL,EXACT,LOW
+DOC-FAC-013,EQUIP,1,runtime,운전시간,text,운전시간,PASS_FAIL,EXACT,LOW
+DOC-FAC-013,EQUIP,2,temperature,온도,text,온도,PASS_FAIL,EXACT,LOW
+DOC-FAC-013,EQUIP,3,pressure,압력,text,압력,PASS_FAIL,EXACT,LOW
+DOC-FAC-013,EQUIP,4,abnormal,이상 여부,text,이상 여부,PASS_FAIL,EXACT,LOW
+DOC-FAC-016,EQUIP,1,equipment_status,설비 상태,text,설비 상태,PASS_FAIL,EXACT,LOW
+DOC-FAC-016,EQUIP,2,operation_condition,운전 조건,text,운전 조건,PASS_FAIL,EXACT,LOW
+DOC-FAC-016,EQUIP,3,result,점검 결과,text,점검 결과,PASS_FAIL,EXACT,LOW
+DOC-OSH-059,EQUIP,1,equipment_check,설비 점검 실시,text,설비 점검 실시,PASS_FAIL,EXACT,LOW
+DOC-OSH-059,EQUIP,2,inspection_datetime,점검일시,date,점검일시,PASS_FAIL,EXACT,HIGH
+DOC-OSH-059,EQUIP,3,equipment_name,설비명,text,설비명,PASS_FAIL,EXACT,LOW
+DOC-OSH-059,EQUIP,4,abnormal,이상 여부,text,이상 여부,PASS_FAIL,EXACT,LOW
+DOC-OSH-059,EQUIP,5,action,조치사항,textarea,조치사항,PASS_FAIL,EXACT,LOW
