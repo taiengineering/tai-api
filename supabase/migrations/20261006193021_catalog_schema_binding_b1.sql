@@ -7,9 +7,10 @@
 --          via plpgsql.check_asserts=off, making guards silently skip).
 -- CORR-07: information_schema queries qualify table_schema = 'public' to avoid
 --          false-positives from same-named tables in other schemas.
---
--- TRANSACTION WRAPPER: ensures any guard failure rolls back all DDL atomically.
-BEGIN;
+-- CORR-08 (FINAL-MIGRATION-CORR-003): explicit BEGIN/COMMIT removed.
+--          Supabase CLI wraps each migration file in its own transaction.
+--          Nested BEGIN would generate a PostgreSQL warning and may break
+--          Supabase Branching's transaction management.
 
 -- ============================================================
 -- STEP 1: PRE-CONDITION GUARDS
@@ -171,5 +172,3 @@ DO $check_final$ BEGIN
     RAISE EXCEPTION 'FINAL FAIL: multiple APPROVED_FOR_RUNTIME_USE schemas share same catalog_document_id';
   END IF;
 END $check_final$;
-
-COMMIT;
