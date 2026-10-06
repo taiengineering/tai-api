@@ -93,7 +93,8 @@ _SCHED_COLS = (
 _RUN_COLS = (
     "id, trigger_type, run_status, github_run_id, github_run_attempt, "
     "head_sha, branch_name, requested_by, requested_at, "
-    "started_at, finished_at, error_code, error_summary, created_at, updated_at"
+    "started_at, finished_at, error_code, error_summary, "
+    "tested_product_heads, created_at, updated_at"
 )
 _TARGET_COLS = "id, run_id, qa_item_id, ordinal, created_at"
 _RESULT_COLS = (
@@ -125,6 +126,29 @@ def redact_error_summary(text: Optional[str]) -> Optional[str]:
         return text
     text = _REDACT_RE.sub(lambda m: m.group(1) + "[REDACTED]", text)
     return text[:_MAX_ERROR_LEN]
+
+
+_PRODUCT_REPOS = frozenset(["tai-api", "tai-admin", "tai-www"])
+_HEAD_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _validate_tested_product_heads(heads: Optional[Dict[str, str]]) -> None:
+    """Validate tested_product_heads: exactly 3 keys, each 40-char lowercase hex SHA."""
+    if heads is None:
+        return
+    if not isinstance(heads, dict):
+        raise HTTPException(422, "INVALID_TESTED_PRODUCT_HEADS: must be an object")
+    if set(heads.keys()) != _PRODUCT_REPOS:
+        raise HTTPException(
+            422,
+            f"INVALID_TESTED_PRODUCT_HEADS: keys must be exactly {sorted(_PRODUCT_REPOS)}, got {sorted(heads.keys())}",
+        )
+    for repo, sha in heads.items():
+        if not isinstance(sha, str) or not _HEAD_SHA_RE.match(sha):
+            raise HTTPException(
+                422,
+                f"INVALID_TESTED_PRODUCT_HEADS: {repo} SHA must be 40 lowercase hex chars, got {sha!r}",
+            )
 
 
 def _validate_artifact_ref(artifact_ref: Optional[str]) -> None:
@@ -861,18 +885,21 @@ def _results_match(existing: Dict, incoming: Dict) -> bool:
 
 def apply_results(
     supabase,
-    run_id:             str,
-    new_status:         Optional[str],
-    github_run_id:      Optional[int],
-    github_run_attempt: Optional[int],
-    head_sha:           Optional[str],
-    branch_name:        Optional[str],
-    run_started_at:     Optional[str],
-    run_finished_at:    Optional[str],
-    run_error_code:     Optional[str],
-    run_error_summary:  Optional[str],
-    results:            List[Dict[str, Any]],
+    run_id:                 str,
+    new_status:             Optional[str],
+    github_run_id:          Optional[int],
+    github_run_attempt:     Optional[int],
+    head_sha:               Optional[str],
+    branch_name:            Optional[str],
+    run_started_at:         Optional[str],
+    run_finished_at:        Optional[str],
+    run_error_code:         Optional[str],
+    run_error_summary:      Optional[str],
+    tested_product_heads:   Optional[Dict[str, str]] = None,
+    results:                List[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    if results is None:
+        results = []
     # GitHub identity pair check
     if (github_run_id is None) != (github_run_attempt is None):
         raise HTTPException(422, "github_run_id와 github_run_attempt는 함께 제공해야 합니다")
@@ -909,6 +936,27 @@ def apply_results(
         elif existing_gri != github_run_id or existing_gra != github_run_attempt:
             raise HTTPException(409, "GITHUB_IDENTITY_MISMATCH")
         # else: same identity — idempotent
+
+    # Tested product heads — validate then immutably bind
+    _validate_tested_product_heads(tested_product_heads)
+    if tested_product_heads is not None:
+        existing_heads = run.get("tested_product_heads")
+        if existing_heads is not None:
+            if existing_heads != tested_product_heads:
+                raise HTTPException(409, "DEPLOYMENT_IDENTITY_MISMATCH")
+            # else: identical replay — idempotent, skip re-write
+        elif current_status in _FINAL_STATUSES:
+            raise HTTPException(409, "DEPLOYMENT_IDENTITY_LATE_BIND")
+
+    # Targeted COMPLETED provenance mandatory
+    if (
+        new_status == "COMPLETED"
+        and run.get("trigger_type") == "PR"
+        and run.get("requested_by") == "targeted-qa"
+    ):
+        effective_heads = tested_product_heads if tested_product_heads is not None else run.get("tested_product_heads")
+        if not effective_heads:
+            raise HTTPException(422, "TESTED_PRODUCT_HEADS_REQUIRED")
 
     # Run-level error notification
     run_notification: Optional[Dict[str, Any]] = None
@@ -1114,6 +1162,8 @@ def apply_results(
     if github_run_id is not None and run.get("github_run_id") is None:
         run_patch["github_run_id"] = github_run_id
         run_patch["github_run_attempt"] = github_run_attempt
+    if tested_product_heads is not None and run.get("tested_product_heads") is None:
+        run_patch["tested_product_heads"] = tested_product_heads
 
     supabase.table("qa_runs").update(run_patch).eq("id", run_id).execute()
 

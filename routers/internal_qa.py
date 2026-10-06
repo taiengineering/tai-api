@@ -88,16 +88,17 @@ class ResultItem(BaseModel):
 
 
 class RunResultsPayload(BaseModel):
-    run_status:         Optional[str]    = None
-    github_run_id:      Optional[int]    = None
-    github_run_attempt: Optional[int]    = None
-    head_sha:           Optional[str]    = None
-    branch_name:        Optional[str]    = None
-    started_at:         Optional[str]    = None
-    finished_at:        Optional[str]    = None
-    error_code:         Optional[str]    = None
-    error_summary:      Optional[str]    = None
-    results:            List[ResultItem] = []
+    run_status:           Optional[str]            = None
+    github_run_id:        Optional[int]            = None
+    github_run_attempt:   Optional[int]            = None
+    head_sha:             Optional[str]            = None
+    branch_name:          Optional[str]            = None
+    started_at:           Optional[str]            = None
+    finished_at:          Optional[str]            = None
+    error_code:           Optional[str]            = None
+    error_summary:        Optional[str]            = None
+    tested_product_heads: Optional[Dict[str, str]] = None
+    results:              List[ResultItem]          = []
 
 
 @router.post("/catalog/sync")
@@ -149,6 +150,7 @@ async def post_run_results(
         run_finished_at=body.finished_at,
         run_error_code=body.error_code,
         run_error_summary=body.error_summary,
+        tested_product_heads=body.tested_product_heads,
         results=results_dicts,
     )
 
