@@ -176,14 +176,19 @@ class PublicDataRuntimeStore:
         return res.data if hasattr(res, "data") else None
 
     def list_due_sources(self, *, now: datetime | None = None) -> list[str]:
-        """Return source_ids that are enabled and due (next_due_at <= now)."""
+        """Return source_ids that are enabled, due, and not in future retry backoff.
+
+        Includes sources where retry_not_before IS NULL (never failed) or
+        retry_not_before <= now (backoff window has passed).
+        """
         now = now or _now()
+        ts = _ts(now)
         res = (
             self._sb.table("public_data_source_runtime")
             .select("source_id")
             .eq("is_enabled", True)
-            .lte("next_due_at", _ts(now))
-            .is_("retry_not_before", None)
+            .lte("next_due_at", ts)
+            .or_(f"retry_not_before.is.null,retry_not_before.lte.{ts}")
             .execute()
         )
         rows = res.data if hasattr(res, "data") else []

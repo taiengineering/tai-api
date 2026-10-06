@@ -1,4 +1,5 @@
 -- WO-PUBLIC-DATA-SYNC-WP1B-RUNTIME-STATE-001
+-- PATCH: WO-PUBLIC-DATA-SYNC-WP1B-PATCH-RUNTIME-CORRECTNESS-001
 -- Public Data Control Plane — runtime state + run evidence + atomic claim RPCs
 -- Production DDL: NOT applied here. Apply via: supabase db push --linked
 
@@ -129,6 +130,11 @@ GRANT SELECT, INSERT, UPDATE, DELETE
 
 -- =============================================================================
 -- RPC: fn_public_data_claim_run
+-- PATCH changes vs original:
+--   1. Source limit guard: p_source_limit != 1 → SOURCE_LIMIT_UNSUPPORTED
+--   2. Stale recovery expanded: credential_pool + rate_limit_group scope added
+--   3. Stale reflect: p_source_id runtime cleared when its current_run was staled
+--   4. EXCEPTION: GET STACKED DIAGNOSTICS → accurate CREDENTIAL_BUSY / RATE_LIMIT_BUSY
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION public.fn_public_data_claim_run(
@@ -152,10 +158,12 @@ SET search_path = public, pg_temp
 AS $fn$
 DECLARE
     v_runtime       record;
+    v_stale_id      uuid;
     v_source_slot   integer;
     v_cred_slot     integer;
     v_rl_slot       integer;
     v_lease_until   timestamptz;
+    v_constraint    text;
 BEGIN
     SELECT * INTO v_runtime
     FROM public.public_data_source_runtime
@@ -165,6 +173,13 @@ BEGIN
     IF NOT FOUND THEN
         RETURN jsonb_build_object(
             'claimed', false, 'run_id', p_run_id, 'reason', 'UNKNOWN_SOURCE_RUNTIME');
+    END IF;
+
+    -- Source concurrency guard: only source_limit = 1 is supported.
+    -- Concurrency > 1 requires multi-run source_runtime state (separate WP).
+    IF p_source_limit IS NULL OR p_source_limit < 1 OR p_source_limit > 1 THEN
+        RETURN jsonb_build_object(
+            'claimed', false, 'run_id', p_run_id, 'reason', 'SOURCE_LIMIT_UNSUPPORTED');
     END IF;
 
     IF p_trigger = 'SCHEDULED' THEN
@@ -183,23 +198,43 @@ BEGIN
         END IF;
     END IF;
 
-    -- Stale recovery
+    -- Stale recovery: expanded scope — p_source_id + shared credential_pool + rate_limit_group.
+    -- Unblocks slots occupied by crashed/expired runs across all shared resources so that
+    -- a source sharing credential_pool or rate_limit_group is not permanently blocked by
+    -- another source's stale RUNNING row.
     UPDATE public.public_data_sync_runs
     SET status      = 'FAILED',
         error_code  = 'LEASE_EXPIRED',
         finished_at = p_now
-    WHERE source_id   = p_source_id
-      AND status      = 'RUNNING'
-      AND lease_until <= p_now;
-
-    UPDATE public.public_data_source_runtime
-    SET current_run_id = NULL,
-        updated_at     = p_now
-    WHERE source_id    = p_source_id
-      AND current_run_id IN (
-          SELECT id FROM public.public_data_sync_runs
-          WHERE source_id = p_source_id AND status = 'FAILED'
+    WHERE status      = 'RUNNING'
+      AND lease_until <= p_now
+      AND (
+          source_id        = p_source_id
+          OR credential_pool   = p_credential_pool
+          OR rate_limit_group  = p_rate_limit_group
       );
+
+    -- Reflect stale recovery in p_source_id runtime (we hold FOR UPDATE lock on this row).
+    -- Only update if p_source_id's current_run_id was the run just staled.
+    -- Other sources' runtimes self-heal on their next claim; touching them here
+    -- would risk deadlock with concurrent claims on those sources.
+    IF v_runtime.current_run_id IS NOT NULL THEN
+        SELECT id INTO v_stale_id
+        FROM public.public_data_sync_runs
+        WHERE id         = v_runtime.current_run_id
+          AND status     = 'FAILED'
+          AND error_code = 'LEASE_EXPIRED';
+
+        IF FOUND THEN
+            UPDATE public.public_data_source_runtime
+            SET current_run_id   = NULL,
+                last_run_id      = v_stale_id,
+                last_status      = 'FAILED',
+                last_finished_at = p_now,
+                updated_at       = p_now
+            WHERE source_id = p_source_id;
+        END IF;
+    END IF;
 
     -- Source slot
     SELECT MIN(s) INTO v_source_slot
@@ -274,8 +309,24 @@ BEGIN
     );
 
 EXCEPTION WHEN unique_violation THEN
-    RETURN jsonb_build_object(
-        'claimed', false, 'run_id', p_run_id, 'reason', 'SOURCE_BUSY');
+    -- Identify which constraint was violated to return accurate reason.
+    GET STACKED DIAGNOSTICS v_constraint = CONSTRAINT_NAME;
+    IF v_constraint = 'udx_pdsr_source_slot_running' THEN
+        RETURN jsonb_build_object(
+            'claimed', false, 'run_id', p_run_id, 'reason', 'SOURCE_BUSY');
+    ELSIF v_constraint = 'udx_pdsr_credential_slot_running' THEN
+        RETURN jsonb_build_object(
+            'claimed', false, 'run_id', p_run_id, 'reason', 'CREDENTIAL_BUSY');
+    ELSIF v_constraint = 'udx_pdsr_ratelimit_slot_running' THEN
+        RETURN jsonb_build_object(
+            'claimed', false, 'run_id', p_run_id, 'reason', 'RATE_LIMIT_BUSY');
+    ELSIF v_constraint = 'public_data_sync_runs_pkey' THEN
+        RETURN jsonb_build_object(
+            'claimed', false, 'run_id', p_run_id, 'reason', 'RUN_ID_CONFLICT');
+    ELSE
+        RETURN jsonb_build_object(
+            'claimed', false, 'run_id', p_run_id, 'reason', 'UNIQUE_CONFLICT');
+    END IF;
 END;
 $fn$;
 
@@ -290,6 +341,8 @@ GRANT EXECUTE ON FUNCTION public.fn_public_data_claim_run(
 
 -- =============================================================================
 -- RPC: fn_public_data_heartbeat_run
+-- PATCH: Added current_run_id fence via EXISTS on source_runtime.
+-- Prevents a stale/recovered run from refreshing its own lease.
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION public.fn_public_data_heartbeat_run(
@@ -306,11 +359,16 @@ AS $fn$
 DECLARE
     v_count integer;
 BEGIN
-    UPDATE public.public_data_sync_runs
+    UPDATE public.public_data_sync_runs r
     SET heartbeat_at = p_now,
         lease_until  = p_now + (p_lease_seconds * interval '1 second')
-    WHERE id     = p_run_id
-      AND status = 'RUNNING';
+    WHERE r.id     = p_run_id
+      AND r.status = 'RUNNING'
+      AND EXISTS (
+          SELECT 1 FROM public.public_data_source_runtime rt
+          WHERE rt.source_id      = r.source_id
+            AND rt.current_run_id = p_run_id
+      );
 
     GET DIAGNOSTICS v_count = ROW_COUNT;
     RETURN v_count > 0;
@@ -324,6 +382,9 @@ GRANT EXECUTE ON FUNCTION public.fn_public_data_heartbeat_run(uuid, timestamptz,
 
 -- =============================================================================
 -- RPC: fn_public_data_complete_run
+-- PATCH: Added current_run_id fence — SELECT FOR UPDATE on source_runtime
+-- WHERE current_run_id = p_run_id. Returns false if source_runtime no longer
+-- points to this run (stale recovery or racing completion took over).
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION public.fn_public_data_complete_run(
@@ -353,11 +414,26 @@ SET search_path = public, pg_temp
 AS $fn$
 DECLARE
     v_run   record;
+    v_rt    record;
 BEGIN
     SELECT * INTO v_run
     FROM public.public_data_sync_runs
     WHERE id     = p_run_id
       AND status = 'RUNNING'
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RETURN false;
+    END IF;
+
+    -- Concurrency fence: source_runtime must still point to this run.
+    -- With source_limit=1 enforced, if current_run_id != p_run_id, a stale
+    -- recovery or a racing completion already updated source state — do not
+    -- overwrite it.
+    SELECT * INTO v_rt
+    FROM public.public_data_source_runtime
+    WHERE source_id      = v_run.source_id
+      AND current_run_id = p_run_id
     FOR UPDATE;
 
     IF NOT FOUND THEN
@@ -381,11 +457,9 @@ BEGIN
         details         = p_details
     WHERE id = p_run_id;
 
+    -- current_run_id = p_run_id is guaranteed by the fence above.
     UPDATE public.public_data_source_runtime
-    SET current_run_id   = CASE
-                               WHEN current_run_id = p_run_id THEN NULL
-                               ELSE current_run_id
-                           END,
+    SET current_run_id   = NULL,
         last_run_id      = p_run_id,
         last_status      = p_status,
         last_finished_at = p_finished_at,

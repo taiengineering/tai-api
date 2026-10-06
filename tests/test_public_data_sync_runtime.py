@@ -1,11 +1,13 @@
-"""WP-1B Runtime Foundation — P01~P15.
+"""WP-1B Runtime Foundation — P01~P15 + PATCH P16~P21 + Migration static M01~M18.
 
-SQL tests (S01~S18) require local Supabase DB.
-LOCAL_DB_UNAVAILABLE = True in this environment.
+SQL execution tests require local Supabase DB (LOCAL_DB_UNAVAILABLE).
+Migration static tests (M01~M18) run against the SQL file text only.
 """
 from __future__ import annotations
 
 import json
+import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock, call, patch
@@ -512,6 +514,278 @@ def test_p15_secrets_excluded_from_details(monkeypatch):
     assert "SHOULD_BE_REDACTED" not in str(details)
     assert details.get("serviceKey") == "***"
     assert details.get("rows") == 5
+
+
+# ---------------------------------------------------------------------------
+# P16 — list_due_sources uses OR for retry condition (not IS NULL only)
+# ---------------------------------------------------------------------------
+
+def test_p16_list_due_sources_uses_or_retry_filter():
+    """list_due_sources must call .or_() to include sources with past retry_not_before."""
+    sb = MagicMock()
+    store = PublicDataRuntimeStore(supabase_client=sb)
+    now_dt = _now()
+
+    chain = sb.table.return_value.select.return_value.eq.return_value.lte.return_value
+    chain.or_.return_value.execute.return_value.data = [{"source_id": "HOLIDAY"}]
+
+    result = store.list_due_sources(now=now_dt)
+
+    assert chain.or_.called, "list_due_sources must use .or_() for retry_not_before"
+    or_arg = chain.or_.call_args[0][0]
+    assert "retry_not_before.is.null" in or_arg
+    assert "retry_not_before.lte." in or_arg
+    assert result == ["HOLIDAY"]
+
+
+# ---------------------------------------------------------------------------
+# P17 — list_due_sources does NOT use the old IS NULL only filter
+# ---------------------------------------------------------------------------
+
+def test_p17_list_due_sources_no_is_null_only_filter():
+    """list_due_sources must NOT call .is_() on retry_not_before (old stale code)."""
+    sb = MagicMock()
+    store = PublicDataRuntimeStore(supabase_client=sb)
+    now_dt = _now()
+
+    chain = sb.table.return_value.select.return_value.eq.return_value.lte.return_value
+    chain.or_.return_value.execute.return_value.data = []
+
+    store.list_due_sources(now=now_dt)
+
+    assert not chain.is_.called, "must not use .is_() for retry_not_before"
+
+
+# ---------------------------------------------------------------------------
+# P18 — SOURCE_LIMIT_UNSUPPORTED claim reason → execute_due_source returns None
+# ---------------------------------------------------------------------------
+
+def test_p18_source_limit_unsupported_returns_none(monkeypatch):
+    """SOURCE_LIMIT_UNSUPPORTED from DB → execute_due_source returns None."""
+    import services.public_data_sync.runner as runner_module
+
+    spec = _spec()
+    sb = _fake_sb(claim_data={
+        "claimed": False, "run_id": str(uuid4()), "reason": "SOURCE_LIMIT_UNSUPPORTED",
+    })
+    store = PublicDataRuntimeStore(supabase_client=sb)
+
+    reg = AdapterRegistry()
+    reg.register(_OkAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+    result = execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# P19 — CREDENTIAL_BUSY reason preserved in ClaimResult
+# ---------------------------------------------------------------------------
+
+def test_p19_credential_busy_reason_preserved():
+    """CREDENTIAL_BUSY returned from DB is preserved in ClaimResult.reason."""
+    sb = _fake_sb(claim_data={
+        "claimed": False, "run_id": str(uuid4()), "reason": "CREDENTIAL_BUSY",
+    })
+    store = PublicDataRuntimeStore(supabase_client=sb)
+
+    claim = store.claim_run(
+        run_id=str(uuid4()),
+        spec=_spec(),
+        trigger=TriggerKind.MANUAL,
+        now=_now(),
+    )
+    assert claim.claimed is False
+    assert claim.reason == "CREDENTIAL_BUSY"
+
+
+# ---------------------------------------------------------------------------
+# P20 — RATE_LIMIT_BUSY reason preserved in ClaimResult
+# ---------------------------------------------------------------------------
+
+def test_p20_rate_limit_busy_reason_preserved():
+    """RATE_LIMIT_BUSY returned from DB is preserved in ClaimResult.reason."""
+    sb = _fake_sb(claim_data={
+        "claimed": False, "run_id": str(uuid4()), "reason": "RATE_LIMIT_BUSY",
+    })
+    store = PublicDataRuntimeStore(supabase_client=sb)
+
+    claim = store.claim_run(
+        run_id=str(uuid4()),
+        spec=_spec(),
+        trigger=TriggerKind.MANUAL,
+        now=_now(),
+    )
+    assert claim.claimed is False
+    assert claim.reason == "RATE_LIMIT_BUSY"
+
+
+# ---------------------------------------------------------------------------
+# P21 — complete_run store exception → orchestrator returns RunResult (no propagate)
+# ---------------------------------------------------------------------------
+
+def test_p21_complete_exception_does_not_propagate(monkeypatch):
+    """If store.complete_run raises, execute_due_source still returns the RunResult."""
+    import services.public_data_sync.runner as runner_module
+
+    spec = _spec()
+    sb = _fake_sb()
+    store = PublicDataRuntimeStore(supabase_client=sb)
+
+    def _raise_complete(*args, **kwargs):
+        raise RuntimeError("DB connection lost")
+
+    store.complete_run = _raise_complete
+
+    reg = AdapterRegistry()
+    reg.register(_OkAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+    result = execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+    assert result is not None
+    assert result.status == RunStatus.SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# Migration static contract tests — M01~M18
+# Run against SQL file text; do not require a running DB.
+# ---------------------------------------------------------------------------
+
+_MIGRATION_PATH = os.path.join(
+    os.path.dirname(__file__), "..",
+    "supabase", "migrations",
+    "20261006131519_public_data_runtime_state.sql",
+)
+
+_EXPECTED_SEED_IDS = {
+    "KOSHA_SAFETY_MATERIAL", "KOSHA_GUIDE", "KOSHA_MSDS", "KECO_15149420",
+    "KOSHA_ACCIDENT_CASES", "KOSHA_CONSTRUCTION_ACCIDENTS",
+    "KOSHA_CONSTRUCTION_SAFETY_LIGHT", "KOSHA_RISK_ASSESSMENT",
+    "CSI_ACCIDENT", "KCSC", "INDUSTRIAL_ACCIDENT_PRECEDENT", "HOLIDAY",
+}
+
+
+@pytest.fixture(scope="module")
+def migration_sql():
+    with open(_MIGRATION_PATH) as f:
+        return f.read()
+
+
+def _claim_body(sql: str) -> str:
+    block = sql[sql.index("fn_public_data_claim_run"):]
+    return block[: block.index("$fn$;")]
+
+
+def _heartbeat_body(sql: str) -> str:
+    block = sql[sql.index("fn_public_data_heartbeat_run"):]
+    return block[: block.index("$fn$;")]
+
+
+def _complete_body(sql: str) -> str:
+    block = sql[sql.index("fn_public_data_complete_run"):]
+    return block[: block.index("$fn$;")]
+
+
+def test_m01_exact_12_seed_ids(migration_sql):
+    found = set(re.findall(r"'([A-Z_0-9]+)',\s+false", migration_sql))
+    # Filter to only known seed IDs (remove false positives like constraint names)
+    found &= _EXPECTED_SEED_IDS | {s.upper() for s in found}
+    assert found == _EXPECTED_SEED_IDS, f"seed mismatch: {found ^ _EXPECTED_SEED_IDS}"
+
+
+def test_m02_all_seed_disabled(migration_sql):
+    seed_section = migration_sql[migration_sql.index("SEED"):]
+    true_rows = re.findall(r"'[A-Z_0-9]+',\s+true", seed_section)
+    assert true_rows == [], f"enabled seed rows found: {true_rows}"
+
+
+def test_m03_legal_text_sync_absent(migration_sql):
+    # Remove SQL comments before checking — comments may legitimately explain exclusion
+    sql_no_comments = re.sub(r"--[^\n]*", "", migration_sql)
+    assert "LEGAL_TEXT_SYNC" not in sql_no_comments
+
+
+def test_m04_ksic_sync_absent(migration_sql):
+    sql_no_comments = re.sub(r"--[^\n]*", "", migration_sql)
+    assert "KSIC_SYNC" not in sql_no_comments
+
+
+def test_m05_rls_source_runtime(migration_sql):
+    assert "public_data_source_runtime ENABLE ROW LEVEL SECURITY" in migration_sql
+
+
+def test_m06_rls_sync_runs(migration_sql):
+    assert "public_data_sync_runs ENABLE ROW LEVEL SECURITY" in migration_sql
+
+
+def test_m07_anon_revoke(migration_sql):
+    assert "FROM anon" in migration_sql
+
+
+def test_m08_authenticated_revoke(migration_sql):
+    assert "FROM anon, authenticated" in migration_sql
+
+
+def test_m09_service_role_grant(migration_sql):
+    assert "TO service_role" in migration_sql
+
+
+def test_m10_claim_security_invoker(migration_sql):
+    assert "SECURITY INVOKER" in _claim_body(migration_sql)
+
+
+def test_m11_heartbeat_security_invoker(migration_sql):
+    assert "SECURITY INVOKER" in _heartbeat_body(migration_sql)
+
+
+def test_m12_complete_security_invoker(migration_sql):
+    assert "SECURITY INVOKER" in _complete_body(migration_sql)
+
+
+def test_m13_shared_stale_credential_scope(migration_sql):
+    """Stale recovery UPDATE must include credential_pool in its WHERE clause."""
+    body = _claim_body(migration_sql)
+    lease_pos = body.index("LEASE_EXPIRED")
+    # Look forward from LEASE_EXPIRED to the closing semicolon of the stale UPDATE
+    surrounding = body[lease_pos: lease_pos + 500]
+    assert "credential_pool" in surrounding, \
+        "stale recovery must scope to credential_pool for shared-resource unblocking"
+
+
+def test_m14_shared_stale_rate_limit_scope(migration_sql):
+    """Stale recovery UPDATE must include rate_limit_group in its WHERE clause."""
+    body = _claim_body(migration_sql)
+    lease_pos = body.index("LEASE_EXPIRED")
+    surrounding = body[lease_pos: lease_pos + 500]
+    assert "rate_limit_group" in surrounding, \
+        "stale recovery must scope to rate_limit_group for shared-resource unblocking"
+
+
+def test_m15_source_limit_guard(migration_sql):
+    """Claim function must reject p_source_limit != 1 with SOURCE_LIMIT_UNSUPPORTED."""
+    assert "SOURCE_LIMIT_UNSUPPORTED" in _claim_body(migration_sql)
+
+
+def test_m16_complete_current_run_fence(migration_sql):
+    """complete_run must SELECT FOR UPDATE on source_runtime WHERE current_run_id = p_run_id."""
+    body = _complete_body(migration_sql)
+    assert "current_run_id = p_run_id" in body, \
+        "complete_run must fence on current_run_id = p_run_id"
+
+
+def test_m17_heartbeat_fence(migration_sql):
+    """heartbeat must check current_run_id to prevent stale run lease renewal."""
+    body = _heartbeat_body(migration_sql)
+    assert "current_run_id" in body, \
+        "heartbeat must include current_run_id fence"
+
+
+def test_m18_unique_conflict_reason_mapping(migration_sql):
+    """Unique violation handler must map each constraint to a distinct reason code."""
+    body = _claim_body(migration_sql)
+    assert "CREDENTIAL_BUSY" in body
+    assert "RATE_LIMIT_BUSY" in body
+    assert "CONSTRAINT_NAME" in body
 
 
 # ---------------------------------------------------------------------------
