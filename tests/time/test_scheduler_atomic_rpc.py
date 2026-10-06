@@ -175,9 +175,10 @@ def test_crash_window2():
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "rpc":
             if n.args and isinstance(n.args[0], ast.Constant):
                 rpc_names.append(n.args[0].value)
-    assert rpc_names == [
+    assert sorted(rpc_names) == [
         "tai_scheduler_claim_occurrence",
         "tai_scheduler_complete_occurrence",
+        "tai_scheduler_heartbeat_occurrence",
     ]
 
 

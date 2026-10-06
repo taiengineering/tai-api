@@ -193,5 +193,26 @@ class DbStore(InMemoryStore):
                 job.next_run_at = nxt
         return bool(fenced)
 
+    def heartbeat_occurrence(
+        self,
+        claim: Claim,
+        *,
+        now: datetime,
+        lease: timedelta,
+    ) -> bool:
+        """Renew the lease via RPC. Returns False if fenced. Propagates RPC exceptions."""
+        res = self._client().rpc("tai_scheduler_heartbeat_occurrence", {
+            "p_job_code": claim.job_code,
+            "p_scheduled_for": serialize_business_datetime(claim.scheduled_for),
+            "p_log_id": claim.log_id,
+            "p_attempt_no": claim.attempt_no,
+            "p_now": serialize_business_datetime(now),
+            "p_lease": f"{int(lease.total_seconds())} seconds",
+        }).execute()
+        data = getattr(res, "data", None)
+        if isinstance(data, list) and data:
+            return bool(data[0])
+        return bool(data)
+
     def advance_next_run(self, job: JobRow, scheduled_for: datetime, nxt: datetime) -> None:
         raise RuntimeError("use complete_and_advance (atomic terminal+next_run)")

@@ -136,6 +136,32 @@ class SchedulerStateDB:
                 self.split_states += 1
             return False
 
+    def heartbeat(self, params: dict[str, Any]) -> bool:
+        job_code = params["p_job_code"]
+        scheduled_for = _ts(params["p_scheduled_for"])
+        log_id = str(params["p_log_id"])
+        attempt_no = int(params["p_attempt_no"])
+        now = _ts(params["p_now"])
+        lease = _lease(params["p_lease"])
+        if lease <= timedelta(0):
+            return False
+        key = self._key(job_code, scheduled_for)
+        with self.lock:
+            row = self.logs.get(key)
+            if row is None:
+                return False
+            if row["status"] != "RUNNING":
+                return False
+            if str(row["id"]) != log_id:
+                return False
+            if int(row["attempt_no"]) != attempt_no:
+                return False
+            existing = row.get("lease_until")
+            if existing is None or existing <= now:
+                return False
+            row["lease_until"] = now + lease
+            return True
+
     def observe_split(self) -> int:
         with self.lock:
             n = 0
@@ -163,6 +189,8 @@ class _Rpc:
             if self.db.drop_complete_response:
                 raise TimeoutError("lost complete RPC response")
             return _Resp(fenced)
+        if self.name == "tai_scheduler_heartbeat_occurrence":
+            return _Resp(self.db.heartbeat(self.params))
         raise ValueError(self.name)
 
 
