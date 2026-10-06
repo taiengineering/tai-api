@@ -516,7 +516,8 @@ def build_factory_update(juso: dict, building_data: dict) -> dict:
         update["earthquake_design_applied"]= title.get("rserthqkDsgnApplyYn") == "1"
         if _to_float(title.get("totArea")):   update["building_area"]           = _to_float(title.get("totArea"))
         if _to_float(title.get("platArea")):  update["land_area"]               = _to_float(title.get("platArea"))
-        if _to_int(title.get("grndFlrCnt")):  update["floor_count"]             = _to_int(title.get("grndFlrCnt"))
+        _fc = _safe_int(title.get("grndFlrCnt"))
+        if _fc is not None:                    update["floor_count"]             = _fc
         if _to_int(title.get("ugrndFlrCnt")): update["underground_floor_count"] = _to_int(title.get("ugrndFlrCnt"))
         if title.get("useAprDay") and len(str(title["useAprDay"])) >= 4:
             update["completion_year"] = int(str(title["useAprDay"])[:4])
