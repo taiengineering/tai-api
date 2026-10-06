@@ -1,6 +1,7 @@
-"""OBJ02-B1: Runtime fail-close guard tests.
+"""OBJ02-B1 (CORR-05): Runtime fail-close guard tests.
 
 create_document() must deny any schema whose status != APPROVED_FOR_RUNTIME_USE.
+CORR-05: Uses actual DB status enum values (REJECTED_BY_HUMAN, not REJECTED).
 """
 
 import sys
@@ -25,7 +26,7 @@ _SCHEMA_DB: dict[str, dict] = {
 _STATUS_DB: dict[str, dict] = {
     "NEEDS_HUMAN_REVIEW": {"id": "cc-03", "status": "NEEDS_HUMAN_REVIEW"},
     "APPROVED_BY_HUMAN":  {"id": "cc-04", "status": "APPROVED_BY_HUMAN"},
-    "REJECTED":           {"id": "cc-05", "status": "REJECTED"},
+    "REJECTED_BY_HUMAN":  {"id": "cc-05", "status": "REJECTED_BY_HUMAN"},
     "ARCHIVED":           {"id": "cc-06", "status": "ARCHIVED"},
 }
 
@@ -182,14 +183,14 @@ def test_G4_approved_by_human_denied():
         assert "APPROVED_BY_HUMAN" in str(e)
 
 
-def test_G5_rejected_denied():
+def test_G5_rejected_by_human_denied():
     _reset()
-    sid = _make_guard_schema("REJECTED")
+    sid = _make_guard_schema("REJECTED_BY_HUMAN")
     try:
         create_document(form_schema_id=sid)
         assert False
     except ValueError as e:
-        assert "REJECTED" in str(e)
+        assert "REJECTED_BY_HUMAN" in str(e)
 
 
 def test_G6_archived_denied():
@@ -220,7 +221,7 @@ def test_G8_no_insert_on_deny():
     """Comprehensive: all non-APPROVED statuses produce zero inserts."""
     blocked_statuses = [
         "CANDIDATE", "NEEDS_HUMAN_REVIEW", "APPROVED_BY_HUMAN",
-        "REJECTED", "ARCHIVED",
+        "REJECTED_BY_HUMAN", "ARCHIVED",
     ]
     for status in blocked_statuses:
         _reset()

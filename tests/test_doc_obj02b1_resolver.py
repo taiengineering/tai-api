@@ -1,4 +1,9 @@
-"""OBJ02-B1: Catalog resolver + workspace readmodel tests."""
+"""OBJ02-B1 (CORR-01/02/04): Catalog resolver + workspace readmodel tests.
+
+CORR-01: Catalog fixtures use actual document_forms columns (no document_family).
+CORR-02: Pagination test verifies filter-before-paginate (W9).
+CORR-04: Resolver parameter renamed catalog_document_id throughout.
+"""
 
 import sys
 import types
@@ -8,43 +13,79 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-CAT_ID_APPROVED = "ddddd001-0001-0001-0001-000000000001"
+CAT_ID_APPROVED  = "ddddd001-0001-0001-0001-000000000001"
 CAT_ID_PREPARING = "ddddd002-0002-0002-0002-000000000002"
 CAT_ID_NO_SCHEMA = "ddddd003-0003-0003-0003-000000000003"
-CAT_ID_MISSING = "ddddd999-9999-9999-9999-999999999999"
+CAT_ID_MISSING   = "ddddd999-9999-9999-9999-999999999999"
 
-SCHEMA_APPROVED_ID = "eeeee001-0001-0001-0001-000000000001"
+# Pagination test catalog IDs (W9): 3 READY, 3 PREPARING
+CAT_P1 = "pppp0001-0001-0001-0001-000000000001"
+CAT_P2 = "pppp0002-0002-0002-0002-000000000002"
+CAT_P3 = "pppp0003-0003-0003-0003-000000000003"
+CAT_P4 = "pppp0004-0004-0004-0004-000000000004"
+CAT_P5 = "pppp0005-0005-0005-0005-000000000005"
+CAT_P6 = "pppp0006-0006-0006-0006-000000000006"
+
+SCHEMA_APPROVED_ID  = "eeeee001-0001-0001-0001-000000000001"
 SCHEMA_CANDIDATE_ID = "eeeee002-0002-0002-0002-000000000002"
 
+# ── Fixture: actual document_forms columns only ───────────────────────────────
+# Production columns: id, doc_id, doc_name, sector, category, law_ref, obligation,
+#   tai_grade, tai_difficulty, priority, has_legal_form, tai_auto, tai_method,
+#   doc_format, doc_owner, is_external_writer, is_active
+# Workspace SELECT uses: id, doc_id, doc_name, sector, category, is_active, priority
+
+_KNOWN_DOCUMENT_FORMS_COLUMNS = frozenset({
+    "id", "doc_id", "doc_name", "sector", "category",
+    "law_ref", "obligation", "tai_grade", "tai_difficulty",
+    "priority", "has_legal_form", "tai_auto", "tai_method",
+    "doc_format", "doc_owner", "is_external_writer", "is_active",
+})
+
+def _cat(cid, doc_id, doc_name, sector="CONSTRUCTION", category="일상",
+         is_active=True, priority=3):
+    return {
+        "id": cid, "doc_id": doc_id, "doc_name": doc_name,
+        "sector": sector, "category": category,
+        "is_active": is_active, "priority": priority,
+    }
+
 _CATALOG_DB = {
-    CAT_ID_APPROVED: {"id": CAT_ID_APPROVED, "doc_id": "D001",
-                      "doc_name": "점검표 A", "document_family": "CHK",
-                      "created_at": "2026-01-01T00:00:00Z",
-                      "updated_at": "2026-01-01T00:00:00Z"},
-    CAT_ID_PREPARING: {"id": CAT_ID_PREPARING, "doc_id": "D002",
-                       "doc_name": "점검표 B", "document_family": "CHK",
-                       "created_at": "2026-01-01T00:00:00Z",
-                       "updated_at": "2026-01-01T00:00:00Z"},
-    CAT_ID_NO_SCHEMA: {"id": CAT_ID_NO_SCHEMA, "doc_id": "D003",
-                       "doc_name": "점검표 C", "document_family": "EQUIP",
-                       "created_at": "2026-01-01T00:00:00Z",
-                       "updated_at": "2026-01-01T00:00:00Z"},
+    CAT_ID_APPROVED:  _cat(CAT_ID_APPROVED,  "D001", "점검표 A"),
+    CAT_ID_PREPARING: _cat(CAT_ID_PREPARING, "D002", "점검표 B"),
+    CAT_ID_NO_SCHEMA: _cat(CAT_ID_NO_SCHEMA, "D003", "점검표 C"),
+    # pagination fixtures (ordered: P1,P2 PREPARING | P3,P4,P5 READY | P6 PREPARING)
+    CAT_P1: _cat(CAT_P1, "PP1", "페이징-준비1"),
+    CAT_P2: _cat(CAT_P2, "PP2", "페이징-준비2"),
+    CAT_P3: _cat(CAT_P3, "PP3", "페이징-완료1"),
+    CAT_P4: _cat(CAT_P4, "PP4", "페이징-완료2"),
+    CAT_P5: _cat(CAT_P5, "PP5", "페이징-준비3"),
+    CAT_P6: _cat(CAT_P6, "PP6", "페이징-완료3"),
 }
 
 _SCHEMA_DB_BY_CATALOG = {
-    CAT_ID_APPROVED: [
-        {"id": SCHEMA_APPROVED_ID, "status": "APPROVED_FOR_RUNTIME_USE",
-         "form_name": "점검표 A v1", "version": 1,
-         "catalog_document_id": CAT_ID_APPROVED,
-         "source_trace": {"source_table": "document_forms"}},
-    ],
-    CAT_ID_PREPARING: [
-        {"id": SCHEMA_CANDIDATE_ID, "status": "CANDIDATE",
-         "form_name": "점검표 B v1 draft", "version": 1,
-         "catalog_document_id": CAT_ID_PREPARING,
-         "source_trace": {"source_table": "document_forms"}},
-    ],
+    CAT_ID_APPROVED:  [{"id": SCHEMA_APPROVED_ID, "status": "APPROVED_FOR_RUNTIME_USE",
+                        "form_name": "점검표 A v1", "version": 1,
+                        "catalog_document_id": CAT_ID_APPROVED,
+                        "source_trace": {"source_table": "document_forms"}}],
+    CAT_ID_PREPARING: [{"id": SCHEMA_CANDIDATE_ID, "status": "CANDIDATE",
+                        "form_name": "점검표 B v1 draft", "version": 1,
+                        "catalog_document_id": CAT_ID_PREPARING,
+                        "source_trace": {"source_table": "document_forms"}}],
     CAT_ID_NO_SCHEMA: [],
+    # P1,P2,P5 → PREPARING; P3,P4,P6 → READY_FOR_EDIT
+    CAT_P1: [{"id": "sp1", "status": "CANDIDATE", "form_name": "c", "version": 1,
+              "catalog_document_id": CAT_P1}],
+    CAT_P2: [{"id": "sp2", "status": "CANDIDATE", "form_name": "c", "version": 1,
+              "catalog_document_id": CAT_P2}],
+    CAT_P3: [{"id": "sp3", "status": "APPROVED_FOR_RUNTIME_USE", "form_name": "c",
+              "version": 1, "catalog_document_id": CAT_P3}],
+    CAT_P4: [{"id": "sp4", "status": "APPROVED_FOR_RUNTIME_USE", "form_name": "c",
+              "version": 1, "catalog_document_id": CAT_P4}],
+    CAT_P5: [{"id": "sp5", "status": "CANDIDATE", "form_name": "c", "version": 1,
+              "catalog_document_id": CAT_P5}],
+    CAT_P6: [{"id": "sp6", "status": "APPROVED_FOR_RUNTIME_USE", "form_name": "c",
+              "version": 1, "catalog_document_id": CAT_P6}],
 }
 
 _FIELDS_DB = {
@@ -55,7 +96,7 @@ _FIELDS_DB = {
     ],
 }
 
-# ── Fake Supabase ─────────────────────────────────────────────────────────────
+# ── Fake Supabase (validates document_forms SELECT columns) ───────────────────
 
 class _FakeSingle:
     def __init__(self, data):
@@ -68,7 +109,7 @@ class _FakeSingle:
 class _FakeResult:
     def __init__(self, data, count=None):
         self.data = data
-        self.count = count or len(data)
+        self.count = count if count is not None else len(data)
 
     def execute(self):
         return self
@@ -80,13 +121,23 @@ class _FakeQuery:
         self._filters: dict = {}
         self._in_values: list = []
         self._cols = "*"
+        self._eq_filters: list = []
 
     def select(self, cols="*", **__):
         self._cols = cols
+        # Validate that workspace readmodel doesn't request unknown document_forms columns
+        if self._table == "document_forms" and cols != "*":
+            requested = {c.strip() for c in cols.split(",")}
+            unknown = requested - _KNOWN_DOCUMENT_FORMS_COLUMNS
+            assert not unknown, (
+                f"CORR-01 VIOLATION: document_forms SELECT requested "
+                f"non-existent column(s): {unknown}"
+            )
         return self
 
     def eq(self, col, val):
         self._filters[col] = val
+        self._eq_filters.append((col, val))
         return self
 
     def in_(self, col, vals):
@@ -192,6 +243,24 @@ finally:
             sys.modules[_n] = _prev
 
 
+# ── CORR-01: Column validation (document_family must NOT be requested) ────────
+
+def test_C1_no_document_family_in_select():
+    """Fake validates that workspace SELECT doesn't request document_family."""
+    result = list_document_workspace()
+    for item in result["items"]:
+        assert "document_family" not in item, (
+            "CORR-01 FAIL: document_family leaked into workspace item"
+        )
+
+
+def test_C2_catalog_fixture_has_no_document_family():
+    for row in _CATALOG_DB.values():
+        assert "document_family" not in row, (
+            f"Fixture still has document_family: {row['doc_id']}"
+        )
+
+
 # ── Resolver tests ────────────────────────────────────────────────────────────
 
 def test_R1_approved_doc_returns_ready_for_edit():
@@ -208,7 +277,7 @@ def test_R2_fields_populated_for_approved():
     assert result["fields"][0]["field_key"] == "site_name"
 
 
-def test_R3_preparing_doc_returns_no_schema():
+def test_R3_preparing_doc_returns_preparing():
     result = resolve_catalog_runtime_schema(CAT_ID_PREPARING)
     assert result["availability"] == "PREPARING"
     assert result["schema"] is None
@@ -238,7 +307,7 @@ def test_R6_resolver_returns_all_keys():
 
 # ── Workspace readmodel tests ─────────────────────────────────────────────────
 
-def test_W1_workspace_returns_all_catalog_rows():
+def test_W1_workspace_returns_catalog_rows():
     result = list_document_workspace()
     assert "items" in result
     assert "total" in result
@@ -276,18 +345,62 @@ def test_W5_schema_id_null_for_no_schema():
         assert item["candidate_count"] == 0
 
 
-def test_W6_availability_filter():
+def test_W6_availability_filter_only_matching():
     result = list_document_workspace(availability="READY_FOR_EDIT")
     for item in result["items"]:
         assert item["availability"] == "READY_FOR_EDIT"
 
 
 def test_W7_page_size_in_result():
-    result = list_document_workspace(page=1, page_size=1)
-    assert result["page_size"] == 1
+    result = list_document_workspace(page=1, page_size=10)
+    assert result["page_size"] == 10
     assert result["page"] == 1
 
 
 def test_W8_page_size_capped_at_200():
     result = list_document_workspace(page=1, page_size=9999)
     assert result["page_size"] == 200
+
+
+# ── CORR-02: Filter-before-pagination test ───────────────────────────────────
+
+def test_W9_filter_before_pagination():
+    """Availability filter applies before pagination.
+
+    Fixture includes 3 READY (P3,P4,P6) + 3 PREPARING (P1,P2,P5) across 9 catalog rows.
+    With availability=READY_FOR_EDIT, page_size=2:
+      total  = 4 (3 pagination fixtures + CAT_ID_APPROVED from base fixtures)
+      page 1 = 2 items
+      page 2 = 2 items (last being CAT_ID_APPROVED)
+    All items on all pages must have availability=READY_FOR_EDIT.
+    """
+    p1 = list_document_workspace(availability="READY_FOR_EDIT", page=1, page_size=2)
+    p2 = list_document_workspace(availability="READY_FOR_EDIT", page=2, page_size=2)
+
+    total = p1["total"]
+    assert total == 4, f"CORR-02 FAIL: expected filtered total=4, got {total}"
+    assert p1["total"] == p2["total"], "total must be consistent across pages"
+
+    assert len(p1["items"]) == 2
+    assert len(p2["items"]) == 2
+
+    for item in p1["items"] + p2["items"]:
+        assert item["availability"] == "READY_FOR_EDIT", (
+            f"CORR-02 FAIL: non-READY item on page with availability filter: {item['doc_id']}"
+        )
+
+
+def test_W10_filtered_total_consistent():
+    """Total reflects filtered count, not raw catalog count."""
+    all_result = list_document_workspace()
+    ready_result = list_document_workspace(availability="READY_FOR_EDIT")
+    preparing_result = list_document_workspace(availability="PREPARING")
+    no_schema_result = list_document_workspace(availability="NO_SCHEMA")
+
+    sum_filtered = (
+        ready_result["total"] + preparing_result["total"] + no_schema_result["total"]
+    )
+    assert sum_filtered == all_result["total"], (
+        f"CORR-02: sum of availability totals ({sum_filtered}) "
+        f"!= unfiltered total ({all_result['total']})"
+    )
