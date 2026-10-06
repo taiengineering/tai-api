@@ -151,6 +151,8 @@ class InMemoryStore:
         lease: timedelta,
     ) -> bool:
         """Renew the lease for a RUNNING occurrence. Returns False if fenced/expired."""
+        if lease <= timedelta(0):
+            return False
         with self._lock:
             key = (claim.job_code, claim.scheduled_for)
             row = self.logs.get(key)

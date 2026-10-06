@@ -434,3 +434,140 @@ def test_hb14_heartbeat_false_after_complete_commits():
     assert fenced is False
     result = store.heartbeat_occurrence(claim, now=NOW + timedelta(minutes=12), lease=LEASE)
     assert result is False
+
+
+def test_hb15_inmemory_zero_lease_returns_false_no_mutation():
+    store = InMemoryStore()
+    from uuid import uuid4
+    log_id = str(uuid4())
+    job_code = "j1"
+    scheduled_for = NOW
+    original_lease = NOW + LEASE
+    store.logs[(job_code, scheduled_for)] = {
+        "id": log_id,
+        "job_code": job_code,
+        "scheduled_for": scheduled_for,
+        "status": "RUNNING",
+        "attempt_no": 1,
+        "lease_until": original_lease,
+    }
+    claim = Claim(
+        job_code=job_code,
+        scheduled_for=scheduled_for,
+        worker_id="w1",
+        attempt_no=1,
+        lease_until=original_lease,
+        log_id=log_id,
+        trace_id="",
+    )
+    result = store.heartbeat_occurrence(claim, now=NOW + timedelta(minutes=5), lease=timedelta(0))
+    assert result is False
+    assert store.logs[(job_code, scheduled_for)]["lease_until"] == original_lease
+
+
+def test_hb16_inmemory_negative_lease_returns_false_no_mutation():
+    store = InMemoryStore()
+    from uuid import uuid4
+    log_id = str(uuid4())
+    job_code = "j1"
+    scheduled_for = NOW
+    original_lease = NOW + LEASE
+    store.logs[(job_code, scheduled_for)] = {
+        "id": log_id,
+        "job_code": job_code,
+        "scheduled_for": scheduled_for,
+        "status": "RUNNING",
+        "attempt_no": 1,
+        "lease_until": original_lease,
+    }
+    claim = Claim(
+        job_code=job_code,
+        scheduled_for=scheduled_for,
+        worker_id="w1",
+        attempt_no=1,
+        lease_until=original_lease,
+        log_id=log_id,
+        trace_id="",
+    )
+    result = store.heartbeat_occurrence(claim, now=NOW + timedelta(minutes=5), lease=timedelta(seconds=-1))
+    assert result is False
+    assert store.logs[(job_code, scheduled_for)]["lease_until"] == original_lease
+
+
+def test_hb17_stale_attempt_heartbeat_false():
+    """Real stale reclaim: attempt 1 heartbeat returns False after attempt 2 takes over."""
+    db = SchedulerStateDB()
+    claim1 = _seed_running(db)
+
+    # Expire attempt 1 lease and reclaim as attempt 2.
+    expired = NOW + LEASE + timedelta(seconds=1)
+    claim2 = _seed_running.__wrapped__(db) if hasattr(_seed_running, "__wrapped__") else None
+    db_store = DbStore(sb=FakeSchedulerSB(db))
+    job = db_store.jobs[claim1.job_code] if db_store.jobs else None
+    if job is None:
+        db_store.refresh(expired)
+        job = db_store.jobs[claim1.job_code]
+    job.next_run_at = claim1.scheduled_for
+    claim2 = db_store.claim(job, "w2", expired, LEASE)
+    assert claim2 is not None
+    assert claim2.attempt_no == 2
+
+    # attempt 1 heartbeat must return False
+    result = db_store.heartbeat_occurrence(claim1, now=expired + timedelta(minutes=5), lease=LEASE)
+    assert result is False
+
+
+def test_hb18_reclaimed_current_heartbeat_true():
+    """Real stale reclaim: attempt 2 heartbeat returns True and extends lease."""
+    db = SchedulerStateDB()
+    claim1 = _seed_running(db)
+
+    # Expire and reclaim.
+    expired = NOW + LEASE + timedelta(seconds=1)
+    db_store = DbStore(sb=FakeSchedulerSB(db))
+    job = db_store.jobs.get(claim1.job_code)
+    if job is None:
+        db_store.refresh(expired)
+        job = db_store.jobs[claim1.job_code]
+    job.next_run_at = claim1.scheduled_for
+    claim2 = db_store.claim(job, "w2", expired, LEASE)
+    assert claim2 is not None
+    assert claim2.attempt_no == 2
+
+    # attempt 2 heartbeat must return True and extend lease.
+    now2 = expired + timedelta(minutes=5)
+    result = db_store.heartbeat_occurrence(claim2, now=now2, lease=LEASE)
+    assert result is True
+    key = db._key(claim2.job_code, claim2.scheduled_for)
+    assert db.logs[key]["lease_until"] == now2 + LEASE
+
+
+# ─── SCHED-M17~M20: claim/complete PUBLIC revoke + service_role grant ────────
+
+
+def test_sched_m17_claim_revoke_public():
+    sql = MIGRATION.read_text(encoding="utf-8")
+    claim_revoke = sql[sql.index("REVOKE ALL ON FUNCTION public.tai_scheduler_claim_occurrence"):]
+    claim_revoke = claim_revoke[:claim_revoke.index(";") + 1]
+    assert "PUBLIC" in claim_revoke
+
+
+def test_sched_m18_claim_grant_service_role():
+    sql = MIGRATION.read_text(encoding="utf-8")
+    claim_grant = sql[sql.index("GRANT EXECUTE ON FUNCTION public.tai_scheduler_claim_occurrence"):]
+    claim_grant = claim_grant[:claim_grant.index(";") + 1]
+    assert "service_role" in claim_grant
+
+
+def test_sched_m19_complete_revoke_public():
+    sql = MIGRATION.read_text(encoding="utf-8")
+    complete_revoke = sql[sql.index("REVOKE ALL ON FUNCTION public.tai_scheduler_complete_occurrence"):]
+    complete_revoke = complete_revoke[:complete_revoke.index(";") + 1]
+    assert "PUBLIC" in complete_revoke
+
+
+def test_sched_m20_complete_grant_service_role():
+    sql = MIGRATION.read_text(encoding="utf-8")
+    complete_grant = sql[sql.index("GRANT EXECUTE ON FUNCTION public.tai_scheduler_complete_occurrence"):]
+    complete_grant = complete_grant[:complete_grant.index(";") + 1]
+    assert "service_role" in complete_grant
