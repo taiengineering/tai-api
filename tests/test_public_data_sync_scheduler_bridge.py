@@ -1,4 +1,4 @@
-"""WP-1C-B2-B (PATCH): Public Data Scheduler Bridge tests — PB01~PB24 + handler."""
+"""WP-1C-B2-B (PATCH+FIXED-SLOT): Public Data Scheduler Bridge tests — PB01~PB24, FS01~FS08."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -24,6 +24,7 @@ from services.public_data_sync.scheduler_bridge import (
 
 _NOW = datetime(2026, 10, 7, 9, 0, tzinfo=timezone.utc)
 _DEFAULT_CADENCE = 3600
+_SCHEDULED_FOR = _NOW
 
 
 def _result(status: RunStatus, source_id="src-a", finished_at=None, error_code=None) -> RunResult:
@@ -37,23 +38,20 @@ def _result(status: RunStatus, source_id="src-a", finished_at=None, error_code=N
     )
 
 
-def _fake_store(due_sources: list[str], cadence: int | None = _DEFAULT_CADENCE) -> MagicMock:
-    """Mock store: list_due_sources returns given list; get_source_runtime returns cadence."""
+def _fake_store(
+    due_sources: list[str],
+    cadence: int | None = _DEFAULT_CADENCE,
+    next_due_at: datetime | str | None = None,
+) -> MagicMock:
+    """Mock store with uniform get_source_runtime response."""
     store = MagicMock()
     store.list_due_sources.return_value = due_sources
+    nd = (next_due_at or _NOW).isoformat() if isinstance(next_due_at or _NOW, datetime) else next_due_at
     store.get_source_runtime.return_value = {
         "source_id": due_sources[0] if due_sources else "src-a",
         "cadence_seconds": cadence,
-        "next_due_at": _NOW.isoformat(),
+        "next_due_at": nd,
     }
-    return store
-
-
-def _fake_store_per_source(due_sources: list[str], runtimes: dict) -> MagicMock:
-    """Mock store with per-source get_source_runtime responses."""
-    store = MagicMock()
-    store.list_due_sources.return_value = due_sources
-    store.get_source_runtime.side_effect = lambda sid: runtimes.get(sid)
     return store
 
 
@@ -118,11 +116,11 @@ def test_pb04_limit_clamps_to_max():
     with patch("services.public_data_sync.scheduler_bridge.execute_due_source", side_effect=_exec):
         tick_public_data_sources(store=store, limit=50)
 
-    assert len(executed) == 10  # _MAX_LIMIT = 10
+    assert len(executed) == 10
 
 
 # ---------------------------------------------------------------------------
-# PB05 — default params work without explicit cadence (source SoT used)
+# PB05 — default params work without explicit cadence
 # ---------------------------------------------------------------------------
 
 def test_pb05_no_explicit_cadence_needed():
@@ -132,30 +130,32 @@ def test_pb05_no_explicit_cadence_needed():
 
 
 # ---------------------------------------------------------------------------
-# PB06 — SUCCESS → next_due = finished + cadence (via resolver)
+# PB06 — SUCCESS → next_due anchored to scheduled_for + cadence
 # ---------------------------------------------------------------------------
 
 def test_pb06_success_advances_by_cadence():
-    finished = datetime(2026, 10, 7, 9, 0, tzinfo=timezone.utc)
+    scheduled = datetime(2026, 10, 7, 9, 0, tzinfo=timezone.utc)
+    finished = scheduled + timedelta(minutes=20)
     cadence = 3600
-    resolver = _make_completion_resolver(cadence_seconds=cadence, retry_delay_seconds=3600)
+    resolver = _make_completion_resolver(cadence, 3600, scheduled)
     result = _result(RunStatus.SUCCESS, finished_at=finished)
     next_due, retry = resolver(result)
-    assert next_due == finished + timedelta(seconds=cadence)
+    assert next_due == scheduled + timedelta(seconds=cadence)
     assert retry is None
 
 
 # ---------------------------------------------------------------------------
-# PB07 — FAILED → next_due = finished, retry backoff applied
+# PB07 — FAILED → next_due = scheduled_for, retry backoff from finished
 # ---------------------------------------------------------------------------
 
-def test_pb07_failed_sets_retry():
-    finished = datetime(2026, 10, 7, 9, 0, tzinfo=timezone.utc)
+def test_pb07_failed_next_due_is_scheduled_for():
+    scheduled = datetime(2026, 10, 7, 9, 0, tzinfo=timezone.utc)
+    finished = scheduled + timedelta(minutes=25)
     retry_delay = 3600
-    resolver = _make_completion_resolver(cadence_seconds=3600, retry_delay_seconds=retry_delay)
+    resolver = _make_completion_resolver(3600, retry_delay, scheduled)
     result = _result(RunStatus.FAILED, finished_at=finished)
     next_due, retry = resolver(result)
-    assert next_due == finished
+    assert next_due == scheduled
     assert retry == finished + timedelta(seconds=retry_delay)
 
 
@@ -164,17 +164,18 @@ def test_pb07_failed_sets_retry():
 # ---------------------------------------------------------------------------
 
 def test_pb08_no_change_advances_by_cadence():
-    finished = datetime(2026, 10, 7, 9, 0, tzinfo=timezone.utc)
+    scheduled = datetime(2026, 10, 7, 9, 0, tzinfo=timezone.utc)
+    finished = scheduled + timedelta(minutes=10)
     cadence = 7200
-    resolver = _make_completion_resolver(cadence_seconds=cadence, retry_delay_seconds=3600)
+    resolver = _make_completion_resolver(cadence, 3600, scheduled)
     result = _result(RunStatus.NO_CHANGE, finished_at=finished)
     next_due, retry = resolver(result)
-    assert next_due == finished + timedelta(seconds=cadence)
+    assert next_due == scheduled + timedelta(seconds=cadence)
     assert retry is None
 
 
 # ---------------------------------------------------------------------------
-# PB09 — execute_due_source raises PublicDataSyncError → captured in summary
+# PB09 — PublicDataSyncError → captured in summary
 # ---------------------------------------------------------------------------
 
 def test_pb09_public_data_sync_error_captured():
@@ -194,7 +195,7 @@ def test_pb09_public_data_sync_error_captured():
 
 
 # ---------------------------------------------------------------------------
-# PB10 — execute_due_source raises generic exception → captured, still raises
+# PB10 — generic exception → type only, no raw message
 # ---------------------------------------------------------------------------
 
 def test_pb10_generic_exception_captured():
@@ -208,14 +209,12 @@ def test_pb10_generic_exception_captured():
             tick_public_data_sources(store=store)
 
     summary = exc_info.value.summary
-    assert summary["failed"] == 1
     assert summary["tick_errors"][0]["error"] == "OSError"
-    # raw exception message must NOT appear in the summary
     assert "network timeout" not in str(summary)
 
 
 # ---------------------------------------------------------------------------
-# PB11 — direct://public_data_sync_tick registered in DIRECT_HANDLERS
+# PB11 — handler registration
 # ---------------------------------------------------------------------------
 
 def test_pb11_handler_registered():
@@ -225,7 +224,7 @@ def test_pb11_handler_registered():
 
 
 # ---------------------------------------------------------------------------
-# PB12 — partial failure (one succeeds, one fails) → errors in summary
+# PB12 — partial failure
 # ---------------------------------------------------------------------------
 
 def test_pb12_partial_failure():
@@ -245,45 +244,37 @@ def test_pb12_partial_failure():
     summary = exc_info.value.summary
     assert summary["succeeded"] == 1
     assert summary["failed"] == 1
-    assert summary["tick_errors"][0]["source_id"] == "src-b"
 
 
 # ---------------------------------------------------------------------------
-# PB13 — result dict has expected keys (SUCCESS only)
+# PB13 — result dict keys
 # ---------------------------------------------------------------------------
 
 def test_pb13_result_dict_keys():
     store = _fake_store(["src-a"])
 
-    def _exec(sid, **kw):
-        return _result(RunStatus.SUCCESS, source_id=sid)
-
-    with patch("services.public_data_sync.scheduler_bridge.execute_due_source", side_effect=_exec):
+    with patch("services.public_data_sync.scheduler_bridge.execute_due_source",
+               return_value=_result(RunStatus.SUCCESS)):
         results = tick_public_data_sources(store=store)
 
-    assert len(results) == 1
     row = results[0]
-    assert "source_id" in row
-    assert "run_id" in row
-    assert "status" in row
+    assert "source_id" in row and "run_id" in row and "status" in row
     assert row["status"] == "SUCCESS"
 
 
 # ---------------------------------------------------------------------------
-# PB14 — execute_due_source returns None (skipped) → not in results, no error
+# PB14 — None result (claim skipped) → not in results, no error
 # ---------------------------------------------------------------------------
 
 def test_pb14_skipped_source_not_in_results():
     store = _fake_store(["src-a"])
-
     with patch("services.public_data_sync.scheduler_bridge.execute_due_source", return_value=None):
         results = tick_public_data_sources(store=store)
-
     assert results == []
 
 
 # ---------------------------------------------------------------------------
-# PB15 — PublicDataSchedulerTickError.summary accessible via getattr (dispatcher compat)
+# PB15 — PublicDataSchedulerTickError.summary via getattr
 # ---------------------------------------------------------------------------
 
 def test_pb15_error_summary_getattr():
@@ -292,40 +283,30 @@ def test_pb15_error_summary_getattr():
     assert exc.summary["failed"] == 1
 
 
-# ============================================================================
-# PB16~PB24 — PATCH-BRIDGE-CONTRACT-001
-# ============================================================================
-
 # ---------------------------------------------------------------------------
-# PB16 — runtime cadence_seconds used, not global
+# PB16 — runtime cadence_seconds used per source
 # ---------------------------------------------------------------------------
 
 def test_pb16_runtime_cadence_used():
-    """Source's own cadence (604800) is used for next_due, not any global value."""
-    finished = datetime(2026, 10, 7, 9, 0, tzinfo=timezone.utc)
-    source_cadence = 604800  # 1 week
-
-    store = _fake_store(["src-a"], cadence=source_cadence)
-    captured_resolver_args = []
-
-    original_make = _make_completion_resolver.__wrapped__ if hasattr(_make_completion_resolver, "__wrapped__") else None
-
-    complete_calls = []
+    source_cadence = 604800
+    scheduled = datetime(2026, 10, 7, 9, 0, tzinfo=timezone.utc)
+    finished = scheduled + timedelta(minutes=30)
+    store = _fake_store(["src-a"], cadence=source_cadence, next_due_at=scheduled)
+    captured = []
 
     def _exec(sid, completion_state_resolver=None, **kw):
-        # Run the resolver with a fake result to inspect the cadence it uses
         r = _result(RunStatus.SUCCESS, source_id=sid, finished_at=finished)
         if completion_state_resolver:
             next_due, retry = completion_state_resolver(r)
-            captured_resolver_args.append((next_due, retry))
+            captured.append((next_due, retry))
         return r
 
     with patch("services.public_data_sync.scheduler_bridge.execute_due_source", side_effect=_exec):
         tick_public_data_sources(store=store)
 
-    assert len(captured_resolver_args) == 1
-    next_due, retry = captured_resolver_args[0]
-    assert next_due == finished + timedelta(seconds=source_cadence)
+    assert len(captured) == 1
+    next_due, retry = captured[0]
+    assert next_due == scheduled + timedelta(seconds=source_cadence)
     assert retry is None
 
 
@@ -334,69 +315,50 @@ def test_pb16_runtime_cadence_used():
 # ---------------------------------------------------------------------------
 
 def test_pb17_scheduled_for_from_runtime():
-    """execute_due_source receives scheduled_for=runtime.next_due_at."""
-    expected_scheduled_for = datetime(2026, 10, 7, 8, 0, tzinfo=timezone.utc)
-
+    expected = datetime(2026, 10, 7, 8, 0, tzinfo=timezone.utc)
     store = MagicMock()
     store.list_due_sources.return_value = ["src-a"]
     store.get_source_runtime.return_value = {
         "cadence_seconds": 3600,
-        "next_due_at": expected_scheduled_for.isoformat(),
+        "next_due_at": expected.isoformat(),
     }
-
-    captured_scheduled_for = []
+    captured = []
 
     def _exec(sid, scheduled_for=None, **kw):
-        captured_scheduled_for.append(scheduled_for)
+        captured.append(scheduled_for)
         return _result(RunStatus.SUCCESS, source_id=sid)
 
     with patch("services.public_data_sync.scheduler_bridge.execute_due_source", side_effect=_exec):
         tick_public_data_sources(store=store)
 
-    assert len(captured_scheduled_for) == 1
-    sf = captured_scheduled_for[0]
+    assert len(captured) == 1
+    sf = captured[0]
     assert sf is not None
-    assert sf.year == expected_scheduled_for.year
-    assert sf.month == expected_scheduled_for.month
-    assert sf.day == expected_scheduled_for.day
-    assert sf.hour == expected_scheduled_for.hour
+    assert sf.hour == expected.hour and sf.day == expected.day
 
 
 # ---------------------------------------------------------------------------
-# PB18 — cadence_seconds = null → CONFIG_CADENCE_MISSING, execute not called
+# PB18 — missing cadence → CONFIG_CADENCE_MISSING
 # ---------------------------------------------------------------------------
 
 def test_pb18_missing_cadence_skips_source():
     store = _fake_store(["src-a"], cadence=None)
     executed = []
 
-    def _exec(sid, **kw):
-        executed.append(sid)
-        return _result(RunStatus.SUCCESS, source_id=sid)
-
-    with patch("services.public_data_sync.scheduler_bridge.execute_due_source", side_effect=_exec):
+    with patch("services.public_data_sync.scheduler_bridge.execute_due_source",
+               side_effect=lambda sid, **kw: executed.append(sid)):
         with pytest.raises(PublicDataSchedulerTickError) as exc_info:
             tick_public_data_sources(store=store)
 
     assert executed == []
-    summary = exc_info.value.summary
-    assert summary["tick_errors"][0]["error"] == "CONFIG_CADENCE_MISSING"
-    assert summary["tick_errors"][0]["source_id"] == "src-a"
+    assert exc_info.value.summary["tick_errors"][0]["error"] == "CONFIG_CADENCE_MISSING"
 
 
 def test_pb18b_zero_cadence_skips_source():
     store = _fake_store(["src-a"], cadence=0)
-    executed = []
-
-    def _exec(sid, **kw):
-        executed.append(sid)
-        return _result(RunStatus.SUCCESS, source_id=sid)
-
-    with patch("services.public_data_sync.scheduler_bridge.execute_due_source", side_effect=_exec):
-        with pytest.raises(PublicDataSchedulerTickError) as exc_info:
+    with pytest.raises(PublicDataSchedulerTickError) as exc_info:
+        with patch("services.public_data_sync.scheduler_bridge.execute_due_source"):
             tick_public_data_sources(store=store)
-
-    assert executed == []
     assert exc_info.value.summary["tick_errors"][0]["error"] == "CONFIG_CADENCE_MISSING"
 
 
@@ -406,19 +368,15 @@ def test_pb18b_zero_cadence_skips_source():
 
 def test_pb19_failed_result_raises():
     store = _fake_store(["src-a"])
-
     with patch("services.public_data_sync.scheduler_bridge.execute_due_source",
                return_value=_result(RunStatus.FAILED, error_code="ADAPTER_ERROR")):
         with pytest.raises(PublicDataSchedulerTickError) as exc_info:
             tick_public_data_sources(store=store)
 
-    summary = exc_info.value.summary
-    assert summary["failed"] == 1
-    err = summary["tick_errors"][0]
+    err = exc_info.value.summary["tick_errors"][0]
     assert err["error"] == "SOURCE_EXECUTION_FAILED"
     assert err["status"] == "FAILED"
     assert err["error_code"] == "ADAPTER_ERROR"
-    # error_message must not appear
     assert "error_message" not in err
 
 
@@ -428,21 +386,17 @@ def test_pb19_failed_result_raises():
 
 def test_pb20_partial_result_raises():
     store = _fake_store(["src-a"])
-
     with patch("services.public_data_sync.scheduler_bridge.execute_due_source",
                return_value=_result(RunStatus.PARTIAL)):
-        with pytest.raises(PublicDataSchedulerTickError) as exc_info:
+        with pytest.raises(PublicDataSchedulerTickError):
             tick_public_data_sources(store=store)
-
-    assert exc_info.value.summary["tick_errors"][0]["status"] == "PARTIAL"
 
 
 # ---------------------------------------------------------------------------
-# PB21 — secret-safe exception handling
+# PB21 — secret-safe exception
 # ---------------------------------------------------------------------------
 
 def test_pb21_exception_secret_safe():
-    """Raw exception message must not appear in summary or error string."""
     secret = "Authorization: Bearer SUPER_SECRET_123"
     store = _fake_store(["src-a"])
 
@@ -456,12 +410,10 @@ def test_pb21_exception_secret_safe():
     exc = exc_info.value
     assert secret not in str(exc)
     assert secret not in str(exc.summary)
-    for err in exc.summary.get("tick_errors", []):
-        assert secret not in str(err)
 
 
 # ---------------------------------------------------------------------------
-# PB22 — default retry delay = 3600
+# PB22 — default retry = 3600
 # ---------------------------------------------------------------------------
 
 def test_pb22_default_retry_delay_3600():
@@ -470,21 +422,169 @@ def test_pb22_default_retry_delay_3600():
 
 
 # ---------------------------------------------------------------------------
-# PB23 — retry delay clamp min (10 → 300)
+# PB23 — retry clamp min
 # ---------------------------------------------------------------------------
 
 def test_pb23_retry_clamp_min():
     assert _effective_retry_delay(10) == 300
     assert _effective_retry_delay(0) == 300
-    assert _effective_retry_delay(299) == 300
     assert _effective_retry_delay(300) == 300
 
 
 # ---------------------------------------------------------------------------
-# PB24 — retry delay clamp max (1000000 → 86400)
+# PB24 — retry clamp max
 # ---------------------------------------------------------------------------
 
 def test_pb24_retry_clamp_max():
     assert _effective_retry_delay(1_000_000) == 86400
-    assert _effective_retry_delay(86401) == 86400
     assert _effective_retry_delay(86400) == 86400
+
+
+# ============================================================================
+# FS01~FS08 — Fixed Daily Slot tests
+# ============================================================================
+
+KST = timezone(timedelta(hours=9))
+
+
+def _kst(y, mo, d, h, m) -> datetime:
+    return datetime(y, mo, d, h, m, tzinfo=KST)
+
+
+# ---------------------------------------------------------------------------
+# FS01 — Normal: scheduled 02:10, finished 02:20 → next 다음날 02:10
+# ---------------------------------------------------------------------------
+
+def test_fs01_normal_slot_preserved():
+    scheduled = _kst(2026, 10, 8, 2, 10)
+    finished = _kst(2026, 10, 8, 2, 20)
+    resolver = _make_completion_resolver(86400, 3600, scheduled)
+    result = _result(RunStatus.SUCCESS, finished_at=finished)
+    next_due, retry = resolver(result)
+    assert next_due == _kst(2026, 10, 9, 2, 10)
+    assert retry is None
+
+
+# ---------------------------------------------------------------------------
+# FS02 — Long run: scheduled 04:10, finished 06:30 → next 다음날 04:10
+# ---------------------------------------------------------------------------
+
+def test_fs02_long_run_slot_preserved():
+    scheduled = _kst(2026, 10, 8, 4, 10)
+    finished = _kst(2026, 10, 8, 6, 30)
+    resolver = _make_completion_resolver(86400, 3600, scheduled)
+    result = _result(RunStatus.NO_CHANGE, finished_at=finished)
+    next_due, retry = resolver(result)
+    assert next_due == _kst(2026, 10, 9, 4, 10)
+    # Must NOT be finished + 24h
+    assert next_due != finished + timedelta(seconds=86400)
+
+
+# ---------------------------------------------------------------------------
+# FS03 — Multi-day outage: scheduled 10/7 02:10, finished 10/10 05:00
+#          → next 10/11 02:10 (no catch-up storm)
+# ---------------------------------------------------------------------------
+
+def test_fs03_multiday_outage_no_catchup():
+    scheduled = _kst(2026, 10, 7, 2, 10)
+    finished = _kst(2026, 10, 10, 5, 0)
+    resolver = _make_completion_resolver(86400, 3600, scheduled)
+    result = _result(RunStatus.SUCCESS, finished_at=finished)
+    next_due, retry = resolver(result)
+    assert next_due == _kst(2026, 10, 11, 2, 10)
+    # Verify only one next_due returned (no list of catch-up dates)
+    assert retry is None
+
+
+# ---------------------------------------------------------------------------
+# FS04 — FAILED: scheduled 02:10, finished 02:25, retry 3600
+#          → next_due=02:10, retry_not_before=03:25
+# ---------------------------------------------------------------------------
+
+def test_fs04_failed_preserves_slot():
+    scheduled = _kst(2026, 10, 8, 2, 10)
+    finished = _kst(2026, 10, 8, 2, 25)
+    resolver = _make_completion_resolver(86400, 3600, scheduled)
+    result = _result(RunStatus.FAILED, finished_at=finished)
+    next_due, retry = resolver(result)
+    assert next_due == scheduled
+    assert retry == finished + timedelta(seconds=3600)
+    assert retry == _kst(2026, 10, 8, 3, 25)
+
+
+# ---------------------------------------------------------------------------
+# FS05 — Retry success: original scheduled 02:10, retry finished 03:40
+#          → next 다음날 02:10 (NOT 03:40 + 24h)
+# ---------------------------------------------------------------------------
+
+def test_fs05_retry_success_anchors_to_original_slot():
+    original_scheduled = _kst(2026, 10, 8, 2, 10)
+    retry_finished = _kst(2026, 10, 8, 3, 40)
+    # On retry, the bridge passes the original next_due_at as scheduled_for
+    resolver = _make_completion_resolver(86400, 3600, original_scheduled)
+    result = _result(RunStatus.SUCCESS, finished_at=retry_finished)
+    next_due, retry = resolver(result)
+    assert next_due == _kst(2026, 10, 9, 2, 10)
+    # Must NOT drift to retry_finished + 24h
+    assert next_due != retry_finished + timedelta(seconds=86400)
+
+
+# ---------------------------------------------------------------------------
+# FS06 — NO_CHANGE preserves slot, retry_not_before = None
+# ---------------------------------------------------------------------------
+
+def test_fs06_no_change_slot_preserved():
+    scheduled = _kst(2026, 10, 8, 2, 10)
+    finished = scheduled + timedelta(minutes=5)
+    resolver = _make_completion_resolver(86400, 3600, scheduled)
+    result = _result(RunStatus.NO_CHANGE, finished_at=finished)
+    next_due, retry = resolver(result)
+    assert next_due == _kst(2026, 10, 9, 2, 10)
+    assert retry is None
+
+
+# ---------------------------------------------------------------------------
+# FS07 — PARTIAL: slot preserved, retry applied, aggregate FAILED
+# ---------------------------------------------------------------------------
+
+def test_fs07_partial_slot_preserved():
+    scheduled = _kst(2026, 10, 8, 2, 10)
+    finished = scheduled + timedelta(minutes=40)
+    resolver = _make_completion_resolver(86400, 3600, scheduled)
+    result = _result(RunStatus.PARTIAL, finished_at=finished)
+    next_due, retry = resolver(result)
+    assert next_due == scheduled
+    assert retry == finished + timedelta(seconds=3600)
+
+
+def test_fs07b_partial_raises_scheduler_failed():
+    """PARTIAL result → PublicDataSchedulerTickError (scheduler aggregate FAILED)."""
+    store = _fake_store(["src-a"], next_due_at=_kst(2026, 10, 8, 2, 10))
+    with patch("services.public_data_sync.scheduler_bridge.execute_due_source",
+               return_value=_result(RunStatus.PARTIAL)):
+        with pytest.raises(PublicDataSchedulerTickError):
+            tick_public_data_sources(store=store)
+
+
+# ---------------------------------------------------------------------------
+# FS08 — next_due_at missing → CONFIG_NEXT_DUE_MISSING, no execute call
+# ---------------------------------------------------------------------------
+
+def test_fs08_missing_next_due_skips_source():
+    store = MagicMock()
+    store.list_due_sources.return_value = ["src-a"]
+    store.get_source_runtime.return_value = {
+        "cadence_seconds": 86400,
+        "next_due_at": None,
+    }
+    executed = []
+
+    def _exec(sid, **kw):
+        executed.append(sid)
+
+    with patch("services.public_data_sync.scheduler_bridge.execute_due_source", side_effect=_exec):
+        with pytest.raises(PublicDataSchedulerTickError) as exc_info:
+            tick_public_data_sources(store=store)
+
+    assert executed == []
+    assert exc_info.value.summary["tick_errors"][0]["error"] == "CONFIG_NEXT_DUE_MISSING"

@@ -4,8 +4,14 @@ Called by direct://public_data_sync_tick. Discovers due sources, reads each sour
 runtime cadence and next_due_at from the SoT (public_data_source_runtime), then executes
 via execute_due_source with a per-source completion_state_resolver.
 
-Raises PublicDataSchedulerTickError on any failure (missing cadence, execution error,
-or FAILED/PARTIAL result) so the dispatcher marks the scheduler occurrence as FAILED.
+Slot-anchored scheduling:
+  SUCCESS/NO_CHANGE/SKIPPED → next_due = first scheduled_for + N*cadence strictly > finished_at
+                               (preserves fixed daily slot, prevents catch-up storm)
+  FAILED/PARTIAL            → next_due = scheduled_for (retry same occurrence)
+                               retry_not_before = finished_at + retry_delay
+
+Raises PublicDataSchedulerTickError on any failure (missing cadence/next_due, execution
+error, or FAILED/PARTIAL result) so the dispatcher marks the scheduler occurrence as FAILED.
 """
 from __future__ import annotations
 
@@ -47,11 +53,13 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _parse_ts(value: str | None) -> datetime | None:
-    if not value:
+def _parse_ts(value: str | datetime | None) -> datetime | None:
+    if value is None:
         return None
+    if isinstance(value, datetime):
+        return value
     from dateutil.parser import parse as _parse
-    return _parse(value)
+    return _parse(str(value))
 
 
 def _effective_retry_delay(requested: int) -> int:
@@ -61,18 +69,32 @@ def _effective_retry_delay(requested: int) -> int:
 def _make_completion_resolver(
     cadence_seconds: int,
     retry_delay_seconds: int,
+    scheduled_for: datetime,
 ) -> Callable[[RunResult], tuple[datetime | None, datetime | None]]:
     """Return a per-source resolver for (next_due_at, retry_not_before).
 
-    SUCCESS / NO_CHANGE / SKIPPED → advance by source cadence, no retry backoff.
-    FAILED / PARTIAL              → next_due immediately, retry backoff applied.
+    SUCCESS / NO_CHANGE / SKIPPED:
+        next_due = first multiple of (scheduled_for + N*cadence) strictly after finished_at
+        Preserves the fixed daily slot — prevents drift caused by long execution times
+        and prevents catch-up storms after multi-day outages.
+        retry_not_before = None
+
+    FAILED / PARTIAL:
+        next_due = scheduled_for  (retry the same occurrence)
+        retry_not_before = finished_at + retry_delay
+        Preserves the original scheduled slot so that after a successful retry,
+        the next occurrence is still anchored to the daily slot.
     """
 
     def resolver(result: RunResult) -> tuple[datetime | None, datetime | None]:
         finished = result.finished_at or _now()
         if result.status in _TERMINAL_SUCCESS:
-            return finished + timedelta(seconds=cadence_seconds), None
-        return finished, finished + timedelta(seconds=retry_delay_seconds)
+            next_due = scheduled_for + timedelta(seconds=cadence_seconds)
+            while next_due <= finished:
+                next_due += timedelta(seconds=cadence_seconds)
+            return next_due, None
+        # FAILED / PARTIAL — retry same slot
+        return scheduled_for, finished + timedelta(seconds=retry_delay_seconds)
 
     return resolver
 
@@ -89,7 +111,7 @@ def tick_public_data_sources(
 ) -> list[dict[str, Any]]:
     """Discover due public data sources and execute each one.
 
-    Source cadence is read from public_data_source_runtime (SoT) — not passed by the caller.
+    Source cadence and scheduled slot are read from public_data_source_runtime (SoT).
     FAILED/PARTIAL results are treated as scheduler tick failures.
 
     Args:
@@ -105,8 +127,8 @@ def tick_public_data_sources(
         List of result dicts for sources that completed with SUCCESS/NO_CHANGE/SKIPPED.
 
     Raises:
-        PublicDataSchedulerTickError: when any source has missing cadence, raises during
-            execution, or completes with FAILED/PARTIAL status.
+        PublicDataSchedulerTickError: when any source has missing cadence/next_due, raises
+            during execution, or completes with FAILED/PARTIAL status.
     """
     effective_retry = _effective_retry_delay(retry_delay_seconds)
     effective_limit = min(max(1, limit), _MAX_LIMIT)
@@ -121,9 +143,11 @@ def tick_public_data_sources(
     errors: list[dict[str, Any]] = []
 
     for source_id in due_sources:
-        # Read source-specific operational state from the SoT.
         runtime = store.get_source_runtime(source_id)
-        cadence = (runtime or {}).get("cadence_seconds")
+        rt = runtime or {}
+
+        # Guard: cadence must be present and positive.
+        cadence = rt.get("cadence_seconds")
         if not cadence or int(cadence) <= 0:
             logger.error(
                 "public_data_sync_tick cadence missing source_id=%s cadence=%r",
@@ -133,20 +157,24 @@ def tick_public_data_sources(
             continue
 
         cadence = int(cadence)
-        original_next_due_raw = (runtime or {}).get("next_due_at")
-        original_next_due = _parse_ts(
-            original_next_due_raw.isoformat()
-            if isinstance(original_next_due_raw, datetime)
-            else original_next_due_raw
-        )
 
-        resolver = _make_completion_resolver(cadence, effective_retry)
+        # Guard: next_due_at must be present — it is the scheduled slot anchor.
+        scheduled_for = _parse_ts(rt.get("next_due_at"))
+        if scheduled_for is None:
+            logger.error(
+                "public_data_sync_tick next_due_at missing source_id=%s",
+                source_id,
+            )
+            errors.append({"source_id": source_id, "error": "CONFIG_NEXT_DUE_MISSING"})
+            continue
+
+        resolver = _make_completion_resolver(cadence, effective_retry, scheduled_for)
 
         try:
             result = execute_due_source(
                 source_id,
                 store=store,
-                scheduled_for=original_next_due,
+                scheduled_for=scheduled_for,
                 lease_seconds=lease_seconds,
                 heartbeat_interval_seconds=heartbeat_interval_seconds,
                 heartbeat_store_factory=heartbeat_store_factory,
