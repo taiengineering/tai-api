@@ -167,11 +167,11 @@ class SafeBuildingConsumerInput(BaseModel):
 
     # SEMANTIC_PROOF 9 (runtime, SAFE 저장값 아님)
     # floor_area_sum_at_or_above_11f: H03 derivation only — direct user workaround prohibited (WO-LFR-OBJ-H03)
+    # occupancy_capacity: H02 — consumer direct assertion prohibited (WO-LFR-OBJ-H02-P0); legal calculation source required
     worker_count: Optional[int] = None
     total_floor_area: Optional[float] = None
     building_use_type: Optional[str] = None
     building_height_m: Optional[float] = None
-    occupancy_capacity: Optional[int] = None
     performance_use_floor_area_sum: Optional[float] = None
     building_use_category: Optional[str] = None
     building_activity_type: Optional[str] = None

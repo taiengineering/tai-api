@@ -53,10 +53,11 @@ def test_build_facility_33_exact():
     assert got["floor_count"]==11 and got["flat_plate_column_section_ratio"]==0.25
 
 def test_false_and_zero_preserved():
+    # occupancy_capacity via internal source_facts path (consumer direct assertion blocked — see H02-F1/F2)
     inp={"has_flat_plate_structure":False,"occupancy_capacity":0,"connection_open_space_open_area_ratio":0.0}
     fac=build_facility(Body(sector="BUILDING", input=inp))
     assert fac.get("has_flat_plate_structure") is False   # False 보존
-    assert fac.get("occupancy_capacity")==0                # 0 보존
+    assert fac.get("occupancy_capacity")==0                # 0 != absent (internal path)
     assert fac.get("connection_open_space_open_area_ratio")==0.0
 
 def test_none_and_blank_omitted():
