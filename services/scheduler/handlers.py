@@ -231,6 +231,23 @@ def _run_qa_scheduler_tick(p):
     return asyncio.run(scheduler_tick(_sb()))
 
 
+def _run_public_data_sync_tick(p):
+    from services.public_data_sync.scheduler_bridge import tick_public_data_sources
+    cadence = int(p.get("cadence_seconds", 3600))
+    limit = int(p.get("limit", 2))
+    lease = int(p.get("lease_seconds", 900))
+    hb_interval = int(p.get("heartbeat_interval_seconds", 60))
+    retry_delay = int(p.get("retry_delay_seconds", 300))
+    results = tick_public_data_sources(
+        cadence_seconds=cadence,
+        limit=limit,
+        lease_seconds=lease,
+        heartbeat_interval_seconds=hb_interval,
+        retry_delay_seconds=retry_delay,
+    )
+    return {"executed": len(results), "results": results}
+
+
 def register_direct_handlers() -> dict[str, Handler]:
     if DIRECT_HANDLERS:
         return DIRECT_HANDLERS
@@ -267,6 +284,7 @@ def register_direct_handlers() -> dict[str, Handler]:
         "direct://shared_search_reconcile":   _run_shared_search_reconcile,
         "direct://saas_recurring_billing":    _run_saas_recurring_billing,
         "direct://qa_scheduler_tick":         _run_qa_scheduler_tick,
+        "direct://public_data_sync_tick":     _run_public_data_sync_tick,
     })
     return DIRECT_HANDLERS
 

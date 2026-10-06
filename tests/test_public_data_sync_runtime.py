@@ -1708,6 +1708,124 @@ def test_h24_invalid_lease_seconds_raises():
 
 
 # ---------------------------------------------------------------------------
+# PR01~PR04 — completion_state_resolver
+# ---------------------------------------------------------------------------
+
+def _noop_supervisor():
+    sv = MagicMock()
+    sv.failed_reason = None
+    sv.start = MagicMock()
+    sv.stop = MagicMock(return_value=True)
+    return sv
+
+
+def _run_result(status=RunStatus.SUCCESS):
+    return RunResult(
+        run_id=str(uuid4()),
+        source_id=_SOURCE_ID,
+        status=status,
+        started_at=_now(),
+        finished_at=_now(),
+    )
+
+
+def test_pr01_resolver_called_with_run_result():
+    """PR01 — completion_state_resolver receives the RunResult produced by run_source."""
+    captured = []
+    from datetime import timezone
+
+    def resolver(result):
+        captured.append(result)
+        finished = result.finished_at or datetime.now(timezone.utc)
+        return finished, None
+
+    sb = _fake_sb()
+
+    with patch("services.public_data_sync.runtime.HeartbeatSupervisor", return_value=_noop_supervisor()):
+        with patch("services.public_data_sync.runner.run_source", return_value=_run_result()) as mock_run:
+            execute_due_source(
+                _SOURCE_ID,
+                store=PublicDataRuntimeStore(sb),
+                completion_state_resolver=resolver,
+            )
+
+    assert len(captured) == 1
+    assert captured[0].status == RunStatus.SUCCESS
+
+
+def test_pr02_resolver_return_passed_to_complete_run():
+    """PR02 — (next_due_at, retry_not_before) from resolver are forwarded to complete_run."""
+    from datetime import timezone
+    fixed_next_due = datetime(2026, 10, 8, 9, 0, tzinfo=timezone.utc)
+    fixed_retry = datetime(2026, 10, 7, 9, 5, tzinfo=timezone.utc)
+    complete_calls = []
+
+    def resolver(result):
+        return fixed_next_due, fixed_retry
+
+    def tracking_complete(self, run_id, result, *, next_due_at=None, retry_not_before=None):
+        complete_calls.append({"next_due_at": next_due_at, "retry_not_before": retry_not_before})
+        return True
+
+    sb = _fake_sb()
+
+    with patch("services.public_data_sync.runtime.HeartbeatSupervisor", return_value=_noop_supervisor()):
+        with patch("services.public_data_sync.runner.run_source", return_value=_run_result()):
+            with patch.object(PublicDataRuntimeStore, "complete_run", tracking_complete):
+                execute_due_source(
+                    _SOURCE_ID,
+                    store=PublicDataRuntimeStore(sb),
+                    completion_state_resolver=resolver,
+                )
+
+    assert len(complete_calls) == 1
+    assert complete_calls[0]["next_due_at"] == fixed_next_due
+    assert complete_calls[0]["retry_not_before"] == fixed_retry
+
+
+def test_pr03_resolver_raises_runtime_completion_error():
+    """PR03 — exception in completion_state_resolver raises RuntimeCompletionError."""
+    def bad_resolver(result):
+        raise ValueError("resolver boom")
+
+    sb = _fake_sb()
+
+    with patch("services.public_data_sync.runtime.HeartbeatSupervisor", return_value=_noop_supervisor()):
+        with patch("services.public_data_sync.runner.run_source", return_value=_run_result()):
+            with pytest.raises(RuntimeCompletionError):
+                execute_due_source(
+                    _SOURCE_ID,
+                    store=PublicDataRuntimeStore(sb),
+                    completion_state_resolver=bad_resolver,
+                )
+
+
+def test_pr04_resolver_none_uses_explicit_params():
+    """PR04 — resolver=None preserves backward compat; explicit next_due_at/retry passed through."""
+    from datetime import timezone
+    explicit_next_due = datetime(2026, 10, 8, 9, 0, tzinfo=timezone.utc)
+    complete_calls = []
+
+    def tracking_complete(self, run_id, result, *, next_due_at=None, retry_not_before=None):
+        complete_calls.append({"next_due_at": next_due_at, "retry_not_before": retry_not_before})
+        return True
+
+    sb = _fake_sb()
+
+    with patch("services.public_data_sync.runtime.HeartbeatSupervisor", return_value=_noop_supervisor()):
+        with patch("services.public_data_sync.runner.run_source", return_value=_run_result()):
+            with patch.object(PublicDataRuntimeStore, "complete_run", tracking_complete):
+                execute_due_source(
+                    _SOURCE_ID,
+                    store=PublicDataRuntimeStore(sb),
+                    next_due_at=explicit_next_due,
+                )
+
+    assert complete_calls[0]["next_due_at"] == explicit_next_due
+    assert complete_calls[0]["retry_not_before"] is None
+
+
+# ---------------------------------------------------------------------------
 # SQL tests placeholder
 # ---------------------------------------------------------------------------
 
