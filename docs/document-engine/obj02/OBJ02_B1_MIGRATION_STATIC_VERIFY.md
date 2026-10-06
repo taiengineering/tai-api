@@ -1,75 +1,77 @@
 ---
-title: OBJ02-B1 Migration Static Verification
-description: Static verification of migration logic without live DB execution
+title: OBJ02-B1 Migration Static + Disposable DB Verification
+description: Migration guards verified statically and on disposable PostgreSQL 16
 type: evidence
-wo: WO-DOC-OBJ02-B1-CATALOG-SCHEMA-BINDING-001
-status: VERIFIED_STATIC_ONLY
+wo: WO-DOC-OBJ02-B1-CORRECTION-002
+status: DISPOSABLE_DB_VERIFIED
+db_version: PostgreSQL 16.15 (aarch64-unknown-linux-musl)
 ---
 
-# OBJ02-B1 Migration Static Verification
+# OBJ02-B1 Migration Static + Disposable DB Verification
 
 ## Migration File
 
 `supabase/migrations/20261006193021_catalog_schema_binding_b1.sql`
 
+## Guard Mechanism (Post CORR-06)
+
+All guards use `RAISE EXCEPTION` — NOT `ASSERT`.
+
+Reason: PostgreSQL `ASSERT` is disabled by `plpgsql.check_asserts=off` (off by default in many environments). Guards must never be skippable.
+
+Migration is wrapped in `BEGIN/COMMIT` so any guard failure causes full ROLLBACK.
+
 ## Structure (§21 Order Compliance)
 
-| Step | Content | Present |
-|------|---------|---------|
-| 1 | PRE-CONDITION ASSERTIONS (DO $check_pre$) | YES |
-| 2 | ADD COLUMN | YES |
-| 3 | BACKFILL | YES |
-| 4 | POST-BACKFILL ASSERTIONS (DO $check_post$) | YES |
-| 5 | FOREIGN KEY | YES |
-| 6 | CHECK CONSTRAINT | YES |
-| 7 | INDEXES + UNIQUE CONSTRAINTS | YES |
-| 8 | FINAL ASSERTION | YES |
+| Step | Content | Mechanism |
+|------|---------|-----------|
+| 1 | PRE-CONDITION GUARDS | `DO ... RAISE EXCEPTION IF` |
+| 2 | ADD COLUMN | `ALTER TABLE ADD COLUMN` |
+| 3 | BACKFILL | `UPDATE ... FROM` |
+| 4 | POST-BACKFILL GUARDS | `DO ... RAISE EXCEPTION IF` |
+| 5 | FOREIGN KEY | `ADD CONSTRAINT ... REFERENCES ... ON DELETE RESTRICT` |
+| 6 | CHECK CONSTRAINT | `ADD CONSTRAINT ... CHECK` |
+| 7 | INDEXES + UNIQUE | `CREATE INDEX` × 3 |
+| 8 | FINAL GUARD | `DO ... RAISE EXCEPTION IF` |
 
-## PRE-CONDITION ASSERTIONS
+## Disposable DB — Positive Test (Production-like Fixture)
 
-| Assertion | Expected | Notes |
-|-----------|----------|-------|
-| document_forms COUNT = 260 | 260 | Verified in OBJ02-A evidence |
-| runtime_form_schema WHERE source_table=document_forms COUNT = 260 | 260 | Verified in OBJ02-A census |
-| dual-condition JOIN (source_id AND doc_id) COUNT = 260 | 260 | Both columns must match |
-| duplicate doc_id in sourced schemas = 0 | 0 | No doc_id appears in >1 schema |
-| catalog_document_id column NOT EXISTS | NOT EXISTS | New column — must not pre-exist |
+Environment: PostgreSQL 16 Docker container (`postgres:16-alpine`)
 
-## BACKFILL LOGIC
+Fixture:
+- `document_forms`: 260 rows
+- `runtime_form_schema`: 324 rows (260 document_forms-sourced + 64 document_form_master-sourced)
+
+Result:
+
+| Check | Value | Status |
+|-------|-------|--------|
+| NOT NULL count | 260 | PASS |
+| NULL count | 64 | PASS |
+| Dangling FK | 0 | PASS |
+| Kind conflict | 0 | PASS |
+
+## Disposable DB — Negative Tests
+
+| ID | Scenario | Expected | Result |
+|----|----------|----------|--------|
+| M1 | document_forms count = 1 (not 260) | PRE guard fires, full ROLLBACK | PASS |
+| M2 | 1 dual-key mismatch (source_id match, doc_id wrong) | PRE guard fires at count=259, full ROLLBACK | PASS |
+| M4 | catalog_document_id column pre-exists | PRE guard fires | PASS |
+| M5 | source-kind CHECK: set catalog_document_id on master-sourced schema | `check_violation` raised | PASS |
+| ACTIVE_UNIQUE | Second APPROVED schema for same catalog doc | `unique_violation` raised | PASS |
+| VER_UNIQUE | Duplicate (catalog_document_id, version) | `unique_violation` raised | PASS |
+| DELETE_RESTRICT | Delete document_forms row referenced by schema | `foreign_key_violation` raised | PASS |
+
+## CORR-07: information_schema Qualification
 
 ```sql
-UPDATE runtime_form_schema rfs SET catalog_document_id = df.id
-FROM document_forms df
-WHERE rfs.source_trace->>'source_table' = 'document_forms'
-  AND rfs.source_trace->>'source_id'    = df.id::text
-  AND rfs.source_trace->>'doc_id'       = df.doc_id;
+WHERE table_schema = 'public'
+  AND table_name   = 'runtime_form_schema'
+  AND column_name  = 'catalog_document_id'
 ```
 
-Dual-condition design: Both `source_id = df.id` AND `doc_id = df.doc_id` must match.
-No row is updated if either key mismatches. Fail-closed.
-
-## POST-BACKFILL ASSERTIONS
-
-| Assertion | Expected |
-|-----------|----------|
-| NOT NULL count = 260 | 260 document_forms-sourced schemas backfilled |
-| NULL count = 64 | 64 document_form_master-sourced schemas untouched |
-| All non-NULL reference valid document_forms.id | No dangling FK |
-| Only source_table=document_forms may have non-NULL | Kind constraint |
-
-## CONSTRAINTS
-
-| Constraint | Type | Definition |
-|------------|------|------------|
-| fk_rfs_catalog_document | FK | catalog_document_id → document_forms(id) ON DELETE RESTRICT |
-| chk_rfs_catalog_source_kind | CHECK | NULL OR source_table='document_forms' |
-| uq_rfs_catalog_active_approved | UNIQUE INDEX | (catalog_document_id) WHERE APPROVED_FOR_RUNTIME_USE |
-| uq_rfs_catalog_version | UNIQUE INDEX | (catalog_document_id, version) WHERE NOT NULL |
-| idx_rfs_catalog_document_id | INDEX | (catalog_document_id) WHERE NOT NULL |
-
-## Static Verification (Tests B1~B7)
-
-All 7 migration static tests PASS. Test file: `tests/test_doc_obj02b1_binding.py`.
+Prevents false-positives from same-named tables in non-public schemas.
 
 ## Production DB Apply Status
 
