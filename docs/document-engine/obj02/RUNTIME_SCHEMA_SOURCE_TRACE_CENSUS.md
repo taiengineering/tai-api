@@ -85,6 +85,47 @@ doc_id와 form_code가 동시에 non-null인 행: **0** (상호 배타적 구조
 
 ---
 
+## CORR-4 — GPT 독립검증 추가 실증 (2026-10-07)
+
+### document_forms 기원 260건 정합성
+
+| 확인 항목 | 결과 |
+|---|---|
+| source_trace.source_id → document_forms.id | 260/260 MATCH |
+| source_trace.doc_id → document_forms.doc_id | 260/260 MATCH |
+| 두 값 동시 정합 | 260/260 MATCH |
+| duplicate source_trace.doc_id | 0 |
+
+### document_form_master 기원 64건 정합성
+
+| 확인 항목 | 결과 |
+|---|---|
+| source_trace.source_id → document_form_master.id | 64/64 MATCH |
+| source_trace.form_code → document_form_master.form_code | 64/64 MATCH |
+
+### 전체 EXACT SOURCE ROW IDENTITY
+
+```
+total = 324
+exact source row identity = 324 / 324
+```
+
+### 주의
+
+이 사실은 324 schema가 모두 Runtime 사용 승인됐다는 뜻이 아님.
+
+```
+document_forms 기원
+  CANDIDATE = 260
+  APPROVED  = 0
+
+document_form_master 기원
+  CANDIDATE = 63
+  APPROVED  = 1
+```
+
+---
+
 ## MUTATION
 
 application code = 0 / DB write = 0

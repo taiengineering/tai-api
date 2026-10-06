@@ -28,16 +28,17 @@ Source: tai-api HEAD 7f3b5bf9 (branch docs/integrated-search-document-plan-20261
 ### IMPLEMENTED (5건)
 
 **CHK / EQUIP / INSP / PPE** — 공통 fetcher: `inspection_fetcher.py`
-- template 파일 실존: `services/document_engine/templates/DOC-CHK.html` 등 (OBJ00 확인)
+- template 파일 실존: `templates/documents/DOC-CHK.html` 등 (CORR-1: 실제 경로 확인)
 - fetcher 실존: `services/document_engine/inspection_fetcher.py`
 - evidence_source: `safety_inspections + safety_inspection_results`
 - GENERATOR_MAP["inspection"] 등록 확인: `services/document_engine/generator.py` (FETCHER_MAP)
 
 **TBM** — fetcher: `tbm_fetcher.py`
-- template 파일 실존: `services/document_engine/templates/DOC-OSH-056.html` (OBJ00 확인)
+- template 파일 실존: `templates/documents/DOC-OSH-056.html` (CORR-1: 실제 경로 확인)
 - fetcher 실존: `services/document_engine/tbm_fetcher.py`
 - evidence_source: `tbm_meetings(risk_items, safety_items)`
-- route: `POST /document-forms/{doc_id}/generate` (TBM only path)
+- generic route: `POST /documents/TBM/generate` via `routers/document_generate.py` (CORR-2)
+- legacy TBM-specific route: `POST /document-forms/{doc_id}/generate` via `routers/document_engine.py` → PDF bytes + documents 테이블 INSERT
 
 ### METADATA_ONLY (1건)
 
@@ -76,9 +77,10 @@ Source: tai-api HEAD 7f3b5bf9 (branch docs/integrated-search-document-plan-20261
 
 ---
 
-## Current Consumer
+## Current Consumer (CORR-2)
 
-- CHK/EQUIP/INSP/PPE/TBM: `routers/document_engine.py` + `services/document_engine/generator.py`
+- CHK/EQUIP/INSP/PPE: `routers/document_generate.py` → `services/document_engine/generator.py` (generic route)
+- TBM: `routers/document_generate.py` (generic) + `routers/document_engine.py` (legacy TBM-specific, documents 테이블 저장)
 - CONLOG/EDU/APPT: 현재 consumer 없음
 
 ---

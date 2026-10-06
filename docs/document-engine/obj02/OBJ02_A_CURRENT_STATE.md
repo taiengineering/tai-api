@@ -92,6 +92,13 @@ WO: WO-DOC-OBJ02-A-BINDING-READMODEL-DISCOVERY-001
 | source_table distribution | document_forms=260 / document_form_master=64 |
 | doc_id distinct | 260 (중복 없음) |
 | 1 doc_id → 1 schema | YES (현재 데이터 기준) |
+| exact source row identity | 324/324 (CORR-4: GPT 독립검증 추가 확인) |
+
+CORR-4 상세:
+- source_trace.source_id → document_forms.id = 260/260 MATCH
+- source_trace.doc_id → document_forms.doc_id = 260/260 MATCH
+- source_trace.source_id → document_form_master.id = 64/64 MATCH
+- source_trace.form_code → document_form_master.form_code = 64/64 MATCH
 
 ---
 
@@ -138,15 +145,19 @@ E2/E3 64건은 catalog(document_forms)와 직접 연결 경로 없음.
 
 ---
 
-## EXPORT
+## EXPORT (CORR-3: DB CHECK 반영)
 
-| format | 상태 |
-|---|---|
-| PDF | ACTUAL (Gotenberg) — 견적서 경로 PRODUCTION_VERIFIED / 문서엔진 경로 UNVERIFIED |
-| HTML | ACTUAL (Jinja2) |
-| XLSX | NOT_PRESENT |
-| DOCX | NOT_PRESENT |
-| HWP | NOT_PRESENT |
+`chk_gd_export` CHECK: HTML / PDF / XLSX / PRINT_VIEW / API_RESPONSE 허용. DOCX/HWP 없음.
+
+| format | DB_ALLOWED | renderer | 판정 |
+|---|---|---|---|
+| PDF | YES | YES (Gotenberg) | ACTUAL — 견적서 경로 PRODUCTION_VERIFIED / 문서엔진 경로 UNVERIFIED |
+| HTML | YES | YES (Jinja2) | ACTUAL |
+| XLSX | YES | NO | DB_ALLOWED_BUT_NOT_IMPLEMENTED |
+| PRINT_VIEW | YES | NO (별도 route 없음) | DB_ALLOWED_BUT_NOT_IMPLEMENTED |
+| API_RESPONSE | YES | PARTIAL | DB_ALLOWED_PARTIAL |
+| DOCX | NO | NO | NOT_ALLOWED_NOT_PRESENT |
+| HWP | NO | NO | NOT_ALLOWED_NOT_PRESENT |
 
 ---
 
@@ -188,8 +199,19 @@ docs/document-engine/obj02/
 
 ---
 
+## CORRECTIONS APPLIED
+
+| CORR | 내용 | 파일 |
+|---|---|---|
+| CORR-1 | Template 실제 경로 수정 (`templates/documents/`) | TYPE_REGISTRY_RUNTIME_EVIDENCE.md |
+| CORR-2 | Generic generation consumer 분리 (`document_generate.py` vs `document_engine.py`) | TYPE_REGISTRY_RUNTIME_EVIDENCE.md |
+| CORR-3 | DB CHECK (`chk_gd_export`) 반영: XLSX=DB_ALLOWED_BUT_NOT_IMPLEMENTED, DOCX/HWP=NOT_ALLOWED | EXPORT_FORMAT_CAPABILITY.md, 이 파일 |
+| CORR-4 | Source identity 추가 실증: 324/324 MATCH (GPT 독립검증 결과) | RUNTIME_SCHEMA_SOURCE_TRACE_CENSUS.md, 이 파일 |
+
+---
+
 ## OBJ02-A = COMPLETE
-GPT INDEPENDENT VERIFICATION = REQUIRED
+GPT INDEPENDENT VERIFICATION = REQUIRED (FINAL REVERIFY)
 
 NO ARCHITECTURE DECISION MADE
 NO SEMANTIC MAPPING MADE

@@ -7,17 +7,19 @@ Source: tai-api HEAD 7f3b5bf9 + requirements.txt 검사
 
 ---
 
-## 현재 실제 지원 format
+## 현재 실제 지원 format (CORR-3: DB CHECK 반영)
 
-| format | DB status/check 허용 | renderer 구현 | 실제 route | frontend consumer | production evidence | 판정 |
+`chk_gd_export` CHECK 허용값: `HTML, PDF, XLSX, PRINT_VIEW, API_RESPONSE` (DOCX/HWP 없음)
+
+| format | DB_ALLOWED (chk_gd_export) | renderer 구현 | 실제 route | frontend consumer | production evidence | 판정 |
 |---|---|---|---|---|---|---|
-| PDF | 없음 | YES (Gotenberg via renderer.py + gotenberg_svc.py) | POST /documents/{doc_type}/generate, POST /document-forms/{doc_id}/generate | /document-forms, /engine-document | documents 테이블 4건 (견적서, 2026-09-30) | ACTUAL (견적서 경로) / UNVERIFIED (문서엔진 경로) |
-| HTML | 없음 | YES (Jinja2 render_document_html) | render_document_html() 내부 함수 | /compliance-report (일부) | 간접 증거 (Jinja2 render 코드 확인) | ACTUAL |
-| XLSX | 없음 | NO (xlsxwriter/openpyxl 미포함) | 없음 | 없음 | 없음 | NOT_PRESENT |
-| DOCX | 없음 | NO (python-docx 미포함) | 없음 | 없음 | 없음 | NOT_PRESENT |
-| HWP | 없음 | NO (hwp 라이브러리 미포함) | 없음 | 없음 | 없음 | NOT_PRESENT |
-| PRINT_VIEW | 없음 | PARTIAL (HTML → browser print) | 없음 (별도 route 없음) | 없음 | 없음 | NOT_IMPLEMENTED |
-| API_RESPONSE | 없음 | PARTIAL (runtime_document_data JSON 반환 가능) | GET /document-engine/... (부분 구현) | 없음 | 없음 | PARTIAL |
+| PDF | YES | YES (Gotenberg via renderer.py + gotenberg_svc.py) | POST /documents/{doc_type}/generate, POST /document-forms/{doc_id}/generate | /document-forms, /engine-document | documents 테이블 4건 (견적서, 2026-09-30) | ACTUAL (견적서 경로) / UNVERIFIED (문서엔진 경로) |
+| HTML | YES | YES (Jinja2 render_document_html) | render_document_html() 내부 함수 | /compliance-report (일부) | 간접 증거 (Jinja2 render 코드 확인) | ACTUAL |
+| XLSX | YES | NO (xlsxwriter/openpyxl 미포함) | 없음 | 없음 | 없음 | DB_ALLOWED_BUT_NOT_IMPLEMENTED |
+| PRINT_VIEW | YES | NO (별도 route 없음) | 없음 | 없음 | 없음 | DB_ALLOWED_BUT_NOT_IMPLEMENTED |
+| API_RESPONSE | YES | PARTIAL (runtime_document_data JSON 반환 가능) | GET /document-engine/... (부분 구현) | 없음 | 없음 | DB_ALLOWED_PARTIAL |
+| DOCX | NO (CHECK에 없음) | NO (python-docx 미포함) | 없음 | 없음 | 없음 | NOT_ALLOWED_NOT_PRESENT |
+| HWP | NO (CHECK에 없음) | NO (hwp 라이브러리 미포함) | 없음 | 없음 | 없음 | NOT_ALLOWED_NOT_PRESENT |
 
 ---
 
@@ -58,12 +60,20 @@ Source: tai-api HEAD 7f3b5bf9 + requirements.txt 검사
 
 ---
 
+## DB vs 실제 구현 정리 (CORR-3)
+
+XLSX: DB에서 허용(chk_gd_export)하나 renderer/route/consumer 없음 → "지원 가능"으로 표시 금지.
+DOCX/HWP: DB CHECK에도 없고 renderer도 없음.
+
+---
+
 ## OBJ01 원칙 대조
 
 Web Document First architecture (OBJ01):
 - HTML = working view → ACTUAL 구현 있음 (Jinja2)
 - PDF = on-demand at download → Gotenberg 경로 존재, 견적서 경로 VERIFIED
-- XLSX/DOCX/HWP = unsupported → NOT_PRESENT (가정 금지)
+- XLSX = DB_ALLOWED_BUT_NOT_IMPLEMENTED
+- DOCX/HWP = NOT_ALLOWED_NOT_PRESENT
 
 ---
 
