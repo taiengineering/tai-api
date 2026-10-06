@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from services.public_data_sync.contracts import RunResult, RunStatus, TriggerKind
@@ -46,6 +46,8 @@ def execute_due_source(
     next_due_at: datetime | None = None,
     retry_not_before: datetime | None = None,
     metadata: dict[str, Any] | None = None,
+    heartbeat_store_factory: Callable[[], PublicDataRuntimeStore] | None = None,
+    heartbeat_interval_seconds: int = 60,
 ) -> RunResult | None:
     """Orchestrate a single source execution through the runtime claim path.
 
@@ -57,6 +59,7 @@ def execute_due_source(
         RuntimeClaimError       — DB/RPC failure or invariant violation during claim_run
         RuntimeCompletionError  — DB/RPC failure during complete_run
         RuntimeFencedError      — complete_run rejected (source ownership lost)
+        RuntimeHeartbeatError   — heartbeat infrastructure failure or stop timeout
     """
     from services.public_data_sync.runner import run_source
 
@@ -103,8 +106,9 @@ def execute_due_source(
     supervisor = HeartbeatSupervisor(
         run_id=run_id,
         source_id=source_id,
-        store_factory=_default_store,
+        store_factory=heartbeat_store_factory or _default_store,
         lease_seconds=lease_seconds,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
     )
     supervisor.start()
 
@@ -141,13 +145,13 @@ def execute_due_source(
             source_id, run_id,
         )
         raise RuntimeFencedError(run_id=run_id, source_id=source_id)
-    if supervisor.failed_reason == "HEARTBEAT_INFRA_ERROR":
+    if supervisor.failed_reason in ("HEARTBEAT_INFRA_ERROR", "HEARTBEAT_STOP_TIMEOUT"):
         logger.error(
-            "heartbeat infra error source_id=%s run_id=%s",
-            source_id, run_id,
+            "heartbeat failure reason=%s source_id=%s run_id=%s",
+            supervisor.failed_reason, source_id, run_id,
         )
         raise RuntimeHeartbeatError(
-            run_id=run_id, source_id=source_id, reason="HEARTBEAT_INFRA_ERROR"
+            run_id=run_id, source_id=source_id, reason=supervisor.failed_reason
         )
 
     # complete_run: DB/RPC failures are infrastructure errors.
