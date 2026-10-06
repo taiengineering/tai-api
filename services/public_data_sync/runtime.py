@@ -48,6 +48,7 @@ def execute_due_source(
     metadata: dict[str, Any] | None = None,
     heartbeat_store_factory: Callable[[], PublicDataRuntimeStore] | None = None,
     heartbeat_interval_seconds: int = 60,
+    completion_state_resolver: Callable[[RunResult], tuple[datetime | None, datetime | None]] | None = None,
 ) -> RunResult | None:
     """Orchestrate a single source execution through the runtime claim path.
 
@@ -153,6 +154,17 @@ def execute_due_source(
         raise RuntimeHeartbeatError(
             run_id=run_id, source_id=source_id, reason=supervisor.failed_reason
         )
+
+    # Optional resolver: derive (next_due_at, retry_not_before) from the RunResult.
+    if completion_state_resolver is not None:
+        try:
+            next_due_at, retry_not_before = completion_state_resolver(result)
+        except Exception as exc:
+            logger.error(
+                "completion_state_resolver failed source_id=%s run_id=%s exception_type=%s",
+                source_id, run_id, type(exc).__name__,
+            )
+            raise RuntimeCompletionError(run_id=run_id) from None
 
     # complete_run: DB/RPC failures are infrastructure errors.
     # A FAILED adapter result with successful persistence is still returned normally.

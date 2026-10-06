@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Any
+from typing import Any, Callable
 
 from services.scheduler.cron_grammar import next_fire_after, next_fire_at_or_after
 from services.scheduler.handlers import execute_direct
+from services.scheduler.heartbeat import SchedulerHeartbeatSupervisor
 from services.scheduler.store import Claim, InMemoryStore, JobRow
 from services.time import SYSTEM_CLOCK, Clock, now_kst, serialize_business_datetime
 from watch_engine.emitter import emit_event
@@ -113,6 +114,8 @@ def tick(
     clock: Clock = SYSTEM_CLOCK,
     worker_id: str = "dispatcher",
     tick_cap: int = DEFAULT_TICK_CAP,
+    store_factory: Callable[[], InMemoryStore] | None = None,
+    heartbeat_interval_seconds: int = 60,
 ) -> list[dict[str, Any]]:
     now = now_kst(clock)
     if hasattr(store, "refresh"):
@@ -128,6 +131,14 @@ def tick(
             continue
         ctx = _cron_trace_context(claim)
         with trace_scope(ctx):
+            _factory = store_factory if store_factory is not None else (lambda: store)
+            supervisor = SchedulerHeartbeatSupervisor(
+                claim,
+                store_factory=_factory,
+                lease=LEASE,
+                heartbeat_interval_seconds=heartbeat_interval_seconds,
+            )
+            supervisor.start()
             status = "SUCCESS"
             detail: Any = None
             try:
@@ -140,9 +151,18 @@ def tick(
                 else:
                     detail = {"error": str(e)[:1000]}
                 logger.error("[SCHED] %s FAILED scheduled_for=%s: %s", job.job_code, claim.scheduled_for, e)
+            finally:
+                supervisor.stop()
+            if supervisor.failed_reason is not None:
+                logger.warning(
+                    "[SCHED] heartbeat failure reason=%s job=%s log_id=%s; skipping complete",
+                    supervisor.failed_reason, job.job_code, claim.log_id,
+                )
+                continue
+            finished_now = now_kst(clock)
             nxt = next_fire_after(job.cron_expression, claim.scheduled_for)
             try:
-                fenced = store.complete_and_advance(claim, status, detail, now, nxt)
+                fenced = store.complete_and_advance(claim, status, detail, finished_now, nxt)
             except Exception as e:
                 logger.error(
                     "[SCHED] complete failed; leaving RUNNING for replay job=%s scheduled_for=%s: %s",
