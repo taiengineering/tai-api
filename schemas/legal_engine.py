@@ -226,3 +226,4 @@ class SafeBuildingLegBody(BaseModel):
 
     factory_id: str
     input: SafeBuildingConsumerInput
+    material_inout_event_id: Optional[str] = None
