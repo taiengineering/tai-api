@@ -17,6 +17,18 @@ from services.public_data_sync.runtime_store import PublicDataRuntimeStore
 
 logger = logging.getLogger(__name__)
 
+# Claim rejection reasons that are expected business outcomes — return None, do not raise.
+# Anything not in this set is a DB invariant violation or unexpected state — raise RuntimeClaimError.
+_NORMAL_CLAIM_REJECTIONS = frozenset({
+    "DISABLED",
+    "NOT_DUE",
+    "RETRY_NOT_BEFORE",
+    "SOURCE_BUSY",
+    "CREDENTIAL_BUSY",
+    "RATE_LIMIT_BUSY",
+    "SOURCE_LIMIT_UNSUPPORTED",
+})
+
 
 def _default_store() -> PublicDataRuntimeStore:
     return PublicDataRuntimeStore()
@@ -40,7 +52,7 @@ def execute_due_source(
 
     Raises:
         SourceNotFoundError     — unknown source_id (programming error)
-        RuntimeClaimError       — DB/RPC failure during claim_run
+        RuntimeClaimError       — DB/RPC failure or invariant violation during claim_run
         RuntimeCompletionError  — DB/RPC failure during complete_run
         RuntimeFencedError      — complete_run rejected (source ownership lost)
     """
@@ -55,6 +67,7 @@ def execute_due_source(
     now = datetime.now(timezone.utc)
 
     # claim_run: DB/RPC failures must propagate — callers must not treat as SKIP.
+    # Raw exception chained with `from None` to prevent secret leakage via traceback.
     try:
         claim = store.claim_run(
             run_id=run_id,
@@ -69,14 +82,21 @@ def execute_due_source(
             "claim_run failed source_id=%s exception_type=%s",
             source_id, type(exc).__name__,
         )
-        raise RuntimeClaimError(source_id=source_id) from exc
+        raise RuntimeClaimError(source_id=source_id) from None
 
     if not claim.claimed:
-        logger.info(
-            "claim skipped source_id=%s reason=%s",
+        if claim.reason in _NORMAL_CLAIM_REJECTIONS:
+            logger.info(
+                "claim skipped source_id=%s reason=%s",
+                source_id, claim.reason,
+            )
+            return None
+        # Unexpected reason — DB invariant violation or new contract code not yet in allowlist.
+        logger.error(
+            "claim invariant violation source_id=%s reason=%s",
             source_id, claim.reason,
         )
-        return None
+        raise RuntimeClaimError(source_id=source_id, reason=claim.reason)
 
     result: RunResult | None = None
     try:
@@ -104,6 +124,7 @@ def execute_due_source(
 
     # complete_run: DB/RPC failures are infrastructure errors.
     # A FAILED adapter result with successful persistence is still returned normally.
+    # Raw exception chained with `from None` to prevent secret leakage via traceback.
     try:
         completed = store.complete_run(
             run_id=run_id,
@@ -116,7 +137,7 @@ def execute_due_source(
             "complete_run failed source_id=%s run_id=%s exception_type=%s",
             source_id, run_id, type(exc).__name__,
         )
-        raise RuntimeCompletionError(run_id=run_id) from exc
+        raise RuntimeCompletionError(run_id=run_id) from None
 
     if not completed:
         logger.warning(

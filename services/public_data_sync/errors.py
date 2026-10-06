@@ -28,15 +28,20 @@ class PreflightError(PublicDataSyncError):
 
 
 class RuntimeClaimError(PublicDataSyncError):
-    """DB/RPC infrastructure failure during claim_run.
+    """DB/RPC infrastructure failure OR DB invariant violation during claim_run.
 
     Distinct from a normal claim rejection (DISABLED, NOT_DUE, SOURCE_BUSY, etc.).
     Callers must not interpret this as a skip decision.
+    reason is a DB contract code (e.g. UNKNOWN_SOURCE_RUNTIME) — never a raw message.
     """
 
-    def __init__(self, source_id: str) -> None:
-        super().__init__(f"Claim infrastructure failure for source: {source_id!r}")
+    def __init__(self, source_id: str, reason: str | None = None) -> None:
+        detail = f" reason={reason!r}" if reason is not None else ""
+        super().__init__(
+            f"Claim infrastructure/invariant failure: source={source_id!r}{detail}"
+        )
         self.source_id = source_id
+        self.reason = reason
 
 
 class RuntimeCompletionError(PublicDataSyncError):

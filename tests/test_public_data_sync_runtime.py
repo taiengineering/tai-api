@@ -773,32 +773,126 @@ def test_p26_adapter_exception_returns_failed_result(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_p27_infra_exception_log_no_raw_secret(monkeypatch, caplog):
-    """Infrastructure exceptions must log only exception type, not the raw message."""
+    """Infrastructure exceptions must not expose raw message (potential secrets) anywhere."""
     import logging
+    import traceback
     import services.public_data_sync.runner as runner_module
 
     spec = _spec()
-    sb = _fake_sb()
-    store = PublicDataRuntimeStore(supabase_client=sb)
+    secret_value = "SUPER_SECRET_123"
 
-    secret_value = "sk_live_SUPER_SECRET_API_KEY_12345"
+    # --- claim path ---
+    sb_claim = _fake_sb()
+    store_claim = PublicDataRuntimeStore(supabase_client=sb_claim)
 
     def _raise_claim(*args, **kwargs):
-        raise RuntimeError(f"auth failed: {secret_value}")
+        raise RuntimeError(f"Authorization: Bearer {secret_value}")
 
-    store.claim_run = _raise_claim
+    store_claim.claim_run = _raise_claim
 
     reg = AdapterRegistry()
     reg.register(_OkAdapter(spec.adapter_key))
     monkeypatch.setattr(runner_module, "adapter_registry", reg)
 
+    exc_claim = None
     with caplog.at_level(logging.ERROR, logger="services.public_data_sync.runtime"):
-        with pytest.raises(RuntimeClaimError):
-            execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+        with pytest.raises(RuntimeClaimError) as exc_info:
+            execute_due_source(_SOURCE_ID, store=store_claim, trigger=TriggerKind.MANUAL)
+        exc_claim = exc_info.value
 
     for record in caplog.records:
         assert secret_value not in record.getMessage(), \
-            f"Secret value leaked in log: {record.getMessage()!r}"
+            f"Claim secret in log: {record.getMessage()!r}"
+    assert secret_value not in str(exc_claim), \
+        "Claim secret in RuntimeClaimError message"
+    tb_str = "".join(traceback.format_exception(type(exc_claim), exc_claim, exc_claim.__traceback__))
+    assert secret_value not in tb_str, \
+        "Claim secret in traceback (raw exc chain not suppressed)"
+
+    caplog.clear()
+
+    # --- complete path ---
+    sb_complete = _fake_sb()
+    store_complete = PublicDataRuntimeStore(supabase_client=sb_complete)
+
+    def _raise_complete(*args, **kwargs):
+        raise RuntimeError(f"Authorization: Bearer {secret_value}")
+
+    store_complete.complete_run = _raise_complete
+
+    monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+    exc_complete = None
+    with caplog.at_level(logging.ERROR, logger="services.public_data_sync.runtime"):
+        with pytest.raises(RuntimeCompletionError) as exc_info:
+            execute_due_source(_SOURCE_ID, store=store_complete, trigger=TriggerKind.MANUAL)
+        exc_complete = exc_info.value
+
+    for record in caplog.records:
+        assert secret_value not in record.getMessage(), \
+            f"Complete secret in log: {record.getMessage()!r}"
+    assert secret_value not in str(exc_complete), \
+        "Complete secret in RuntimeCompletionError message"
+    tb_str = "".join(traceback.format_exception(type(exc_complete), exc_complete, exc_complete.__traceback__))
+    assert secret_value not in tb_str, \
+        "Complete secret in traceback (raw exc chain not suppressed)"
+
+
+# ---------------------------------------------------------------------------
+# P28~P34 — Normal claim rejections (allowlist) → None
+# P35~P39 — Invariant/unexpected claim rejections → RuntimeClaimError
+# ---------------------------------------------------------------------------
+
+def test_p28_to_p34_normal_claim_rejections_return_none(monkeypatch):
+    """All allowlisted business rejection reasons must return None without raising."""
+    import services.public_data_sync.runner as runner_module
+
+    spec = _spec()
+    normal_reasons = [
+        "DISABLED",               # P28
+        "NOT_DUE",                # P29
+        "RETRY_NOT_BEFORE",       # P30
+        "SOURCE_BUSY",            # P31
+        "CREDENTIAL_BUSY",        # P32
+        "RATE_LIMIT_BUSY",        # P33
+        "SOURCE_LIMIT_UNSUPPORTED",  # P34
+    ]
+    for reason in normal_reasons:
+        sb = _fake_sb(claim_data={"claimed": False, "run_id": str(uuid4()), "reason": reason})
+        store = PublicDataRuntimeStore(supabase_client=sb)
+
+        reg = AdapterRegistry()
+        reg.register(_OkAdapter(spec.adapter_key))
+        monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+        result = execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+        assert result is None, f"Normal reason {reason!r} must return None, not raise"
+
+
+def test_p35_to_p39_invariant_claim_rejections_raise(monkeypatch):
+    """DB invariant violations and unknown reasons must raise RuntimeClaimError with reason."""
+    import services.public_data_sync.runner as runner_module
+
+    spec = _spec()
+    invariant_reasons = [
+        "UNKNOWN_SOURCE_RUNTIME",  # P35 — Registry/DB seed mismatch
+        "RUN_ID_CONFLICT",         # P36 — UUID collision in sync_runs PK
+        "UNIQUE_CONFLICT",         # P37 — Unexpected DB invariant violation
+        "DEADLOCK_RETRY",          # P38 — Deadlock; no retry engine in this WP
+        "SOME_FUTURE_REASON",      # P39 — Unknown reason not yet in allowlist
+    ]
+    for reason in invariant_reasons:
+        sb = _fake_sb(claim_data={"claimed": False, "run_id": str(uuid4()), "reason": reason})
+        store = PublicDataRuntimeStore(supabase_client=sb)
+
+        reg = AdapterRegistry()
+        reg.register(_OkAdapter(spec.adapter_key))
+        monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+        with pytest.raises(RuntimeClaimError) as exc_info:
+            execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+        assert exc_info.value.reason == reason, \
+            f"RuntimeClaimError.reason must carry the DB contract code: {reason!r}"
 
 
 # ---------------------------------------------------------------------------
