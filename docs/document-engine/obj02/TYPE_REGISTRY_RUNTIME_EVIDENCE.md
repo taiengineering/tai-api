@@ -29,13 +29,13 @@ Source: tai-api HEAD 7f3b5bf9 (branch docs/integrated-search-document-plan-20261
 
 **CHK / EQUIP / INSP / PPE** — 공통 fetcher: `inspection_fetcher.py`
 - template 파일 실존: `templates/documents/DOC-CHK.html` 등 (CORR-1: 실제 경로 확인)
-- fetcher 실존: `services/document_engine/inspection_fetcher.py`
+- fetcher 실존: `services/document_engine/fetchers/inspection_fetcher.py`
 - evidence_source: `safety_inspections + safety_inspection_results`
 - GENERATOR_MAP["inspection"] 등록 확인: `services/document_engine/generator.py` (FETCHER_MAP)
 
 **TBM** — fetcher: `tbm_fetcher.py`
 - template 파일 실존: `templates/documents/DOC-OSH-056.html` (CORR-1: 실제 경로 확인)
-- fetcher 실존: `services/document_engine/tbm_fetcher.py`
+- fetcher 실존: `services/document_engine/fetchers/tbm_fetcher.py`
 - evidence_source: `tbm_meetings(risk_items, safety_items)`
 - generic route: `POST /documents/TBM/generate` via `routers/document_generate.py` (CORR-2)
 - legacy TBM-specific route: `POST /document-forms/{doc_id}/generate` via `routers/document_engine.py` → PDF bytes + documents 테이블 INSERT
