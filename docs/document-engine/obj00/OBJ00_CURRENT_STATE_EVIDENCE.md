@@ -11,7 +11,7 @@ WO: WO-DOC-OBJ00-READONLY-DISCOVERY-001
 | 레포 | SHA |
 |---|---|
 | tai-api local main | `aa46bbb7ed07416784f3310681540c9fce7eef92` |
-| tai-api origin/main | `939ef60ba3c43f2ac0ff6a0256a787ebf05bd1aa` (local과 diverged) |
+| tai-api origin/main | `939ef60ba3c43f2ac0ff6a0256a787ebf05bd1aa` (local behind origin by 1 commit) |
 | tai-admin main | `94f2491c468df73d2a50e50551a51a5a6de44224` |
 | 45cminc/doc main | `218091f6adc0895294ac6c9da74f565e557084ea` |
 
@@ -107,9 +107,10 @@ WO: WO-DOC-OBJ00-READONLY-DISCOVERY-001
 ### 주요 mismatch (사실)
 
 1. `POST /document-engine/documents/{id}/generate` → 응답에 pdf_url 없음 (PENDING만 반환). frontend extractPdfUrl() = '' → silent fail.
-2. `GET /document-forms?per_page=200` → backend는 `size` 파라미터 사용. per_page 무시.
-3. `GET /engine/forms/{form_code}/download` → backend 엔드포인트 미구현 (404).
-4. `GET /document-forms` 응답 → form_schema_id 필드 없음. frontend POST /document-engine/documents body에서 form_schema_id=undefined.
+2. `GET /document-forms?per_page=200` → MATCH. backend `/document-forms`는 `page` / `per_page` 지원 (GPT 독립검증 CORR-1 정정).
+3. `GET /engine/forms` pagination/search → MISMATCH. frontend: page/size/keyword/category 전송. backend: form_type/form_category/obligation_type/sector/is_active 지원. pagination 없음, keyword search 없음.
+4. `GET /engine/forms/{form_code}/download` → backend 엔드포인트 미구현 (404).
+5. `GET /document-forms` 응답 → form_schema_id 필드 없음. frontend POST /document-engine/documents body에서 form_schema_id=undefined.
 
 ---
 
@@ -169,6 +170,9 @@ docs/document-engine/obj00/
 | CORR-B | GIT_DEPLOYMENT_IDENTITY 정정 주석 추가 | DONE |
 | CORR-C | Storage 실증 수치 반영 (GPT verified) | DONE |
 | CORR-D | frontend mismatch 표현 교정 (/engine/forms) | DONE |
+| CORR-1 | /document-forms per_page = MATCH (GPT 최종검증 정정) | DONE |
+| CORR-2 | local/origin 관계 DIVERGED → LOCAL BEHIND BY 1 COMMIT | DONE |
+| CORR-3 | GIT_DEPLOYMENT_IDENTITY remote commit/SHA 갱신 | DONE |
 | CORR-E | Railway/Gotenberg NOT_ACCESSIBLE 상세 기록 | DONE |
 | CORR-F | PENDING provenance 분리 명확화 | DONE |
 

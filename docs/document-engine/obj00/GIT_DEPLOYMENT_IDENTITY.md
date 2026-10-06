@@ -12,10 +12,11 @@
 | local HEAD | `aa46bbb7ed07416784f3310681540c9fce7eef92` |
 | origin/main | `939ef60ba3c43f2ac0ff6a0256a787ebf05bd1aa` |
 | branch | main |
-| local vs origin | DIVERGED — local main = aa46bbb7, origin/main = 939ef60b |
+| local vs origin | LOCAL BEHIND ORIGIN BY 1 COMMIT (ahead_by=0, behind_by=1, merge_base=aa46bbb7) |
 | last local commit | `fix(migrations): normalize duplicate version identities for 5 debt migrations (#532)` |
-| last origin commit | 별도 커밋 존재 (fetch 후 확인) |
-| OBJ00 기준 branch | `origin/docs/integrated-search-document-plan-20261007` → SHA `ad91df39c3dfab03c380387435ef90999386fcd7` |
+| last origin commit | `feat(public-data-sync): connect KOSHA adapters to control plane (#533)` — SHA `939ef60ba3c43f2ac0ff6a0256a787ebf05bd1aa` |
+| OBJ00 기준 branch (initial) | `origin/docs/integrated-search-document-plan-20261007` → `ad91df39c3dfab03c380387435ef90999386fcd7` |
+| OBJ00 기준 branch (closeout) | `origin/docs/integrated-search-document-plan-20261007` → `6d9d47624f7870d467d8ef20e0799215cdfcd40e` |
 
 ### 최근 5 커밋 (local main)
 ```
@@ -92,14 +93,20 @@ GPT 독립검증 2026-10-07 확인 내용.
 OBJ00 조사 시 local tai-api main:
   aa46bbb7ed07416784f3310681540c9fce7eef92
 
-현재 remote main (독립검증 시점):
+remote main (GPT 독립검증 시점):
   939ef60ba3c43f2ac0ff6a0256a787ebf05bd1aa
+  commit: feat(public-data-sync): connect KOSHA adapters to control plane (#533)
 
-difference: 1 commit
-  commit: feat(public-data-sync): WP-1C-B1 heartbeat (또는 유사)
+관계: LOCAL BEHIND ORIGIN BY 1 COMMIT
+  ahead_by = 0
+  behind_by = 1
+  merge_base = aa46bbb7ed07416784f3310681540c9fce7eef92
 
 document-engine scope changed: NO
 changed scope: public-data-sync / KOSHA adapter only
+
+OBJ00 initial branch SHA: ad91df39c3dfab03c380387435ef90999386fcd7
+OBJ00 closeout branch SHA: 6d9d47624f7870d467d8ef20e0799215cdfcd40e
 
 판정: OBJ00 조사 결과는 aa46bbb7 기준으로 유효하며 재조사 불필요.
 ```
