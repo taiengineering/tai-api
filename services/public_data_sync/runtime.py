@@ -11,7 +11,9 @@ from services.public_data_sync.errors import (
     RuntimeClaimError,
     RuntimeCompletionError,
     RuntimeFencedError,
+    RuntimeHeartbeatError,
 )
+from services.public_data_sync.heartbeat import HeartbeatSupervisor
 from services.public_data_sync.registry import registry
 from services.public_data_sync.runtime_store import PublicDataRuntimeStore
 
@@ -98,6 +100,14 @@ def execute_due_source(
         )
         raise RuntimeClaimError(source_id=source_id, reason=claim.reason)
 
+    supervisor = HeartbeatSupervisor(
+        run_id=run_id,
+        source_id=source_id,
+        store_factory=_default_store,
+        lease_seconds=lease_seconds,
+    )
+    supervisor.start()
+
     result: RunResult | None = None
     try:
         result = run_source(
@@ -119,7 +129,25 @@ def execute_due_source(
             started_at=now,
             finished_at=datetime.now(timezone.utc),
             error_code="ORCHESTRATOR_EXCEPTION",
-            error_message=f"{type(exc).__name__}: {exc}",
+            error_message=type(exc).__name__,
+        )
+    finally:
+        supervisor.stop()
+
+    # Heartbeat failure is fail-closed: skip complete_run and raise the appropriate error.
+    if supervisor.failed_reason == "LEASE_LOST":
+        logger.warning(
+            "heartbeat lost lease source_id=%s run_id=%s",
+            source_id, run_id,
+        )
+        raise RuntimeFencedError(run_id=run_id, source_id=source_id)
+    if supervisor.failed_reason == "HEARTBEAT_INFRA_ERROR":
+        logger.error(
+            "heartbeat infra error source_id=%s run_id=%s",
+            source_id, run_id,
+        )
+        raise RuntimeHeartbeatError(
+            run_id=run_id, source_id=source_id, reason="HEARTBEAT_INFRA_ERROR"
         )
 
     # complete_run: DB/RPC failures are infrastructure errors.

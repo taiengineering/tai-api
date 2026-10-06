@@ -27,8 +27,10 @@ from services.public_data_sync.errors import (
     RuntimeClaimError,
     RuntimeCompletionError,
     RuntimeFencedError,
+    RuntimeHeartbeatError,
     SourceNotFoundError,
 )
+from services.public_data_sync.heartbeat import HeartbeatSupervisor
 from services.public_data_sync.registry import registry
 from services.public_data_sync.runtime import execute_due_source
 from services.public_data_sync.runtime_store import ClaimResult, PublicDataRuntimeStore
@@ -1069,6 +1071,294 @@ def test_m22_stale_recovery_protects_newer_current_run(migration_sql):
     # WHERE rt.current_run_id = s.id prevents clearing a newer claim's ownership
     assert "current_run_id = s.id" in body, \
         "stale recovery WHERE must reference current_run_id = s.id (stale run only)"
+
+
+# ---------------------------------------------------------------------------
+# M23~M28 — Migration static tests for heartbeat lease guard migration
+# ---------------------------------------------------------------------------
+
+_HEARTBEAT_GUARD_MIGRATION_PATH = os.path.join(
+    os.path.dirname(__file__), "..",
+    "supabase", "migrations",
+    "20261006180546_public_data_heartbeat_lease_guard.sql",
+)
+
+
+@pytest.fixture(scope="module")
+def heartbeat_guard_sql():
+    with open(_HEARTBEAT_GUARD_MIGRATION_PATH) as f:
+        return f.read()
+
+
+def _guard_fn_body(sql: str) -> str:
+    block = sql[sql.index("fn_public_data_heartbeat_run"):]
+    return block[: block.index("$fn$;")]
+
+
+def test_m23_guard_migration_file_exists():
+    assert os.path.exists(_HEARTBEAT_GUARD_MIGRATION_PATH), \
+        "heartbeat guard migration file must exist"
+
+
+def test_m24_guard_migration_contains_create_or_replace(heartbeat_guard_sql):
+    assert "CREATE OR REPLACE FUNCTION public.fn_public_data_heartbeat_run" in heartbeat_guard_sql
+
+
+def test_m25_guard_migration_lease_until_is_not_null(heartbeat_guard_sql):
+    body = _guard_fn_body(heartbeat_guard_sql)
+    assert "lease_until" in body and "IS NOT NULL" in body, \
+        "heartbeat guard must check lease_until IS NOT NULL"
+
+
+def test_m26_guard_migration_lease_until_gt_p_now(heartbeat_guard_sql):
+    body = _guard_fn_body(heartbeat_guard_sql)
+    assert "lease_until" in body and "> p_now" in body, \
+        "heartbeat guard must check lease_until > p_now"
+
+
+def test_m27_guard_migration_security_invoker(heartbeat_guard_sql):
+    body = _guard_fn_body(heartbeat_guard_sql)
+    assert "SECURITY INVOKER" in body
+
+
+def test_m28_guard_migration_service_role_grant(heartbeat_guard_sql):
+    assert "TO service_role" in heartbeat_guard_sql
+
+
+# ---------------------------------------------------------------------------
+# H01~H11 — HeartbeatSupervisor and orchestrator heartbeat integration tests
+# ---------------------------------------------------------------------------
+
+def _make_supervisor(
+    *,
+    heartbeat_fn=None,
+    lease_seconds: int = 30,
+    interval: int = 1,
+) -> HeartbeatSupervisor:
+    """Build a HeartbeatSupervisor with a stub store factory."""
+    calls = []
+
+    class _StubStore:
+        def heartbeat(self, run_id, *, lease_seconds=900):
+            return heartbeat_fn(run_id) if heartbeat_fn else True
+
+    return HeartbeatSupervisor(
+        run_id=str(uuid4()),
+        source_id="KOSHA_ACCIDENT_CASES",
+        store_factory=_StubStore,
+        lease_seconds=lease_seconds,
+        heartbeat_interval_seconds=interval,
+    )
+
+
+def test_h01_supervisor_starts_daemon_thread():
+    sv = _make_supervisor(interval=60)
+    sv.start()
+    assert sv._thread is not None
+    assert sv._thread.daemon is True
+    sv.stop()
+
+
+def test_h02_supervisor_sends_heartbeat():
+    import time
+    beat_count = []
+
+    def _hb(run_id):
+        beat_count.append(1)
+        return True
+
+    sv = _make_supervisor(heartbeat_fn=_hb, lease_seconds=3, interval=1)
+    sv.start()
+    time.sleep(2.5)
+    sv.stop()
+    assert len(beat_count) >= 1, "supervisor must call heartbeat at least once"
+
+
+def test_h03_supervisor_stops_cleanly():
+    import time
+    sv = _make_supervisor(interval=60)
+    sv.start()
+    sv.stop(timeout=2.0)
+    assert not sv._thread.is_alive(), "thread must stop after stop() called"
+
+
+def test_h04_heartbeat_false_sets_lease_lost():
+    import time
+
+    def _hb(run_id):
+        return False
+
+    sv = _make_supervisor(heartbeat_fn=_hb, lease_seconds=3, interval=1)
+    sv.start()
+    time.sleep(2.0)
+    sv.stop()
+    assert sv.failed_reason == "LEASE_LOST"
+
+
+def test_h05_heartbeat_exception_sets_infra_error():
+    import time
+
+    def _hb(run_id):
+        raise RuntimeError("DB connection lost")
+
+    sv = _make_supervisor(heartbeat_fn=_hb, lease_seconds=3, interval=1)
+    sv.start()
+    time.sleep(2.0)
+    sv.stop()
+    assert sv.failed_reason == "HEARTBEAT_INFRA_ERROR"
+
+
+def test_h06_successful_heartbeat_failed_reason_none():
+    import time
+
+    def _hb(run_id):
+        return True
+
+    sv = _make_supervisor(heartbeat_fn=_hb, lease_seconds=3, interval=1)
+    sv.start()
+    time.sleep(0.5)
+    sv.stop()
+    assert sv.failed_reason is None
+
+
+def test_h07_interval_bounded_to_one_third_lease():
+    sv = HeartbeatSupervisor(
+        run_id=str(uuid4()),
+        source_id="X",
+        store_factory=object,
+        lease_seconds=30,
+        heartbeat_interval_seconds=300,
+    )
+    assert sv._interval == 10, f"expected 30//3=10, got {sv._interval}"
+
+    sv2 = HeartbeatSupervisor(
+        run_id=str(uuid4()),
+        source_id="X",
+        store_factory=object,
+        lease_seconds=30,
+        heartbeat_interval_seconds=5,
+    )
+    assert sv2._interval == 5, f"configured interval 5 < lease//3=10, should use 5"
+
+    sv3 = HeartbeatSupervisor(
+        run_id=str(uuid4()),
+        source_id="X",
+        store_factory=object,
+        lease_seconds=2,
+        heartbeat_interval_seconds=300,
+    )
+    assert sv3._interval == 1, f"min bound must be 1, got {sv3._interval}"
+
+
+def test_h08_lease_lost_heartbeat_raises_runtime_fenced_error(monkeypatch):
+    """execute_due_source: LEASE_LOST heartbeat → RuntimeFencedError, complete_run skipped."""
+    import services.public_data_sync.runner as runner_module
+    import services.public_data_sync.runtime as runtime_module
+
+    spec = _spec()
+    sb = _fake_sb()
+    store = PublicDataRuntimeStore(supabase_client=sb)
+
+    complete_called = []
+    original_complete = store.complete_run
+    def _spy_complete(*args, **kwargs):
+        complete_called.append(True)
+        return original_complete(*args, **kwargs)
+    store.complete_run = _spy_complete
+
+    reg = AdapterRegistry()
+    reg.register(_OkAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+    fake_sv = MagicMock()
+    fake_sv.failed_reason = "LEASE_LOST"
+
+    with patch("services.public_data_sync.runtime.HeartbeatSupervisor", return_value=fake_sv):
+        with pytest.raises(RuntimeFencedError):
+            execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+
+    assert complete_called == [], "complete_run must not be called when LEASE_LOST"
+
+
+def test_h09_heartbeat_infra_error_raises_runtime_heartbeat_error(monkeypatch):
+    """execute_due_source: HEARTBEAT_INFRA_ERROR → RuntimeHeartbeatError, complete_run skipped."""
+    import services.public_data_sync.runner as runner_module
+
+    spec = _spec()
+    sb = _fake_sb()
+    store = PublicDataRuntimeStore(supabase_client=sb)
+
+    complete_called = []
+    original_complete = store.complete_run
+    def _spy_complete(*args, **kwargs):
+        complete_called.append(True)
+        return original_complete(*args, **kwargs)
+    store.complete_run = _spy_complete
+
+    reg = AdapterRegistry()
+    reg.register(_OkAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+    fake_sv = MagicMock()
+    fake_sv.failed_reason = "HEARTBEAT_INFRA_ERROR"
+
+    with patch("services.public_data_sync.runtime.HeartbeatSupervisor", return_value=fake_sv):
+        with pytest.raises(RuntimeHeartbeatError) as exc_info:
+            execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+
+    assert exc_info.value.reason == "HEARTBEAT_INFRA_ERROR"
+    assert complete_called == [], "complete_run must not be called when HEARTBEAT_INFRA_ERROR"
+
+
+def test_h10_no_heartbeat_failure_complete_run_called(monkeypatch):
+    """execute_due_source: no heartbeat failure → complete_run is called normally."""
+    import services.public_data_sync.runner as runner_module
+
+    spec = _spec()
+    sb = _fake_sb()
+    store = PublicDataRuntimeStore(supabase_client=sb)
+
+    reg = AdapterRegistry()
+    reg.register(_OkAdapter(spec.adapter_key))
+    monkeypatch.setattr(runner_module, "adapter_registry", reg)
+
+    fake_sv = MagicMock()
+    fake_sv.failed_reason = None
+
+    with patch("services.public_data_sync.runtime.HeartbeatSupervisor", return_value=fake_sv):
+        result = execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+
+    assert result is not None
+    assert result.status == RunStatus.SUCCESS
+    complete_calls = [c for c in sb.rpc.call_args_list
+                      if c.args[0] == "fn_public_data_complete_run"]
+    assert len(complete_calls) == 1
+
+
+def test_h11_orchestrator_exception_message_no_raw_text(monkeypatch):
+    """runtime.py ORCHESTRATOR_EXCEPTION path must not expose raw exception message."""
+    spec = _spec()
+    sb = _fake_sb()
+    store = PublicDataRuntimeStore(supabase_client=sb)
+
+    secret = "Authorization: Bearer secret_token_xyz"
+
+    fake_sv = MagicMock()
+    fake_sv.failed_reason = None
+
+    with patch("services.public_data_sync.runtime.HeartbeatSupervisor", return_value=fake_sv):
+        with patch(
+            "services.public_data_sync.runner.run_source",
+            side_effect=RuntimeError(secret),
+        ):
+            result = execute_due_source(_SOURCE_ID, store=store, trigger=TriggerKind.MANUAL)
+
+    assert result is not None
+    assert result.status == RunStatus.FAILED
+    assert result.error_code == "ORCHESTRATOR_EXCEPTION"
+    assert secret not in (result.error_message or ""), \
+        "raw exception message must not appear in error_message"
+    assert result.error_message == "RuntimeError"
 
 
 # ---------------------------------------------------------------------------
