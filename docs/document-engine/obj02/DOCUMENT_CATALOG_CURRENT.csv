@@ -1,0 +1,261 @@
+id,doc_id,doc_name,sector,category,law_ref,obligation,tai_grade,tai_difficulty,priority,has_legal_form,tai_auto,tai_method,doc_format,doc_owner,is_external_writer,is_active
+0175d554-ff5b-4a6b-a0b8-c595cb5c30fa,DOC-CON-029,철근 작업계획서,CONSTRUCTION,작업시,산안법,권고,B,A,4,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+01906f8f-429b-453d-855f-992ddc93201f,DOC-OSH-030,보건관리자 해임신고서,COMMON,일상,산안법 제18조,법정필수,D,C,3,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+02206a05-47b7-4c7a-84fe-656e2b654eae,DOC-OSH-038,안전점검 기록부,COMMON,일상,산안법 제38조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+02e194b4-c6a7-418e-96e2-4c1709038505,DOC-BLD-001,소방시설 자체점검 결과보고서,BUILDING,정기,소방시설법 제25조,법정필수,D,C,3,True,True,팩스(팝빌) 또는 소민터 링크 안내,DIGITAL_OK,BUSINESS,False,True
+05d29ca1-cd74-4e3d-b124-22acc14b8f61,DOC-FAC-022,고압가스 정기검사 신청서,BUILDING,정기,고압가스안전관리법 제16조,의무,C,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+0637ed70-ae2d-45eb-a48b-41549b26d6df,DOC-OSH-009,안전관리자선임보고서,COMMON,일상,산안법 제17조,법정필수,D,C,3,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+06a97796-e5e5-4ccf-b679-d80166056101,DOC-SERA-011,중대재해 관련 보고자료,COMMON,사고시,중대재해처벌법,법정필수,C,A,3,False,True,팩스(팝빌) / 노동포털 링크 안내,COPY_OK,BUSINESS,False,True
+082eb4f4-9129-4ad6-9bf6-223f608eb9f2,DOC-SERA-006,안전보건교육 실시 결과기록,COMMON,정기,중대재해처벌법 제4조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+08f2fa19-5e30-4484-a567-8d4d409c6b43,DOC-BLD-025,전기안전관리자 변경신고서,BUILDING,일상,전기안전관리법 제17조,의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+0a178992-7c5f-448c-a512-751df33de955,DOC-CON-022,유지관리지침서,CONSTRUCTION,종료,건설기술진흥법,법정필수,X,X,5,False,True,TAI내 보관,COPY_OK,BUSINESS,False,True
+0b73a478-8745-4590-92d9-ab0530f578eb,DOC-BLD-008,전기안전관리자 선임신고서,BUILDING,일상,전기안전관리법 제17조,법정필수,D,C,3,True,True,팩스(팝빌) / 전기안전여기로 링크 안내,DIGITAL_OK,BUSINESS,False,True
+0cbefa24-b862-4a2f-9307-a94a88aca254,DOC-OSH-012,MSDS,COMMON,일상,산안법 제110조,법정필수,X,X,5,False,True,TAI내 보관·열람,DIGITAL_OK,BUSINESS,False,True
+11386bb6-0bc6-4972-a3b4-e700b61eff57,DOC-CHEM-011,유해성위해성 자료 제출서,COMMON,착공전,화학물질등록평가법,법정필수,X,X,5,True,False,ICIS 링크 안내만 가능,DIGITAL_OK,BUSINESS,False,True
+11ba170e-5332-42d1-9dd2-23345f28fbf7,DOC-FAC-018,냉동설비 사고 보고서,BUILDING,사고시,에너지이용합리화법,법정필수,C,A,5,False,True,팩스(팝빌) 자동발송,COPY_OK,BUSINESS,False,True
+12a180c1-0bf8-41fd-b2e0-12b16a30144a,DOC-FAC-036,검사대상기기 검사증,BUILDING,정기,에너지이용합리화법,의무,C,X,5,True,False,,ORIGINAL_ONLY,EXTERNAL_RECEIVE,True,True
+12b88121-263b-44db-9fce-783663e25c21,DOC-SERA-003,유해위험요인 확인 개선기록,COMMON,정기,중대재해처벌법 제4조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+12d63de6-3c60-43f9-b17d-b795081b6996,DOC-OSH-041,위험성평가 실시결과서,COMMON,정기,산안법 제36조,법정필수,C,B,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+134394a4-0481-445c-9ab9-8c33bea24ec2,DOC-CON-LAW-014,안전점검 실시기록,CONSTRUCTION,일상,건설기술진흥법 제62조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+13682a13-61dc-4395-b035-a0cd7c495d9b,DOC-BLD-018,시설물 정밀안전진단 보고서,BUILDING,정기,시설물안전법 제12조,법정필수,X,X,5,True,False,FMS 포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+14d89799-0a18-4fb9-a6ee-307fe1f076cf,DOC-FAC-002,가스시설 정기점검 기록부,BUILDING,정기,고압가스안전관리법 제17조,법정필수,A,S,2,False,False,,COPY_OK,BUSINESS,False,True
+1649569a-0503-4e93-8905-901652124f40,DOC-CHEM-013,화학사고예방관리계획서,INDUSTRIAL,착공전,화학물질관리법 제23조,의무,B,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+1814f7c6-85da-4091-bb17-47604937e3bd,DOC-OSH-043,화학물질 관리대장,INDUSTRIAL,일상,산안법 제110조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+184c379a-dc8d-488a-afa8-675b8ad04d34,DOC-OSH-067,재해예방 전문지도기관 지정신청서,COMMON,일상,"산안법 제74조, 시행규칙 제90조",의무,X,X,5,True,False,,DIGITAL_OK,AGENCY_ONLY,True,True
+18b4c78d-a76a-4852-b19a-69f5953bae86,DOC-OSH-024,보건관리자 선임신고서,COMMON,일상,산안법 제18조,법정필수,D,C,3,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+19a194d1-dfe5-4340-95ce-5993f14cca4f,DOC-CON-046,소규모안전관리계획 검토결과 통보서,CONSTRUCTION,착공전,건설기술진흥법 제62조의2제2항,의무,C,X,5,False,False,,COPY_OK,EXTERNAL_RECEIVE,False,True
+1b6f9376-e7ed-42a4-98b1-05b106882c2f,DOC-CON-005,착공신고서,CONSTRUCTION,착공전,건설산업기본법,법정필수,D,C,5,True,False,EAIS 포털 링크 안내,COPY_OK,BUSINESS,False,True
+1c7fb853-873f-4555-be81-96f3b34afeaa,DOC-CHEM-025,화학물질 등록등면제확인 변경신청서,INDUSTRIAL,변경시,화학물질등록평가법 시행규칙 제7조의2,의무,D,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+1ea3eb56-df16-4014-b0e9-95109c25f6d4,DOC-SERA-005,종사자 의견청취 반영기록,COMMON,일상,중대재해처벌법 제4조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+1ea597ec-a561-471d-8dea-ac25ad1d5e3c,DOC-CHEM-017,유해화학물질 영업 변경허가 신청서,INDUSTRIAL,변경시,화학물질관리법 제28조제5항,의무,C,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+1ed035a4-b747-4374-857c-ee05337a7a18,DOC-BLD-033,승강기 설치검사 결과서,BUILDING,일상,승강기안전관리법 제28조,의무,C,X,5,True,False,,DIGITAL_OK,EXTERNAL_RECEIVE,True,True
+1f79fada-efed-437d-b472-7a074b8a6eb6,DOC-OSH-006,안전보건교육일지,COMMON,일상,산안법 제29조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+1fff3fe1-ddb3-4caa-b6f3-618eeaa740c5,DOC-OSH-011,산업보건의선임보고서,COMMON,일상,산안법 제19조,법정필수,D,C,5,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+206a54d7-c069-4bab-98e3-d4a119f9765f,DOC-BLD-006,소방훈련 교육 기록부,BUILDING,정기,소방시설법 제22조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+2179484b-9923-4f62-bfb2-5cbeccf5edb5,DOC-CON-035,해체공사 안전관리계획서,CONSTRUCTION,착공전,산안법,법정필수,C,B,4,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+218b1a1c-0976-4c61-addd-b7c9509d80e4,DOC-CON-031,타워크레인 설치계획서,CONSTRUCTION,착공전,산안법 제38조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+21fe1e49-576a-4956-9487-efbcb96b0fe4,DOC-OSH-070,안전검사 신청서,COMMON,정기,"산안법 제93조, 시행규칙 제124조",의무,B,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+22a5bd27-943e-4a05-9ea4-5ead4a90f1c8,DOC-OSH-007,안전점검일지,COMMON,일상,산안법 제38조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+23d1f8e2-a0ce-42fc-9e24-ca5615b3e582,DOC-CON-051,건설공사대장 변경통보서,CONSTRUCTION,변경시,건설산업기본법 시행령 제26조,의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+249a5b56-9bc8-4c05-bf37-29a79ba377b7,DOC-OSH-046,보호구 착용 점검기록,COMMON,일상,산안법 제41조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+24f6e5f5-74fd-424b-85ec-6886ca55acbf,DOC-BLD-021,소방안전관리자 선임 연기 신청서,BUILDING,일상,소방시설법 시행규칙 제14조,의무,D,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+2520bdd8-00c4-4368-9e2b-c99e190c55a2,DOC-CHEM-002,유해화학물질 취급시설 검사 결과서,COMMON,정기,화학물질관리법 제24조,법정필수,X,X,5,True,False,링크 안내만 가능,DIGITAL_OK,EXTERNAL_RECEIVE,True,True
+25ade0bb-2ee1-490b-ae48-856555ea357a,DOC-OSH-019,산업재해발생보고서,COMMON,사고시,산안법 제54조,법정필수,D,C,4,False,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+27fe5d6a-3506-4e8b-baef-0b8d425a738b,DOC-FAC-025,위험물 제조소등 설치허가 신청서,BUILDING,일상,위험물안전관리법 제6조,의무,C,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+281ea475-5a9a-4de6-9ca7-2da41205c7ca,DOC-OSH-057,근로자 의견청취 기록,COMMON,일상,산안법 제26조,권고,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+28aa89db-ace5-4233-9581-31a13038a4f3,DOC-CON-024,흙막이공 안전계획서,CONSTRUCTION,작업시,산안법,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+28bfb0a7-1542-4200-a40d-b6e8e0855a33,DOC-CON-013,장비점검기록부,CONSTRUCTION,정기,산안법 제38조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+2a046094-f35b-4037-94bd-73b066e5d694,DOC-OSH-042,위험성평가 개선조치계획서,COMMON,정기,산안법 제36조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+2a55986c-3b23-4834-9fe2-14def22a8f9c,DOC-OSH-059,기계설비 점검기록부,INDUSTRIAL,정기,산안법 제38조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+2ec3447e-6b31-461b-8739-39dace783b6d,DOC-FAC-014,보일러 정기검사 결과서,BUILDING,정기,에너지이용합리화법,법정필수,X,X,5,True,False,링크 안내만 가능,DIGITAL_OK,EXTERNAL_RECEIVE,True,True
+2f17ec34-c1ad-4c42-b142-63b51f252392,DOC-CON-045,소규모안전관리계획 변경서,CONSTRUCTION,변경시,건설기술진흥법 제62조의2,의무,C,X,5,False,False,,COPY_OK,BUSINESS,False,True
+30bdb92c-2be3-4652-a471-f77c5bfb19de,DOC-CON-034,해체공사 계획서,CONSTRUCTION,착공전,산안법 제52조,법정필수,C,B,4,False,True,팩스(팝빌) / 노동포털 링크 안내,COPY_OK,BUSINESS,False,True
+319ef1f0-de47-46f5-a631-022ce7c0e9b5,DOC-CON-032,타워크레인 점검기록부,CONSTRUCTION,정기,산안법,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+33bade51-3c5d-42b1-aaad-9661e4e67a4b,DOC-CON-049,재하도급계약 통보서,CONSTRUCTION,일상,"건설산업기본법 제29조제6항, 시행규칙 별지 제23호의3",의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+36d1559f-b95e-4f3d-9838-840bce0722ed,DOC-BLD-023,소방시설 자체점검 조치계획서,BUILDING,정기,소방시설법 제25조,의무,B,X,5,False,False,,COPY_OK,BUSINESS,False,True
+3747ac78-d513-47b9-83ec-b57c725e62fb,DOC-CON-LAW-007,품질관리계획 사본,CONSTRUCTION,착공전,건설기술진흥법 제55조,법정필수,X,X,5,True,True,이메일 자동발송,COPY_OK,BUSINESS,False,True
+382d1279-8ffc-430a-bdaf-37c62e1141fd,DOC-BLD-036,석면건축물안전관리인 지정 신고서,BUILDING,일상,석면안전관리법 제23조,의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+3a32d73b-853f-486b-9a0f-0d95ba3bc65e,DOC-FAC-021,고압가스배관 시공감리 증명서,BUILDING,일상,고압가스안전관리법 제16조제2항,의무,D,X,5,True,False,,ORIGINAL_ONLY,EXTERNAL_RECEIVE,True,True
+3c4114ef-1dc1-482e-a67b-44fae3a2c2db,DOC-OSH-040,도급사업 안전보건조치 이행기록,CONSTRUCTION,일상,산안법 제63조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+3c565153-a54d-4a01-aeec-ea28e16169fa,DOC-FAC-034,검사대상기기 개조검사 신청서,BUILDING,변경시,에너지이용합리화법,의무,D,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+3c63f3e3-43e9-42ab-b0c3-dc4875218eaf,DOC-CON-LAW-005,품질관리계획 심사결과 통보서,CONSTRUCTION,감독대응,건설기술진흥법 제55조,법정필수,X,X,5,True,False,링크 안내만 가능,COPY_OK,BUSINESS,False,True
+3e13a50d-83e6-429b-b1a8-a3207a83e723,DOC-BLD-037,석면건축물안전관리인 변경 신고서,BUILDING,일상,석면안전관리법 제23조,의무,D,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+3eb30ecb-23dc-4d63-a85f-d54576f8d4fa,DOC-OSH-051,비상조치계획서,COMMON,일상,산안법 제38조,법정필수,C,B,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+4143f6e7-2ee0-44ba-bfbc-8c22950b64bc,DOC-FAC-029,위험물 예방규정 변경인가 신청서,BUILDING,변경시,위험물안전관리법 제17조,의무,C,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+41e18ccf-ea77-4f11-882d-27492d4441ba,DOC-CON-004,시공계획서,CONSTRUCTION,착공전,건설기술진흥법,법정필수,X,X,5,False,True,이메일 자동발송,COPY_OK,BUSINESS,False,True
+42b796ba-08ea-40dd-a6cf-e54244cce907,DOC-OSH-061,통합 산업재해 현황 조사표,COMMON,정기,산안법 시행규칙 제4조,의무,B,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+43472787-d834-468b-ae70-5c4cfc533fbb,DOC-OSH-071,자율검사프로그램 인정신청서,COMMON,일상,"산안법 제98조, 시행규칙 제131조",의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+43f63b57-eb16-445e-8918-1c65ef156e27,DOC-BLD-044,시설물 중대한 결함 보고서,BUILDING,사고시,시설물안전법,의무,B,X,5,False,False,,DIGITAL_OK,BUSINESS,False,True
+44f76f14-0d1e-4288-83aa-3eed329a2671,DOC-CON-021,준공도서,CONSTRUCTION,종료,건설기술진흥법,법정필수,X,X,5,False,True,이메일 자동발송(대용량),COPY_OK,BUSINESS,False,True
+45478c85-710e-448a-b976-a4d10ef18ea1,DOC-CON-028,동바리 안전계획서,CONSTRUCTION,작업시,산안법,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+458937b0-99e1-4db5-a680-c173f45d1b38,DOC-BLD-013,승강기 사고 보고서,BUILDING,사고시,승강기안전관리법,법정필수,C,A,4,False,True,팩스(팝빌) / 포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+46f248e7-d86c-4b1b-907a-69486718dc8d,DOC-CON-020,준공검사신청서,CONSTRUCTION,종료,건설기술진흥법,법정필수,X,X,5,True,True,이메일 자동발송,COPY_OK,BUSINESS,False,True
+47471a97-2d98-42d1-ba8c-820618aca926,DOC-CHEM-005,위해관리계획서,COMMON,정기,화학물질관리법 제42조,법정필수,X,X,5,True,True,ICIS 링크 안내 / 이메일,DIGITAL_OK,BUSINESS,False,True
+47c6d6ad-06bf-4e21-9350-61d0668ba067,DOC-CHEM-016,유해화학물질 연간 취급예정량 서류,INDUSTRIAL,일상,화학물질관리법 시행규칙 별지 제44호,의무,D,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+4ce857be-406d-4fc8-91d0-e643dd942f11,DOC-OSH-010,보건관리자선임보고서,COMMON,일상,산안법 제18조,법정필수,D,C,3,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+4ced58a0-7314-42c8-95e6-c2e8bc5d6384,DOC-BLD-002,소방시설 작동기능점검 기록,BUILDING,정기,소방시설법 제25조,법정필수,A,S,1,True,False,,COPY_OK,BUSINESS,False,True
+4f05b44b-03c2-416c-a22b-8f2b8e4b4ce0,DOC-OSH-021,작업환경측정결과보고서,INDUSTRIAL,정기,산안법 제125조,법정필수,X,X,5,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+501fef0d-8c03-4cfe-bed9-44d0ab8bcc3f,DOC-CON-015,굴착작업 안전계획서,CONSTRUCTION,작업시,산안법,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+52160ce9-f032-4966-9d8f-2c26c70796bf,DOC-OSH-020,건강진단개인통보서,COMMON,정기,산안법 제129조,법정필수,X,X,5,True,True,이메일 자동발송(근로자),COPY_OK,EXTERNAL_RECEIVE,True,True
+524d2f13-70fd-4833-b44a-a58dc61211ef,DOC-FAC-015,보일러 사고 보고서,BUILDING,사고시,에너지이용합리화법,법정필수,C,A,5,False,True,팩스(팝빌) 자동발송,COPY_OK,BUSINESS,False,True
+5863fee5-1a9d-4c78-beca-3d4b0d677641,DOC-CON-025,비계 설치계획서,CONSTRUCTION,작업시,산안법 제38조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+593d9e6f-ab9e-4ac0-b022-d8de4ffde9a2,DOC-OSH-025,산업보건의 선임신고서,COMMON,일상,산안법 제19조,법정필수,D,C,5,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+5ccd0a3e-1cb6-4dc5-a62f-be87371d803f,DOC-CON-050,건설공사대장,CONSTRUCTION,일상,"건설산업기본법 제22조제6항, 시행규칙 별지 제17호",의무,B,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+5d5ddf0a-a0b6-4fbc-a76d-a1276960d467,DOC-OSH-054,협력업체 안전관리평가서,CONSTRUCTION,정기,산안법 제63조,권고,B,A,4,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+5e78864a-7d38-4b63-8a3c-fac05b739dba,DOC-FAC-009,위험물 시설 검사 결과서,BUILDING,정기,위험물안전관리법 제13조,법정필수,X,X,5,True,False,링크 안내만 가능,DIGITAL_OK,EXTERNAL_RECEIVE,True,True
+5eb9a30b-34f6-43a3-bfea-257a652ce6be,DOC-FAC-013,보일러 운전일지,BUILDING,일상,에너지이용합리화법,법정필수,A,S,2,True,False,,COPY_OK,BUSINESS,False,True
+5f40f6ca-ff3a-4ea6-824f-4fcd524e7549,DOC-CHEM-001,유해화학물질 취급시설 설치검사 신청서,COMMON,착공전,화학물질관리법 제24조,법정필수,X,X,5,True,True,ICIS 링크 안내 / 이메일,DIGITAL_OK,BUSINESS,False,True
+5f69c741-2e50-4340-adbf-ac952bfb9ed3,DOC-BLD-040,석면건축물 조치명령 이행결과 보고서,BUILDING,일상,석면안전관리법 제22조,의무,C,X,5,False,False,,COPY_OK,BUSINESS,False,True
+6019885a-138a-4125-8712-d06b5979b1c9,DOC-BLD-031,승강기 안전관리자 변경 통보서,BUILDING,일상,승강기안전관리법 제29조,의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+615e9ed3-8e0f-4859-8826-8de5e539d9ad,DOC-BLD-041,시설물 안전 및 유지관리계획,BUILDING,정기,시설물안전법 제6조,의무,B,X,5,False,False,,DIGITAL_OK,BUSINESS,False,True
+618e04c3-1fa7-4518-a653-dbba467269a2,DOC-CON-LAW-011,정밀안전점검 결과보고서,CONSTRUCTION,정기,건설기술진흥법 제62조,법정필수,X,X,5,False,True,이메일 자동발송,DIGITAL_OK,BUSINESS,False,True
+62718fa4-8021-453d-b13c-076b9285e616,DOC-SERA-007,도급용역위탁 안전보건 확보기록,COMMON,일상,중대재해처벌법 제5조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+6301f895-7e11-4336-be6d-593687cedbc7,DOC-FAC-023,고압가스 사고발생 통보서,BUILDING,사고시,고압가스안전관리법,의무,B,X,5,False,False,,COPY_OK,BUSINESS,False,True
+633306b3-5164-49aa-9f5f-9446d0f21cac,DOC-FAC-035,검사대상기기 설치장소 변경검사 신청서,BUILDING,변경시,에너지이용합리화법,의무,D,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+6438e609-a15d-4aa1-b667-bf3609b09182,DOC-BLD-030,승강기 안전관리자 선임 통보서,BUILDING,일상,승강기안전관리법 제29조,의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+64685e3d-8ba2-464b-b2c8-3a66d0d5c3d5,DOC-OSH-026,안전관리자 변경신고서,COMMON,일상,산안법 제17조,법정필수,D,C,3,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+64f6bdbc-a15b-45a7-a859-0c9e9917b382,DOC-FAC-001,가스안전관리자 선임신고서,BUILDING,일상,고압가스안전관리법 제15조,법정필수,D,C,4,True,True,팩스(팝빌) / KGS 링크 안내,DIGITAL_OK,BUSINESS,False,True
+6594ee7c-c79b-4514-9458-69cf99174427,DOC-OSH-005,특수건강진단결과서,INDUSTRIAL,정기,산안법 제129조,법정필수,X,X,5,True,True,이메일 자동발송(근로자),DIGITAL_OK,EXTERNAL_RECEIVE,True,True
+65e211c8-bb9d-4dbe-91de-f66b6a621b18,DOC-OSH-064,안전관리자등 해임 통합 보고서,COMMON,일상,"산안법 시행규칙 제11조제2항, 제23조제2항",의무,B,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+6a1021b3-a02d-46b8-87bc-92cf378f96b9,DOC-CON-018,품질시험성적서,CONSTRUCTION,정기,건설기술진흥법,법정필수,X,X,5,True,True,이메일 자동발송,COPY_OK,BUSINESS,False,True
+6a19c356-0560-4296-beac-34b609690a44,DOC-SERA-001,안전보건관리체계 구축계획서,COMMON,일상,중대재해처벌법 제4조,법정필수,C,B,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+6a43296b-4950-4805-b41e-3e64f5ad24dc,DOC-CON-042,낙하물 방지계획서,CONSTRUCTION,작업시,산안법,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+6ba6dfd8-eec7-44ac-ab49-4119b77116f9,DOC-SERA-010,중대재해 원인조사 재발방지 대책서,COMMON,사고시,중대재해처벌법 제4조,법정필수,C,B,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+6d5a54e5-679c-4c86-b5d0-355702f8c559,DOC-OSH-049,작업허가서(위험작업),COMMON,작업시,산안법 제38조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+6dfc00dc-73e5-4f52-95d7-5c170511bb83,DOC-OSH-036,건강진단 결과 통보서,COMMON,정기,산안법 제129조,법정필수,X,X,5,True,True,이메일 자동발송(근로자),COPY_OK,EXTERNAL_RECEIVE,True,True
+712e9cfb-1dcf-4c2d-a43b-6cf5734d514f,DOC-BLD-005,소방계획서,BUILDING,정기,소방시설법 제21조,법정필수,C,B,3,True,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+7348570b-d6cd-4f78-a85d-f08d44833c36,DOC-BLD-012,승강기 정기검사 결과서,BUILDING,정기,승강기안전관리법 제13조,법정필수,X,X,5,True,False,링크 안내만 가능,DIGITAL_OK,EXTERNAL_RECEIVE,True,True
+7388fa12-c7be-45cb-b118-271f9a8e5e42,DOC-CON-014,비계 점검기록,CONSTRUCTION,정기,산안법 제38조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+73d58069-4c21-4f11-b9a1-a88500f5f66c,DOC-FAC-005,가스안전관리계획서,BUILDING,정기,고압가스안전관리법,법정필수,C,B,4,True,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+75ada7f2-ce19-4f21-ba6f-13683c07207d,DOC-OSH-048,밀폐공간 산소농도 측정기록,INDUSTRIAL,작업시,산안법 제38조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+76756a2b-df3c-4323-9002-c6d6c22f5c30,DOC-OSH-073,석면해체제거작업 변경신고서,COMMON,작업시,"산안법 제122조, 시행규칙 제181조",의무,B,X,5,True,False,,DIGITAL_OK,BUSINESS,True,True
+7789ea55-5adf-4ff7-bbc7-dc2076189ab3,DOC-CON-039,전기작업 계획서,CONSTRUCTION,작업시,전기안전관리법,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+77f24669-2325-4262-9cc3-e4161404c529,DOC-BLD-020,소방안전관리보조자 선임신고서,BUILDING,일상,"소방시설법 제24조, 시행규칙 제16조",의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+788984a9-0b5b-46dc-bd4a-3bf813c4d374,DOC-OSH-023,안전관리자 선임신고서,COMMON,일상,산안법 제17조,법정필수,D,C,3,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+799f409d-762b-4e59-aa08-6c4553e5b4a9,DOC-CON-038,고소작업 계획서,CONSTRUCTION,작업시,산안법 제38조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+7af4ad9c-a20c-4b27-adf9-10676efeb1db,DOC-BLD-034,승강기 수시검사 결과서,BUILDING,정기,승강기안전관리법 제32조,의무,C,X,5,True,False,,DIGITAL_OK,EXTERNAL_RECEIVE,True,True
+7b430cd2-7e66-40b5-8831-448cbfe241e4,DOC-CON-LAW-009,안전관리계획 변경서,CONSTRUCTION,변경시,건설기술진흥법 제62조,법정필수,C,B,4,True,True,이메일 자동발송,COPY_OK,BUSINESS,False,True
+7b4e72af-d82d-4bc9-aa59-352feb7a3d00,DOC-CHEM-021,유해화학물질 영업 실적보고서,INDUSTRIAL,정기,화학물질관리법 제49조,의무,B,X,5,False,False,,DIGITAL_OK,BUSINESS,False,True
+7e6e02b5-a57a-4eb6-acf2-07f48813d7ad,DOC-SERA-008,협력업체 안전보건관리 점검기록,COMMON,정기,중대재해처벌법 제5조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+7ea9a9e5-14c5-4101-b279-5a9d87f186e6,DOC-CHEM-015,유해화학물질 영업허가 신청서,INDUSTRIAL,일상,"화학물질관리법 제28조, 시행규칙 별지 제43호",의무,C,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+80091a8d-89cc-48d4-8c8c-c30138b9b17f,DOC-OSH-062,안전보건관리책임자 선임 보고서,COMMON,일상,"산안법 제15조, 시행규칙 제9조",의무,A,X,5,False,False,,COPY_OK,BUSINESS,False,True
+81428aef-d603-4257-9389-36d9f67fe25b,DOC-CHEM-006,화학사고 즉시신고서,COMMON,사고시,화학물질관리법 제43조,법정필수,D,C,4,True,True,팩스(팝빌) 자동발송,DIGITAL_OK,BUSINESS,False,True
+83770f8c-f8a2-4099-bb34-b4a4122f4646,DOC-FAC-017,냉동설비 검사 결과서,BUILDING,정기,에너지이용합리화법,법정필수,X,X,5,True,False,링크 안내만 가능,DIGITAL_OK,EXTERNAL_RECEIVE,True,True
+84fd89aa-649e-42f2-89ba-c334077581e5,DOC-CON-002,안전관리계획서 승인서,CONSTRUCTION,착공전,건설기술진흥법,법정필수,X,X,5,True,False,링크 안내만 가능,COPY_OK,BUSINESS,True,True
+850d89da-8c2f-4895-925b-1252f5ba0dd3,DOC-CON-LAW-004,품질시험계획 변경서,CONSTRUCTION,변경시,건설기술진흥법 제55조,법정필수,X,X,5,True,True,이메일 자동발송,COPY_OK,BUSINESS,False,True
+872223d2-63fd-4f66-a348-0a85fb1f0b45,DOC-CON-010,도급사업 안전보건조치계획,CONSTRUCTION,일상,산안법 제63조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+877eabe7-a6fc-4d6d-8808-67f9c96dda93,DOC-OSH-047,밀폐공간 작업허가서,INDUSTRIAL,작업시,산안법 제38조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+89ff4c92-2e06-46bd-99a4-6091dba797e1,DOC-OSH-004,작업환경측정결과서,INDUSTRIAL,정기,산안법 제125조,법정필수,X,X,5,True,True,노동포털 링크 안내 / 팩스(팝빌),DIGITAL_OK,BUSINESS,False,True
+8a2ceea6-6725-4880-adff-ed4813651ad9,DOC-CON-027,거푸집 설치계획서,CONSTRUCTION,작업시,산안법,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+8b0a8639-f939-420e-8356-8acc43a0974e,DOC-CON-019,하도급관리대장,CONSTRUCTION,일상,건설산업기본법,법정필수,B,A,3,True,True,TAI내 보관·열람,DIGITAL_OK,BUSINESS,False,True
+8bd7ff7e-188b-49b3-b3d6-46c52b0d293c,DOC-CON-LAW-006,품질시험 및 검사 기록,CONSTRUCTION,일상,건설기술진흥법 제55조,법정필수,X,X,5,False,True,이메일 자동발송,COPY_OK,BUSINESS,False,True
+8c3bba29-6a36-4a1d-9e1c-eab3ae6ec52a,DOC-CON-012,TBM 기록(건설),CONSTRUCTION,일상,산안법,권고,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+8c69248f-0409-43e2-a2e2-8155bd77e585,DOC-OSH-055,안전보건점검 체크리스트,COMMON,일상,산안법 제38조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+8d51d083-ef46-4705-844b-2c641bd82404,DOC-FAC-020,고압가스배관 시공감리 신청서,BUILDING,일상,고압가스안전관리법 제16조제2항,의무,D,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+8e312ac1-c8da-4670-8a2c-3526ef839c81,DOC-FAC-010,위험물 사고 보고서,BUILDING,사고시,위험물안전관리법,법정필수,C,A,4,False,True,팩스(팝빌) 자동발송,COPY_OK,BUSINESS,False,True
+8eb9dba8-b321-4d02-9cac-38414ce6f0e9,DOC-CHEM-004,장외영향평가서,COMMON,착공전,화학물질관리법 제41조,법정필수,X,X,5,True,True,ICIS 링크 안내 / 이메일,DIGITAL_OK,BUSINESS,False,True
+8f17f61d-ed0e-4cf9-89bf-57f517304a3d,DOC-OSH-068,공정안전보고서,INDUSTRIAL,착공전,산안법 제44조,의무,B,X,5,False,False,,DIGITAL_OK,BUSINESS,False,True
+902852dd-7195-4f58-9d95-603c894c9547,DOC-OSH-039,밀폐공간 작업기록부,INDUSTRIAL,일상,산안법 제38조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+925ca663-f238-4b55-bbe3-014c767a4840,DOC-CON-LAW-008,안전관리계획(법정),CONSTRUCTION,착공전,건설기술진흥법 제62조,법정필수,C,B,4,True,True,이메일 자동발송,COPY_OK,BUSINESS,False,True
+937d9d3b-ac00-48fc-b141-0eb26d75c917,DOC-CHEM-026,화학물질 변경등록 신청서,INDUSTRIAL,변경시,화학물질등록평가법 시행규칙 제9조,의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+94594f0b-d504-4211-9cb9-e1f73d852abb,DOC-CON-LAW-012,긴급안전점검 결과보고서,CONSTRUCTION,사고시,건설기술진흥법 제62조,법정필수,X,X,5,False,True,이메일 자동발송,DIGITAL_OK,BUSINESS,False,True
+96c147aa-36c0-4166-8341-e97fd24b3ffe,DOC-BLD-035,승강기 정밀안전검사 결과서,BUILDING,정기,승강기안전관리법 제32조,의무,C,X,5,True,False,,DIGITAL_OK,EXTERNAL_RECEIVE,True,True
+98c45426-63e7-4649-9e83-8d5a5625f17c,DOC-CON-LAW-013,안전점검 종합보고서,CONSTRUCTION,종료,건설기술진흥법 제62조,법정필수,X,X,5,False,True,이메일 자동발송,DIGITAL_OK,BUSINESS,False,True
+9cf424e7-ff2a-4720-8d0c-0df5a89dba7b,DOC-OSH-015,안전보건협의체회의록,CONSTRUCTION,정기,산안법 제64조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+a0112f69-1b86-4edc-ad03-c5091cd62fcf,DOC-FAC-019,고압가스 안전관리자 해임퇴직 신고서,BUILDING,일상,"고압가스안전관리법 제15조제3항, 시행규칙 별지 제19호",의무,C,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+a05c67c5-73a3-411a-8c2e-49c0975f9cb6,DOC-SERA-009,중대재해 발생 대응조치 기록,COMMON,사고시,중대재해처벌법 제4조,법정필수,C,A,3,False,True,TAI보관 + 팩스(팝빌),COPY_OK,BUSINESS,False,True
+a0e48e42-9203-4e18-91bc-479e272d865c,DOC-OSH-066,보건관리전문기관 지정신청서,COMMON,일상,"산안법 제21조, 시행규칙 제20조",의무,X,X,5,True,False,,DIGITAL_OK,AGENCY_ONLY,True,True
+a124981f-9624-4ce2-8734-25dd8396284a,DOC-OSH-035,특수건강진단 결과보고서 제출서,INDUSTRIAL,정기,산안법 제129조,법정필수,X,X,5,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,True,True
+a18932fb-3631-4fb2-ba8e-d8cdc8b2628d,DOC-SERA-012,경영책임자 의무이행 입증자료,COMMON,감독대응,중대재해처벌법 제4조,법정필수,C,B,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+a1d2d277-8552-4370-bb1d-ce6321c7a685,DOC-CON-048,재하도급 승낙 통보서,CONSTRUCTION,일상,"건설산업기본법 제29조제6항, 시행규칙 별지 제23호의2",의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+a35b127e-fe1b-4dc7-902a-8f7d77b0f76e,DOC-CHEM-018,유해화학물질 영업 변경신고서,INDUSTRIAL,변경시,화학물질관리법 제28조제5항,의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+a36d11c1-b217-4ac7-b458-095b523d99fd,DOC-BLD-016,석면점검 기록부,BUILDING,정기,석면안전관리법,법정필수,A,S,2,True,False,,COPY_OK,BUSINESS,False,True
+a417becb-6439-45e8-af20-008359fd1a9d,DOC-OSH-072,석면해체제거작업 신고서,COMMON,작업시,"산안법 제122조, 시행규칙 제181조",의무,B,X,5,True,False,,DIGITAL_OK,BUSINESS,True,True
+a4a8c008-57d3-4351-b020-2b5f97a1b20a,DOC-OSH-016,도급안전보건조치기록,CONSTRUCTION,일상,산안법 제63조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+a4d9d7eb-f14a-4a29-8a98-d88bc64729d6,DOC-FAC-012,보일러 관리자 선임신고서,BUILDING,일상,에너지이용합리화법,법정필수,D,C,5,True,True,팩스(팝빌) / 에너지공단 링크 안내,DIGITAL_OK,BUSINESS,False,True
+a695c859-1474-455c-8cbc-83f2bb5ba50f,DOC-CHEM-010,화학물질 등록신청서,COMMON,착공전,화학물질등록평가법 제10조,법정필수,X,X,5,True,False,ICIS 링크 안내만 가능,DIGITAL_OK,BUSINESS,False,True
+a6ea9bb4-f247-4fc1-bf15-535d22a22425,DOC-CHEM-027,등록한 자의 변경신고서,INDUSTRIAL,변경시,화학물질등록평가법 시행규칙 제11조,의무,D,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+a795be1d-08a4-4291-aa68-57b7ff59519d,DOC-CON-044,소규모안전관리계획,CONSTRUCTION,착공전,건설기술진흥법 제62조의2,의무,B,X,5,False,False,,COPY_OK,BUSINESS,False,True
+a8edc4a8-ebe1-429d-b078-6d2b1f4f817f,DOC-CON-LAW-002,품질시험계획,CONSTRUCTION,착공전,건설기술진흥법 제55조,법정필수,X,X,5,True,True,이메일 자동발송,COPY_OK,BUSINESS,False,True
+a969e5fe-2d21-4467-a73d-ec9541a6fe71,DOC-CON-003,품질관리계획서,CONSTRUCTION,착공전,건설기술진흥법 제55조,법정필수,X,X,5,True,True,이메일 자동발송 / 팩스(팝빌),COPY_OK,BUSINESS,False,True
+a9a1af72-5d98-4ebe-8567-53a64aa14fc1,DOC-CON-LAW-001,품질관리계획(법정),CONSTRUCTION,착공전,건설기술진흥법 제55조,법정필수,X,X,5,True,True,이메일 자동발송,COPY_OK,BUSINESS,False,True
+a9d3e80e-8fd5-44ed-bbfc-86cdd1200421,DOC-OSH-001,안전보건관리규정,COMMON,일상,산안법 제25조,법정필수,C,B,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+ab556daa-7366-45ce-a0be-4f19ab1e7b43,DOC-CON-033,양중작업계획서,CONSTRUCTION,작업시,산안법 제38조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+ab63340a-a9ef-4451-87e7-88acc6606ddd,DOC-BLD-022,소방안전관리보조자 선임 연기 신청서,BUILDING,일상,소방시설법 시행규칙 제16조,의무,D,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+ab96faae-4df5-4608-8c31-c6968e229df1,DOC-OSH-044,물질안전보건자료 교육기록,COMMON,일상,산안법 제110조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+ad647012-e8e1-48df-89a5-1c8ed2d4f056,DOC-BLD-004,소방안전관리자 선임신고서,BUILDING,일상,소방시설법 제20조,법정필수,D,C,3,True,True,팩스(팝빌) / 등기(포스트플러스),DIGITAL_OK,BUSINESS,False,True
+ae4634da-1ed6-46de-9593-b89745a562f6,DOC-BLD-045,시설물 사고보고서,BUILDING,사고시,시설물안전법,의무,B,X,5,False,False,,DIGITAL_OK,BUSINESS,False,True
+afa892b6-c766-4fb0-9a0f-de7785b2791b,DOC-CON-036,용접작업 허가서,CONSTRUCTION,작업시,산안법 제38조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+b20356e3-c6a6-4b0c-9606-87dba8df4a2b,DOC-CHEM-022,기존화학물질 신고서,INDUSTRIAL,일상,화학물질등록평가법 시행규칙 제6조의2,의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+b2b2adc6-121b-4ce6-8c05-936ebe339990,DOC-OSH-033,유해위험방지계획서 제출서,CONSTRUCTION,착공전,산안법 제42조,법정필수,D,C,4,True,True,KOSHA 링크 안내 / 이메일,DIGITAL_OK,BUSINESS,False,True
+b2cf3855-d9c9-4f92-a6ca-c4e6ae83ea76,DOC-FAC-028,위험물 제조소등 완공검사필증,BUILDING,일상,"위험물안전관리법 제9조, 제13조",의무,C,X,5,True,False,,ORIGINAL_ONLY,EXTERNAL_RECEIVE,True,True
+b2dbd375-8a32-408d-9061-5f10fb1ef94b,DOC-CON-007,안전점검일지(건설),CONSTRUCTION,일상,산안법 제38조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+b2e40748-7ffa-43fd-9761-fb411fd2f37e,DOC-CON-047,하도급계약 통보서,CONSTRUCTION,일상,"건설산업기본법 제29조제6항, 시행규칙 별지 제23호",의무,B,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+b36e4fb8-7a78-49c1-95bc-9d2e4a143aaa,DOC-BLD-019,시설물 유지관리계획서,BUILDING,정기,시설물안전법 제7조,법정필수,C,B,4,True,True,TAI내 보관·열람,DIGITAL_OK,BUSINESS,False,True
+b3ed372c-19bf-4b2b-a564-2e69426cf9d6,DOC-FAC-003,가스시설 검사 결과서,BUILDING,정기,고압가스안전관리법 제16조,법정필수,X,X,5,True,False,링크 안내만 가능,DIGITAL_OK,EXTERNAL_RECEIVE,True,True
+b4100f2a-3ec9-438c-85fb-d1c3758abb91,DOC-OSH-017,점검표(체크리스트),COMMON,일상,산안법 제38조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+b46554fd-7d47-42ae-9fb2-551ce0aa594c,DOC-CON-023,굴착공사 작업계획서,CONSTRUCTION,작업시,산안법 제38조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+b62d4111-1654-413b-b326-6eb713a2f8f1,DOC-BLD-026,전기안전관리자 해임신고서,BUILDING,일상,전기안전관리법 제17조,의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+b672ce48-521f-4a21-8f4f-3911275e436b,DOC-BLD-014,석면관리대장,BUILDING,일상,석면안전관리법 제22조,법정필수,B,A,3,True,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+b6ff1827-1407-43bc-a2c9-e56ffc7ea76d,DOC-OSH-018,사고보고서,COMMON,사고시,산안법 제54조,법정필수,C,A,3,False,True,팩스(팝빌) 자동발송,DIGITAL_OK,BUSINESS,False,True
+b70a5aea-2441-40e2-8fc2-73d499de29ac,DOC-FAC-033,검사대상기기 계속사용검사 신청서,BUILDING,정기,에너지이용합리화법,의무,C,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+b715fae2-fd1f-4bf3-a190-92e17196676c,DOC-OSH-052,비상훈련 실시기록,COMMON,정기,산안법 제38조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+b812dbdc-8bf4-4ef8-b2aa-3873694be9cc,DOC-CHEM-003,유해화학물질 취급시설 자체점검 기록,COMMON,정기,화학물질관리법 제24조,법정필수,A,S,2,False,False,,COPY_OK,BUSINESS,False,True
+b87f8767-ba27-4d36-8ed7-7b3a2aaecc60,DOC-OSH-069,공정안전보고서 변경 제출서,INDUSTRIAL,일상,"산안법 제44조, 시행규칙 제50조",의무,B,X,5,False,False,,DIGITAL_OK,BUSINESS,False,True
+b882ddc6-fdb9-4480-b56b-34a671e5cdfa,DOC-BLD-010,전기설비 정기검사 결과서,BUILDING,정기,전기안전관리법,법정필수,X,X,5,True,False,링크 안내만 가능,DIGITAL_OK,EXTERNAL_RECEIVE,True,True
+b8f70c3a-2088-4e51-abcf-311f6e9556a3,DOC-CHEM-007,화학사고 조사보고서,COMMON,사고시,화학물질관리법 제44조,법정필수,C,B,4,False,True,팩스(팝빌) / 이메일,COPY_OK,BUSINESS,True,True
+b9f3af33-cafb-47cb-8990-97336c661130,DOC-BLD-015,석면건축물 관리계획서,BUILDING,정기,석면안전관리법 제21조,법정필수,C,B,4,True,True,TAI보관 + 지자체 팩스/등기,COPY_OK,BUSINESS,False,True
+ba9f3c12-e501-4c54-bbee-439bab137ec5,DOC-CHEM-008,유해화학물질 취급기록부,COMMON,일상,화학물질관리법 제29조,법정필수,B,A,3,True,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+bc08c35b-8608-4c9c-ae84-a64b2cc16310,DOC-CHEM-023,신규화학물질 신고서,INDUSTRIAL,일상,화학물질등록평가법 시행규칙 제6조의3,의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+bc2d3470-b5a1-400e-936e-d44f5847a6d9,DOC-FAC-016,냉동기 설비 점검기록부,BUILDING,정기,에너지이용합리화법,법정필수,A,S,2,True,False,,COPY_OK,BUSINESS,False,True
+be3df4d6-6de5-4900-b117-a20e17beba1e,DOC-CHEM-009,유해화학물질 관리자 선임신고서,COMMON,일상,화학물질관리법 제31조,법정필수,D,C,4,True,True,팩스(팝빌) / ICIS 링크 안내,DIGITAL_OK,BUSINESS,False,True
+bf0439ab-bce0-47e0-9911-8118e5c0edc0,DOC-CHEM-014,화학사고예방관리계획서 변경검토 신청서,INDUSTRIAL,변경시,화학물질관리법 제23조,의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+bfe2b028-ff61-46eb-99fc-9132597d0fcb,DOC-CON-026,비계 점검기록부,CONSTRUCTION,정기,산안법 제38조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+bfe45c4b-d562-4384-af5f-ed3571ec24d5,DOC-CON-008,작업계획서(고위험작업),CONSTRUCTION,작업시,산안법 제42조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+c060a7a2-1c90-47c1-b179-e49de27b88a6,DOC-SERA-004,재해예방 인력예산 편성기록,COMMON,정기,중대재해처벌법 제4조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+c16dbdff-941c-4c7e-a89f-3a2fdc375a69,DOC-BLD-039,석면건축물 조치명령 이행계획서,BUILDING,일상,석면안전관리법 제22조,의무,C,X,5,False,False,,COPY_OK,BUSINESS,False,True
+c2637ef7-2bc8-4ec5-beac-81326fe80416,DOC-OSH-027,보건관리자 변경신고서,COMMON,일상,산안법 제18조,법정필수,D,C,3,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+c407a14e-f03f-458d-a281-0c268c5ee502,DOC-OSH-002,위험성평가서,COMMON,정기,산안법 제36조,법정필수,C,B,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+c45b80c8-354b-4f81-9214-4c894c228ae1,DOC-OSH-003,산업재해조사표,COMMON,사고시,산안법 제57조,법정필수,D,C,4,True,True,노동포털 링크 안내 / 팩스(팝빌),DIGITAL_OK,BUSINESS,False,True
+c4eac578-03e7-4da0-9c43-6b438958c909,DOC-CON-009,유해위험방지계획서(건설),CONSTRUCTION,착공전,산안법 제42조,법정필수,C,B,4,True,True,KOSHA 링크 안내 / 이메일,DIGITAL_OK,BUSINESS,False,True
+c8689df8-a929-4cca-8bdd-2b5aac041b4d,DOC-OSH-013,작업허가서(일반),COMMON,작업시,산안법 제38조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+cb1019e4-9025-4cd5-8370-d32227e21571,DOC-OSH-031,산업보건의 해임신고서,COMMON,일상,산안법 제19조,법정필수,D,C,5,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+cc7a42a4-1f52-42df-a905-37f1ff1ad16b,DOC-BLD-027,전기설비 사용전검사 신청서,BUILDING,일상,전기안전관리법,의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+ccc67e35-621e-4318-8537-7166b6acb9b8,DOC-CON-011,안전보건협의체 회의록(건설),CONSTRUCTION,정기,산안법 제64조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+ccd6471c-23a2-4aaa-9b22-5add5d343dfb,DOC-CON-017,감리보고서,CONSTRUCTION,정기,건설기술진흥법,법정필수,X,X,5,True,False,링크 안내만 가능,COPY_OK,BUSINESS,False,True
+ceff80c9-04cf-4d09-9a23-431f41cef7bc,DOC-BLD-009,전기설비 점검기록부,BUILDING,정기,전기안전관리법 제11조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+d03cb25e-fa5e-4dfe-abb5-656aa06cd430,DOC-CON-041,작업중지 및 재개 기록,CONSTRUCTION,사고시,산안법 제52조,법정필수,C,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+d10e9c9b-1d9f-4f7b-987e-15e56db42a58,DOC-BLD-029,전기재해 보고서,BUILDING,사고시,전기안전관리법,의무,B,X,5,False,False,,COPY_OK,BUSINESS,False,True
+d16bc19a-ee91-4182-a643-59f04d85c97b,DOC-BLD-007,피난계획 대피훈련 기록,BUILDING,정기,소방시설법,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+d234ff39-8bc0-4f02-9a65-a21947788008,DOC-BLD-011,승강기 유지관리 점검기록부,BUILDING,정기,승강기안전관리법 제17조,법정필수,A,S,1,True,False,,COPY_OK,BUSINESS,False,True
+d2c18249-1fb6-473f-b8fc-4611a3fc691d,DOC-OSH-065,안전관리전문기관 지정신청서,COMMON,일상,"산안법 제21조, 시행규칙 제16조",의무,X,X,5,True,False,,ORIGINAL_ONLY,AGENCY_ONLY,True,True
+d300cedf-69aa-4361-b5c7-1006d954e0e1,DOC-FAC-008,위험물 시설 점검기록부,BUILDING,정기,위험물안전관리법 제18조,법정필수,A,S,2,True,False,,COPY_OK,BUSINESS,False,True
+d31345c6-6823-46fa-93de-4f11c6cddfc0,DOC-FAC-032,검사대상기기 설치검사 신청서,BUILDING,일상,에너지이용합리화법,의무,C,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+d3260b40-1b97-4525-9a26-a602a4d1715a,DOC-FAC-011,위험물 예방규정,BUILDING,일상,위험물안전관리법 제17조,법정필수,C,B,4,False,True,팩스(팝빌) / 등기(포스트플러스),COPY_OK,BUSINESS,False,True
+d463785a-959a-428f-9a03-cf30a814de85,DOC-OSH-056,TBM 기록,COMMON,일상,산안법 제38조,권고,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+d46d90b7-385d-45ef-8341-219837320ecf,DOC-OSH-058,산업안전보건위원회 회의록,COMMON,정기,산안법 제24조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+d4fcac65-1d6d-47a2-9c49-9a1d72f4bb4c,DOC-BLD-028,전기설비 정기검사 신청서,BUILDING,정기,전기안전관리법,의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+d52a2a1c-d1f3-4cd1-bb69-bc8f31ae82a9,DOC-OSH-032,산업재해조사표 제출서,COMMON,사고시,산안법 제57조,법정필수,D,C,4,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+d5512ea7-19be-4400-a9c5-21fdca98417d,DOC-FAC-006,위험물 안전관리자 선임신고서,BUILDING,일상,위험물안전관리법 제15조,법정필수,D,C,4,True,True,팩스(팝빌) / 등기(포스트플러스),COPY_OK,BUSINESS,False,True
+d6051bd9-5563-411c-9012-c37044b2ca7c,DOC-CHEM-024,화학물질 등록등면제확인 신청서,INDUSTRIAL,일상,화학물질등록평가법 시행규칙 제7조,의무,D,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+d7c98f26-d681-4b71-813a-60aff0574a56,DOC-BLD-038,석면건축물 조사 결과서,BUILDING,정기,석면안전관리법 제21조,의무,B,X,5,True,False,,DIGITAL_OK,EXTERNAL_RECEIVE,False,True
+d93df63a-688b-4ffb-8f9b-eebb2cb4be1b,DOC-OSH-028,산업보건의 변경신고서,COMMON,일상,산안법 제19조,법정필수,D,C,5,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+d9ce894f-e49e-4853-94a4-24fe5984b418,DOC-OSH-063,안전보건총괄책임자 선임 보고서,COMMON,일상,"산안법 제62조, 시행규칙 제9조",의무,A,X,5,False,False,,COPY_OK,BUSINESS,False,True
+da7bf5d8-157a-4cb0-9d11-e80361352757,DOC-OSH-050,안전작업절차서(SOP),COMMON,일상,산안법 제38조,권고,C,B,4,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+db15354f-130e-476e-a85b-8ad5bccb47e0,DOC-CON-037,밀폐공간 작업허가서(건설),CONSTRUCTION,작업시,산안법 제38조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+db99e086-4a00-43bc-affc-2a25dbe1b648,DOC-OSH-076,근골격계질환 예방관리 프로그램,INDUSTRIAL,일상,안전보건규칙 제662조,의무,B,X,5,False,False,,COPY_OK,BUSINESS,False,True
+dba88e1e-39ce-4c11-9c5e-de50325ca737,DOC-OSH-014,밀폐공간작업계획서,INDUSTRIAL,작업시,산안법 제38조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+de06f122-6fb1-4f86-826a-4940bb09d379,DOC-FAC-024,위험물안전관리자 해임퇴직 신고서,BUILDING,일상,"위험물안전관리법 제15조, 시행규칙 별지 제32호",의무,C,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+e01d7071-7c09-49fa-a4d3-3afb5d86104a,DOC-OSH-029,안전관리자 해임신고서,COMMON,일상,산안법 제17조,법정필수,D,C,3,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+e055e711-693b-4a52-9b97-93fdf6b5b9a4,DOC-CON-006,공사일지,CONSTRUCTION,일상,건설기술진흥법,법정필수,A,S,1,True,False,,COPY_OK,BUSINESS,False,True
+e09904d9-e1ee-41c8-ba19-d46cc41dcd87,DOC-OSH-034,작업환경측정 결과보고서 제출서,INDUSTRIAL,정기,산안법 제125조,법정필수,X,X,5,True,True,팩스(팝빌) / 노동포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+e0d058bb-43ac-4d16-900f-1de8d9566324,DOC-BLD-024,소방시설 자체점검 조치완료보고서,BUILDING,정기,소방시설법 제25조,의무,B,X,5,False,False,,COPY_OK,BUSINESS,False,True
+e0dd01c1-22e8-4ae6-b960-1c623b625cb3,DOC-OSH-053,중대재해 발생 대응기록,COMMON,사고시,중대재해처벌법,법정필수,C,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+e1a814cc-61cc-434b-88cd-47ed8a4f090b,DOC-FAC-026,위험물 제조소등 변경허가 신청서,BUILDING,변경시,위험물안전관리법 제6조,의무,C,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+e2c7b836-3ad4-4085-aa0c-0f4e173505d1,DOC-CON-LAW-015,건설공사 안전관리 이행기록,CONSTRUCTION,일상,건설기술진흥법 제62조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+e39677b4-fb23-4b50-bde9-cd5b57a079fe,DOC-OSH-045,보호구 지급대장,COMMON,일상,산안법 제41조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+e4810910-0a83-43c9-88dd-1fba57f2ad44,DOC-BLD-032,승강기 중대한 고장 보고서,BUILDING,사고시,승강기안전관리법,의무,B,X,5,False,False,,DIGITAL_OK,BUSINESS,False,True
+e6db9020-c479-4623-bff2-48f1bac28fb4,DOC-CON-040,장비 사용계획서,CONSTRUCTION,작업시,산안법,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+e778aae5-5cd3-4342-acd6-0ce9649397e3,DOC-CHEM-020,유해화학물질 관리자 해임퇴직 신고서,INDUSTRIAL,일상,"화학물질관리법 제32조, 시행규칙 별지 제49호",의무,C,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+e92b25cc-2fd4-499d-9f05-c52745b99a07,DOC-FAC-031,검사대상기기 조종자 선임해임 신고서,BUILDING,일상,에너지이용합리화법,의무,C,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+e9d05382-bef4-4f89-b732-74ad22652697,DOC-BLD-017,시설물 안전점검 결과보고서,BUILDING,정기,시설물안전법 제6조,법정필수,X,X,5,True,False,FMS 포털 링크 안내,DIGITAL_OK,BUSINESS,False,True
+ebc1ba10-3975-492a-bf8f-44e3b462960e,DOC-OSH-074,석면농도측정 결과보고서,COMMON,작업시,"산안법 제124조, 시행규칙 제186조",의무,B,X,5,True,False,,DIGITAL_OK,BUSINESS,True,True
+ebef4d62-a30f-4e91-9c4e-2be606798f68,DOC-CHEM-019,유해화학물질 시약 판매업 신고서,INDUSTRIAL,일상,"화학물질관리법 제29조의3, 시행규칙 별지 제47호의3",의무,D,X,5,True,False,,DIGITAL_OK,BUSINESS,False,True
+ec1e368b-1313-4c08-82d1-849dcbfdffc3,DOC-SERA-002,안전보건관리체계 점검기록,COMMON,정기,중대재해처벌법 제4조,법정필수,B,A,2,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+ec45077f-0d47-443d-8d3d-23b4b323ee27,DOC-CON-001,안전관리계획서,CONSTRUCTION,착공전,건설기술진흥법 제62조,법정필수,C,B,4,True,True,이메일 자동발송 / 팩스(팝빌),COPY_OK,BUSINESS,False,True
+ed047fe4-4a0c-443f-9159-b1be0318f779,DOC-OSH-037,안전보건교육 실시기록부,COMMON,일상,산안법 제29조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+ed1c5d1b-1d73-4a15-9a5b-889b8c4874c7,DOC-BLD-042,시설물 성능평가 결과보고서,BUILDING,정기,시설물안전법,의무,C,X,5,False,False,,DIGITAL_OK,EXTERNAL_RECEIVE,False,True
+eda592d3-e0b1-463f-8e08-16b699105b5a,DOC-FAC-007,위험물 저장취급 기록부,BUILDING,일상,위험물안전관리법 제18조,법정필수,B,A,3,True,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+ee12384d-72eb-4370-9bdd-48d8d3b58772,DOC-OSH-022,밀폐공간작업프로그램기록,INDUSTRIAL,일상,산안법 제38조,법정필수,B,A,3,False,True,TAI내 보관·열람,COPY_OK,BUSINESS,False,True
+efe156b5-dec7-452f-8ec7-22e607b27f97,DOC-CHEM-012,화학물질 정보제공서,COMMON,일상,화학물질등록평가법 제29조,법정필수,X,X,5,True,True,이메일 자동발송(하위사용자),DIGITAL_OK,BUSINESS,False,True
+efe70a0b-ea97-4aab-b6fc-56504aa10b7b,DOC-FAC-030,위험물 정기점검 결과 제출서,BUILDING,정기,위험물안전관리법 제18조,의무,B,X,5,False,False,,COPY_OK,BUSINESS,False,True
+f55d2d31-3dff-4de6-bbce-08a8af7e4941,DOC-OSH-008,유해위험방지계획서,CONSTRUCTION,착공전,산안법 제42조,법정필수,C,B,4,True,True,KOSHA 링크 안내 / 이메일,DIGITAL_OK,BUSINESS,False,True
+f78353bd-4d8c-46fe-8898-a4610b66e75f,DOC-CON-016,콘크리트 타설계획서,CONSTRUCTION,작업시,건설기술지침,권고,X,X,5,False,True,이메일 자동발송,COPY_OK,BUSINESS,False,True
+f7976d16-1afa-47ee-ab04-9dd0345686c2,DOC-BLD-043,시설물 보수보강 조치 결과보고서,BUILDING,일상,시설물안전법,의무,B,X,5,False,False,,DIGITAL_OK,BUSINESS,False,True
+f79ad720-48d4-484e-b4d0-8160893d2aa8,DOC-CON-LAW-010,정기안전점검 결과보고서,CONSTRUCTION,정기,건설기술진흥법 제62조,법정필수,C,B,3,False,True,이메일 자동발송,DIGITAL_OK,BUSINESS,False,True
+fbbdbfe7-08b3-462e-a899-71179de863ae,DOC-CON-043,방호조치 점검기록,CONSTRUCTION,정기,산안법 제38조,법정필수,A,S,1,False,False,,COPY_OK,BUSINESS,False,True
+fc42cdd4-1568-4cfa-b084-903c879fde49,DOC-CON-LAW-003,품질관리계획 변경서,CONSTRUCTION,변경시,건설기술진흥법 제55조,법정필수,X,X,5,True,True,이메일 자동발송,COPY_OK,BUSINESS,False,True
+fc7df800-5d12-4df4-ae92-ea5fe1a40595,DOC-BLD-003,소방시설 종합정밀점검 보고서,BUILDING,정기,소방시설법 제25조,법정필수,X,X,5,True,True,팩스(팝빌) 또는 소민터 링크 안내,DIGITAL_OK,BUSINESS,False,True
+fe3dddbc-0e68-45da-b4c2-61c6b2f94abc,DOC-FAC-027,위험물 제조소등 완공검사 신청서,BUILDING,일상,"위험물안전관리법 제9조, 제13조",의무,C,X,5,True,False,,ORIGINAL_ONLY,BUSINESS,False,True
+fe6800b7-1488-4c25-b2bc-c79b78b7ad62,DOC-OSH-075,근골격계부담작업 유해요인조사표,INDUSTRIAL,정기,안전보건규칙 제657조,의무,B,X,5,False,False,,COPY_OK,BUSINESS,False,True
+ff3c22d0-ac14-4432-9530-a995cb4f3128,DOC-FAC-004,가스사고 보고서,BUILDING,사고시,고압가스안전관리법,법정필수,C,A,4,False,True,팩스(팝빌) 자동발송,COPY_OK,BUSINESS,False,True
