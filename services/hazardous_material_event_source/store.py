@@ -14,8 +14,10 @@ Hard delete = 0. DB failure raises HazardousMaterialEventSourceLoadError.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger("hazardous_material_event_source.store")
 
@@ -130,7 +132,7 @@ def update_event_draft(
         )
     forbidden = {"status", "confirmed_at", "voided_at", "id", "factory_id", "created_at"}
     safe_patch = {k: v for k, v in patch.items() if k not in forbidden}
-    safe_patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+    safe_patch["updated_at"] = serialize_external_utc(now_kst())
     try:
         res = (
             supabase.table(TABLE)
@@ -163,7 +165,7 @@ def confirm_event(
             f"Only DRAFT→CONFIRMED transition is allowed (current status={row['status']})"
         )
     _validate_confirm_fields(row)
-    now = datetime.now(timezone.utc)
+    now = now_kst()
     occurred_at = row.get("occurred_at")
     if occurred_at:
         _occ = _parse_ts(occurred_at)
@@ -171,11 +173,12 @@ def confirm_event(
             raise HazardousMaterialEventValidationError(
                 "occurred_at must not be in the future at confirmation time"
             )
+    now_str = serialize_external_utc(now)
     patch = {
         "status": "CONFIRMED",
-        "confirmed_at": now.isoformat(),
+        "confirmed_at": now_str,
         "voided_at": None,
-        "updated_at": now.isoformat(),
+        "updated_at": now_str,
     }
     try:
         res = (
@@ -208,11 +211,11 @@ def void_event(
         raise HazardousMaterialEventValidationError(
             f"Only CONFIRMED→VOID transition is allowed (current status={row['status']})"
         )
-    now = datetime.now(timezone.utc)
+    now_str = serialize_external_utc(now_kst())
     patch = {
         "status": "VOID",
-        "voided_at": now.isoformat(),
-        "updated_at": now.isoformat(),
+        "voided_at": now_str,
+        "updated_at": now_str,
     }
     try:
         res = (
@@ -327,12 +330,14 @@ def _validate_confirm_fields(row: Dict[str, Any]) -> None:
 
 
 def _parse_ts(value: Any) -> Optional[datetime]:
+    from services.time import parse_external_datetime
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if value.tzinfo is not None:
+            return value
+        return None  # naive datetime → reject (no implicit UTC assumption)
     if isinstance(value, str):
         try:
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            return parse_external_datetime(value.replace("Z", "+00:00"))
         except (ValueError, AttributeError):
             return None
     return None
