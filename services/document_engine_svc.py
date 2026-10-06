@@ -102,6 +102,11 @@ def create_document(
     )
     if not schema.data:
         raise ValueError(f"schema not found: {form_schema_id}")
+    if schema.data["status"] != "APPROVED_FOR_RUNTIME_USE":
+        raise ValueError(
+            f"schema not approved for runtime use: {form_schema_id} "
+            f"(status={schema.data['status']})"
+        )
     now = serialize_external_utc(now_kst())
     record = {
         "form_schema_id": form_schema_id,
