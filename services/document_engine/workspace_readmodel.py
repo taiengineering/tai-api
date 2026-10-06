@@ -1,39 +1,49 @@
-"""OBJ02-B1: Document workspace read-model.
+"""OBJ02-B1 (CORR-01/02): Document workspace read-model.
 
 list_document_workspace() returns the catalog × schema binding state
 for every document in document_forms, enriched with availability.
+
+CORR-01: Uses actual document_forms columns (no document_family).
+CORR-02: Availability filter applied BEFORE pagination so that
+         total and page items are consistent across pages.
 """
 from __future__ import annotations
 from db.supabase_client import get_supabase
 
 _APPROVED = "APPROVED_FOR_RUNTIME_USE"
 _CANDIDATE = "CANDIDATE"
+_KNOWN_DOCUMENT_FORMS_COLUMNS = frozenset({
+    "id", "doc_id", "doc_name", "sector", "category",
+    "law_ref", "obligation", "tai_grade", "tai_difficulty",
+    "priority", "has_legal_form", "tai_auto", "tai_method",
+    "doc_format", "doc_owner", "is_external_writer", "is_active",
+})
+_SELECT_COLUMNS = "id,doc_id,doc_name,sector,category,is_active,priority"
 
 
 def list_document_workspace(
     page: int = 1,
     page_size: int = 50,
     availability: str = None,
-    document_family: str = None,
+    sector: str = None,
+    category: str = None,
 ) -> dict:
     """Return paginated catalog × schema binding workspace.
 
-    Each row is a document_forms record enriched with:
-      availability: READY_FOR_EDIT | PREPARING | NO_SCHEMA
-      schema_id:    UUID of the APPROVED schema, or None
-      schema_status: status string of the APPROVED schema, or None
-      candidate_count: number of CANDIDATE schemas bound to this catalog doc
+    Filter order (CORR-02): sector/category → schema resolve → availability →
+    filtered total → pagination. Never paginate before availability is known.
 
-    Args:
-        page:              1-based page number
-        page_size:         rows per page (max 200)
-        availability:      filter by availability value (optional)
-        document_family:   filter by document_forms.document_family (optional)
+    Each row:
+      id, doc_id, doc_name, sector, category, is_active, priority
+      availability: READY_FOR_EDIT | PREPARING | NO_SCHEMA
+      schema_id:    UUID | None
+      schema_status: str | None
+      candidate_count: int
 
     Returns:
         {
           "items": [...],
-          "total": <int>,
+          "total": <filtered total, not raw catalog count>,
           "page": <int>,
           "page_size": <int>,
         }
@@ -41,23 +51,21 @@ def list_document_workspace(
     sb = get_supabase()
     page_size = min(page_size, 200)
 
-    q = sb.table("document_forms").select(
-        "id,doc_id,doc_name,document_family,created_at,updated_at",
-        count="exact",
-    )
-    if document_family:
-        q = q.eq("document_family", document_family)
-    offset = (page - 1) * page_size
-    q = q.order("document_family").order("doc_name").range(offset, offset + page_size - 1)
+    # STEP 1: Fetch all matching catalog rows (no DB pagination yet)
+    q = sb.table("document_forms").select(_SELECT_COLUMNS)
+    if sector:
+        q = q.eq("sector", sector)
+    if category:
+        q = q.eq("category", category)
+    q = q.order("sector").order("doc_name")
     catalog_res = q.execute()
     catalog_rows = catalog_res.data or []
-    total = catalog_res.count or 0
 
     if not catalog_rows:
-        return {"items": [], "total": total, "page": page, "page_size": page_size}
+        return {"items": [], "total": 0, "page": page, "page_size": page_size}
 
+    # STEP 2: Batch resolve schemas for all catalog IDs
     catalog_ids = [r["id"] for r in catalog_rows]
-
     schema_res = (
         sb.table("runtime_form_schema")
         .select("id,status,form_name,catalog_document_id")
@@ -68,15 +76,15 @@ def list_document_workspace(
 
     approved_map: dict[str, dict] = {}
     candidate_count_map: dict[str, int] = {}
-
     for s in schema_rows:
         cid = s["catalog_document_id"]
         if s["status"] == _APPROVED:
             approved_map[cid] = s
-        if s["status"] == _CANDIDATE:
+        elif s["status"] == _CANDIDATE:
             candidate_count_map[cid] = candidate_count_map.get(cid, 0) + 1
 
-    items = []
+    # STEP 3: Compute availability + apply availability filter
+    all_items = []
     for cat in catalog_rows:
         cid = cat["id"]
         approved = approved_map.get(cid)
@@ -92,7 +100,7 @@ def list_document_workspace(
         if availability and avail != availability:
             continue
 
-        items.append({
+        all_items.append({
             **cat,
             "availability": avail,
             "schema_id": approved["id"] if approved else None,
@@ -100,9 +108,14 @@ def list_document_workspace(
             "candidate_count": ccount,
         })
 
+    # STEP 4: filtered total, then paginate
+    filtered_total = len(all_items)
+    offset = (page - 1) * page_size
+    page_items = all_items[offset: offset + page_size]
+
     return {
-        "items": items,
-        "total": total,
+        "items": page_items,
+        "total": filtered_total,
         "page": page,
         "page_size": page_size,
     }

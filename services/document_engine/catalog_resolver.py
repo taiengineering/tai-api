@@ -16,11 +16,13 @@ _APPROVED = "APPROVED_FOR_RUNTIME_USE"
 _CANDIDATE = "CANDIDATE"
 
 
-def resolve_catalog_runtime_schema(doc_id: str) -> dict:
+def resolve_catalog_runtime_schema(catalog_document_id: str) -> dict:
     """Return schema + fields + availability for a catalog document.
 
     Args:
-        doc_id: document_forms.id (UUID string)
+        catalog_document_id: document_forms.id (UUID string).
+            Named catalog_document_id to distinguish from the business key
+            document_forms.doc_id (e.g. 'DOC-CHK-001').
 
     Returns:
         {
@@ -32,24 +34,24 @@ def resolve_catalog_runtime_schema(doc_id: str) -> dict:
         }
 
     Raises:
-        ValueError: doc_id not found in document_forms
+        ValueError: catalog_document_id not found in document_forms
     """
     sb = get_supabase()
 
     catalog_row = (
         sb.table("document_forms")
         .select("id,doc_id,doc_name")
-        .eq("id", doc_id)
+        .eq("id", catalog_document_id)
         .single()
         .execute()
     )
     if not catalog_row.data:
-        raise ValueError(f"catalog document not found: {doc_id}")
+        raise ValueError(f"catalog document not found: {catalog_document_id}")
 
     schemas = (
         sb.table("runtime_form_schema")
         .select("id,status,form_name,version,catalog_document_id,source_trace")
-        .eq("catalog_document_id", doc_id)
+        .eq("catalog_document_id", catalog_document_id)
         .execute()
     )
     rows = schemas.data or []
@@ -64,7 +66,7 @@ def resolve_catalog_runtime_schema(doc_id: str) -> dict:
         # uq_rfs_catalog_active_approved should prevent this; guard anyway
         raise RuntimeError(
             f"integrity violation: multiple APPROVED_FOR_RUNTIME_USE schemas "
-            f"for catalog_document_id={doc_id}"
+            f"for catalog_document_id={catalog_document_id}"
         )
     elif candidates:
         schema = None
