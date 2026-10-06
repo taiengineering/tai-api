@@ -2,7 +2,7 @@
 title: OBJ02-B1 Migration Static + Disposable DB Verification
 description: Migration guards verified statically and on disposable PostgreSQL 16
 type: evidence
-wo: WO-DOC-OBJ02-B1-CORRECTION-002
+wo: WO-DOC-OBJ02-B1-CORRECTION-002 + WO-DOC-OBJ02-B1-FINAL-MIGRATION-CORR-003
 status: DISPOSABLE_DB_VERIFIED
 db_version: PostgreSQL 16.15 (aarch64-unknown-linux-musl)
 ---
@@ -13,13 +13,15 @@ db_version: PostgreSQL 16.15 (aarch64-unknown-linux-musl)
 
 `supabase/migrations/20261006193021_catalog_schema_binding_b1.sql`
 
-## Guard Mechanism (Post CORR-06)
+## Guard Mechanism (Post CORR-06 / CORR-08)
 
 All guards use `RAISE EXCEPTION` — NOT `ASSERT`.
 
 Reason: PostgreSQL `ASSERT` is disabled by `plpgsql.check_asserts=off` (off by default in many environments). Guards must never be skippable.
 
-Migration is wrapped in `BEGIN/COMMIT` so any guard failure causes full ROLLBACK.
+Guard count: **10 total** — PRE=5, POST=4, FINAL=1.
+
+Transaction: Supabase CLI wraps each migration file in its own transaction. No explicit `BEGIN/COMMIT` inside the migration file (CORR-08 — nested `BEGIN` generates a PostgreSQL warning and may break Supabase Branching).
 
 ## Structure (§21 Order Compliance)
 

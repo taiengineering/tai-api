@@ -1,8 +1,8 @@
 ---
 title: OBJ02-B1 PR Scope Verification
-description: PR topology and scope verification — clean 11-file diff
+description: PR topology and scope verification — clean 14-file diff
 type: evidence
-wo: WO-DOC-OBJ02-B1-CORRECTION-002
+wo: WO-DOC-OBJ02-B1-CORRECTION-002 + WO-DOC-OBJ02-B1-FINAL-MIGRATION-CORR-003
 status: VERIFIED
 ---
 
@@ -13,7 +13,7 @@ status: VERIFIED
 | PR | Branch | Parent | Files | Status |
 |----|--------|--------|-------|--------|
 | #537 | `feat/doc-obj02b-catalog-schema-binding` | main (5fd4def3) | 30+ (includes unrelated main commits) | CLOSED |
-| #538 | `feat/doc-obj02b-catalog-schema-binding-v2` | docs (254fe9d1) | 11 | OPEN |
+| #538 | `feat/doc-obj02b-catalog-schema-binding-v2` | docs (254fe9d1) | 14 | OPEN |
 
 ## Root Cause of PR #537 Topology Issue
 
@@ -34,12 +34,15 @@ The docs branch had not been merged into main, so the diff between implementatio
 git diff --name-only origin/docs/integrated-search-document-plan-20261007...HEAD
 ```
 
-Output (11 files):
+Output (14 files):
 ```
+docs/document-engine/obj02/OBJ02_B1_DISPOSABLE_DB_VERIFY.md
 docs/document-engine/obj02/OBJ02_B1_IMPLEMENTATION_EVIDENCE.md
 docs/document-engine/obj02/OBJ02_B1_MIGRATION_STATIC_VERIFY.md
+docs/document-engine/obj02/OBJ02_B1_PR_SCOPE_VERIFY.md
 docs/document-engine/obj02/OBJ02_B1_READMODEL_CONTRACT.md
 docs/document-engine/obj02/OBJ02_B1_RUNTIME_GUARD_VERIFY.md
+docs/document-engine/obj02/OBJ02_B1_SUPABASE_RUNNER_VERIFY.md
 services/document_engine/catalog_resolver.py
 services/document_engine/workspace_readmodel.py
 services/document_engine_svc.py
