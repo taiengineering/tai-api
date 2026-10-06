@@ -6,11 +6,11 @@ Lifecycle: DRAFT → CONFIRMED → VOID (no hard DELETE).
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 from services.occupancy_capacity.legal_registry import RULESET_VERSION, get_ruleset_sha256
+from services.time import now_kst, serialize_external_utc
 
 
 def create_draft(
@@ -47,7 +47,7 @@ def attach_calculation(
             "result_numerator": str(result_num),
             "result_denominator": str(result_den),
             "calculation_trace": json.dumps(calculation_trace),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": serialize_external_utc(now_kst()),
         })
         .eq("id", assessment_id)
         .eq("status", "DRAFT")
@@ -79,7 +79,7 @@ def confirm_assessment(
     if row["result_numerator"] is None:
         raise ValueError("Cannot confirm: calculation not yet attached")
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = serialize_external_utc(now_kst())
     resp = (
         supabase.table("factory_occupancy_capacity_assessments")
         .update({
@@ -102,7 +102,7 @@ def void_assessment(
     supabase,
     assessment_id: str,
 ) -> dict[str, Any]:
-    now = datetime.now(timezone.utc).isoformat()
+    now = serialize_external_utc(now_kst())
     resp = (
         supabase.table("factory_occupancy_capacity_assessments")
         .update({
