@@ -17,6 +17,30 @@ _STATUS_MAP: dict[str, RunStatus] = {
     "VALIDATED": RunStatus.FAILED,  # intermediate state — should never be final
 }
 
+_CHANGE_DETECTED: dict[str, bool] = {
+    "COMPLETED": True,
+    "SNAPSHOT_NO_CHANGE": False,
+    "DRY_RUN": False,
+    "REJECT": False,
+    "FAILED": False,
+    "VALIDATED": False,
+}
+
+# Keys allowed in RunResult.details.
+# snapshot_hash omitted — already stored in RunResult.content_hash.
+# fetched omitted — already stored in RunResult.fetched.
+# failure_reason omitted — not a stable code; kept out of details to avoid raw exception text.
+_GUIDE_DETAILS_KEYS = (
+    "domain_status",
+    "declared",
+    "unique",
+    "hold_count",
+    "membership",
+    "snapshot_id",
+    "catalog_upserted",
+    "business_dml",
+)
+
 
 class KoshaGuideAdapter(SourceAdapter):
     """Thin adapter: delegates to sync_kosha_guides (synchronous).
@@ -46,33 +70,37 @@ class KoshaGuideAdapter(SourceAdapter):
                 from services.kosha_guide_sync import sync_kosha_guides
                 sync_result = sync_kosha_guides(dry_run=ctx.dry_run)
         except Exception as exc:
-            return self._result(
+            return self._fail(
                 ctx,
-                RunStatus.FAILED,
-                error_code="SYNC_FN_EXCEPTION",
-                error_message=f"{type(exc).__name__}: {exc}",
+                error_code="DOMAIN_EXECUTION_ERROR",
+                error_message=type(exc).__name__,
             )
 
         domain_status = getattr(sync_result, "status", None)
         run_status = _STATUS_MAP.get(domain_status)
         if run_status is None:
-            return self._result(
+            return self._fail(
                 ctx,
-                RunStatus.FAILED,
                 error_code="UNKNOWN_DOMAIN_STATUS",
                 error_message=f"unrecognised domain status: {domain_status!r}",
-                details=self._to_details(sync_result),
             )
 
         error_code = None
         error_message = None
         if run_status == RunStatus.FAILED:
-            error_code = domain_status
-            error_message = getattr(sync_result, "failure_reason", None) or domain_status
+            error_code = domain_status   # stable domain code
+            error_message = domain_status
 
-        return self._result(
-            ctx,
-            run_status,
+        return RunResult(
+            run_id=ctx.run_id,
+            source_id=ctx.source_id,
+            status=run_status,
+            started_at=ctx.started_at,
+            finished_at=datetime.now(timezone.utc),
+            fetched=int(getattr(sync_result, "fetched", None) or 0),
+            source_version=getattr(sync_result, "snapshot_id", None),
+            content_hash=getattr(sync_result, "snapshot_hash", None),
+            change_detected=_CHANGE_DETECTED.get(domain_status, False),
             error_code=error_code,
             error_message=error_message,
             details=self._to_details(sync_result),
@@ -85,35 +113,32 @@ class KoshaGuideAdapter(SourceAdapter):
     @staticmethod
     def _to_details(sync_result: Any) -> dict:
         return {
-            "domain_status": getattr(sync_result, "status", None),
-            "declared": getattr(sync_result, "declared", None),
-            "fetched": getattr(sync_result, "fetched", None),
-            "unique": getattr(sync_result, "unique", None),
-            "hold_count": getattr(sync_result, "hold_count", None),
-            "membership": getattr(sync_result, "membership", None),
-            "snapshot_hash": getattr(sync_result, "snapshot_hash", None),
-            "snapshot_id": getattr(sync_result, "snapshot_id", None),
-            "catalog_upserted": getattr(sync_result, "catalog_upserted", None),
-            "business_dml": getattr(sync_result, "business_dml", None),
-            "failure_reason": getattr(sync_result, "failure_reason", None),
+            k: v for k, attr in {
+                "domain_status": "status",
+                "declared": "declared",
+                "unique": "unique",
+                "hold_count": "hold_count",
+                "membership": "membership",
+                "snapshot_id": "snapshot_id",
+                "catalog_upserted": "catalog_upserted",
+                "business_dml": "business_dml",
+            }.items()
+            if (v := getattr(sync_result, attr, None)) is not None
         }
 
-    def _result(
+    def _fail(
         self,
         ctx: RunContext,
-        status: RunStatus,
         *,
-        error_code: str | None = None,
-        error_message: str | None = None,
-        details: dict | None = None,
+        error_code: str,
+        error_message: str,
     ) -> RunResult:
         return RunResult(
             run_id=ctx.run_id,
             source_id=ctx.source_id,
-            status=status,
+            status=RunStatus.FAILED,
             started_at=ctx.started_at,
             finished_at=datetime.now(timezone.utc),
             error_code=error_code,
             error_message=error_message,
-            details=details or {},
         )
