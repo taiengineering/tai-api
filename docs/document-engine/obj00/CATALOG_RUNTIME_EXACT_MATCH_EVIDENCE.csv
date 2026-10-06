@@ -1,0 +1,7 @@
+match_type,runtime_form_schema_id,form_name,document_family,form_type,status,src_doc_id,src_form_code,src_source_table,catalog_doc_id,catalog_doc_name,note
+EXPLICIT_BINDING,—,—,—,—,—,—,—,—,—,—,NO explicit FK or mapping table between runtime_form_schema and document_forms
+EXACT_IDENTIFIER_MATCH,260 rows,via source_trace->doc_id,multiple,OFFICIAL/CUSTOM/INTERNAL,mostly CANDIDATE,DOC-xxx-nnn (all 260 doc_ids),null,document_forms,exact match,1:1 exact match (no ambiguity). source_trace->>'source_id' = document_forms.id (uuid FK in jsonb)
+EXACT_NAME_MATCH,3 rows,form_name case-insensitive match to doc_name,multiple,OFFICIAL,CANDIDATE,null (source_table=document_form_master),various,document_form_master,DOC-OSH-062/DOC-OSH-037/DOC-CON-001,안전보건관리책임자 선임 보고서 / 안전보건교육 실시기록부 / 안전관리계획서,doc_id null in source_trace but name matches catalog
+NO_EXACT_MATCH,61 rows,various,multiple,OFFICIAL/CUSTOM,CANDIDATE,null,BW-*/INSPECT-*/APPOINT-*/STD-*/FREE-GUIDE-*/LEGAL-*,document_form_master,—,—,source_table=document_form_master; no doc_id; no name match to document_forms
+AMBIGUOUS_EXACT_MATCH,0 rows,—,—,—,—,—,—,—,—,—,NO ambiguous matches found
+SUMMARY,EXPLICIT_BINDING=0,EXACT_IDENTIFIER_MATCH=260,EXACT_NAME_MATCH=3,NO_EXACT_MATCH=61,AMBIGUOUS=0,TOTAL=324,—,—,—,—,—,—
