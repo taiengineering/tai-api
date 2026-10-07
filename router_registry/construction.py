@@ -6,6 +6,7 @@ ROUTERS = [
     # 경로가 겹치지 않으며, prefix 를 주면 /construction/construction/... 이 된다.
     {"module": "routers.construction_check"},
     {"module": "routers.subcontractors"},
+    {"module": "routers.subcontract_legal_events"},
     {"module": "routers.tbm"},
     {"module": "routers.tbm_templates"},
     {"module": "routers.safety_meetings"},
