@@ -43,6 +43,8 @@ def _body(sector,fd):
     extra = {}
     if sector in ("BUILDING", "INDUSTRIAL", "INDUSTRY", "MANUFACTURING"):
         extra["appendix3_item_no"] = 28
+    elif sector == "CONSTRUCTION":
+        extra["appendix3_item_no"] = 48
     return DiagnosisRunBody(auth_token="t",sector=sector,disclaimer_log_id="disc1",form_data=fd, **extra)
 
 def test_11_true_via_formdata():
@@ -119,6 +121,7 @@ def test_ec1_paid_base_input_preserved_form_data_only():
 def test_ec1_top_level_precedence_over_form_data():
     b = DiagnosisRunBody(auth_token="t", sector="CONSTRUCTION", disclaimer_log_id="disc1",
                          worker_count=7, contract_amount_eok=3.0,
+                         appendix3_item_no=48,
                          is_construction=True, is_relationship_contractor=False,
                          is_civil_construction=False,
                          form_data={"worker_count": 100, "project_amount": 50})

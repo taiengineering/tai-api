@@ -7,9 +7,11 @@ Canonical source is the user-selected 별표 3 호 (`appendix3_item_no`).
 The four group booleans are representation expansion of that one legal fact,
 not a new inference and not a user-supplied Runtime authority.
 
-BUILDING / INDUSTRIAL (after normalize_sector_db) require explicit source
-before disclaimer / quota / Runtime. CONSTRUCTION and SPECIAL_FACILITY are
-not gated here.
+BUILDING / INDUSTRIAL / CONSTRUCTION (after normalize_sector_db) require
+explicit source before disclaimer / quota / Runtime.
+SPECIAL_FACILITY is not gated here.
+WO-LFR-OBJ-S01-P1-001: CONSTRUCTION added — appendix3_item_no=49 is the
+C4 classification source for S01 norms.
 
 NOT: KSIC mapping, sector mapping, industry_type, building_use_type.
 NOT: item 49 → is_construction, item ≤48 → is_construction=false.
@@ -53,7 +55,9 @@ ERROR_SUBTYPE_CONFLICT = "APPENDIX3_SUBTYPE_CONFLICT"
 ERROR_REQUIRED = "APPENDIX3_EXPLICIT_CLASSIFICATION_REQUIRED"
 
 # Completeness gate scope only. Not a legal-item inference from sector.
-GATED_NORMALIZED_SECTORS = frozenset({"BUILDING", "INDUSTRIAL"})
+# WO-LFR-OBJ-S01-P1-001: CONSTRUCTION added — S01 norms require appendix3_item_no=49
+# as the C4 classification source. sector=CONSTRUCTION without explicit item_no → 422.
+GATED_NORMALIZED_SECTORS = frozenset({"BUILDING", "INDUSTRIAL", "CONSTRUCTION"})
 
 
 class Appendix3SourceError(ValueError):
@@ -191,9 +195,9 @@ def collect_explicit_appendix3_source_http(body: Any) -> Dict[str, Any]:
 def missing_explicit_appendix3_fields(body: Any, sector: Any) -> List[str]:
     """Return missing explicit Appendix3 source fields. Empty = completeness PASS.
 
-    Gated only after normalize_sector_db ∈ {BUILDING, INDUSTRIAL}.
+    Gated only after normalize_sector_db ∈ {BUILDING, INDUSTRIAL, CONSTRUCTION}.
     INDUSTRY / MANUFACTURING normalize to INDUSTRIAL and are gated.
-    CONSTRUCTION / SPECIAL_FACILITY are no-op.
+    SPECIAL_FACILITY is no-op. WO-LFR-OBJ-S01-P1-001: CONSTRUCTION added.
 
     KSIC / sector / internal leaves never satisfy this gate.
     False is answered. missing ≠ false.

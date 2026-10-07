@@ -45,6 +45,7 @@ def _run(sector, codes, factory="f1", paid=True, own=True, eqfail=False):
     def r1(sb, s1): cap["s1"] = s1; return {"status": "success", "data": {"applicable_count": 0, "rules_table": []}}
     kw = dict(auth_token="t", sector=sector, disclaimer_log_id="disc1")
     if sector == "CONSTRUCTION":
+        kw["appendix3_item_no"] = 48
         kw["is_construction"] = True
         kw["is_relationship_contractor"] = False
         kw["is_civil_construction"] = False

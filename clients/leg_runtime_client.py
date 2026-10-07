@@ -359,6 +359,11 @@ _LEG_INPUT_FIELDS = (
     # Published CORE22 Leaf.field exact-name. No alias/renaming/sector/order_type/kcsc adapter.
     # False is a value. None/missing is omitted. Default false = 0.
     "is_construction", "is_relationship_contractor", "is_civil_construction",
+    # WO-LFR-OBJ-S01-P1-001: S01 CORE22 Leaf.field — 별표3 항목번호 (integer 1..49).
+    # law_version_id=1fa1f5af. transported as exact integer; 49 → 건설업 (evaluated in LEG).
+    # No conversion: 49 → is_construction, 1..48 → false, sector → 49, KSIC → 49.
+    # missing/None → OMIT in LEG (NumericComparator UNKNOWN, not false).
+    "appendix3_item_no",
     # WO-SM-CORE22-AP01-05-EXPLICIT-APPENDIX3-INPUT-CONTRACT-001
     # Published AP01~05 Leaf.field exact-name. Server projection only.
     # Client must not supply these as authority. appendix3_item_no is the source, not a Leaf.

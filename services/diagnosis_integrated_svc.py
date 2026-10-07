@@ -461,12 +461,15 @@ def run_diagnosis(
         auth_row = resolve_member_auth_log(supabase, current_user)
     else:
         raise HTTPException(status_code=401, detail="인증이 필요합니다. 본인인증 후 이용해 주세요.")
-    # WO-SM-CORE22-CONSTRUCTION-PREDICATE-SERVER-FAIL-CLOSED-001
-    # After auth read, before disclaimer / quota / engine / persist.
-    validate_explicit_construction_predicates(body, getattr(body, "sector", None))
     # WO-SM-CORE22-AP01-05-APPENDIX3-SERVER-FAIL-CLOSED-001
-    # After Construction fail-closed, before disclaimer / quota / canonical / Runtime / persist.
+    # PARENT authority source validated FIRST — appendix3_item_no conflict/missing
+    # must surface before child-predicate gate (which depends on item_no==49).
+    # After auth read, before disclaimer / quota / engine / persist.
     validate_explicit_appendix3_classification(body, getattr(body, "sector", None))
+    # WO-SM-CORE22-CONSTRUCTION-PREDICATE-SERVER-FAIL-CLOSED-001
+    # CHILD gate validated SECOND — item_no==49 is now confirmed present.
+    # After appendix3 source validation, before disclaimer / quota / engine / persist.
+    validate_explicit_construction_predicates(body, getattr(body, "sector", None))
     disclaimer_log_id = (body.disclaimer_log_id or "").strip()
     if not disclaimer_log_id:
         if body.payment_ref:
@@ -977,15 +980,18 @@ def upgrade_diagnosis(
         raise HTTPException(status_code=403, detail="자신의 진단만 업그레이드할 수 있습니다.")
 
     input_data = rec.get("input_data") or {}
-    # After diagnosis read, before Runtime / result update / purchase write.
-    validate_explicit_construction_predicates(
-        stored_explicit_predicate_body(input_data),
-        str(input_data.get("sector") or ""),
-    )
     # WO-SM-CORE22-AP01-05-APPENDIX3-SERVER-FAIL-CLOSED-001
-    # After Construction predicate validation, before pricing / runtime / purchase / result write.
+    # PARENT authority source validated FIRST (upgrade path mirrors run_diagnosis).
+    # After diagnosis read, before Runtime / result update / purchase write.
     validate_explicit_appendix3_classification(
         stored_appendix3_body(input_data),
+        str(input_data.get("sector") or ""),
+    )
+    # WO-SM-CORE22-CONSTRUCTION-PREDICATE-SERVER-FAIL-CLOSED-001
+    # CHILD gate validated SECOND — item_no==49 is now confirmed present.
+    # After appendix3 source validation, before pricing / runtime / purchase / result write.
+    validate_explicit_construction_predicates(
+        stored_explicit_predicate_body(input_data),
         str(input_data.get("sector") or ""),
     )
 

@@ -216,8 +216,20 @@ def test_F11_item49_completeness_pass_no_is_construction():
     assert "is_construction" not in proj
 
 
-def test_F12_construction_missing_appendix3_noop():
+def test_F12_construction_missing_appendix3_now_gated():
+    # WO-LFR-OBJ-S01-P1-001: CONSTRUCTION added to GATED_NORMALIZED_SECTORS.
+    # sector=CONSTRUCTION without explicit appendix3_item_no → required.
     body = DiagnosisRunBody(sector="CONSTRUCTION")
+    assert missing_explicit_appendix3_fields(body, "CONSTRUCTION") == ["appendix3_item_no"]
+    with pytest.raises(HTTPException) as exc_info:
+        validate_explicit_appendix3_classification(body, "CONSTRUCTION")
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["code"] == "APPENDIX3_EXPLICIT_CLASSIFICATION_REQUIRED"
+
+
+def test_F12b_construction_with_item_no_passes():
+    # CONSTRUCTION + explicit item_no → gate passes.
+    body = DiagnosisRunBody(sector="CONSTRUCTION", appendix3_item_no=48)
     assert missing_explicit_appendix3_fields(body, "CONSTRUCTION") == []
     validate_explicit_appendix3_classification(body, "CONSTRUCTION")
 
@@ -660,3 +672,73 @@ def test_stored_form_data_item_satisfies_upgrade():
     assert missing_explicit_appendix3_fields(
         stored_appendix3_body(stored), "BUILDING"
     ) == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATCH-01: source conflict precedes child-missing (WO-LFR-OBJ-S01-P1-001)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_run_conflict_precedes_child_missing():
+    """top-level item_no=49, form_data item_no=48, children absent
+    → APPENDIX3_ITEM_NO_CONFLICT (not CONSTRUCTION_EXPLICIT_PREDICATE_REQUIRED).
+    Parent authority conflict must surface BEFORE child gate.
+    """
+    body = DiagnosisRunBody(
+        sector="CONSTRUCTION",
+        auth_token="t",
+        disclaimer_log_id="disc1",
+        appendix3_item_no=49,
+        form_data={"appendix3_item_no": 48},
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.run_diagnosis(
+            _SB(), body,
+            run_step1_func=lambda *a, **k: {"status": "success", "data": {}},
+            **_run_kw(),
+        )
+    assert ei.value.status_code == 422
+    assert ei.value.detail["code"] == ERROR_ITEM_CONFLICT, (
+        f"Expected APPENDIX3_ITEM_NO_CONFLICT, got {ei.value.detail}"
+    )
+
+
+def test_run_missing_item_precedes_child_missing():
+    """CONSTRUCTION sector, no item_no, no children
+    → APPENDIX3_EXPLICIT_CLASSIFICATION_REQUIRED (not CONSTRUCTION_EXPLICIT_PREDICATE_REQUIRED).
+    """
+    body = DiagnosisRunBody(
+        sector="CONSTRUCTION",
+        auth_token="t",
+        disclaimer_log_id="disc1",
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.run_diagnosis(
+            _SB(), body,
+            run_step1_func=lambda *a, **k: {"status": "success", "data": {}},
+            **_run_kw(),
+        )
+    assert ei.value.status_code == 422
+    assert ei.value.detail["code"] == ERROR_REQUIRED, (
+        f"Expected APPENDIX3_EXPLICIT_CLASSIFICATION_REQUIRED, got {ei.value.detail}"
+    )
+
+
+def test_run_item49_present_then_child_missing():
+    """CONSTRUCTION + item_no=49 present, children absent
+    → CONSTRUCTION_EXPLICIT_PREDICATE_REQUIRED (child gate fires after parent confirmed).
+    """
+    from services.canonical.explicit_construction_predicates import ERROR_CODE as CST_CODE
+    body = DiagnosisRunBody(
+        sector="CONSTRUCTION",
+        auth_token="t",
+        disclaimer_log_id="disc1",
+        appendix3_item_no=49,
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.run_diagnosis(
+            _SB(), body,
+            run_step1_func=lambda *a, **k: {"status": "success", "data": {}},
+            **_run_kw(),
+        )
+    assert ei.value.status_code == 422
+    assert ei.value.detail["code"] == CST_CODE

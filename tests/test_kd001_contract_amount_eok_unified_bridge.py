@@ -138,6 +138,7 @@ def _cap(body: DiagnosisRunBody, *, auto_tier="CONSTRUCTION_FREE"):
 
 def _cst_body(form_data, **extra):
     fd = dict(form_data or {})
+    fd.setdefault("appendix3_item_no", 48)
     fd.setdefault("is_construction", True)
     fd.setdefault("is_relationship_contractor", False)
     fd.setdefault("is_civil_construction", False)
