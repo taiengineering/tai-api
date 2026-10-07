@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 
 class DiagnoseStep1Body(BaseModel):
@@ -152,7 +152,8 @@ class SafeConstructionConsumerInput(BaseModel):
     contracts_construction_work_at_site: Optional[bool] = None
     leads_and_manages_construction_execution: Optional[bool] = None
     recontracts_received_construction_work: Optional[bool] = None
-    same_site_contracted_construction_work_count: Optional[int] = None
+    # PATCH-C: strict int >= 0; bool/float/string coercion forbidden (matches LEG contract.py).
+    same_site_contracted_construction_work_count: Optional[Annotated[StrictInt, Field(ge=0)]] = None
 
 
 class SafeConstructionLegBody(BaseModel):
