@@ -161,6 +161,7 @@ class SafeConstructionLegBody(BaseModel):
 
     site_id: str
     input: SafeConstructionConsumerInput
+    subcontract_legal_event_id: Optional[str] = None
 
 
 class SafeBuildingConsumerInput(BaseModel):
