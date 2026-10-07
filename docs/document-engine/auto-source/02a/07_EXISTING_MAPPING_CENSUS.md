@@ -1,9 +1,10 @@
 ---
 title: Existing Mapping Table Census
 status: FROZEN
-version: 1
+version: 2
 governed_by: WO-DOC-AUTO-SRC-02A
 date: 2026-10-08
+corr: CORR-001 — document_type_mapping count 29→30; system_codes section added; equipment structure inventory added
 ---
 
 # Existing Mapping Table Census
@@ -65,7 +66,7 @@ LPG_MGR_APPOINT     → GAS-FORM-001
 |-----------|-------|
 | Table | document_type_mapping |
 | Columns | id, doc_id, doc_type, doc_detail, source_note |
-| Row count | 29 |
+| Row count | 30 |
 | Key | doc_id (catalog document ID) |
 | Value | doc_type, doc_detail |
 | Semantics | Maps catalog doc_id → doc_type + doc_detail |
@@ -73,7 +74,52 @@ LPG_MGR_APPOINT     → GAS-FORM-001
 | Writer | static seed data |
 | Relevant to projection_type | NO — maps doc_id to projection, not source_record to projection |
 
-### 2d. company_form_mapping
+### 2d. system_codes (equipment_type category)
+
+| Attribute | Value |
+|-----------|-------|
+| Table | system_codes |
+| Filter | category = 'equipment_type' |
+| Columns | code, category, name_ko, name_en (and others) |
+| Row count | 40 |
+| Key | code (numeric string: '001'–'040') |
+| Value | name_ko (Korean canonical name) |
+| Semantics | Canonical master list of equipment type codes with Korean names |
+| Consumer | equipment_assets.equipment_type_code references this master |
+| Writer | static seed / admin data |
+| Relevant to projection_type | PARTIAL — provides numeric code → Korean name mapping; code → EQUIP doc_detail mapping NOT FOUND (GAP-02B) |
+
+Sample rows:
+```
+001 = 변압기
+008 = 전동기
+011 = 펌프
+013 = 열교환기
+014 = 보일러
+021 = 크레인
+024 = 컨베이어
+025 = 승강기
+031 = 스프링클러
+032 = 자동화재탐지
+036 = 집진기
+038 = 압력용기
+040 = 기타
+```
+
+Note: 2,935 equipment_assets rows have numeric type_code values joinable to system_codes. Named uppercase codes (CRANE/PRESS/PRESSURE_VESSEL/CONVEYOR) and lowercase user-entered codes are NOT in system_codes.
+
+### 2e. Other Equipment-Related Structures (inventory — not searched as projection selectors)
+
+| Table | Note |
+|-------|------|
+| equipment_model_master | Equipment model registry; not queried as projection selector |
+| master_legal_inspection_target | Legal inspection target master; not confirmed as projection selector |
+| inspection_master | Inspection template master; not confirmed as projection selector |
+| site_equipment_sets | Site-level equipment sets; not confirmed as projection selector; linked to inspection_sets.equipment_set_id = 0/396 |
+
+These tables were identified during search scope but not confirmed to contain equipment_type → doc_detail mapping. Querying them for this mapping is reserved for GPT판정 scope.
+
+### 2f. company_form_mapping
 
 | Attribute | Value |
 |-----------|-------|
@@ -81,7 +127,7 @@ LPG_MGR_APPOINT     → GAS-FORM-001
 | Columns | (not queried) |
 | Relevant | NO — company-scoped form mapping, not inspection→projection |
 
-### 2e. form_mapping_candidate
+### 2g. form_mapping_candidate
 
 | Attribute | Value |
 |-----------|-------|
@@ -107,4 +153,10 @@ document_type_registry
 
 document_type_mapping
   = EXISTS but maps doc_id → projection (not source_record → projection)
+  = 30 rows (CORR-001: previously stated 29)
+
+system_codes(category=equipment_type)
+  = EXISTS with 40 rows (CORR-001: previously stated MASTER_NOT_FOUND)
+  = Provides numeric code → Korean name mapping
+  = Does NOT provide code → EQUIP doc_detail mapping (GAP-02B)
 ```

@@ -37,8 +37,9 @@ CHK discriminator today  = NONE
 ```
 
 Evidence:
-- `inspection_sets.inspection_category` is 78% NULL (LEGAL_ENGINE rows)
-- The canonical_writer does NOT set inspection_category
+- `inspection_sets.inspection_category`: LEGAL_ENGINE 83/395 non-null (21.0%); MANUAL 1/1 non-null
+- The canonical_writer does NOT set inspection_category (not in payload or refresh fields)
+- 83 LEGAL_ENGINE rows have category from prior write path (LEGACY_ORIGIN_UNRESOLVED)
 - No source field distinguishes "안전점검일지 (INSP)" from "점검 체크리스트 (CHK)"
 - document_type_registry explicitly notes CHK and INSP use the same source
 - CHECK_TYPE_MAP in inspection_sets_helpers.py maps obligation_type → check_type (PASS_FAIL/CHECK/DATE)
@@ -55,7 +56,7 @@ INSP vs CHK source discriminator = NO CURRENT SOURCE DISCRIMINATOR
 
 ```
 PPE candidate fields checked:
-  - inspection_category: populated for 84/396 rows (MANUAL only); no PPE-specific value confirmed
+  - inspection_category: populated for 84/396 rows (83 LEGAL_ENGINE from legacy write + 1 MANUAL); no PPE-specific value confirmed in either group
   - obligation_type: no obligation_type value maps specifically to PPE
   - inspection set source: MANUAL or LEGAL_ENGINE — does not indicate PPE
   - legal atom metadata: LEG DB schema not visible from taieng; enrichment.obligation_type carries INSPECT/ACTION/etc.

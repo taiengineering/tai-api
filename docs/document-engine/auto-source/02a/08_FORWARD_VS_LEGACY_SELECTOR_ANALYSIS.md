@@ -1,9 +1,10 @@
 ---
 title: Forward vs Legacy Selector Analysis
 status: FROZEN
-version: 1
+version: 2
 governed_by: WO-DOC-AUTO-SRC-02A
 date: 2026-10-08
+corr: CORR-001 — inspection_category LEGAL_ENGINE stats corrected; EQUIP earliest stage unfrozen (GPT DESIGN REQUIRED); equipment numeric master corrected
 ---
 
 # Forward vs Legacy Selector Analysis
@@ -30,15 +31,19 @@ These two problems are analyzed separately.
 
 ```
 Total inspection_sets = 396
-LEGAL_ENGINE rows     = 395 (inspection_category = NULL for all)
-MANUAL rows           = 1   (inspection_category = FIRE)
+LEGAL_ENGINE rows     = 395 (inspection_category: 83 non-null = LEGACY_ORIGIN_UNRESOLVED; 312 = NULL)
+MANUAL rows           = 1   (inspection_category = FIRE; obligation_type = INSPECT, LEGACY_ORIGIN_UNRESOLVED)
 
 inspection_category populated = 84/396 = 21.2%
-  These 84 rows have values like: FIRE, ELEC, SAFETY, BUILDING, HAZMAT, ENV, MACHINERY, WELFARE, INFRA, etc.
+  83 are LEGAL_ENGINE rows with values like: FIRE, ELEC, SAFETY, BUILDING, HAZMAT, ENV, MACHINERY, WELFARE, INFRA, etc.
+    Origin: canonical_writer.py does NOT set inspection_category (not in payload or _REFRESH_FIELDS)
+    These values come from a prior write path — LEGACY_ORIGIN_UNRESOLVED
+  1 is the MANUAL row (FIRE — user-provided via API)
   These values do NOT directly map to INSP/CHK/EQUIP/PPE without an explicit contract.
 
 obligation_type populated = 396/396
   Values: BEFORE_WORK (188), INSPECT (137), ACTION (54), PROHIBIT (4), APPOINT (4), REPORT (4), NOTIFY (2), DOCUMENT (1), OTHER (1)
+  MANUAL row obligation_type = INSPECT (created 2026-03-31, updated 2026-04-15; LEGACY_ORIGIN_UNRESOLVED — create_manual_set() does not write obligation_type)
   NO obligation_type value maps deterministically to INSP/CHK/EQUIP/PPE.
 ```
 
@@ -87,7 +92,7 @@ Stage 4: safety_inspection creation (fn_create_worker_inspection_record)
 
 | projection_type | Earliest possible | Requirement | Status |
 |----------------|-------------------|-------------|--------|
-| EQUIP | Stage 4 (inspection creation) | Requires asset_id in fn_create INSERT + asset→detail resolver | FORWARD_DETERMINISTIC_POSSIBLE with contract change |
+| EQUIP | GPT DESIGN REQUIRED | Requires asset_id in fn_create INSERT + asset→detail resolver (numeric code master EXISTS; code→detail mapping NOT FOUND — GAP-02B) | FORWARD_DETERMINISTIC_POSSIBLE — forward path design requires GPT판정 |
 | INSP | Stage 2 (inspection_set creation) | Requires new field in LEG enrichment OR explicit doc_projection_type on inspection_set | FORWARD_DETERMINISTIC_POSSIBLE with contract extension |
 | CHK | Stage 2 (inspection_set creation) | Same as INSP — requires discriminator field | FORWARD_DETERMINISTIC_POSSIBLE with contract extension |
 | PPE | Stage 2 (inspection_set creation) | Same as INSP — requires discriminator field | FORWARD_DETERMINISTIC_POSSIBLE with contract extension |
@@ -106,7 +111,9 @@ Required changes (Claude does NOT select these — evidence only):
 
 3. equipment_assets.equipment_type_code → EQUIP doc_detail resolver
    Required: canonical mapping table (numeric codes + named codes → FIRE/ELEC/CRANE/etc.)
-   Status: NO EXISTING MASTER (MASTER_NOT_FOUND for numeric 001-040)
+   Numeric code master: EXPLICIT_MASTER EXISTS (system_codes category=equipment_type; 40 rows; 001=변압기...040=기타)
+   Named uppercase codes (CRANE/PRESS/PRESSURE_VESSEL/CONVEYOR): NOT in system_codes (UNRESOLVED_ORIGIN)
+   Code → EQUIP doc_detail mapping: NOT FOUND (GAP-02B; GPT DESIGN REQUIRED)
 ```
 
 ### 3d. INSP/CHK/PPE forward path (specific)
@@ -162,7 +169,7 @@ Legacy rows (396 inspection_sets):
 Future rows:
   EQUIP projection_type deterministic  = FORWARD_DETERMINISTIC_POSSIBLE (requires asset_id chain + resolver)
   INSP/CHK/PPE projection_type         = FORWARD_DETERMINISTIC_POSSIBLE (requires discriminator field)
-  Earliest deterministic stage         = Stage 2 (inspection_set creation) for INSP/CHK/PPE; Stage 4 for EQUIP
+  Earliest deterministic stage         = Stage 2 (inspection_set creation) for INSP/CHK/PPE; EQUIP = GPT DESIGN REQUIRED
 
 LLM/name inference used = NO
 ```

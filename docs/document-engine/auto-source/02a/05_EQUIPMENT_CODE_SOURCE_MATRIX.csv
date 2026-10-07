@@ -1,51 +1,55 @@
-source_equipment_code,code_schema,row_count,equipment_category,master_table,master_source,canonical_name,master_status,notes
-040,numeric 001-040,800,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,Numeric codes 001-040 exist in equipment_assets; no master/lookup table found in taieng DB
-036,numeric 001-040,215,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-021,numeric 001-040,181,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-011,numeric 001-040,179,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-025,numeric 001-040,143,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-037,numeric 001-040,142,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-013,numeric 001-040,129,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-008,numeric 001-040,106,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-029,numeric 001-040,103,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-024,numeric 001-040,94,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-014,numeric 001-040,90,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-032,numeric 001-040,85,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-039,numeric 001-040,78,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-031,numeric 001-040,66,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-015,numeric 001-040,61,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-026,numeric 001-040,56,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-007,numeric 001-040,54,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-012,numeric 001-040,52,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-009,numeric 001-040,49,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-010,numeric 001-040,39,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-001,numeric 001-040,37,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-030,numeric 001-040,35,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-033,numeric 001-040,28,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-034,numeric 001-040,27,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-006,numeric 001-040,25,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-018,numeric 001-040,21,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-002,numeric 001-040,20,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-023,numeric 001-040,7,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-017,numeric 001-040,5,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-028,numeric 001-040,1,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-016,numeric 001-040,1,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
-033,numeric 001-040,1,소방설비,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,one row has equipment_category = 소방설비 but no formal master
-PRESSURE_VESSEL,named uppercase,300,MACHINE,NOT FOUND,equipment_assets.equipment_category,MACHINE,UNRESOLVED,MACHINE is not an EQUIP doc_detail; no mapping to BOILER/CRANE/etc.
-PRESS,named uppercase,300,FIRE,NOT FOUND,equipment_assets.equipment_category,FIRE,UNRESOLVED,FIRE→EQUIP FIRE? Inconsistent: PRESS equipment categorized as FIRE (likely test data)
-CRANE,named uppercase,300,ELECTRICAL,NOT FOUND,equipment_assets.equipment_category,ELECTRICAL,UNRESOLVED,CRANE equipment categorized as ELECTRICAL (suspect test data mismatch)
-CONVEYOR,named uppercase,300,TRANSPORT,NOT FOUND,equipment_assets.equipment_category,TRANSPORT,UNRESOLVED,TRANSPORT is not an EQUIP doc_detail
-NULL,NULL (type_code absent),14,HEATTREAT,NOT FOUND,equipment_assets.equipment_category,HEATTREAT,UNRESOLVED,no code at all
-NULL,NULL,2,CASTING,NOT FOUND,equipment_assets.equipment_category,CASTING,UNRESOLVED,
-NULL,NULL,2,ROLLING,NOT FOUND,equipment_assets.equipment_category,ROLLING,UNRESOLVED,
-NULL,NULL,2,MACHINERY,NOT FOUND,equipment_assets.equipment_category,MACHINERY,UNRESOLVED,
-NULL,NULL,2,FURNACE,NOT FOUND,equipment_assets.equipment_category,FURNACE,UNRESOLVED,
-paint_booth,named lowercase,2,도장,user-entered,user-entered,도장,UNRESOLVED,user-entered informal code
-welder,named lowercase,2,용접,user-entered,user-entered,용접,UNRESOLVED,
-ventilation,named lowercase,1,환기,user-entered,user-entered,환기,UNRESOLVED,
-boiler,named lowercase,1,보일러,user-entered,user-entered,보일러,UNRESOLVED,lowercase; different from BOILER doc_detail
-press_brake,named lowercase,1,성형,user-entered,user-entered,성형,UNRESOLVED,
-cutter,named lowercase,1,절단,user-entered,user-entered,절단,UNRESOLVED,
-forklift,named lowercase,1,운반하역,user-entered,user-entered,운반하역,UNRESOLVED,
-crane,named lowercase,1,양중기,user-entered,user-entered,양중기,UNRESOLVED,lowercase; different from CRANE uppercase named code
-robot,named lowercase,1,자동화,user-entered,user-entered,자동화,UNRESOLVED,
+source_equipment_code,code_schema,row_count_in_equipment_assets,canonical_name_ko,master_table,master_source,master_status,candidate_doc_detail,detail_mapping_status,notes
+001,numeric 001-040,37,변압기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,detail mapping to FIRE/ELEC/etc. requires GPT judgment
+002,numeric 001-040,20,기중차단기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+003,numeric 001-040,0,진공차단기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,code in master but 0 rows in equipment_assets
+004,numeric 001-040,0,배선용차단기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+005,numeric 001-040,0,누전차단기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+006,numeric 001-040,25,배전반,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+007,numeric 001-040,54,분전반,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+008,numeric 001-040,106,전동기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+009,numeric 001-040,49,UPS,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+010,numeric 001-040,39,비상발전기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+011,numeric 001-040,179,펌프,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+012,numeric 001-040,52,압축기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+013,numeric 001-040,129,열교환기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+014,numeric 001-040,90,보일러,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+015,numeric 001-040,61,탱크,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+016,numeric 001-040,1,밸브,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+017,numeric 001-040,5,배관,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+018,numeric 001-040,21,팬,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+019,numeric 001-040,0,냉동기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+020,numeric 001-040,0,칠러,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+021,numeric 001-040,181,크레인,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+022,numeric 001-040,0,호이스트,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+023,numeric 001-040,7,프레스,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+024,numeric 001-040,94,컨베이어,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+025,numeric 001-040,143,승강기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+026,numeric 001-040,56,에스컬레이터,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+027,numeric 001-040,0,가스탱크,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+028,numeric 001-040,1,LPG탱크,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+029,numeric 001-040,103,화학물질탱크,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+030,numeric 001-040,35,유류탱크,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+031,numeric 001-040,66,스프링클러,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+032,numeric 001-040,85,자동화재탐지,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+033,numeric 001-040,28,소화기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+034,numeric 001-040,27,소화전,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+035,numeric 001-040,0,배기시설,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+036,numeric 001-040,215,집진기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+037,numeric 001-040,142,오수처리시설,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+038,numeric 001-040,0,압력용기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+039,numeric 001-040,78,냉동기(냉각),system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+040,numeric 001-040,800,기타,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,기타 catch-all
+PRESSURE_VESSEL,named uppercase,300,PRESSURE_VESSEL,NOT FOUND,equipment_assets.equipment_type_code,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,not in system_codes; equipment_category=MACHINE (inconsistent)
+PRESS,named uppercase,300,PRESS,NOT FOUND,equipment_assets.equipment_type_code,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,equipment_category=FIRE (inconsistent — likely test data)
+CRANE,named uppercase,300,CRANE,NOT FOUND,equipment_assets.equipment_type_code,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,equipment_category=ELECTRICAL (inconsistent)
+CONVEYOR,named uppercase,300,CONVEYOR,NOT FOUND,equipment_assets.equipment_type_code,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,equipment_category=TRANSPORT
+NULL,NULL (type_code absent),14,NULL,NOT FOUND,equipment_assets.equipment_category,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,HEATTREAT/CASTING/ROLLING/MACHINERY/FURNACE
+paint_booth,named lowercase,2,도장,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,
+welder,named lowercase,2,용접,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,
+ventilation,named lowercase,1,환기,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,
+boiler,named lowercase,1,보일러,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,lowercase differs from numeric 014 보일러
+press_brake,named lowercase,1,성형,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,
+cutter,named lowercase,1,절단,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,
+forklift,named lowercase,1,운반하역,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,
+crane,named lowercase,1,양중기,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,lowercase differs from named CRANE and numeric 021 크레인
+robot,named lowercase,1,자동화,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,

@@ -1,9 +1,10 @@
 ---
 title: AUTO-SRC-02A Final Evidence
-status: COMPLETE — GPT VERIFY REQUIRED
-version: 1
+status: CORR-001 COMPLETE — GPT VERIFY REQUIRED
+version: 2
 governed_by: WO-DOC-AUTO-SRC-02A
 date: 2026-10-08
+corr: CORR-001 — inspection_category LEGAL_ENGINE 83 non-null (LEGACY_ORIGIN_UNRESOLVED); MANUAL obligation_type origin unconfirmed; system_codes numeric master EXISTS (not MASTER_NOT_FOUND); document_type_mapping 30 rows (not 29); EQUIP earliest stage unfrozen
 ---
 
 # WO-DOC-AUTO-SRC-02A RESULT
@@ -38,6 +39,9 @@ inspection_sets total           = 396
 source populated                = 396/396
 obligation_type populated       = 396/396
 inspection_category populated   = 84/396 (21.2%)
+  LEGAL_ENGINE non-null         = 83/395 (LEGACY_ORIGIN_UNRESOLVED — canonical_writer does NOT set inspection_category)
+  MANUAL non-null               = 1/1 (FIRE — user-provided via API; obligation_type = INSPECT, LEGACY_ORIGIN_UNRESOLVED)
+  LEGAL_ENGINE NULL             = 312/395
 inspection_category_code        = 0/396 (all NULL)
 
 equipment_set_id populated      = 0/396
@@ -77,7 +81,9 @@ inspection writer:
 source field ownership:
   inspection_sets.source          = canonical_writer (LEGAL_ENGINE) / queries.py (MANUAL)
   inspection_sets.obligation_type = canonical_writer from LEG enrichment.obligation_type
-  inspection_sets.inspection_category = queries.py body (MANUAL only); NOT set by canonical_writer
+                                    MANUAL row: obligation_type = INSPECT (LEGACY_ORIGIN_UNRESOLVED — create_manual_set() does NOT write obligation_type)
+  inspection_sets.inspection_category = queries.py body (MANUAL — user-provided); NOT set by canonical_writer
+                                         83/395 LEGAL_ENGINE rows have non-null value = LEGACY_ORIGIN_UNRESOLVED (prior write path; canonical_writer _REFRESH_FIELDS does not include inspection_category)
 
 asset_id chain:
   inspection_sets.equipment_set_id  = 0/396 (no writer)
@@ -120,28 +126,31 @@ forward deterministic possible:
 
 ```
 numeric code master (001-040):
-  = MASTER_NOT_FOUND
-  = No canonical lookup table in taieng DB
-  = equipment_assets has ~4,000 rows with numeric codes; no name mapping available
+  = EXPLICIT_MASTER EXISTS (CORR-001: previously stated MASTER_NOT_FOUND — error)
+  = system_codes(category=equipment_type): 40 rows; 001=변압기, 008=전동기, 011=펌프, 013=열교환기,
+    014=보일러, 021=크레인, 024=컨베이어, 025=승강기, 031=스프링클러, 038=압력용기, 040=기타 (full list)
+  = 2,935 equipment_assets rows have numeric type_code joinable to system_codes
+  = code → EQUIP doc_detail mapping: NOT FOUND (GAP-02B)
 
 named code master (CRANE/PRESS/PRESSURE_VESSEL/CONVEYOR):
-  = No formal master table
+  = No formal master table; NOT in system_codes
   = equipment_assets.equipment_category populated for ~1,200 rows
   = categories (MACHINE/FIRE/ELECTRICAL/TRANSPORT) do NOT map to EQUIP doc_detail
   = Suspected test/seed data — category values inconsistent with EQUIP detail schema
 
 lowercase user-entered codes (crane/boiler/forklift/etc.):
   = user-entered strings
-  = no formal master
-  = different values from uppercase named codes
+  = no formal master; NOT in system_codes
+  = different values from uppercase named codes and numeric codes
 
-canonical equipment code source    = NOT FOUND
-detail mapping table exists        = NO EXISTING CANONICAL MAPPING
+canonical equipment code source    = system_codes(category=equipment_type) for numeric codes
+                                     UNRESOLVED_ORIGIN for named uppercase and lowercase codes
+detail mapping table exists        = NO EXISTING CANONICAL MAPPING (code → EQUIP doc_detail)
 mapping consumer exists            = NONE CONFIRMED
 
 resolved detail candidates         = 0
-ambiguous                          = ALL (MASTER_NOT_FOUND or UNRESOLVED)
-unresolved                         = ALL numeric codes (25 distinct values sampled)
+ambiguous                          = all named + lowercase codes (UNRESOLVED_ORIGIN or INCONSISTENT_CATEGORY)
+unresolved                         = all numeric codes (name known; doc_detail mapping NOT FOUND)
 ```
 
 ---
@@ -150,7 +159,8 @@ unresolved                         = ALL numeric codes (25 distinct values sampl
 
 ```
 legacy rows deterministic           = NO
-  inspection_category NULL = 312/396 (all LEGAL_ENGINE rows)
+  inspection_category LEGAL_ENGINE NULL = 312/395 (83/395 LEGAL_ENGINE non-null = LEGACY_ORIGIN_UNRESOLVED)
+  inspection_category MANUAL non-null   = 1/1 (FIRE; obligation_type origin = LEGACY_ORIGIN_UNRESOLVED)
   obligation_type does not map to projection_type
   asset_id = 0 across all tables in chain
 
@@ -185,9 +195,14 @@ document_type_registry:
   NOT a source→projection selector
 
 document_type_mapping:
-  EXISTS (29 rows)
+  EXISTS (30 rows) (CORR-001: previously stated 29)
   Maps doc_id → doc_type + doc_detail
   NOT a source_record→projection selector
+
+system_codes(category=equipment_type):
+  EXISTS (40 rows) (CORR-001: previously stated MASTER_NOT_FOUND)
+  Maps numeric code (001-040) → Korean canonical name
+  NOT a code→EQUIP doc_detail selector (GAP-02B)
 
 existing writer for projection mapping = NONE
 existing consumer for projection mapping = NONE
@@ -209,7 +224,7 @@ code change      = 0
 ## I. FINAL
 
 ```
-AUTO-SRC-02A = COMPLETE
+AUTO-SRC-02A = CORR-001 COMPLETE
 
 GPT independent verify = REQUIRED
 
@@ -217,8 +232,53 @@ AUTO-SRC-02B (Selector Implementation) = BLOCKED
   Requires GPT판정:
     1. Projection type selector rule (INSP vs CHK vs PPE vs EQUIP)
     2. Forward write boundary (where to add discriminator field)
-    3. Equipment detail resolver (numeric code → EQUIP detail mapping)
+    3. Equipment detail resolver (numeric code → EQUIP detail mapping, GAP-02B)
     4. Legacy backfill policy (UNRESOLVED_TYPE or partial backfill)
 
 AUTO-SRC-03 = BLOCKED (GAP-03)
+```
+
+---
+
+## J. CORR-001 DELTA
+
+```
+version: 1 → 2
+corr_id: CORR-001
+
+ERROR-01 (inspection_category LEGAL_ENGINE population):
+  v1 claim: "inspection_category NULL for all LEGAL_ENGINE rows" / "LEGAL_ENGINE = MANUAL only"
+  CORR-001 fact: 83/395 LEGAL_ENGINE rows have non-null inspection_category
+                 Origin = LEGACY_ORIGIN_UNRESOLVED (canonical_writer does NOT set this field;
+                 existing values survive refresh; prior write path unknown)
+  Files corrected: 01, 02, 04, 08, 09
+
+ERROR-02 (MANUAL obligation_type writer):
+  v1 claim: obligation_type set by create_manual_set()
+  CORR-001 fact: create_manual_set() does NOT write obligation_type
+                 MANUAL row has obligation_type = INSPECT (created 2026-03-31, updated 2026-04-15)
+                 Origin = LEGACY_ORIGIN_UNRESOLVED
+  Files corrected: 01, 09
+
+ERROR-03 (numeric equipment code master):
+  v1 claim: numeric 001-040 = MASTER_NOT_FOUND; no canonical lookup table in taieng DB
+  CORR-001 fact: system_codes(category=equipment_type) EXISTS with 40 rows
+                 Maps numeric codes 001-040 → Korean canonical names
+                 2,935 equipment_assets joinable to system_codes
+                 Remaining gap = code → EQUIP doc_detail mapping (GAP-02B; NOT FOUND)
+  Files corrected: 05 (COMPLETE REWRITE), 06, 07, 08, 09
+
+ERROR-04 (document_type_mapping count):
+  v1 claim: 29 rows
+  CORR-001 fact: 30 rows
+  Files corrected: 07, 09
+
+ERROR-05 (EQUIP earliest deterministic stage freeze):
+  v1 claim: "EQUIP earliest deterministic stage = Stage 4" (frozen as fact)
+  CORR-001 fact: This is a design decision requiring GPT판정; not a frozen factual finding
+  Files corrected: 08, 09
+
+DB write     = 0
+Code change  = 0
+Migration    = 0
 ```

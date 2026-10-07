@@ -1,19 +1,19 @@
 source_equipment_code,source_equipment_category,master_source,master_name,candidate_doc_detail,mapping_basis,mapping_status,gpt_review_required
-040,NULL,MASTER_NOT_FOUND,UNKNOWN,(none),NO_BASIS,UNRESOLVED,YES
-036,NULL,MASTER_NOT_FOUND,UNKNOWN,(none),NO_BASIS,UNRESOLVED,YES
-021,NULL,MASTER_NOT_FOUND,UNKNOWN,(none),NO_BASIS,UNRESOLVED,YES
-011,NULL,MASTER_NOT_FOUND,UNKNOWN,(none),NO_BASIS,UNRESOLVED,YES
-025,NULL,MASTER_NOT_FOUND,UNKNOWN,(none),NO_BASIS,UNRESOLVED,YES
-037,NULL,MASTER_NOT_FOUND,UNKNOWN,(none),NO_BASIS,UNRESOLVED,YES
-013,NULL,MASTER_NOT_FOUND,UNKNOWN,(none),NO_BASIS,UNRESOLVED,YES
-008,NULL,MASTER_NOT_FOUND,UNKNOWN,(none),NO_BASIS,UNRESOLVED,YES
-029,NULL,MASTER_NOT_FOUND,UNKNOWN,(none),NO_BASIS,UNRESOLVED,YES
-024,NULL,MASTER_NOT_FOUND,UNKNOWN,(none),NO_BASIS,UNRESOLVED,YES
-014,NULL,MASTER_NOT_FOUND,UNKNOWN,(none),NO_BASIS,UNRESOLVED,YES
-PRESSURE_VESSEL,MACHINE,equipment_assets.equipment_category,MACHINE,(none),CATEGORY_DOES_NOT_MAP_TO_DETAIL,UNRESOLVED,YES — MACHINE category not an EQUIP doc_detail
-PRESS,FIRE,equipment_assets.equipment_category,FIRE,(none),INCONSISTENT,UNRESOLVED,YES — PRESS equipment labeled FIRE (test data mismatch suspected)
-CRANE,ELECTRICAL,equipment_assets.equipment_category,ELECTRICAL,(none),INCONSISTENT,UNRESOLVED,YES — CRANE labeled ELECTRICAL (mismatch)
-CONVEYOR,TRANSPORT,equipment_assets.equipment_category,TRANSPORT,(none),CATEGORY_DOES_NOT_MAP_TO_DETAIL,UNRESOLVED,YES — TRANSPORT not an EQUIP doc_detail
+040,NULL,system_codes(category=equipment_type),기타,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
+036,NULL,system_codes(category=equipment_type),집진기,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
+021,NULL,system_codes(category=equipment_type),크레인,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
+011,NULL,system_codes(category=equipment_type),펌프,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
+025,NULL,system_codes(category=equipment_type),승강기,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
+037,NULL,system_codes(category=equipment_type),오수처리시설,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
+013,NULL,system_codes(category=equipment_type),열교환기,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
+008,NULL,system_codes(category=equipment_type),전동기,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
+029,NULL,system_codes(category=equipment_type),화학물질탱크,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
+024,NULL,system_codes(category=equipment_type),컨베이어,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
+014,NULL,system_codes(category=equipment_type),보일러,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
+PRESSURE_VESSEL,MACHINE,equipment_assets.equipment_category,MACHINE,(none),INCONSISTENT_CATEGORY,UNRESOLVED,YES — MACHINE category not an EQUIP doc_detail
+PRESS,FIRE,equipment_assets.equipment_category,FIRE,(none),INCONSISTENT_CATEGORY,UNRESOLVED,YES — PRESS equipment labeled FIRE (test data mismatch suspected)
+CRANE,ELECTRICAL,equipment_assets.equipment_category,ELECTRICAL,(none),INCONSISTENT_CATEGORY,UNRESOLVED,YES — CRANE labeled ELECTRICAL (mismatch)
+CONVEYOR,TRANSPORT,equipment_assets.equipment_category,TRANSPORT,(none),INCONSISTENT_CATEGORY,UNRESOLVED,YES — TRANSPORT not an EQUIP doc_detail
 boiler,보일러,user-entered,보일러,(none),USER_ENTERED,UNRESOLVED,YES — lowercase code; no formal master
 crane,양중기,user-entered,양중기,(none),USER_ENTERED,UNRESOLVED,YES — lowercase differs from named CRANE
 forklift,운반하역,user-entered,운반하역,(none),USER_ENTERED,UNRESOLVED,YES

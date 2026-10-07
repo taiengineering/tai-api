@@ -51,9 +51,13 @@ Read Model (on-demand)
 | status_code | "PENDING_ANCHOR" |
 | is_active | true |
 
-**Fields NOT set by canonical_writer:**
+**Fields NOT set by canonical_writer (new rows or refresh):**
 ```
-inspection_category        = NOT SET (NULL for all LEGAL_ENGINE rows)
+inspection_category        = NOT SET by canonical_writer
+                             Production: 83/395 LEGAL_ENGINE rows have non-null value
+                             Origin of existing values: LEGACY_ORIGIN_UNRESOLVED
+                             (canonical_writer.py _REFRESH_FIELDS does not include inspection_category;
+                             existing values are preserved on refresh, not overwritten)
 inspection_category_code   = NOT SET
 equipment_set_id           = NOT SET
 site_equipment_set_id      = NOT SET
@@ -64,7 +68,10 @@ asset_id                   = NOT SET (column does not exist on inspection_sets)
 **MANUAL path:** `services/inspection_sets_svc/queries.py` `create_manual_set()`
 - `inspection_category` = body.inspection_category (user-provided via API)
 - `source` = "MANUAL"
-- All other fields same shape
+- `obligation_type` = NOT set by create_manual_set() INSERT
+- Production MANUAL row has obligation_type=INSPECT (created 2026-03-31, updated 2026-04-15)
+  → origin unresolved: may be legacy writer, direct DB update, or separate API path
+  → current obligation_type writer for MANUAL rows = NOT CONFIRMED (LEGACY_ORIGIN_UNRESOLVED)
 
 ---
 
@@ -121,7 +128,7 @@ safety_inspections.asset_id = NOT SET by fn_create_worker_inspection_record
 |-------|-------|--------|--------------------|
 | source | inspection_sets | canonical_writer / queries.py | 396/396 |
 | obligation_type | inspection_sets | canonical_writer (from LEG enrichment) | 396/396 |
-| inspection_category | inspection_sets | queries.py (MANUAL only / user input) | 84/396 (21.2%) |
+| inspection_category | inspection_sets | LEGACY_ORIGIN_UNRESOLVED (canonical_writer: NOT SET; existing values in 83 LEGAL_ENGINE rows from unknown prior write) | 84/396 (21.2%) |
 | inspection_category_code | inspection_sets | NO WRITER | 0/396 |
 | equipment_set_id | inspection_sets | NO WRITER | 0/396 |
 | site_equipment_set_id | inspection_sets | NO WRITER | 0/396 |
@@ -135,9 +142,11 @@ safety_inspections.asset_id = NOT SET by fn_create_worker_inspection_record
 
 ```
 inspection_sets.inspection_category
-  = user-provided label (MANUAL) or NULL (LEGAL_ENGINE)
-  = NOT derived from legal obligation metadata
-  = NOT a projection_type selector today
+  = NOT SET by canonical_writer (any source path)
+  = NOT in canonical_writer refresh fields → existing values survive refresh
+  = 83/395 LEGAL_ENGINE rows have non-null value (LEGACY_ORIGIN_UNRESOLVED)
+  = 1/1 MANUAL row has non-null value (user-provided via API or legacy update)
+  = NOT a projection_type selector today (no explicit canonical mapping contract)
 
 work_schedules.form_code
   = column exists, schema nullable text
