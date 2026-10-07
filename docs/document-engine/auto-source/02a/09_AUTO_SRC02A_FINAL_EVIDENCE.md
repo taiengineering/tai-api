@@ -1,10 +1,10 @@
 ---
 title: AUTO-SRC-02A Final Evidence
-status: CORR-002 COMPLETE — GPT VERIFY REQUIRED
-version: 3
+status: CLOSED FINAL / GPT PASS / 100%
+version: 4
 governed_by: WO-DOC-AUTO-SRC-02A
 date: 2026-10-08
-corr: CORR-002 — alias canonicalizer + registry + historical SQL; uppercase=EXPLICIT_LEGACY_ALIAS; lowercase=LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED; INSP/CHK/PPE Stage 2 freeze removed; all projection earliest boundary = GPT DESIGN REQUIRED; numeric row counts corrected (007/019/027/033/040); GAP-02 split into 02A/02B/02C
+closed: CORR-003 PASS — GAP numbering, lowercase wording, all projection boundaries GPT DESIGN REQUIRED
 ---
 
 # WO-DOC-AUTO-SRC-02A RESULT
@@ -257,9 +257,9 @@ code change      = 0
 ## I. FINAL
 
 ```
-AUTO-SRC-02A = CORR-002 COMPLETE
+AUTO-SRC-02A = CLOSED FINAL / GPT PASS / 100%
 
-GPT independent verify = REQUIRED
+GPT independent verify = PASS (CORR-003)
 
 AUTO-SRC-02B (Selector Implementation) = BLOCKED
   Requires GPT판정:
