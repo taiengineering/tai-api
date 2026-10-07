@@ -656,3 +656,75 @@ def test_c2c2_16_signature_inactive_field_rejected(monkeypatch):
         assert False, "expected SignatureError"
     except SignatureError as e:
         assert "not found in schema" in str(e)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# MIG-01 ~ MIG-08  Static migration contract tests
+# Read the migration file as text; assert/deny specific tokens.
+# These tests do NOT run SQL — they verify the migration text is correct.
+# ════════════════════════════════════════════════════════════════════════
+
+_MIG_FILE = ROOT / "supabase" / "migrations" / "20261007131755_document_c2c2_active_child_correction.sql"
+
+
+def _mig_sql():
+    return _MIG_FILE.read_text(encoding="utf-8")
+
+
+# MIG-01: migration file exists at expected path
+def test_mig_01_file_exists():
+    assert _MIG_FILE.exists(), f"migration file not found: {_MIG_FILE}"
+
+
+# MIG-02: BLOCKER-1 fixed — APPROVED_FOR_RUNTIME_USE absent
+def test_mig_02_approved_for_runtime_use_absent():
+    assert "APPROVED_FOR_RUNTIME_USE" not in _mig_sql(), \
+        "BLOCKER-1: APPROVED_FOR_RUNTIME_USE must not appear (invalid status for document_schema_candidate)"
+
+
+# MIG-03: BLOCKER-2 fixed — rf.is_mandatory absent (column does not exist on runtime_field)
+def test_mig_03_rf_is_mandatory_absent():
+    assert "rf.is_mandatory" not in _mig_sql(), \
+        "BLOCKER-2: rf.is_mandatory is not a column on runtime_field; use field_candidate.is_mandatory"
+
+
+# MIG-04: BLOCKER-3 fixed — updated_at absent (no such column on child tables)
+def test_mig_04_updated_at_absent():
+    assert "updated_at" not in _mig_sql(), \
+        "BLOCKER-3: runtime_field/runtime_checklist_item/runtime_evidence_field have no updated_at column"
+
+
+# MIG-05: BLOCKER-4 fixed — old audit column name row_id absent
+def test_mig_05_old_audit_row_id_absent():
+    assert "row_id" not in _mig_sql(), \
+        "BLOCKER-4: wrong audit column 'row_id' must not appear; correct column is 'target_id'"
+
+
+# MIG-06: P0 scope uses document_type_mapping join with correct doc_type values
+def test_mig_06_document_type_mapping_present():
+    sql = _mig_sql()
+    assert "document_type_mapping" in sql, \
+        "P0 target must use document_type_mapping join"
+    assert "'EQUIP'" in sql and "'INSP'" in sql and "'CHK'" in sql and "'TBM'" in sql and "'PPE'" in sql, \
+        "P0 doc_type filter must include EQUIP, INSP, CHK, TBM, PPE"
+
+
+# MIG-07: field_candidate join present for required_status derivation
+def test_mig_07_field_candidate_is_mandatory_present():
+    sql = _mig_sql()
+    assert "field_candidate" in sql, \
+        "required_status derivation requires reference to field_candidate"
+    assert "fc.is_mandatory" in sql, \
+        "required_status must be derived from fc.is_mandatory (field_candidate alias fc)"
+
+
+# MIG-08: correct audit columns present; old wrong column names absent
+def test_mig_08_correct_audit_columns():
+    sql = _mig_sql()
+    assert "target_table" in sql, "audit INSERT must use 'target_table'"
+    assert "target_id" in sql, "audit INSERT must use 'target_id'"
+    assert "changed_by" in sql, "audit INSERT must use 'changed_by'"
+    assert "table_name" not in sql, \
+        "BLOCKER-4: wrong audit column 'table_name' must not appear"
+    assert "changed_at" not in sql, \
+        "BLOCKER-4: wrong audit column 'changed_at' must not appear; use 'created_at'"
