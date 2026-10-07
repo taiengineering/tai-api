@@ -448,7 +448,7 @@ def test_c26_failed_membership_isolated_from_history(apply_on):
     failed_only = set(store.cases) - hist_after
     assert failed_only
     assert all(cid not in hist_after for cid in failed_only)
-    src = inspect.getsource(sync_mod.sync_csi_accidents)
+    src = inspect.getsource(sync_mod._sync_csi_bytes)
     assert src.find("insert_running_snapshot") < src.find("upsert_cases")
     assert src.find("insert_running_snapshot") < src.find("insert_membership")
 

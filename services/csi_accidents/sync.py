@@ -208,16 +208,26 @@ def _reject(code: str, message: str, dry_run: bool) -> SyncResult:
     )
 
 
-def sync_csi_accidents(
-    *,
+def _sync_csi_bytes(
     data: bytes,
-    filename: str = OFFICIAL_FILENAME,
+    filename: str,
+    *,
+    effective_date: str,
+    download_url: str,
+    declared_rows: Optional[int] = None,
+    dataset_id: str = DATASET_ID,
     dry_run: bool = True,
     store: Any = None,
     now: Optional[datetime] = None,
     uuid_fn=None,
-    skip_file_pin: bool = False,
 ) -> SyncResult:
+    """Parametrized ingest core. Called by both the legacy baseline path and the
+    dynamic refresh path. Callers are responsible for pre-validating the file
+    before calling this (e.g. assert_file_contract for the static baseline).
+
+    declared_rows=None means the portal did not declare a row count; the
+    persisted value will be parsed_rows (PARSED_FALLBACK).
+    """
     extra = {
         "storage": storage_report(),
         "graph_writes_open": GRAPH_WRITES_OPEN,
@@ -228,18 +238,21 @@ def sync_csi_accidents(
     }
     if not GRAPH_WRITES_OPEN:
         extra["graph_write_path"] = "CLOSED"
+
     try:
-        if not skip_file_pin:
-            assert_file_contract(data, filename=filename)
         digest = file_sha256(data)
         parsed = parse_official_bytes(data)
         rows = [normalize_row(raw, i) for i, raw in enumerate(parsed.rows, start=1)]
         parsed_n = len(rows)
-        mismatch = parsed_n != DECLARED_ROWS
         if parsed.headers != list(OFFICIAL_HEADERS) or len(parsed.headers) != HEADER_COUNT:
             raise CsiSyncError("HEADER_MISMATCH", "header identity failed")
     except CsiSyncError as e:
         return _reject(e.code, e.message, dry_run)
+
+    # Resolve declared_rows: None means portal count unavailable → use parsed_rows
+    declared_rows_value = parsed_n if declared_rows is None else declared_rows
+    declared_rows_source = "PARSED_FALLBACK" if declared_rows is None else "PORTAL"
+    mismatch = parsed_n != declared_rows_value
 
     if store is None:
         store = MemoryCsiStore()
@@ -251,12 +264,14 @@ def sync_csi_accidents(
             ("filename", filename),
             ("bytes", len(data)),
             ("encoding", SOURCE_ENCODING),
-            ("declared_rows", DECLARED_ROWS),
-            ("dataset_id", DATASET_ID),
-            ("effective_date", DATASET_EFFECTIVE_DATE),
+            ("dataset_id", dataset_id),
+            ("effective_date", effective_date),
         ):
             if existing.get(key) not in (None, val) and existing.get(key) != val:
                 conflict.append(key)
+        existing_declared = existing.get("declared_rows")
+        if existing_declared not in (None, declared_rows_value) and existing_declared != declared_rows_value:
+            conflict.append("declared_rows")
         if existing.get("parsed_rows") not in (None, parsed_n) and existing.get("parsed_rows") != parsed_n:
             conflict.append("parsed_rows")
         if conflict:
@@ -277,11 +292,12 @@ def sync_csi_accidents(
     result = SyncResult(
         status="VALIDATED",
         dry_run=dry_run,
+        dataset_id=dataset_id,
         filename=filename,
         bytes=len(data),
         file_sha256=digest,
         encoding=SOURCE_ENCODING,
-        declared_rows=DECLARED_ROWS,
+        declared_rows=declared_rows_value,
         parsed_rows=parsed_n,
         row_count_mismatch=mismatch,
         malformed_rows=parsed.malformed_rows,
@@ -298,7 +314,8 @@ def sync_csi_accidents(
     )
     extra["collision_fingerprint_ids"] = id_stats["collision_fingerprints"]
     extra["row_count_mismatch_recorded"] = mismatch
-    extra["declared_vs_parsed"] = {"declared": DECLARED_ROWS, "parsed": parsed_n}
+    extra["declared_vs_parsed"] = {"declared": declared_rows_value, "parsed": parsed_n}
+    extra["declared_rows_source"] = declared_rows_source
     extra["history_source"] = "COMPLETED_SNAPSHOTS_ONLY"
 
     if dry_run:
@@ -325,24 +342,22 @@ def sync_csi_accidents(
 
     clock = now or now_kst()
     now_s = serialize_business_datetime(clock)
-    snapshot_id = str(uuid.uuid4())
+    snapshot_id = str(uuid.uuid4()) if uuid_fn is None else str(uuid_fn())
     running = {
         "id": snapshot_id,
         "status": "RUNNING",
-        "dataset_id": DATASET_ID,
-        "effective_date": DATASET_EFFECTIVE_DATE,
+        "dataset_id": dataset_id,
+        "effective_date": effective_date,
         "filename": filename,
         "bytes": len(data),
         "file_sha256": digest,
         "encoding": SOURCE_ENCODING,
-        "declared_rows": DECLARED_ROWS,
+        "declared_rows": declared_rows_value,
         "parsed_rows": parsed_n,
         "row_count_mismatch": mismatch,
         "header_count": HEADER_COUNT,
-        "download_url": DOWNLOAD_URL,
-        "proposed_raw_object_key": proposed_object_key(
-            DATASET_EFFECTIVE_DATE, digest, filename
-        ),
+        "download_url": download_url,
+        "proposed_raw_object_key": proposed_object_key(effective_date, digest, filename),
         "r2_written": False,
         "started_at": now_s,
         "completed_at": None,
@@ -377,10 +392,41 @@ def sync_csi_accidents(
     return result
 
 
+def sync_csi_accidents(
+    *,
+    data: bytes,
+    filename: str = OFFICIAL_FILENAME,
+    dry_run: bool = True,
+    store: Any = None,
+    now: Optional[datetime] = None,
+    uuid_fn=None,
+    skip_file_pin: bool = False,
+) -> SyncResult:
+    try:
+        if not skip_file_pin:
+            assert_file_contract(data, filename=filename)
+    except CsiSyncError as e:
+        return _reject(e.code, e.message, dry_run)
+
+    return _sync_csi_bytes(
+        data,
+        filename,
+        effective_date=DATASET_EFFECTIVE_DATE,
+        download_url=DOWNLOAD_URL,
+        declared_rows=DECLARED_ROWS,
+        dry_run=dry_run,
+        store=store,
+        now=now,
+        uuid_fn=uuid_fn,
+    )
+
+
 __all__ = [
     "SyncResult",
     "SupabaseCsiStore",
     "sync_csi_accidents",
+    "_sync_csi_bytes",
     "download_official_csv",
     "assert_file_contract",
+    "file_sha256",
 ]

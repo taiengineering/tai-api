@@ -208,6 +208,11 @@ def _parse_attachment(url: str) -> tuple[str, str]:
     return attachment_id, file_detail_sn
 
 
+def parse_download_identity(url: str) -> tuple[str, str]:
+    """Public: extract (attachment_id, file_detail_sn) from a data.go.kr download URL."""
+    return _parse_attachment(url)
+
+
 # ─── Public API ───────────────────────────────────────────────────────────────
 
 def discover_latest_artifact(
@@ -356,4 +361,5 @@ __all__ = [
     "DiscoveryError",
     "DiscoveryResult",
     "discover_latest_artifact",
+    "parse_download_identity",
 ]
