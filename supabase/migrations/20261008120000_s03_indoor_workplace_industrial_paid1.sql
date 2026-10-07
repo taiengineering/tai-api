@@ -28,9 +28,9 @@ INSERT INTO public.diagnosis_input_fields (
   unit, is_required, help_text, sort_order, is_active, visibility_condition
 ) VALUES (
   'INDUSTRIAL', 'PAID1', '작업장 환경', 'indoor_workplace',
-  '현재 사업장이 옥내작업장에 해당합니까?', 'boolean',
+  '현재 진단 대상 작업장은 옥내작업장에 해당합니까?', 'boolean',
   NULL, false,
-  '「산업안전보건기준에 관한 규칙」 제19조(경보설비의 설치). 지붕·벽으로 구획된 실내 작업 공간.',
+  '「산업안전보건기준에 관한 규칙」 제19조의 ''옥내작업장'' 해당 여부를 확인합니다.',
   850, true, NULL
 )
 ON CONFLICT (sector, tier, field_code) DO NOTHING;
