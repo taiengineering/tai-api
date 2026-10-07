@@ -690,7 +690,7 @@ BEGIN
       'internal_indexnow_delivery_retry_failed',
       'internal_indexnow_baseline_verify'
     );
-  IF v_count < 11 THEN
-    RAISE EXCEPTION 'POST FAIL: expected >= 11 RPCs in public schema, found %', v_count;
+  IF v_count != 12 THEN
+    RAISE EXCEPTION 'POST FAIL: expected exactly 12 RPCs in public schema, found %', v_count;
   END IF;
 END $check_post$;
