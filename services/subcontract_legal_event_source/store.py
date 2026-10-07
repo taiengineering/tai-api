@@ -124,12 +124,26 @@ def update_draft(sb, event_id: str, body: Dict) -> Dict:
     return r.data[0]
 
 
+def _parse_timestamp_or_none(ts: Optional[str]) -> Optional[datetime]:
+    if not ts or not isinstance(ts, str):
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def _validate_for_confirm(event: Dict) -> None:
     """Confirm pre-conditions. Raises 422 (HTTPException) if required fields missing."""
     etype = event["event_type"]
+    now = datetime.now(timezone.utc)
 
     if not event.get("occurred_at"):
         raise HTTPException(422, "occurred_at 필수")
+    occurred_dt = _parse_timestamp_or_none(event.get("occurred_at"))
+    if occurred_dt is not None and occurred_dt > now:
+        raise HTTPException(422, "occurred_at이 미래 시각입니다.")
+
     if not event.get("obligated_actor_company_id"):
         raise HTTPException(422, "obligated_actor_company_id 필수 (actor company 권원 미확인 시 CONFIRM 불가)")
 
@@ -156,18 +170,18 @@ def _validate_for_confirm(event: Dict) -> None:
             raise HTTPException(422, "notice_type 필수 (ART37_E)")
         if not event.get("notice_received_at"):
             raise HTTPException(422, "notice_received_at 필수 (ART37_E)")
-        nr = event["notice_received_at"]
-        if isinstance(nr, str):
-            try:
-                nr_dt = datetime.fromisoformat(nr.replace("Z", "+00:00"))
-                if nr_dt > datetime.now(timezone.utc):
-                    raise HTTPException(422, "notice_received_at이 미래 시각입니다.")
-            except ValueError:
-                pass
+        if not event.get("evidence_ref"):
+            raise HTTPException(422, "evidence_ref 필수 (ART37_E)")
+        nr_dt = _parse_timestamp_or_none(event.get("notice_received_at"))
+        if nr_dt is not None and nr_dt > now:
+            raise HTTPException(422, "notice_received_at이 미래 시각입니다.")
 
     elif etype == "ART37_INSPECTION_COMPLETED_AS_DESIGNED":
         if not event.get("inspection_completed_at"):
             raise HTTPException(422, "inspection_completed_at 필수 (ART37_F)")
+        ic_dt = _parse_timestamp_or_none(event.get("inspection_completed_at"))
+        if ic_dt is not None and ic_dt > now:
+            raise HTTPException(422, "inspection_completed_at이 미래 시각입니다.")
         if not event.get("design_conformance_confirmed"):
             raise HTTPException(422, "design_conformance_confirmed=true 필수 (ART37_F)")
         if not event.get("notice_event_id"):
@@ -218,8 +232,8 @@ def confirm_event(sb, event_id: str) -> Dict:
 
 def void_event(sb, event_id: str) -> Dict:
     event = get_event(sb, event_id)
-    if event["status"] == "VOID":
-        raise HTTPException(409, "이미 VOID 상태입니다.")
+    if event["status"] != "CONFIRMED":
+        raise HTTPException(409, f"CONFIRMED 상태만 VOID 가능합니다. 현재: {event['status']}")
     patch = {
         "status": "VOID",
         "voided_at": datetime.now(timezone.utc).isoformat(),
@@ -229,3 +243,43 @@ def void_event(sb, event_id: str) -> Dict:
     if not r.data:
         raise HTTPException(500, "VOID 실패")
     return r.data[0]
+
+
+def get_event_exact(sb, *, site_id: str, subcontractor_id: str, event_id: str) -> Dict:
+    """Exact-binding event fetch: event_id + site_id + subcontractor_id must all match.
+
+    Raises 404 if not found or if any of the three identifiers do not match.
+    """
+    r = (
+        sb.table(TABLE)
+        .select("*")
+        .eq("id", event_id)
+        .eq("site_id", site_id)
+        .eq("subcontractor_id", subcontractor_id)
+        .limit(1)
+        .execute()
+    )
+    if not r.data:
+        raise HTTPException(404, "이벤트를 찾을 수 없습니다.")
+    return r.data[0]
+
+
+def load_confirmed_subcontract_legal_event_context(
+    sb,
+    *,
+    site_id: str,
+    subcontractor_id: str,
+    event_id: str,
+) -> Optional[Dict]:
+    """Exact-object eligibility: event_id + site_id + subcontractor_id + status=CONFIRMED.
+
+    Returns the event row if all four conditions match; returns None otherwise.
+    Never raises — caller decides what to do with None.
+    """
+    try:
+        event = get_event_exact(sb, site_id=site_id, subcontractor_id=subcontractor_id, event_id=event_id)
+    except Exception:
+        return None
+    if event.get("status") != "CONFIRMED":
+        return None
+    return event

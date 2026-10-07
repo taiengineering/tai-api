@@ -205,6 +205,7 @@ def run_safe_construction_leg(
     site_id: str,
     consumer_input,
     subcontract_legal_event_id: Optional[str] = None,
+    subcontractor_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """SAFE CONSTRUCTION 공식 LEG 진단. full_result 반환(저장/결제/factory 생성 없음)."""
     # A. asset canonical (assembler, READ ONLY) — site↔factory bridge 포함.
@@ -250,28 +251,30 @@ def run_safe_construction_leg(
         unresolved.discard(field)
 
     # B-prime-prime-prime. Subcontract legal event facts (S02-L2, EXISTING_SOURCE_FACT)
-    if subcontract_legal_event_id:
-        from services.subcontract_legal_event_source.store import get_event
+    # Exact-object eligibility: event_id + site_id + subcontractor_id + status=CONFIRMED.
+    # Both subcontract_legal_event_id and subcontractor_id required (co-presence enforced
+    # at schema layer). Missing = no event facts (canonical facts stay ABSENT).
+    if subcontract_legal_event_id and subcontractor_id:
+        from services.subcontract_legal_event_source.store import (
+            load_confirmed_subcontract_legal_event_context,
+        )
         from services.subcontract_legal_event_source.canonical_adapter import (
             project_confirmed_event, get_event_provenance
         )
-        try:
-            event_row = get_event(supabase, subcontract_legal_event_id)
-            # Identity check: event must belong to same site
-            if str(event_row.get("site_id", "")) != str(site_id):
-                # Wrong site — fail-closed: do not merge
-                pass
-            else:
-                event_facts = project_confirmed_event(event_row)
-                if event_facts:
-                    prov = get_event_provenance(event_row)
-                    for field, val in event_facts.items():
-                        values[field] = val
-                        provenance[field] = prov
-                        unresolved.discard(field)
-        except Exception:
-            # DB error = fail-closed (do not silently ignore with empty)
-            raise
+        event_row = load_confirmed_subcontract_legal_event_context(
+            supabase,
+            site_id=site_id,
+            subcontractor_id=subcontractor_id,
+            event_id=subcontract_legal_event_id,
+        )
+        if event_row is not None:
+            event_facts = project_confirmed_event(event_row)
+            if event_facts:
+                prov = get_event_provenance(event_row)
+                for field, val in event_facts.items():
+                    values[field] = val
+                    provenance[field] = prov
+                    unresolved.discard(field)
 
     # C. WO-010 STEP-2C : canonical27 final-cut 제거. TARGET_FIELDS / RUNTIME_INPUT_FIELDS 는
     #    assembler 의 source contract 로 계속 import(unresolved_fields 반환용) — 계약 파일 delta 0.

@@ -83,6 +83,20 @@ ALTER TABLE construction_subcontract_legal_events
         notice_type IS NULL OR notice_type IN ('COMPLETION', 'PROGRESS')
     );
 
+-- Lifecycle timestamp constraints: confirmed_at populated iff CONFIRMED; voided_at populated iff VOID
+ALTER TABLE construction_subcontract_legal_events
+    ADD CONSTRAINT csle_confirmed_at_lifecycle CHECK (
+        (status = 'CONFIRMED') = (confirmed_at IS NOT NULL)
+    );
+
+ALTER TABLE construction_subcontract_legal_events
+    ADD CONSTRAINT csle_voided_at_lifecycle CHECK (
+        (status = 'VOID') = (voided_at IS NOT NULL)
+    );
+
+-- Row Level Security
+ALTER TABLE construction_subcontract_legal_events ENABLE ROW LEVEL SECURITY;
+
 -- Performance indexes
 CREATE INDEX csle_site_sub_status_idx ON construction_subcontract_legal_events(site_id, subcontractor_id, status);
 CREATE INDEX csle_tenant_idx ON construction_subcontract_legal_events(tenant_company_id);

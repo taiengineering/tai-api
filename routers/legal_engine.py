@@ -214,7 +214,13 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
     if not leg_runtime_client.is_enabled():                   # LEG availability (TAI fallback 금지)
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
     try:
-        out = run_safe_construction_leg(supabase, body.site_id, body.input, subcontract_legal_event_id=body.subcontract_legal_event_id)
+        out = run_safe_construction_leg(
+            supabase,
+            body.site_id,
+            body.input,
+            subcontract_legal_event_id=body.subcontract_legal_event_id,
+            subcontractor_id=body.subcontractor_id,
+        )
     except ConstructionSiteBridgeError as e:
         raise HTTPException(status_code=409, detail=str(e))    # site↔factory 미연결 fail-closed
     except EquipmentSourceLoadError as e:

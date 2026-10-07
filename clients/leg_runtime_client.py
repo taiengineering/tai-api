@@ -417,6 +417,15 @@ _LEG_INPUT_FIELDS = (
     "leads_and_manages_construction_execution",
     "recontracts_received_construction_work",
     "same_site_contracted_construction_work_count",
+    # WO-LFR-OBJ-S02-L2: subcontract legal event canonical facts.
+    # EXISTING_SOURCE_FACT via project_confirmed_event. Never emitted False.
+    # Missing → OMIT (UNKNOWN). No alias/derivation.
+    "subcontract_legal_actor_role",
+    "art35_direct_payment_confirmation_required",
+    "art35_direct_payment_basis_type",
+    "art36_contract_adjustment_direction",
+    "art37_completion_or_progress_notice_received",
+    "art37_inspection_completed_as_designed",
 )
 
 # WO-FIX-BUILDFACILITY-SECTOR-GATE-001: WIRING-016 append BUILDING N1 raw primitive 32축.

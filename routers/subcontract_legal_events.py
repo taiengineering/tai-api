@@ -18,6 +18,7 @@ from services.subcontract_legal_event_source.store import (
     update_draft,
     confirm_event,
     void_event,
+    get_event_exact,
 )
 
 router = APIRouter(
@@ -112,6 +113,11 @@ async def patch_legal_event(
 ) -> Dict[str, Any]:
     sb = get_supabase()
     _ensure_sub_own(sb, subcontractor_id, current)
+    sub_r = sb.table("subcontractors").select("site_id").eq("id", str(subcontractor_id)).limit(1).execute()
+    if not sub_r.data:
+        raise HTTPException(404, "하도급업체를 찾을 수 없습니다.")
+    site_id = str(sub_r.data[0]["site_id"])
+    get_event_exact(sb, site_id=site_id, subcontractor_id=str(subcontractor_id), event_id=str(event_id))
     row = update_draft(sb, event_id=str(event_id), body=body.model_dump(exclude_none=True))
     return {"status": "success", "data": row}
 
@@ -125,6 +131,11 @@ async def confirm_legal_event(
 ) -> Dict[str, Any]:
     sb = get_supabase()
     _ensure_sub_own(sb, subcontractor_id, current)
+    sub_r = sb.table("subcontractors").select("site_id").eq("id", str(subcontractor_id)).limit(1).execute()
+    if not sub_r.data:
+        raise HTTPException(404, "하도급업체를 찾을 수 없습니다.")
+    site_id = str(sub_r.data[0]["site_id"])
+    get_event_exact(sb, site_id=site_id, subcontractor_id=str(subcontractor_id), event_id=str(event_id))
     row = confirm_event(sb, event_id=str(event_id))
     return {"status": "success", "data": row}
 
@@ -138,5 +149,10 @@ async def void_legal_event(
 ) -> Dict[str, Any]:
     sb = get_supabase()
     _ensure_sub_own(sb, subcontractor_id, current)
+    sub_r = sb.table("subcontractors").select("site_id").eq("id", str(subcontractor_id)).limit(1).execute()
+    if not sub_r.data:
+        raise HTTPException(404, "하도급업체를 찾을 수 없습니다.")
+    site_id = str(sub_r.data[0]["site_id"])
+    get_event_exact(sb, site_id=site_id, subcontractor_id=str(subcontractor_id), event_id=str(event_id))
     row = void_event(sb, event_id=str(event_id))
     return {"status": "success", "data": row}
