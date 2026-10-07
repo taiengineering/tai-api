@@ -53,7 +53,11 @@ class KoshaIncrementalAdapter(SourceAdapter):
 
         since: str | None = None
         if self._get_since_fn is not None:
-            since = self._get_since_fn(self._log_target)
+            try:
+                since = self._get_since_fn(self._log_target)
+            except Exception as exc:
+                error_code = getattr(exc, "code", None) or type(exc).__name__
+                return self._fail(ctx, error_code)
 
         async def _call() -> dict:
             kwargs: dict = {"strict": True}

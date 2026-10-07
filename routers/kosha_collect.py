@@ -169,7 +169,7 @@ def _log(target: str, status: str, rows: int = 0, err: str = ""):
         pass
 
 
-def _get_last_collected(target: str) -> Optional[str]:
+def _get_last_collected(target: str, *, strict: bool = False) -> Optional[str]:
     canonical = _canonical_log_target(target)
     try:
         sb = get_supabase()
@@ -182,9 +182,11 @@ def _get_last_collected(target: str) -> Optional[str]:
                .execute())
         if r.data:
             return r.data[0]["collected_at"][:10]
+        return INIT_DATE  # no rows = legitimate bootstrap
     except Exception:
-        pass
-    return INIT_DATE
+        if strict:
+            raise KoshaFetchError("KOSHA_CURSOR_LOOKUP_ERROR") from None
+        return INIT_DATE
 
 
 def _parse_date(val: str) -> Optional[str]:
@@ -217,7 +219,7 @@ async def _collect_accident_cases(
         params = {"callApiId": "1040", "pageNo": page, "numOfRows": MAX_ROWS}
         resp  = await KoshaAPI.get("disaster_api02/getdisaster_api02", params, strict=strict)
         items = KoshaAPI.items(resp)
-        if strict and page == 1 and not items and KoshaAPI.total(resp) <= 0:
+        if strict and page == 1 and (not items or KoshaAPI.total(resp) <= 0):
             raise KoshaFetchError("SOURCE_EMPTY_UNEXPECTED")
         if not items: break
         rows, stop_early = [], False
@@ -317,7 +319,7 @@ async def _collect_construction_accidents(
             strict=strict,
         )
         items = KoshaAPI.items(resp)
-        if strict and page == 1 and not items and KoshaAPI.total(resp) <= 0:
+        if strict and page == 1 and (not items or KoshaAPI.total(resp) <= 0):
             raise KoshaFetchError("SOURCE_EMPTY_UNEXPECTED")
         if not items: break
         rows, stop_early = [], False

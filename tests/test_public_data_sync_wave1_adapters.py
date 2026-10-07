@@ -431,3 +431,164 @@ def test_w1_22_run_source_holiday_adapter_lookup():
                 result = run_source("HOLIDAY")
     assert result is not None
     assert result.status == RunStatus.SUCCESS
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# W1-P01~P09 — PATCH-FAIL-CLOSED-001
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_w1_p01_items_empty_total_nonzero_raises():
+    """items=[] but totalCount=2802 on first page → SOURCE_EMPTY_UNEXPECTED (OR guard)."""
+    from routers.kosha_collect import KoshaFetchError, _collect_accident_cases
+    import json
+
+    resp = json.dumps({"body": {"items": [], "totalCount": 2802}})
+
+    async def _run():
+        with patch("routers.kosha_collect.kr_get", return_value=(200, resp)):
+            with patch("routers.kosha_collect._get_service_key", return_value="key"):
+                with patch("routers.kosha_collect.get_supabase"):
+                    await _collect_accident_cases(strict=True)
+
+    with pytest.raises(KoshaFetchError) as exc_info:
+        asyncio.run(_run())
+    assert exc_info.value.code == "SOURCE_EMPTY_UNEXPECTED"
+
+
+def test_w1_p02_items_nonempty_total_zero_raises():
+    """items=[...] but totalCount=0 on first page → SOURCE_EMPTY_UNEXPECTED (OR guard)."""
+    from routers.kosha_collect import KoshaFetchError, _collect_accident_cases
+    import json
+
+    item = {"boardNo": "1", "title": "test", "regDt": "20260101", "content": "x"}
+    resp = json.dumps({"body": {"items": [item], "totalCount": 0}})
+
+    async def _run():
+        with patch("routers.kosha_collect.kr_get", return_value=(200, resp)):
+            with patch("routers.kosha_collect._get_service_key", return_value="key"):
+                with patch("routers.kosha_collect.get_supabase"):
+                    await _collect_accident_cases(strict=True)
+
+    with pytest.raises(KoshaFetchError) as exc_info:
+        asyncio.run(_run())
+    assert exc_info.value.code == "SOURCE_EMPTY_UNEXPECTED"
+
+
+def test_w1_p03_construction_items_empty_total_nonzero_raises():
+    """Construction: items=[] but totalCount>0 → SOURCE_EMPTY_UNEXPECTED."""
+    from routers.kosha_collect import KoshaFetchError, _collect_construction_accidents
+    import json
+
+    resp = json.dumps({"body": {"items": [], "totalCount": 1039}})
+
+    async def _run():
+        with patch("routers.kosha_collect.kr_get", return_value=(200, resp)):
+            with patch("routers.kosha_collect._get_service_key", return_value="key"):
+                with patch("routers.kosha_collect.get_supabase"):
+                    await _collect_construction_accidents(strict=True)
+
+    with pytest.raises(KoshaFetchError) as exc_info:
+        asyncio.run(_run())
+    assert exc_info.value.code == "SOURCE_EMPTY_UNEXPECTED"
+
+
+def test_w1_p04_construction_items_nonempty_total_zero_raises():
+    """Construction: items=[...] but totalCount=0 → SOURCE_EMPTY_UNEXPECTED."""
+    from routers.kosha_collect import KoshaFetchError, _collect_construction_accidents
+    import json
+
+    item = {"seq": "1", "dsstrDt": "20260101"}
+    resp = json.dumps({"body": {"items": [item], "totalCount": 0}})
+
+    async def _run():
+        with patch("routers.kosha_collect.kr_get", return_value=(200, resp)):
+            with patch("routers.kosha_collect._get_service_key", return_value="key"):
+                with patch("routers.kosha_collect.get_supabase"):
+                    await _collect_construction_accidents(strict=True)
+
+    with pytest.raises(KoshaFetchError) as exc_info:
+        asyncio.run(_run())
+    assert exc_info.value.code == "SOURCE_EMPTY_UNEXPECTED"
+
+
+def test_w1_p05_get_last_collected_db_success_row_found(monkeypatch):
+    """DB success with row → returns date string."""
+    from routers.kosha_collect import _get_last_collected
+
+    class _FakeSB:
+        def table(self, name): return self
+        def select(self, *a): return self
+        def eq(self, *a): return self
+        def order(self, *a, **kw): return self
+        def limit(self, *a): return self
+        def execute(self):
+            m = MagicMock()
+            m.data = [{"collected_at": "2026-09-15T12:00:00"}]
+            return m
+
+    monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: _FakeSB())
+    result = _get_last_collected("accident_cases", strict=True)
+    assert result == "2026-09-15"
+
+
+def test_w1_p06_get_last_collected_db_success_no_rows(monkeypatch):
+    """DB success but no rows (bootstrap) → returns INIT_DATE even in strict mode."""
+    from routers.kosha_collect import _get_last_collected, INIT_DATE
+
+    class _FakeSB:
+        def table(self, name): return self
+        def select(self, *a): return self
+        def eq(self, *a): return self
+        def order(self, *a, **kw): return self
+        def limit(self, *a): return self
+        def execute(self):
+            m = MagicMock()
+            m.data = []
+            return m
+
+    monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: _FakeSB())
+    result = _get_last_collected("accident_cases", strict=True)
+    assert result == INIT_DATE
+
+
+def test_w1_p07_get_last_collected_db_raises_strict_true(monkeypatch):
+    """DB raises in strict=True → KoshaFetchError(KOSHA_CURSOR_LOOKUP_ERROR)."""
+    from routers.kosha_collect import _get_last_collected, KoshaFetchError
+
+    monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: (_ for _ in ()).throw(RuntimeError("connection refused")))
+
+    with pytest.raises(KoshaFetchError) as exc_info:
+        _get_last_collected("accident_cases", strict=True)
+    assert exc_info.value.code == "KOSHA_CURSOR_LOOKUP_ERROR"
+
+
+def test_w1_p08_get_last_collected_db_raises_strict_false(monkeypatch):
+    """DB raises in strict=False → returns INIT_DATE (legacy fallback preserved)."""
+    from routers.kosha_collect import _get_last_collected, INIT_DATE
+
+    monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: (_ for _ in ()).throw(RuntimeError("connection refused")))
+
+    result = _get_last_collected("accident_cases", strict=False)
+    assert result == INIT_DATE
+
+
+def test_w1_p09_adapter_cursor_lookup_failure_returns_failed():
+    """KoshaIncrementalAdapter: get_since_fn raises KoshaFetchError → RunStatus.FAILED."""
+    from routers.kosha_collect import KoshaFetchError
+
+    def _failing_since(target):
+        raise KoshaFetchError("KOSHA_CURSOR_LOOKUP_ERROR")
+
+    async def _collect(**kw):
+        return {"upserted": 5}
+
+    adapter = KoshaIncrementalAdapter(
+        adapter_key="kosha_accident_cases",
+        collect_fn=_collect,
+        log_target="accident_cases",
+        get_since_fn=_failing_since,
+    )
+    with patch.dict(os.environ, {"DATA_GO_KR_SERVICE_KEY": "key"}):
+        result = adapter.run(_ctx())
+    assert result.status == RunStatus.FAILED
+    assert result.error_code == "KOSHA_CURSOR_LOOKUP_ERROR"

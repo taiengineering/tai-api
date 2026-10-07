@@ -50,7 +50,7 @@ def register_builtin_adapters() -> None:
             adapter_key="kosha_accident_cases",
             collect_fn=_collect_accident_cases,
             log_target="accident_cases",
-            get_since_fn=_get_last_collected,
+            get_since_fn=lambda target: _get_last_collected(target, strict=True),
         )
 
     def _make_construction_accidents() -> KoshaIncrementalAdapter:
@@ -59,7 +59,7 @@ def register_builtin_adapters() -> None:
             adapter_key="kosha_construction_accidents",
             collect_fn=_collect_construction_accidents,
             log_target="construction_accidents",
-            get_since_fn=_get_last_collected,
+            get_since_fn=lambda target: _get_last_collected(target, strict=True),
         )
 
     for factory in (_make_accident_cases, _make_construction_accidents):
