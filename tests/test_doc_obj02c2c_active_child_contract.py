@@ -728,3 +728,105 @@ def test_mig_08_correct_audit_columns():
         "BLOCKER-4: wrong audit column 'table_name' must not appear"
     assert "changed_at" not in sql, \
         "BLOCKER-4: wrong audit column 'changed_at' must not appear; use 'created_at'"
+
+
+# ════════════════════════════════════════════════════════════════════════
+# MIG-09 ~ MIG-19  CORR-002 fail-close guard structural tests
+# These tests verify that named guards and exact assertions exist in the
+# migration SQL; they check for guard variable names + assertion patterns,
+# not just isolated token presence.
+# ════════════════════════════════════════════════════════════════════════
+
+# MIG-09: target schema distinct=24 guard exists (PRE-1)
+def test_mig_09_target_schema_distinct_24_guard():
+    sql = _mig_sql()
+    assert "COUNT(DISTINCT rfs.id)" in sql, \
+        "MIG-09: COUNT(DISTINCT rfs.id) must appear for schema distinct count"
+    assert "v_pre_schema_count <> 24" in sql, \
+        "MIG-09: assertion 'v_pre_schema_count <> 24' must be present"
+
+
+# MIG-10: target schema CANDIDATE=24 guard exists in both pre and post
+def test_mig_10_target_schema_candidate_24_both_guards():
+    sql = _mig_sql()
+    assert "v_pre_schema_candidate <> 24" in sql, \
+        "MIG-10: precondition 'v_pre_schema_candidate <> 24' must be present"
+    assert "v_post_schema_candidate <> 24" in sql, \
+        "MIG-10: postcondition 'v_post_schema_candidate <> 24' must be present"
+
+
+# MIG-11: field_candidate FK matched=96 guard exists (PRE-2)
+def test_mig_11_field_fk_matched_96_guard():
+    sql = _mig_sql()
+    assert "v_pre_fk_matched <> 96" in sql, \
+        "MIG-11: assertion 'v_pre_fk_matched <> 96' must be present"
+
+
+# MIG-12: mandatory true=38 / false=58 / null=0 exact guards exist (PRE-2)
+def test_mig_12_mandatory_exact_guards():
+    sql = _mig_sql()
+    assert "v_pre_mandatory_true <> 38" in sql, \
+        "MIG-12: mandatory true=38 assertion must be present"
+    assert "v_pre_mandatory_false <> 58" in sql, \
+        "MIG-12: mandatory false=58 assertion must be present"
+    assert "v_pre_mandatory_null <> 0" in sql, \
+        "MIG-12: mandatory null=0 assertion must be present"
+
+
+# MIG-13: evidence FK chain via evidence_field_candidate.field_candidate_id exists (PRE-4)
+def test_mig_13_evidence_fk_chain_guard():
+    sql = _mig_sql()
+    assert "evidence_field_candidate" in sql, \
+        "MIG-13: evidence_field_candidate must be joined in evidence guard"
+    assert "efc.field_candidate_id" in sql, \
+        "MIG-13: efc.field_candidate_id must be used in FK chain"
+
+
+# MIG-14: timestamp_auto → date semantic pair guard exists
+def test_mig_14_timestamp_auto_date_semantic_pair():
+    sql = _mig_sql()
+    assert "re.upload_type = 'timestamp_auto' AND rf.input_type = 'date'" in sql, \
+        "MIG-14: semantic pair timestamp_auto → date must be explicitly guarded"
+
+
+# MIG-15: signature → signature semantic pair guard exists
+def test_mig_15_signature_signature_semantic_pair():
+    sql = _mig_sql()
+    assert "re.upload_type = 'signature'" in sql, \
+        "MIG-15: re.upload_type = 'signature' must appear in semantic guard"
+    assert "rf.input_type = 'signature'" in sql, \
+        "MIG-15: rf.input_type = 'signature' must appear in semantic pair"
+
+
+# MIG-16: audit exact total=204 postcondition exists (POST-5)
+def test_mig_16_audit_total_204_guard():
+    sql = _mig_sql()
+    assert "v_post_audit_total <> 204" in sql, \
+        "MIG-16: assertion 'v_post_audit_total <> 204' must be present"
+
+
+# MIG-17: audit per-table 96/96/12 guards exist (POST-5)
+def test_mig_17_audit_per_table_guards():
+    sql = _mig_sql()
+    assert "v_post_audit_field <> 96" in sql, \
+        "MIG-17: audit field=96 assertion must be present"
+    assert "v_post_audit_cl <> 96" in sql, \
+        "MIG-17: audit checklist=96 assertion must be present"
+    assert "v_post_audit_ev <> 12" in sql, \
+        "MIG-17: audit evidence=12 assertion must be present"
+
+
+# MIG-18: post-condition schema CANDIDATE=24 guard exists (POST-1)
+def test_mig_18_post_schema_candidate_24_guard():
+    sql = _mig_sql()
+    assert "v_post_schema_candidate <> 24" in sql, \
+        "MIG-18: postcondition 'v_post_schema_candidate <> 24' must be present"
+
+
+# MIG-19: post-condition required_status 38/58 exact guards exist (POST-2)
+def test_mig_19_post_required_status_guards():
+    sql = _mig_sql()
+    assert "v_post_required <> 38" in sql, \
+        "MIG-19: postcondition REQUIRED_BY_HUMAN=38 assertion must be present"
+    assert "v_post_not_required <> 58" in sql, \
+        "MIG-19: postcondition NOT_REQUIRED=58 assertion must be present"
