@@ -41,6 +41,7 @@ from services.company_scope import (
     _ensure_own_company,
     _ensure_factory_own,
     _forced_company_id,
+    require_scope_ids,
     scoped_filter,
     apply_scoped_filter,
     DENY,
@@ -116,13 +117,22 @@ def create_document(
     """문서 생성 (DRAFT 상태)"""
     sb = get_supabase()
     created_by = str(current_user.get("id") or "").strip() or None
-    company_id = _forced_company_id(current_user, sb, body.company_id)
-    if body.factory_id:
+
+    # CORR-19: server-side scope resolution — client-supplied ids not trusted
+    scope = require_scope_ids(current_user, sb, ["company_id", "factory_id"])
+    company_id = scope.get("company_id")
+
+    # factory_id: FACTORY/TEAM tiers get server-assigned factory; others may opt-in
+    factory_id = scope.get("factory_id")
+    if factory_id is None and body.factory_id:
+        # COMPANY/ALL tier supplying optional factory — verify ownership
         _ensure_factory_own(sb, body.factory_id, current_user)
+        factory_id = body.factory_id
+
     try:
         result = svc.create_document(
             body.form_schema_id,
-            body.factory_id,
+            factory_id,
             company_id,
             created_by,
         )
@@ -175,11 +185,13 @@ def update_document(
     sb = get_supabase()
     _check_doc_scope(sb, doc_id, current_user)
     try:
+        # CORR-20: updated_by bound to authenticated user, body value ignored
+        effective_updated_by = str(current_user.get("id") or "").strip() or None
         result = svc.update_document(
             doc_id,
             body.runtime_data_json,
             body.evidence_links,
-            body.updated_by,
+            effective_updated_by,
         )
         return {"status": "success", "data": result}
     except ValueError as e:
@@ -238,10 +250,15 @@ def change_status(
         except ConfirmError as e:
             raise HTTPException(e.http_status, e.detail)
 
-    # 그 외 전이는 기존 경로 유지
+    # 그 외 전이: actor_id bound to authenticated user (CORR-20)
+    user_id = str(current_user.get("id") or "").strip()
+    if not user_id:
+        raise HTTPException(401, "authenticated user identity unavailable")
+    if body.actor_id is not None and str(body.actor_id) != user_id:
+        raise HTTPException(403, "actor_id does not match authenticated user")
     try:
         result = svc.change_status(
-            doc_id, body.to_status, body.actor_id, body.comment
+            doc_id, body.to_status, user_id, body.comment
         )
         return {"status": "success", "data": result}
     except ValueError as e:
@@ -275,7 +292,7 @@ def add_evidence(
         body.file_size,
         body.mime_type,
         body.linked_field_id,
-        body.uploaded_by,
+        str(current_user.get("id") or "").strip() or None,  # CORR-20: server-bound
     )
     return {"status": "success", "data": result}
 

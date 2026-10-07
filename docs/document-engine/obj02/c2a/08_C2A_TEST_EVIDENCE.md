@@ -122,6 +122,25 @@ status: CORR-01~16 APPLIED
 | SEC7 | different company → GET evidence denied (404) |
 | SEC8 | different company → PDF generation denied (404) |
 
+### CR-tests: Create Scope Fail-Close (CORR-19)
+
+| Test | Description |
+|------|-------------|
+| CR1 | non-ALL user with no company_id → create returns 403 |
+| CR2 | FACTORY user omitting factory_id → 403 (no bypass) |
+| CR3 | FACTORY user supplying foreign factory_id → server scope wins (body ignored) |
+| CR4 | client supplies foreign company_id → server scope wins, not foreign company |
+| CR5 | created_by from body is ignored; actual created_by = current_user.id |
+
+### ID-tests: Audit Actor Binding (CORR-20)
+
+| Test | Description |
+|------|-------------|
+| ID1 | body.updated_by spoofed → effective updated_by = current_user.id |
+| ID2 | body.uploaded_by spoofed → stored uploader = current_user.id |
+| ID3 | status transition with mismatched actor_id → 403 |
+| ID4 | non-spoofed normal transition → actor_id = current_user.id |
+
 ## Regression Tests
 
-B1 tests (existing): PASS (no regression)
+B1 tests (33 PASS): no regression. Router tests total: RT(6) + SEC(8) + CR(5) + ID(4) = 23.

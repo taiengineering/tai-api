@@ -43,6 +43,8 @@ OBJ02-C2A fixes four runtime workflow breakages identified in the C1 audit:
 | CORR-14 | Full runtime authorization: all document instance endpoints require auth + tenant scope |
 | CORR-15 | ARCHIVED reprint: status in ("APPROVED_BY_HUMAN", "ARCHIVED") → archive only |
 | CORR-16 | Single Gotenberg adapter: generate_document_pdf() delegates to html_to_pdf() |
+| CORR-19 | create scope uses require_scope_ids — FACTORY tier factory bypass impossible. Client-supplied company_id/factory_id in POST body are ignored; server resolves from token. |
+| CORR-20 | created_by/updated_by/uploaded_by/actor_id all server-bound to current_user.id. Body-supplied actor values are rejected if they mismatch the authenticated user. |
 
 ## generated_document INSERT = 0 (no row created)
 
