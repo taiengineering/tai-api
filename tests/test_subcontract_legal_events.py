@@ -33,6 +33,7 @@ from services.subcontract_legal_event_source.store import (
     get_event,
     get_event_exact,
     load_confirmed_subcontract_legal_event_context,
+    SubcontractLegalEventSourceLoadError,
     TABLE,
 )
 from services.subcontract_legal_event_source.canonical_adapter import (
@@ -136,12 +137,15 @@ _ACTOR_COMPANY_ID = str(_uuid.uuid4())
 
 def _make_sb():
     sb = _InMemorySB()
-    # Seed construction_sites and subcontractors for identity resolution
     sb._store["construction_sites"] = [
         {"id": _SITE_ID, "company_id": _SITE_COMPANY_ID}
     ]
     sb._store["subcontractors"] = [
         {"id": _SUB_ID, "site_id": _SITE_ID, "company_id": _SUB_COMPANY_ID}
+    ]
+    # Seed companies so actor company existence check passes
+    sb._store["companies"] = [
+        {"id": _ACTOR_COMPANY_ID, "name": "테스트 의무 주체 회사"}
     ]
     return sb
 
@@ -617,3 +621,198 @@ def test_P02_load_confirmed_context_wrong_subcontractor_returns_none():
         sb, site_id=_SITE_ID, subcontractor_id=str(_uuid.uuid4()), event_id=draft["id"]
     )
     assert result is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WO-006 BLOCKER patch tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+# PATCH-A: DB lifecycle constraint truth table (contract tests — not DB execution)
+def test_Q01_lifecycle_truth_table_draft_state():
+    """Q01a: DRAFT state — confirmed_at=NULL, voided_at=NULL."""
+    sb = _make_sb()
+    row = _make_art35a_draft(sb)
+    assert row["status"] == "DRAFT"
+    assert row.get("confirmed_at") is None
+    assert row.get("voided_at") is None
+
+
+def test_Q01_lifecycle_truth_table_confirmed_state():
+    """Q01b: CONFIRMED state — confirmed_at NOT NULL, voided_at NULL."""
+    sb = _make_sb()
+    draft = _make_art35a_confirmable_draft(sb)
+    confirmed = confirm_event(sb, event_id=draft["id"])
+    assert confirmed["status"] == "CONFIRMED"
+    assert confirmed.get("confirmed_at") is not None
+    assert confirmed.get("voided_at") is None
+
+
+def test_Q01_lifecycle_truth_table_void_state():
+    """Q01c: VOID state — confirmed_at NOT NULL, voided_at NOT NULL."""
+    sb = _make_sb()
+    draft = _make_art35a_confirmable_draft(sb)
+    confirm_event(sb, event_id=draft["id"])
+    voided = void_event(sb, event_id=draft["id"])
+    assert voided["status"] == "VOID"
+    assert voided.get("confirmed_at") is not None
+    assert voided.get("voided_at") is not None
+
+
+# PATCH-B: DB failure fail-closed
+def test_Q02_load_confirmed_context_db_failure_raises():
+    """Q02: load_confirmed_subcontract_legal_event_context — DB query failure → raises SubcontractLegalEventSourceLoadError."""
+    class _BrokenSB:
+        def table(self, name):
+            raise RuntimeError("DB connection lost")
+
+    with pytest.raises(SubcontractLegalEventSourceLoadError):
+        load_confirmed_subcontract_legal_event_context(
+            _BrokenSB(), site_id=_SITE_ID, subcontractor_id=_SUB_ID, event_id=str(_uuid.uuid4())
+        )
+
+
+def test_Q02_load_confirmed_context_none_sb_raises():
+    """Q02b: load_confirmed_subcontract_legal_event_context with None supabase → raises SubcontractLegalEventSourceLoadError."""
+    with pytest.raises(SubcontractLegalEventSourceLoadError):
+        load_confirmed_subcontract_legal_event_context(
+            None, site_id=_SITE_ID, subcontractor_id=_SUB_ID, event_id=str(_uuid.uuid4())
+        )
+
+
+def test_Q02_db_failure_does_not_return_none():
+    """Q02c: DB failure must NOT be silently converted to absent (None). Raised exception confirms fail-closed."""
+    class _BrokenExecuteSB:
+        def table(self, name):
+            class _Q:
+                def select(self, *a, **k): return self
+                def eq(self, *a, **k): return self
+                def limit(self, *a, **k): return self
+                def execute(self): raise ConnectionError("timeout")
+            return _Q()
+
+    result = None
+    raised = False
+    try:
+        result = load_confirmed_subcontract_legal_event_context(
+            _BrokenExecuteSB(), site_id=_SITE_ID, subcontractor_id=_SUB_ID, event_id=str(_uuid.uuid4())
+        )
+    except SubcontractLegalEventSourceLoadError:
+        raised = True
+    assert raised, "DB failure must raise SubcontractLegalEventSourceLoadError, not return None"
+    assert result is None  # never assigned
+
+
+# PATCH-C: Timestamp strictness
+def test_Q03_invalid_occurred_at_raises_422():
+    """Q03a: occurred_at with invalid format → 422 on confirm."""
+    sb = _make_sb()
+    row = _make_art35a_draft(sb)
+    update_draft(sb, event_id=row["id"], body={
+        "occurred_at": "not-a-date",
+        "obligated_actor_company_id": _ACTOR_COMPANY_ID,
+    })
+    with pytest.raises(HTTPException) as exc_info:
+        confirm_event(sb, event_id=row["id"])
+    assert exc_info.value.status_code == 422
+    assert "occurred_at" in exc_info.value.detail
+
+
+def test_Q03_invalid_notice_received_at_raises_422():
+    """Q03b: notice_received_at with invalid format → 422 on confirm (ART37_E)."""
+    sb = _make_sb()
+    row = create_draft(sb, site_id=_SITE_ID, subcontractor_id=_SUB_ID, body={
+        "event_type": "ART37_COMPLETION_OR_PROGRESS_NOTICE_RECEIVED",
+    })
+    update_draft(sb, event_id=row["id"], body={
+        "occurred_at": "2026-10-01T09:00:00+09:00",
+        "obligated_actor_company_id": _ACTOR_COMPANY_ID,
+        "notice_type": "COMPLETION",
+        "notice_received_at": "2026/10/01 09:00",  # wrong format
+        "evidence_ref": "ref-001",
+    })
+    with pytest.raises(HTTPException) as exc_info:
+        confirm_event(sb, event_id=row["id"])
+    assert exc_info.value.status_code == 422
+    assert "notice_received_at" in exc_info.value.detail
+
+
+def test_Q03_invalid_inspection_completed_at_raises_422():
+    """Q03c: inspection_completed_at with invalid format → 422 on confirm (ART37_F)."""
+    sb = _make_sb()
+    # First create a CONFIRMED ART37_E event to link
+    art37e = create_draft(sb, site_id=_SITE_ID, subcontractor_id=_SUB_ID, body={
+        "event_type": "ART37_COMPLETION_OR_PROGRESS_NOTICE_RECEIVED",
+    })
+    update_draft(sb, event_id=art37e["id"], body={
+        "occurred_at": "2026-10-01T09:00:00+09:00",
+        "obligated_actor_company_id": _ACTOR_COMPANY_ID,
+        "notice_type": "COMPLETION",
+        "notice_received_at": "2026-10-01T09:00:00+09:00",
+        "evidence_ref": "ref-e",
+    })
+    confirm_event(sb, event_id=art37e["id"])
+
+    row = create_draft(sb, site_id=_SITE_ID, subcontractor_id=_SUB_ID, body={
+        "event_type": "ART37_INSPECTION_COMPLETED_AS_DESIGNED",
+    })
+    update_draft(sb, event_id=row["id"], body={
+        "occurred_at": "2026-10-01T09:00:00+09:00",
+        "obligated_actor_company_id": _ACTOR_COMPANY_ID,
+        "inspection_completed_at": "01/10/2026",  # wrong format
+        "design_conformance_confirmed": True,
+        "notice_event_id": art37e["id"],
+        "evidence_ref": "ref-f",
+    })
+    with pytest.raises(HTTPException) as exc_info:
+        confirm_event(sb, event_id=row["id"])
+    assert exc_info.value.status_code == 422
+    assert "inspection_completed_at" in exc_info.value.detail
+
+
+def test_Q03_timezone_naive_occurred_at_raises_422():
+    """Q03d: timezone-naive occurred_at → 422 on confirm."""
+    sb = _make_sb()
+    row = _make_art35a_draft(sb)
+    update_draft(sb, event_id=row["id"], body={
+        "occurred_at": "2026-10-01T09:00:00",  # no tz
+        "obligated_actor_company_id": _ACTOR_COMPANY_ID,
+    })
+    with pytest.raises(HTTPException) as exc_info:
+        confirm_event(sb, event_id=row["id"])
+    assert exc_info.value.status_code == 422
+    assert "timezone" in exc_info.value.detail
+
+
+# PATCH-D: Actor company existence check
+def test_Q04_unknown_actor_company_raises_422():
+    """Q04a: obligated_actor_company_id does not exist in companies → 422 on confirm."""
+    sb = _make_sb()
+    unknown_id = str(_uuid.uuid4())
+    row = _make_art35a_draft(sb)
+    update_draft(sb, event_id=row["id"], body={
+        "occurred_at": "2026-10-01T09:00:00+09:00",
+        "obligated_actor_company_id": unknown_id,  # not in companies
+    })
+    with pytest.raises(HTTPException) as exc_info:
+        confirm_event(sb, event_id=row["id"])
+    assert exc_info.value.status_code == 422
+    assert "존재하지" in exc_info.value.detail or "company" in exc_info.value.detail.lower()
+
+
+def test_Q04_existing_actor_company_confirms_successfully():
+    """Q04b: obligated_actor_company_id exists in companies → CONFIRM eligible."""
+    sb = _make_sb()
+    draft = _make_art35a_confirmable_draft(sb)
+    confirmed = confirm_event(sb, event_id=draft["id"])
+    assert confirmed["status"] == "CONFIRMED"
+
+
+def test_Q04_missing_actor_company_id_raises_422():
+    """Q04c: missing obligated_actor_company_id → 422 (existing check, still guards empty string)."""
+    sb = _make_sb()
+    row = _make_art35a_draft(sb)
+    update_draft(sb, event_id=row["id"], body={"occurred_at": "2026-10-01T09:00:00+09:00"})
+    with pytest.raises(HTTPException) as exc_info:
+        confirm_event(sb, event_id=row["id"])
+    assert exc_info.value.status_code == 422
+    assert "obligated_actor_company_id" in exc_info.value.detail

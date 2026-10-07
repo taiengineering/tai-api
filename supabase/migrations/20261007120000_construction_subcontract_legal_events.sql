@@ -83,15 +83,29 @@ ALTER TABLE construction_subcontract_legal_events
         notice_type IS NULL OR notice_type IN ('COMPLETION', 'PROGRESS')
     );
 
--- Lifecycle timestamp constraints: confirmed_at populated iff CONFIRMED; voided_at populated iff VOID
+-- Lifecycle timestamp constraint: enforces full state machine truth table.
+-- DRAFT:     confirmed_at NULL,     voided_at NULL
+-- CONFIRMED: confirmed_at NOT NULL, voided_at NULL
+-- VOID:      confirmed_at NOT NULL, voided_at NOT NULL
 ALTER TABLE construction_subcontract_legal_events
-    ADD CONSTRAINT csle_confirmed_at_lifecycle CHECK (
-        (status = 'CONFIRMED') = (confirmed_at IS NOT NULL)
-    );
-
-ALTER TABLE construction_subcontract_legal_events
-    ADD CONSTRAINT csle_voided_at_lifecycle CHECK (
-        (status = 'VOID') = (voided_at IS NOT NULL)
+    ADD CONSTRAINT csle_lifecycle_timestamps CHECK (
+        (
+            status = 'DRAFT'
+            AND confirmed_at IS NULL
+            AND voided_at IS NULL
+        )
+        OR
+        (
+            status = 'CONFIRMED'
+            AND confirmed_at IS NOT NULL
+            AND voided_at IS NULL
+        )
+        OR
+        (
+            status = 'VOID'
+            AND confirmed_at IS NOT NULL
+            AND voided_at IS NOT NULL
+        )
     );
 
 -- Row Level Security

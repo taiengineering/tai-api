@@ -124,28 +124,48 @@ def update_draft(sb, event_id: str, body: Dict) -> Dict:
     return r.data[0]
 
 
-def _parse_timestamp_or_none(ts: Optional[str]) -> Optional[datetime]:
+def _parse_timestamp_strict(ts: Optional[str], field_name: str) -> datetime:
+    """Parse a required timestamp string strictly.
+
+    Contract:
+    - missing/empty → HTTPException 422 (missing)
+    - malformed (parse error) → HTTPException 422 (invalid format)
+    - timezone-naive → HTTPException 422 (timezone required)
+    - future → HTTPException 422 (future timestamp)
+    - valid past/present → returns datetime
+    """
     if not ts or not isinstance(ts, str):
-        return None
+        raise HTTPException(422, f"{field_name} 필수")
     try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except ValueError:
-        return None
+        raise HTTPException(422, f"{field_name} 형식이 올바르지 않습니다. ISO-8601 timezone-aware 형식 필요.")
+    if dt.tzinfo is None:
+        raise HTTPException(422, f"{field_name}에 timezone 정보가 없습니다. timezone-aware ISO-8601 형식 필요.")
+    if dt > datetime.now(timezone.utc):
+        raise HTTPException(422, f"{field_name}이 미래 시각입니다.")
+    return dt
 
 
-def _validate_for_confirm(event: Dict) -> None:
-    """Confirm pre-conditions. Raises 422 (HTTPException) if required fields missing."""
+def _validate_actor_company_exists(sb, company_id: str) -> None:
+    """Verify that obligated_actor_company_id exists in companies master.
+
+    Raises 422 if the company does not exist.
+    """
+    r = sb.table("companies").select("id").eq("id", company_id).limit(1).execute()
+    if not r.data:
+        raise HTTPException(422, f"obligated_actor_company_id가 존재하지 않는 회사입니다: {company_id}")
+
+
+def _validate_for_confirm(sb, event: Dict) -> None:
+    """Confirm pre-conditions. Raises 422 (HTTPException) if required fields missing/invalid."""
     etype = event["event_type"]
-    now = datetime.now(timezone.utc)
 
-    if not event.get("occurred_at"):
-        raise HTTPException(422, "occurred_at 필수")
-    occurred_dt = _parse_timestamp_or_none(event.get("occurred_at"))
-    if occurred_dt is not None and occurred_dt > now:
-        raise HTTPException(422, "occurred_at이 미래 시각입니다.")
+    _parse_timestamp_strict(event.get("occurred_at"), "occurred_at")
 
     if not event.get("obligated_actor_company_id"):
         raise HTTPException(422, "obligated_actor_company_id 필수 (actor company 권원 미확인 시 CONFIRM 불가)")
+    _validate_actor_company_exists(sb, str(event["obligated_actor_company_id"]))
 
     if etype == "ART35_DIRECT_PAYMENT_BASIS":
         if not event.get("basis_type") or event["basis_type"] not in VALID_BASIS_TYPES:
@@ -168,20 +188,12 @@ def _validate_for_confirm(event: Dict) -> None:
     elif etype == "ART37_COMPLETION_OR_PROGRESS_NOTICE_RECEIVED":
         if not event.get("notice_type") or event["notice_type"] not in VALID_NOTICE_TYPES:
             raise HTTPException(422, "notice_type 필수 (ART37_E)")
-        if not event.get("notice_received_at"):
-            raise HTTPException(422, "notice_received_at 필수 (ART37_E)")
         if not event.get("evidence_ref"):
             raise HTTPException(422, "evidence_ref 필수 (ART37_E)")
-        nr_dt = _parse_timestamp_or_none(event.get("notice_received_at"))
-        if nr_dt is not None and nr_dt > now:
-            raise HTTPException(422, "notice_received_at이 미래 시각입니다.")
+        _parse_timestamp_strict(event.get("notice_received_at"), "notice_received_at")
 
     elif etype == "ART37_INSPECTION_COMPLETED_AS_DESIGNED":
-        if not event.get("inspection_completed_at"):
-            raise HTTPException(422, "inspection_completed_at 필수 (ART37_F)")
-        ic_dt = _parse_timestamp_or_none(event.get("inspection_completed_at"))
-        if ic_dt is not None and ic_dt > now:
-            raise HTTPException(422, "inspection_completed_at이 미래 시각입니다.")
+        _parse_timestamp_strict(event.get("inspection_completed_at"), "inspection_completed_at")
         if not event.get("design_conformance_confirmed"):
             raise HTTPException(422, "design_conformance_confirmed=true 필수 (ART37_F)")
         if not event.get("notice_event_id"):
@@ -216,7 +228,7 @@ def confirm_event(sb, event_id: str) -> Dict:
     if event["status"] != "DRAFT":
         raise HTTPException(409, f"DRAFT 상태만 CONFIRM 가능합니다. 현재: {event['status']}")
 
-    _validate_for_confirm(event)
+    _validate_for_confirm(sb, event)
     _validate_notice_event_link(sb, event)
 
     patch = {
@@ -264,6 +276,18 @@ def get_event_exact(sb, *, site_id: str, subcontractor_id: str, event_id: str) -
     return r.data[0]
 
 
+class SubcontractLegalEventSourceLoadError(RuntimeError):
+    """DB query failure loading confirmed subcontract legal event.
+
+    Must NOT be treated as event-absent. LEG execution must be blocked.
+    """
+    code = "SUBCONTRACT_LEGAL_EVENT_SOURCE_UNAVAILABLE"
+
+    def __init__(self, message: str, *, event_id: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.event_id = event_id
+
+
 def load_confirmed_subcontract_legal_event_context(
     sb,
     *,
@@ -273,13 +297,35 @@ def load_confirmed_subcontract_legal_event_context(
 ) -> Optional[Dict]:
     """Exact-object eligibility: event_id + site_id + subcontractor_id + status=CONFIRMED.
 
-    Returns the event row if all four conditions match; returns None otherwise.
-    Never raises — caller decides what to do with None.
+    Contract:
+    - event not found / wrong exact binding / DRAFT / VOID → returns None (ABSENT)
+    - DB query failure → raises SubcontractLegalEventSourceLoadError (fail-closed)
+    - matching CONFIRMED row → returns event dict
     """
+    if sb is None:
+        raise SubcontractLegalEventSourceLoadError(
+            "subcontract legal event source client missing", event_id=event_id
+        )
     try:
-        event = get_event_exact(sb, site_id=site_id, subcontractor_id=subcontractor_id, event_id=event_id)
-    except Exception:
+        r = (
+            sb.table(TABLE)
+            .select("*")
+            .eq("id", event_id)
+            .eq("site_id", site_id)
+            .eq("subcontractor_id", subcontractor_id)
+            .eq("status", "CONFIRMED")
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise SubcontractLegalEventSourceLoadError(
+            f"construction_subcontract_legal_events 조회 실패: {exc}", event_id=event_id
+        ) from exc
+    result = getattr(r, "data", None)
+    if not isinstance(result, list):
+        raise SubcontractLegalEventSourceLoadError(
+            "construction_subcontract_legal_events 응답 형식 오류", event_id=event_id
+        )
+    if not result:
         return None
-    if event.get("status") != "CONFIRMED":
-        return None
-    return event
+    return result[0]
