@@ -40,6 +40,16 @@ def _require_env(name: str) -> str:
     return val
 
 
+def _require_service_key() -> None:
+    from services.keco_chemical.contract import SERVICE_KEY_ENV
+    if not any((os.getenv(name) or "").strip() for name in SERVICE_KEY_ENV):
+        logger.error(
+            "Required environment variable missing: %s or legacy %s",
+            SERVICE_KEY_ENV[0], SERVICE_KEY_ENV[1],
+        )
+        sys.exit(1)
+
+
 def _make_client():
     from services.keco_chemical.client import KecoChemicalClient
     return KecoChemicalClient()
@@ -62,7 +72,7 @@ def _make_budget():
 def mode_preflight(args) -> None:
     """최대 3 API call로 live connectivity + 응답 구조 확인."""
     from services.keco_chemical.probe import run_preflight_probe
-    _require_env("KECO_API_SERVICE_KEY")
+    _require_service_key()
     _require_env("LEG_SUPABASE_URL")
     _require_env("LEG_SUPABASE_SERVICE_ROLE_KEY")
     logger.info("[PREFLIGHT] Starting live probe (max 3 API calls)")
@@ -116,7 +126,7 @@ def mode_batch(args) -> None:
     """PENDING/RETRY targets를 bounded batch 처리. preflight 후 controlled test용."""
     max_targets = getattr(args, "max_targets", None) or 10
     dry = getattr(args, "dry_run", False)
-    _require_env("KECO_API_SERVICE_KEY")
+    _require_service_key()
     _require_env("LEG_SUPABASE_URL")
     _require_env("LEG_SUPABASE_SERVICE_ROLE_KEY")
 
@@ -167,7 +177,7 @@ def mode_batch(args) -> None:
 
 def mode_bulk(args) -> None:
     """전수 초기 적재. PENDING/RETRY 전체를 budget 소진까지 처리."""
-    _require_env("KECO_API_SERVICE_KEY")
+    _require_service_key()
     _require_env("LEG_SUPABASE_URL")
     _require_env("LEG_SUPABASE_SERVICE_ROLE_KEY")
 
@@ -238,7 +248,7 @@ def mode_bulk(args) -> None:
 def mode_retry(args) -> None:
     """FAILED/RETRY 대상 재처리 (PENDING 포함 안함)."""
     max_targets = getattr(args, "max_targets", None) or 50
-    _require_env("KECO_API_SERVICE_KEY")
+    _require_service_key()
     _require_env("LEG_SUPABASE_URL")
     _require_env("LEG_SUPABASE_SERVICE_ROLE_KEY")
 
@@ -274,7 +284,7 @@ def mode_retry(args) -> None:
 def mode_refresh(args) -> None:
     """next_refresh_at <= now のtarget 처리."""
     max_targets = getattr(args, "max_targets", None)
-    _require_env("KECO_API_SERVICE_KEY")
+    _require_service_key()
     _require_env("LEG_SUPABASE_URL")
     _require_env("LEG_SUPABASE_SERVICE_ROLE_KEY")
 

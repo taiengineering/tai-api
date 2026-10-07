@@ -13,8 +13,14 @@ PROVIDER = "한국환경공단"
 BASE_URL = "https://apis.data.go.kr/B552584/kecoapi/ncissbstn"
 OPERATION = "chemSbstnList"
 
-# 환경변수명 — 다른 키 fallback 금지
-SERVICE_KEY_ENV = ("KECO_API_SERVICE_KEY",)
+# 환경변수명 — canonical data.go.kr 공유키 우선, legacy fallback 지원
+CANONICAL_SERVICE_KEY_ENV = "DATA_GO_KR_SERVICE_KEY"
+LEGACY_SERVICE_KEY_ENV = "KECO_API_SERVICE_KEY"
+
+SERVICE_KEY_ENV = (
+    CANONICAL_SERVICE_KEY_ENV,
+    LEGACY_SERVICE_KEY_ENV,
+)
 
 # searchGubun 값 (국문명 코드 없음)
 SEARCH_ENGLISH_NAME = "1"   # 영문명

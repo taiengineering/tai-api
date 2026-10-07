@@ -59,7 +59,7 @@ def run_probe(
     max_calls는 하드코딩 PROBE_MAX_CALLS(3)이 상한.
     """
     if not _has_service_key():
-        logger.info("KECO probe: BLOCKED_NO_KEY — KECO_API_SERVICE_KEY not set")
+        logger.info("KECO probe: BLOCKED_NO_KEY — DATA_GO_KR_SERVICE_KEY or legacy KECO_API_SERVICE_KEY not set")
         return ProbeResult(status=PROBE_BLOCKED_NO_KEY)
 
     effective_max = min(max_calls, PROBE_MAX_CALLS)
@@ -122,8 +122,8 @@ def run_preflight_probe() -> None:
     result = run_probe(client, budget=budget)
 
     if result.status == PROBE_BLOCKED_NO_KEY:
-        logger.warning("[PREFLIGHT] BLOCKED_NO_KEY — KECO_API_SERVICE_KEY not set")
-        raise RuntimeError("KECO_API_SERVICE_KEY not set — cannot run preflight")
+        logger.warning("[PREFLIGHT] BLOCKED_NO_KEY — DATA_GO_KR_SERVICE_KEY or legacy KECO_API_SERVICE_KEY not set")
+        raise RuntimeError("DATA_GO_KR_SERVICE_KEY or legacy KECO_API_SERVICE_KEY not set — cannot run preflight")
 
     for c in result.calls:
         if c.error:

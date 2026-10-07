@@ -34,7 +34,7 @@ def _ctx(source_id: str = "KECO_15149420") -> RunContext:
 
 
 _GOOD_ENV = {
-    "KECO_API_SERVICE_KEY": "key",
+    "DATA_GO_KR_SERVICE_KEY": "key",
     "LEG_SUPABASE_URL": "https://leg.supabase.co",
     "LEG_SUPABASE_SERVICE_ROLE_KEY": "leg_key",
     "KECO_REQUEST_BUDGET": "9000",
@@ -93,7 +93,9 @@ def _adapter_with_domain(domain_result: FakeDomainResult) -> KecoChemicalAdapter
 
 def test_k2a_01_missing_keco_credential():
     adapter = KecoChemicalAdapter()
-    env = {k: v for k, v in _GOOD_ENV.items() if k != "KECO_API_SERVICE_KEY"}
+    # Both canonical and legacy must be absent to trigger PreflightError
+    env = {k: v for k, v in _GOOD_ENV.items()
+           if k not in ("DATA_GO_KR_SERVICE_KEY", "KECO_API_SERVICE_KEY")}
     with patch.dict(os.environ, env, clear=True):
         with pytest.raises(PreflightError):
             adapter.preflight(_ctx())
@@ -361,7 +363,7 @@ def test_k2a_16c_registry_sync_mode_and_pool():
     from services.public_data_sync.contracts import SourceMode
     spec = registry.get("KECO_15149420")
     assert spec.sync_mode == SourceMode.TARGET_REFRESH
-    assert spec.credential_pool == "KECO_DEDICATED"
+    assert spec.credential_pool == "DATA_GO_KR"
     assert spec.rate_limit_group == "KECO"
     assert spec.auto_refresh_candidate is True
 

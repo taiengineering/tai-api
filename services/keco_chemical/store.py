@@ -199,8 +199,8 @@ class KecoReferenceStore:
     ) -> None:
         """run을 FAILED로 마감. serviceKey가 error_message에 코드되면 실제로 제거한 후 저장.
         해당 run에 남은 RUNNING targets도 RETRY로 해제해 orphan 방지."""
-        from services.keco_chemical.client import redact_key
-        api_key = (os.getenv("KECO_API_SERVICE_KEY") or "").strip()
+        from services.keco_chemical.client import redact_key, _get_service_key
+        api_key = _get_service_key()
         safe_msg = redact_key(error_message or "", api_key)
         client = _get_supabase_client()
         db = client.schema("msds_ref")
