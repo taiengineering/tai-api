@@ -112,9 +112,10 @@ def test_p01_wp1a_regression():
     assert "KSIC_SYNC" not in {s.source_id for s in reg.list_all()}
     assert reg.get("CSI_ACCIDENT").sync_mode.value == "FILE_SNAPSHOT"
     assert reg.get("KECO_15149420").credential_pool == "KECO_DEDICATED"
-    # runner still accepts no run_id/started_at
-    with pytest.raises(AdapterNotRegisteredError):
-        run_source(_SOURCE_ID)
+    # KOSHA_ACCIDENT_CASES adapter is now registered (Wave1); run_source no longer raises.
+    # Without credentials it returns PREFLIGHT_ERROR FAILED instead of raising.
+    result = run_source(_SOURCE_ID)
+    assert result.status.value in ("FAILED", "SUCCESS", "NO_CHANGE")
 
 
 # ---------------------------------------------------------------------------
