@@ -147,6 +147,12 @@ class SafeConstructionConsumerInput(BaseModel):
     has_water_tank: Optional[bool] = None
     is_energy_intensive: Optional[bool] = None
     is_multi_use: Optional[bool] = None
+    # WO-LFR-OBJ-S02-L1-ART68-INITIAL-FACT-IMPLEMENT-001: 건설공사발주자 4-fact.
+    # 초기 사업장/공사 정보 입력에서 수집. None=미제공(UNKNOWN). alias/파생 금지.
+    contracts_construction_work_at_site: Optional[bool] = None
+    leads_and_manages_construction_execution: Optional[bool] = None
+    recontracts_received_construction_work: Optional[bool] = None
+    same_site_contracted_construction_work_count: Optional[int] = None
 
 
 class SafeConstructionLegBody(BaseModel):
