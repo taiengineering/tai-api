@@ -1,13 +1,13 @@
 ---
 title: AUTO-SRC-01 Final Evidence
-status: COMPLETE — GPT VERIFY REQUIRED
+status: CLOSED FINAL / GPT PASS / 100%
 version: 2
 governed_by: WO-DOC-AUTO-SRC-01
 date: 2026-10-08
 corr: CORR-001
 ---
 
-# WO-DOC-AUTO-SRC-01 RESULT (CORR-001)
+# WO-DOC-AUTO-SRC-01 RESULT (CORR-001 / CLOSED FINAL)
 
 ## A. OBJECT
 
@@ -229,9 +229,9 @@ PDF generation = 0
 ```
 AUTO-SRC-01 EXECUTION = COMPLETE (CORR-001 APPLIED)
 
-GPT independent verify = REQUIRED
+GPT independent verify = PASS
 
-AUTO-SRC-01 CLOSED = NO
+AUTO-SRC-01 = CLOSED FINAL / GPT PASS / 100%
 
 AUTO-SRC-02 = BLOCKED (GAP-01 / GAP-02 resolution needed)
 AUTO-SRC-03 = BLOCKED (GAP-03 resolution needed)
