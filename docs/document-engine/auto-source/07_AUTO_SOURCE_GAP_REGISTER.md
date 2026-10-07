@@ -39,7 +39,7 @@ date: 2026-10-08
 | Attribute | Value |
 |-----------|-------|
 | Status | OPEN |
-| Scope | 10/24 doc_ids in AUTO catalog are AMBIGUOUS |
+| Scope | 14/24 doc_ids in AUTO catalog are AMBIGUOUS |
 | Details | INSP=4(same null detail), CHK=2(same null detail), TBM=2(null detail, construction vs general), EQUIP HAZMAT=2, MACHINE=2, SCAFFOLD=2 |
 | Impact | Cannot assign a single catalog_doc_id to many AUTO_SOURCE projections |
 | Blocking | catalog_binding_status = AMBIGUOUS for these cases |
@@ -83,13 +83,27 @@ date: 2026-10-08
 
 ---
 
+## GAP-07: Inspection Source Change Token Contract Undefined
+
+| Attribute | Value |
+|-----------|-------|
+| Status | OPEN |
+| Source field | safety_inspections — NO updated_at column; fn_resolve_inspection_record returns revision field |
+| Production evidence | safety_inspections schema confirmed: no updated_at; tbm_meetings has updated_at; revision semantics for inspection not contractually defined for change detection |
+| Impact | Read Model source_version_token and source_changed_at semantics cannot be implemented uniformly across INSPECTION and TBM source domains |
+| Blocking | Read Model source change detection (05_AUTO_DOCUMENT_READMODEL_CONTRACT.md Section 2 — source_version_token / source_changed_at) |
+| Resolution path | Define per-domain contract: INSPECTION = resolver revision as version token (REVIEW_REQUIRED — confirm monotonic); TBM = updated_at as source_changed_at. Requires DB schema verification. |
+
+---
+
 ## Summary
 
 | GAP | Status | Blocks |
 |-----|--------|--------|
 | GAP-01 | OPEN | AUTO-SRC-02 |
 | GAP-02 | OPEN | AUTO-SRC-02 EQUIP |
-| GAP-03 | OPEN | catalog_binding AMBIGUOUS (10/24) |
+| GAP-03 | OPEN | catalog_binding AMBIGUOUS (14/24) |
 | GAP-04 | OPEN | AUTO-SRC-04 |
 | GAP-05 | OPEN | AUTO-SRC-06 |
 | GAP-06 | PARTIAL | AUTO-SRC-02 performance |
+| GAP-07 | OPEN | Read Model source_version_token / source_changed_at |

@@ -1,12 +1,13 @@
 ---
 title: AUTO-SRC-01 Final Evidence
 status: COMPLETE — GPT VERIFY REQUIRED
-version: 1
+version: 2
 governed_by: WO-DOC-AUTO-SRC-01
 date: 2026-10-08
+corr: CORR-001
 ---
 
-# WO-DOC-AUTO-SRC-01 RESULT
+# WO-DOC-AUTO-SRC-01 RESULT (CORR-001)
 
 ## A. OBJECT
 
@@ -31,15 +32,12 @@ base branch = docs/doc-archrec-canonical-channels
 base HEAD   = 31c84979
 
 branch = docs/doc-auto-src-01-readmodel-design
-HEAD   = 5ad15514
+content HEAD   = 47258e23
+CORR-001 HEAD  = (this commit)
 
-changed files:
-  docs/document-engine/auto-source/01_AUTO_DOCUMENT_IDENTITY_CONTRACT.md
+changed files (CORR-001):
   docs/document-engine/auto-source/02_SOURCE_AUTHORITY_MATRIX.csv
-  docs/document-engine/auto-source/03_PROJECTION_SELECTOR_EVIDENCE.csv
-  docs/document-engine/auto-source/04_CATALOG_BINDING_AMBIGUITY.csv
   docs/document-engine/auto-source/05_AUTO_DOCUMENT_READMODEL_CONTRACT.md
-  docs/document-engine/auto-source/06_CONFIRM_BOUNDARY_ANALYSIS.md
   docs/document-engine/auto-source/07_AUTO_SOURCE_GAP_REGISTER.md
   docs/document-engine/auto-source/08_AUTO_SRC01_FINAL_EVIDENCE.md
 ```
@@ -69,16 +67,28 @@ metadata change preserves identity = YES (title/date/status not in key)
 ```
 INSPECTION source = safety_inspections
 inspection canonical resolver = fn_resolve_inspection_record(inspection_id) — SINGLE ROW
-  → normalizes status: COMPLETED/completed/ISSUE/HOLD → COMPLETED
+  → normalizes raw status_code:
+      in_progress / IN_PROGRESS       → IN_PROGRESS
+      completed / COMPLETED / ISSUE / HOLD → COMPLETED (internally)
+  → canonical effective status = COMPLETED
+  → ISSUE and HOLD are NOT canonical effective statuses —
+    fn_resolve maps them TO COMPLETED internally
   → N+1 pattern; not bulk
 
 inspector-scoped bulk path = fn_list_effective_inspection_records_by_inspector(inspector_id) — EXISTS
 factory-wide bulk path = NOT CONFIRMED
 
+INSPECTION source change token:
+  safety_inspections.updated_at = DOES NOT EXIST
+  source_version_token = resolver revision candidate (REVIEW_REQUIRED — monotonicity unconfirmed)
+  source_changed_at = NULL / UNRESOLVED for INSPECTION domain
+  → GAP-07 OPEN
+
 TBM source = tbm_meetings
 TBM completion authority = status_code = COMPLETED (10/11 in production)
 TBM company_id = direct column on tbm_meetings
 TBM construction_site_id = present (4/11 = 36% populated)
+TBM source change token = tbm_meetings.updated_at (source_changed_at — AVAILABLE)
 ```
 
 ---
@@ -136,6 +146,13 @@ generated_document required = NO
 on-demand render existing = YES (POST /documents/{doc_type}/generate, /preview)
 document library read model existing = NO (GAP-04)
 
+preview/download = TRANSIENT on-demand render only
+  → no persistent write to generated_document or Storage by default
+  → persistent artifact deferred to AUTO-SRC-06 confirm contract
+
+source_version_token = per-domain (INSPECTION: resolver revision REVIEW_REQUIRED; TBM: UNRESOLVED)
+source_changed_at = per-domain (INSPECTION: NULL/UNRESOLVED; TBM: tbm_meetings.updated_at)
+
 runtime_document_data.source_inspection_id = EXISTS
 UNIQUE (source_inspection_id, form_schema_id) = EXISTS
 Purpose = MANUAL/ASSISTED_MANUAL working-state linkage only
@@ -165,11 +182,37 @@ GAP-03 = OPEN — Catalog doc_id ambiguous for 14/24 AUTO docs
 GAP-04 = OPEN — Document library Read Model not implemented
 GAP-05 = OPEN — AUTO confirm path incompatible with current contract
 GAP-06 = PARTIAL — Single-row resolver exists; factory-wide bulk path not confirmed
+GAP-07 = OPEN — Inspection source change token undefined (safety_inspections has no updated_at)
 ```
 
 ---
 
-## J. MUTATION
+## J. CORR-001 DELTA
+
+```
+02_SOURCE_AUTHORITY_MATRIX.csv:
+  completion_status — INSPECTION row corrected:
+    BEFORE: inspection_status IN (COMPLETED | ISSUE | HOLD) after normalization
+    AFTER:  effective inspection_status == COMPLETED
+            (ISSUE/HOLD are NOT canonical effective statuses —
+             fn_resolve maps them to COMPLETED internally)
+
+05_AUTO_DOCUMENT_READMODEL_CONTRACT.md:
+  source_updated_at (single field) → REPLACED with:
+    source_version_token (text nullable) — INSPECTION: resolver revision REVIEW_REQUIRED; TBM: UNRESOLVED
+    source_changed_at (timestamptz nullable) — INSPECTION: NULL/UNRESOLVED; TBM: tbm_meetings.updated_at
+  Section 5 transient render wording — CORRECTED:
+    preview/download = transient only; no persistent DB write by default
+
+07_AUTO_SOURCE_GAP_REGISTER.md:
+  GAP-03 scope: 10/24 → 14/24 AMBIGUOUS
+  Summary table: GAP-03 (10/24) → (14/24)
+  GAP-07 ADDED: Inspection source change token contract undefined
+```
+
+---
+
+## K. MUTATION
 
 ```
 DB write = 0
@@ -181,10 +224,10 @@ PDF generation = 0
 
 ---
 
-## K. FINAL
+## L. FINAL
 
 ```
-AUTO-SRC-01 EXECUTION = COMPLETE
+AUTO-SRC-01 EXECUTION = COMPLETE (CORR-001 APPLIED)
 
 GPT independent verify = REQUIRED
 

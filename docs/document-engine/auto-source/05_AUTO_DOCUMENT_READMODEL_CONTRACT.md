@@ -42,7 +42,8 @@ The Read Model shows source records as if they were documents.
 | issue_code | text (nullable) | generated display code | {TYPE}-{사업장}-{YYYYMMDD}[-{DETAIL}] |
 | confirmed | boolean | false until explicit user action | false by default |
 | archive_id | uuid (nullable) | runtime_document_archive.id | null until confirmed |
-| source_updated_at | timestamptz | source record updated_at | for change detection |
+| source_version_token | text (nullable) | source-domain-specific version token | INSPECTION: resolver revision candidate (REVIEW_REQUIRED — monotonicity unconfirmed); TBM: UNRESOLVED |
+| source_changed_at | timestamptz (nullable) | nullable per source domain | INSPECTION: NULL / UNRESOLVED (safety_inspections has no updated_at column); TBM: tbm_meetings.updated_at |
 
 ## 3. Selector Status → Library Visibility
 
@@ -75,7 +76,7 @@ generated_document       = NOT required for AUTO listing
 PDF / Storage            = NOT required for AUTO listing
 ```
 
-These are created only on explicit user action (preview/download/confirm).
+Preview and download = transient on-demand render only; no persistent DB write to generated_document or Storage by default. Persistent artifact created only if a future confirm contract requires it (deferred to AUTO-SRC-06).
 
 ## 6. runtime_document_data Separation Note
 
