@@ -74,8 +74,11 @@ def _make_page(*distributions: dict) -> bytes:
     ).encode()
 
 
-def _csv_dist(content_url: str, fmt: str = "CSV") -> dict:
-    return {"@type": "DataDownload", "encodingFormat": fmt, "contentUrl": content_url}
+def _csv_dist(content_url: str, fmt: str | None = "CSV") -> dict:
+    d: dict = {"@type": "DataDownload", "contentUrl": content_url}
+    if fmt is not None:
+        d["encodingFormat"] = fmt
+    return d
 
 
 def _make_page_csv(*content_urls: str) -> bytes:
@@ -161,6 +164,7 @@ def test_d03_new_artifact():
     result = discover_latest_artifact(
         http_get=http_get,
         known_attachment_id=ATCH_FILE_ID,
+        known_file_detail_sn="1",
         known_effective_date=DATASET_EFFECTIVE_DATE,
     )
     assert result.status == "NEW_ARTIFACT"
@@ -177,6 +181,7 @@ def test_d04_no_change():
     result = discover_latest_artifact(
         http_get=_HTTP_CURRENT,
         known_attachment_id=ATCH_FILE_ID,
+        known_file_detail_sn="1",
         known_effective_date=DATASET_EFFECTIVE_DATE,
     )
     assert result.status == "NO_CHANGE"
@@ -338,6 +343,7 @@ def test_p02_explicit_no_change():
     result = discover_latest_artifact(
         http_get=_HTTP_CURRENT,
         known_attachment_id=ATCH_FILE_ID,
+        known_file_detail_sn="1",
         known_effective_date=DATASET_EFFECTIVE_DATE,
     )
     assert result.status == "NO_CHANGE"
@@ -356,6 +362,7 @@ def test_p03_explicit_new_artifact():
     result = discover_latest_artifact(
         http_get=http_get,
         known_attachment_id=ATCH_FILE_ID,
+        known_file_detail_sn="1",
         known_effective_date=DATASET_EFFECTIVE_DATE,
     )
     assert result.status == "NEW_ARTIFACT"
@@ -553,3 +560,108 @@ def test_d_allowed_hosts_contract():
 def test_d_static_constants():
     assert DOWNLOAD_PATH == "/cmm/cmm/fileDownload.do"
     assert DATASET_NAME == "국토안전관리원_건설안전사고사례"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P14 — same atchFileId, different fileDetailSn → AMBIGUOUS_LATEST_ARTIFACT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p14_same_attachment_different_fdsn_ambiguous():
+    url_a = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId=FILE_A&fileDetailSn=1"
+    url_b = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId=FILE_A&fileDetailSn=2"
+    page = _make_page(_csv_dist(url_a, "CSV"), _csv_dist(url_b, "CSV"))
+    http_get = _make_http_get(_META_CURRENT, page)
+    result = discover_latest_artifact(http_get=http_get)
+    assert result.status == "FAILED"
+    assert result.error_code == "AMBIGUOUS_LATEST_ARTIFACT"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P15 — same attachment + same date, different fileDetailSn in known → NEW_ARTIFACT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p15_known_fdsn_differs_new_artifact():
+    result = discover_latest_artifact(
+        http_get=_HTTP_CURRENT,
+        known_attachment_id=ATCH_FILE_ID,
+        known_file_detail_sn="99",
+        known_effective_date=DATASET_EFFECTIVE_DATE,
+    )
+    assert result.status == "NEW_ARTIFACT"
+    assert result.artifact is not None
+    assert result.artifact.file_detail_sn == "1"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P16 — only one of three comparison fields provided → COMPARISON_INPUT_INCOMPLETE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p16_file_detail_sn_only_incomplete():
+    result = discover_latest_artifact(
+        http_get=_HTTP_CURRENT,
+        known_file_detail_sn="1",
+    )
+    assert result.status == "FAILED"
+    assert result.error_code == "COMPARISON_INPUT_INCOMPLETE"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P17 — all distributions have no encodingFormat → NO_ARTIFACT (fail-closed)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p17_missing_encoding_format_no_artifact():
+    no_fmt_url = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId={ATCH_FILE_ID}&fileDetailSn=1"
+    page = _make_page(_csv_dist(no_fmt_url, fmt=None))
+    http_get = _make_http_get(_META_CURRENT, page)
+    result = discover_latest_artifact(http_get=http_get)
+    assert result.status == "FAILED"
+    assert result.error_code == "NO_ARTIFACT"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P18 — CSV dist A + no-format dist B + JSON dist C → only A selected
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p18_mixed_formats_only_csv_selected():
+    csv_url = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId=FILE_CSV&fileDetailSn=1"
+    no_fmt_url = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId=FILE_NOFMT&fileDetailSn=1"
+    json_url = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId=FILE_JSON&fileDetailSn=1"
+    page = _make_page(
+        _csv_dist(csv_url, fmt="CSV"),
+        _csv_dist(no_fmt_url, fmt=None),
+        _csv_dist(json_url, fmt="JSON"),
+    )
+    http_get = _make_http_get(_META_CURRENT, page)
+    result = discover_latest_artifact(http_get=http_get)
+    assert result.status == "DISCOVERED"
+    assert result.artifact is not None
+    assert result.artifact.attachment_id == "FILE_CSV"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P19 — now_fn() raises RuntimeError with secret → DISCOVERY_UNEXPECTED, no leak
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p19_now_fn_raises_no_secret_leaked():
+    result = discover_latest_artifact(
+        http_get=_HTTP_CURRENT,
+        now_fn=lambda: (_ for _ in ()).throw(RuntimeError("SECRET=super_secret_now_key")),
+    )
+    assert result.status == "FAILED"
+    assert result.error_code == "DISCOVERY_UNEXPECTED"
+    assert result.error_message == "RuntimeError"
+    assert "SECRET" not in (result.error_message or "")
+    assert "super_secret" not in (result.error_message or "")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P20 — now_fn returns non-datetime object → DISCOVERY_UNEXPECTED (AttributeError)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p20_now_fn_returns_non_datetime():
+    result = discover_latest_artifact(
+        http_get=_HTTP_CURRENT,
+        now_fn=lambda: object(),
+    )
+    assert result.status == "FAILED"
+    assert result.error_code == "DISCOVERY_UNEXPECTED"

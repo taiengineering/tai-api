@@ -6,9 +6,10 @@ Two HTTP requests are made:
   2. DATASET_URL  (fileData.do)    → JSON-LD distribution contentUrl → attachment ID
 
 Callers must provide http_get for testing (default uses urllib with bounded retry).
-Change detection is the caller's responsibility: pass known_attachment_id +
-known_effective_date (both non-None) to get NO_CHANGE / NEW_ARTIFACT; omit both
-(or pass both=None) to get DISCOVERED; partial supply → FAILED.
+Change detection is the caller's responsibility: pass all three of
+(known_attachment_id, known_file_detail_sn, known_effective_date) as non-None for
+NO_CHANGE/NEW_ARTIFACT; omit all (or pass all=None) for DISCOVERED;
+any partial supply → FAILED/COMPARISON_INPUT_INCOMPLETE.
 """
 from __future__ import annotations
 
@@ -33,6 +34,9 @@ from services.csi_accidents.contract import (
 _USER_AGENT = "tai-api-csi-discovery/1.0"
 _TIMEOUT = 30
 _MAX_ATTEMPTS = 3
+
+# CSV is the required format; text/csv is a normalized alias
+_ALLOWED_CSV_FORMATS: frozenset[str] = frozenset({"CSV", "TEXT/CSV"})
 
 HttpGetFn = Callable[[str], bytes]
 
@@ -167,14 +171,18 @@ def _extract_json_ld_blocks(html: str) -> list[dict]:
 
 
 def _collect_csv_content_urls(json_ld_blocks: list[dict]) -> list[str]:
-    """Return contentUrl values from CSV DataDownload distributions only."""
+    """Return contentUrl values from distributions whose encodingFormat is CSV only.
+
+    Distributions with a missing, blank, or non-CSV encodingFormat are silently
+    skipped. This is fail-closed: unknown formats are never treated as CSV.
+    """
     urls: list[str] = []
     for block in json_ld_blocks:
         for dist in block.get("distribution", []):
             if not isinstance(dist, dict):
                 continue
             fmt = (dist.get("encodingFormat") or "").strip().upper()
-            if fmt and fmt != "CSV":
+            if fmt not in _ALLOWED_CSV_FORMATS:
                 continue
             url = (dist.get("contentUrl") or "").strip()
             if url:
@@ -206,21 +214,24 @@ def discover_latest_artifact(
     *,
     http_get: Optional[HttpGetFn] = None,
     known_attachment_id: Optional[str] = None,
+    known_file_detail_sn: Optional[str] = None,
     known_effective_date: Optional[str] = None,
     now_fn: Optional[Callable[[], datetime]] = None,
 ) -> DiscoveryResult:
     """Discover the latest official CSI accident CSV artifact on data.go.kr.
 
-    Change detection contract:
-      both None          → DISCOVERED  (discovery only, no comparison)
-      both non-None      → NO_CHANGE or NEW_ARTIFACT
-      one None, one set  → FAILED / COMPARISON_INPUT_INCOMPLETE
+    Change detection contract (all three fields required for comparison):
+      all None       → DISCOVERED   (discovery only, no comparison)
+      all non-None   → NO_CHANGE or NEW_ARTIFACT
+      partial        → FAILED / COMPARISON_INPUT_INCOMPLETE
     """
     get = http_get or _default_http_get
-    now = (now_fn or (lambda: datetime.now(timezone.utc)))()
-    discovered_at = now.isoformat()
 
     try:
+        # now_fn is inside the boundary so failures are caught as DISCOVERY_UNEXPECTED
+        now = (now_fn or (lambda: datetime.now(timezone.utc)))()
+        discovered_at = now.isoformat()
+
         # ── Step 1: metadata JSON ────────────────────────────────────────────
         try:
             meta_bytes = get(METADATA_URL)
@@ -245,7 +256,7 @@ def discover_latest_artifact(
         portal_modified_at: str = meta.get("dateModified", "")
         effective_date = _parse_effective_date(alternate_name)
 
-        # ── Step 2: HTML page → JSON-LD → distribution contentUrl ───────────
+        # ── Step 2: HTML page → JSON-LD → CSV distribution contentUrls ──────
         try:
             page_bytes = get(DATASET_URL)
         except (HTTPError, URLError, OSError) as exc:
@@ -274,12 +285,13 @@ def discover_latest_artifact(
         for url in csv_urls:
             _validate_download_url(url)
 
-        # De-duplicate by attachment_id; multiple distinct CSV IDs = ambiguous
-        seen: dict[str, str] = {}
+        # Dedupe by (attachment_id, file_detail_sn); distinct pairs = ambiguous
+        seen: dict[tuple[str, str], str] = {}
         for url in csv_urls:
-            att_id, _ = _parse_attachment(url)
-            if att_id not in seen:
-                seen[att_id] = url
+            att_id, fdsn = _parse_attachment(url)
+            key = (att_id, fdsn)
+            if key not in seen:
+                seen[key] = url
 
         if len(seen) > 1:
             raise DiscoveryError(
@@ -303,18 +315,22 @@ def discover_latest_artifact(
             source_page_url=DATASET_URL,
         )
 
-        # ── Change detection ─────────────────────────────────────────────────
-        if known_attachment_id is None and known_effective_date is None:
+        # ── Change detection (all three fields required) ─────────────────────
+        known_fields = (known_attachment_id, known_file_detail_sn, known_effective_date)
+        none_count = sum(1 for f in known_fields if f is None)
+
+        if none_count == 3:
             return DiscoveryResult(status="DISCOVERED", artifact=artifact)
 
-        if known_attachment_id is None or known_effective_date is None:
+        if none_count > 0:
             raise DiscoveryError(
                 "COMPARISON_INPUT_INCOMPLETE",
-                "both known_attachment_id and known_effective_date must be provided",
+                "known_attachment_id, known_file_detail_sn, and known_effective_date must all be provided",
             )
 
         if (
             attachment_id == known_attachment_id
+            and file_detail_sn == known_file_detail_sn
             and effective_date == known_effective_date
         ):
             return DiscoveryResult(status="NO_CHANGE", artifact=artifact)
