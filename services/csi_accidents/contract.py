@@ -7,6 +7,8 @@ from __future__ import annotations
 DATASET_ID = "15108262"
 DATASET_EFFECTIVE_DATE = "2025-06-30"
 DATASET_URL = "https://www.data.go.kr/data/15108262/fileData.do"
+METADATA_URL = f"https://www.data.go.kr/catalog/{DATASET_ID}/fileData.json"
+ALLOWED_DOWNLOAD_HOSTS: frozenset[str] = frozenset({"www.data.go.kr", "data.go.kr"})
 DOWNLOAD_URL = (
     "https://www.data.go.kr/cmm/cmm/fileDownload.do"
     "?atchFileId=FILE_000000003574744&fileDetailSn=1&insertDataPrcus=N"
