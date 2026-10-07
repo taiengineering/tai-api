@@ -30,7 +30,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 __all__ = [
     "RENDERER_VERSION",
@@ -191,6 +191,7 @@ def _render_rows(
     fields: List[Dict[str, Any]],
     data: Dict[str, Any],
     consumed: set,
+    signature_images: Optional[Dict[str, str]] = None,
 ) -> List[str]:
     out: List[str] = []
     for f in fields:
@@ -200,6 +201,37 @@ def _render_rows(
         key = f.get("field_key")
         if key is not None and not isinstance(key, str):
             raise _fail("runtime_field.field_key must be str or None")
+
+        # ── signature field: render inline image, never expose snapshot JSON ──
+        if input_type == "signature":
+            if key is not None and key in data:
+                consumed.add(key)
+            img_uri = (signature_images or {}).get(key) if key else None
+            if img_uri:
+                state = "present"
+                # data URI only contains A-Za-z0-9+/= — safe in quoted attribute
+                cell_html = (
+                    '<img src="%s" alt="서명" '
+                    'style="max-width:200px;max-height:80px;display:block;">'
+                    % img_uri
+                )
+            else:
+                state = "missing"
+                cell_html = _esc(_MISSING_TEXT)
+            out.append(
+                '<tr data-field-id="%s" data-field-key="%s" data-input-type="%s" data-state="%s">'
+                "<th>%s</th><td>%s</td></tr>"
+                % (
+                    _esc(fid),
+                    _esc(key) if key is not None else "",
+                    _esc(input_type),
+                    state,
+                    _esc(label),
+                    cell_html,
+                )
+            )
+            continue
+        # ──────────────────────────────────────────────────────────────────────
 
         if key is None:
             # 값 조회 키가 없는 필드 — 값을 추측하지 않는다(auto fill 금지).
@@ -277,6 +309,8 @@ def build_render_artifacts(
     schema: Dict[str, Any],
     fields: List[Dict[str, Any]],
     checklists: List[Dict[str, Any]],
+    signature_images: Optional[Dict[str, str]] = None,
+    signature_manifest: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """confirm 봉인에 필요한 렌더 산출물을 만든다(순수 함수).
 
@@ -331,7 +365,7 @@ def build_render_artifacts(
     ordered_checks = sorted(checklists, key=lambda r: _order_key(r, "item_order"))
 
     consumed: set = set()
-    field_rows = _render_rows(ordered_fields, data, consumed)
+    field_rows = _render_rows(ordered_fields, data, consumed, signature_images)
     check_rows = _render_checklists(ordered_checks, data, consumed)
     unmapped_rows = _render_unmapped(data, consumed)
 
@@ -375,5 +409,5 @@ def build_render_artifacts(
         "rendered_body": rendered_body,
         "template_identity": _template_identity(structure),
         "source_trace_snapshot": source_trace_snapshot,
-        "evidence_manifest": [],
+        "evidence_manifest": list(signature_manifest) if signature_manifest else [],
     }
