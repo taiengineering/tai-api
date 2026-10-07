@@ -1,55 +1,97 @@
-doc_type,runtime_field_key,runtime_input_type,runtime_field_order,fetcher_output_key,exact_match,semantic_match
-INSP,inspection_done,text,1,,NO,REVIEW_REQUIRED
-INSP,inspection_datetime,date,2,inspection_date,NO,REVIEW_REQUIRED
-INSP,inspector,text,3,inspector_name,NO,REVIEW_REQUIRED
-INSP,risk,text,4,issue_items,NO,REVIEW_REQUIRED
-INSP,action,textarea,5,issue_items[].note,NO,REVIEW_REQUIRED
-CHK,inspection_done,text,1,,NO,REVIEW_REQUIRED
-CHK,inspection_datetime,date,2,inspection_date,NO,REVIEW_REQUIRED
-CHK,inspector,text,3,inspector_name,NO,REVIEW_REQUIRED
-CHK,risk,text,4,issue_items,NO,REVIEW_REQUIRED
-CHK,action,textarea,5,issue_items[].note,NO,REVIEW_REQUIRED
-PPE,ppe_check,text,1,,NO,REVIEW_REQUIRED
-PPE,worker,text,2,,NO,REVIEW_REQUIRED
-PPE,non_compliance,text,3,,NO,REVIEW_REQUIRED
-PPE,action,textarea,4,issue_items[].note,NO,REVIEW_REQUIRED
-TBM,work_content,textarea,1,work_description,NO,REVIEW_REQUIRED
-TBM,risk_share,text,2,risk_items,NO,REVIEW_REQUIRED
-TBM,participants,text,3,attendees,NO,REVIEW_REQUIRED
-TBM,signatures,signature,4,attendees[].signature_url,NO,REVIEW_REQUIRED
-EQUIP,crane_check,text,1,,NO,REVIEW_REQUIRED
-EQUIP,brake,text,2,,NO,REVIEW_REQUIRED
-EQUIP,wire,text,3,,NO,REVIEW_REQUIRED
-EQUIP,gas_check,text,1,,NO,REVIEW_REQUIRED
-EQUIP,leak,text,2,,NO,REVIEW_REQUIRED
-EQUIP,pressure,text,3,,NO,REVIEW_REQUIRED
-EQUIP,valve,text,4,,NO,REVIEW_REQUIRED
-EQUIP,equipment_check,text,1,,NO,REVIEW_REQUIRED
-EQUIP,inspection_datetime,date,2,inspection_date,NO,REVIEW_REQUIRED
-EQUIP,equipment_name,text,3,,NO,REVIEW_REQUIRED
-EQUIP,abnormal,text,4,,NO,REVIEW_REQUIRED
-EQUIP,action,textarea,5,issue_items[].note,NO,REVIEW_REQUIRED
-EQUIP,scaffold_check,text,1,,NO,REVIEW_REQUIRED
-EQUIP,binding,text,2,,NO,REVIEW_REQUIRED
-EQUIP,abnormal,text,3,,NO,REVIEW_REQUIRED
-EQUIP,collapse_risk,text,3,,NO,REVIEW_REQUIRED
-EQUIP,install_status,text,2,,NO,REVIEW_REQUIRED
-EQUIP,asbestos_status,text,1,,NO,REVIEW_REQUIRED
-EQUIP,damage,text,2,,NO,REVIEW_REQUIRED
-EQUIP,result,text,3,,NO,REVIEW_REQUIRED
-EQUIP,runtime,text,1,,NO,REVIEW_REQUIRED
-EQUIP,temperature,text,2,,NO,REVIEW_REQUIRED
-EQUIP,inspection_date,date,1,inspection_date,YES,YES
-EQUIP,inspection_content,textarea,2,,NO,REVIEW_REQUIRED
-EQUIP,equipment_status,text,1,,NO,REVIEW_REQUIRED
-EQUIP,operation_condition,text,2,,NO,REVIEW_REQUIRED
-EQUIP,electrical_check,text,1,,NO,REVIEW_REQUIRED
-EQUIP,guard_check,text,1,,NO,REVIEW_REQUIRED
-EQUIP,removed,text,2,,NO,REVIEW_REQUIRED
-EQUIP,status,text,3,,NO,REVIEW_REQUIRED
-EQUIP,target,text,1,,NO,REVIEW_REQUIRED
-EQUIP,defect,textarea,3,,NO,REVIEW_REQUIRED
-EQUIP,inspector_sign,signature,5,,NO,REVIEW_REQUIRED
-EQUIP,facility_check,text,1,,NO,REVIEW_REQUIRED
-EQUIP,storage,text,3,,NO,REVIEW_REQUIRED
-EQUIP,risk,text,4,,NO,REVIEW_REQUIRED
+doc_id,doc_type,doc_detail,form_schema_id,runtime_field_id,runtime_field_key,runtime_field_label,runtime_input_type,runtime_field_order,candidate_fetcher_output_key,exact_match,semantic_match
+DOC-OSH-017,CHK,일상,262847b3,549ead06,inspection_done,점검 실시 여부,text,1,,NO,REVIEW_REQUIRED
+DOC-OSH-017,CHK,일상,262847b3,23218165,inspection_datetime,점검일시,date,2,inspection_date,NO,REVIEW_REQUIRED
+DOC-OSH-017,CHK,일상,262847b3,8e265499,inspector,점검자,text,3,inspector_name,NO,REVIEW_REQUIRED
+DOC-OSH-017,CHK,일상,262847b3,c81e89ca,risk,위험요인,text,4,issue_items,NO,REVIEW_REQUIRED
+DOC-OSH-017,CHK,일상,262847b3,e206074b,action,조치사항,textarea,5,issue_items[].note,NO,REVIEW_REQUIRED
+DOC-OSH-055,CHK,일상,d8e7c4af,70491e1c,inspection_done,점검 실시 여부,text,1,,NO,REVIEW_REQUIRED
+DOC-OSH-055,CHK,일상,d8e7c4af,663d1613,inspection_datetime,점검일시,date,2,inspection_date,NO,REVIEW_REQUIRED
+DOC-OSH-055,CHK,일상,d8e7c4af,fe8585c0,inspector,점검자,text,3,inspector_name,NO,REVIEW_REQUIRED
+DOC-OSH-055,CHK,일상,d8e7c4af,7eeb659b,risk,위험요인,text,4,issue_items,NO,REVIEW_REQUIRED
+DOC-OSH-055,CHK,일상,d8e7c4af,1577ec6a,action,조치사항,textarea,5,issue_items[].note,NO,REVIEW_REQUIRED
+DOC-FAC-013,EQUIP,일상,bcbe777b,1924d56b,runtime,운전시간,text,1,,NO,REVIEW_REQUIRED
+DOC-FAC-013,EQUIP,일상,bcbe777b,b79704fd,temperature,온도,text,2,,NO,REVIEW_REQUIRED
+DOC-FAC-013,EQUIP,일상,bcbe777b,731b9f15,pressure,압력,text,3,,NO,REVIEW_REQUIRED
+DOC-FAC-013,EQUIP,일상,bcbe777b,e69cc663,abnormal,이상 여부,text,4,,NO,REVIEW_REQUIRED
+DOC-BLD-002,EQUIP,정기,107f9b0f,dae9afe0,target,점검 대상,text,1,,NO,REVIEW_REQUIRED
+DOC-BLD-002,EQUIP,정기,107f9b0f,7d4b443c,result,점검 결과,text,2,,NO,REVIEW_REQUIRED
+DOC-BLD-002,EQUIP,정기,107f9b0f,ef14cd22,defect,불량사항,textarea,3,,NO,REVIEW_REQUIRED
+DOC-BLD-002,EQUIP,정기,107f9b0f,c81a38be,action,조치사항,textarea,4,issue_items[].note,NO,REVIEW_REQUIRED
+DOC-BLD-002,EQUIP,정기,107f9b0f,7a015117,inspector_sign,점검자 서명,signature,5,,NO,REVIEW_REQUIRED
+DOC-BLD-009,EQUIP,정기,d8accb0a,3a18bc83,electrical_check,전기설비 점검,text,1,,NO,REVIEW_REQUIRED
+DOC-BLD-009,EQUIP,정기,d8accb0a,2eb2f728,inspection_datetime,점검일시,date,2,inspection_date,NO,REVIEW_REQUIRED
+DOC-BLD-009,EQUIP,정기,d8accb0a,1466f8fc,abnormal,이상 여부,text,3,,NO,REVIEW_REQUIRED
+DOC-BLD-011,EQUIP,정기,e26de2ee,c93f4ea3,inspection_date,점검일자,date,1,inspection_date,YES,YES
+DOC-BLD-011,EQUIP,정기,e26de2ee,912c98b1,inspection_content,점검내용,textarea,2,,NO,REVIEW_REQUIRED
+DOC-BLD-011,EQUIP,정기,e26de2ee,37184cc2,result,점검결과,text,3,,NO,REVIEW_REQUIRED
+DOC-BLD-011,EQUIP,정기,e26de2ee,47f3a2a6,action,조치사항,textarea,4,issue_items[].note,NO,REVIEW_REQUIRED
+DOC-BLD-016,EQUIP,정기,e6485339,6b80cc7f,asbestos_status,석면 상태,text,1,,NO,REVIEW_REQUIRED
+DOC-BLD-016,EQUIP,정기,e6485339,9fe3d54c,damage,손상 여부,text,2,,NO,REVIEW_REQUIRED
+DOC-BLD-016,EQUIP,정기,e6485339,ca3931d7,result,점검 결과,text,3,,NO,REVIEW_REQUIRED
+DOC-CHEM-003,EQUIP,정기,f0f6c84c,1ce1e742,facility_check,시설 점검 실시,text,1,,NO,REVIEW_REQUIRED
+DOC-CHEM-003,EQUIP,정기,f0f6c84c,f067c7ba,leak,누출 여부,text,2,,NO,REVIEW_REQUIRED
+DOC-CHEM-003,EQUIP,정기,f0f6c84c,c1fd7d8f,storage,저장 상태,text,3,,NO,REVIEW_REQUIRED
+DOC-CHEM-003,EQUIP,정기,f0f6c84c,d2d629d7,risk,위험성 평가,text,4,issue_items,NO,REVIEW_REQUIRED
+DOC-CON-013,EQUIP,정기,2e533a09,ff0a5339,equipment_check,장비 점검,text,1,,NO,REVIEW_REQUIRED
+DOC-CON-013,EQUIP,정기,2e533a09,236edc01,equipment_name,장비명,text,2,,NO,REVIEW_REQUIRED
+DOC-CON-013,EQUIP,정기,2e533a09,d44a8cc2,status,상태,text,3,,NO,REVIEW_REQUIRED
+DOC-CON-014,EQUIP,정기,d18a7909,6f0098fe,scaffold_check,비계 점검,text,1,,NO,REVIEW_REQUIRED
+DOC-CON-014,EQUIP,정기,d18a7909,9ba36c39,install_status,설치 상태,text,2,,NO,REVIEW_REQUIRED
+DOC-CON-014,EQUIP,정기,d18a7909,654e4455,collapse_risk,붕괴 위험,text,3,,NO,REVIEW_REQUIRED
+DOC-CON-026,EQUIP,정기,2a31ed12,2504fba4,scaffold_check,비계 점검,text,1,,NO,REVIEW_REQUIRED
+DOC-CON-026,EQUIP,정기,2a31ed12,78cba815,binding,결속 상태,text,2,,NO,REVIEW_REQUIRED
+DOC-CON-026,EQUIP,정기,2a31ed12,dfec7ebf,abnormal,이상 여부,text,3,,NO,REVIEW_REQUIRED
+DOC-CON-032,EQUIP,정기,2d773b5d,65dba83e,crane_check,크레인 점검,text,1,,NO,REVIEW_REQUIRED
+DOC-CON-032,EQUIP,정기,2d773b5d,1ab552a4,brake,브레이크 상태,text,2,,NO,REVIEW_REQUIRED
+DOC-CON-032,EQUIP,정기,2d773b5d,449ceaaa,wire,와이어 상태,text,3,,NO,REVIEW_REQUIRED
+DOC-CON-043,EQUIP,정기,be2bdd5b,3e24d5b8,guard_check,방호장치 점검,text,1,,NO,REVIEW_REQUIRED
+DOC-CON-043,EQUIP,정기,be2bdd5b,dce81778,removed,제거 여부,text,2,,NO,REVIEW_REQUIRED
+DOC-CON-043,EQUIP,정기,be2bdd5b,13d1e249,status,상태,text,3,,NO,REVIEW_REQUIRED
+DOC-FAC-002,EQUIP,정기,a74c056c,ae693e4c,gas_check,가스시설 점검,text,1,,NO,REVIEW_REQUIRED
+DOC-FAC-002,EQUIP,정기,a74c056c,850cc90d,leak,누출 여부,text,2,,NO,REVIEW_REQUIRED
+DOC-FAC-002,EQUIP,정기,a74c056c,ed20778d,pressure,압력 상태,text,3,,NO,REVIEW_REQUIRED
+DOC-FAC-002,EQUIP,정기,a74c056c,02a84c91,valve,밸브 상태,text,4,,NO,REVIEW_REQUIRED
+DOC-FAC-008,EQUIP,정기,162c689e,f8d0ccdb,inspection_content,점검내용,textarea,1,,NO,REVIEW_REQUIRED
+DOC-FAC-008,EQUIP,정기,162c689e,5e489dec,result,점검결과,text,2,,NO,REVIEW_REQUIRED
+DOC-FAC-008,EQUIP,정기,162c689e,9b731f9f,abnormal,이상 여부,text,3,,NO,REVIEW_REQUIRED
+DOC-FAC-008,EQUIP,정기,162c689e,70c3d78f,action,조치사항,textarea,4,issue_items[].note,NO,REVIEW_REQUIRED
+DOC-FAC-016,EQUIP,정기,f99be5c5,6e264745,equipment_status,설비 상태,text,1,,NO,REVIEW_REQUIRED
+DOC-FAC-016,EQUIP,정기,f99be5c5,cb6c4487,operation_condition,운전 조건,text,2,,NO,REVIEW_REQUIRED
+DOC-FAC-016,EQUIP,정기,f99be5c5,214ebdf9,result,점검 결과,text,3,,NO,REVIEW_REQUIRED
+DOC-OSH-059,EQUIP,정기,8a482918,273a070c,equipment_check,설비 점검 실시,text,1,,NO,REVIEW_REQUIRED
+DOC-OSH-059,EQUIP,정기,8a482918,98fb2f81,inspection_datetime,점검일시,date,2,inspection_date,NO,REVIEW_REQUIRED
+DOC-OSH-059,EQUIP,정기,8a482918,17d47d9b,equipment_name,설비명,text,3,,NO,REVIEW_REQUIRED
+DOC-OSH-059,EQUIP,정기,8a482918,db764856,abnormal,이상 여부,text,4,,NO,REVIEW_REQUIRED
+DOC-OSH-059,EQUIP,정기,8a482918,0751ca24,action,조치사항,textarea,5,issue_items[].note,NO,REVIEW_REQUIRED
+DOC-CON-007,INSP,일상,1413ce42,4c018ce5,inspection_done,점검 실시 여부,text,1,,NO,REVIEW_REQUIRED
+DOC-CON-007,INSP,일상,1413ce42,b2dc3d97,inspection_datetime,점검일시,date,2,inspection_date,NO,REVIEW_REQUIRED
+DOC-CON-007,INSP,일상,1413ce42,a1552464,inspector,점검자,text,3,inspector_name,NO,REVIEW_REQUIRED
+DOC-CON-007,INSP,일상,1413ce42,213c78e9,risk,위험요인,text,4,issue_items,NO,REVIEW_REQUIRED
+DOC-CON-007,INSP,일상,1413ce42,f8e3d4d2,action,조치사항,textarea,5,issue_items[].note,NO,REVIEW_REQUIRED
+DOC-CON-LAW-014,INSP,일상,a39ac8bb,74e1f5c7,inspection_done,점검 실시 여부,text,1,,NO,REVIEW_REQUIRED
+DOC-CON-LAW-014,INSP,일상,a39ac8bb,5a6957d1,inspection_datetime,점검일시,date,2,inspection_date,NO,REVIEW_REQUIRED
+DOC-CON-LAW-014,INSP,일상,a39ac8bb,e0e36acf,inspector,점검자,text,3,inspector_name,NO,REVIEW_REQUIRED
+DOC-CON-LAW-014,INSP,일상,a39ac8bb,ac3fe155,risk,위험요인,text,4,issue_items,NO,REVIEW_REQUIRED
+DOC-CON-LAW-014,INSP,일상,a39ac8bb,4f47b384,action,조치사항,textarea,5,issue_items[].note,NO,REVIEW_REQUIRED
+DOC-OSH-007,INSP,일상,2d231cb5,46b1e086,inspection_done,점검 실시 여부,text,1,,NO,REVIEW_REQUIRED
+DOC-OSH-007,INSP,일상,2d231cb5,0436347d,inspection_datetime,점검일시,date,2,inspection_date,NO,REVIEW_REQUIRED
+DOC-OSH-007,INSP,일상,2d231cb5,7f5931c7,inspector,점검자,text,3,inspector_name,NO,REVIEW_REQUIRED
+DOC-OSH-007,INSP,일상,2d231cb5,6ef56f51,risk,위험요인,text,4,issue_items,NO,REVIEW_REQUIRED
+DOC-OSH-007,INSP,일상,2d231cb5,29a6bf5a,action,조치사항,textarea,5,issue_items[].note,NO,REVIEW_REQUIRED
+DOC-OSH-038,INSP,일상,3cee80a7,82c6f34d,inspection_done,점검 실시 여부,text,1,,NO,REVIEW_REQUIRED
+DOC-OSH-038,INSP,일상,3cee80a7,3cd5d807,inspection_datetime,점검일시,date,2,inspection_date,NO,REVIEW_REQUIRED
+DOC-OSH-038,INSP,일상,3cee80a7,8cd018a5,inspector,점검자,text,3,inspector_name,NO,REVIEW_REQUIRED
+DOC-OSH-038,INSP,일상,3cee80a7,11cd4f9e,risk,위험요인,text,4,issue_items,NO,REVIEW_REQUIRED
+DOC-OSH-038,INSP,일상,3cee80a7,1fb9ecdf,action,조치사항,textarea,5,issue_items[].note,NO,REVIEW_REQUIRED
+DOC-OSH-046,PPE,일상,5ab73af9,d10fcd81,ppe_check,보호구 착용 여부,text,1,,NO,REVIEW_REQUIRED
+DOC-OSH-046,PPE,일상,5ab73af9,9f3908af,worker,작업자,text,2,,NO,REVIEW_REQUIRED
+DOC-OSH-046,PPE,일상,5ab73af9,0f2c4e30,non_compliance,미착용자,text,3,,NO,REVIEW_REQUIRED
+DOC-OSH-046,PPE,일상,5ab73af9,f4c11e64,action,조치사항,textarea,4,issue_items[].note,NO,REVIEW_REQUIRED
+DOC-CON-012,TBM,일상,c74cfda0,bfa2de9f,work_content,작업내용,textarea,1,work_description,NO,REVIEW_REQUIRED
+DOC-CON-012,TBM,일상,c74cfda0,da5e3590,risk_share,위험요인 공유,text,2,risk_items,NO,REVIEW_REQUIRED
+DOC-CON-012,TBM,일상,c74cfda0,e5f78c6a,participants,참석자,text,3,attendees,NO,REVIEW_REQUIRED
+DOC-CON-012,TBM,일상,c74cfda0,9cf41e47,signatures,서명,signature,4,attendees[].signature_url,NO,REVIEW_REQUIRED
+DOC-OSH-056,TBM,일상,495bdefe,cacda53f,work_content,작업내용,textarea,1,work_description,NO,REVIEW_REQUIRED
+DOC-OSH-056,TBM,일상,495bdefe,5e1d4484,risk_share,위험요인 공유,text,2,risk_items,NO,REVIEW_REQUIRED
+DOC-OSH-056,TBM,일상,495bdefe,0fe733dc,participants,참석자,text,3,attendees,NO,REVIEW_REQUIRED
+DOC-OSH-056,TBM,일상,495bdefe,99e6888a,signatures,서명,signature,4,attendees[].signature_url,NO,REVIEW_REQUIRED

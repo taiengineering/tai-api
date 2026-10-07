@@ -1,24 +1,23 @@
 ---
 title: ARCH-REC-02 Final Evidence
-status: COMPLETE — GPT VERIFY REQUIRED
-version: 1
+status: CORR-001 COMPLETE — GPT VERIFY REQUIRED
+version: 2
 governed_by: WO-DOC-ARCHREC-002
 date: 2026-10-08
 ---
 
-# WO-DOC-ARCHREC-002 RESULT
+# WO-DOC-ARCHREC-002 RESULT (CORR-001 APPLIED)
 
 ## A. GIT
 
 ```
-main (base) = pulled current (3 commits behind origin at start, now synced)
+main (base) = eba8fc90
 branch = docs/doc-archrec-canonical-channels
-HEAD = [pending commit]
-changed files:
+before HEAD = 8b442d5e (initial commit)
+after HEAD  = [CORR-001 commit — pending push]
+changed files (CORR-001):
   docs/document-engine/architecture-reconciliation/01_CANONICAL_CHANNEL_CONTRACT.md
-  docs/document-engine/architecture-reconciliation/02_AUTO_SOURCE_CURRENT_MATRIX.csv
   docs/document-engine/architecture-reconciliation/03_RUNTIME_FETCHER_KEY_MATRIX.csv
-  docs/document-engine/architecture-reconciliation/04_DOCUMENT_260_CHANNEL_FACTS.csv
   docs/document-engine/architecture-reconciliation/05_MANUAL_CHANNEL_REVIEW_QUEUE.csv
   docs/document-engine/architecture-reconciliation/06_TASK_GUIDE_SEARCH_CONTRACT.md
   docs/document-engine/architecture-reconciliation/07_C2C_SCOPE_RECLASSIFICATION.md
@@ -67,14 +66,35 @@ conductor_signature, manager_name
 | unmapped | 230 |
 | AUTO_SOURCE_CANDIDATE (fetcher_status=EXISTING) | 24 |
 | mapped but NOT AUTO_SOURCE (NO_SOURCE + NEW_NEEDED) | 6 |
+| **MANUAL_REVIEW_REQUIRED total** | **236 (= 230 + 6)** |
 | has_legal_form=true | 138 |
 | has_legal_form=false | 122 |
 | is_external_writer=true | 25 |
 | is_external_writer=false | 235 |
 
-Grade distribution:
+Manual review breakdown:
+```
+unmapped                                    = 230
+mapped but current fetcher unavailable      =   6
+  APPT  (NO_SOURCE)  2 — DOC-OSH-062, DOC-OSH-063
+  CONLOG (NEW_NEEDED) 1 — DOC-CON-006
+  EDU   (NEW_NEEDED)  3 — DOC-OSH-006, DOC-OSH-037, DOC-SERA-006
+─────────────────────────────────────────────────────────────────
+MANUAL_REVIEW_REQUIRED total                = 236
+```
+
+Grade distribution (all 260):
 ```
 A: 30
+B: 75
+C: 72
+D: 37
+X: 46
+```
+
+Grade distribution (236 manual review):
+```
+A:  6
 B: 75
 C: 72
 D: 37
@@ -95,9 +115,22 @@ tai_auto reflects delivery/processing automation, NOT document generation mode
 | Attribute | Value |
 |-----------|-------|
 | P0 runtime schemas total | 24 |
-| P0 runtime fields total | 96 (post C2-C2 correction, status=CANDIDATE) |
-| fetcher exact key matches | 1 (EQUIP inspection_date↔inspection_date) |
-| review_required matches | all remaining — GPT semantic mapping 대기 |
+| P0 runtime fields total | 96 |
+| runtime matrix rows (03_RUNTIME_FETCHER_KEY_MATRIX.csv) | 96 |
+| fetcher exact key matches | 1 (EQUIP DOC-BLD-011 inspection_date↔inspection_date) |
+| review_required matches | 95 — GPT semantic mapping 대기 |
+
+Runtime matrix count breakdown:
+```
+CHK   2 schemas × 5 fields = 10
+EQUIP 1 schema  × 4 fields =  4  (DOC-FAC-013 일상)
+EQUIP 14 schemas             50  (정기 variants)
+INSP  4 schemas × 5 fields = 20
+PPE   1 schema  × 4 fields =  4
+TBM   2 schemas × 4 fields =  8
+─────────────────────────────────
+Total                        96
+```
 
 Runtime schema field keys do NOT align with Fetcher output keys.
 Connecting runtime schemas directly to AUTO_SOURCE is not supported without a mapping layer.
@@ -110,12 +143,36 @@ Connecting runtime schemas directly to AUTO_SOURCE is not supported without a ma
 |-----------|-------|
 | safe_help_content type allowed values | PAGE_GUIDE, TASK_GUIDE, FAQ |
 | current TASK_GUIDE rows | 0 |
-| Shared Search domain | KNOWLEDGE_CENTER |
+| Shared Search domain_name | KNOWLEDGE |
+| Shared Search object_type | KNOWLEDGE |
+| canonical enqueue | enqueue_search_index_sync called on upsert/status change |
+| incremental job | shared_search_incremental ACTIVE |
 | visibility | PUBLIC + SAAS + PAID |
+
+NOT confirmed by this contract:
+```
+Google/Naver automatic SEO indexing — separate public route/crawl/sitemap verification needed
+document_forms ↔ TASK_GUIDE automatic linking — no implementation; separate WO needed
+```
 
 ---
 
-## F. MUTATION
+## F. C2-C2
+
+| Attribute | Value |
+|-----------|-------|
+| C2-C2 implementation | CLOSED / GPT PASS |
+| production migration applied | NO |
+| Production runtime schema status | CANDIDATE (24 schemas) |
+| Production runtime field status | CANDIDATE (96 fields) |
+| Production checklist status | APPROVED_BY_HUMAN (96 items) |
+| Production evidence field status | CANDIDATE (12 fields) |
+
+Production child state = pre-apply. "96 fields normalized" refers to implementation verification only, not production state.
+
+---
+
+## G. MUTATION
 
 | Type | Count |
 |------|-------|
@@ -127,14 +184,17 @@ Connecting runtime schemas directly to AUTO_SOURCE is not supported without a ma
 
 ---
 
-## G. FINAL
+## H. FINAL
 
 | Item | Status |
 |------|--------|
 | ARCH-REC-01 | CLOSED / GPT PASS |
-| ARCH-REC-02 | COMPLETE — GPT VERIFY REQUIRED |
-| C2-C3 | BLOCKED (not prerequisite for AUTO_SOURCE; manual/fallback schema approval pending) |
+| ARCH-REC-02 CORR-001 | COMPLETE — GPT VERIFY REQUIRED |
+| ARCH-REC-02 CLOSED | NO |
+| C2-C2 implementation | CLOSED / GPT PASS |
+| C2-C2 production apply | NO |
+| C2-C3 | BLOCKED (manual/fallback schema approval pending) |
 | C2-C4 | BLOCKED |
 | AUTO_SOURCE connection | MISSING — separate WO needed |
 | TASK_GUIDE content | MISSING — separate WO needed |
-| 230 manual channel classification | MANUAL_REVIEW_REQUIRED — GPT판정 대기 |
+| 236 manual channel classification | MANUAL_REVIEW_REQUIRED — GPT판정 대기 |

@@ -76,14 +76,25 @@ TASK_GUIDE does NOT:
 
 ## 5. Shared Search Domain Connection
 
-`safe_help_content` is currently connected to Shared Search as:
-- Domain: KNOWLEDGE_CENTER
-- Visibility: PUBLIC + SAAS + PAID
+`safe_help_content` is connected to Shared Search via `KnowledgeAdapter` (confirmed in `services/shared_search/adapters/knowledge.py`):
 
-When TASK_GUIDE rows are created, they automatically become:
-- Indexed in TAI unified search
-- Eligible for Google/Naver SEO
-- Linked from document catalog to guidance content
+```
+domain_name  = KNOWLEDGE
+object_type  = KNOWLEDGE
+```
+
+Visibility scopes: PUBLIC + SAAS + PAID
+
+Publication gate: `status = 'PUBLISHED'` only.
+
+When a TASK_GUIDE row is saved with `status=PUBLISHED` through the canonical `safe_help_svc`:
+- `enqueue_search_index_sync(domain_name="KNOWLEDGE", object_type="KNOWLEDGE")` is called
+- `shared_search_incremental` cron (active, every minute) picks it up
+- The entry becomes eligible for TAI unified search (Shared Search indexing)
+
+The following are **NOT** confirmed by this contract:
+- Automatic Google/Naver external search engine indexing (requires public route + crawl + sitemap/SEO policy — separate verification needed)
+- Automatic linking between `document_forms` and `safe_help_content TASK_GUIDE` (no implementation exists; separate linking contract / WO needed)
 
 ---
 

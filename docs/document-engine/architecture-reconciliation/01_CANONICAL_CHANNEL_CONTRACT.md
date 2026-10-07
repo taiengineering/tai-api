@@ -75,7 +75,17 @@ AUTO_SOURCE_CANDIDATE =
   AND document_type_registry.fetcher_status = EXISTING
 ```
 
-Remaining 230 documents without mapping = MANUAL_REVIEW_REQUIRED.
+Manual review required total = 236
+
+```
+Unmapped (no document_type_mapping)    = 230
+Mapped but current fetcher unavailable =   6
+  APPT  2  (NO_SOURCE)
+  CONLOG 1 (NEW_NEEDED)
+  EDU   3  (NEW_NEEDED)
+─────────────────────────────────────────────
+Total MANUAL_REVIEW_REQUIRED           = 236
+```
 
 ---
 
@@ -156,7 +166,7 @@ document_forms
       ↓
 TASK_GUIDE (safe_help_content)
       ↓
-Shared Search (KNOWLEDGE_CENTER domain)
+Shared Search (KNOWLEDGE domain)
       ↓
 Google / Naver / 안전정보검색
       ↓

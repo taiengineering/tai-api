@@ -63,7 +63,7 @@ scaffold_check, binding, abnormal
 | Item | Status |
 |------|--------|
 | C2-C1 | CLOSED |
-| C2-C2 | CLOSED (GPT PASS) — 96 fields normalized, CANDIDATE status |
+| C2-C2 | CLOSED (GPT PASS) — implementation verified; migration NOT applied to Production; Production child state remains pre-apply (schema=CANDIDATE, field=CANDIDATE, checklist=APPROVED_BY_HUMAN, evidence=CANDIDATE) |
 | C2-C3 | HOLD — schema approval verification for manual/fallback use |
 | C2-C4 | HOLD |
 | C2-C3 as AUTO_SOURCE prerequisite | REMOVED (this reclassification) |
