@@ -1,5 +1,6 @@
 -- WO-SEO-NAVER-INDEXNOW-V2-004B: IndexNow Snapshot Diff State
--- RC3: queue claim worker, retry scheduling, baseline seed, full unique idempotency.
+-- RC4: retry_failed fix (no updated_at, attempt_count=0, processing_at=NULL), queue field cleanup,
+--      baseline post-verify RPC, preflight order enforced in JS.
 -- Production DB apply: NOT YET AUTHORIZED.
 --
 -- Security: internal schema NOT exposed via PostgREST (public schema only).
@@ -449,7 +450,10 @@ BEGIN
         status           = 'DELIVERED',
         delivered_at     = now(),
         last_http_status = v_hs,
-        attempt_count    = attempt_count + 1
+        attempt_count    = attempt_count + 1,
+        processing_at    = NULL,
+        next_retry_at    = NULL,
+        last_error       = NULL
       WHERE url = v_url AND event_type = v_etype AND target_fingerprint = v_tfp
         AND status IN ('PENDING', 'PROCESSING', 'RETRY');
 
@@ -467,6 +471,7 @@ BEGIN
         attempt_count    = attempt_count + 1,
         last_http_status = v_hs,
         last_error       = COALESCE(r->>'error', 'HTTP_' || v_hs),
+        processing_at    = NULL,
         next_retry_at    = CASE
           WHEN attempt_count + 1 >= 3 THEN NULL
           WHEN attempt_count = 0      THEN now() + interval '10 minutes'
@@ -555,9 +560,10 @@ AS $$
 BEGIN
   UPDATE internal.indexnow_delivery_queue SET
     status        = 'RETRY',
+    attempt_count = 0,
+    processing_at = NULL,
     next_retry_at = now() + interval '1 minute',
-    last_error    = NULL,
-    updated_at    = now()
+    last_error    = NULL
   WHERE url = p_url AND event_type = p_event_type AND target_fingerprint = p_target_fingerprint
     AND status = 'FAILED';
 
@@ -571,6 +577,34 @@ REVOKE ALL ON FUNCTION public.internal_indexnow_delivery_retry_failed(TEXT, TEXT
 REVOKE ALL ON FUNCTION public.internal_indexnow_delivery_retry_failed(TEXT, TEXT, TEXT) FROM anon;
 REVOKE ALL ON FUNCTION public.internal_indexnow_delivery_retry_failed(TEXT, TEXT, TEXT) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.internal_indexnow_delivery_retry_failed(TEXT, TEXT, TEXT) TO service_role;
+
+-- ── RPC 12: baseline verification ────────────────────────────────────────────
+-- Returns 4-column aggregate for JS post-seed verification.
+-- Pass criteria: total = active = fingerprint_match = expected_unique; queue = 0.
+CREATE OR REPLACE FUNCTION public.internal_indexnow_baseline_verify()
+RETURNS TABLE (
+  total_rows             BIGINT,
+  active_rows            BIGINT,
+  fingerprint_match_rows BIGINT,
+  queue_rows             BIGINT
+)
+LANGUAGE sql
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+  SELECT
+    (SELECT COUNT(*) FROM internal.indexnow_url_state)                                          AS total_rows,
+    (SELECT COUNT(*) FROM internal.indexnow_url_state WHERE state = 'ACTIVE')                   AS active_rows,
+    (SELECT COUNT(*) FROM internal.indexnow_url_state
+       WHERE current_fingerprint = last_submitted_fingerprint
+         AND last_submitted_fingerprint IS NOT NULL)                                             AS fingerprint_match_rows,
+    (SELECT COUNT(*) FROM internal.indexnow_delivery_queue)                                     AS queue_rows;
+$$;
+
+REVOKE ALL ON FUNCTION public.internal_indexnow_baseline_verify() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.internal_indexnow_baseline_verify() FROM anon;
+REVOKE ALL ON FUNCTION public.internal_indexnow_baseline_verify() FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.internal_indexnow_baseline_verify() TO service_role;
 
 -- ============================================================
 -- STEP 7: POST-CREATION GUARDS
@@ -653,9 +687,10 @@ BEGIN
       'internal_indexnow_delivery_update_batch',
       'internal_indexnow_baseline_seed_batch',
       'internal_indexnow_url_state_count',
-      'internal_indexnow_delivery_retry_failed'
+      'internal_indexnow_delivery_retry_failed',
+      'internal_indexnow_baseline_verify'
     );
-  IF v_count < 10 THEN
-    RAISE EXCEPTION 'POST FAIL: expected >= 10 RPCs in public schema, found %', v_count;
+  IF v_count < 11 THEN
+    RAISE EXCEPTION 'POST FAIL: expected >= 11 RPCs in public schema, found %', v_count;
   END IF;
 END $check_post$;
