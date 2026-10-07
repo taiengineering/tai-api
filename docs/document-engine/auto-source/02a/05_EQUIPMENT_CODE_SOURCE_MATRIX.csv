@@ -1,0 +1,51 @@
+source_equipment_code,code_schema,row_count,equipment_category,master_table,master_source,canonical_name,master_status,notes
+040,numeric 001-040,800,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,Numeric codes 001-040 exist in equipment_assets; no master/lookup table found in taieng DB
+036,numeric 001-040,215,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+021,numeric 001-040,181,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+011,numeric 001-040,179,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+025,numeric 001-040,143,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+037,numeric 001-040,142,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+013,numeric 001-040,129,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+008,numeric 001-040,106,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+029,numeric 001-040,103,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+024,numeric 001-040,94,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+014,numeric 001-040,90,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+032,numeric 001-040,85,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+039,numeric 001-040,78,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+031,numeric 001-040,66,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+015,numeric 001-040,61,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+026,numeric 001-040,56,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+007,numeric 001-040,54,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+012,numeric 001-040,52,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+009,numeric 001-040,49,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+010,numeric 001-040,39,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+001,numeric 001-040,37,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+030,numeric 001-040,35,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+033,numeric 001-040,28,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+034,numeric 001-040,27,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+006,numeric 001-040,25,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+018,numeric 001-040,21,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+002,numeric 001-040,20,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+023,numeric 001-040,7,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+017,numeric 001-040,5,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+028,numeric 001-040,1,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+016,numeric 001-040,1,NULL,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,
+033,numeric 001-040,1,소방설비,NOT FOUND,NOT FOUND,UNKNOWN,MASTER_NOT_FOUND,one row has equipment_category = 소방설비 but no formal master
+PRESSURE_VESSEL,named uppercase,300,MACHINE,NOT FOUND,equipment_assets.equipment_category,MACHINE,UNRESOLVED,MACHINE is not an EQUIP doc_detail; no mapping to BOILER/CRANE/etc.
+PRESS,named uppercase,300,FIRE,NOT FOUND,equipment_assets.equipment_category,FIRE,UNRESOLVED,FIRE→EQUIP FIRE? Inconsistent: PRESS equipment categorized as FIRE (likely test data)
+CRANE,named uppercase,300,ELECTRICAL,NOT FOUND,equipment_assets.equipment_category,ELECTRICAL,UNRESOLVED,CRANE equipment categorized as ELECTRICAL (suspect test data mismatch)
+CONVEYOR,named uppercase,300,TRANSPORT,NOT FOUND,equipment_assets.equipment_category,TRANSPORT,UNRESOLVED,TRANSPORT is not an EQUIP doc_detail
+NULL,NULL (type_code absent),14,HEATTREAT,NOT FOUND,equipment_assets.equipment_category,HEATTREAT,UNRESOLVED,no code at all
+NULL,NULL,2,CASTING,NOT FOUND,equipment_assets.equipment_category,CASTING,UNRESOLVED,
+NULL,NULL,2,ROLLING,NOT FOUND,equipment_assets.equipment_category,ROLLING,UNRESOLVED,
+NULL,NULL,2,MACHINERY,NOT FOUND,equipment_assets.equipment_category,MACHINERY,UNRESOLVED,
+NULL,NULL,2,FURNACE,NOT FOUND,equipment_assets.equipment_category,FURNACE,UNRESOLVED,
+paint_booth,named lowercase,2,도장,user-entered,user-entered,도장,UNRESOLVED,user-entered informal code
+welder,named lowercase,2,용접,user-entered,user-entered,용접,UNRESOLVED,
+ventilation,named lowercase,1,환기,user-entered,user-entered,환기,UNRESOLVED,
+boiler,named lowercase,1,보일러,user-entered,user-entered,보일러,UNRESOLVED,lowercase; different from BOILER doc_detail
+press_brake,named lowercase,1,성형,user-entered,user-entered,성형,UNRESOLVED,
+cutter,named lowercase,1,절단,user-entered,user-entered,절단,UNRESOLVED,
+forklift,named lowercase,1,운반하역,user-entered,user-entered,운반하역,UNRESOLVED,
+crane,named lowercase,1,양중기,user-entered,user-entered,양중기,UNRESOLVED,lowercase; different from CRANE uppercase named code
+robot,named lowercase,1,자동화,user-entered,user-entered,자동화,UNRESOLVED,
