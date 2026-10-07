@@ -1,0 +1,76 @@
+doc_id,doc_name,tai_grade,has_legal_form,is_external_writer,tai_auto,tai_method,auto_source_candidate,manual_channel_classification,gpt_review_required
+DOC-BLD-006,소방훈련 교육 기록부,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-BLD-007,피난계획 대피훈련 기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-BLD-014,석면관리대장,B,true,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-BLD-023,소방시설 자체점검 조치계획서,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-BLD-024,소방시설 자체점검 조치완료보고서,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-BLD-029,전기재해 보고서,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-BLD-032,승강기 중대한 고장 보고서,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-BLD-038,석면건축물 조사 결과서,B,true,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-BLD-041,시설물 안전 및 유지관리계획,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-BLD-043,시설물 보수보강 조치 결과보고서,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-BLD-044,시설물 중대한 결함 보고서,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-BLD-045,시설물 사고보고서,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-CHEM-008,유해화학물질 취급기록부,B,true,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CHEM-013,화학사고예방관리계획서,B,true,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-CHEM-021,유해화학물질 영업 실적보고서,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-CON-008,작업계획서(고위험작업),B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-010,도급사업 안전보건조치계획,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-011,안전보건협의체 회의록(건설),B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-015,굴착작업 안전계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-019,하도급관리대장,B,true,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-023,굴착공사 작업계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-024,흙막이공 안전계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-025,비계 설치계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-027,거푸집 설치계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-028,동바리 안전계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-029,철근 작업계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-031,타워크레인 설치계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-033,양중작업계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-036,용접작업 허가서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-037,밀폐공간 작업허가서(건설),B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-038,고소작업 계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-039,전기작업 계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-040,장비 사용계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-042,낙하물 방지계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-CON-044,소규모안전관리계획,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-CON-047,하도급계약 통보서,B,true,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-CON-050,건설공사대장,B,true,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-CON-LAW-015,건설공사 안전관리 이행기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-FAC-007,위험물 저장취급 기록부,B,true,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-FAC-023,고압가스 사고발생 통보서,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-FAC-030,위험물 정기점검 결과 제출서,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-OSH-013,작업허가서(일반),B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-014,밀폐공간작업계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-015,안전보건협의체회의록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-016,도급안전보건조치기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-022,밀폐공간작업프로그램기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-039,밀폐공간 작업기록부,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-040,도급사업 안전보건조치 이행기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-042,위험성평가 개선조치계획서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-043,화학물질 관리대장,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-044,물질안전보건자료 교육기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-045,보호구 지급대장,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-047,밀폐공간 작업허가서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-048,밀폐공간 산소농도 측정기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-049,작업허가서(위험작업),B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-052,비상훈련 실시기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-054,협력업체 안전관리평가서,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-057,근로자 의견청취 기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-058,산업안전보건위원회 회의록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-OSH-061,통합 산업재해 현황 조사표,B,true,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-OSH-064,안전관리자등 해임 통합 보고서,B,true,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-OSH-068,공정안전보고서,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-OSH-069,공정안전보고서 변경 제출서,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-OSH-070,안전검사 신청서,B,true,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-OSH-072,석면해체제거작업 신고서,B,true,true,false,,NO,REVIEW_REQUIRED,YES
+DOC-OSH-073,석면해체제거작업 변경신고서,B,true,true,false,,NO,REVIEW_REQUIRED,YES
+DOC-OSH-074,석면농도측정 결과보고서,B,true,true,false,,NO,REVIEW_REQUIRED,YES
+DOC-OSH-075,근골격계부담작업 유해요인조사표,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-OSH-076,근골격계질환 예방관리 프로그램,B,false,false,false,,NO,REVIEW_REQUIRED,YES
+DOC-SERA-002,안전보건관리체계 점검기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-SERA-003,유해위험요인 확인 개선기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-SERA-004,재해예방 인력예산 편성기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-SERA-005,종사자 의견청취 반영기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-SERA-007,도급용역위탁 안전보건 확보기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES
+DOC-SERA-008,협력업체 안전보건관리 점검기록,B,false,false,true,TAI내 보관·열람,NO,REVIEW_REQUIRED,YES

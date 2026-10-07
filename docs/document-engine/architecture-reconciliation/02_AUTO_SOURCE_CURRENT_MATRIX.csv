@@ -1,0 +1,9 @@
+doc_type,document_count,fetcher_key,fetcher_status,template_file,source_tables,auto_data_exists,auto_render_exists,auto_document_list_exists,auto_completion_hook_exists
+INSP,4,inspection,EXISTING,DOC-INSP.html,"safety_inspections + safety_inspection_results",YES,YES,NO,NO
+CHK,2,inspection,EXISTING,DOC-CHK.html,"safety_inspections + safety_inspection_results",YES,YES,NO,NO
+EQUIP,15,inspection,EXISTING,DOC-EQUIP.html,"safety_inspections + safety_inspection_results",YES,YES,NO,NO
+PPE,1,inspection,EXISTING,DOC-PPE.html,safety_inspections,YES,YES,NO,NO
+TBM,2,tbm,EXISTING,DOC-OSH-056.html,"tbm_meetings + tbm_attendees",YES,YES,NO,NO
+APPT,2,,NO_SOURCE,DOC-APPT.html,,NO,NO,NO,NO
+CONLOG,1,construction,NEW_NEEDED,DOC-CONLOG.html,,NO,NO,NO,NO
+EDU,3,education,NEW_NEEDED,DOC-EDU.html,,NO,NO,NO,NO

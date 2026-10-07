@@ -1,0 +1,261 @@
+doc_id,doc_name,tai_grade,existing_data,additional_input,has_legal_form,is_external_writer,tai_auto,tai_method,mapped_doc_type,registry_fetcher_key,registry_fetcher_status,auto_source_candidate,manual_channel_classification,note_tai_auto
+DOC-BLD-002,소방시설 작동기능점검 기록,A,inspections,-,true,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-BLD-009,전기설비 점검기록부,A,inspections,-,false,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-BLD-011,승강기 유지관리 점검기록부,A,inspections,-,true,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-BLD-016,석면점검 기록부,A,inspections,-,true,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-CHEM-003,유해화학물질 취급시설 자체점검 기록,A,inspections,-,false,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-CON-006,공사일지,A,factory/inspections,-,true,false,false,,CONLOG,construction,NEW_NEEDED,NO,MANUAL_REVIEW_REQUIRED,fetcher NEW_NEEDED
+DOC-CON-007,안전점검일지(건설),A,inspections,-,false,false,false,,INSP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-CON-012,TBM 기록(건설),A,TBM모듈,-,false,false,false,,TBM,tbm,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-CON-013,장비점검기록부,A,inspections,-,false,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-CON-014,비계 점검기록,A,inspections,-,false,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-CON-026,비계 점검기록부,A,inspections,-,false,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-CON-032,타워크레인 점검기록부,A,inspections,-,false,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-CON-043,방호조치 점검기록,A,inspections,-,false,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-CON-LAW-014,안전점검 실시기록,A,inspections,-,false,false,false,,INSP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-FAC-002,가스시설 정기점검 기록부,A,inspections,-,false,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-FAC-008,위험물 시설 점검기록부,A,inspections,-,true,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-FAC-013,보일러 운전일지,A,inspections,-,true,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-FAC-016,냉동기 설비 점검기록부,A,inspections,-,true,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-OSH-006,안전보건교육일지,A,workers/교육모듈,-,false,false,false,,EDU,education,NEW_NEEDED,NO,MANUAL_REVIEW_REQUIRED,fetcher NEW_NEEDED
+DOC-OSH-007,안전점검일지,A,inspections/factory,-,false,false,false,,INSP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-OSH-017,점검표(체크리스트),A,inspections/법령엔진,-,false,false,false,,CHK,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-OSH-037,안전보건교육 실시기록부,A,workers/교육모듈,-,false,false,false,,EDU,education,NEW_NEEDED,NO,MANUAL_REVIEW_REQUIRED,fetcher NEW_NEEDED
+DOC-OSH-038,안전점검 기록부,A,inspections,-,false,false,false,,INSP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-OSH-046,보호구 착용 점검기록,A,inspections,-,false,false,false,,PPE,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-OSH-055,안전보건점검 체크리스트,A,inspections/법령엔진,-,false,false,false,,CHK,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-OSH-056,TBM 기록,A,TBM모듈,-,false,false,false,,TBM,tbm,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-OSH-059,기계설비 점검기록부,A,inspections,-,false,false,false,,EQUIP,inspection,EXISTING,YES,AUTO_SOURCE_CANDIDATE,tai_auto=false but auto source exists via fetcher
+DOC-OSH-062,안전보건관리책임자 선임 보고서,A,,,false,false,false,,APPT,,NO_SOURCE,NO,MANUAL_REVIEW_REQUIRED,NO_SOURCE — no fetcher path
+DOC-OSH-063,안전보건총괄책임자 선임 보고서,A,,,false,false,false,,APPT,,NO_SOURCE,NO,MANUAL_REVIEW_REQUIRED,NO_SOURCE — no fetcher path
+DOC-SERA-006,안전보건교육 실시 결과기록,A,workers/교육모듈,-,false,false,false,,EDU,education,NEW_NEEDED,NO,MANUAL_REVIEW_REQUIRED,fetcher NEW_NEEDED
+DOC-BLD-006,소방훈련 교육 기록부,B,workers,훈련내용 참석자,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-007,피난계획 대피훈련 기록,B,factory/workers,훈련내용 대피경로,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-014,석면관리대장,B,factory,석면 위치 상태,true,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-023,소방시설 자체점검 조치계획서,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-024,소방시설 자체점검 조치완료보고서,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-029,전기재해 보고서,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-032,승강기 중대한 고장 보고서,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-038,석면건축물 조사 결과서,B,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-041,시설물 안전 및 유지관리계획,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-043,시설물 보수보강 조치 결과보고서,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-044,시설물 중대한 결함 보고서,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-045,시설물 사고보고서,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-008,유해화학물질 취급기록부,B,factory,화학물질 종류 수량,true,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-013,화학사고예방관리계획서,B,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-021,유해화학물질 영업 실적보고서,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-008,작업계획서(고위험작업),B,factory,작업내용 위험요인,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-010,도급사업 안전보건조치계획,B,factory,조치내용,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-011,안전보건협의체 회의록(건설),B,factory/workers,안건 결정사항,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-015,굴착작업 안전계획서,B,factory,작업내용 위험요인,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-019,하도급관리대장,B,factory,하도급업체 정보,true,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-023,굴착공사 작업계획서,B,factory,작업상세,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-024,흙막이공 안전계획서,B,factory,구조검토 시공방법,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-025,비계 설치계획서,B,factory,비계 종류 규격,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-027,거푸집 설치계획서,B,factory,규격 시공방법,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-028,동바리 안전계획서,B,factory,구조검토 시공방법,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-029,철근 작업계획서,B,factory,작업내용,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-031,타워크레인 설치계획서,B,factory,크레인 제원,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-033,양중작업계획서,B,factory,인양물 중량,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-036,용접작업 허가서,B,factory/workers,작업장소 화기관리,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-037,밀폐공간 작업허가서(건설),B,factory,장소 가스농도,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-038,고소작업 계획서,B,factory,높이 작업방법,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-039,전기작업 계획서,B,factory,작업내용 전압,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-040,장비 사용계획서,B,factory,장비종류 작업반경,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-042,낙하물 방지계획서,B,factory,방호시설 종류,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-044,소규모안전관리계획,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-047,하도급계약 통보서,B,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-050,건설공사대장,B,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-LAW-015,건설공사 안전관리 이행기록,B,factory/inspections,이행내용,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-007,위험물 저장취급 기록부,B,factory,위험물 종류 수량,true,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-023,고압가스 사고발생 통보서,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-030,위험물 정기점검 결과 제출서,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-013,작업허가서(일반),B,factory/workers,작업내용 위험요인,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-014,밀폐공간작업계획서,B,factory,작업장소 유해가스,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-015,안전보건협의체회의록,B,factory/workers,안건 결정사항,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-016,도급안전보건조치기록,B,factory,조치내용 확인자,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-022,밀폐공간작업프로그램기록,B,factory,작업내용 측정결과,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-039,밀폐공간 작업기록부,B,factory,작업내용 측정결과,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-040,도급사업 안전보건조치 이행기록,B,factory,조치내용,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-042,위험성평가 개선조치계획서,B,inspections,개선내용 일정 담당자,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-043,화학물질 관리대장,B,factory,화학물질 목록 수량,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-044,물질안전보건자료 교육기록,B,workers,교육내용 참석자,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-045,보호구 지급대장,B,workers,보호구 종류 수량,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-047,밀폐공간 작업허가서,B,factory,작업장소 가스농도,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-048,밀폐공간 산소농도 측정기록,B,factory,측정값 측정자 시간,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-049,작업허가서(위험작업),B,factory/workers,작업내용 위험요인,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-052,비상훈련 실시기록,B,factory/workers,훈련내용 참석자,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-054,협력업체 안전관리평가서,B,factory,평가항목 점수,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-057,근로자 의견청취 기록,B,workers,의견내용 조치결과,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-058,산업안전보건위원회 회의록,B,factory/workers,안건 결정사항,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-061,통합 산업재해 현황 조사표,B,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-064,안전관리자등 해임 통합 보고서,B,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-068,공정안전보고서,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-069,공정안전보고서 변경 제출서,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-070,안전검사 신청서,B,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-072,석면해체제거작업 신고서,B,,,true,true,false,,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-OSH-073,석면해체제거작업 변경신고서,B,,,true,true,false,,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-OSH-074,석면농도측정 결과보고서,B,,,true,true,false,,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-OSH-075,근골격계부담작업 유해요인조사표,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-076,근골격계질환 예방관리 프로그램,B,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-SERA-002,안전보건관리체계 점검기록,B,inspections,점검결과 개선내용,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-SERA-003,유해위험요인 확인 개선기록,B,inspections/법령엔진,위험요인 개선조치,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-SERA-004,재해예방 인력예산 편성기록,B,factory,인력 예산 집행내역,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-SERA-005,종사자 의견청취 반영기록,B,workers,의견내용 반영결과,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-SERA-007,도급용역위탁 안전보건 확보기록,B,factory,조치내용 확인자,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-SERA-008,협력업체 안전보건관리 점검기록,B,factory/inspections,점검결과,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-005,소방계획서,C,factory/법령엔진,소방시설 현황,true,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-013,승강기 사고 보고서,C,factory,사고상세,false,false,true,팩스(팝빌) / 포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-015,석면건축물 관리계획서,C,factory,석면 관리방안,true,false,true,TAI보관 + 지자체 팩스/등기,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-019,시설물 유지관리계획서,C,factory,유지관리 항목,true,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-020,소방안전관리보조자 선임신고서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-025,전기안전관리자 변경신고서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-026,전기안전관리자 해임신고서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-027,전기설비 사용전검사 신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-028,전기설비 정기검사 신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-030,승강기 안전관리자 선임 통보서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-031,승강기 안전관리자 변경 통보서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-033,승강기 설치검사 결과서,C,,,true,true,false,,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-BLD-034,승강기 수시검사 결과서,C,,,true,true,false,,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-BLD-035,승강기 정밀안전검사 결과서,C,,,true,true,false,,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-BLD-036,석면건축물안전관리인 지정 신고서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-039,석면건축물 조치명령 이행계획서,C,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-040,석면건축물 조치명령 이행결과 보고서,C,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-042,시설물 성능평가 결과보고서,C,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-007,화학사고 조사보고서,C,factory,원인분석 상세,false,true,true,팩스(팝빌) / 이메일,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-CHEM-014,화학사고예방관리계획서 변경검토 신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-015,유해화학물질 영업허가 신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-017,유해화학물질 영업 변경허가 신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-018,유해화학물질 영업 변경신고서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-020,유해화학물질 관리자 해임퇴직 신고서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-022,기존화학물질 신고서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-023,신규화학물질 신고서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-026,화학물질 변경등록 신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-001,안전관리계획서,C,factory/법령엔진,공종별 안전대책,true,false,true,이메일 자동발송 / 팩스(팝빌),,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-009,유해위험방지계획서(건설),C,factory/법령엔진,공종별 위험요인,true,false,true,KOSHA 링크 안내 / 이메일,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-034,해체공사 계획서,C,factory,해체공법 안전대책,false,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-035,해체공사 안전관리계획서,C,factory,해체공법 안전대책,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-041,작업중지 및 재개 기록,C,factory,중지사유 재개조건,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-045,소규모안전관리계획 변경서,C,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-046,소규모안전관리계획 검토결과 통보서,C,,,false,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-048,재하도급 승낙 통보서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-049,재하도급계약 통보서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-051,건설공사대장 변경통보서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-LAW-008,안전관리계획(법정),C,factory/법령엔진,공종별 안전대책,true,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-LAW-009,안전관리계획 변경서,C,factory,변경내용,true,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-LAW-010,정기안전점검 결과보고서,C,inspections/factory,점검결과 종합평가,false,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-004,가스사고 보고서,C,factory,사고상세,false,false,true,팩스(팝빌) 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-005,가스안전관리계획서,C,factory,가스시설 현황,true,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-010,위험물 사고 보고서,C,factory,사고상세,false,false,true,팩스(팝빌) 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-011,위험물 예방규정,C,factory,예방조치 세부사항,false,false,true,팩스(팝빌) / 등기(포스트플러스),,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-015,보일러 사고 보고서,C,factory,사고상세,false,false,true,팩스(팝빌) 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-018,냉동설비 사고 보고서,C,factory,사고상세,false,false,true,팩스(팝빌) 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-019,고압가스 안전관리자 해임퇴직 신고서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-022,고압가스 정기검사 신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-024,위험물안전관리자 해임퇴직 신고서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-025,위험물 제조소등 설치허가 신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-026,위험물 제조소등 변경허가 신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-027,위험물 제조소등 완공검사 신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-028,위험물 제조소등 완공검사필증,C,,,true,true,false,,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-FAC-029,위험물 예방규정 변경인가 신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-031,검사대상기기 조종자 선임해임 신고서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-032,검사대상기기 설치검사 신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-033,검사대상기기 계속사용검사 신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-036,검사대상기기 검사증,C,,,true,true,false,,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-OSH-001,안전보건관리규정,C,factory/법령엔진,사업장 특성별 세부규정,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-002,위험성평가서,C,factory/법령엔진/inspections,위험도등급 감소대책,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-008,유해위험방지계획서,C,factory/법령엔진,공종별 위험요인,true,false,true,KOSHA 링크 안내 / 이메일,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-018,사고보고서,C,factory/workers,사고상세 원인 조치,false,false,true,팩스(팝빌) 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-041,위험성평가 실시결과서,C,factory/법령엔진/inspections,위험도 감소대책,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-050,안전작업절차서(SOP),C,법령엔진,작업별 세부절차,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-051,비상조치계획서,C,factory/법령엔진,비상연락망 대피경로,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-053,중대재해 발생 대응기록,C,factory/workers,대응상세 시간순,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-071,자율검사프로그램 인정신청서,C,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-SERA-001,안전보건관리체계 구축계획서,C,factory/법령엔진,체계 세부내용,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-SERA-009,중대재해 발생 대응조치 기록,C,factory/workers,대응상세,false,false,true,TAI보관 + 팩스(팝빌),,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-SERA-010,중대재해 원인조사 재발방지 대책서,C,factory/inspections,원인분석 재발방지,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-SERA-011,중대재해 관련 보고자료,C,factory/workers,보고내용,false,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-SERA-012,경영책임자 의무이행 입증자료,C,전체 데이터 종합,포트폴리오 형태,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-001,소방시설 자체점검 결과보고서,D,inspections,소방점검 결과 상세,true,false,true,팩스(팝빌) 또는 소민터 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-004,소방안전관리자 선임신고서,D,factory/workers,자격정보,true,false,true,팩스(팝빌) / 등기(포스트플러스),,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-008,전기안전관리자 선임신고서,D,factory/workers,자격정보,true,false,true,팩스(팝빌) / 전기안전여기로 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-021,소방안전관리자 선임 연기 신청서,D,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-022,소방안전관리보조자 선임 연기 신청서,D,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-037,석면건축물안전관리인 변경 신고서,D,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-006,화학사고 즉시신고서,D,factory,사고상세,true,false,true,팩스(팝빌) 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-009,유해화학물질 관리자 선임신고서,D,factory/workers,자격정보,true,false,true,팩스(팝빌) / ICIS 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-016,유해화학물질 연간 취급예정량 서류,D,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-019,유해화학물질 시약 판매업 신고서,D,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-024,화학물질 등록등면제확인 신청서,D,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-025,화학물질 등록등면제확인 변경신청서,D,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-027,등록한 자의 변경신고서,D,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-005,착공신고서,D,factory,공사 상세정보,true,false,false,EAIS 포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-001,가스안전관리자 선임신고서,D,factory/workers,자격정보,true,false,true,팩스(팝빌) / KGS 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-006,위험물 안전관리자 선임신고서,D,factory/workers,자격정보,true,false,true,팩스(팝빌) / 등기(포스트플러스),,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-012,보일러 관리자 선임신고서,D,factory/workers,자격정보,true,false,true,팩스(팝빌) / 에너지공단 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-020,고압가스배관 시공감리 신청서,D,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-021,고압가스배관 시공감리 증명서,D,,,true,true,false,,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-FAC-034,검사대상기기 개조검사 신청서,D,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-FAC-035,검사대상기기 설치장소 변경검사 신청서,D,,,true,false,false,,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-003,산업재해조사표,D,factory/workers,재해 상세정보,true,false,true,노동포털 링크 안내 / 팩스(팝빌),,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-009,안전관리자선임보고서,D,factory/workers,자격정보 선임일,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-010,보건관리자선임보고서,D,factory/workers,자격정보 선임일,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-011,산업보건의선임보고서,D,factory/workers,자격정보 선임일,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-019,산업재해발생보고서,D,factory/workers,재해상세,false,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-023,안전관리자 선임신고서,D,factory/workers,자격정보,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-024,보건관리자 선임신고서,D,factory/workers,자격정보,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-025,산업보건의 선임신고서,D,factory/workers,자격정보,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-026,안전관리자 변경신고서,D,factory/workers,변경사유 자격정보,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-027,보건관리자 변경신고서,D,factory/workers,변경사유 자격정보,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-028,산업보건의 변경신고서,D,factory/workers,변경사유 자격정보,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-029,안전관리자 해임신고서,D,factory/workers,해임사유,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-030,보건관리자 해임신고서,D,factory/workers,해임사유,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-031,산업보건의 해임신고서,D,factory/workers,해임사유,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-032,산업재해조사표 제출서,D,factory/workers,재해상세,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-OSH-033,유해위험방지계획서 제출서,D,factory/법령엔진,공종별 상세,true,false,true,KOSHA 링크 안내 / 이메일,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-003,소방시설 종합정밀점검 보고서,X,-,전문 점검기관,true,false,true,팩스(팝빌) 또는 소민터 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer candidate
+DOC-BLD-010,전기설비 정기검사 결과서,X,-,검사기관,true,true,false,링크 안내만 가능,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-BLD-012,승강기 정기검사 결과서,X,-,검사기관,true,true,false,링크 안내만 가능,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-BLD-017,시설물 안전점검 결과보고서,X,-,전문 점검기관,true,false,false,FMS 포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-BLD-018,시설물 정밀안전진단 보고서,X,-,전문 진단기관,true,false,false,FMS 포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-001,유해화학물질 취급시설 설치검사 신청서,X,-,전문 영역,true,false,true,ICIS 링크 안내 / 이메일,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-002,유해화학물질 취급시설 검사 결과서,X,-,검사기관,true,true,false,링크 안내만 가능,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-CHEM-004,장외영향평가서,X,-,전문 컨설팅,true,false,true,ICIS 링크 안내 / 이메일,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-005,위해관리계획서,X,-,전문 컨설팅,true,false,true,ICIS 링크 안내 / 이메일,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-010,화학물질 등록신청서,X,-,전문 영역,true,false,false,ICIS 링크 안내만 가능,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-011,유해성위해성 자료 제출서,X,-,전문 영역,true,false,false,ICIS 링크 안내만 가능,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CHEM-012,화학물질 정보제공서,X,-,제조사 영역,true,false,true,이메일 자동발송(하위사용자),,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer candidate
+DOC-CON-002,안전관리계획서 승인서,X,-,감리 영역,true,true,false,링크 안내만 가능,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-CON-003,품질관리계획서,X,-,시공사 전문,true,false,true,이메일 자동발송 / 팩스(팝빌),,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-004,시공계획서,X,-,시공사 전문,false,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-016,콘크리트 타설계획서,X,-,시공사 전문,false,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-017,감리보고서,X,-,감리 영역,true,false,false,링크 안내만 가능,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-018,품질시험성적서,X,-,시험기관,true,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer candidate
+DOC-CON-020,준공검사신청서,X,-,시공사 영역,true,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-021,준공도서,X,-,시공사 영역,false,false,true,이메일 자동발송(대용량),,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-022,유지관리지침서,X,-,시공사 영역,false,false,true,TAI내 보관,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-LAW-001,품질관리계획(법정),X,-,시공사 전문,true,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-LAW-002,품질시험계획,X,-,시공사 전문,true,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-LAW-003,품질관리계획 변경서,X,-,시공사 영역,true,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-LAW-004,품질시험계획 변경서,X,-,시공사 영역,true,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-LAW-005,품질관리계획 심사결과 통보서,X,-,발주청 영역,true,false,false,링크 안내만 가능,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer candidate
+DOC-CON-LAW-006,품질시험 및 검사 기록,X,-,시험기관,false,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer candidate
+DOC-CON-LAW-007,품질관리계획 사본,X,-,시공사 영역,true,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,no mapping
+DOC-CON-LAW-011,정밀안전점검 결과보고서,X,-,전문 점검기관,false,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer candidate
+DOC-CON-LAW-012,긴급안전점검 결과보고서,X,-,전문 점검기관,false,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer candidate
+DOC-CON-LAW-013,안전점검 종합보고서,X,-,전문 점검기관,false,false,true,이메일 자동발송,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer candidate
+DOC-FAC-003,가스시설 검사 결과서,X,-,검사기관,true,true,false,링크 안내만 가능,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-FAC-009,위험물 시설 검사 결과서,X,-,검사기관,true,true,false,링크 안내만 가능,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-FAC-014,보일러 정기검사 결과서,X,-,검사기관,true,true,false,링크 안내만 가능,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-FAC-017,냉동설비 검사 결과서,X,-,검사기관,true,true,false,링크 안내만 가능,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-OSH-004,작업환경측정결과서,X,-,외부 측정기관,true,false,true,노동포털 링크 안내 / 팩스(팝빌),,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer candidate
+DOC-OSH-005,특수건강진단결과서,X,-,외부 검진기관,true,true,true,이메일 자동발송(근로자),,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-OSH-012,MSDS,X,-,제조사 제공,false,false,true,TAI내 보관·열람,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer candidate
+DOC-OSH-020,건강진단개인통보서,X,-,검진기관,true,true,true,이메일 자동발송(근로자),,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-OSH-021,작업환경측정결과보고서,X,-,측정기관,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer candidate
+DOC-OSH-034,작업환경측정 결과보고서 제출서,X,-,측정기관,true,false,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer candidate
+DOC-OSH-035,특수건강진단 결과보고서 제출서,X,-,검진기관,true,true,true,팩스(팝빌) / 노동포털 링크 안내,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-OSH-036,건강진단 결과 통보서,X,-,검진기관,true,true,true,이메일 자동발송(근로자),,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-OSH-065,안전관리전문기관 지정신청서,X,,,true,true,false,,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-OSH-066,보건관리전문기관 지정신청서,X,,,true,true,false,,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
+DOC-OSH-067,재해예방 전문지도기관 지정신청서,X,,,true,true,false,,,,NO,MANUAL_REVIEW_REQUIRED,is_external_writer=true
