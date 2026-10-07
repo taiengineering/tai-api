@@ -403,6 +403,8 @@ def apply_signature(
             raise HTTPException(404, msg)
         if "forbidden" in msg or "cross-user" in msg:
             raise HTTPException(403, msg)
+        if "DOCUMENT_SIGNATURE_CONFLICT" in msg:
+            raise HTTPException(409, detail=msg)
         raise HTTPException(400, msg)
 
 

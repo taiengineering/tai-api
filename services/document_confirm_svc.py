@@ -27,6 +27,7 @@ from services.document_schema_renderer import (
 from services.document_signature_svc import (
     SignatureError,
     resolve_signature_images_for_render,
+    validate_required_signatures,
 )
 from services.document_snapshot_integrity import (
     compute_confirmed_snapshot_hash,
@@ -194,10 +195,18 @@ def confirm_document_atomic(
             # 14a. Signature resolution — downloads immutable document snapshots from Storage
             #       Runs inside transaction to use lock-verified runtime_values.
             #       I/O is Supabase Storage (HTTP), separate from psycopg2 connection.
+
+            # 14a-pre. CORR-05: required signature pre-check (before Storage I/O)
+            try:
+                validate_required_signatures(runtime_values, fields)
+            except SignatureError as e:
+                raise ConfirmError(422, "required signature missing: %s" % e)
+
             try:
                 sig_result = resolve_signature_images_for_render(
                     runtime_data_json=runtime_values,
                     fields=fields,
+                    document_id=str(locked["id"]),
                 )
             except SignatureError as e:
                 raise ConfirmError(422, "signature resolution failed: %s" % e)

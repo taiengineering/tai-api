@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re as _re
 import struct
 from typing import Any, Dict, List, Optional
 
@@ -74,16 +75,22 @@ def _validate_png(data: bytes) -> None:
         )
 
 
+_DATA_URI_PREFIX = "data:image/png;base64,"
+_MAX_ENCODED_BYTES = 2 * 1024 * 1024  # ~1.5× raw 1 MiB PNG ceiling
+
 def _decode_data_uri(data_uri: str) -> bytes:
-    """Decode 'data:image/png;base64,...' → raw bytes. Only png accepted."""
-    if not isinstance(data_uri, str) or not data_uri.startswith("data:image/png"):
-        raise SignatureError("only data:image/png data URIs are supported")
+    """Decode data URI → raw bytes. Exact prefix 'data:image/png;base64,' only."""
+    if not isinstance(data_uri, str) or not data_uri.startswith(_DATA_URI_PREFIX):
+        raise SignatureError("only data:image/png;base64, data URIs are supported")
+    b64 = data_uri[len(_DATA_URI_PREFIX):]
+    if not b64:
+        raise SignatureError("data URI payload is empty")
+    if len(b64) > _MAX_ENCODED_BYTES:
+        raise SignatureError(
+            f"data URI encoded payload exceeds limit ({_MAX_ENCODED_BYTES} chars)"
+        )
     try:
-        _, b64 = data_uri.split(",", 1)
-    except ValueError:
-        raise SignatureError("malformed data URI: no comma separator")
-    try:
-        return base64.b64decode(b64)
+        return base64.b64decode(b64, validate=True)
     except Exception:
         raise SignatureError("invalid base64 in data URI")
 
@@ -154,10 +161,12 @@ def save_profile_signature(
     _private_upload(sb, path, png_bytes)
     stable_ref = _storage_ref(path)
     now = serialize_external_utc(now_kst())
-    sb.table("users").update({
+    update_res = sb.table("users").update({
         "signature_url": stable_ref,
         "signature_registered_at": now,
     }).eq("id", user_id).execute()
+    if not update_res.data:
+        raise SignatureError("profile signature update returned 0 rows — user record not found")
     return {
         "signature_url": stable_ref,
         "signature_registered_at": now,
@@ -226,7 +235,7 @@ def apply_profile_to_document(
     # 1. Load document — check editable status
     doc_res = (
         sb.table("runtime_document_data")
-        .select("id,form_schema_id,runtime_data_json,status,version")
+        .select("id,form_schema_id,runtime_data_json,status,version,updated_at")
         .eq("id", doc_id)
         .single()
         .execute()
@@ -234,6 +243,7 @@ def apply_profile_to_document(
     if not doc_res.data:
         raise SignatureError("document not found")
     doc = doc_res.data
+    expected_updated_at = doc.get("updated_at")
 
     if doc["status"] not in _EDITABLE_STATUSES:
         raise SignatureError(
@@ -302,13 +312,21 @@ def apply_profile_to_document(
         "profile_signature_registered_at": profile_registered_at,
     }
 
-    # 7. Merge into runtime_data_json (direct DB write — bypasses PATCH guard intentionally)
+    # 7. Merge into runtime_data_json — optimistic concurrency guard (CORR-01)
     existing_json = doc.get("runtime_data_json") or {}
     merged = {**existing_json, field_key: snapshot}
-    sb.table("runtime_document_data").update({
-        "runtime_data_json": merged,
-        "updated_at": now,
-    }).eq("id", doc_id).execute()
+    update_res = (
+        sb.table("runtime_document_data")
+        .update({"runtime_data_json": merged, "updated_at": now})
+        .eq("id", doc_id)
+        .eq("updated_at", expected_updated_at)
+        .in_("status", list(_EDITABLE_STATUSES))
+        .execute()
+    )
+    if not update_res.data:
+        raise SignatureError(
+            "DOCUMENT_SIGNATURE_CONFLICT: document was modified concurrently or status changed"
+        )
 
     return {"signature_snapshot": snapshot}
 
@@ -317,11 +335,78 @@ def apply_profile_to_document(
 # Signature resolution for renderer
 # ─────────────────────────────────────────────────────────────────────────────
 
+_SHA256_RE = _re.compile(r'^[0-9a-f]{64}$')
+
+
+def _validate_snapshot_canonical(
+    fkey: str,
+    val: Any,
+    expected_field_id: str,
+    document_id: Optional[str] = None,
+) -> None:
+    """Validate canonical snapshot structure. Raises SignatureError on any violation."""
+    if not isinstance(val, dict):
+        raise SignatureError(
+            f"signature field {fkey!r}: expected object, got {type(val).__name__}"
+        )
+    if val.get("_type") != "signature_snapshot":
+        raise SignatureError(
+            f"signature field {fkey!r}: _type must be 'signature_snapshot'"
+        )
+    if val.get("version") != 1:
+        raise SignatureError(
+            f"signature field {fkey!r}: unsupported snapshot version {val.get('version')!r}"
+        )
+    if val.get("field_key") != fkey:
+        raise SignatureError(
+            f"signature field {fkey!r}: field_key mismatch in snapshot {val.get('field_key')!r}"
+        )
+    if expected_field_id and str(val.get("field_id", "")) != expected_field_id:
+        raise SignatureError(
+            f"signature field {fkey!r}: field_id mismatch "
+            f"(expected={expected_field_id!r}, got={str(val.get('field_id', ''))!r})"
+        )
+    if val.get("mime_type") != "image/png":
+        raise SignatureError(
+            f"signature field {fkey!r}: mime_type must be 'image/png'"
+        )
+    byte_size = val.get("byte_size")
+    if not isinstance(byte_size, int) or isinstance(byte_size, bool) or byte_size <= 0:
+        raise SignatureError(
+            f"signature field {fkey!r}: byte_size must be a positive integer"
+        )
+    sha_val = val.get("sha256", "")
+    if not _SHA256_RE.match(str(sha_val)):
+        raise SignatureError(
+            f"signature field {fkey!r}: sha256 must be a 64-char lowercase hex string"
+        )
+    if not val.get("signer_user_id"):
+        raise SignatureError(f"signature field {fkey!r}: signer_user_id is required")
+    if not val.get("signed_at"):
+        raise SignatureError(f"signature field {fkey!r}: signed_at is required")
+    if val.get("source") != "PROFILE_SIGNATURE":
+        raise SignatureError(
+            f"signature field {fkey!r}: source must be 'PROFILE_SIGNATURE'"
+        )
+    storage_ref = val.get("storage_ref")
+    if not storage_ref:
+        raise SignatureError(f"signature field {fkey!r}: storage_ref is required")
+    if document_id:
+        expected_prefix = (
+            f"storage://company-docs/signatures/document/{document_id}/"
+        )
+        if not storage_ref.startswith(expected_prefix):
+            raise SignatureError(
+                f"signature field {fkey!r}: storage_ref does not match document path"
+            )
+
+
 def resolve_signature_images_for_render(
     runtime_data_json: Dict[str, Any],
     fields: List[Dict[str, Any]],
+    document_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Resolve signature field images for rendering.
+    """Resolve signature field images for rendering (FAIL-CLOSE on non-null malformed snapshots).
 
     Downloads private PNG for each signature_snapshot in runtime_data_json,
     validates SHA256, returns data URIs + evidence manifest entries.
@@ -332,8 +417,8 @@ def resolve_signature_images_for_render(
             "manifest": [{"type": "signature", ...}]
         }
 
-    Hash mismatch → raises SignatureError (FAIL-CLOSE — rendering must stop).
-    Missing/malformed snapshot → treated as missing (not an error).
+    Hash mismatch or malformed non-null snapshot → raises SignatureError (FAIL-CLOSE).
+    None value → treated as missing (no error).
     """
     images: Dict[str, str] = {}
     manifest: List[Dict[str, Any]] = []
@@ -347,16 +432,16 @@ def resolve_signature_images_for_render(
         fkey = field.get("field_key")
         if not fkey:
             continue
+        runtime_field_id = str(field.get("id", ""))
         val = runtime_data_json.get(fkey)
         if val is None:
-            continue
-        if not isinstance(val, dict) or val.get("_type") != "signature_snapshot":
-            continue  # not a valid snapshot — treat as missing
+            continue  # genuinely missing — OK
 
-        storage_ref = val.get("storage_ref")
-        expected_sha = val.get("sha256")
-        if not storage_ref or not expected_sha:
-            continue
+        # CORR-04: non-null → must be canonical; malformed → FAIL-CLOSE
+        _validate_snapshot_canonical(fkey, val, runtime_field_id, document_id)
+
+        storage_ref = val["storage_ref"]
+        expected_sha = val["sha256"]
 
         path = _parse_storage_ref(storage_ref)
         data = _private_download(sb, path)
@@ -365,6 +450,11 @@ def resolve_signature_images_for_render(
             raise SignatureError(
                 f"signature hash mismatch for field {fkey!r}: "
                 f"expected {expected_sha}, got {actual_sha}"
+            )
+        if len(data) != val["byte_size"]:
+            raise SignatureError(
+                f"signature field {fkey!r}: byte_size mismatch "
+                f"(snapshot={val['byte_size']}, actual={len(data)})"
             )
         _validate_png(data)
         images[fkey] = _bytes_to_data_uri(data)
@@ -382,3 +472,21 @@ def resolve_signature_images_for_render(
         })
 
     return {"images": images, "manifest": manifest}
+
+
+def validate_required_signatures(
+    runtime_data_json: Dict[str, Any],
+    fields: List[Dict[str, Any]],
+) -> None:
+    """Raise SignatureError if any REQUIRED_BY_HUMAN signature field lacks a canonical snapshot."""
+    for field in fields:
+        if (field.get("input_type") == "signature"
+                and field.get("required_status") == "REQUIRED_BY_HUMAN"):
+            fkey = field.get("field_key")
+            if not fkey:
+                continue
+            val = runtime_data_json.get(fkey)
+            if not (isinstance(val, dict) and val.get("_type") == "signature_snapshot"):
+                raise SignatureError(
+                    f"required signature missing for field {fkey!r}"
+                )

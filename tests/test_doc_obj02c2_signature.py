@@ -63,6 +63,8 @@ class _SbMock:
         users_row: Optional[Dict[str, Any]] = None,
         doc_row: Optional[Dict[str, Any]] = None,
         field_rows: Optional[List[Dict[str, Any]]] = None,
+        update_doc_rows: Optional[List[Dict[str, Any]]] = None,
+        update_user_rows: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         self._tables: Dict[str, MagicMock] = {}
 
@@ -90,12 +92,15 @@ class _SbMock:
             "runtime_data_json": {},
             "status": "DRAFT",
             "version": 1,
+            "updated_at": "2026-10-07T00:00:00Z",
         }
         self._field_rows = (
             field_rows
             if field_rows is not None
             else [{"id": FIELD_ID, "field_key": FIELD_KEY, "input_type": "signature"}]
         )
+        self._update_doc_rows = update_doc_rows if update_doc_rows is not None else [{"id": DOC_ID}]
+        self._update_user_rows = update_user_rows if update_user_rows is not None else [{"id": USER_ID}]
 
     def table(self, name: str) -> MagicMock:
         if name in self._tables:
@@ -120,9 +125,19 @@ class _SbMock:
             q.execute.return_value = MagicMock(data=self._field_rows)
 
         tbl.select.return_value = q
-        tbl.update.return_value = MagicMock(
-            execute=MagicMock(return_value=MagicMock(data={}))
-        )
+
+        # Chainable update mock: .update().eq().in_().execute()
+        update_q = MagicMock()
+        update_q.eq.return_value = update_q
+        update_q.in_.return_value = update_q
+        if name == "users":
+            update_q.execute.return_value = MagicMock(data=self._update_user_rows)
+        elif name == "runtime_document_data":
+            update_q.execute.return_value = MagicMock(data=self._update_doc_rows)
+        else:
+            update_q.execute.return_value = MagicMock(data=[{"id": "any"}])
+        tbl.update.return_value = update_q
+
         self._tables[name] = tbl
         return tbl
 
@@ -295,6 +310,7 @@ class TestDocumentApplySignature:
             "runtime_data_json": {},
             "status": doc_status,
             "version": 1,
+            "updated_at": "2026-10-07T00:00:00Z",
         }
         fields = [{"id": FIELD_ID, "field_key": FIELD_KEY, "input_type": field_input_type}]
         users_row = (
@@ -533,9 +549,16 @@ class TestRenderer:
 
         snapshot = {
             "_type": "signature_snapshot",
+            "version": 1,
+            "field_id": "f1",
             "field_key": "sign",
             "storage_ref": f"storage://company-docs/signatures/document/{DOC_ID}/{FIELD_ID}/{SHA256_VALID}.png",
             "sha256": SHA256_VALID,  # expected hash of VALID_PNG
+            "mime_type": "image/png",
+            "byte_size": len(VALID_PNG),
+            "signer_user_id": USER_ID,
+            "signed_at": "2026-10-07T10:00:00Z",
+            "source": "PROFILE_SIGNATURE",
         }
         fields = [{"id": "f1", "field_key": "sign", "input_type": "signature"}]
         with patch("services.document_signature_svc.get_supabase", return_value=sb):
@@ -552,9 +575,16 @@ class TestRenderer:
 
         snapshot = {
             "_type": "signature_snapshot",
+            "version": 1,
+            "field_id": "f1",
             "field_key": "sign",
             "storage_ref": f"storage://company-docs/signatures/document/{DOC_ID}/{FIELD_ID}/{SHA256_VALID}.png",
             "sha256": SHA256_VALID,
+            "mime_type": "image/png",
+            "byte_size": len(VALID_PNG),
+            "signer_user_id": USER_ID,
+            "signed_at": "2026-10-07T10:00:00Z",
+            "source": "PROFILE_SIGNATURE",
         }
         fields = [{"id": "f1", "field_key": "sign", "input_type": "signature"}]
         with patch("services.document_signature_svc.get_supabase", return_value=sb):
@@ -643,6 +673,8 @@ class TestConfirmArchive:
 
         snapshot = {
             "_type": "signature_snapshot",
+            "version": 1,
+            "field_id": FIELD_ID,
             "field_key": "sign",
             "storage_ref": f"storage://company-docs/signatures/document/{DOC_ID}/{FIELD_ID}/{SHA256_VALID}.png",
             "sha256": SHA256_VALID,
@@ -668,6 +700,7 @@ class TestConfirmArchive:
 
         snapshot = {
             "_type": "signature_snapshot",
+            "version": 1,
             "field_key": "sign",
             "field_id": FIELD_ID,
             "storage_ref": f"storage://company-docs/signatures/document/{DOC_ID}/{FIELD_ID}/{SHA256_VALID}.png",
@@ -749,9 +782,16 @@ class TestConfirmArchive:
 
         snapshot = {
             "_type": "signature_snapshot",
+            "version": 1,
+            "field_id": FIELD_ID,
             "field_key": "sign",
             "storage_ref": f"storage://company-docs/signatures/document/{DOC_ID}/{FIELD_ID}/{SHA256_VALID}.png",
             "sha256": SHA256_VALID,  # expected = original PNG hash
+            "mime_type": "image/png",
+            "byte_size": len(VALID_PNG),
+            "signer_user_id": USER_ID,
+            "signed_at": "2026-10-07T10:00:00Z",
+            "source": "PROFILE_SIGNATURE",
         }
         fields = [{"id": FIELD_ID, "field_key": "sign", "input_type": "signature"}]
         with patch("services.document_signature_svc.get_supabase", return_value=sb):
@@ -915,3 +955,282 @@ class TestInternalHelpers:
         from services.document_signature_svc import _parse_storage_ref
         path = _parse_storage_ref(f"storage://company-docs/signatures/profile/{USER_ID}/abc.png")
         assert path == f"signatures/profile/{USER_ID}/abc.png"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CORR tests: B64, WRITE, CONC, SNAP, REQUIRED, IMMUTABLE
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestStrictBase64:
+    """B64-01, B64-02: strict data URI + base64 validation (CORR-03)."""
+
+    def test_b64_01_non_base64_chars_rejected(self):
+        """B64-01: valid prefix but non-base64 chars in payload → rejected with validate=True."""
+        # Build a "valid looking" uri with ! injected into otherwise valid base64
+        b64_clean = base64.b64encode(VALID_PNG).decode()
+        # Insert a '!' which is not a valid base64 character
+        b64_dirty = b64_clean[:10] + "!" + b64_clean[11:]
+        uri = "data:image/png;base64," + b64_dirty
+        with pytest.raises(SignatureError, match="invalid base64"):
+            _decode_data_uri(uri)
+
+    def test_b64_02_extra_media_type_params_rejected(self):
+        """B64-02: 'data:image/png;foo;base64,...' is rejected by exact prefix check."""
+        b64 = base64.b64encode(VALID_PNG).decode()
+        uri = "data:image/png;foo;base64," + b64
+        with pytest.raises(SignatureError, match="only data:image/png;base64,"):
+            _decode_data_uri(uri)
+
+    def test_b64_03_jpeg_prefix_rejected(self):
+        """B64-03: jpeg prefix rejected."""
+        with pytest.raises(SignatureError, match="only data:image/png;base64,"):
+            _decode_data_uri("data:image/jpeg;base64,/9j/abc")
+
+    def test_b64_04_empty_payload_rejected(self):
+        """B64-04: empty payload after prefix → rejected."""
+        with pytest.raises(SignatureError, match="payload is empty"):
+            _decode_data_uri("data:image/png;base64,")
+
+    def test_b64_05_valid_data_uri_accepted(self):
+        """B64-05: exact correct prefix + valid base64 → accepted."""
+        result = _decode_data_uri(VALID_DATA_URI)
+        assert result == VALID_PNG
+
+
+class TestDbWriteGuard:
+    """WRITE-01: DB false-success guard (CORR-02)."""
+
+    def test_write_01_profile_update_0_rows_raises(self):
+        """WRITE-01: users UPDATE returns 0 rows → SignatureError, no false success."""
+        sb = _make_sb(update_user_rows=[])  # 0 rows updated
+        with patch("services.document_signature_svc.get_supabase", return_value=sb), \
+             patch("services.document_signature_svc.now_kst") as mk, \
+             patch("services.document_signature_svc.serialize_external_utc", return_value=_fake_now()):
+            from datetime import datetime, timezone
+            mk.return_value = datetime(2026, 10, 7, tzinfo=timezone.utc)
+            with pytest.raises(SignatureError, match="0 rows"):
+                save_profile_signature(USER_ID, VALID_DATA_URI)
+
+
+class TestConcurrency:
+    """CONC-01, CONC-02, CONC-03: optimistic concurrency guard (CORR-01)."""
+
+    def _user(self, uid: str = USER_ID) -> Dict[str, Any]:
+        return {"id": uid}
+
+    def _sb_conc(self, update_doc_rows=None) -> _SbMock:
+        doc = {
+            "id": DOC_ID,
+            "form_schema_id": SCHEMA_ID,
+            "runtime_data_json": {"text_field": "original"},
+            "status": "DRAFT",
+            "version": 1,
+            "updated_at": "2026-10-07T00:00:00Z",
+        }
+        fields = [{"id": FIELD_ID, "field_key": FIELD_KEY, "input_type": "signature"}]
+        users_row = {
+            "signature_url": f"storage://company-docs/signatures/profile/{USER_ID}/{SHA256_VALID}.png",
+            "signature_registered_at": "2026-10-07T00:00:00Z",
+        }
+        rows = update_doc_rows if update_doc_rows is not None else [{"id": DOC_ID}]
+        return _SbMock(doc_row=doc, field_rows=fields, users_row=users_row, update_doc_rows=rows)
+
+    def test_conc_01_updated_at_changed_raises_409_error(self):
+        """CONC-01: concurrent update changes updated_at → apply returns 0 rows → 409 error."""
+        sb = self._sb_conc(update_doc_rows=[])  # simulate 0 rows due to updated_at mismatch
+        with patch("services.document_signature_svc.get_supabase", return_value=sb), \
+             patch("services.document_signature_svc.now_kst") as mk, \
+             patch("services.document_signature_svc.serialize_external_utc", return_value=_fake_now()):
+            from datetime import datetime, timezone
+            mk.return_value = datetime(2026, 10, 7, tzinfo=timezone.utc)
+            with pytest.raises(SignatureError, match="DOCUMENT_SIGNATURE_CONFLICT"):
+                apply_profile_to_document(DOC_ID, FIELD_KEY, self._user())
+
+    def test_conc_02_status_changed_raises_conflict(self):
+        """CONC-02: doc status changed to non-editable between read and update → 0 rows → conflict."""
+        # Same as CONC-01 from mock perspective: 0-row update = DOCUMENT_SIGNATURE_CONFLICT
+        sb = self._sb_conc(update_doc_rows=[])
+        with patch("services.document_signature_svc.get_supabase", return_value=sb), \
+             patch("services.document_signature_svc.now_kst") as mk, \
+             patch("services.document_signature_svc.serialize_external_utc", return_value=_fake_now()):
+            from datetime import datetime, timezone
+            mk.return_value = datetime(2026, 10, 7, tzinfo=timezone.utc)
+            with pytest.raises(SignatureError, match="DOCUMENT_SIGNATURE_CONFLICT"):
+                apply_profile_to_document(DOC_ID, FIELD_KEY, self._user())
+
+    def test_conc_03_stale_json_not_written_on_conflict(self):
+        """CONC-03: concurrent text field update → signature apply does not silently overwrite."""
+        # Simulate: text field was updated by another request (updated_at changed → 0-row UPDATE)
+        sb = self._sb_conc(update_doc_rows=[])
+        with patch("services.document_signature_svc.get_supabase", return_value=sb), \
+             patch("services.document_signature_svc.now_kst") as mk, \
+             patch("services.document_signature_svc.serialize_external_utc", return_value=_fake_now()):
+            from datetime import datetime, timezone
+            mk.return_value = datetime(2026, 10, 7, tzinfo=timezone.utc)
+            with pytest.raises(SignatureError):
+                apply_profile_to_document(DOC_ID, FIELD_KEY, self._user())
+        # Verify the UPDATE was attempted (not silently skipped)
+        rt_tbl = sb._tables.get("runtime_document_data")
+        assert rt_tbl is not None
+        assert rt_tbl.update.call_count >= 1
+
+
+class TestCanonicalSnapshotValidation:
+    """SNAP-01~06: canonical snapshot validation (CORR-04)."""
+
+    def _make_snapshot(self, **overrides) -> dict:
+        snap = {
+            "_type": "signature_snapshot",
+            "version": 1,
+            "field_id": FIELD_ID,
+            "field_key": "sign",
+            "storage_ref": f"storage://company-docs/signatures/document/{DOC_ID}/{FIELD_ID}/{SHA256_VALID}.png",
+            "sha256": SHA256_VALID,
+            "mime_type": "image/png",
+            "byte_size": len(VALID_PNG),
+            "signer_user_id": USER_ID,
+            "signed_at": "2026-10-07T10:00:00Z",
+            "source": "PROFILE_SIGNATURE",
+        }
+        snap.update(overrides)
+        return snap
+
+    def _resolve_with_snapshot(self, snapshot: dict, doc_id: str = DOC_ID) -> None:
+        sb = MagicMock()
+        bucket = MagicMock()
+        bucket.download.return_value = VALID_PNG
+        sb.storage.from_.return_value = bucket
+        fields = [{"id": FIELD_ID, "field_key": "sign", "input_type": "signature"}]
+        with patch("services.document_signature_svc.get_supabase", return_value=sb):
+            resolve_signature_images_for_render(
+                {"sign": snapshot}, fields, document_id=doc_id
+            )
+
+    def test_snap_01_wrong_type_fails(self):
+        """SNAP-01: wrong _type → FAIL."""
+        snap = self._make_snapshot(_type="wrong_type")
+        with pytest.raises(SignatureError, match="_type"):
+            self._resolve_with_snapshot(snap)
+
+    def test_snap_02_wrong_field_id_fails(self):
+        """SNAP-02: wrong field_id → FAIL."""
+        snap = self._make_snapshot(field_id="wrong-field-id")
+        with pytest.raises(SignatureError, match="field_id"):
+            self._resolve_with_snapshot(snap)
+
+    def test_snap_03_wrong_field_key_fails(self):
+        """SNAP-03: wrong field_key in snapshot (doesn't match lookup key) → FAIL."""
+        snap = self._make_snapshot(field_key="other_key")  # snapshot says other_key but we looked up "sign"
+        with pytest.raises(SignatureError, match="field_key"):
+            self._resolve_with_snapshot(snap)
+
+    def test_snap_04_wrong_document_storage_ref_fails(self):
+        """SNAP-04: storage_ref path doesn't match document_id → FAIL."""
+        snap = self._make_snapshot(
+            storage_ref=f"storage://company-docs/signatures/document/WRONG_DOC_ID/{FIELD_ID}/{SHA256_VALID}.png"
+        )
+        with pytest.raises(SignatureError, match="storage_ref does not match document"):
+            self._resolve_with_snapshot(snap, doc_id=DOC_ID)
+
+    def test_snap_05_wrong_byte_size_fails(self):
+        """SNAP-05: byte_size in snapshot doesn't match actual downloaded bytes → FAIL."""
+        snap = self._make_snapshot(byte_size=999999)  # wrong size, but sha256 still matches
+        # Need to mock: download returns VALID_PNG (sha256 matches) but byte_size in snap is wrong
+        sb = MagicMock()
+        bucket = MagicMock()
+        bucket.download.return_value = VALID_PNG  # actual size = len(VALID_PNG)
+        sb.storage.from_.return_value = bucket
+        fields = [{"id": FIELD_ID, "field_key": "sign", "input_type": "signature"}]
+        with patch("services.document_signature_svc.get_supabase", return_value=sb):
+            with pytest.raises(SignatureError, match="byte_size"):
+                resolve_signature_images_for_render({"sign": snap}, fields)
+
+    def test_snap_06_wrong_mime_type_fails(self):
+        """SNAP-06: mime_type != image/png → FAIL."""
+        snap = self._make_snapshot(mime_type="image/jpeg")
+        with pytest.raises(SignatureError, match="mime_type"):
+            self._resolve_with_snapshot(snap)
+
+    def test_snap_missing_value_allowed(self):
+        """None value in runtime_data_json for signature field → missing (no error)."""
+        sb = MagicMock()
+        bucket = MagicMock()
+        sb.storage.from_.return_value = bucket
+        fields = [{"id": FIELD_ID, "field_key": "sign", "input_type": "signature"}]
+        with patch("services.document_signature_svc.get_supabase", return_value=sb):
+            result = resolve_signature_images_for_render({"sign": None}, fields)
+        assert "sign" not in result["images"]
+
+
+class TestRequiredSignature:
+    """REQUIRED-01, REQUIRED-02: required signature validation (CORR-05)."""
+
+    def test_required_01_missing_required_signature_fails(self):
+        """REQUIRED-01: REQUIRED_BY_HUMAN signature with no snapshot → SignatureError."""
+        from services.document_signature_svc import validate_required_signatures
+        fields = [{"field_key": "sig1", "input_type": "signature", "required_status": "REQUIRED_BY_HUMAN"}]
+        with pytest.raises(SignatureError, match="required signature missing"):
+            validate_required_signatures({}, fields)
+
+    def test_required_02_canonical_snapshot_passes(self):
+        """REQUIRED-02: REQUIRED_BY_HUMAN with canonical snapshot → no error."""
+        from services.document_signature_svc import validate_required_signatures
+        snap = {"_type": "signature_snapshot", "version": 1}
+        fields = [{"field_key": "sig1", "input_type": "signature", "required_status": "REQUIRED_BY_HUMAN"}]
+        validate_required_signatures({"sig1": snap}, fields)  # must not raise
+
+    def test_required_optional_sig_without_snapshot_passes(self):
+        """Non-REQUIRED_BY_HUMAN signature without snapshot → no error."""
+        from services.document_signature_svc import validate_required_signatures
+        fields = [{"field_key": "sig1", "input_type": "signature", "required_status": "CANDIDATE_ONLY"}]
+        validate_required_signatures({}, fields)  # must not raise
+
+
+class TestImmutability:
+    """IMMUTABLE-01: document snapshot is unaffected by profile change."""
+
+    def test_immutable_01_document_snapshot_unaffected_by_profile_change(self):
+        """IMMUTABLE-01: profile A→B does not affect committed document snapshot of A."""
+        import hashlib as _hl
+        png_a = make_png(1, 1)
+        png_b = make_png(2, 2)
+        sha_a = _hl.sha256(png_a).hexdigest()
+        sha_b = _hl.sha256(png_b).hexdigest()
+        assert sha_a != sha_b
+
+        doc_ref = f"storage://company-docs/signatures/document/{DOC_ID}/{FIELD_ID}/{sha_a}.png"
+        snapshot = {
+            "_type": "signature_snapshot",
+            "version": 1,
+            "field_id": FIELD_ID,
+            "field_key": "sign",
+            "storage_ref": doc_ref,
+            "sha256": sha_a,
+            "mime_type": "image/png",
+            "byte_size": len(png_a),
+            "signer_user_id": USER_ID,
+            "signed_at": "2026-10-07T10:00:00Z",
+            "source": "PROFILE_SIGNATURE",
+        }
+
+        # Storage: document path returns A; profile path would return B but resolver must not access it
+        def _dl(path):
+            if f"signatures/document/{DOC_ID}/{FIELD_ID}/{sha_a}" in path:
+                return png_a
+            raise AssertionError(f"unexpected download from path: {path}")
+
+        sb = MagicMock()
+        bucket = MagicMock()
+        bucket.download.side_effect = _dl
+        sb.storage.from_.return_value = bucket
+
+        fields = [{"id": FIELD_ID, "field_key": "sign", "input_type": "signature"}]
+        with patch("services.document_signature_svc.get_supabase", return_value=sb):
+            result = resolve_signature_images_for_render(
+                {"sign": snapshot}, fields, document_id=DOC_ID
+            )
+
+        assert "sign" in result["images"]
+        decoded = base64.b64decode(result["images"]["sign"].split(",", 1)[1])
+        assert decoded == png_a  # actual bytes are A
+        assert _hl.sha256(decoded).hexdigest() == sha_a  # hash matches snapshot.sha256
