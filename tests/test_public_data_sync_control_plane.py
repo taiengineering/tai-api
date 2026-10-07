@@ -247,7 +247,7 @@ def test_t06_source_spec_required_fields():
 
 def test_t07_credential_pool_rate_limit_group_independent():
     keco = registry.get("KECO_15149420")
-    assert keco.credential_pool == "KECO_DEDICATED"
+    assert keco.credential_pool == "DATA_GO_KR"
     assert keco.rate_limit_group == "KECO"
     assert keco.credential_pool != keco.rate_limit_group
 
@@ -349,13 +349,13 @@ def test_t16_s07_candidate_false():
 
 
 # ---------------------------------------------------------------------------
-# T17 — KECO_15149420 TARGET_REFRESH + KECO_DEDICATED pool
+# T17 — KECO_15149420 TARGET_REFRESH + DATA_GO_KR shared pool
 # ---------------------------------------------------------------------------
 
 def test_t17_keco_target_refresh():
     spec = registry.get("KECO_15149420")
     assert spec.sync_mode == SourceMode.TARGET_REFRESH
-    assert spec.credential_pool == "KECO_DEDICATED"
+    assert spec.credential_pool == "DATA_GO_KR"
     assert spec.rate_limit_group == "KECO"
     assert spec.source_kind == SourceKind.API
 

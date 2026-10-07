@@ -141,9 +141,10 @@ _SOURCES: list[SourceSpec] = [
         adapter_key="csi_accident",
         credential_pool="CSI_DEDICATED",
         rate_limit_group="CSI",
-        refresh_policy="MONTHLY",
+        refresh_policy="DAILY",
         consumer_tags=("csi", "safety"),
         auto_refresh_candidate=True,
+        notes="DAILY = portal metadata discovery only; full CSV download only when NEW_ARTIFACT",
     ),
     # 10. KCSC
     SourceSpec(

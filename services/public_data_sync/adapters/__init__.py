@@ -72,5 +72,10 @@ def register_builtin_adapters() -> None:
     if keco.adapter_key not in adapter_registry.registered_keys():
         adapter_registry.register(keco)
 
+    from services.public_data_sync.adapters.csi_accident import CsiAccidentAdapter
+    csi = CsiAccidentAdapter()
+    if csi.adapter_key not in adapter_registry.registered_keys():
+        adapter_registry.register(csi)
+
 
 __all__ = ["SourceAdapter", "AdapterRegistry", "adapter_registry", "register_builtin_adapters"]
