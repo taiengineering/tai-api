@@ -179,18 +179,65 @@ def confirm_document_atomic(
                 raise ConfirmError(422, "form schema not found")
             schema_row = dict(schema_row)
             cur.execute(
-                "SELECT * FROM runtime_field WHERE form_schema_id = %s", (schema_id,)
+                "SELECT * FROM runtime_field WHERE form_schema_id = %s AND status = 'APPROVED_BY_HUMAN'",
+                (schema_id,),
             )
             fields = [dict(r) for r in (cur.fetchall() or [])]
             cur.execute(
-                "SELECT * FROM runtime_checklist_item WHERE form_schema_id = %s",
+                "SELECT * FROM runtime_checklist_item WHERE form_schema_id = %s AND status = 'APPROVED_BY_HUMAN'",
                 (schema_id,),
             )
             checklists = [dict(r) for r in (cur.fetchall() or [])]
 
+            # Load active evidence fields (status = APPROVED_BY_HUMAN only)
+            cur.execute(
+                "SELECT id FROM runtime_evidence_field WHERE form_schema_id = %s AND status = 'APPROVED_BY_HUMAN'",
+                (schema_id,),
+            )
+            active_evidence_ids = {str(r["id"]) for r in (cur.fetchall() or [])}
+
             # runtime_data_json / evidence_links 정규화 (락 이후 값)
             runtime_values = _normalize_values(locked.get("runtime_data_json"))
             evidence_links = _normalize_evidence(locked.get("evidence_links"))
+
+            # C2C2: inactive runtime key fail-close — reject keys not in active fields/checklists
+            if runtime_values:
+                import re as _re
+                _uuid_pat = _re.compile(
+                    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+                    _re.IGNORECASE,
+                )
+                active_field_keys = {f["field_key"] for f in fields if f.get("field_key")}
+                active_checklist_ids = {str(c["id"]) for c in checklists if c.get("id")}
+                inactive_keys = [
+                    k for k in runtime_values
+                    if (
+                        (_uuid_pat.match(k) and k not in active_checklist_ids)
+                        or (not _uuid_pat.match(k) and k not in active_field_keys)
+                    )
+                ]
+                if inactive_keys:
+                    raise ConfirmError(
+                        422,
+                        "INACTIVE_RUNTIME_KEY: runtime_data_json contains keys not in active schema: %s"
+                        % sorted(inactive_keys),
+                    )
+
+            # C2C2: inactive evidence link fail-close — reject linked_field_ids not in active evidence
+            if evidence_links:
+                inactive_ev = [
+                    el.get("linked_field_id")
+                    for el in evidence_links
+                    if isinstance(el, dict)
+                    and el.get("linked_field_id")
+                    and str(el["linked_field_id"]) not in active_evidence_ids
+                ]
+                if inactive_ev:
+                    raise ConfirmError(
+                        422,
+                        "INACTIVE_EVIDENCE_FIELD: evidence_links references inactive field_ids: %s"
+                        % sorted(inactive_ev),
+                    )
 
             # 14a. Signature resolution — downloads immutable document snapshots from Storage
             #       Runs inside transaction to use lock-verified runtime_values.

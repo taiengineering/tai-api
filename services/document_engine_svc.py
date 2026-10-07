@@ -65,31 +65,37 @@ def get_form_schema_detail(schema_id: str) -> dict:
     )
     if not schema.data:
         return None
-    fields = (
+    status_filter = (
+        "APPROVED_BY_HUMAN"
+        if (schema.data or {}).get("status") == "APPROVED_FOR_RUNTIME_USE"
+        else None
+    )
+    fields_q = (
         sb.table("runtime_field")
         .select("*")
         .eq("form_schema_id", schema_id)
         .order("field_order")
-        .execute()
     )
-    checklists = (
+    checklists_q = (
         sb.table("runtime_checklist_item")
         .select("*")
         .eq("form_schema_id", schema_id)
         .order("item_order")
-        .execute()
     )
-    evidence = (
+    evidence_q = (
         sb.table("runtime_evidence_field")
         .select("*")
         .eq("form_schema_id", schema_id)
-        .execute()
     )
+    if status_filter:
+        fields_q = fields_q.eq("status", status_filter)
+        checklists_q = checklists_q.eq("status", status_filter)
+        evidence_q = evidence_q.eq("status", status_filter)
     return {
         "schema": schema.data,
-        "fields": fields.data or [],
-        "checklists": checklists.data or [],
-        "evidence_fields": evidence.data or [],
+        "fields": fields_q.execute().data or [],
+        "checklists": checklists_q.execute().data or [],
+        "evidence_fields": evidence_q.execute().data or [],
     }
 
 
@@ -460,6 +466,7 @@ def _validate_runtime_keys(sb, schema_id: str, data_json: dict):
         sb.table("runtime_field")
         .select("field_key,input_type")
         .eq("form_schema_id", schema_id)
+        .eq("status", "APPROVED_BY_HUMAN")
         .execute()
     )
     allowed_field_keys = {r["field_key"] for r in (res.data or []) if r.get("field_key")}
@@ -473,6 +480,7 @@ def _validate_runtime_keys(sb, schema_id: str, data_json: dict):
         sb.table("runtime_checklist_item")
         .select("id")
         .eq("form_schema_id", schema_id)
+        .eq("status", "APPROVED_BY_HUMAN")
         .execute()
     )
     allowed_checklist_ids = {str(r["id"]) for r in (cl_res.data or []) if r.get("id")}
@@ -526,6 +534,7 @@ def _validate_evidence_links(sb, schema_id: str, links: list):
         sb.table("runtime_evidence_field")
         .select("id")
         .eq("form_schema_id", schema_id)
+        .eq("status", "APPROVED_BY_HUMAN")
         .execute()
     )
     allowed = {str(r["id"]) for r in (res.data or [])}
@@ -589,6 +598,7 @@ def resolve_runtime_document_state(doc_id: str) -> dict:
         sb.table("runtime_field")
         .select("*")
         .eq("form_schema_id", schema_id)
+        .eq("status", "APPROVED_BY_HUMAN")
         .order("field_order")
         .execute()
     ).data or []
@@ -597,6 +607,7 @@ def resolve_runtime_document_state(doc_id: str) -> dict:
         sb.table("runtime_checklist_item")
         .select("*")
         .eq("form_schema_id", schema_id)
+        .eq("status", "APPROVED_BY_HUMAN")
         .order("item_order")
         .execute()
     ).data or []
@@ -605,6 +616,7 @@ def resolve_runtime_document_state(doc_id: str) -> dict:
         sb.table("runtime_evidence_field")
         .select("*")
         .eq("form_schema_id", schema_id)
+        .eq("status", "APPROVED_BY_HUMAN")
         .execute()
     ).data or []
 

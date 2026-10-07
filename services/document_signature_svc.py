@@ -251,13 +251,14 @@ def apply_profile_to_document(
             f"editable: {sorted(_EDITABLE_STATUSES)}"
         )
 
-    # 2. Verify field exists in schema and is signature type
+    # 2. Verify field exists in schema and is signature type (active fields only)
     schema_id = doc["form_schema_id"]
     field_res = (
         sb.table("runtime_field")
         .select("id,field_key,input_type")
         .eq("form_schema_id", schema_id)
         .eq("field_key", field_key)
+        .eq("status", "APPROVED_BY_HUMAN")
         .execute()
     )
     field_rows = field_res.data or []
