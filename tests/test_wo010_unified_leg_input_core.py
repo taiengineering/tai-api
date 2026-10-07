@@ -33,9 +33,9 @@ PATCH2A_15_AXES = (
 
 
 def test_T1_vocabulary_len_and_distinct():
-    """T1: len(_LEG_INPUT_FIELDS) == 260 & distinct == 260 (WO-LFR-OBJ-S02-L2: +6 subcontract legal event facts)."""
-    assert len(_LEG_INPUT_FIELDS) == 260
-    assert len(set(_LEG_INPUT_FIELDS)) == 260
+    """T1: len(_LEG_INPUT_FIELDS) == 261 & distinct == 261 (WO-LFR-OBJ-S03: +1 indoor_workplace)."""
+    assert len(_LEG_INPUT_FIELDS) == 261
+    assert len(set(_LEG_INPUT_FIELDS)) == 261
     assert "has_building_elevator" not in _LEG_INPUT_FIELDS
     assert "has_furniture_moving_lift" in _LEG_INPUT_FIELDS
     assert "has_welding" in _LEG_INPUT_FIELDS

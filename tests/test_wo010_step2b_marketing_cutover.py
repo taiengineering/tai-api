@@ -515,5 +515,5 @@ def test_T14_contract_files_still_importable_and_stable():
         "process_list", "equipment_list",
     ]
     assert hasattr(m4, "DiagnoseStep1Body")
-    assert len(m5._LEG_INPUT_FIELDS) == 260  # WO-LFR-OBJ-S02-L2: +6 subcontract legal event facts
+    assert len(m5._LEG_INPUT_FIELDS) == 261  # WO-LFR-OBJ-S03: +1 indoor_workplace
     assert len(m5._BUILDING_N1_FIELDS) == 32
