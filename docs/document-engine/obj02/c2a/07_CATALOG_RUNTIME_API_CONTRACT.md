@@ -18,7 +18,7 @@ Where `doc_id` is `document_forms.doc_id` string (e.g., `"DOC-BLD-002"`), NOT a 
 2. Call `catalog_resolver.resolve_catalog_runtime_schema(catalog_document_id=UUID)` 
 3. Build response
 
-## Response Shape
+## Response Shape (CORR-01)
 
 ```json
 {
@@ -32,8 +32,10 @@ Where `doc_id` is `document_forms.doc_id` string (e.g., `"DOC-BLD-002"`), NOT a 
       "category": "..."
     },
     "runtime": {
-      "schema_id": "<UUID or null>",
-      "schema_status": "CANDIDATE | APPROVED_FOR_RUNTIME_USE | null",
+      "active_schema_id": "<UUID or null>",
+      "active_schema_status": "APPROVED_FOR_RUNTIME_USE | null",
+      "candidate_schema_id": "<UUID or null>",
+      "candidate_schema_status": "CANDIDATE | null",
       "availability": "PREPARING | READY_FOR_EDIT | NO_SCHEMA",
       "can_create": false
     },
@@ -44,6 +46,10 @@ Where `doc_id` is `document_forms.doc_id` string (e.g., `"DOC-BLD-002"`), NOT a 
   }
 }
 ```
+
+## CANDIDATE Availability (CORR-01)
+
+CANDIDATE availability: candidate schema detail (fields/checklists/evidence_fields) returned. active_schema_id=null, candidate_schema_id=<uuid>. can_create=false.
 
 ## `can_create` Rule
 

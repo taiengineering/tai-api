@@ -33,10 +33,12 @@ Any other value (including lowercase variants like `"pass"`) raises `ValueError`
 - UUID-shaped key not in `runtime_checklist_item` → `ValueError`
 - Unknown UUID-like keys are never silently ignored
 
-## Empty Schema Guard
+## Empty Schema Guard (CORR-02)
 
-If `runtime_field` returns no rows (schema has no fields), all non-UUID keys are allowed (free-form input). This preserves backward compatibility with schemas that predate field registration.
+If `runtime_field` returns no rows (schema has 0 fields), non-UUID keys are still rejected. The empty allowed set causes `key not in allowed_field_keys` to be True for any key. This enforces strict validation — no bypass for empty schemas.
 
 ## Tests
 
-K1–K6 in `tests/test_doc_obj02c2a_runtime_state_contract.py`
+K1–K7 in `tests/test_doc_obj02c2a_runtime_state_contract.py`
+
+K7: schema with 0 fields → arbitrary non-UUID key still rejected (no bypass)

@@ -22,15 +22,29 @@ OBJ02-C2A fixes four runtime workflow breakages identified in the C1 audit:
 
 | File | Change |
 |------|--------|
-| `services/document_engine_svc.py` | CONTRACT B + C: `_validate_runtime_keys()`, PATCH merge, version increment, `resolve_runtime_document_state()`, `render_document_html()` |
-| `routers/document_engine_api.py` | CONTRACT A + C + D: catalog endpoint, render endpoint, fixed generate endpoint |
-| `tests/test_doc_obj02c2a_runtime_state_contract.py` | 26 tests: K1-K6, M1-M3, R1-R5, P2-P4, A1-A3 |
+| `services/document_engine_svc.py` | CORR-01~13: dedup, null preserve, strict validation, status whitelist, confirmed fail-close, generate_document removal |
+| `services/document_engine/catalog_resolver.py` | CORR-01: candidate schema detail (fields/checklists/evidence_fields) returned, 4 new keys |
+| `services/document_engine/renderer.py` | CORR-07: `html_to_pdf()` adapter function added |
+| `routers/document_engine_api.py` | CORR-08~11: httpx removed, html_to_pdf wired, auth added, catalog keys updated |
+| `tests/test_doc_obj02c2a_runtime_state_contract.py` | ES-1~8, C1~5, K7, P6, updated M3/A2 |
+
+## Correction Notes
+
+| ID | Description |
+|----|-------------|
+| CORR-01 | PREPARING availability: candidate schema detail (fields/checklists/evidence_fields) returned. 4 new keys: active_schema_id/active_schema_status/candidate_schema_id/candidate_schema_status |
+| CORR-02 | `_validate_runtime_keys()`: empty schema (0 fields) rejects arbitrary keys (no bypass) |
+| CORR-03 | null values preserved as-is in stored state (not deleted) |
+| CORR-04 | version auto increment = REMOVED from update_document() |
+| CORR-05 | ARCHIVED→strict whitelist: DRAFT/IN_PROGRESS/RETURNED_FOR_EDIT only |
+| CORR-06 | APPROVED_BY_HUMAN archive: fail-close by (doc_id, version). No fallback to mutable state |
+| CORR-12 | Duplicate resolve_runtime_document_state/render_document_html removed |
+| CORR-13 | generate_document (INSERT PENDING row) = REMOVED. Export is purely transient |
+
+## generated_document INSERT = 0 (no row created)
+
+The `generate_document()` service function that inserted a PENDING row has been removed. Export is transient only.
 
 ## Test Results
 
-All 26 C2A tests PASS. All 26 existing B1 tests PASS (no regression).
-
-```
-26 passed in 0.08s  (C2A tests)
-26 passed in 0.09s  (B1 regression tests)
-```
+All tests PASS. B1 regression tests PASS (no regression).

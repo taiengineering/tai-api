@@ -21,10 +21,11 @@ Body: `{"export_type": "HTML" | "PDF"}`
 
 ## Transient Export Rules
 
-- Does NOT insert into `generated_document` table
-- Existing historical `PENDING` rows are preserved (not deleted)
+- generated_document INSERT = 0 — no PENDING row, no COMPLETE row. Export is purely transient.
+- The `generate_document()` service function that inserted PENDING rows has been REMOVED (CORR-13)
 - Render calls `render_document_html(doc_id)` which uses only `runtime_document_data`
 - No `InspectionFetcher` or `TbmFetcher` calls
+- Format validation: only HTML and PDF accepted (422 for others)
 
 ## PDF Generation
 

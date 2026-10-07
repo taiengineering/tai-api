@@ -199,8 +199,12 @@ def update_document(
     )
     if not before.data:
         raise ValueError("document not found")
-    if before.data["status"] == "ARCHIVED":
-        raise ValueError("ARCHIVED document cannot be modified")
+    _EDITABLE = frozenset({"DRAFT", "IN_PROGRESS", "RETURNED_FOR_EDIT"})
+    if before.data["status"] not in _EDITABLE:
+        raise ValueError(
+            f"document status '{before.data['status']}' does not allow editing; "
+            f"editable: {sorted(_EDITABLE)}"
+        )
 
     schema_id = before.data["form_schema_id"]
     now = serialize_external_utc(now_kst())
@@ -210,11 +214,9 @@ def update_document(
     # Guardrail: runtime_field field_key OR checklist UUID key만 저장 (C2A)
     if runtime_data_json is not None:
         _validate_runtime_keys(sb, schema_id, runtime_data_json)
-        # PATCH merge semantics (C2A) — incoming keys overwrite, None removes, others preserved
+        # PATCH merge semantics (C2A) — incoming keys overwrite, others preserved
         existing_json = before.data.get("runtime_data_json") or {}
         merged = {**existing_json, **runtime_data_json}
-        # Remove keys explicitly set to None (treat None as "delete this key")
-        merged = {k: v for k, v in merged.items() if v is not None}
         update["runtime_data_json"] = merged
         changes["runtime_data_json"] = True
 
@@ -226,10 +228,6 @@ def update_document(
 
     if updated_by:
         update["updated_by"] = updated_by
-
-    # Version increment (C2A): confirm_document_atomic checks version>=1 but not
-    # a specific version number, so incrementing on each PATCH is safe.
-    update["version"] = (before.data.get("version") or 1) + 1
 
     res = (
         sb.table("runtime_document_data")
@@ -386,32 +384,6 @@ def list_evidence(doc_id: str) -> list:
 # 5. Generated Document
 # ═══════════════════════════════════════════════════════
 
-def generate_document(doc_id: str, export_type: str = "HTML") -> dict:
-    """입력된 값만 사용. auto fill / inferred summary 금지."""
-    sb = get_supabase()
-    doc = (
-        sb.table("runtime_document_data")
-        .select("*")
-        .eq("id", doc_id)
-        .single()
-        .execute()
-    )
-    if not doc.data:
-        raise ValueError("document not found")
-    record = {
-        "runtime_document_id": doc_id,
-        "form_schema_id": doc.data.get("form_schema_id"),
-        "export_type": export_type,
-        "status": "PENDING",  # WP-DOCUMENT-ARCH-03C: object 미생성 상태이므로 GENERATED 금지 (pre-DDL compat). 실제 완료는 output/snapshot 계약(Q5)에서 GENERATED 승격.
-    }
-    res = sb.table("generated_document").insert(record).execute()
-    gen = res.data[0] if res.data else {}
-    # v1.1.0: audit log 추가
-    if gen:
-        _audit(sb, doc_id, "CREATED", None, None, gen)
-    return gen
-
-
 def list_generated(doc_id: str) -> list:
     sb = get_supabase()
     res = (
@@ -516,7 +488,7 @@ def _validate_runtime_keys(sb, schema_id: str, data_json: dict):
                 )
         else:
             # Non-UUID key: must be a known field_key
-            if allowed_field_keys and key not in allowed_field_keys:
+            if key not in allowed_field_keys:
                 unknown_keys.append(key)
 
     if unknown_keys:
@@ -551,148 +523,6 @@ def _validate_evidence_links(sb, schema_id: str, links: list):
         )
 
 
-
-
-# ═══════════════════════════════════════════════════════
-# 8. Runtime Document State Resolution & Rendering (C2A)
-# ═══════════════════════════════════════════════════════
-
-def resolve_runtime_document_state(doc_id: str) -> dict:
-    """Load full runtime document state for rendering.
-
-    Returns:
-        {
-            "document": <runtime_document_data row>,
-            "schema": <runtime_form_schema row>,
-            "fields": [<runtime_field rows>],
-            "checklists": [<runtime_checklist_item rows>],
-            "evidence_fields": [<runtime_evidence_field rows>],
-            "catalog": <document_forms row or None>,
-        }
-
-    Raises:
-        ValueError: if document or schema not found.
-    """
-    sb = get_supabase()
-
-    doc_res = (
-        sb.table("runtime_document_data")
-        .select("*")
-        .eq("id", doc_id)
-        .single()
-        .execute()
-    )
-    if not doc_res.data:
-        raise ValueError(f"document not found: {doc_id}")
-    document = doc_res.data
-
-    schema_id = document.get("form_schema_id")
-    if not schema_id:
-        raise ValueError(f"document has no form_schema_id: {doc_id}")
-
-    schema_res = (
-        sb.table("runtime_form_schema")
-        .select("*")
-        .eq("id", schema_id)
-        .single()
-        .execute()
-    )
-    if not schema_res.data:
-        raise ValueError(f"schema not found: {schema_id}")
-    schema = schema_res.data
-
-    fields = (
-        sb.table("runtime_field")
-        .select("*")
-        .eq("form_schema_id", schema_id)
-        .order("field_order")
-        .execute()
-    ).data or []
-
-    checklists = (
-        sb.table("runtime_checklist_item")
-        .select("*")
-        .eq("form_schema_id", schema_id)
-        .order("item_order")
-        .execute()
-    ).data or []
-
-    evidence_fields = (
-        sb.table("runtime_evidence_field")
-        .select("*")
-        .eq("form_schema_id", schema_id)
-        .execute()
-    ).data or []
-
-    # Optionally load catalog row
-    catalog = None
-    catalog_document_id = schema.get("catalog_document_id")
-    if catalog_document_id:
-        cat_res = (
-            sb.table("document_forms")
-            .select("*")
-            .eq("id", catalog_document_id)
-            .single()
-            .execute()
-        )
-        catalog = cat_res.data  # None if not found
-
-    return {
-        "document": document,
-        "schema": schema,
-        "fields": fields,
-        "checklists": checklists,
-        "evidence_fields": evidence_fields,
-        "catalog": catalog,
-    }
-
-
-def render_document_html(doc_id: str) -> str:
-    """Render canonical HTML from runtime document state.
-
-    CONTRACT C (OBJ02-C2A):
-    1. Resolve full state via resolve_runtime_document_state()
-    2. If document is confirmed (APPROVED_BY_HUMAN) and a runtime_document_archive
-       row with rendered_body exists, return archived body.
-    3. Otherwise render fresh via document_schema_renderer.build_render_artifacts()
-
-    Does NOT call InspectionFetcher or TbmFetcher.
-
-    Raises:
-        ValueError: document or schema not found
-        SchemaRenderError: render failed
-    """
-    from services.document_schema_renderer import build_render_artifacts
-
-    state = resolve_runtime_document_state(doc_id)
-    document = state["document"]
-
-    # Step 2: Check for confirmed archive body
-    if document.get("status") == "APPROVED_BY_HUMAN":
-        sb = get_supabase()
-        try:
-            archive_res = (
-                sb.table("runtime_document_archive")
-                .select("rendered_body")
-                .eq("runtime_document_id", doc_id)
-                .order("confirmed_at", desc=True)
-                .execute()
-            )
-            if archive_res.data:
-                body = archive_res.data[0].get("rendered_body")
-                if body:
-                    return body
-        except Exception:
-            pass  # archive table may not be accessible; fall through to fresh render
-
-    # Step 3: Fresh render
-    artifacts = build_render_artifacts(
-        document=document,
-        schema=state["schema"],
-        fields=state["fields"],
-        checklists=state["checklists"],
-    )
-    return artifacts["rendered_body"]
 
 # ═══════════════════════════════════════════════════════
 # 8. Runtime Document State Resolution & Rendering (C2A)
@@ -803,21 +633,27 @@ def render_document_html(doc_id: str) -> str:
     document = state["document"]
 
     if document.get("status") == "APPROVED_BY_HUMAN":
+        doc_version = document.get("version")
         sb = get_supabase()
-        try:
-            archive_res = (
-                sb.table("runtime_document_archive")
-                .select("rendered_body")
-                .eq("runtime_document_id", doc_id)
-                .order("confirmed_at", desc=True)
-                .execute()
+        archive_res = (
+            sb.table("runtime_document_archive")
+            .select("rendered_body,document_version")
+            .eq("runtime_document_id", doc_id)
+            .eq("document_version", doc_version)
+            .execute()
+        )
+        if not archive_res.data:
+            raise ValueError(
+                f"confirmed document archive not found: "
+                f"doc_id={doc_id}, version={doc_version}"
             )
-            if archive_res.data:
-                body = archive_res.data[0].get("rendered_body")
-                if body:
-                    return body
-        except Exception:
-            pass  # fall through to fresh render
+        body = archive_res.data[0].get("rendered_body")
+        if not body:
+            raise ValueError(
+                f"confirmed document archive has no rendered_body: "
+                f"doc_id={doc_id}, version={doc_version}"
+            )
+        return body
 
     artifacts = build_render_artifacts(
         document=document,

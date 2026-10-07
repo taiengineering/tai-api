@@ -18,8 +18,6 @@ v1.1.0 (WP-DOCUMENT-ARCH-05B-B1): APPROVED_BY_HUMAN 전이를 인증·인가·�
 v1.2.0 (WP-DOCUMENT-ARCH-05B-B1-CORR-01): SUBMITTED_FOR_REVIEW 도 submitted_by 를
   반드시 인증 사용자로 기록한다(위조 차단). Confirm 권한은 제출자 본인.
 """
-import os
-import httpx
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import HTMLResponse, Response
 from typing import Optional
@@ -33,9 +31,8 @@ from schemas.document_engine import (
 from services import document_engine_svc as svc
 from services.document_confirm_svc import confirm_document_atomic, ConfirmError
 from services.document_engine.catalog_resolver import resolve_catalog_runtime_schema
+from services.document_engine.renderer import html_to_pdf as _html_to_pdf
 from routers.auth import get_current_user
-
-GOTENBERG_URL = os.getenv("GOTENBERG_URL", "http://gotenberg.railway.internal:3000")
 
 router = APIRouter(prefix="/document-engine", tags=["문서엔진"])
 
@@ -225,16 +222,26 @@ def list_evidence(doc_id: str):
 # ═══════════════════════════════════════════════════════
 
 @router.post("/documents/{doc_id}/generate")
-async def generate_document(doc_id: str, body: GenerateDocumentIn):
+async def generate_document(
+    doc_id: str,
+    body: GenerateDocumentIn,
+    current_user: dict = Depends(get_current_user),
+):
     """문서 생성 (입력값만 사용, auto fill 금지).
 
     CONTRACT D (OBJ02-C2A):
     - Renders canonical HTML via render_document_html() (no InspectionFetcher/TbmFetcher)
-    - export_type=PDF: Gotenberg conversion, returns application/pdf
+    - export_type=PDF: Gotenberg via renderer.html_to_pdf(), returns application/pdf
     - export_type=HTML: returns HTML
     - Transient export: does NOT insert into generated_document table
-    - Existing historical PENDING rows are not deleted
     """
+    export_fmt = (body.export_type or "HTML").upper()
+    if export_fmt not in ("HTML", "PDF"):
+        raise HTTPException(
+            422,
+            f"unsupported export_type: {body.export_type!r}; supported: HTML, PDF",
+        )
+
     try:
         html_str = svc.render_document_html(doc_id)
     except ValueError as e:
@@ -242,29 +249,13 @@ async def generate_document(doc_id: str, body: GenerateDocumentIn):
     except Exception as e:
         raise HTTPException(500, f"render failed: {e}")
 
-    if body.export_type.upper() == "PDF":
+    if export_fmt == "PDF":
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    f"{GOTENBERG_URL}/forms/chromium/convert/html",
-                    files={"index.html": ("index.html", html_str, "text/html")},
-                    data={
-                        "paperWidth": "8.27",
-                        "paperHeight": "11.69",
-                        "marginTop": "0.4",
-                        "marginBottom": "0.4",
-                        "marginLeft": "0.4",
-                        "marginRight": "0.4",
-                        "printBackground": "true",
-                    },
-                )
-                resp.raise_for_status()
-                pdf_bytes = resp.content
+            pdf_bytes = await _html_to_pdf(html_str)
         except Exception as e:
             raise HTTPException(500, f"PDF generation failed: {e}")
         return Response(content=pdf_bytes, media_type="application/pdf")
 
-    # Default: HTML
     return HTMLResponse(content=html_str)
 
 
@@ -304,7 +295,7 @@ def get_audit_log(doc_id: str):
 # ═══════════════════════════════════════════════════════
 
 @router.get("/documents/{doc_id}/render")
-def render_document(doc_id: str):
+def render_document(doc_id: str, current_user: dict = Depends(get_current_user)):
     """Canonical HTML render of runtime document (입력값만, auto fill 금지).
 
     CONTRACT C (OBJ02-C2A):
@@ -357,13 +348,14 @@ def get_catalog_runtime(doc_id: str):
     except RuntimeError as e:
         raise HTTPException(500, str(e))
 
-    schema = resolved["schema"]
     availability = resolved["availability"]
     can_create = availability == "READY_FOR_EDIT"
 
     runtime_block = {
-        "schema_id": schema["id"] if schema else None,
-        "schema_status": schema["status"] if schema else None,
+        "active_schema_id": resolved.get("active_schema_id"),
+        "active_schema_status": resolved.get("active_schema_status"),
+        "candidate_schema_id": resolved.get("candidate_schema_id"),
+        "candidate_schema_status": resolved.get("candidate_schema_status"),
         "availability": availability,
         "can_create": can_create,
     }

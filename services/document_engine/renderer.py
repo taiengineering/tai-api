@@ -69,3 +69,23 @@ async def generate_document_pdf(doc_id: str, data: Dict[str, Any]) -> bytes:
         )
         resp.raise_for_status()
         return resp.content
+
+
+async def html_to_pdf(html_content: str) -> bytes:
+    """Convert canonical HTML string to PDF bytes via Gotenberg."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{GOTENBERG_URL}/forms/chromium/convert/html",
+            files={"index.html": ("index.html", html_content, "text/html")},
+            data={
+                "paperWidth": "8.27",
+                "paperHeight": "11.69",
+                "marginTop": "0.4",
+                "marginBottom": "0.4",
+                "marginLeft": "0.4",
+                "marginRight": "0.4",
+                "printBackground": "true",
+            },
+        )
+        resp.raise_for_status()
+        return resp.content

@@ -1,7 +1,7 @@
 ---
 wo: WO-DOC-OBJ02-C2A-RUNTIME-STATE-CONTRACT-001
 contract: TEST_EVIDENCE
-status: 26/26 PASS
+status: CORR-01~13 APPLIED
 ---
 
 # C2A Test Evidence
@@ -10,65 +10,84 @@ status: 26/26 PASS
 
 `tests/test_doc_obj02c2a_runtime_state_contract.py`
 
-## Results
-
-```
-26 passed in 0.08s
-```
-
 ## Test Coverage
 
 ### K-tests: Runtime Key Contract
 
-| Test | Description | Result |
-|------|-------------|--------|
-| K1 | known field_key accepted | PASS |
-| K2 | known checklist UUID accepted | PASS |
-| K3 | unknown non-UUID key rejected | PASS |
-| K4 | mixed field + checklist accepted | PASS |
-| K5 | PASS/FAIL/NA values accepted | PASS |
-| K5b | null value accepted for checklist | PASS |
-| K6 | invalid value "YES" rejected | PASS |
-| K6b | lowercase "pass" rejected (case-sensitive) | PASS |
-| K3b | unknown UUID-shaped key rejected | PASS |
+| Test | Description |
+|------|-------------|
+| K1 | known field_key accepted |
+| K2 | known checklist UUID accepted |
+| K3 | unknown non-UUID key rejected |
+| K4 | mixed field + checklist accepted |
+| K5 | PASS/FAIL/NA values accepted |
+| K5b | null value accepted for checklist |
+| K6 | invalid value "YES" rejected |
+| K6b | lowercase "pass" rejected (case-sensitive) |
+| K3b | unknown UUID-shaped key rejected |
+| K7 | empty schema (0 fields) rejects arbitrary key (no bypass) — CORR-02 |
 
 ### M-tests: PATCH Merge Semantics
 
-| Test | Description | Result |
-|------|-------------|--------|
-| M1 | existing {a:A, b:B} + incoming {a:A2} → {a:A2, b:B} | PASS |
-| M2 | checklist UUID preserved on non-overlapping field update | PASS |
-| M3 | incoming {key: null} → key removed | PASS |
+| Test | Description |
+|------|-------------|
+| M1 | existing {a:A, b:B} + incoming {a:A2} → {a:A2, b:B} |
+| M2 | checklist UUID preserved on non-overlapping field update |
+| M3 | incoming {key: null} → key present with null value (not deleted) — CORR-03 |
 
 ### R-tests: Render
 
-| Test | Description | Result |
-|------|-------------|--------|
-| R1 | field value in rendered HTML | PASS |
-| R2 | checklist UUID with "PASS" in rendered HTML | PASS |
-| R3 | missing field shows "(미입력)" | PASS |
-| R5 | same state → same HTML (deterministic) | PASS |
-| R1b | render_document_html returns HTML with field value | PASS |
-| Rnf | render raises ValueError for unknown doc_id | PASS |
+| Test | Description |
+|------|-------------|
+| R1 | field value in rendered HTML |
+| R2 | checklist UUID with "PASS" in rendered HTML |
+| R3 | missing field shows "(미입력)" |
+| R5 | same state → same HTML (deterministic) |
+| R1b | render_document_html returns HTML with field value |
+| Rnf | render raises ValueError for unknown doc_id |
 
 ### P-tests: Export Side-Effects
 
-| Test | Description | Result |
-|------|-------------|--------|
-| P2 | InspectionFetcher NOT called during render | PASS |
-| P3 | TbmFetcher NOT called during render | PASS |
-| P4 | no generated_document INSERT during transient render | PASS |
+| Test | Description |
+|------|-------------|
+| P2 | InspectionFetcher NOT called during render |
+| P3 | TbmFetcher NOT called during render |
+| P4 | no generated_document INSERT during transient render |
+| P6 | only HTML and PDF are supported export formats — CORR |
 
 ### A-tests: Catalog API
 
-| Test | Description | Result |
-|------|-------------|--------|
-| A1 | approved schema → can_create=true, schema_id returned | PASS |
-| A2 | candidate only → can_create=false | PASS |
-| A3 | doc not found → ValueError (→ 404) | PASS |
-| A1b | approved schema → fields and checklists populated | PASS |
-| A2b | candidate schema → fields and checklists empty | PASS |
+| Test | Description |
+|------|-------------|
+| A1 | approved schema → can_create=true, schema_id returned |
+| A2 | candidate only → candidate schema detail returned, can_create=false — CORR-01 |
+| A3 | doc not found → ValueError (→ 404) |
+| A1b | approved schema → fields and checklists populated |
+| A2b | candidate schema → fields and checklists returned (not empty) — CORR-01 |
+
+### ES-tests: Edit-State Whitelist (CORR-05)
+
+| Test | Description |
+|------|-------------|
+| ES-1 | DRAFT → edit allowed |
+| ES-2 | IN_PROGRESS → edit allowed |
+| ES-3 | RETURNED_FOR_EDIT → edit allowed |
+| ES-4 | SUBMITTED_FOR_REVIEW → edit denied |
+| ES-5 | REVIEW_PENDING → edit denied |
+| ES-6 | APPROVED_BY_HUMAN → edit denied |
+| ES-7 | REJECTED_BY_HUMAN → edit denied |
+| ES-8 | ARCHIVED → edit denied |
+
+### C-tests: Confirmed Reprint Fail-Close (CORR-06)
+
+| Test | Description |
+|------|-------------|
+| C1 | APPROVED_BY_HUMAN + matching archive → archive rendered_body returned |
+| C2 | APPROVED_BY_HUMAN → archive body used regardless of runtime_data_json changes |
+| C3 | APPROVED_BY_HUMAN + no archive row → ValueError (fail-close, no fallback) |
+| C4 | APPROVED_BY_HUMAN + archive exists but rendered_body is None → ValueError |
+| C5 | version mismatch → ValueError |
 
 ## Regression Tests
 
-B1 tests (existing): 26/26 PASS (no regression)
+B1 tests (existing): PASS (no regression)

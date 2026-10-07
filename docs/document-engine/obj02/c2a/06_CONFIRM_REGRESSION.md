@@ -8,31 +8,25 @@ status: SAFE
 
 ## Question
 
-Is the version increment in `update_document()` safe with `confirm_document_atomic()`?
+Is `render_document_html()` safe for APPROVED_BY_HUMAN documents?
 
-## Evidence from `document_confirm_svc.py`
+## Evidence (CORR-06)
 
-`confirm_document_atomic()` at line 160-163:
-```python
-version = locked.get("version")
-if not isinstance(version, int) or isinstance(version, bool) or version < 1:
-    raise ConfirmError(422, "document.version must be int >= 1")
-```
+`render_document_html()` for `APPROVED_BY_HUMAN` status:
+- Queries `runtime_document_archive` WHERE `(runtime_document_id = doc_id AND document_version = doc_version)`
+- If no row found → ValueError raised (fail-close, no fallback to mutable state)
+- If row found but `rendered_body` is None → ValueError raised
 
-**The confirm flow checks `version >= 1` only. It does NOT check for a specific version number.**
+`runtime_document_archive` UNIQUE(runtime_document_id, document_version) = EXISTS (uq_rdarch_doc_version)
 
-The archive stores `document_version = version` from the locked row. No unique constraint on `(runtime_document_id, document_version)` that would cause a conflict if the version has been incremented by multiple PATCHes before confirm.
+confirmed fresh render fallback = PROHIBITED (fail-close)
 
-(Note: `runtime_document_archive` has a `snapshot_hash` column with a uniqueness constraint. The hash depends on the runtime data content and `confirmed_at` timestamp, not solely on the version number.)
+## Version Increment Removed (CORR-04)
 
-## Conclusion
+The version increment in `update_document()` has been removed. Version is managed only by the confirmation flow.
 
-Version increment on each PATCH is SAFE. Incrementing causes `confirm_document_atomic()` to archive a higher version number, which is the correct behavior — the version at archive time reflects how many times the document was edited.
+## Archive Contract
 
-## Implementation
-
-```python
-update["version"] = (before.data.get("version") or 1) + 1
-```
-
-This is placed in `update_document()` after the merge computation.
+The archive query uses exact match on `document_version` (not `order by confirmed_at desc`). This means:
+- The archived body is pinned to the version that was confirmed
+- If the document is re-edited after confirmation (via RETURNED_FOR_EDIT), a new version will be created upon re-confirm

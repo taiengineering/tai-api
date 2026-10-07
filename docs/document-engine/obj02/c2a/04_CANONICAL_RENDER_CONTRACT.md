@@ -28,9 +28,9 @@ Raises `ValueError` if document or schema not found.
 
 ### `render_document_html(doc_id) -> str`
 
-Render pipeline:
+Render pipeline (CORR-06):
 1. Call `resolve_runtime_document_state(doc_id)`
-2. If `status == "APPROVED_BY_HUMAN"`: attempt to load `rendered_body` from `runtime_document_archive` (most recent `confirmed_at`). If found and non-empty, return it (sealed body).
+2. If `status == "APPROVED_BY_HUMAN"`: load `rendered_body` from `runtime_document_archive` WHERE `(runtime_document_id, document_version)` exact match. APPROVED_BY_HUMAN: archive ONLY, exact by (runtime_document_id, document_version). No fallback to mutable state. Missing archive = EXPORT FAIL (ValueError raised).
 3. Otherwise: call `document_schema_renderer.build_render_artifacts()` for a fresh deterministic render.
 
 ## Render Endpoint

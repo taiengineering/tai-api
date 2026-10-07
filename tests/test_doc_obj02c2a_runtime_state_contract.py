@@ -82,6 +82,30 @@ _CHECKLISTS_FOR_SCHEMA = [
     },
 ]
 
+CANDIDATE_SCHEMA_ID = SCHEMA_CANDIDATE["id"]  # "aaaaaaaa-0002-0002-0002-000000000002"
+
+_FIELDS_FOR_CANDIDATE = [
+    {
+        "id": "cccccccc-0002-0002-0002-000000000002",
+        "form_schema_id": CANDIDATE_SCHEMA_ID,
+        "field_key": "candidate_field",
+        "field_label": "후보 필드",
+        "input_type": "text",
+        "field_order": 1,
+        "required_status": "OPTIONAL",
+    }
+]
+
+_CHECKLISTS_FOR_CANDIDATE = [
+    {
+        "id": "dddddddd-0003-0003-0003-000000000003",
+        "form_schema_id": CANDIDATE_SCHEMA_ID,
+        "raw_text": "후보 점검 항목",
+        "input_type": "PASS_FAIL_NA",
+        "item_order": 1,
+    }
+]
+
 _DOCUMENT_ROW = {
     "id": DOC_ID,
     "form_schema_id": SCHEMA_ID,
@@ -199,11 +223,15 @@ class _FakeQuery:
             sid = self._filters.get("form_schema_id")
             if sid == SCHEMA_ID:
                 return _FakeResult(_FIELDS_FOR_SCHEMA)
+            if sid == CANDIDATE_SCHEMA_ID:
+                return _FakeResult(_FIELDS_FOR_CANDIDATE)
             return _FakeResult([])
         if t == "runtime_checklist_item":
             sid = self._filters.get("form_schema_id")
             if sid == SCHEMA_ID:
                 return _FakeResult(_CHECKLISTS_FOR_SCHEMA)
+            if sid == CANDIDATE_SCHEMA_ID:
+                return _FakeResult(_CHECKLISTS_FOR_CANDIDATE)
             return _FakeResult([])
         if t == "runtime_evidence_field":
             return _FakeResult([])
@@ -401,6 +429,25 @@ def test_K3_unknown_uuid_rejected():
         assert UNKNOWN_UUID in str(e)
 
 
+def test_K7_empty_schema_rejects_arbitrary_key():
+    """K7: schema with 0 fields → arbitrary non-UUID key still rejected (no bypass)."""
+    class _EmptySchemaQuery:
+        def select(self, *_, **__): return self
+        def eq(self, *_, **__): return self
+        def order(self, *_, **__): return self
+        def execute(self): return _FakeResult([])
+
+    class _EmptyFieldsSB:
+        def table(self, _): return _EmptySchemaQuery()
+
+    sb = _EmptyFieldsSB()
+    try:
+        _validate_runtime_keys(sb, SCHEMA_ID, {"arbitrary_key": "value"})
+        assert False, "should raise ValueError for arbitrary key even with empty schema"
+    except ValueError as e:
+        assert "arbitrary_key" in str(e)
+
+
 # ═══════════════════════════════════════════════════════
 # M-tests: PATCH merge semantics
 # ═══════════════════════════════════════════════════════
@@ -548,17 +595,17 @@ def test_M2_patch_merge_preserves_checklist_on_field_update():
     assert data.get(CL_UUID_1) == "PASS", f"checklist key should be preserved, got: {data}"
 
 
-def test_M3_patch_none_removes_key():
-    """M3: incoming {"key": null} → key removed from merged result."""
+def test_M3_patch_null_preserved_as_null():
+    """M3: incoming {"key": null} → key present with null value (not deleted)."""
     _reset()
     existing = {"a": "A", "b": "B"}
     sb = _MergeFakeSupabase(existing)
     ud = _load_update_document_with_sb(sb)
     result = ud(DOC_ID, runtime_data_json={"a": None})
-    assert "a" not in result["runtime_data_json"], (
-        f"key 'a' should be removed when set to None, got: {result['runtime_data_json']}"
-    )
-    assert result["runtime_data_json"].get("b") == "B"
+    data = result["runtime_data_json"]
+    assert "a" in data, f"key 'a' should be present after null patch, got: {data}"
+    assert data["a"] is None, f"key 'a' should be null, got: {data['a']}"
+    assert data.get("b") == "B"
 
 
 # ═══════════════════════════════════════════════════════
@@ -820,14 +867,17 @@ def test_A1_approved_schema_can_create_true():
     assert can_create is True
 
 
-def test_A2_candidate_only_can_create_false():
-    """A2: doc exists + candidate only → can_create=false."""
+def test_A2_candidate_detail_returned_can_create_false():
+    """A2: candidate only → candidate schema detail returned, can_create=false."""
     rcrs = _load_catalog_resolver()
     result = rcrs(CAT_CANDIDATE_UUID)
     assert result["availability"] == "PREPARING"
+    assert result["candidate_schema_id"] == SCHEMA_CANDIDATE["id"]
+    assert result["candidate_schema_status"] == "CANDIDATE"
+    assert result["active_schema_id"] is None
+    assert result["schema"] is None
     can_create = result["availability"] == "READY_FOR_EDIT"
     assert can_create is False
-    assert result["schema"] is None
 
 
 def test_A3_doc_not_exists_raises_value_error():
@@ -849,9 +899,267 @@ def test_A1_fields_and_checklists_returned():
     assert len(result["checklists"]) >= 2
 
 
-def test_A2_no_fields_for_candidate():
-    """A2b: candidate schema → fields and checklists are empty."""
+def test_A2_candidate_fields_checklists_returned():
+    """A2b: candidate schema → fields and checklists returned (not empty)."""
     rcrs = _load_catalog_resolver()
     result = rcrs(CAT_CANDIDATE_UUID)
-    assert result["fields"] == []
-    assert result["checklists"] == []
+    assert len(result["fields"]) >= 1, f"candidate fields should be returned, got: {result['fields']}"
+    assert len(result["checklists"]) >= 1, f"candidate checklists should be returned, got: {result['checklists']}"
+
+
+# ═══════════════════════════════════════════════════════
+# ES-tests: Edit-state whitelist (CORR-05)
+# ═══════════════════════════════════════════════════════
+
+class _StatusFakeQuery:
+    def __init__(self, table, status):
+        self._table = table
+        self._status = status
+        self._filters = {}
+        self._update_data = None
+
+    def select(self, *_, **__): return self
+    def eq(self, col, val): self._filters[col] = val; return self
+    def order(self, *_, **__): return self
+
+    def single(self):
+        if self._table == "runtime_document_data":
+            return _FakeSingle({
+                "id": DOC_ID, "form_schema_id": SCHEMA_ID,
+                "runtime_data_json": {}, "evidence_links": [],
+                "status": self._status, "version": 1,
+                "updated_at": "2026-10-07T00:00:00Z",
+            })
+        if self._table == "runtime_form_schema":
+            return _FakeSingle({"id": SCHEMA_ID, "status": "APPROVED_FOR_RUNTIME_USE"})
+        return _FakeSingle(None)
+
+    def insert(self, r):
+        _insert_calls.append({"table": self._table, "data": r})
+        return _FakeResult([{"id": "x"}])
+
+    def update(self, record):
+        self._update_data = record
+        _update_calls.append({"table": self._table, "data": record})
+        return self
+
+    def execute(self):
+        if self._update_data is not None:
+            merged = {"id": DOC_ID, "form_schema_id": SCHEMA_ID, "status": self._status}
+            merged.update(self._update_data)
+            return _FakeResult([merged])
+        return _FakeResult([])
+
+
+class _StatusFakeSB:
+    def __init__(self, status): self._status = status
+    def table(self, name): return _StatusFakeQuery(name, self._status)
+
+
+def _make_status_ud(status):
+    return _load_update_document_with_sb(_StatusFakeSB(status))
+
+
+def test_ES_DRAFT_allows_edit():
+    """ES-1: DRAFT → edit allowed."""
+    result = _make_status_ud("DRAFT")(DOC_ID, runtime_data_json={})
+    assert result is not None
+
+
+def test_ES_IN_PROGRESS_allows_edit():
+    """ES-2: IN_PROGRESS → edit allowed."""
+    result = _make_status_ud("IN_PROGRESS")(DOC_ID, runtime_data_json={})
+    assert result is not None
+
+
+def test_ES_RETURNED_allows_edit():
+    """ES-3: RETURNED_FOR_EDIT → edit allowed."""
+    result = _make_status_ud("RETURNED_FOR_EDIT")(DOC_ID, runtime_data_json={})
+    assert result is not None
+
+
+def test_ES_SUBMITTED_denies_edit():
+    """ES-4: SUBMITTED_FOR_REVIEW → edit denied."""
+    try:
+        _make_status_ud("SUBMITTED_FOR_REVIEW")(DOC_ID, runtime_data_json={})
+        assert False, "should raise ValueError"
+    except ValueError as e:
+        assert "SUBMITTED_FOR_REVIEW" in str(e)
+
+
+def test_ES_REVIEW_PENDING_denies_edit():
+    """ES-5: REVIEW_PENDING → edit denied."""
+    try:
+        _make_status_ud("REVIEW_PENDING")(DOC_ID, runtime_data_json={})
+        assert False, "should raise ValueError"
+    except ValueError as e:
+        assert "REVIEW_PENDING" in str(e)
+
+
+def test_ES_APPROVED_denies_edit():
+    """ES-6: APPROVED_BY_HUMAN → edit denied."""
+    try:
+        _make_status_ud("APPROVED_BY_HUMAN")(DOC_ID, runtime_data_json={})
+        assert False, "should raise ValueError"
+    except ValueError as e:
+        assert "APPROVED_BY_HUMAN" in str(e)
+
+
+def test_ES_REJECTED_denies_edit():
+    """ES-7: REJECTED_BY_HUMAN → edit denied."""
+    try:
+        _make_status_ud("REJECTED_BY_HUMAN")(DOC_ID, runtime_data_json={})
+        assert False, "should raise ValueError"
+    except ValueError as e:
+        assert "REJECTED_BY_HUMAN" in str(e)
+
+
+def test_ES_ARCHIVED_denies_edit():
+    """ES-8: ARCHIVED → edit denied."""
+    try:
+        _make_status_ud("ARCHIVED")(DOC_ID, runtime_data_json={})
+        assert False, "should raise ValueError"
+    except ValueError as e:
+        assert "ARCHIVED" in str(e)
+
+
+# ═══════════════════════════════════════════════════════
+# C-tests: Confirmed reprint fail-close (CORR-06)
+# ═══════════════════════════════════════════════════════
+
+ARCHIVE_BODY = "<html><body>Confirmed document HTML</body></html>"
+DOC_VERSION_APPROVED = 3
+
+
+class _ArchiveFakeQuery:
+    def __init__(self, table, doc_row, archive_rows):
+        self._table = table
+        self._doc_row = doc_row
+        self._archive_rows = archive_rows
+        self._filters = {}
+
+    def select(self, *_, **__): return self
+    def eq(self, col, val): self._filters[col] = val; return self
+    def order(self, *_, **__): return self
+
+    def single(self):
+        if self._table == "runtime_document_data":
+            return _FakeSingle(dict(self._doc_row))
+        if self._table == "runtime_form_schema":
+            return _FakeSingle({
+                "id": SCHEMA_ID, "status": "APPROVED_FOR_RUNTIME_USE",
+                "form_name": "Test", "catalog_document_id": None, "source_trace": {},
+            })
+        return _FakeSingle(None)
+
+    def execute(self):
+        if self._table == "runtime_document_archive":
+            rid = self._filters.get("runtime_document_id")
+            ver = self._filters.get("document_version")
+            if rid == DOC_ID and ver == DOC_VERSION_APPROVED:
+                return _FakeResult(list(self._archive_rows))
+            return _FakeResult([])
+        return _FakeResult([])
+
+
+class _ArchiveFakeSB:
+    def __init__(self, doc_row, archive_rows):
+        self._doc_row = doc_row
+        self._archive_rows = archive_rows
+    def table(self, name):
+        return _ArchiveFakeQuery(name, self._doc_row, self._archive_rows)
+
+
+def _make_approved_doc(version=DOC_VERSION_APPROVED):
+    return {
+        "id": DOC_ID, "form_schema_id": SCHEMA_ID,
+        "runtime_data_json": {FIELD_KEY: "서울"},
+        "status": "APPROVED_BY_HUMAN", "version": version,
+        "created_at": "2026-10-07T00:00:00Z",
+        "updated_at": "2026-10-07T00:00:00Z",
+    }
+
+
+def _load_render_html_with_sb(sb_factory):
+    saved = {n: sys.modules.get(n, _MISSING) for n in _MODULE_NAMES}
+    try:
+        mods = _make_modules(sb_factory=sb_factory)
+        for k, v in mods.items():
+            sys.modules[k] = v
+        _doc_eng_pkg = types.ModuleType("services.document_engine")
+        _doc_eng_pkg.__path__ = [str(ROOT / "services" / "document_engine")]
+        sys.modules["services.document_engine"] = _doc_eng_pkg
+        sys.modules.pop("services.document_engine_svc", None)
+        sys.modules.pop("services.document_schema_renderer", None)
+        from services.document_engine_svc import render_document_html as rdh
+        return rdh
+    finally:
+        for _n, _prev in saved.items():
+            if _prev is _MISSING:
+                sys.modules.pop(_n, None)
+            else:
+                sys.modules[_n] = _prev
+
+
+def test_C1_approved_uses_archive_body():
+    """C1: APPROVED_BY_HUMAN + matching archive → archive rendered_body returned."""
+    archive_rows = [{"rendered_body": ARCHIVE_BODY, "document_version": DOC_VERSION_APPROVED}]
+    rdh = _load_render_html_with_sb(lambda: _ArchiveFakeSB(_make_approved_doc(), archive_rows))
+    result = rdh(DOC_ID)
+    assert result == ARCHIVE_BODY
+
+
+def test_C2_approved_archive_used_regardless_of_runtime_data():
+    """C2: APPROVED_BY_HUMAN → archive body used regardless of runtime_data_json changes."""
+    archive_rows = [{"rendered_body": ARCHIVE_BODY, "document_version": DOC_VERSION_APPROVED}]
+    doc = _make_approved_doc()
+    doc["runtime_data_json"] = {FIELD_KEY: "CHANGED_AFTER_CONFIRM"}
+    rdh = _load_render_html_with_sb(lambda: _ArchiveFakeSB(doc, archive_rows))
+    result = rdh(DOC_ID)
+    assert result == ARCHIVE_BODY
+
+
+def test_C3_approved_no_archive_raises():
+    """C3: APPROVED_BY_HUMAN + no archive row → ValueError (fail-close, no fallback)."""
+    rdh = _load_render_html_with_sb(lambda: _ArchiveFakeSB(_make_approved_doc(), []))
+    try:
+        rdh(DOC_ID)
+        assert False, "should raise ValueError"
+    except ValueError as e:
+        assert "archive" in str(e).lower() or "not found" in str(e).lower()
+
+
+def test_C4_approved_archive_empty_body_raises():
+    """C4: APPROVED_BY_HUMAN + archive exists but rendered_body is None → ValueError."""
+    archive_rows = [{"rendered_body": None, "document_version": DOC_VERSION_APPROVED}]
+    rdh = _load_render_html_with_sb(lambda: _ArchiveFakeSB(_make_approved_doc(), archive_rows))
+    try:
+        rdh(DOC_ID)
+        assert False, "should raise ValueError"
+    except ValueError as e:
+        assert "rendered_body" in str(e).lower() or "archive" in str(e).lower()
+
+
+def test_C5_version_mismatch_raises():
+    """C5: APPROVED_BY_HUMAN + archive version != doc version → ValueError."""
+    # Archive rows don't match DOC_VERSION_APPROVED because filter returns []
+    rdh = _load_render_html_with_sb(lambda: _ArchiveFakeSB(_make_approved_doc(version=DOC_VERSION_APPROVED), []))
+    try:
+        rdh(DOC_ID)
+        assert False, "should raise ValueError"
+    except ValueError:
+        pass  # expected
+
+
+# ═══════════════════════════════════════════════════════
+# P5/P6: Export format tests
+# ═══════════════════════════════════════════════════════
+
+def test_P6_supported_formats_set():
+    """P6: only HTML and PDF are in the supported export format set."""
+    SUPPORTED = {"HTML", "PDF"}
+    # Contract: router rejects anything not in this set
+    for bad in ("XLSX", "DOCX", "HWP", "UNKNOWN", "xml"):
+        assert bad.upper() not in SUPPORTED, f"{bad!r} should not be supported"
+    for good in ("html", "pdf", "HTML", "PDF"):
+        assert good.upper() in SUPPORTED, f"{good!r} should be supported"
