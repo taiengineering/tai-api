@@ -1,7 +1,7 @@
 ---
 title: ARCH-REC-02 Final Evidence
-status: CORR-001 COMPLETE — GPT VERIFY REQUIRED
-version: 2
+status: CLOSED / GPT PASS / 100%
+version: 3
 governed_by: WO-DOC-ARCHREC-002
 date: 2026-10-08
 ---
@@ -189,8 +189,8 @@ Production child state = pre-apply. "96 fields normalized" refers to implementat
 | Item | Status |
 |------|--------|
 | ARCH-REC-01 | CLOSED / GPT PASS |
-| ARCH-REC-02 CORR-001 | COMPLETE — GPT VERIFY REQUIRED |
-| ARCH-REC-02 CLOSED | NO |
+| ARCH-REC-02 CORR-001 | PASSED |
+| ARCH-REC-02 | CLOSED / GPT PASS / 100% |
 | C2-C2 implementation | CLOSED / GPT PASS |
 | C2-C2 production apply | NO |
 | C2-C3 | BLOCKED (manual/fallback schema approval pending) |
