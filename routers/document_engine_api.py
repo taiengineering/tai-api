@@ -36,7 +36,11 @@ from services.document_confirm_svc import confirm_document_atomic, ConfirmError
 from services.document_signature_svc import SignatureError, apply_profile_to_document
 from services.document_engine.catalog_resolver import resolve_catalog_runtime_schema
 from services.document_engine.renderer import html_to_pdf as _html_to_pdf
+from services.document_engine.generator import render_html as _render_html, render_pdf as _render_pdf
+from services.document_engine.auto_source_readmodel import list_auto_documents
 from routers.auth import get_current_user
+from routers.inspection_checklist import _ensure_inspection_own
+from routers.tbm import _ensure_tbm_own
 from db.supabase_client import get_supabase
 from services.company_scope import (
     _ensure_own_company,
@@ -500,3 +504,115 @@ def get_catalog_runtime(doc_id: str):
             "supported_export_formats": ["HTML", "PDF"],
         },
     }
+
+
+# ═══════════════════════════════════════════════════════
+# 9. AUTO-REUSE-01: Auto Document Discovery (READ-ONLY)
+# ═══════════════════════════════════════════════════════
+
+_AUTO_SOURCE_TYPES = {"ALL", "INSPECTION", "TBM"}
+
+
+@router.get("/auto-documents")
+def list_auto_documents_endpoint(
+    source_type: str = Query("ALL"),
+    factory_id: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=50),
+    current: dict = Depends(get_current_user),
+):
+    """AUTO_SOURCE 문서 목록 — 완료된 점검/TBM의 자동 문서 목록.
+
+    Zero persistence. Read-only.
+    source_type: ALL | INSPECTION | TBM
+    """
+    if source_type not in _AUTO_SOURCE_TYPES:
+        raise HTTPException(400, f"source_type must be one of {sorted(_AUTO_SOURCE_TYPES)}")
+    sb = get_supabase()
+    filt = scoped_filter(current, sb, ["company_id", "factory_id"])
+    result = list_auto_documents(
+        sb,
+        filt,
+        source_type=source_type,
+        factory_id=factory_id,
+        page=page,
+        page_size=page_size,
+    )
+    return {"status": "success", "data": result}
+
+
+@router.get("/auto-documents/{source_type}/{source_id}/preview", response_class=HTMLResponse)
+async def auto_document_preview(
+    source_type: str,
+    source_id: str,
+    current: dict = Depends(get_current_user),
+):
+    """AUTO_SOURCE 문서 미리보기 — 기존 Fetcher/Generator 재사용.
+
+    server-side doc_type binding:
+      INSPECTION → INSP (InspectionFetcher)
+      TBM        → TBM  (TbmFetcher)
+    Zero persistence.
+    """
+    if source_type not in ("INSPECTION", "TBM"):
+        raise HTTPException(400, "source_type must be INSPECTION or TBM")
+    sb = get_supabase()
+
+    if source_type == "INSPECTION":
+        _ensure_inspection_own(sb, source_id, current)
+        try:
+            html = await _render_html("INSP", {"inspection_id": source_id})
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"render error: {e}")
+        return HTMLResponse(content=html)
+
+    # TBM
+    _ensure_tbm_own(sb, source_id, current)
+    try:
+        html = await _render_html("TBM", {"meeting_id": source_id})
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"render error: {e}")
+    return HTMLResponse(content=html)
+
+
+@router.get("/auto-documents/{source_type}/{source_id}/pdf")
+async def auto_document_pdf(
+    source_type: str,
+    source_id: str,
+    current: dict = Depends(get_current_user),
+):
+    """AUTO_SOURCE PDF 다운로드 — 기존 Generator 재사용. Transient response, zero persistence."""
+    if source_type not in ("INSPECTION", "TBM"):
+        raise HTTPException(400, "source_type must be INSPECTION or TBM")
+    sb = get_supabase()
+
+    if source_type == "INSPECTION":
+        _ensure_inspection_own(sb, source_id, current)
+        try:
+            pdf_bytes = await _render_pdf("INSP", {"inspection_id": source_id})
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"render error: {e}")
+        filename = f"점검기록_{source_id[:8]}.pdf"
+    else:
+        _ensure_tbm_own(sb, source_id, current)
+        try:
+            pdf_bytes = await _render_pdf("TBM", {"meeting_id": source_id})
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"render error: {e}")
+        filename = f"TBM_{source_id[:8]}.pdf"
+
+    from urllib.parse import quote
+    encoded = quote(filename, safe="")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"},
+    )
