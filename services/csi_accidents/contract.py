@@ -8,6 +8,8 @@ DATASET_ID = "15108262"
 DATASET_EFFECTIVE_DATE = "2025-06-30"
 DATASET_URL = "https://www.data.go.kr/data/15108262/fileData.do"
 METADATA_URL = f"https://www.data.go.kr/catalog/{DATASET_ID}/fileData.json"
+DATASET_NAME = "국토안전관리원_건설안전사고사례"
+DOWNLOAD_PATH = "/cmm/cmm/fileDownload.do"
 ALLOWED_DOWNLOAD_HOSTS: frozenset[str] = frozenset({"www.data.go.kr", "data.go.kr"})
 DOWNLOAD_URL = (
     "https://www.data.go.kr/cmm/cmm/fileDownload.do"

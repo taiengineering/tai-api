@@ -6,6 +6,9 @@ Two HTTP requests are made:
   2. DATASET_URL  (fileData.do)    → JSON-LD distribution contentUrl → attachment ID
 
 Callers must provide http_get for testing (default uses urllib with bounded retry).
+Change detection is the caller's responsibility: pass known_attachment_id +
+known_effective_date (both non-None) to get NO_CHANGE / NEW_ARTIFACT; omit both
+(or pass both=None) to get DISCOVERED; partial supply → FAILED.
 """
 from __future__ import annotations
 
@@ -20,10 +23,10 @@ from urllib.request import Request, urlopen
 
 from services.csi_accidents.contract import (
     ALLOWED_DOWNLOAD_HOSTS,
-    ATCH_FILE_ID,
-    DATASET_EFFECTIVE_DATE,
     DATASET_ID,
+    DATASET_NAME,
     DATASET_URL,
+    DOWNLOAD_PATH,
     METADATA_URL,
 )
 
@@ -82,17 +85,69 @@ def _default_http_get(url: str) -> bytes:
     raise last_exc
 
 
-# ─── Parsing helpers ──────────────────────────────────────────────────────────
+# ─── Validation helpers ───────────────────────────────────────────────────────
+
+_EXPECTED_DATASET_PATH = f"/data/{DATASET_ID}/fileData.do"
+
+
+def _validate_dataset_url(url: str) -> None:
+    """Strict path-level fence: scheme+host+path must match dataset 15108262."""
+    parsed = urlparse(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc not in ALLOWED_DOWNLOAD_HOSTS
+        or parsed.path != _EXPECTED_DATASET_PATH
+    ):
+        raise DiscoveryError(
+            "DATASET_ID_MISMATCH",
+            f"metadata url {url!r} does not match dataset {DATASET_ID!r} identity",
+        )
+
+
+def _validate_dataset_name(name: str) -> None:
+    if name.strip() != DATASET_NAME:
+        raise DiscoveryError(
+            "DATASET_NAME_MISMATCH",
+            f"metadata name {name!r} does not match expected {DATASET_NAME!r}",
+        )
+
 
 def _parse_effective_date(alternate_name: str) -> str:
     m = re.search(r"_(\d{8})$", alternate_name)
     if not m:
         raise DiscoveryError(
             "EFFECTIVE_DATE_UNRESOLVED",
-            f"cannot extract YYYYMMDD date from alternateName: {alternate_name!r}",
+            f"cannot extract YYYYMMDD from alternateName: {alternate_name!r}",
         )
     d = m.group(1)
+    try:
+        datetime.strptime(d, "%Y%m%d")
+    except ValueError:
+        raise DiscoveryError(
+            "EFFECTIVE_DATE_UNRESOLVED",
+            f"date token {d!r} is not a valid calendar date",
+        )
     return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+
+
+def _validate_download_url(url: str) -> None:
+    """Strict scheme + host + path fence for download URLs."""
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise DiscoveryError(
+            "UNTRUSTED_DOWNLOAD_HOST",
+            f"scheme {parsed.scheme!r} not allowed (https only)",
+        )
+    if parsed.netloc not in ALLOWED_DOWNLOAD_HOSTS:
+        raise DiscoveryError(
+            "UNTRUSTED_DOWNLOAD_HOST",
+            f"download host {parsed.netloc!r} not in allowlist",
+        )
+    if parsed.path != DOWNLOAD_PATH:
+        raise DiscoveryError(
+            "UNTRUSTED_DOWNLOAD_HOST",
+            f"download path {parsed.path!r} not allowed (expected {DOWNLOAD_PATH!r})",
+        )
 
 
 def _extract_json_ld_blocks(html: str) -> list[dict]:
@@ -111,34 +166,36 @@ def _extract_json_ld_blocks(html: str) -> list[dict]:
     return blocks
 
 
-def _collect_content_urls(json_ld_blocks: list[dict]) -> list[str]:
+def _collect_csv_content_urls(json_ld_blocks: list[dict]) -> list[str]:
+    """Return contentUrl values from CSV DataDownload distributions only."""
     urls: list[str] = []
     for block in json_ld_blocks:
         for dist in block.get("distribution", []):
-            if isinstance(dist, dict):
-                url = (dist.get("contentUrl") or "").strip()
-                if url:
-                    urls.append(url)
+            if not isinstance(dist, dict):
+                continue
+            fmt = (dist.get("encodingFormat") or "").strip().upper()
+            if fmt and fmt != "CSV":
+                continue
+            url = (dist.get("contentUrl") or "").strip()
+            if url:
+                urls.append(url)
     return urls
 
 
-def _validate_download_host(url: str) -> None:
-    host = urlparse(url).netloc
-    if host not in ALLOWED_DOWNLOAD_HOSTS:
-        raise DiscoveryError(
-            "UNTRUSTED_DOWNLOAD_HOST",
-            f"download host {host!r} not in allowlist {sorted(ALLOWED_DOWNLOAD_HOSTS)}",
-        )
-
-
 def _parse_attachment(url: str) -> tuple[str, str]:
+    """Return (atchFileId, fileDetailSn); both are required — no fallback."""
     params = parse_qs(urlparse(url).query)
     attachment_id = (params.get("atchFileId") or [None])[0]
-    file_detail_sn = (params.get("fileDetailSn") or ["1"])[0]
+    file_detail_sn = (params.get("fileDetailSn") or [None])[0]
     if not attachment_id:
         raise DiscoveryError(
             "DISCOVERY_PARSE_ERROR",
             "atchFileId missing from distribution contentUrl",
+        )
+    if file_detail_sn is None:
+        raise DiscoveryError(
+            "DISCOVERY_PARSE_ERROR",
+            "fileDetailSn missing from distribution contentUrl",
         )
     return attachment_id, file_detail_sn
 
@@ -148,79 +205,78 @@ def _parse_attachment(url: str) -> tuple[str, str]:
 def discover_latest_artifact(
     *,
     http_get: Optional[HttpGetFn] = None,
-    known_attachment_id: Optional[str] = ATCH_FILE_ID,
-    known_effective_date: Optional[str] = DATASET_EFFECTIVE_DATE,
+    known_attachment_id: Optional[str] = None,
+    known_effective_date: Optional[str] = None,
     now_fn: Optional[Callable[[], datetime]] = None,
 ) -> DiscoveryResult:
     """Discover the latest official CSI accident CSV artifact on data.go.kr.
 
-    Returns NO_CHANGE when the discovered artifact matches known_attachment_id
-    and known_effective_date. Returns NEW_ARTIFACT when either differs. Returns
-    DISCOVERED when comparison data is not provided. Returns FAILED on any error.
+    Change detection contract:
+      both None          → DISCOVERED  (discovery only, no comparison)
+      both non-None      → NO_CHANGE or NEW_ARTIFACT
+      one None, one set  → FAILED / COMPARISON_INPUT_INCOMPLETE
     """
     get = http_get or _default_http_get
     now = (now_fn or (lambda: datetime.now(timezone.utc)))()
     discovered_at = now.isoformat()
 
     try:
-        # Step 1: metadata JSON → alternateName, dateModified, dataset identity
+        # ── Step 1: metadata JSON ────────────────────────────────────────────
         try:
             meta_bytes = get(METADATA_URL)
         except (HTTPError, URLError, OSError) as exc:
             raise DiscoveryError(
-                "DISCOVERY_HTTP_ERROR", f"metadata fetch failed: {type(exc).__name__}"
+                "DISCOVERY_HTTP_ERROR",
+                f"metadata fetch failed: {type(exc).__name__}",
             ) from exc
 
         try:
             meta = json.loads(meta_bytes)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise DiscoveryError(
-                "DISCOVERY_PARSE_ERROR", f"metadata JSON parse failed: {type(exc).__name__}"
+                "DISCOVERY_PARSE_ERROR",
+                f"metadata JSON parse failed: {type(exc).__name__}",
             ) from exc
 
-        # Dataset identity fence
-        dataset_url_in_meta: str = meta.get("url", "")
-        if DATASET_ID not in dataset_url_in_meta:
-            raise DiscoveryError(
-                "DATASET_ID_MISMATCH",
-                f"metadata url {dataset_url_in_meta!r} does not contain dataset_id={DATASET_ID!r}",
-            )
+        _validate_dataset_url(meta.get("url", ""))
+        _validate_dataset_name(meta.get("name", ""))
 
         alternate_name: str = meta.get("alternateName", "")
-        dataset_name: str = meta.get("name", "")
         portal_modified_at: str = meta.get("dateModified", "")
         effective_date = _parse_effective_date(alternate_name)
 
-        # Step 2: HTML page → JSON-LD → distribution contentUrl
+        # ── Step 2: HTML page → JSON-LD → distribution contentUrl ───────────
         try:
             page_bytes = get(DATASET_URL)
         except (HTTPError, URLError, OSError) as exc:
             raise DiscoveryError(
-                "DISCOVERY_HTTP_ERROR", f"page fetch failed: {type(exc).__name__}"
+                "DISCOVERY_HTTP_ERROR",
+                f"page fetch failed: {type(exc).__name__}",
             ) from exc
 
         try:
             html = page_bytes.decode("utf-8", errors="replace")
         except Exception as exc:
             raise DiscoveryError(
-                "DISCOVERY_PARSE_ERROR", f"page decode failed: {type(exc).__name__}"
+                "DISCOVERY_PARSE_ERROR",
+                f"page decode failed: {type(exc).__name__}",
             ) from exc
 
         json_ld_blocks = _extract_json_ld_blocks(html)
-        raw_urls = _collect_content_urls(json_ld_blocks)
+        csv_urls = _collect_csv_content_urls(json_ld_blocks)
 
-        if not raw_urls:
+        if not csv_urls:
             raise DiscoveryError(
                 "NO_ARTIFACT",
-                "no distribution contentUrl found in JSON-LD on page",
+                "no CSV distribution contentUrl found in JSON-LD on page",
             )
 
-        for url in raw_urls:
-            _validate_download_host(url)
+        for url in csv_urls:
+            _validate_download_url(url)
 
-        # De-duplicate by attachment_id; multiple distinct IDs = ambiguous
-        seen: dict[str, str] = {}  # attachment_id → url
-        for url in raw_urls:
+        # De-duplicate by attachment_id; multiple distinct CSV IDs = ambiguous
+        seen: dict[str, str] = {}
+        for url in csv_urls:
             att_id, _ = _parse_attachment(url)
             if att_id not in seen:
                 seen[att_id] = url
@@ -228,7 +284,7 @@ def discover_latest_artifact(
         if len(seen) > 1:
             raise DiscoveryError(
                 "AMBIGUOUS_LATEST_ARTIFACT",
-                f"multiple distinct attachments found: {sorted(seen.keys())}",
+                f"multiple distinct CSV attachments found: {sorted(seen.keys())}",
             )
 
         download_url = next(iter(seen.values()))
@@ -236,7 +292,7 @@ def discover_latest_artifact(
 
         artifact = CsiArtifactDescriptor(
             dataset_id=DATASET_ID,
-            dataset_name=dataset_name,
+            dataset_name=DATASET_NAME,
             effective_date=effective_date,
             alternate_name=alternate_name,
             download_url=download_url,
@@ -247,9 +303,15 @@ def discover_latest_artifact(
             source_page_url=DATASET_URL,
         )
 
-        # Change detection
-        if known_attachment_id is None or known_effective_date is None:
+        # ── Change detection ─────────────────────────────────────────────────
+        if known_attachment_id is None and known_effective_date is None:
             return DiscoveryResult(status="DISCOVERED", artifact=artifact)
+
+        if known_attachment_id is None or known_effective_date is None:
+            raise DiscoveryError(
+                "COMPARISON_INPUT_INCOMPLETE",
+                "both known_attachment_id and known_effective_date must be provided",
+            )
 
         if (
             attachment_id == known_attachment_id
@@ -264,6 +326,12 @@ def discover_latest_artifact(
             status="FAILED",
             error_code=exc.code,
             error_message=exc.message,
+        )
+    except Exception as exc:
+        return DiscoveryResult(
+            status="FAILED",
+            error_code="DISCOVERY_UNEXPECTED",
+            error_message=type(exc).__name__,
         )
 
 

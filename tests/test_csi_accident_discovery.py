@@ -1,4 +1,4 @@
-"""WP-1D Wave2B — CSI Artifact Discovery tests (D01 ~ D12).
+"""WP-1D Wave2B — CSI Artifact Discovery tests (D01 ~ D12, P01 ~ P13).
 
 All tests use mock HTTP — zero external calls, zero production DB mutation.
 """
@@ -17,8 +17,10 @@ from services.csi_accidents.contract import (
     ATCH_FILE_ID,
     DATASET_EFFECTIVE_DATE,
     DATASET_ID,
+    DATASET_NAME,
     DATASET_URL,
     DECLARED_ROWS,
+    DOWNLOAD_PATH,
     METADATA_URL,
     OFFICIAL_HEADERS,
 )
@@ -34,43 +36,50 @@ from services.csi_accidents.sync import sync_csi_accidents
 # ─── Fixture helpers ──────────────────────────────────────────────────────────
 
 _KNOWN_CONTENT_URL = (
-    "https://www.data.go.kr/cmm/cmm/fileDownload.do"
+    f"https://www.data.go.kr{DOWNLOAD_PATH}"
     f"?atchFileId={ATCH_FILE_ID}&fileDetailSn=1&insertDataPrcus=N"
 )
 
 
 def _make_meta(
+    name: str = DATASET_NAME,
     alternate_name: str = f"국토안전관리원_건설안전사고사례_20250630",
     dataset_id: str = DATASET_ID,
     modified: str = "2026-09-15",
+    url_override: str | None = None,
 ) -> bytes:
+    url = url_override or f"https://www.data.go.kr/data/{dataset_id}/fileData.do"
     return json.dumps({
         "@context": "https://schema.org",
         "@type": "Dataset",
-        "name": "국토안전관리원_건설안전사고사례",
+        "name": name,
         "alternateName": alternate_name,
-        "url": f"https://www.data.go.kr/data/{dataset_id}/fileData.do",
+        "url": url,
         "dateModified": modified,
         "datasetTimeInterval": "연간",
         "encodingFormat": "CSV",
     }).encode()
 
 
-def _make_page(*content_urls: str) -> bytes:
-    distributions = [
-        {"@type": "DataDownload", "encodingFormat": "CSV", "contentUrl": url}
-        for url in content_urls
-    ]
+def _make_page(*distributions: dict) -> bytes:
     ld = json.dumps({
         "@context": "https://schema.org",
         "@type": "Dataset",
-        "distribution": distributions,
+        "distribution": list(distributions),
     })
     return (
-        f'<html><head>'
+        f"<html><head>"
         f'<script type="application/ld+json">{ld}</script>'
-        f'</head><body></body></html>'
+        f"</head><body></body></html>"
     ).encode()
+
+
+def _csv_dist(content_url: str, fmt: str = "CSV") -> dict:
+    return {"@type": "DataDownload", "encodingFormat": fmt, "contentUrl": content_url}
+
+
+def _make_page_csv(*content_urls: str) -> bytes:
+    return _make_page(*[_csv_dist(u) for u in content_urls])
 
 
 def _make_http_get(meta: bytes, page: bytes) -> Callable[[str], bytes]:
@@ -84,7 +93,7 @@ def _make_http_get(meta: bytes, page: bytes) -> Callable[[str], bytes]:
 
 
 _META_CURRENT = _make_meta()
-_PAGE_CURRENT = _make_page(_KNOWN_CONTENT_URL)
+_PAGE_CURRENT = _make_page_csv(_KNOWN_CONTENT_URL)
 _HTTP_CURRENT = _make_http_get(_META_CURRENT, _PAGE_CURRENT)
 
 
@@ -111,18 +120,19 @@ def _csv_bytes(rows: list, headers=None, encoding: str = "cp949") -> bytes:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# D01 — current effective date extracted from alternateName
+# D01 — default call → DISCOVERED, effective_date extracted correctly
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_d01_current_effective_date():
     result = discover_latest_artifact(http_get=_HTTP_CURRENT)
+    assert result.status == "DISCOVERED"
     assert result.artifact is not None
     assert result.artifact.effective_date == "2025-06-30"
     assert result.artifact.dataset_id == DATASET_ID
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# D02 — wrong dataset_id in metadata → DATASET_ID_MISMATCH
+# D02 — wrong dataset_id in metadata URL → DATASET_ID_MISMATCH
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_d02_dataset_id_mismatch():
@@ -135,20 +145,24 @@ def test_d02_dataset_id_mismatch():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# D03 — new artifact (2026-11-30) → NEW_ARTIFACT
+# D03 — new artifact (2026-11-30) with known comparison → NEW_ARTIFACT
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_d03_new_artifact():
     new_att_id = "FILE_000000009999999"
     new_url = (
-        "https://www.data.go.kr/cmm/cmm/fileDownload.do"
+        f"https://www.data.go.kr{DOWNLOAD_PATH}"
         f"?atchFileId={new_att_id}&fileDetailSn=1&insertDataPrcus=N"
     )
     new_meta = _make_meta(alternate_name="국토안전관리원_건설안전사고사례_20261130")
-    new_page = _make_page(new_url)
+    new_page = _make_page_csv(new_url)
     http_get = _make_http_get(new_meta, new_page)
 
-    result = discover_latest_artifact(http_get=http_get)
+    result = discover_latest_artifact(
+        http_get=http_get,
+        known_attachment_id=ATCH_FILE_ID,
+        known_effective_date=DATASET_EFFECTIVE_DATE,
+    )
     assert result.status == "NEW_ARTIFACT"
     assert result.artifact is not None
     assert result.artifact.effective_date == "2026-11-30"
@@ -156,11 +170,15 @@ def test_d03_new_artifact():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# D04 — same artifact as current production → NO_CHANGE
+# D04 — same artifact with explicit comparison → NO_CHANGE
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_d04_no_change():
-    result = discover_latest_artifact(http_get=_HTTP_CURRENT)
+    result = discover_latest_artifact(
+        http_get=_HTTP_CURRENT,
+        known_attachment_id=ATCH_FILE_ID,
+        known_effective_date=DATASET_EFFECTIVE_DATE,
+    )
     assert result.status == "NO_CHANGE"
     assert result.artifact is not None
     assert result.artifact.attachment_id == ATCH_FILE_ID
@@ -168,19 +186,13 @@ def test_d04_no_change():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# D05 — two distinct attachment IDs → AMBIGUOUS_LATEST_ARTIFACT
+# D05 — two distinct CSV attachment IDs → AMBIGUOUS_LATEST_ARTIFACT
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_d05_ambiguous_latest_artifact():
-    url_a = (
-        "https://www.data.go.kr/cmm/cmm/fileDownload.do"
-        "?atchFileId=FILE_000000001111111&fileDetailSn=1&insertDataPrcus=N"
-    )
-    url_b = (
-        "https://www.data.go.kr/cmm/cmm/fileDownload.do"
-        "?atchFileId=FILE_000000002222222&fileDetailSn=1&insertDataPrcus=N"
-    )
-    page = _make_page(url_a, url_b)
+    url_a = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId=FILE_000000001111111&fileDetailSn=1"
+    url_b = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId=FILE_000000002222222&fileDetailSn=1"
+    page = _make_page_csv(url_a, url_b)
     http_get = _make_http_get(_META_CURRENT, page)
     result = discover_latest_artifact(http_get=http_get)
     assert result.status == "FAILED"
@@ -204,8 +216,8 @@ def test_d06_effective_date_unresolved():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_d07_untrusted_download_host():
-    bad_url = "https://example.com/download?atchFileId=FILE_000000003574744&fileDetailSn=1"
-    bad_page = _make_page(bad_url)
+    bad_url = f"https://example.com{DOWNLOAD_PATH}?atchFileId={ATCH_FILE_ID}&fileDetailSn=1"
+    bad_page = _make_page_csv(bad_url)
     http_get = _make_http_get(_META_CURRENT, bad_page)
     result = discover_latest_artifact(http_get=http_get)
     assert result.status == "FAILED"
@@ -221,6 +233,7 @@ def test_d08_current_baseline_regression():
     a = result.artifact
     assert a is not None
     assert a.dataset_id == DATASET_ID
+    assert a.dataset_name == DATASET_NAME
     assert a.attachment_id == ATCH_FILE_ID
     assert a.effective_date == DATASET_EFFECTIVE_DATE
     assert a.file_detail_sn == "1"
@@ -228,7 +241,7 @@ def test_d08_current_baseline_regression():
     assert a.portal_modified_at == "2026-09-15"
     assert a.download_url == _KNOWN_CONTENT_URL
     assert a.alternate_name == "국토안전관리원_건설안전사고사례_20250630"
-    # download-time fields start unpopulated
+    # filename not available at discovery stage
     assert a.filename is None
     assert a.bytes is None
     assert a.sha256 is None
@@ -296,7 +309,7 @@ def test_d11b_metadata_parse_failure_preserves_current():
 
 def test_d12_http_get_is_injectable():
     sig = inspect.signature(discover_latest_artifact)
-    assert "http_get" in sig.parameters, "http_get must be injectable for test isolation"
+    assert "http_get" in sig.parameters
 
 
 def test_d12b_no_artifact_found_in_page() -> None:
@@ -308,7 +321,198 @@ def test_d12b_no_artifact_found_in_page() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Extra — DISCOVERED status when no comparison data provided
+# P01 — default call (no comparison args) → DISCOVERED
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p01_default_is_discovered():
+    result = discover_latest_artifact(http_get=_HTTP_CURRENT)
+    assert result.status == "DISCOVERED"
+    assert result.artifact is not None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P02 — explicit current comparison → NO_CHANGE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p02_explicit_no_change():
+    result = discover_latest_artifact(
+        http_get=_HTTP_CURRENT,
+        known_attachment_id=ATCH_FILE_ID,
+        known_effective_date=DATASET_EFFECTIVE_DATE,
+    )
+    assert result.status == "NO_CHANGE"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P03 — new portal artifact + current DB identity → NEW_ARTIFACT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p03_explicit_new_artifact():
+    new_att = "FILE_NEW_2026"
+    new_url = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId={new_att}&fileDetailSn=1"
+    new_meta = _make_meta(alternate_name="국토안전관리원_건설안전사고사례_20261130")
+    http_get = _make_http_get(new_meta, _make_page_csv(new_url))
+
+    result = discover_latest_artifact(
+        http_get=http_get,
+        known_attachment_id=ATCH_FILE_ID,
+        known_effective_date=DATASET_EFFECTIVE_DATE,
+    )
+    assert result.status == "NEW_ARTIFACT"
+    assert result.artifact is not None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P04 — partial comparison (one arg None) → COMPARISON_INPUT_INCOMPLETE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p04_attachment_only_incomplete():
+    result = discover_latest_artifact(
+        http_get=_HTTP_CURRENT,
+        known_attachment_id=ATCH_FILE_ID,
+        known_effective_date=None,
+    )
+    assert result.status == "FAILED"
+    assert result.error_code == "COMPARISON_INPUT_INCOMPLETE"
+
+
+def test_p04b_effective_date_only_incomplete():
+    result = discover_latest_artifact(
+        http_get=_HTTP_CURRENT,
+        known_attachment_id=None,
+        known_effective_date=DATASET_EFFECTIVE_DATE,
+    )
+    assert result.status == "FAILED"
+    assert result.error_code == "COMPARISON_INPUT_INCOMPLETE"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P05 — dataset_id substring attack in metadata URL → DATASET_ID_MISMATCH
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p05_dataset_url_substring_attack():
+    # /data/99999999/fileData.do?foo=15108262 must not pass
+    attack_meta = _make_meta(url_override=f"https://www.data.go.kr/data/99999999/fileData.do?foo={DATASET_ID}")
+    http_get = _make_http_get(attack_meta, _PAGE_CURRENT)
+    result = discover_latest_artifact(http_get=http_get)
+    assert result.status == "FAILED"
+    assert result.error_code == "DATASET_ID_MISMATCH"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P06 — correct dataset URL but wrong dataset name → DATASET_NAME_MISMATCH
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p06_wrong_dataset_name():
+    wrong_name_meta = _make_meta(name="국토안전관리원_다른데이터셋")
+    http_get = _make_http_get(wrong_name_meta, _PAGE_CURRENT)
+    result = discover_latest_artifact(http_get=http_get)
+    assert result.status == "FAILED"
+    assert result.error_code == "DATASET_NAME_MISMATCH"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P07 — alternateName with impossible date (month 13) → EFFECTIVE_DATE_UNRESOLVED
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p07_invalid_calendar_date():
+    bad_date_meta = _make_meta(alternate_name="국토안전관리원_건설안전사고사례_20261399")
+    http_get = _make_http_get(bad_date_meta, _PAGE_CURRENT)
+    result = discover_latest_artifact(http_get=http_get)
+    assert result.status == "FAILED"
+    assert result.error_code == "EFFECTIVE_DATE_UNRESOLVED"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P08 — http:// download URL → UNTRUSTED_DOWNLOAD_HOST (scheme rejected)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p08_http_scheme_rejected():
+    http_url = f"http://www.data.go.kr{DOWNLOAD_PATH}?atchFileId={ATCH_FILE_ID}&fileDetailSn=1"
+    page = _make_page_csv(http_url)
+    http_get = _make_http_get(_META_CURRENT, page)
+    result = discover_latest_artifact(http_get=http_get)
+    assert result.status == "FAILED"
+    assert result.error_code == "UNTRUSTED_DOWNLOAD_HOST"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P09 — correct host but wrong path → UNTRUSTED_DOWNLOAD_HOST
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p09_wrong_download_path_rejected():
+    bad_path_url = f"https://www.data.go.kr/not-download?atchFileId={ATCH_FILE_ID}&fileDetailSn=1"
+    page = _make_page_csv(bad_path_url)
+    http_get = _make_http_get(_META_CURRENT, page)
+    result = discover_latest_artifact(http_get=http_get)
+    assert result.status == "FAILED"
+    assert result.error_code == "UNTRUSTED_DOWNLOAD_HOST"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P10 — contentUrl missing fileDetailSn → DISCOVERY_PARSE_ERROR
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p10_missing_file_detail_sn():
+    no_sn_url = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId={ATCH_FILE_ID}&insertDataPrcus=N"
+    page = _make_page_csv(no_sn_url)
+    http_get = _make_http_get(_META_CURRENT, page)
+    result = discover_latest_artifact(http_get=http_get)
+    assert result.status == "FAILED"
+    assert result.error_code == "DISCOVERY_PARSE_ERROR"
+    assert result.artifact is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P11 — non-CSV distribution ignored, CSV selected without ambiguity
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p11_non_csv_distribution_ignored():
+    csv_url = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId={ATCH_FILE_ID}&fileDetailSn=1"
+    json_url = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId=FILE_JSON_FORMAT&fileDetailSn=2"
+    page = _make_page(
+        _csv_dist(csv_url, fmt="CSV"),
+        _csv_dist(json_url, fmt="JSON"),
+    )
+    http_get = _make_http_get(_META_CURRENT, page)
+    result = discover_latest_artifact(http_get=http_get)
+    assert result.status == "DISCOVERED"
+    assert result.artifact is not None
+    assert result.artifact.attachment_id == ATCH_FILE_ID
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P12 — two CSV distributions with distinct IDs → AMBIGUOUS_LATEST_ARTIFACT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p12_two_csv_distributions_ambiguous():
+    url_a = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId=FILE_CSV_A&fileDetailSn=1"
+    url_b = f"https://www.data.go.kr{DOWNLOAD_PATH}?atchFileId=FILE_CSV_B&fileDetailSn=1"
+    page = _make_page(_csv_dist(url_a, "CSV"), _csv_dist(url_b, "CSV"))
+    http_get = _make_http_get(_META_CURRENT, page)
+    result = discover_latest_artifact(http_get=http_get)
+    assert result.status == "FAILED"
+    assert result.error_code == "AMBIGUOUS_LATEST_ARTIFACT"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P13 — unexpected exception → DISCOVERY_UNEXPECTED, no secret leaked
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p13_unexpected_exception_sanitized():
+    def _raise_runtime(_url: str) -> bytes:
+        raise RuntimeError("SECRET=super_secret_key request failed")
+
+    result = discover_latest_artifact(http_get=_raise_runtime)
+    assert result.status == "FAILED"
+    assert result.error_code == "DISCOVERY_UNEXPECTED"
+    assert result.error_message == "RuntimeError"
+    assert "SECRET" not in (result.error_message or "")
+    assert "super_secret" not in (result.error_message or "")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Extra — both None explicitly → DISCOVERED
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_d_discovered_when_no_known_baseline():
@@ -322,14 +526,14 @@ def test_d_discovered_when_no_known_baseline():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Extra — duplicate content URL (same attachment ID twice) is not ambiguous
+# Extra — duplicate same attachment URL not ambiguous
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_d_duplicate_same_attachment_not_ambiguous():
-    page = _make_page(_KNOWN_CONTENT_URL, _KNOWN_CONTENT_URL)
+    page = _make_page_csv(_KNOWN_CONTENT_URL, _KNOWN_CONTENT_URL)
     http_get = _make_http_get(_META_CURRENT, page)
     result = discover_latest_artifact(http_get=http_get)
-    assert result.status == "NO_CHANGE"
+    assert result.status == "DISCOVERED"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -340,3 +544,12 @@ def test_d_allowed_hosts_contract():
     assert "www.data.go.kr" in ALLOWED_DOWNLOAD_HOSTS
     assert "data.go.kr" in ALLOWED_DOWNLOAD_HOSTS
     assert "example.com" not in ALLOWED_DOWNLOAD_HOSTS
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Extra — DOWNLOAD_PATH and DATASET_NAME contract
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_d_static_constants():
+    assert DOWNLOAD_PATH == "/cmm/cmm/fileDownload.do"
+    assert DATASET_NAME == "국토안전관리원_건설안전사고사례"
