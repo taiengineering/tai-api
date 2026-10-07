@@ -31,7 +31,7 @@ base branch = docs/doc-archrec-canonical-channels
 base HEAD   = 31c84979
 
 branch = docs/doc-auto-src-01-readmodel-design
-HEAD   = [pending commit]
+HEAD   = 5ad15514
 
 changed files:
   docs/document-engine/auto-source/01_AUTO_DOCUMENT_IDENTITY_CONTRACT.md
