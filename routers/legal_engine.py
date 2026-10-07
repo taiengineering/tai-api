@@ -10,6 +10,7 @@ from services import legal_engine_svc
 from services.legal_v510_svc import run_diagnose_step1_v510
 from services.safe_industrial_leg_runtime import run_safe_industrial_leg
 from services.safe_construction_leg_runtime import run_safe_construction_leg, ConstructionSiteBridgeError
+from services.subcontract_legal_event_source.store import SubcontractLegalEventSourceLoadError
 from services.safe_building_leg_runtime import run_safe_building_leg
 from services.hazardous_material_event_source.store import HazardousMaterialEventSourceLoadError
 from services.company_scope import _ensure_own_company
@@ -214,9 +215,20 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
     if not leg_runtime_client.is_enabled():                   # LEG availability (TAI fallback 금지)
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
     try:
-        out = run_safe_construction_leg(supabase, body.site_id, body.input)
+        out = run_safe_construction_leg(
+            supabase,
+            body.site_id,
+            body.input,
+            subcontract_legal_event_id=body.subcontract_legal_event_id,
+            subcontractor_id=body.subcontractor_id,
+        )
     except ConstructionSiteBridgeError as e:
         raise HTTPException(status_code=409, detail=str(e))    # site↔factory 미연결 fail-closed
+    except SubcontractLegalEventSourceLoadError as e:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "SUBCONTRACT_LEGAL_EVENT_SOURCE_UNAVAILABLE", "message": str(e)},
+        ) from e
     except EquipmentSourceLoadError as e:
         # WO-EQUIPMENT-A2-REMAINING-CONSUMER-PARITY-IMPLEMENT-001: Equipment read failure 503.
         raise HTTPException(

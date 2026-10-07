@@ -368,7 +368,7 @@ def test_T10_contract_files_still_importable_and_stable():
     from services import safe_construction_canonical_assembler as m_cst_asm
     import schemas.legal_engine as m_sch
 
-    assert len(m_leg._LEG_INPUT_FIELDS) == 254  # WO-LFR-OBJ-S02-L1: +4 건설공사발주자 facts
+    assert len(m_leg._LEG_INPUT_FIELDS) == 260  # WO-LFR-OBJ-S02-L2: +6 subcontract legal event facts
     assert len(m_leg._BUILDING_N1_FIELDS) == 32
     assert m_leg._LEG_CODE_TO_CONSUMER == {
         "has_chemical": "has_chemical_substance",

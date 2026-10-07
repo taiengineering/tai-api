@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 
 class DiagnoseStep1Body(BaseModel):
@@ -161,6 +161,18 @@ class SafeConstructionLegBody(BaseModel):
 
     site_id: str
     input: SafeConstructionConsumerInput
+    subcontract_legal_event_id: Optional[str] = None
+    subcontractor_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _co_presence(self) -> "SafeConstructionLegBody":
+        has_eid = self.subcontract_legal_event_id is not None
+        has_sid = self.subcontractor_id is not None
+        if has_eid != has_sid:
+            raise ValueError(
+                "subcontract_legal_event_id와 subcontractor_id는 함께 제공하거나 둘 다 생략해야 합니다."
+            )
+        return self
 
 
 class SafeBuildingConsumerInput(BaseModel):
