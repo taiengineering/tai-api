@@ -1,17 +1,20 @@
 -- WO-SEO-NAVER-INDEXNOW-V2-004B: IndexNow Snapshot Diff State
--- RC1: state enum = ACTIVE|MISSING_CANDIDATE|INACTIVE (DELETE_READY is classification only).
---      RPC SECURITY INVOKER + SET search_path = '' + REVOKE from PUBLIC.
+-- RC2: delivery state separation, correct missing state machine, write RPCs.
 -- Production DB apply: NOT YET AUTHORIZED.
 --
 -- Security: internal schema NOT exposed via PostgREST (public schema only).
 --   anon/authenticated have zero access to these tables.
---   Reads via public.internal_indexnow_url_state_page() RPC (service_role only).
---   Writes via service_role JWT through PostgREST or direct pg connection.
+--   All access via public.* RPCs (SECURITY INVOKER, service_role only).
 --
 -- State contract:
 --   Persistent URL states: ACTIVE | MISSING_CANDIDATE | INACTIVE
---   INACTIVE: URL absent from >= 2 complete scans (maps from diff classification DELETE_READY).
 --   DELETE_READY is a diff classification, NOT a persistent DB state.
+--
+-- Delivery contract:
+--   current_fingerprint       = fingerprint from last scan when URL was present
+--   last_submitted_fingerprint = fingerprint of last successfully delivered state (NULL = never)
+--   Delivery on: current != last_submitted (or last_submitted IS NULL)
+--   last_submitted updated ONLY on Naver HTTP 200/202.
 --
 -- CORR-01: RAISE EXCEPTION (not ASSERT) for all guards.
 -- CORR-02: information_schema queries qualify table_schema.
@@ -44,46 +47,76 @@ GRANT USAGE ON SCHEMA internal TO service_role;
 -- ============================================================
 
 CREATE TABLE internal.indexnow_scan_runs (
-  id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  scan_started_at     TIMESTAMPTZ NOT NULL,
-  scan_completed_at   TIMESTAMPTZ,
-  sitemap_ok_count    INT         NOT NULL CHECK (sitemap_ok_count >= 0),
-  sitemap_fail_count  INT         NOT NULL CHECK (sitemap_fail_count >= 0),
-  total_url_count     INT         NOT NULL CHECK (total_url_count >= 0),
-  is_complete         BOOLEAN     NOT NULL,
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  scan_started_at         TIMESTAMPTZ NOT NULL,
+  scan_completed_at       TIMESTAMPTZ,
+  -- Sitemap scan counts
+  sitemap_ok_count        INT         NOT NULL DEFAULT 0 CHECK (sitemap_ok_count >= 0),
+  sitemap_fail_count      INT         NOT NULL DEFAULT 0 CHECK (sitemap_fail_count >= 0),
+  -- URL counts (raw = sum of all sitemap rows; unique = after dedup)
+  raw_url_count           INT         NOT NULL DEFAULT 0 CHECK (raw_url_count >= 0),
+  unique_url_count        INT         NOT NULL DEFAULT 0 CHECK (unique_url_count >= 0),
+  duplicate_count         INT         NOT NULL DEFAULT 0 CHECK (duplicate_count >= 0),
+  with_lastmod_count      INT         NOT NULL DEFAULT 0 CHECK (with_lastmod_count >= 0),
+  without_lastmod_count   INT         NOT NULL DEFAULT 0 CHECK (without_lastmod_count >= 0),
+  -- Diff classification counts
+  new_count               INT         NOT NULL DEFAULT 0,
+  changed_count           INT         NOT NULL DEFAULT 0,
+  unchanged_count         INT         NOT NULL DEFAULT 0,
+  missing_candidate_count INT         NOT NULL DEFAULT 0,
+  delete_ready_count      INT         NOT NULL DEFAULT 0,
+  resurrected_count       INT         NOT NULL DEFAULT 0,
+  -- Run status
+  is_complete             BOOLEAN     NOT NULL DEFAULT false,
+  status                  TEXT        NOT NULL DEFAULT 'RUNNING'
+                            CONSTRAINT chk_scan_run_status
+                              CHECK (status IN ('RUNNING', 'COMPLETE', 'PARTIAL', 'FAILED')),
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE internal.indexnow_url_state (
-  url               TEXT        PRIMARY KEY,
-  fingerprint       TEXT        NOT NULL,
-  lastmod           TEXT        NOT NULL DEFAULT '',
-  -- Persistent states only (DELETE_READY is a diff classification, not a persistent state):
-  -- ACTIVE           = URL present in most recent scan
-  -- MISSING_CANDIDATE = URL absent from 1 scan (or partial scan)
-  -- INACTIVE         = URL absent from >= 2 complete scans
-  state             TEXT        NOT NULL DEFAULT 'ACTIVE'
-                                  CONSTRAINT chk_url_state_state
-                                    CHECK (state IN ('ACTIVE', 'MISSING_CANDIDATE', 'INACTIVE')),
-  missing_streak    INT         NOT NULL DEFAULT 0 CHECK (missing_streak >= 0),
-  first_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_seen_at      TIMESTAMPTZ,
-  last_submitted_at TIMESTAMPTZ,
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  url                         TEXT        PRIMARY KEY,
+  -- Public state fingerprint (updated every scan when URL is present)
+  current_fingerprint         TEXT        NOT NULL,
+  current_lastmod             TEXT        NOT NULL DEFAULT '',
+  -- Persistent URL state (DELETE_READY is a diff classification, not stored here)
+  state                       TEXT        NOT NULL DEFAULT 'ACTIVE'
+                                CONSTRAINT chk_url_state_state
+                                  CHECK (state IN ('ACTIVE', 'MISSING_CANDIDATE', 'INACTIVE')),
+  missing_streak              INT         NOT NULL DEFAULT 0 CHECK (missing_streak >= 0),
+  -- Delivery state (separated from scan state per B04)
+  -- NULL = never successfully delivered to Naver
+  last_submitted_fingerprint  TEXT,
+  last_submitted_at           TIMESTAMPTZ,
+  last_http_status            INT,
+  -- Lifecycle timestamps
+  first_seen_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at                TIMESTAMPTZ,
+  created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE internal.indexnow_delivery_queue (
-  id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  run_id        UUID        NOT NULL
-                              REFERENCES internal.indexnow_scan_runs(id)
-                              ON DELETE CASCADE,
-  url           TEXT        NOT NULL,
-  queued_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  delivered_at  TIMESTAMPTZ,
-  status        TEXT        NOT NULL DEFAULT 'PENDING'
-                              CONSTRAINT chk_queue_status
-                                CHECK (status IN ('PENDING', 'DELIVERED', 'FAILED')),
-  http_status   INT
+  id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id              UUID        NOT NULL
+                        REFERENCES internal.indexnow_scan_runs(id)
+                        ON DELETE CASCADE,
+  url                 TEXT        NOT NULL,
+  event_type          TEXT        NOT NULL
+                        CONSTRAINT chk_queue_event_type
+                          CHECK (event_type IN ('CREATE', 'UPDATE', 'DELETE', 'RESURRECT')),
+  -- Target fingerprint: what we are delivering; on success, becomes last_submitted_fingerprint
+  target_fingerprint  TEXT        NOT NULL,
+  status              TEXT        NOT NULL DEFAULT 'PENDING'
+                        CONSTRAINT chk_queue_status
+                          CHECK (status IN ('PENDING', 'PROCESSING', 'DELIVERED', 'RETRY', 'FAILED')),
+  attempt_count       INT         NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  next_retry_at       TIMESTAMPTZ,
+  last_http_status    INT,
+  last_error          TEXT,
+  queued_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processing_at       TIMESTAMPTZ,
+  delivered_at        TIMESTAMPTZ
 );
 
 -- ============================================================
@@ -100,12 +133,18 @@ CREATE INDEX idx_delivery_queue_pending
   ON internal.indexnow_delivery_queue (status, queued_at)
   WHERE status = 'PENDING';
 
+-- Partial unique index for queue idempotency: one active entry per (url, event_type, target_fingerprint).
+-- DELIVERED/FAILED entries allow new entries (re-queue after permanent failure).
+CREATE UNIQUE INDEX idx_delivery_queue_idempotent
+  ON internal.indexnow_delivery_queue (url, event_type, target_fingerprint)
+  WHERE status IN ('PENDING', 'PROCESSING', 'RETRY');
+
 -- ============================================================
 -- STEP 5: TABLE PERMISSIONS
 -- ============================================================
-GRANT SELECT, INSERT, UPDATE ON internal.indexnow_scan_runs TO service_role;
-GRANT SELECT, INSERT, UPDATE ON internal.indexnow_url_state TO service_role;
-GRANT SELECT, INSERT, UPDATE ON internal.indexnow_delivery_queue TO service_role;
+GRANT SELECT, INSERT, UPDATE ON internal.indexnow_scan_runs       TO service_role;
+GRANT SELECT, INSERT, UPDATE ON internal.indexnow_url_state       TO service_role;
+GRANT SELECT, INSERT, UPDATE ON internal.indexnow_delivery_queue  TO service_role;
 
 REVOKE ALL ON internal.indexnow_scan_runs FROM PUBLIC;
 REVOKE ALL ON internal.indexnow_scan_runs FROM anon;
@@ -118,38 +157,260 @@ REVOKE ALL ON internal.indexnow_delivery_queue FROM anon;
 REVOKE ALL ON internal.indexnow_delivery_queue FROM authenticated;
 
 -- ============================================================
--- STEP 6: RPC — paginated URL state read
--- SECURITY INVOKER: runs as the calling role (service_role).
--- SET search_path = '': prevent search_path hijacking.
--- All object references are schema-qualified in the function body.
+-- STEP 6: RPCs
+-- All: SECURITY INVOKER, SET search_path = '', schema-qualified bodies.
+-- All: REVOKE from PUBLIC/anon/authenticated, GRANT to service_role.
 -- ============================================================
+
+-- ── RPC 1: paginated URL state read ──────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.internal_indexnow_url_state_page(
   p_offset INT DEFAULT 0,
   p_limit  INT DEFAULT 1000
 )
 RETURNS TABLE (
-  url            TEXT,
-  fingerprint    TEXT,
-  lastmod        TEXT,
-  state          TEXT,
-  missing_streak INT
+  url                        TEXT,
+  current_fingerprint        TEXT,
+  current_lastmod            TEXT,
+  state                      TEXT,
+  missing_streak             INT,
+  last_submitted_fingerprint TEXT
 )
 LANGUAGE sql
 SECURITY INVOKER
 SET search_path = ''
 AS $$
-  SELECT url, fingerprint, lastmod, state, missing_streak
+  SELECT url, current_fingerprint, current_lastmod, state, missing_streak, last_submitted_fingerprint
   FROM internal.indexnow_url_state
   ORDER BY url
   LIMIT p_limit OFFSET p_offset;
 $$;
 
--- Deny all roles, then grant only to service_role.
--- PUBLIC must be revoked explicitly (Supabase 2026-10-30 policy: no implicit grants).
 REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_page(INT, INT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_page(INT, INT) FROM anon;
 REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_page(INT, INT) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.internal_indexnow_url_state_page(INT, INT) TO service_role;
+
+-- ── RPC 2: create scan run ────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.internal_indexnow_scan_create(
+  p_scan_started_at       TIMESTAMPTZ,
+  p_sitemap_ok_count      INT,
+  p_sitemap_fail_count    INT,
+  p_raw_url_count         INT,
+  p_unique_url_count      INT,
+  p_duplicate_count       INT,
+  p_with_lastmod_count    INT,
+  p_without_lastmod_count INT,
+  p_is_complete           BOOLEAN
+)
+RETURNS UUID
+LANGUAGE sql
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+  INSERT INTO internal.indexnow_scan_runs (
+    scan_started_at, sitemap_ok_count, sitemap_fail_count,
+    raw_url_count, unique_url_count, duplicate_count,
+    with_lastmod_count, without_lastmod_count,
+    is_complete, status
+  ) VALUES (
+    p_scan_started_at, p_sitemap_ok_count, p_sitemap_fail_count,
+    p_raw_url_count, p_unique_url_count, p_duplicate_count,
+    p_with_lastmod_count, p_without_lastmod_count,
+    p_is_complete, 'RUNNING'
+  )
+  RETURNING id;
+$$;
+
+REVOKE ALL ON FUNCTION public.internal_indexnow_scan_create(TIMESTAMPTZ, INT, INT, INT, INT, INT, INT, INT, BOOLEAN) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.internal_indexnow_scan_create(TIMESTAMPTZ, INT, INT, INT, INT, INT, INT, INT, BOOLEAN) FROM anon;
+REVOKE ALL ON FUNCTION public.internal_indexnow_scan_create(TIMESTAMPTZ, INT, INT, INT, INT, INT, INT, INT, BOOLEAN) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.internal_indexnow_scan_create(TIMESTAMPTZ, INT, INT, INT, INT, INT, INT, INT, BOOLEAN) TO service_role;
+
+-- ── RPC 3: complete scan run ─────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.internal_indexnow_scan_complete(
+  p_run_id                  UUID,
+  p_new_count               INT,
+  p_changed_count           INT,
+  p_unchanged_count         INT,
+  p_missing_candidate_count INT,
+  p_delete_ready_count      INT,
+  p_resurrected_count       INT,
+  p_status                  TEXT
+)
+RETURNS VOID
+LANGUAGE sql
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+  UPDATE internal.indexnow_scan_runs SET
+    scan_completed_at       = now(),
+    new_count               = p_new_count,
+    changed_count           = p_changed_count,
+    unchanged_count         = p_unchanged_count,
+    missing_candidate_count = p_missing_candidate_count,
+    delete_ready_count      = p_delete_ready_count,
+    resurrected_count       = p_resurrected_count,
+    status                  = p_status
+  WHERE id = p_run_id;
+$$;
+
+REVOKE ALL ON FUNCTION public.internal_indexnow_scan_complete(UUID, INT, INT, INT, INT, INT, INT, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.internal_indexnow_scan_complete(UUID, INT, INT, INT, INT, INT, INT, TEXT) FROM anon;
+REVOKE ALL ON FUNCTION public.internal_indexnow_scan_complete(UUID, INT, INT, INT, INT, INT, INT, TEXT) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.internal_indexnow_scan_complete(UUID, INT, INT, INT, INT, INT, INT, TEXT) TO service_role;
+
+-- ── RPC 4: upsert present URLs (ACTIVE state) ────────────────────────────────
+-- For NEW, UNCHANGED, CHANGED, RESURRECTED — all have a current fingerprint.
+CREATE OR REPLACE FUNCTION public.internal_indexnow_url_state_upsert_present_batch(p_rows jsonb)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+BEGIN
+  INSERT INTO internal.indexnow_url_state (
+    url, current_fingerprint, current_lastmod, state, missing_streak,
+    first_seen_at, last_seen_at, created_at, updated_at
+  )
+  SELECT
+    r->>'url',
+    r->>'current_fingerprint',
+    COALESCE(r->>'current_lastmod', ''),
+    COALESCE(r->>'state', 'ACTIVE'),
+    COALESCE((r->>'missing_streak')::int, 0),
+    now(), now(), now(), now()
+  FROM jsonb_array_elements(p_rows) AS r
+  ON CONFLICT (url) DO UPDATE SET
+    current_fingerprint = EXCLUDED.current_fingerprint,
+    current_lastmod     = EXCLUDED.current_lastmod,
+    state               = EXCLUDED.state,
+    missing_streak      = EXCLUDED.missing_streak,
+    last_seen_at        = now(),
+    updated_at          = now();
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_upsert_present_batch(jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_upsert_present_batch(jsonb) FROM anon;
+REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_upsert_present_batch(jsonb) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.internal_indexnow_url_state_upsert_present_batch(jsonb) TO service_role;
+
+-- ── RPC 5: update absent URLs (MISSING_CANDIDATE or INACTIVE) ────────────────
+-- Does NOT touch current_fingerprint/current_lastmod — keeps last known scan values.
+CREATE OR REPLACE FUNCTION public.internal_indexnow_url_state_update_absent_batch(p_rows jsonb)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+BEGIN
+  UPDATE internal.indexnow_url_state AS s SET
+    state          = (r->>'state'),
+    missing_streak = (r->>'missing_streak')::int,
+    updated_at     = now()
+  FROM jsonb_array_elements(p_rows) AS r
+  WHERE s.url = (r->>'url');
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_update_absent_batch(jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_update_absent_batch(jsonb) FROM anon;
+REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_update_absent_batch(jsonb) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.internal_indexnow_url_state_update_absent_batch(jsonb) TO service_role;
+
+-- ── RPC 6: enqueue delivery batch (idempotent) ───────────────────────────────
+-- ON CONFLICT with partial unique index: skips if active entry already exists.
+CREATE OR REPLACE FUNCTION public.internal_indexnow_delivery_enqueue_batch(
+  p_run_id UUID,
+  p_rows   jsonb
+)
+RETURNS INT
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+DECLARE
+  v_count INT;
+BEGIN
+  INSERT INTO internal.indexnow_delivery_queue (run_id, url, event_type, target_fingerprint)
+  SELECT
+    p_run_id,
+    r->>'url',
+    r->>'event_type',
+    r->>'target_fingerprint'
+  FROM jsonb_array_elements(p_rows) AS r
+  ON CONFLICT (url, event_type, target_fingerprint)
+    WHERE status IN ('PENDING', 'PROCESSING', 'RETRY')
+  DO NOTHING;
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.internal_indexnow_delivery_enqueue_batch(UUID, jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.internal_indexnow_delivery_enqueue_batch(UUID, jsonb) FROM anon;
+REVOKE ALL ON FUNCTION public.internal_indexnow_delivery_enqueue_batch(UUID, jsonb) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.internal_indexnow_delivery_enqueue_batch(UUID, jsonb) TO service_role;
+
+-- ── RPC 7: update delivery results ───────────────────────────────────────────
+-- On success: queue → DELIVERED, url_state.last_submitted_fingerprint updated.
+-- On failure: queue → RETRY/FAILED, url_state unchanged.
+CREATE OR REPLACE FUNCTION public.internal_indexnow_delivery_update_batch(p_rows jsonb)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+DECLARE
+  r       jsonb;
+  v_url   text;
+  v_etype text;
+  v_tfp   text;
+  v_ok    bool;
+  v_hs    int;
+BEGIN
+  FOR r IN SELECT jsonb_array_elements(p_rows) LOOP
+    v_url   := r->>'url';
+    v_etype := r->>'event_type';
+    v_tfp   := r->>'target_fingerprint';
+    v_ok    := COALESCE((r->>'success')::boolean, false);
+    v_hs    := COALESCE((r->>'http_status')::int, 0);
+
+    IF v_ok THEN
+      UPDATE internal.indexnow_delivery_queue SET
+        status           = 'DELIVERED',
+        delivered_at     = now(),
+        last_http_status = v_hs,
+        attempt_count    = attempt_count + 1
+      WHERE url = v_url AND event_type = v_etype AND target_fingerprint = v_tfp
+        AND status IN ('PENDING', 'PROCESSING', 'RETRY');
+
+      -- Only on success: advance last_submitted_fingerprint
+      UPDATE internal.indexnow_url_state SET
+        last_submitted_fingerprint = v_tfp,
+        last_submitted_at          = now(),
+        last_http_status           = v_hs,
+        updated_at                 = now()
+      WHERE url = v_url;
+    ELSE
+      UPDATE internal.indexnow_delivery_queue SET
+        status           = CASE WHEN attempt_count + 1 >= 3 THEN 'FAILED' ELSE 'RETRY' END,
+        attempt_count    = attempt_count + 1,
+        last_http_status = v_hs,
+        last_error       = COALESCE(r->>'error', 'HTTP_' || v_hs)
+      WHERE url = v_url AND event_type = v_etype AND target_fingerprint = v_tfp
+        AND status IN ('PENDING', 'PROCESSING', 'RETRY');
+      -- url_state.last_submitted_fingerprint unchanged on failure
+    END IF;
+  END LOOP;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.internal_indexnow_delivery_update_batch(jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.internal_indexnow_delivery_update_batch(jsonb) FROM anon;
+REVOKE ALL ON FUNCTION public.internal_indexnow_delivery_update_batch(jsonb) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.internal_indexnow_delivery_update_batch(jsonb) TO service_role;
 
 -- ============================================================
 -- STEP 7: POST-CREATION GUARDS
@@ -175,16 +436,51 @@ BEGIN
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'internal'
       AND table_name   = 'indexnow_url_state'
-      AND column_name  = 'fingerprint'
+      AND column_name  = 'current_fingerprint'
   ) THEN
-    RAISE EXCEPTION 'POST FAIL: fingerprint column missing on internal.indexnow_url_state';
+    RAISE EXCEPTION 'POST FAIL: current_fingerprint column missing on internal.indexnow_url_state';
   END IF;
 
   IF NOT EXISTS (
-    SELECT 1 FROM information_schema.routines
-    WHERE routine_schema = 'public'
-      AND routine_name   = 'internal_indexnow_url_state_page'
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'internal'
+      AND table_name   = 'indexnow_url_state'
+      AND column_name  = 'last_submitted_fingerprint'
   ) THEN
-    RAISE EXCEPTION 'POST FAIL: internal_indexnow_url_state_page function missing';
+    RAISE EXCEPTION 'POST FAIL: last_submitted_fingerprint column missing on internal.indexnow_url_state';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'internal'
+      AND table_name   = 'indexnow_delivery_queue'
+      AND column_name  = 'event_type'
+  ) THEN
+    RAISE EXCEPTION 'POST FAIL: event_type column missing on internal.indexnow_delivery_queue';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname = 'internal'
+      AND tablename  = 'indexnow_delivery_queue'
+      AND indexname  = 'idx_delivery_queue_idempotent'
+  ) THEN
+    RAISE EXCEPTION 'POST FAIL: idx_delivery_queue_idempotent partial unique index missing';
+  END IF;
+
+  SELECT COUNT(*) INTO v_count
+  FROM information_schema.routines
+  WHERE routine_schema = 'public'
+    AND routine_name IN (
+      'internal_indexnow_url_state_page',
+      'internal_indexnow_scan_create',
+      'internal_indexnow_scan_complete',
+      'internal_indexnow_url_state_upsert_present_batch',
+      'internal_indexnow_url_state_update_absent_batch',
+      'internal_indexnow_delivery_enqueue_batch',
+      'internal_indexnow_delivery_update_batch'
+    );
+  IF v_count < 7 THEN
+    RAISE EXCEPTION 'POST FAIL: expected 7 RPCs in public schema, found %', v_count;
   END IF;
 END $check_post$;
