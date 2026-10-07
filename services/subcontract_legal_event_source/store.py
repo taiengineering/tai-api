@@ -157,6 +157,99 @@ def _validate_actor_company_exists(sb, company_id: str) -> None:
         raise HTTPException(422, f"obligated_actor_company_id가 존재하지 않는 회사입니다: {company_id}")
 
 
+def _actor_candidate_ids(sb, *, site_id: str, subcontractor_id: str) -> List[Dict[str, str]]:
+    """Scoped actor candidates: site tenant + same-site parent chain.
+
+    Returns [{company_id, relationship_source: SITE_TENANT|PARENT_CONTRACTOR}].
+    Current subcontractor's own company_id is excluded (they are the counterparty).
+    Other-site parents are excluded. Cycle-safe.
+    """
+    seen: Dict[str, str] = {}
+
+    site_r = sb.table("construction_sites").select("company_id").eq("id", site_id).limit(1).execute()
+    if site_r.data:
+        cid = str(site_r.data[0]["company_id"])
+        seen[cid] = "SITE_TENANT"
+
+    visited_subs = {str(subcontractor_id)}
+    current_sub_id = str(subcontractor_id)
+    while True:
+        sub_r = (
+            sb.table("subcontractors")
+            .select("parent_subcontractor_id, company_id, site_id")
+            .eq("id", current_sub_id)
+            .limit(1)
+            .execute()
+        )
+        if not sub_r.data:
+            break
+        sub = sub_r.data[0]
+        parent_id = sub.get("parent_subcontractor_id")
+        if not parent_id:
+            break
+        parent_id_str = str(parent_id)
+        if parent_id_str in visited_subs:
+            break
+        parent_r = (
+            sb.table("subcontractors")
+            .select("company_id, site_id")
+            .eq("id", parent_id_str)
+            .limit(1)
+            .execute()
+        )
+        if not parent_r.data:
+            break
+        parent = parent_r.data[0]
+        if str(parent["site_id"]) != str(site_id):
+            break
+        cid = str(parent["company_id"])
+        if cid not in seen:
+            seen[cid] = "PARENT_CONTRACTOR"
+        visited_subs.add(parent_id_str)
+        current_sub_id = parent_id_str
+
+    return [{"company_id": cid, "relationship_source": rel} for cid, rel in seen.items()]
+
+
+def list_actor_candidates(sb, *, site_id: str, subcontractor_id: str) -> List[Dict]:
+    """Scoped actor candidates with company names.
+
+    Returns [{id, name, relationship_source}]. Used by the actor-candidates endpoint.
+    """
+    id_rows = _actor_candidate_ids(sb, site_id=site_id, subcontractor_id=subcontractor_id)
+    if not id_rows:
+        return []
+    company_ids = [r["company_id"] for r in id_rows]
+    rel_map = {r["company_id"]: r["relationship_source"] for r in id_rows}
+    companies_r = sb.table("companies").select("id, name").in_("id", company_ids).execute()
+    name_map = {str(c["id"]): c["name"] for c in (companies_r.data or [])}
+    result = []
+    for cid, rel in rel_map.items():
+        name = name_map.get(cid)
+        if name:
+            result.append({"id": cid, "name": name, "relationship_source": rel})
+    return result
+
+
+def _validate_actor_candidate_scope(sb, event: Dict) -> None:
+    """CONFIRM: obligated_actor_company_id must belong to scoped candidate set.
+
+    Raises 422 if company is not in {SITE_TENANT ∪ PARENT_CONTRACTOR chain}.
+    """
+    company_id = str(event["obligated_actor_company_id"])
+    candidates = _actor_candidate_ids(
+        sb,
+        site_id=str(event["site_id"]),
+        subcontractor_id=str(event["subcontractor_id"]),
+    )
+    allowed = {r["company_id"] for r in candidates}
+    if company_id not in allowed:
+        raise HTTPException(
+            422,
+            "obligated_actor_company_id가 이 하도급 관계의 허용 후보 회사 범위 밖입니다.",
+        )
+
+
 def _validate_for_confirm(sb, event: Dict) -> None:
     """Confirm pre-conditions. Raises 422 (HTTPException) if required fields missing/invalid."""
     etype = event["event_type"]
@@ -166,6 +259,7 @@ def _validate_for_confirm(sb, event: Dict) -> None:
     if not event.get("obligated_actor_company_id"):
         raise HTTPException(422, "obligated_actor_company_id 필수 (actor company 권원 미확인 시 CONFIRM 불가)")
     _validate_actor_company_exists(sb, str(event["obligated_actor_company_id"]))
+    _validate_actor_candidate_scope(sb, event)
 
     if etype == "ART35_DIRECT_PAYMENT_BASIS":
         if not event.get("basis_type") or event["basis_type"] not in VALID_BASIS_TYPES:

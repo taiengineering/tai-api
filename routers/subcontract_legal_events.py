@@ -19,6 +19,7 @@ from services.subcontract_legal_event_source.store import (
     confirm_event,
     void_event,
     get_event_exact,
+    list_actor_candidates,
 )
 
 router = APIRouter(
@@ -60,6 +61,22 @@ class LegalEventPatch(BaseModel):
     notice_event_id: Optional[str] = None
     scope_description: Optional[str] = None
     evidence_ref: Optional[str] = None
+
+
+# ── GET /construction/subcontractors/{subcontractor_id}/legal-event-actor-candidates ──
+@router.get("/{subcontractor_id}/legal-event-actor-candidates")
+async def list_legal_event_actor_candidates(
+    subcontractor_id: UUID,
+    current: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    sb = get_supabase()
+    _ensure_sub_own(sb, subcontractor_id, current)
+    sub_r = sb.table("subcontractors").select("site_id").eq("id", str(subcontractor_id)).limit(1).execute()
+    if not sub_r.data:
+        raise HTTPException(404, "하도급업체를 찾을 수 없습니다.")
+    site_id = str(sub_r.data[0]["site_id"])
+    items = list_actor_candidates(sb, site_id=site_id, subcontractor_id=str(subcontractor_id))
+    return {"status": "success", "data": {"items": items}}
 
 
 # ── GET /construction/subcontractors/{subcontractor_id}/legal-events ──────────

@@ -33,6 +33,7 @@ from services.subcontract_legal_event_source.store import (
     get_event,
     get_event_exact,
     load_confirmed_subcontract_legal_event_context,
+    list_actor_candidates,
     SubcontractLegalEventSourceLoadError,
     TABLE,
 )
@@ -133,6 +134,8 @@ _SUB_ID = str(_uuid.uuid4())
 _SITE_COMPANY_ID = str(_uuid.uuid4())
 _SUB_COMPANY_ID = str(_uuid.uuid4())
 _ACTOR_COMPANY_ID = str(_uuid.uuid4())
+# Parent subcontractor whose company_id == _ACTOR_COMPANY_ID (PARENT_CONTRACTOR candidate)
+_PARENT_SUB_ID = str(_uuid.uuid4())
 
 
 def _make_sb():
@@ -140,12 +143,25 @@ def _make_sb():
     sb._store["construction_sites"] = [
         {"id": _SITE_ID, "company_id": _SITE_COMPANY_ID}
     ]
+    # _SUB_ID → parent _PARENT_SUB_ID (same site); parent company_id = _ACTOR_COMPANY_ID
     sb._store["subcontractors"] = [
-        {"id": _SUB_ID, "site_id": _SITE_ID, "company_id": _SUB_COMPANY_ID}
+        {
+            "id": _SUB_ID,
+            "site_id": _SITE_ID,
+            "company_id": _SUB_COMPANY_ID,
+            "parent_subcontractor_id": _PARENT_SUB_ID,
+        },
+        {
+            "id": _PARENT_SUB_ID,
+            "site_id": _SITE_ID,
+            "company_id": _ACTOR_COMPANY_ID,
+            "parent_subcontractor_id": None,
+        },
     ]
-    # Seed companies so actor company existence check passes
+    # Seed companies for existence + name lookups
     sb._store["companies"] = [
-        {"id": _ACTOR_COMPANY_ID, "name": "테스트 의무 주체 회사"}
+        {"id": _ACTOR_COMPANY_ID, "name": "테스트 의무 주체 회사"},
+        {"id": _SITE_COMPANY_ID, "name": "테스트 현장 소속 회사"},
     ]
     return sb
 
@@ -816,3 +832,159 @@ def test_Q04_missing_actor_company_id_raises_422():
         confirm_event(sb, event_id=row["id"])
     assert exc_info.value.status_code == 422
     assert "obligated_actor_company_id" in exc_info.value.detail
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WO-007 PATCH tests — scoped actor candidates + CONFIRM authority gate
+# ─────────────────────────────────────────────────────────────────────────────
+
+_UNRELATED_COMPANY_ID = str(_uuid.uuid4())
+_OTHER_SITE_ID_C = str(_uuid.uuid4())
+_OTHER_SITE_COMPANY_ID_C = str(_uuid.uuid4())
+_OTHER_SITE_PARENT_SUB_ID = str(_uuid.uuid4())
+
+
+# C01: own subcontractor candidate endpoint returns items
+def test_C01_list_actor_candidates_returns_items():
+    """C01: list_actor_candidates for own subcontractor → returns non-empty list."""
+    sb = _make_sb()
+    items = list_actor_candidates(sb, site_id=_SITE_ID, subcontractor_id=_SUB_ID)
+    assert isinstance(items, list)
+    assert len(items) >= 1
+    for item in items:
+        assert "id" in item
+        assert "name" in item
+        assert "relationship_source" in item
+
+
+# C02: foreign-site subcontractor yields no parent candidates from original site
+def test_C02_foreign_subcontractor_no_parent_from_site():
+    """C02: subcontractor on other site → parent chain doesn't cross site boundary."""
+    sb = _InMemorySB()
+    other_site_id = str(_uuid.uuid4())
+    other_company_id = str(_uuid.uuid4())
+    sb._store["construction_sites"] = [
+        {"id": _SITE_ID, "company_id": _SITE_COMPANY_ID},
+        {"id": other_site_id, "company_id": other_company_id},
+    ]
+    foreign_sub_id = str(_uuid.uuid4())
+    # foreign sub belongs to other_site, its parent is on SITE_ID (different site)
+    sb._store["subcontractors"] = [
+        {
+            "id": foreign_sub_id,
+            "site_id": other_site_id,
+            "company_id": str(_uuid.uuid4()),
+            "parent_subcontractor_id": _PARENT_SUB_ID,
+        },
+        {
+            "id": _PARENT_SUB_ID,
+            "site_id": _SITE_ID,  # different site from foreign_sub
+            "company_id": _ACTOR_COMPANY_ID,
+            "parent_subcontractor_id": None,
+        },
+    ]
+    sb._store["companies"] = [
+        {"id": _SITE_COMPANY_ID, "name": "원 현장 회사"},
+        {"id": other_company_id, "name": "타 현장 회사"},
+        {"id": _ACTOR_COMPANY_ID, "name": "원 현장 상위 수급인"},
+    ]
+    # Use foreign sub with its own site: only site tenant from other_site included
+    items = list_actor_candidates(sb, site_id=other_site_id, subcontractor_id=foreign_sub_id)
+    ids = {i["id"] for i in items}
+    # parent (_ACTOR_COMPANY_ID) should NOT appear because parent.site_id != other_site_id
+    assert _ACTOR_COMPANY_ID not in ids
+    # other site tenant should appear
+    assert other_company_id in ids
+
+
+# C03: site tenant candidate included with SITE_TENANT source
+def test_C03_site_tenant_candidate_included():
+    """C03: list_actor_candidates includes site tenant with SITE_TENANT relationship_source."""
+    sb = _make_sb()
+    items = list_actor_candidates(sb, site_id=_SITE_ID, subcontractor_id=_SUB_ID)
+    site_tenant = next((i for i in items if i["relationship_source"] == "SITE_TENANT"), None)
+    assert site_tenant is not None
+    assert site_tenant["id"] == _SITE_COMPANY_ID
+
+
+# C04: parent contractor included with PARENT_CONTRACTOR source
+def test_C04_parent_contractor_candidate_included():
+    """C04: list_actor_candidates includes parent subcontractor company with PARENT_CONTRACTOR source."""
+    sb = _make_sb()
+    items = list_actor_candidates(sb, site_id=_SITE_ID, subcontractor_id=_SUB_ID)
+    parent_cand = next((i for i in items if i["relationship_source"] == "PARENT_CONTRACTOR"), None)
+    assert parent_cand is not None
+    assert parent_cand["id"] == _ACTOR_COMPANY_ID
+
+
+# C05: unrelated company not in candidates
+def test_C05_unrelated_company_excluded():
+    """C05: unrelated company UUID not present in candidate list."""
+    sb = _make_sb()
+    sb._store["companies"].append({"id": _UNRELATED_COMPANY_ID, "name": "무관 회사"})
+    items = list_actor_candidates(sb, site_id=_SITE_ID, subcontractor_id=_SUB_ID)
+    ids = {i["id"] for i in items}
+    assert _UNRELATED_COMPANY_ID not in ids
+
+
+# C06: other-site parent excluded from candidates
+def test_C06_other_site_parent_excluded():
+    """C06: parent subcontractor from a different site is excluded from candidates."""
+    sb = _InMemorySB()
+    other_site_id = str(_uuid.uuid4())
+    other_site_company_id = str(_uuid.uuid4())
+    other_site_parent_company_id = str(_uuid.uuid4())
+    other_site_parent_sub_id = str(_uuid.uuid4())
+    sb._store["construction_sites"] = [
+        {"id": _SITE_ID, "company_id": _SITE_COMPANY_ID},
+        {"id": other_site_id, "company_id": other_site_company_id},
+    ]
+    # _SUB_ID's parent is on other_site (cross-site parent — forbidden)
+    sb._store["subcontractors"] = [
+        {
+            "id": _SUB_ID,
+            "site_id": _SITE_ID,
+            "company_id": _SUB_COMPANY_ID,
+            "parent_subcontractor_id": other_site_parent_sub_id,
+        },
+        {
+            "id": other_site_parent_sub_id,
+            "site_id": other_site_id,  # different site!
+            "company_id": other_site_parent_company_id,
+            "parent_subcontractor_id": None,
+        },
+    ]
+    sb._store["companies"] = [
+        {"id": _SITE_COMPANY_ID, "name": "현장 회사"},
+        {"id": other_site_parent_company_id, "name": "타 현장 상위 회사"},
+    ]
+    items = list_actor_candidates(sb, site_id=_SITE_ID, subcontractor_id=_SUB_ID)
+    ids = {i["id"] for i in items}
+    assert other_site_parent_company_id not in ids
+    assert _SITE_COMPANY_ID in ids  # site tenant still present
+
+
+# C07: arbitrary existing company UUID → CONFIRM 422 (outside candidate set)
+def test_C07_arbitrary_company_confirm_422():
+    """C07: obligated_actor_company_id is a valid company but outside scoped candidate set → 422."""
+    sb = _make_sb()
+    sb._store["companies"].append({"id": _UNRELATED_COMPANY_ID, "name": "무관 회사"})
+    row = _make_art35a_draft(sb)
+    update_draft(sb, event_id=row["id"], body={
+        "occurred_at": "2026-10-01T09:00:00+09:00",
+        "obligated_actor_company_id": _UNRELATED_COMPANY_ID,
+    })
+    with pytest.raises(HTTPException) as exc_info:
+        confirm_event(sb, event_id=row["id"])
+    assert exc_info.value.status_code == 422
+    assert "범위" in exc_info.value.detail
+
+
+# C08: allowed candidate company UUID → CONFIRM eligible
+def test_C08_allowed_candidate_company_confirm_eligible():
+    """C08: obligated_actor_company_id in scoped candidate set → CONFIRM succeeds."""
+    sb = _make_sb()
+    # _ACTOR_COMPANY_ID is PARENT_CONTRACTOR candidate
+    draft = _make_art35a_confirmable_draft(sb)
+    confirmed = confirm_event(sb, event_id=draft["id"])
+    assert confirmed["status"] == "CONFIRMED"
