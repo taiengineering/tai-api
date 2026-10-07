@@ -1,14 +1,20 @@
 -- WO-SEO-NAVER-INDEXNOW-V2-004B: IndexNow Snapshot Diff State
--- Creates internal schema + 3 tables for sitemap snapshot diff engine.
+-- RC1: state enum = ACTIVE|MISSING_CANDIDATE|INACTIVE (DELETE_READY is classification only).
+--      RPC SECURITY INVOKER + SET search_path = '' + REVOKE from PUBLIC.
 -- Production DB apply: NOT YET AUTHORIZED.
 --
--- Security: internal schema is NOT exposed via PostgREST (public only).
+-- Security: internal schema NOT exposed via PostgREST (public schema only).
 --   anon/authenticated have zero access to these tables.
 --   Reads via public.internal_indexnow_url_state_page() RPC (service_role only).
---   Writes via direct pg connection using service_role credentials.
+--   Writes via service_role JWT through PostgREST or direct pg connection.
+--
+-- State contract:
+--   Persistent URL states: ACTIVE | MISSING_CANDIDATE | INACTIVE
+--   INACTIVE: URL absent from >= 2 complete scans (maps from diff classification DELETE_READY).
+--   DELETE_READY is a diff classification, NOT a persistent DB state.
 --
 -- CORR-01: RAISE EXCEPTION (not ASSERT) for all guards.
--- CORR-02: information_schema queries qualify table_schema to avoid false-positives.
+-- CORR-02: information_schema queries qualify table_schema.
 -- CORR-03: No explicit BEGIN/COMMIT — Supabase CLI wraps each migration file.
 
 -- ============================================================
@@ -28,7 +34,6 @@ END $check_pre$;
 -- ============================================================
 CREATE SCHEMA internal;
 
--- Prevent anon/authenticated from using internal schema
 REVOKE ALL ON SCHEMA internal FROM PUBLIC;
 REVOKE ALL ON SCHEMA internal FROM anon;
 REVOKE ALL ON SCHEMA internal FROM authenticated;
@@ -38,46 +43,47 @@ GRANT USAGE ON SCHEMA internal TO service_role;
 -- STEP 3: TABLES
 -- ============================================================
 
--- Scan run manifest: one row per snapshot scan.
 CREATE TABLE internal.indexnow_scan_runs (
-  id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  scan_started_at   TIMESTAMPTZ NOT NULL,
-  scan_completed_at TIMESTAMPTZ,
-  sitemap_ok_count  INT         NOT NULL CHECK (sitemap_ok_count >= 0),
-  sitemap_fail_count INT        NOT NULL CHECK (sitemap_fail_count >= 0),
-  total_url_count   INT         NOT NULL CHECK (total_url_count >= 0),
-  is_complete       BOOLEAN     NOT NULL,
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  scan_started_at     TIMESTAMPTZ NOT NULL,
+  scan_completed_at   TIMESTAMPTZ,
+  sitemap_ok_count    INT         NOT NULL CHECK (sitemap_ok_count >= 0),
+  sitemap_fail_count  INT         NOT NULL CHECK (sitemap_fail_count >= 0),
+  total_url_count     INT         NOT NULL CHECK (total_url_count >= 0),
+  is_complete         BOOLEAN     NOT NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Per-URL fingerprint state: tracks each URL's change state across scans.
 CREATE TABLE internal.indexnow_url_state (
-  url              TEXT        PRIMARY KEY,
-  fingerprint      TEXT        NOT NULL,                   -- SHA256 hex (Fingerprint V1)
-  lastmod          TEXT        NOT NULL DEFAULT '',
-  state            TEXT        NOT NULL DEFAULT 'ACTIVE'
-                                CONSTRAINT chk_url_state_state
-                                  CHECK (state IN ('ACTIVE', 'MISSING_CANDIDATE', 'DELETE_READY')),
-  missing_streak   INT         NOT NULL DEFAULT 0 CHECK (missing_streak >= 0),
-  first_seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_seen_at     TIMESTAMPTZ,
+  url               TEXT        PRIMARY KEY,
+  fingerprint       TEXT        NOT NULL,
+  lastmod           TEXT        NOT NULL DEFAULT '',
+  -- Persistent states only (DELETE_READY is a diff classification, not a persistent state):
+  -- ACTIVE           = URL present in most recent scan
+  -- MISSING_CANDIDATE = URL absent from 1 scan (or partial scan)
+  -- INACTIVE         = URL absent from >= 2 complete scans
+  state             TEXT        NOT NULL DEFAULT 'ACTIVE'
+                                  CONSTRAINT chk_url_state_state
+                                    CHECK (state IN ('ACTIVE', 'MISSING_CANDIDATE', 'INACTIVE')),
+  missing_streak    INT         NOT NULL DEFAULT 0 CHECK (missing_streak >= 0),
+  first_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at      TIMESTAMPTZ,
   last_submitted_at TIMESTAMPTZ,
-  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Delivery queue: URLs queued for Naver IndexNow submission per run.
 CREATE TABLE internal.indexnow_delivery_queue (
-  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  run_id       UUID        NOT NULL
-                             REFERENCES internal.indexnow_scan_runs(id)
-                             ON DELETE CASCADE,
-  url          TEXT        NOT NULL,
-  queued_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  delivered_at TIMESTAMPTZ,
-  status       TEXT        NOT NULL DEFAULT 'PENDING'
-                             CONSTRAINT chk_queue_status
-                               CHECK (status IN ('PENDING', 'DELIVERED', 'FAILED')),
-  http_status  INT
+  id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id        UUID        NOT NULL
+                              REFERENCES internal.indexnow_scan_runs(id)
+                              ON DELETE CASCADE,
+  url           TEXT        NOT NULL,
+  queued_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  delivered_at  TIMESTAMPTZ,
+  status        TEXT        NOT NULL DEFAULT 'PENDING'
+                              CONSTRAINT chk_queue_status
+                                CHECK (status IN ('PENDING', 'DELIVERED', 'FAILED')),
+  http_status   INT
 );
 
 -- ============================================================
@@ -90,27 +96,32 @@ CREATE INDEX idx_url_state_state
 CREATE INDEX idx_delivery_queue_run_id
   ON internal.indexnow_delivery_queue (run_id);
 
-CREATE INDEX idx_delivery_queue_status
+CREATE INDEX idx_delivery_queue_pending
   ON internal.indexnow_delivery_queue (status, queued_at)
   WHERE status = 'PENDING';
 
 -- ============================================================
--- STEP 5: PERMISSIONS
+-- STEP 5: TABLE PERMISSIONS
 -- ============================================================
 GRANT SELECT, INSERT, UPDATE ON internal.indexnow_scan_runs TO service_role;
 GRANT SELECT, INSERT, UPDATE ON internal.indexnow_url_state TO service_role;
 GRANT SELECT, INSERT, UPDATE ON internal.indexnow_delivery_queue TO service_role;
 
--- Deny all on internal tables for anon/authenticated
+REVOKE ALL ON internal.indexnow_scan_runs FROM PUBLIC;
 REVOKE ALL ON internal.indexnow_scan_runs FROM anon;
 REVOKE ALL ON internal.indexnow_scan_runs FROM authenticated;
+REVOKE ALL ON internal.indexnow_url_state FROM PUBLIC;
 REVOKE ALL ON internal.indexnow_url_state FROM anon;
 REVOKE ALL ON internal.indexnow_url_state FROM authenticated;
+REVOKE ALL ON internal.indexnow_delivery_queue FROM PUBLIC;
 REVOKE ALL ON internal.indexnow_delivery_queue FROM anon;
 REVOKE ALL ON internal.indexnow_delivery_queue FROM authenticated;
 
 -- ============================================================
--- STEP 6: RPC — paginated URL state read (service_role only)
+-- STEP 6: RPC — paginated URL state read
+-- SECURITY INVOKER: runs as the calling role (service_role).
+-- SET search_path = '': prevent search_path hijacking.
+-- All object references are schema-qualified in the function body.
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.internal_indexnow_url_state_page(
   p_offset INT DEFAULT 0,
@@ -124,8 +135,8 @@ RETURNS TABLE (
   missing_streak INT
 )
 LANGUAGE sql
-SECURITY DEFINER
-SET search_path = internal, public
+SECURITY INVOKER
+SET search_path = ''
 AS $$
   SELECT url, fingerprint, lastmod, state, missing_streak
   FROM internal.indexnow_url_state
@@ -133,10 +144,12 @@ AS $$
   LIMIT p_limit OFFSET p_offset;
 $$;
 
-REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_page FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_page FROM anon;
-REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_page FROM authenticated;
-GRANT EXECUTE ON FUNCTION public.internal_indexnow_url_state_page TO service_role;
+-- Deny all roles, then grant only to service_role.
+-- PUBLIC must be revoked explicitly (Supabase 2026-10-30 policy: no implicit grants).
+REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_page(INT, INT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_page(INT, INT) FROM anon;
+REVOKE ALL ON FUNCTION public.internal_indexnow_url_state_page(INT, INT) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.internal_indexnow_url_state_page(INT, INT) TO service_role;
 
 -- ============================================================
 -- STEP 7: POST-CREATION GUARDS
@@ -144,14 +157,12 @@ GRANT EXECUTE ON FUNCTION public.internal_indexnow_url_state_page TO service_rol
 DO $check_post$ DECLARE
   v_count bigint;
 BEGIN
-  -- Schema exists
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.schemata WHERE schema_name = 'internal'
   ) THEN
     RAISE EXCEPTION 'POST FAIL: internal schema missing';
   END IF;
 
-  -- All 3 tables exist
   SELECT COUNT(*) INTO v_count
   FROM information_schema.tables
   WHERE table_schema = 'internal'
@@ -160,7 +171,6 @@ BEGIN
     RAISE EXCEPTION 'POST FAIL: expected 3 tables in internal schema, found %', v_count;
   END IF;
 
-  -- catalog_document_id check (validate FK not cross-contaminated)
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'internal'
@@ -170,7 +180,6 @@ BEGIN
     RAISE EXCEPTION 'POST FAIL: fingerprint column missing on internal.indexnow_url_state';
   END IF;
 
-  -- RPC function exists
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.routines
     WHERE routine_schema = 'public'
