@@ -672,3 +672,73 @@ def test_stored_form_data_item_satisfies_upgrade():
     assert missing_explicit_appendix3_fields(
         stored_appendix3_body(stored), "BUILDING"
     ) == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATCH-01: source conflict precedes child-missing (WO-LFR-OBJ-S01-P1-001)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_run_conflict_precedes_child_missing():
+    """top-level item_no=49, form_data item_no=48, children absent
+    → APPENDIX3_ITEM_NO_CONFLICT (not CONSTRUCTION_EXPLICIT_PREDICATE_REQUIRED).
+    Parent authority conflict must surface BEFORE child gate.
+    """
+    body = DiagnosisRunBody(
+        sector="CONSTRUCTION",
+        auth_token="t",
+        disclaimer_log_id="disc1",
+        appendix3_item_no=49,
+        form_data={"appendix3_item_no": 48},
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.run_diagnosis(
+            _SB(), body,
+            run_step1_func=lambda *a, **k: {"status": "success", "data": {}},
+            **_run_kw(),
+        )
+    assert ei.value.status_code == 422
+    assert ei.value.detail["code"] == ERROR_ITEM_CONFLICT, (
+        f"Expected APPENDIX3_ITEM_NO_CONFLICT, got {ei.value.detail}"
+    )
+
+
+def test_run_missing_item_precedes_child_missing():
+    """CONSTRUCTION sector, no item_no, no children
+    → APPENDIX3_EXPLICIT_CLASSIFICATION_REQUIRED (not CONSTRUCTION_EXPLICIT_PREDICATE_REQUIRED).
+    """
+    body = DiagnosisRunBody(
+        sector="CONSTRUCTION",
+        auth_token="t",
+        disclaimer_log_id="disc1",
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.run_diagnosis(
+            _SB(), body,
+            run_step1_func=lambda *a, **k: {"status": "success", "data": {}},
+            **_run_kw(),
+        )
+    assert ei.value.status_code == 422
+    assert ei.value.detail["code"] == ERROR_REQUIRED, (
+        f"Expected APPENDIX3_EXPLICIT_CLASSIFICATION_REQUIRED, got {ei.value.detail}"
+    )
+
+
+def test_run_item49_present_then_child_missing():
+    """CONSTRUCTION + item_no=49 present, children absent
+    → CONSTRUCTION_EXPLICIT_PREDICATE_REQUIRED (child gate fires after parent confirmed).
+    """
+    from services.canonical.explicit_construction_predicates import ERROR_CODE as CST_CODE
+    body = DiagnosisRunBody(
+        sector="CONSTRUCTION",
+        auth_token="t",
+        disclaimer_log_id="disc1",
+        appendix3_item_no=49,
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.run_diagnosis(
+            _SB(), body,
+            run_step1_func=lambda *a, **k: {"status": "success", "data": {}},
+            **_run_kw(),
+        )
+    assert ei.value.status_code == 422
+    assert ei.value.detail["code"] == CST_CODE
