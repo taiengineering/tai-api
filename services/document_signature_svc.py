@@ -392,13 +392,25 @@ def _validate_snapshot_canonical(
     if not storage_ref:
         raise SignatureError(f"signature field {fkey!r}: storage_ref is required")
     if document_id:
-        expected_prefix = (
-            f"storage://company-docs/signatures/document/{document_id}/"
-        )
-        if not storage_ref.startswith(expected_prefix):
-            raise SignatureError(
-                f"signature field {fkey!r}: storage_ref does not match document path"
+        if expected_field_id:
+            # CORR-002-C: exact canonical path — same doc + different field_id/sha = FAIL
+            expected_storage_ref = (
+                f"storage://company-docs/signatures/document/"
+                f"{document_id}/{expected_field_id}/{sha_val}.png"
             )
+            if storage_ref != expected_storage_ref:
+                raise SignatureError(
+                    f"signature field {fkey!r}: storage_ref does not match canonical path "
+                    f"(expected: {expected_storage_ref!r})"
+                )
+        else:
+            expected_prefix = (
+                f"storage://company-docs/signatures/document/{document_id}/"
+            )
+            if not storage_ref.startswith(expected_prefix):
+                raise SignatureError(
+                    f"signature field {fkey!r}: storage_ref does not match document path"
+                )
 
 
 def resolve_signature_images_for_render(

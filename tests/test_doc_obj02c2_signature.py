@@ -1129,7 +1129,7 @@ class TestCanonicalSnapshotValidation:
         snap = self._make_snapshot(
             storage_ref=f"storage://company-docs/signatures/document/WRONG_DOC_ID/{FIELD_ID}/{SHA256_VALID}.png"
         )
-        with pytest.raises(SignatureError, match="storage_ref does not match document"):
+        with pytest.raises(SignatureError, match="storage_ref does not match canonical"):
             self._resolve_with_snapshot(snap, doc_id=DOC_ID)
 
     def test_snap_05_wrong_byte_size_fails(self):
@@ -1150,6 +1150,41 @@ class TestCanonicalSnapshotValidation:
         snap = self._make_snapshot(mime_type="image/jpeg")
         with pytest.raises(SignatureError, match="mime_type"):
             self._resolve_with_snapshot(snap)
+
+    def test_snap_07_wrong_field_id_in_path_fails(self):
+        """SNAP-07: same document, wrong field_id in storage_ref path → FAIL (exact binding)."""
+        wrong_field_id = "wrongfff-0001-0001-0001-000000000001"
+        snap = self._make_snapshot(
+            storage_ref=(
+                f"storage://company-docs/signatures/document/"
+                f"{DOC_ID}/{wrong_field_id}/{SHA256_VALID}.png"
+            )
+        )
+        with pytest.raises(SignatureError, match="storage_ref does not match canonical"):
+            self._resolve_with_snapshot(snap, doc_id=DOC_ID)
+
+    def test_snap_08_wrong_sha_filename_fails(self):
+        """SNAP-08: correct document+field_id, wrong sha256 filename → FAIL."""
+        wrong_sha = "b" * 64
+        snap = self._make_snapshot(
+            storage_ref=(
+                f"storage://company-docs/signatures/document/"
+                f"{DOC_ID}/{FIELD_ID}/{wrong_sha}.png"
+            )
+        )
+        with pytest.raises(SignatureError, match="storage_ref does not match canonical"):
+            self._resolve_with_snapshot(snap, doc_id=DOC_ID)
+
+    def test_snap_09_extra_suffix_in_path_fails(self):
+        """SNAP-09: storage_ref with extra path suffix → FAIL (exact match required)."""
+        snap = self._make_snapshot(
+            storage_ref=(
+                f"storage://company-docs/signatures/document/"
+                f"{DOC_ID}/{FIELD_ID}/{SHA256_VALID}.png/extra"
+            )
+        )
+        with pytest.raises(SignatureError, match="storage_ref does not match canonical"):
+            self._resolve_with_snapshot(snap, doc_id=DOC_ID)
 
     def test_snap_missing_value_allowed(self):
         """None value in runtime_data_json for signature field → missing (no error)."""
@@ -1234,3 +1269,49 @@ class TestImmutability:
         decoded = base64.b64decode(result["images"]["sign"].split(",", 1)[1])
         assert decoded == png_a  # actual bytes are A
         assert _hl.sha256(decoded).hexdigest() == sha_a  # hash matches snapshot.sha256
+
+
+class TestRenderDocumentId:
+    """RENDER-DOC-01: render_document_html passes document_id to signature resolver."""
+
+    def test_render_doc_01_document_id_forwarded_to_resolver(self):
+        """RENDER-DOC-01: render_document_html must forward document_id to resolve_signature_images_for_render."""
+        from services.document_engine_svc import render_document_html
+
+        fake_state = {
+            "document": {
+                "id": DOC_ID,
+                "status": "DRAFT",
+                "runtime_data_json": {},
+                "version": 1,
+            },
+            "schema": {
+                "id": SCHEMA_ID,
+                "raw_template": "<html><body></body></html>",
+                "field_placeholder_map": {},
+                "checklist_placeholder_map": {},
+                "catalog_document_id": None,
+            },
+            "fields": [
+                {"id": FIELD_ID, "field_key": "sign", "input_type": "signature",
+                 "field_label": "서명", "field_order": 1, "required_status": "REQUIRED_BY_HUMAN"}
+            ],
+            "checklists": [],
+        }
+
+        captured_doc_id: list = []
+
+        def mock_resolver(runtime_data_json, fields, document_id=None):
+            captured_doc_id.append(document_id)
+            return {"images": {}, "manifest": []}
+
+        with (
+            patch("services.document_engine_svc.resolve_runtime_document_state", return_value=fake_state),
+            patch("services.document_signature_svc.resolve_signature_images_for_render", side_effect=mock_resolver),
+            patch("services.document_schema_renderer.build_render_artifacts", return_value={"rendered_body": "<html/>"}),
+        ):
+            render_document_html(DOC_ID)
+
+        assert captured_doc_id == [str(DOC_ID)], (
+            f"document_id not forwarded to resolver; got {captured_doc_id!r}"
+        )
