@@ -1,3 +1,6 @@
+# snapshot_at: 2026-10-08 (GPT independent verification; production DB timeout during CORR-002 execution)
+# numeric row_count_in_equipment_assets = point-in-time observation; system_codes code/name = structural contract
+# numeric sum verified: 2935 (CORR-002 GPT snapshot)
 source_equipment_code,code_schema,row_count_in_equipment_assets,canonical_name_ko,master_table,master_source,master_status,candidate_doc_detail,detail_mapping_status,notes
 001,numeric 001-040,37,변압기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,detail mapping to FIRE/ELEC/etc. requires GPT judgment
 002,numeric 001-040,20,기중차단기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
@@ -5,51 +8,51 @@ source_equipment_code,code_schema,row_count_in_equipment_assets,canonical_name_k
 004,numeric 001-040,0,배선용차단기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 005,numeric 001-040,0,누전차단기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 006,numeric 001-040,25,배전반,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
-007,numeric 001-040,54,분전반,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+007,numeric 001-040,55,분전반,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,CORR-002: 54→55
 008,numeric 001-040,106,전동기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 009,numeric 001-040,49,UPS,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
-010,numeric 001-040,39,비상발전기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+010,numeric 001-040,39,비상발전기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,registry: has_emergency_gen
 011,numeric 001-040,179,펌프,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 012,numeric 001-040,52,압축기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 013,numeric 001-040,129,열교환기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
-014,numeric 001-040,90,보일러,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+014,numeric 001-040,90,보일러,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,registry: has_boiler
 015,numeric 001-040,61,탱크,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 016,numeric 001-040,1,밸브,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 017,numeric 001-040,5,배관,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 018,numeric 001-040,21,팬,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
-019,numeric 001-040,0,냉동기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+019,numeric 001-040,1,냉동기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,CORR-002: 0→1
 020,numeric 001-040,0,칠러,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
-021,numeric 001-040,181,크레인,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+021,numeric 001-040,181,크레인,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,alias target: CRANE→021
 022,numeric 001-040,0,호이스트,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
-023,numeric 001-040,7,프레스,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
-024,numeric 001-040,94,컨베이어,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+023,numeric 001-040,7,프레스,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,alias target: PRESS→023; registry: has_press
+024,numeric 001-040,94,컨베이어,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,alias target: CONVEYOR→024; registry: has_conveyor
 025,numeric 001-040,143,승강기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 026,numeric 001-040,56,에스컬레이터,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
-027,numeric 001-040,0,가스탱크,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+027,numeric 001-040,1,가스탱크,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,CORR-002: 0→1
 028,numeric 001-040,1,LPG탱크,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 029,numeric 001-040,103,화학물질탱크,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 030,numeric 001-040,35,유류탱크,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 031,numeric 001-040,66,스프링클러,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 032,numeric 001-040,85,자동화재탐지,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
-033,numeric 001-040,28,소화기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+033,numeric 001-040,29,소화기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,CORR-002: 28→29
 034,numeric 001-040,27,소화전,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 035,numeric 001-040,0,배기시설,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 036,numeric 001-040,215,집진기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
 037,numeric 001-040,142,오수처리시설,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
-038,numeric 001-040,0,압력용기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
+038,numeric 001-040,0,압력용기,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,alias target: PRESSURE_VESSEL→038; registry: has_pressure_vessel
 039,numeric 001-040,78,냉동기(냉각),system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,
-040,numeric 001-040,800,기타,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,기타 catch-all
-PRESSURE_VESSEL,named uppercase,300,PRESSURE_VESSEL,NOT FOUND,equipment_assets.equipment_type_code,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,not in system_codes; equipment_category=MACHINE (inconsistent)
-PRESS,named uppercase,300,PRESS,NOT FOUND,equipment_assets.equipment_type_code,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,equipment_category=FIRE (inconsistent — likely test data)
-CRANE,named uppercase,300,CRANE,NOT FOUND,equipment_assets.equipment_type_code,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,equipment_category=ELECTRICAL (inconsistent)
-CONVEYOR,named uppercase,300,CONVEYOR,NOT FOUND,equipment_assets.equipment_type_code,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,equipment_category=TRANSPORT
+040,numeric 001-040,802,기타,system_codes,system_codes(category=equipment_type),EXPLICIT_MASTER,(none),UNRESOLVED — GPT REQUIRED,기타 catch-all; CORR-002: 800→802
+PRESSURE_VESSEL,named uppercase,300,압력용기 (→038),canonicalizer.py,canonicalizer._ALIAS_TO_NUMERIC,EXPLICIT_LEGACY_ALIAS,(none),UNRESOLVED — GPT REQUIRED,canonicalizer: PRESSURE_VESSEL→038; doc_detail mapping still UNRESOLVED (GAP-02C)
+PRESS,named uppercase,300,프레스 (→023),canonicalizer.py,canonicalizer._ALIAS_TO_NUMERIC,EXPLICIT_LEGACY_ALIAS,(none),UNRESOLVED — GPT REQUIRED,canonicalizer: PRESS→023; doc_detail mapping still UNRESOLVED (GAP-02C)
+CRANE,named uppercase,300,크레인 (→021),canonicalizer.py,canonicalizer._ALIAS_TO_NUMERIC,EXPLICIT_LEGACY_ALIAS,(none),UNRESOLVED — GPT REQUIRED,canonicalizer: CRANE→021; doc_detail mapping still UNRESOLVED (GAP-02C)
+CONVEYOR,named uppercase,300,컨베이어 (→024),canonicalizer.py,canonicalizer._ALIAS_TO_NUMERIC,EXPLICIT_LEGACY_ALIAS,(none),UNRESOLVED — GPT REQUIRED,canonicalizer: CONVEYOR→024; doc_detail mapping still UNRESOLVED (GAP-02C)
 NULL,NULL (type_code absent),14,NULL,NOT FOUND,equipment_assets.equipment_category,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,HEATTREAT/CASTING/ROLLING/MACHINERY/FURNACE
-paint_booth,named lowercase,2,도장,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,
-welder,named lowercase,2,용접,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,
-ventilation,named lowercase,1,환기,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,
-boiler,named lowercase,1,보일러,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,lowercase differs from numeric 014 보일러
-press_brake,named lowercase,1,성형,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,
-cutter,named lowercase,1,절단,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,
-forklift,named lowercase,1,운반하역,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,
-crane,named lowercase,1,양중기,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,lowercase differs from named CRANE and numeric 021 크레인
-robot,named lowercase,1,자동화,NOT FOUND,user-entered string,UNRESOLVED_ORIGIN,(none),UNRESOLVED — GPT REQUIRED,
+paint_booth,named lowercase,2,도장,NOT FOUND,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,(none),UNRESOLVED — GPT REQUIRED,rejected by current canonical authority validation
+welder,named lowercase,2,용접,NOT FOUND,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,(none),UNRESOLVED — GPT REQUIRED,rejected by current canonical authority validation
+ventilation,named lowercase,1,환기,NOT FOUND,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,(none),UNRESOLVED — GPT REQUIRED,rejected by current canonical authority validation
+boiler,named lowercase,1,보일러,NOT FOUND,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,(none),UNRESOLVED — GPT REQUIRED,lowercase differs from numeric 014 보일러; rejected by canonical authority
+press_brake,named lowercase,1,성형,NOT FOUND,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,(none),UNRESOLVED — GPT REQUIRED,rejected by current canonical authority validation
+cutter,named lowercase,1,절단,NOT FOUND,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,(none),UNRESOLVED — GPT REQUIRED,rejected by current canonical authority validation
+forklift,named lowercase,1,운반하역,NOT FOUND,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,(none),UNRESOLVED — GPT REQUIRED,rejected by current canonical authority validation
+crane,named lowercase,1,양중기,NOT FOUND,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,(none),UNRESOLVED — GPT REQUIRED,differs from uppercase CRANE alias and numeric 021; rejected by canonical authority
+robot,named lowercase,1,자동화,NOT FOUND,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,(none),UNRESOLVED — GPT REQUIRED,rejected by current canonical authority validation

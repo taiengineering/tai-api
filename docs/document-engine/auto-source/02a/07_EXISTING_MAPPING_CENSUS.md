@@ -1,10 +1,10 @@
 ---
 title: Existing Mapping Table Census
 status: FROZEN
-version: 2
+version: 3
 governed_by: WO-DOC-AUTO-SRC-02A
 date: 2026-10-08
-corr: CORR-001 — document_type_mapping count 29→30; system_codes section added; equipment structure inventory added
+corr: CORR-002 — canonicalizer + registry + historical SQL sections added; equipment_type_inspection_map production status recorded
 ---
 
 # Existing Mapping Table Census
@@ -119,7 +119,108 @@ Note: 2,935 equipment_assets rows have numeric type_code values joinable to syst
 
 These tables were identified during search scope but not confirmed to contain equipment_type → doc_detail mapping. Querying them for this mapping is reserved for GPT판정 scope.
 
-### 2f. company_form_mapping
+### 2f. Equipment Uppercase Alias Canonicalizer (Code Contract — CORR-002)
+
+| Attribute | Value |
+|-----------|-------|
+| File | services/equipment_source/canonicalizer.py |
+| Status | ACTIVE CODE CONTRACT |
+| Contract | normalize_equipment_type_code() |
+| Dictionary | `_ALIAS_TO_NUMERIC` |
+
+Explicit alias mappings:
+```
+CRANE            → 021  (크레인)
+CONVEYOR         → 024  (컨베이어)
+PRESS            → 023  (프레스)
+PRESSURE_VESSEL  → 038  (압력용기)
+```
+
+Pass-through behavior:
+```
+None                 → None (no-op)
+Valid numeric 001-040 → returned as-is
+Unknown / lowercase  → returned as-is (downstream authority validation rejects)
+```
+
+Relevant to projection_type: NO (canonical equipment code → AUTO doc_detail mapping is a separate gap — GAP-02C)
+
+### 2g. Equipment Source Validation Authority (Code Contract — CORR-002)
+
+| Attribute | Value |
+|-----------|-------|
+| File | services/equipment_source/store.py |
+| Function | validate_equipment_source_row() |
+| Status | ACTIVE CODE CONTRACT |
+
+`EQUIPMENT_AUTHORITY_CODES` accepts:
+```
+numeric 001–040 (zero-padded)  = valid
+CRANE, CONVEYOR, PRESS, PRESSURE_VESSEL = valid (aliases, normalized to numeric before storage)
+unknown / lowercase / free-text = EquipmentSourceValidationError → 422 HTTP
+```
+
+Relevant to projection_type: NO (validates equipment_type_code; does not determine doc_detail)
+
+### 2h. Equipment Source Registry (Code Contract — CORR-002)
+
+| Attribute | Value |
+|-----------|-------|
+| File | services/equipment_source/registry.py |
+| Object | EQUIPMENT_CODE_MAP |
+| Status | ACTIVE CODE CONTRACT |
+
+Registered code → canonical boolean fact mappings:
+```
+010 → has_emergency_gen  (비상발전기)
+014 → has_boiler         (보일러)
+023 → has_press          (프레스)
+024 → has_conveyor       (컨베이어)
+038 → has_pressure_vessel (압력용기)
+```
+
+Note from registry (code_condition_resolver discrepancy):
+```
+"010" code_condition_resolver uses "has_generator"; canonical LEG fact is "has_emergency_gen"
+"038" string "PRESSURE_VESSEL" → has_pressure_vessel in resolver; numeric "038" authority = equipment_type_inspection_map only
+```
+
+Relevant to projection_type: NO — maps code → canonical boolean fact for LEG diagnosis input; does NOT map code → AUTO EQUIP doc_detail
+
+AUTHORITY_BLOCKED codes (not in numeric system):
+```
+has_construction_machine  — 건설기계: no numeric code
+has_high_speed_rotor      — 고속회전체: no numeric code
+```
+
+### 2i. Historical Equipment Type Inspection Map SQL (Design Artifact — CORR-002)
+
+| Attribute | Value |
+|-----------|-------|
+| File 1 | docs/sql/20260331_equipment_type_inspection_map.sql |
+| File 2 | docs/sql/20260401_equipment_type_inspection_map_all_exact.sql |
+| Intent | Create equipment_type_inspection_map table: type_code → inspection_master.equipment_std |
+| Production status | Table does NOT exist in production (public schema) |
+
+The SQL artifact creates `equipment_type_inspection_map` with mappings of the form:
+```
+011 → 'pump'
+012 → 'compressor'
+014 → 'boiler'
+021 → 'crane'
+023 → 'press'
+024 → 'conveyor'
+025 → 'elevator'
+038 → 'pressure_vessel'
+040 → NULL (기타 — 표준 미정)
+...
+```
+
+This is NOT a doc_detail mapping — it maps type_code → inspection_master.equipment_std (an intermediate inspection standard string). The table was never applied to production.
+
+Relevant to projection_type: NO (maps type_code → inspection_master.equipment_std, not → AUTO EQUIP doc_detail)
+
+### 2j. company_form_mapping
 
 | Attribute | Value |
 |-----------|-------|
@@ -127,7 +228,7 @@ These tables were identified during search scope but not confirmed to contain eq
 | Columns | (not queried) |
 | Relevant | NO — company-scoped form mapping, not inspection→projection |
 
-### 2g. form_mapping_candidate
+### 2k. form_mapping_candidate
 
 | Attribute | Value |
 |-----------|-------|
@@ -158,5 +259,25 @@ document_type_mapping
 system_codes(category=equipment_type)
   = EXISTS with 40 rows (CORR-001: previously stated MASTER_NOT_FOUND)
   = Provides numeric code → Korean name mapping
-  = Does NOT provide code → EQUIP doc_detail mapping (GAP-02B)
+  = Does NOT provide code → EQUIP doc_detail mapping (GAP-02C)
+
+canonicalizer (services/equipment_source/canonicalizer.py)
+  = ACTIVE CODE CONTRACT
+  = CRANE→021 / CONVEYOR→024 / PRESS→023 / PRESSURE_VESSEL→038 (EXPLICIT_LEGACY_ALIAS)
+  = lowercase/free-text → pass-through → authority rejected (LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED)
+  = NOT a doc_detail mapping
+
+equipment_source registry (services/equipment_source/registry.py)
+  = ACTIVE CODE CONTRACT (5 codes → boolean facts)
+  = 010→has_emergency_gen / 014→has_boiler / 023→has_press / 024→has_conveyor / 038→has_pressure_vessel
+  = Maps code → LEG diagnosis boolean fact; NOT → AUTO EQUIP doc_detail
+
+historical equipment_type_inspection_map SQL
+  = Design artifact (docs/sql/20260331_..., 20260401_...)
+  = Maps type_code → inspection_master.equipment_std (NOT doc_detail)
+  = Production table does NOT exist
+
+MISSING (GAP-02C)
+  = canonical equipment code → AUTO EQUIP doc_detail
+  = NO EXISTING MAPPING
 ```

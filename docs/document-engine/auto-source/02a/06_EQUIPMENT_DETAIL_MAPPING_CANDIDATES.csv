@@ -10,10 +10,10 @@ source_equipment_code,source_equipment_category,master_source,master_name,candid
 029,NULL,system_codes(category=equipment_type),화학물질탱크,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
 024,NULL,system_codes(category=equipment_type),컨베이어,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
 014,NULL,system_codes(category=equipment_type),보일러,(none),NAME_KNOWN_DETAIL_UNRESOLVED,UNRESOLVED,YES
-PRESSURE_VESSEL,MACHINE,equipment_assets.equipment_category,MACHINE,(none),INCONSISTENT_CATEGORY,UNRESOLVED,YES — MACHINE category not an EQUIP doc_detail
-PRESS,FIRE,equipment_assets.equipment_category,FIRE,(none),INCONSISTENT_CATEGORY,UNRESOLVED,YES — PRESS equipment labeled FIRE (test data mismatch suspected)
-CRANE,ELECTRICAL,equipment_assets.equipment_category,ELECTRICAL,(none),INCONSISTENT_CATEGORY,UNRESOLVED,YES — CRANE labeled ELECTRICAL (mismatch)
-CONVEYOR,TRANSPORT,equipment_assets.equipment_category,TRANSPORT,(none),INCONSISTENT_CATEGORY,UNRESOLVED,YES — TRANSPORT not an EQUIP doc_detail
-boiler,보일러,user-entered,보일러,(none),USER_ENTERED,UNRESOLVED,YES — lowercase code; no formal master
-crane,양중기,user-entered,양중기,(none),USER_ENTERED,UNRESOLVED,YES — lowercase differs from named CRANE
-forklift,운반하역,user-entered,운반하역,(none),USER_ENTERED,UNRESOLVED,YES
+PRESSURE_VESSEL,MACHINE,canonicalizer.py (_ALIAS_TO_NUMERIC),압력용기 (→038),(none),ALIAS_CANONICALIZED_TO_NUMERIC,UNRESOLVED,YES — canonicalized to 038; doc_detail mapping still GPT REQUIRED
+PRESS,FIRE,canonicalizer.py (_ALIAS_TO_NUMERIC),프레스 (→023),(none),ALIAS_CANONICALIZED_TO_NUMERIC,UNRESOLVED,YES — canonicalized to 023; doc_detail mapping still GPT REQUIRED
+CRANE,ELECTRICAL,canonicalizer.py (_ALIAS_TO_NUMERIC),크레인 (→021),(none),ALIAS_CANONICALIZED_TO_NUMERIC,UNRESOLVED,YES — canonicalized to 021; doc_detail mapping still GPT REQUIRED
+CONVEYOR,TRANSPORT,canonicalizer.py (_ALIAS_TO_NUMERIC),컨베이어 (→024),(none),ALIAS_CANONICALIZED_TO_NUMERIC,UNRESOLVED,YES — canonicalized to 024; doc_detail mapping still GPT REQUIRED
+boiler,보일러,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,보일러,(none),ORIGIN_UNRESOLVED,UNRESOLVED,YES — lowercase; rejected by current canonical authority validation
+crane,양중기,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,양중기,(none),ORIGIN_UNRESOLVED,UNRESOLVED,YES — lowercase; rejected by current canonical authority validation
+forklift,운반하역,LEGACY_OR_ALTERNATE_ORIGIN_UNRESOLVED,운반하역,(none),ORIGIN_UNRESOLVED,UNRESOLVED,YES — lowercase; rejected by current canonical authority validation

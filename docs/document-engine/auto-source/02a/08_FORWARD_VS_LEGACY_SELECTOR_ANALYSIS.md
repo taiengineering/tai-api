@@ -1,10 +1,10 @@
 ---
 title: Forward vs Legacy Selector Analysis
 status: FROZEN
-version: 2
+version: 3
 governed_by: WO-DOC-AUTO-SRC-02A
 date: 2026-10-08
-corr: CORR-001 — inspection_category LEGAL_ENGINE stats corrected; EQUIP earliest stage unfrozen (GPT DESIGN REQUIRED); equipment numeric master corrected
+corr: CORR-002 — INSP/CHK/PPE earliest stage unfrozen (GPT DESIGN REQUIRED for ALL projections); Stage 2 freeze removed
 ---
 
 # Forward vs Legacy Selector Analysis
@@ -90,12 +90,35 @@ Stage 4: safety_inspection creation (fn_create_worker_inspection_record)
 
 ### 3b. Earliest deterministic point per projection_type
 
-| projection_type | Earliest possible | Requirement | Status |
-|----------------|-------------------|-------------|--------|
-| EQUIP | GPT DESIGN REQUIRED | Requires asset_id in fn_create INSERT + asset→detail resolver (numeric code master EXISTS; code→detail mapping NOT FOUND — GAP-02B) | FORWARD_DETERMINISTIC_POSSIBLE — forward path design requires GPT판정 |
-| INSP | Stage 2 (inspection_set creation) | Requires new field in LEG enrichment OR explicit doc_projection_type on inspection_set | FORWARD_DETERMINISTIC_POSSIBLE with contract extension |
-| CHK | Stage 2 (inspection_set creation) | Same as INSP — requires discriminator field | FORWARD_DETERMINISTIC_POSSIBLE with contract extension |
-| PPE | Stage 2 (inspection_set creation) | Same as INSP — requires discriminator field | FORWARD_DETERMINISTIC_POSSIBLE with contract extension |
+All four projection types: **earliest write boundary = GPT DESIGN REQUIRED**
+
+Factual basis only (Claude does NOT design or freeze):
+```
+Stage 1 (LEG enrichment):
+  projection discriminator does not currently exist in enrichment.obligation_type
+  POSSIBLE if LEG enrichment extended with explicit doc_projection_type field
+
+Stage 2 (inspection_set creation):
+  projection discriminator does not currently exist in inspection_sets
+  POSSIBLE if inspection_sets.doc_projection_type column added at creation time
+
+Stage 3 (work_schedules):
+  form_code / asset linkage not currently populated
+  POSSIBLE if carried from inspection_set
+
+Stage 4 (safety_inspection creation):
+  fn_create_worker_inspection_record does not currently persist asset_id
+  POSSIBLE for EQUIP if asset_id chain repaired
+```
+
+The authoring boundary (which stage to add the discriminator) and the persistence boundary (where to carry/store it) are GPT DESIGN REQUIRED for all four projections.
+
+| projection_type | Factual current state | Forward possible | Earliest write boundary |
+|----------------|----------------------|-----------------|------------------------|
+| INSP | no discriminator in any stage | YES — requires new field | GPT DESIGN REQUIRED |
+| CHK | no discriminator in any stage | YES — requires new field | GPT DESIGN REQUIRED |
+| PPE | no discriminator in any stage | YES — requires new field | GPT DESIGN REQUIRED |
+| EQUIP | asset_id broken at all stages; numeric code master EXISTS; code→detail NOT FOUND (GAP-02C) | YES — requires asset_id chain + detail resolver | GPT DESIGN REQUIRED |
 
 ### 3c. EQUIP forward path (specific)
 
@@ -119,24 +142,24 @@ Required changes (Claude does NOT select these — evidence only):
 ### 3d. INSP/CHK/PPE forward path (specific)
 
 ```
-Required (evidence — Claude does NOT design):
+Required paths are GPT DESIGN REQUIRED.
 
-Option A: Extend LEG enrichment
-  Add doc_projection_type to legal obligation atom enrichment.
-  Canonical writer carries it to inspection_sets.
-  Earliest: Stage 1/2.
+Factual constraints only (Claude does NOT design):
 
-Option B: Add inspection_sets.doc_projection_type column
-  New nullable column on inspection_sets.
-  Set at creation time (both LEGAL_ENGINE and MANUAL).
-  Requires: canonical_writer.py update + DB migration.
+Option A (Stage 1): Extend LEG enrichment with doc_projection_type
+  = POSSIBLE — carries earliest authoring boundary to LEG domain
+  = requires LEG domain change
 
-Option C: Post-creation classification
-  Separate classification step after inspection_set creation.
-  Stores result in a new column or separate table.
-  Requires: classification rules (from GPT판정) + implementation.
+Option B (Stage 2): Add inspection_sets.doc_projection_type column
+  = POSSIBLE — earliest within taieng scope
+  = requires canonical_writer.py update + DB migration
+
+Option C (Stage 2+): Post-creation classification service
+  = POSSIBLE — decouples projection assignment from creation
+  = requires classification rules from GPT판정 + separate implementation
 
 Claude does not select between A/B/C.
+Authoring boundary decision = GPT판정 (AUTO-SRC-02B).
 ```
 
 ---
@@ -169,7 +192,7 @@ Legacy rows (396 inspection_sets):
 Future rows:
   EQUIP projection_type deterministic  = FORWARD_DETERMINISTIC_POSSIBLE (requires asset_id chain + resolver)
   INSP/CHK/PPE projection_type         = FORWARD_DETERMINISTIC_POSSIBLE (requires discriminator field)
-  Earliest deterministic stage         = Stage 2 (inspection_set creation) for INSP/CHK/PPE; EQUIP = GPT DESIGN REQUIRED
+  Earliest deterministic stage         = GPT DESIGN REQUIRED (all four: INSP / CHK / PPE / EQUIP)
 
 LLM/name inference used = NO
 ```
