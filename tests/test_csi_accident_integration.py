@@ -559,3 +559,92 @@ def test_extra_parse_download_identity():
     att_id, fdsn = parse_download_identity(_BASELINE_DOWNLOAD_URL)
     assert att_id == ATCH_FILE_ID
     assert fdsn == "1"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test A — actual adapter.run() uses canonical get_supabase(); no TAIENG env
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_a_canonical_db_client(monkeypatch):
+    from unittest.mock import MagicMock, patch as mock_patch
+
+    monkeypatch.delenv("TAIENG_SUPABASE_URL", raising=False)
+    monkeypatch.delenv("TAIENG_SUPABASE_SERVICE_ROLE_KEY", raising=False)
+
+    mock_client = MagicMock()
+    no_change_result = RefreshResult(
+        status="NO_CHANGE",
+        discovery_status="NO_CHANGE",
+        metadata_requests=2,
+        full_csv_downloads=0,
+    )
+
+    with mock_patch("db.supabase_client.get_supabase", return_value=mock_client) as mock_gs, \
+         mock_patch(
+             "services.csi_accidents.refresh.refresh_latest_csi_artifact",
+             return_value=no_change_result,
+         ):
+        adapter = CsiAccidentAdapter()
+        run_result = adapter.run(_ctx())
+
+    assert mock_gs.call_count == 1
+    assert run_result.status == RunStatus.NO_CHANGE
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test B — preflight PASS: SUPABASE_URL + SUPABASE_SERVICE_KEY + enable=1
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_b_preflight_pass(monkeypatch):
+    from services.public_data_sync.errors import PreflightError
+
+    monkeypatch.setenv("SUPABASE_URL", "https://fake.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "fake-service-key")
+    monkeypatch.setenv(APPLY_ENABLE_ENV, "1")
+
+    CsiAccidentAdapter().preflight(_ctx())  # must not raise
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test C — preflight PASS: SUPABASE_KEY fallback (no SUPABASE_SERVICE_KEY)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_c_preflight_supabase_key_fallback(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://fake.supabase.co")
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    monkeypatch.setenv("SUPABASE_KEY", "fake-anon-key")
+    monkeypatch.setenv(APPLY_ENABLE_ENV, "1")
+
+    CsiAccidentAdapter().preflight(_ctx())  # must not raise
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test D — preflight FAIL: CSI_ACCIDENT_SYNC_ENABLE absent → PreflightError, I/O=0
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_d_preflight_fail_apply_gate_missing(monkeypatch):
+    from services.public_data_sync.errors import PreflightError
+
+    monkeypatch.setenv("SUPABASE_URL", "https://fake.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "fake-service-key")
+    monkeypatch.delenv(APPLY_ENABLE_ENV, raising=False)
+
+    with pytest.raises(PreflightError) as exc_info:
+        CsiAccidentAdapter().preflight(_ctx())
+    assert APPLY_ENABLE_ENV in str(exc_info.value)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test E — preflight FAIL: DB credential absent → PreflightError, I/O=0
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_e_preflight_fail_db_credential_missing(monkeypatch):
+    from services.public_data_sync.errors import PreflightError
+
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    monkeypatch.delenv("SUPABASE_KEY", raising=False)
+    monkeypatch.setenv(APPLY_ENABLE_ENV, "1")
+
+    with pytest.raises(PreflightError):
+        CsiAccidentAdapter().preflight(_ctx())

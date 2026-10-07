@@ -1,8 +1,11 @@
 """CSI Accident Public Data adapter — thin Control Plane layer over refresh_latest_csi_artifact."""
 from __future__ import annotations
 
+import os
+
 from services.public_data_sync.adapters.base import SourceAdapter
 from services.public_data_sync.contracts import RunContext, RunResult, RunStatus
+from services.public_data_sync.errors import PreflightError
 
 
 class CsiAccidentAdapter(SourceAdapter):
@@ -15,15 +18,29 @@ class CsiAccidentAdapter(SourceAdapter):
 
     adapter_key = "csi_accident"
 
+    def preflight(self, ctx: RunContext) -> None:
+        from services.csi_accidents.contract import APPLY_ENABLE_ENV
+        if not os.environ.get("SUPABASE_URL"):
+            raise PreflightError("SUPABASE_URL not configured (PREFLIGHT_ERROR)")
+        if not (os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_KEY")):
+            raise PreflightError(
+                "SUPABASE_SERVICE_KEY / SUPABASE_KEY not configured (PREFLIGHT_ERROR)"
+            )
+        if os.environ.get(APPLY_ENABLE_ENV) != "1":
+            raise PreflightError(
+                f"{APPLY_ENABLE_ENV} != '1' — CSI writes not enabled (PREFLIGHT_ERROR)"
+            )
+
     def run(self, ctx: RunContext) -> RunResult:
         try:
+            from db.supabase_client import get_supabase
             from services.csi_accidents.refresh import (
                 RefreshResult,
                 refresh_latest_csi_artifact,
             )
             from services.csi_accidents.store import SupabaseCsiStore
 
-            store = SupabaseCsiStore(_build_supabase_client())
+            store = SupabaseCsiStore(get_supabase())
             result: RefreshResult = refresh_latest_csi_artifact(store=store)
             return self._map(ctx, result)
         except Exception as exc:
@@ -96,11 +113,3 @@ class CsiAccidentAdapter(SourceAdapter):
             error_code=error_code,
             error_message=error_message,
         )
-
-
-def _build_supabase_client():
-    import os
-    from supabase import create_client
-    url = os.environ["TAIENG_SUPABASE_URL"]
-    key = os.environ["TAIENG_SUPABASE_SERVICE_ROLE_KEY"]
-    return create_client(url, key)

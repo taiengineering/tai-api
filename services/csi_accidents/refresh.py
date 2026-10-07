@@ -173,7 +173,8 @@ def refresh_latest_csi_artifact(
       FAILED     — any step failed (existing snapshot preserved)
     """
     if store is None:
-        store = SupabaseCsiStore(_build_supabase_client())
+        from db.supabase_client import get_supabase
+        store = SupabaseCsiStore(get_supabase())
 
     # Step 1: Load current baseline
     latest = store.get_latest_completed() if hasattr(store, "get_latest_completed") else None
@@ -313,14 +314,6 @@ def refresh_latest_csi_artifact(
             "declared_rows_source": sync_result.extra.get("declared_rows_source"),
         },
     )
-
-
-def _build_supabase_client():
-    import os
-    from supabase import create_client
-    url = os.environ["TAIENG_SUPABASE_URL"]
-    key = os.environ["TAIENG_SUPABASE_SERVICE_ROLE_KEY"]
-    return create_client(url, key)
 
 
 __all__ = [
