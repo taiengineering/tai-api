@@ -67,5 +67,10 @@ def register_builtin_adapters() -> None:
         if adapter.adapter_key not in adapter_registry.registered_keys():
             adapter_registry.register(adapter)
 
+    from services.public_data_sync.adapters.keco_chemical import KecoChemicalAdapter
+    keco = KecoChemicalAdapter()
+    if keco.adapter_key not in adapter_registry.registered_keys():
+        adapter_registry.register(keco)
+
 
 __all__ = ["SourceAdapter", "AdapterRegistry", "adapter_registry", "register_builtin_adapters"]
