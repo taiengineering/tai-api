@@ -53,6 +53,28 @@ MAX_ROWS  = 100
 MAX_PAGES = 500   # v1.6.0: 100→500 (10,000건 한도 해제. 실 totalCount 기반으로 자동 중단됨)
 INIT_DATE = "2024-01-01"
 
+# Canonical log target map — endpoint keys (hyphen) → DB log target (underscore).
+_KOSHA_LOG_TARGET: dict[str, str] = {
+    "accident-cases": "accident_cases",
+    "construction-accidents": "construction_accidents",
+    "construction-safety-light": "construction_safety_light",
+    "risk-assessment": "risk_assessment",
+    "safety-materials": "safety_materials",
+}
+
+
+def _canonical_log_target(target: str) -> str:
+    """Return canonical underscore log target for both hyphen and underscore inputs."""
+    return _KOSHA_LOG_TARGET.get(target, target)
+
+
+class KoshaFetchError(Exception):
+    """Raised by KoshaAPI.get() when strict=True and the request fails."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
 
 def _parse_kosha_text(text: str) -> dict:
     """KOSHA 응답 텍스트 → dict. JSON 우선, 실패 시 XML 파싱(기존 동작 유지)."""
@@ -78,15 +100,40 @@ def _parse_kosha_text(text: str) -> dict:
 
 class KoshaAPI:
     @staticmethod
-    async def get(path: str, params: dict) -> dict:
+    async def get(path: str, params: dict, *, strict: bool = False) -> dict:
         params["serviceKey"] = _get_service_key()
         url = f"{BASE}/{path}"
         try:
             status, text = await asyncio.to_thread(kr_get, url, params=params, timeout=30)
-            return _parse_kosha_text(text)
         except Exception as e:
+            if strict:
+                log.error("[KOSHA strict] %s network error: %s", path, type(e).__name__)
+                raise KoshaFetchError("KOSHA_FETCH_ERROR") from None
             log.error("[KOSHA] %s 호출 실패: %s", path, e)
             return {"body": {"items": [], "totalCount": 0}}
+
+        if strict and status >= 400:
+            log.error("[KOSHA strict] %s HTTP %s", path, status)
+            raise KoshaFetchError("KOSHA_HTTP_ERROR")
+
+        try:
+            parsed = _parse_kosha_text(text)
+        except Exception as e:
+            if strict:
+                log.error("[KOSHA strict] %s parse error: %s", path, type(e).__name__)
+                raise KoshaFetchError("KOSHA_PARSE_ERROR") from None
+            log.error("[KOSHA] %s 파싱 실패: %s", path, e)
+            return {"body": {"items": [], "totalCount": 0}}
+
+        if strict:
+            # resultCode check — KOSHA normal code is "00"
+            header = parsed.get("header") or {}
+            result_code = str(header.get("resultCode", "")).strip()
+            if result_code and result_code != "00":
+                log.error("[KOSHA strict] %s resultCode=%s", path, result_code)
+                raise KoshaFetchError("KOSHA_RESULT_CODE")
+
+        return parsed
 
     @staticmethod
     def items(resp: dict) -> list:
@@ -122,21 +169,24 @@ def _log(target: str, status: str, rows: int = 0, err: str = ""):
         pass
 
 
-def _get_last_collected(target: str) -> Optional[str]:
+def _get_last_collected(target: str, *, strict: bool = False) -> Optional[str]:
+    canonical = _canonical_log_target(target)
     try:
         sb = get_supabase()
         r = (sb.table("kosha_collect_log")
                .select("collected_at")
-               .eq("target", target)
+               .eq("target", canonical)
                .eq("status", "success")
                .order("collected_at", desc=True)
                .limit(1)
                .execute())
         if r.data:
             return r.data[0]["collected_at"][:10]
+        return INIT_DATE  # no rows = legitimate bootstrap
     except Exception:
-        pass
-    return INIT_DATE
+        if strict:
+            raise KoshaFetchError("KOSHA_CURSOR_LOOKUP_ERROR") from None
+        return INIT_DATE
 
 
 def _parse_date(val: str) -> Optional[str]:
@@ -157,14 +207,20 @@ def _after_since(date_str: str, since_date: str) -> bool:
 # 수집함수
 # ─────────────────────────────────────────────────────
 
-async def _collect_accident_cases(since_date: str = INIT_DATE, full_refresh: bool = False) -> dict:
+async def _collect_accident_cases(
+    since_date: str = INIT_DATE,
+    full_refresh: bool = False,
+    strict: bool = False,
+) -> dict:
     sb = get_supabase()
     since = INIT_DATE if full_refresh else since_date
     total_upserted = 0
     for page in range(1, MAX_PAGES + 1):
         params = {"callApiId": "1040", "pageNo": page, "numOfRows": MAX_ROWS}
-        resp  = await KoshaAPI.get("disaster_api02/getdisaster_api02", params)
+        resp  = await KoshaAPI.get("disaster_api02/getdisaster_api02", params, strict=strict)
         items = KoshaAPI.items(resp)
+        if strict and page == 1 and (not items or KoshaAPI.total(resp) <= 0):
+            raise KoshaFetchError("SOURCE_EMPTY_UNEXPECTED")
         if not items: break
         rows, stop_early = [], False
         for i, it in enumerate(items):
@@ -248,16 +304,23 @@ def _collect_safety_material_details(dry_run: bool = True, batch_size: int = 100
     return {"target": "safety_material_details", **result}
 
 
-async def _collect_construction_accidents(since_date: str = INIT_DATE, full_refresh: bool = False) -> dict:
+async def _collect_construction_accidents(
+    since_date: str = INIT_DATE,
+    full_refresh: bool = False,
+    strict: bool = False,
+) -> dict:
     sb = get_supabase()
     since = INIT_DATE if full_refresh else since_date
     total_upserted = 0
     for page in range(1, MAX_PAGES + 1):
         resp  = await KoshaAPI.get(
             "constDsstr01/getconstDsstr01",
-            {"callApiId": "1050", "pageNo": page, "numOfRows": MAX_ROWS}
+            {"callApiId": "1050", "pageNo": page, "numOfRows": MAX_ROWS},
+            strict=strict,
         )
         items = KoshaAPI.items(resp)
+        if strict and page == 1 and (not items or KoshaAPI.total(resp) <= 0):
+            raise KoshaFetchError("SOURCE_EMPTY_UNEXPECTED")
         if not items: break
         rows, stop_early = [], False
         for i, it in enumerate(items):
