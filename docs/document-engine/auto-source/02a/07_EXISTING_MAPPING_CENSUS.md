@@ -87,7 +87,7 @@ LPG_MGR_APPOINT     → GAS-FORM-001
 | Semantics | Canonical master list of equipment type codes with Korean names |
 | Consumer | equipment_assets.equipment_type_code references this master |
 | Writer | static seed / admin data |
-| Relevant to projection_type | PARTIAL — provides numeric code → Korean name mapping; code → EQUIP doc_detail mapping NOT FOUND (GAP-02B) |
+| Relevant to projection_type | PARTIAL — provides numeric code → Korean name mapping; code → EQUIP doc_detail mapping NOT FOUND (GAP-02C) |
 
 Sample rows:
 ```
@@ -106,7 +106,7 @@ Sample rows:
 040 = 기타
 ```
 
-Note: 2,935 equipment_assets rows have numeric type_code values joinable to system_codes. Named uppercase codes (CRANE/PRESS/PRESSURE_VESSEL/CONVEYOR) and lowercase user-entered codes are NOT in system_codes.
+Note: 2,935 equipment_assets rows have numeric type_code values joinable to system_codes. Named uppercase codes (CRANE/PRESS/PRESSURE_VESSEL/CONVEYOR) and lowercase/free-text legacy or alternate-origin codes are NOT in system_codes.
 
 ### 2e. Other Equipment-Related Structures (inventory — not searched as projection selectors)
 

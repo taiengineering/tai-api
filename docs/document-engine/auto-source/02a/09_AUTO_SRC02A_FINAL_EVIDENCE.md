@@ -131,7 +131,7 @@ numeric code master (001-040):
   = system_codes(category=equipment_type): 40 rows; 001=변압기, 008=전동기, 011=펌프, 013=열교환기,
     014=보일러, 021=크레인, 024=컨베이어, 025=승강기, 031=스프링클러, 038=압력용기, 040=기타 (full list)
   = 2,935 equipment_assets rows have numeric type_code joinable to system_codes
-  = code → EQUIP doc_detail mapping: NOT FOUND (GAP-02B)
+  = code → EQUIP doc_detail mapping: NOT FOUND (GAP-02C)
 
 named uppercase codes (CRANE/PRESS/PRESSURE_VESSEL/CONVEYOR):
   = EXPLICIT_LEGACY_ALIAS (CORR-002)
@@ -298,7 +298,7 @@ ERROR-03 (numeric equipment code master):
   CORR-001 fact: system_codes(category=equipment_type) EXISTS with 40 rows
                  Maps numeric codes 001-040 → Korean canonical names
                  2,935 equipment_assets joinable to system_codes
-                 Remaining gap = code → EQUIP doc_detail mapping (GAP-02B; NOT FOUND)
+                 Remaining gap = code → EQUIP doc_detail mapping (historical v2 naming: GAP-02B; current naming: GAP-02C; NOT FOUND)
   Files corrected: 05 (COMPLETE REWRITE), 06, 07, 08, 09
 
 ERROR-04 (document_type_mapping count):

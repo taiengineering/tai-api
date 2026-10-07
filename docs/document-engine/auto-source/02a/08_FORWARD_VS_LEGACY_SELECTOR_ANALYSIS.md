@@ -136,7 +136,7 @@ Required changes (Claude does NOT select these — evidence only):
    Required: canonical mapping table (numeric codes + named codes → FIRE/ELEC/CRANE/etc.)
    Numeric code master: EXPLICIT_MASTER EXISTS (system_codes category=equipment_type; 40 rows; 001=변압기...040=기타)
    Named uppercase codes (CRANE/PRESS/PRESSURE_VESSEL/CONVEYOR): NOT in system_codes (UNRESOLVED_ORIGIN)
-   Code → EQUIP doc_detail mapping: NOT FOUND (GAP-02B; GPT DESIGN REQUIRED)
+   Code → EQUIP doc_detail mapping: NOT FOUND (GAP-02C; GPT DESIGN REQUIRED)
 ```
 
 ### 3d. INSP/CHK/PPE forward path (specific)
