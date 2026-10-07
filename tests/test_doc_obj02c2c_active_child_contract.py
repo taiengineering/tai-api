@@ -830,3 +830,15 @@ def test_mig_19_post_required_status_guards():
         "MIG-19: postcondition REQUIRED_BY_HUMAN=38 assertion must be present"
     assert "v_post_not_required <> 58" in sql, \
         "MIG-19: postcondition NOT_REQUIRED=58 assertion must be present"
+
+
+# MIG-20: field UPDATE uses PostgreSQL-valid comma-separated FROM (CORR-003)
+# UPDATE target alias rf must not appear in JOIN ON inside FROM; join cond goes in WHERE
+def test_mig_20_field_update_comma_from_not_join_on():
+    sql = _mig_sql()
+    assert "FROM runtime_form_schema rfs," in sql, \
+        "MIG-20: UPDATE runtime_field must use comma-separated FROM (not chained JOIN ON)"
+    assert "AND fc.id" in sql, \
+        "MIG-20: field_candidate join condition must appear as AND clause in WHERE"
+    assert "fc.is_mandatory IS TRUE" in sql, \
+        "MIG-20: CASE expression must use explicit IS TRUE (NULL-safe)"

@@ -277,15 +277,18 @@ WHERE rf.status = 'CANDIDATE'
 UPDATE runtime_field rf
 SET
   status          = 'APPROVED_BY_HUMAN',
-  required_status = CASE WHEN fc.is_mandatory THEN 'REQUIRED_BY_HUMAN' ELSE 'NOT_REQUIRED' END
-FROM runtime_form_schema rfs
-JOIN document_schema_candidate dsc ON dsc.id = rfs.schema_candidate_id
-JOIN document_type_mapping dtm ON dtm.doc_id = dsc.doc_id
-JOIN field_candidate fc ON fc.id = rf.field_candidate_id
-WHERE rf.form_schema_id = rfs.id
-  AND rf.status = 'CANDIDATE'
+  required_status = CASE WHEN fc.is_mandatory IS TRUE THEN 'REQUIRED_BY_HUMAN' ELSE 'NOT_REQUIRED' END
+FROM runtime_form_schema rfs,
+     document_schema_candidate dsc,
+     document_type_mapping dtm,
+     field_candidate fc
+WHERE rf.form_schema_id    = rfs.id
+  AND dsc.id               = rfs.schema_candidate_id
+  AND dtm.doc_id           = dsc.doc_id
+  AND fc.id                = rf.field_candidate_id
+  AND rf.status            = 'CANDIDATE'
   AND dtm.doc_type IN ('EQUIP','INSP','CHK','TBM','PPE')
-  AND rfs.status = 'CANDIDATE';
+  AND rfs.status           = 'CANDIDATE';
 
 -- ── 2. Checklist correction: APPROVED_BY_HUMAN → REJECTED_BY_HUMAN ───────────
 
