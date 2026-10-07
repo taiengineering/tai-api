@@ -426,7 +426,16 @@ _LEG_INPUT_FIELDS = (
     "art36_contract_adjustment_direction",
     "art37_completion_or_progress_notice_received",
     "art37_inspection_completed_as_designed",
+    # WO-LFR-OBJ-S03: Art.19 옥내작업장 경보설비. INITIAL_FRONT_FACT. INDUSTRIAL PAID1 only.
+    # missing != false — absent → OMIT (UNKNOWN). INDUSTRIAL sector gate below.
+    "indoor_workplace",
 )
+
+# WO-LFR-OBJ-S03: INDUSTRIAL PAID1 전용 INITIAL_FRONT_FACT 축.
+# BUILDING/CONSTRUCTION sector 유입 차단 — Art.19 옥내작업장은 산업안전보건기준규칙 전용.
+_INDUSTRIAL_ONLY_FIELDS = frozenset({
+    "indoor_workplace",
+})
 
 # WO-FIX-BUILDFACILITY-SECTOR-GATE-001: WIRING-016 append BUILDING N1 raw primitive 32축.
 # build_facility 는 이 축들을 sector=="BUILDING" 일 때만 facility 에 넣는다(다른 sector 유입 차단).
@@ -473,6 +482,9 @@ def build_facility(step1_body: Any) -> Dict[str, Any]:
     facility: Dict[str, Any] = {}
     _sector = getattr(step1_body, "sector", None)
     for code in _LEG_INPUT_FIELDS:
+        # WO-LFR-OBJ-S03: INDUSTRIAL 전용 축은 INDUSTRIAL sector 에만 노출.
+        if code in _INDUSTRIAL_ONLY_FIELDS and _sector != "INDUSTRIAL":
+            continue
         # WO-FIX-BUILDFACILITY-SECTOR-GATE-001: BUILDING N1 32축은 BUILDING sector 에만 노출.
         if code in _BUILDING_N1_FIELDS and _sector != "BUILDING":
             continue

@@ -97,8 +97,8 @@ def test_excavation_machinery_in_use_in_leg_input_fields():
 
 def test_field_count_is_243():
     # PR-W1-E FC-011: 241 → 242. A5 FC-024: 242 → 243. WO-A5-FC001-TRACK1: 243 → 249.
-    # WO-LFR-OBJ-S02-L1: +4 → 254. WO-LFR-OBJ-S02-L2: +6 → 260.
-    assert len(_LEG_INPUT_FIELDS) == 260
+    # WO-LFR-OBJ-S02-L1: +4 → 254. WO-LFR-OBJ-S02-L2: +6 → 260. WO-LFR-OBJ-S03: +1 → 261.
+    assert len(_LEG_INPUT_FIELDS) == 261
 
 
 def test_no_duplicate_in_leg_input_fields():
