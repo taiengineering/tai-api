@@ -300,9 +300,12 @@ def test_R5_missing_catalog_raises_value_error():
 
 def test_R6_resolver_returns_all_keys():
     result = resolve_catalog_runtime_schema(CAT_ID_APPROVED)
-    assert set(result.keys()) == {
-        "availability", "schema", "fields", "checklists", "evidence_fields"
-    }
+    # CORR-01: 4 new keys added (active_schema_id, active_schema_status,
+    # candidate_schema_id, candidate_schema_status)
+    required = {"availability", "schema", "fields", "checklists", "evidence_fields",
+                "active_schema_id", "active_schema_status",
+                "candidate_schema_id", "candidate_schema_status"}
+    assert required.issubset(set(result.keys()))
 
 
 # ── Workspace readmodel tests ─────────────────────────────────────────────────

@@ -60,12 +60,13 @@ _SOURCES: list[SourceSpec] = [
         sync_mode=SourceMode.TARGET_REFRESH,
         source_kind=SourceKind.API,
         adapter_key="keco_chemical",
-        credential_pool="KECO_DEDICATED",
+        credential_pool="DATA_GO_KR",
         rate_limit_group="KECO",
-        refresh_policy="ON_DEMAND_BUDGET",
+        refresh_policy="DAILY",
+        max_run_seconds=7200,
         consumer_tags=("chem",),
         auto_refresh_candidate=True,
-        notes="Targets leg-prod/msds_ref schema; exclusive DB run lock; budget code 22/23",
+        notes="Central cadence=DAILY; target-level refresh bounded by KECO_REQUEST_BUDGET/BATCH; exclusive KECO domain lock preserved",
     ),
     # 5. KOSHA_ACCIDENT_CASES
     SourceSpec(

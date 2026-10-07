@@ -36,8 +36,18 @@ def _require_env(name: str) -> str:
     return val
 
 
+def _require_service_key() -> None:
+    from services.keco_chemical.contract import SERVICE_KEY_ENV
+    if not any((os.getenv(name) or "").strip() for name in SERVICE_KEY_ENV):
+        logger.error(
+            "Required environment variable missing: %s or legacy %s",
+            SERVICE_KEY_ENV[0], SERVICE_KEY_ENV[1],
+        )
+        sys.exit(1)
+
+
 def main() -> None:
-    _require_env("KECO_API_SERVICE_KEY")
+    _require_service_key()
     _require_env("LEG_SUPABASE_URL")
     _require_env("LEG_SUPABASE_SERVICE_ROLE_KEY")
 

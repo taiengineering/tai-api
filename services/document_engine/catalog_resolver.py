@@ -70,40 +70,30 @@ def resolve_catalog_runtime_schema(catalog_document_id: str) -> dict:
         )
     elif candidates:
         schema = None
+        candidate_schema = candidates[0]
         availability = "PREPARING"
     else:
         schema = None
+        candidate_schema = None
         availability = "NO_SCHEMA"
 
     fields: list = []
     checklists: list = []
     evidence_fields: list = []
 
-    if schema:
-        schema_id = schema["id"]
-        fields = (
-            sb.table("runtime_field")
-            .select("*")
-            .eq("form_schema_id", schema_id)
-            .order("field_order")
-            .execute()
-        ).data or []
-        checklists = (
-            sb.table("runtime_checklist_item")
-            .select("*")
-            .eq("form_schema_id", schema_id)
-            .order("item_order")
-            .execute()
-        ).data or []
-        evidence_fields = (
-            sb.table("runtime_evidence_field")
-            .select("*")
-            .eq("form_schema_id", schema_id)
-            .execute()
-        ).data or []
+    query_schema = schema if schema else (candidates[0] if candidates else None)
+    if query_schema:
+        schema_id = query_schema["id"]
+        fields = (sb.table("runtime_field").select("*").eq("form_schema_id", schema_id).order("field_order").execute()).data or []
+        checklists = (sb.table("runtime_checklist_item").select("*").eq("form_schema_id", schema_id).order("item_order").execute()).data or []
+        evidence_fields = (sb.table("runtime_evidence_field").select("*").eq("form_schema_id", schema_id).execute()).data or []
 
     return {
         "availability": availability,
+        "active_schema_id": schema["id"] if schema else None,
+        "active_schema_status": schema["status"] if schema else None,
+        "candidate_schema_id": candidates[0]["id"] if (candidates and not schema) else None,
+        "candidate_schema_status": _CANDIDATE if (candidates and not schema) else None,
         "schema": schema,
         "fields": fields,
         "checklists": checklists,

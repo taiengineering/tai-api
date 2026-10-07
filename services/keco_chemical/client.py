@@ -52,7 +52,7 @@ class KecoChemicalClientError(Exception):
 
 class KecoNoServiceKeyError(KecoChemicalClientError):
     def __init__(self):
-        super().__init__("SERVICE_KEY_MISSING", "KECO_API_SERVICE_KEY is not set or empty")
+        super().__init__("SERVICE_KEY_MISSING", "DATA_GO_KR_SERVICE_KEY or legacy KECO_API_SERVICE_KEY is not set")
 
 
 class KecoTransportError(KecoChemicalClientError):
@@ -73,7 +73,7 @@ def redact_key(text: str, key: str) -> str:
 
 
 def _get_service_key() -> str:
-    """KECO_API_SERVICE_KEY 환경변수에서만 읽기. 다른 키 fallback 금지."""
+    """DATA_GO_KR_SERVICE_KEY(canonical) → KECO_API_SERVICE_KEY(legacy) 순으로 탐색."""
     for name in SERVICE_KEY_ENV:
         value = (os.getenv(name) or "").strip()
         if value:
