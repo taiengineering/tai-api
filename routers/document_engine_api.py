@@ -18,7 +18,10 @@ v1.1.0 (WP-DOCUMENT-ARCH-05B-B1): APPROVED_BY_HUMAN 전이를 인증·인가·�
 v1.2.0 (WP-DOCUMENT-ARCH-05B-B1-CORR-01): SUBMITTED_FOR_REVIEW 도 submitted_by 를
   반드시 인증 사용자로 기록한다(위조 차단). Confirm 권한은 제출자 본인.
 """
+import os
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi.responses import HTMLResponse, Response
 from typing import Optional
 from schemas.document_engine import (
     DocumentCreateIn,
@@ -29,7 +32,10 @@ from schemas.document_engine import (
 )
 from services import document_engine_svc as svc
 from services.document_confirm_svc import confirm_document_atomic, ConfirmError
+from services.document_engine.catalog_resolver import resolve_catalog_runtime_schema
 from routers.auth import get_current_user
+
+GOTENBERG_URL = os.getenv("GOTENBERG_URL", "http://gotenberg.railway.internal:3000")
 
 router = APIRouter(prefix="/document-engine", tags=["문서엔진"])
 
@@ -219,13 +225,47 @@ def list_evidence(doc_id: str):
 # ═══════════════════════════════════════════════════════
 
 @router.post("/documents/{doc_id}/generate")
-def generate_document(doc_id: str, body: GenerateDocumentIn):
-    """문서 생성 (입력값만 사용, auto fill 금지)"""
+async def generate_document(doc_id: str, body: GenerateDocumentIn):
+    """문서 생성 (입력값만 사용, auto fill 금지).
+
+    CONTRACT D (OBJ02-C2A):
+    - Renders canonical HTML via render_document_html() (no InspectionFetcher/TbmFetcher)
+    - export_type=PDF: Gotenberg conversion, returns application/pdf
+    - export_type=HTML: returns HTML
+    - Transient export: does NOT insert into generated_document table
+    - Existing historical PENDING rows are not deleted
+    """
     try:
-        result = svc.generate_document(doc_id, body.export_type)
-        return {"status": "success", "data": result}
+        html_str = svc.render_document_html(doc_id)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"render failed: {e}")
+
+    if body.export_type.upper() == "PDF":
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"{GOTENBERG_URL}/forms/chromium/convert/html",
+                    files={"index.html": ("index.html", html_str, "text/html")},
+                    data={
+                        "paperWidth": "8.27",
+                        "paperHeight": "11.69",
+                        "marginTop": "0.4",
+                        "marginBottom": "0.4",
+                        "marginLeft": "0.4",
+                        "marginRight": "0.4",
+                        "printBackground": "true",
+                    },
+                )
+                resp.raise_for_status()
+                pdf_bytes = resp.content
+        except Exception as e:
+            raise HTTPException(500, f"PDF generation failed: {e}")
+        return Response(content=pdf_bytes, media_type="application/pdf")
+
+    # Default: HTML
+    return HTMLResponse(content=html_str)
 
 
 @router.get("/documents/{doc_id}/generated")
@@ -257,3 +297,85 @@ def get_factory_metrics(factory_id: str):
 def get_audit_log(doc_id: str):
     """문서 감사 로그"""
     return {"status": "success", "data": svc.get_audit_log(doc_id)}
+
+
+# ═══════════════════════════════════════════════════════
+# 7. Canonical Render (CONTRACT C, OBJ02-C2A)
+# ═══════════════════════════════════════════════════════
+
+@router.get("/documents/{doc_id}/render")
+def render_document(doc_id: str):
+    """Canonical HTML render of runtime document (입력값만, auto fill 금지).
+
+    CONTRACT C (OBJ02-C2A):
+    Returns deterministic HTML from runtime_document_data + schema.
+    Does NOT call InspectionFetcher or TbmFetcher.
+    """
+    try:
+        html_str = svc.render_document_html(doc_id)
+        return HTMLResponse(content=html_str)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"render failed: {e}")
+
+
+# ═══════════════════════════════════════════════════════
+# 8. Catalog Runtime API (CONTRACT A, OBJ02-C2A)
+# ═══════════════════════════════════════════════════════
+
+@router.get("/catalog/{doc_id}")
+def get_catalog_runtime(doc_id: str):
+    """Catalog + runtime schema state for a given document_forms.doc_id string.
+
+    CONTRACT A (OBJ02-C2A):
+    Returns catalog metadata + runtime availability + fields + checklists + evidence_fields.
+    can_create=true ONLY when availability==READY_FOR_EDIT.
+
+    Args:
+        doc_id: document_forms.doc_id string (e.g. "DOC-BLD-002"), NOT a UUID.
+    """
+    from db.supabase_client import get_supabase
+    sb = get_supabase()
+
+    # Lookup document_forms row by doc_id string
+    cat_res = (
+        sb.table("document_forms")
+        .select("id,doc_id,doc_name,sector,category")
+        .eq("doc_id", doc_id)
+        .execute()
+    )
+    if not cat_res.data:
+        raise HTTPException(404, f"catalog document not found: {doc_id}")
+    catalog_row = cat_res.data[0]
+    catalog_document_id = catalog_row["id"]  # UUID
+
+    try:
+        resolved = resolve_catalog_runtime_schema(catalog_document_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+
+    schema = resolved["schema"]
+    availability = resolved["availability"]
+    can_create = availability == "READY_FOR_EDIT"
+
+    runtime_block = {
+        "schema_id": schema["id"] if schema else None,
+        "schema_status": schema["status"] if schema else None,
+        "availability": availability,
+        "can_create": can_create,
+    }
+
+    return {
+        "status": "success",
+        "data": {
+            "catalog": catalog_row,
+            "runtime": runtime_block,
+            "fields": resolved["fields"],
+            "checklists": resolved["checklists"],
+            "evidence_fields": resolved["evidence_fields"],
+            "supported_export_formats": ["HTML", "PDF"],
+        },
+    }

@@ -1,14 +1,25 @@
-"""TAI 문서엔진 서비스 v1.1.0
+"""TAI 문서엔진 서비스 v1.2.0
 
 Router = HTTP만, Service = 비즈니스 로직 (FastAPI import 금지)
 절대 금지: auto fill, auto approve, inferred default,
            semantic match, fallback mapping, candidate→truth 승격
 
 v1.1.0: Audit 수정 — field_key 검증, evidence 검증, generate audit 추가
+v1.2.0: OBJ02-C2A — runtime key contract, PATCH merge semantics,
+        resolve_runtime_document_state(), render_document_html()
 """
+import re as _re
 from datetime import datetime, timezone
 from db.supabase_client import get_supabase
 from services.time import now_kst, serialize_external_utc
+
+# UUID pattern for checklist key detection (36-char with dashes)
+_UUID_RE = _re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    _re.IGNORECASE,
+)
+# Canonical checklist values (case-sensitive)
+_CHECKLIST_VALUES = frozenset({"PASS", "FAIL", "NA"})
 
 
 # ═══════════════════════════════════════════════════════
@@ -196,10 +207,15 @@ def update_document(
     update = {"updated_at": now}
     changes = {}
 
-    # Guardrail: runtime_field에 존재하는 field_key만 저장
+    # Guardrail: runtime_field field_key OR checklist UUID key만 저장 (C2A)
     if runtime_data_json is not None:
-        _validate_field_keys(sb, schema_id, runtime_data_json)
-        update["runtime_data_json"] = runtime_data_json
+        _validate_runtime_keys(sb, schema_id, runtime_data_json)
+        # PATCH merge semantics (C2A) — incoming keys overwrite, None removes, others preserved
+        existing_json = before.data.get("runtime_data_json") or {}
+        merged = {**existing_json, **runtime_data_json}
+        # Remove keys explicitly set to None (treat None as "delete this key")
+        merged = {k: v for k, v in merged.items() if v is not None}
+        update["runtime_data_json"] = merged
         changes["runtime_data_json"] = True
 
     # Guardrail: evidence_links의 linked_field_id 검증
@@ -210,6 +226,10 @@ def update_document(
 
     if updated_by:
         update["updated_by"] = updated_by
+
+    # Version increment (C2A): confirm_document_atomic checks version>=1 but not
+    # a specific version number, so incrementing on each PATCH is safe.
+    update["version"] = (before.data.get("version") or 1) + 1
 
     res = (
         sb.table("runtime_document_data")
@@ -446,22 +466,63 @@ def get_audit_log(doc_id: str) -> list:
 # ═══════════════════════════════════════════════════════
 
 def _validate_field_keys(sb, schema_id: str, data_json: dict):
-    """runtime_field에 존재하는 field_key만 허용. 미등록 키 차단."""
+    """Deprecated wrapper: use _validate_runtime_keys() instead."""
+    _validate_runtime_keys(sb, schema_id, data_json)
+
+
+def _validate_runtime_keys(sb, schema_id: str, data_json: dict):
+    """runtime_field field_key OR checklist UUID key만 허용.
+
+    CONTRACT B (OBJ02-C2A):
+    - field_key (str) — registered in runtime_field
+    - checklist UUID (str UUID) — registered in runtime_checklist_item
+      - value must be PASS | FAIL | NA (or null/None)
+    Unknown UUID-like keys not registered as checklist IDs → DENIED.
+    """
     if not data_json:
         return
+
+    # 1. Load allowed field_keys
     res = (
         sb.table("runtime_field")
         .select("field_key")
         .eq("form_schema_id", schema_id)
         .execute()
     )
-    allowed = {r["field_key"] for r in (res.data or []) if r.get("field_key")}
-    if not allowed:
-        return  # field_key 없는 schema는 자유형 입력 허용
-    unknown = set(data_json.keys()) - allowed
-    if unknown:
+    allowed_field_keys = {r["field_key"] for r in (res.data or []) if r.get("field_key")}
+
+    # 2. Load allowed checklist UUIDs
+    cl_res = (
+        sb.table("runtime_checklist_item")
+        .select("id")
+        .eq("form_schema_id", schema_id)
+        .execute()
+    )
+    allowed_checklist_ids = {str(r["id"]) for r in (cl_res.data or []) if r.get("id")}
+
+    unknown_keys = []
+    for key, value in data_json.items():
+        is_uuid = bool(_UUID_RE.match(key))
+        if is_uuid:
+            # UUID key: must be a registered checklist item
+            if key not in allowed_checklist_ids:
+                unknown_keys.append(key)
+                continue
+            # Validate checklist value: PASS / FAIL / NA or null
+            if value is not None and value not in _CHECKLIST_VALUES:
+                raise ValueError(
+                    f"invalid checklist value for key {key!r}: "
+                    f"must be one of {sorted(_CHECKLIST_VALUES)} or null, got {value!r}"
+                )
+        else:
+            # Non-UUID key: must be a known field_key
+            if allowed_field_keys and key not in allowed_field_keys:
+                unknown_keys.append(key)
+
+    if unknown_keys:
         raise ValueError(
-            f"unknown field_keys not in runtime_field: {sorted(unknown)}"
+            f"unknown keys not in runtime_field or runtime_checklist_item: "
+            f"{sorted(unknown_keys)}"
         )
 
 
@@ -488,6 +549,283 @@ def _validate_evidence_links(sb, schema_id: str, links: list):
         raise ValueError(
             f"unknown evidence field_ids not in runtime_evidence_field: {sorted(unknown)}"
         )
+
+
+
+
+# ═══════════════════════════════════════════════════════
+# 8. Runtime Document State Resolution & Rendering (C2A)
+# ═══════════════════════════════════════════════════════
+
+def resolve_runtime_document_state(doc_id: str) -> dict:
+    """Load full runtime document state for rendering.
+
+    Returns:
+        {
+            "document": <runtime_document_data row>,
+            "schema": <runtime_form_schema row>,
+            "fields": [<runtime_field rows>],
+            "checklists": [<runtime_checklist_item rows>],
+            "evidence_fields": [<runtime_evidence_field rows>],
+            "catalog": <document_forms row or None>,
+        }
+
+    Raises:
+        ValueError: if document or schema not found.
+    """
+    sb = get_supabase()
+
+    doc_res = (
+        sb.table("runtime_document_data")
+        .select("*")
+        .eq("id", doc_id)
+        .single()
+        .execute()
+    )
+    if not doc_res.data:
+        raise ValueError(f"document not found: {doc_id}")
+    document = doc_res.data
+
+    schema_id = document.get("form_schema_id")
+    if not schema_id:
+        raise ValueError(f"document has no form_schema_id: {doc_id}")
+
+    schema_res = (
+        sb.table("runtime_form_schema")
+        .select("*")
+        .eq("id", schema_id)
+        .single()
+        .execute()
+    )
+    if not schema_res.data:
+        raise ValueError(f"schema not found: {schema_id}")
+    schema = schema_res.data
+
+    fields = (
+        sb.table("runtime_field")
+        .select("*")
+        .eq("form_schema_id", schema_id)
+        .order("field_order")
+        .execute()
+    ).data or []
+
+    checklists = (
+        sb.table("runtime_checklist_item")
+        .select("*")
+        .eq("form_schema_id", schema_id)
+        .order("item_order")
+        .execute()
+    ).data or []
+
+    evidence_fields = (
+        sb.table("runtime_evidence_field")
+        .select("*")
+        .eq("form_schema_id", schema_id)
+        .execute()
+    ).data or []
+
+    # Optionally load catalog row
+    catalog = None
+    catalog_document_id = schema.get("catalog_document_id")
+    if catalog_document_id:
+        cat_res = (
+            sb.table("document_forms")
+            .select("*")
+            .eq("id", catalog_document_id)
+            .single()
+            .execute()
+        )
+        catalog = cat_res.data  # None if not found
+
+    return {
+        "document": document,
+        "schema": schema,
+        "fields": fields,
+        "checklists": checklists,
+        "evidence_fields": evidence_fields,
+        "catalog": catalog,
+    }
+
+
+def render_document_html(doc_id: str) -> str:
+    """Render canonical HTML from runtime document state.
+
+    CONTRACT C (OBJ02-C2A):
+    1. Resolve full state via resolve_runtime_document_state()
+    2. If document is confirmed (APPROVED_BY_HUMAN) and a runtime_document_archive
+       row with rendered_body exists, return archived body.
+    3. Otherwise render fresh via document_schema_renderer.build_render_artifacts()
+
+    Does NOT call InspectionFetcher or TbmFetcher.
+
+    Raises:
+        ValueError: document or schema not found
+        SchemaRenderError: render failed
+    """
+    from services.document_schema_renderer import build_render_artifacts
+
+    state = resolve_runtime_document_state(doc_id)
+    document = state["document"]
+
+    # Step 2: Check for confirmed archive body
+    if document.get("status") == "APPROVED_BY_HUMAN":
+        sb = get_supabase()
+        try:
+            archive_res = (
+                sb.table("runtime_document_archive")
+                .select("rendered_body")
+                .eq("runtime_document_id", doc_id)
+                .order("confirmed_at", desc=True)
+                .execute()
+            )
+            if archive_res.data:
+                body = archive_res.data[0].get("rendered_body")
+                if body:
+                    return body
+        except Exception:
+            pass  # archive table may not be accessible; fall through to fresh render
+
+    # Step 3: Fresh render
+    artifacts = build_render_artifacts(
+        document=document,
+        schema=state["schema"],
+        fields=state["fields"],
+        checklists=state["checklists"],
+    )
+    return artifacts["rendered_body"]
+
+# ═══════════════════════════════════════════════════════
+# 8. Runtime Document State Resolution & Rendering (C2A)
+# ═══════════════════════════════════════════════════════
+
+def resolve_runtime_document_state(doc_id: str) -> dict:
+    """Load full runtime document state for rendering.
+
+    Returns:
+        {
+            "document": <runtime_document_data row>,
+            "schema": <runtime_form_schema row>,
+            "fields": [<runtime_field rows>],
+            "checklists": [<runtime_checklist_item rows>],
+            "evidence_fields": [<runtime_evidence_field rows>],
+            "catalog": <document_forms row or None>,
+        }
+
+    Raises:
+        ValueError: if document or schema not found.
+    """
+    sb = get_supabase()
+
+    doc_res = (
+        sb.table("runtime_document_data")
+        .select("*")
+        .eq("id", doc_id)
+        .single()
+        .execute()
+    )
+    if not doc_res.data:
+        raise ValueError(f"document not found: {doc_id}")
+    document = doc_res.data
+
+    schema_id = document.get("form_schema_id")
+    if not schema_id:
+        raise ValueError(f"document has no form_schema_id: {doc_id}")
+
+    schema_res = (
+        sb.table("runtime_form_schema")
+        .select("*")
+        .eq("id", schema_id)
+        .single()
+        .execute()
+    )
+    if not schema_res.data:
+        raise ValueError(f"schema not found: {schema_id}")
+    schema = schema_res.data
+
+    fields = (
+        sb.table("runtime_field")
+        .select("*")
+        .eq("form_schema_id", schema_id)
+        .order("field_order")
+        .execute()
+    ).data or []
+
+    checklists = (
+        sb.table("runtime_checklist_item")
+        .select("*")
+        .eq("form_schema_id", schema_id)
+        .order("item_order")
+        .execute()
+    ).data or []
+
+    evidence_fields = (
+        sb.table("runtime_evidence_field")
+        .select("*")
+        .eq("form_schema_id", schema_id)
+        .execute()
+    ).data or []
+
+    catalog = None
+    catalog_document_id = schema.get("catalog_document_id")
+    if catalog_document_id:
+        cat_res = (
+            sb.table("document_forms")
+            .select("*")
+            .eq("id", catalog_document_id)
+            .single()
+            .execute()
+        )
+        catalog = cat_res.data
+
+    return {
+        "document": document,
+        "schema": schema,
+        "fields": fields,
+        "checklists": checklists,
+        "evidence_fields": evidence_fields,
+        "catalog": catalog,
+    }
+
+
+def render_document_html(doc_id: str) -> str:
+    """Render canonical HTML from runtime document state.
+
+    CONTRACT C (OBJ02-C2A):
+    1. Resolve full state via resolve_runtime_document_state()
+    2. If confirmed (APPROVED_BY_HUMAN) and archive has rendered_body, return it.
+    3. Otherwise render fresh via document_schema_renderer.build_render_artifacts()
+
+    Does NOT call InspectionFetcher or TbmFetcher.
+    """
+    from services.document_schema_renderer import build_render_artifacts
+
+    state = resolve_runtime_document_state(doc_id)
+    document = state["document"]
+
+    if document.get("status") == "APPROVED_BY_HUMAN":
+        sb = get_supabase()
+        try:
+            archive_res = (
+                sb.table("runtime_document_archive")
+                .select("rendered_body")
+                .eq("runtime_document_id", doc_id)
+                .order("confirmed_at", desc=True)
+                .execute()
+            )
+            if archive_res.data:
+                body = archive_res.data[0].get("rendered_body")
+                if body:
+                    return body
+        except Exception:
+            pass  # fall through to fresh render
+
+    artifacts = build_render_artifacts(
+        document=document,
+        schema=state["schema"],
+        fields=state["fields"],
+        checklists=state["checklists"],
+    )
+    return artifacts["rendered_body"]
 
 
 # ═══════════════════════════════════════════════════════
