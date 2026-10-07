@@ -1,0 +1,14 @@
+---
+title: Template/Fetcher vs Runtime State Matrix — Gate T1
+description: Two-column compatibility assessment: INFRA_PRESENT vs RUNTIME_EXPORT_COMPATIBLE
+type: evidence
+wo: WO-DOC-OBJ02-C1-SUPPLEMENTAL-CONTRACT-VERIFY-002
+status: COLLECTED
+gate: T1
+---
+doc_type,fetcher_key,fetcher_class,template_file,infra_present,infra_notes,runtime_export_compatible,runtime_export_notes
+CHK,inspection,InspectionFetcher,DOC-CHK.html,PASS,template on disk + fetcher in FETCHER_MAP + fetcher_key in document_type_registry,FAIL,InspectionFetcher reads from safety_inspections+safety_inspection_results directly — NOT from runtime_data_json. PDF export via OLD path (/document-forms/{doc_id}/generate) not registered for CHK. NEW path produces PENDING only.
+INSP,inspection,InspectionFetcher,DOC-INSP.html,PASS,template on disk + fetcher in FETCHER_MAP + fetcher_key in document_type_registry,FAIL,Same as CHK — InspectionFetcher bypasses runtime_data_json. Not registered in _FETCHERS dict. NEW path produces PENDING only.
+PPE,inspection,InspectionFetcher,DOC-PPE.html,PASS,template on disk + fetcher in FETCHER_MAP + fetcher_key in document_type_registry,FAIL,Same as CHK — InspectionFetcher bypasses runtime_data_json. Not registered in _FETCHERS dict. NEW path produces PENDING only.
+TBM,tbm,TbmFetcher,DOC-OSH-056.html,PASS,template on disk + fetcher in FETCHER_MAP (tbm key) + fetcher_key in document_type_registry,PARTIAL,DOC-OSH-056 only is registered in _FETCHERS dict (OLD path). Produces PDF bytes but via /document-forms/{doc_id}/generate (not frontend-connected path). TbmFetcher reads from tbm_meetings — NOT from runtime_data_json. DOC-CON-012 (also TBM) NOT registered.
+EQUIP,inspection,InspectionFetcher,DOC-EQUIP.html,PASS,template on disk + fetcher in FETCHER_MAP + fetcher_key in document_type_registry,FAIL,Same as CHK — InspectionFetcher bypasses runtime_data_json. None of 15 EQUIP docs registered in _FETCHERS dict. NEW path produces PENDING only.

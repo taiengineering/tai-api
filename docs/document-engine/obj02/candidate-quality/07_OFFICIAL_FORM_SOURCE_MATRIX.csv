@@ -1,0 +1,25 @@
+doc_id,doc_type,doc_detail,has_legal_form,evidence_count,evidence_family,legal_form_coverage_gap
+DOC-OSH-017,CHK,,false,1,DATE,N/A (no legal form)
+DOC-OSH-055,CHK,,false,1,DATE,N/A (no legal form)
+DOC-CON-007,INSP,,false,1,DATE,N/A (no legal form)
+DOC-CON-LAW-014,INSP,,false,1,DATE,N/A (no legal form)
+DOC-OSH-007,INSP,,false,1,DATE,N/A (no legal form)
+DOC-OSH-038,INSP,,false,1,DATE,N/A (no legal form)
+DOC-OSH-046,PPE,,false,0,(none),N/A (no legal form)
+DOC-CON-012,TBM,,false,1,SIGNATURE,N/A (no legal form)
+DOC-OSH-056,TBM,,false,1,SIGNATURE,N/A (no legal form)
+DOC-BLD-002,EQUIP,FIRE,true,1,SIGNATURE,DATE missing — no timestamp_auto evidence
+DOC-BLD-009,EQUIP,ELEC,false,1,DATE,N/A (no legal form)
+DOC-BLD-011,EQUIP,ELEV,true,1,DATE,SIGNATURE missing — no signature evidence
+DOC-BLD-016,EQUIP,ASBESTOS,true,0,(none),BOTH DATE and SIGNATURE missing
+DOC-CHEM-003,EQUIP,HAZMAT,false,0,(none),N/A (no legal form)
+DOC-CON-013,EQUIP,MACHINE,false,0,(none),N/A (no legal form)
+DOC-CON-014,EQUIP,SCAFFOLD,false,0,(none),N/A (no legal form)
+DOC-CON-026,EQUIP,SCAFFOLD,false,0,(none),N/A (no legal form)
+DOC-CON-032,EQUIP,CRANE,false,0,(none),N/A (no legal form)
+DOC-CON-043,EQUIP,GUARD,false,0,(none),N/A (no legal form)
+DOC-FAC-002,EQUIP,GAS,false,0,(none),N/A (no legal form)
+DOC-FAC-008,EQUIP,HAZMAT,true,0,(none),BOTH DATE and SIGNATURE missing
+DOC-FAC-013,EQUIP,BOILER,true,0,(none),BOTH DATE and SIGNATURE missing
+DOC-FAC-016,EQUIP,REFRIG,true,0,(none),BOTH DATE and SIGNATURE missing
+DOC-OSH-059,EQUIP,MACHINE,false,1,DATE,N/A (no legal form)

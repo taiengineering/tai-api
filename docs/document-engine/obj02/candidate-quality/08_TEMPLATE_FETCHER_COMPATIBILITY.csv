@@ -1,0 +1,6 @@
+doc_type,doc_count,template_file,template_exists,fetcher_key,fetcher_in_FETCHER_MAP,fetcher_status,evidence_source,compatibility_verdict
+CHK,2,DOC-CHK.html,YES,inspection,YES,EXISTING,safety_inspections+safety_inspection_results,COMPATIBLE
+INSP,4,DOC-INSP.html,YES,inspection,YES,EXISTING,safety_inspections+safety_inspection_results,COMPATIBLE
+PPE,1,DOC-PPE.html,YES,inspection,YES,EXISTING,safety_inspections,COMPATIBLE
+TBM,2,DOC-OSH-056.html,YES,tbm,YES,EXISTING,tbm_meetings(risk_items+safety_items),COMPATIBLE
+EQUIP,15,DOC-EQUIP.html,YES,inspection,YES,EXISTING,safety_inspections+safety_inspection_results(asset_id→equipment_assets),COMPATIBLE
