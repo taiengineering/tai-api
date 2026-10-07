@@ -1,0 +1,25 @@
+doc_id,doc_name,doc_type,doc_detail,same_type_count,same_type_detail_count,catalog_resolution,notes
+DOC-OSH-017,점검표(체크리스트),CHK,,2,2,AMBIGUOUS,CHK has 2 doc_ids with same null detail
+DOC-OSH-055,안전보건점검 체크리스트,CHK,,2,2,AMBIGUOUS,CHK has 2 doc_ids with same null detail
+DOC-BLD-016,석면점검 기록부,EQUIP,ASBESTOS,15,1,RESOLVED,Only 1 doc_id for EQUIP/ASBESTOS
+DOC-FAC-013,보일러 운전일지,EQUIP,BOILER,15,1,RESOLVED,Only 1 doc_id for EQUIP/BOILER
+DOC-CON-032,타워크레인 점검기록부,EQUIP,CRANE,15,1,RESOLVED,Only 1 doc_id for EQUIP/CRANE
+DOC-BLD-009,전기설비 점검기록부,EQUIP,ELEC,15,1,RESOLVED,Only 1 doc_id for EQUIP/ELEC
+DOC-BLD-011,승강기 유지관리 점검기록부,EQUIP,ELEV,15,1,RESOLVED,Only 1 doc_id for EQUIP/ELEV
+DOC-BLD-002,소방시설 작동기능점검 기록,EQUIP,FIRE,15,1,RESOLVED,Only 1 doc_id for EQUIP/FIRE
+DOC-FAC-002,가스시설 정기점검 기록부,EQUIP,GAS,15,1,RESOLVED,Only 1 doc_id for EQUIP/GAS
+DOC-CON-043,방호조치 점검기록,EQUIP,GUARD,15,1,RESOLVED,Only 1 doc_id for EQUIP/GUARD
+DOC-CHEM-003,유해화학물질 취급시설 자체점검 기록,EQUIP,HAZMAT,15,2,AMBIGUOUS,2 doc_ids for EQUIP/HAZMAT
+DOC-FAC-008,위험물 시설 점검기록부,EQUIP,HAZMAT,15,2,AMBIGUOUS,2 doc_ids for EQUIP/HAZMAT
+DOC-CON-013,장비점검기록부,EQUIP,MACHINE,15,2,AMBIGUOUS,2 doc_ids for EQUIP/MACHINE
+DOC-OSH-059,기계설비 점검기록부,EQUIP,MACHINE,15,2,AMBIGUOUS,2 doc_ids for EQUIP/MACHINE
+DOC-FAC-016,냉동기 설비 점검기록부,EQUIP,REFRIG,15,1,RESOLVED,Only 1 doc_id for EQUIP/REFRIG
+DOC-CON-014,비계 점검기록,EQUIP,SCAFFOLD,15,2,AMBIGUOUS,2 doc_ids for EQUIP/SCAFFOLD
+DOC-CON-026,비계 점검기록부,EQUIP,SCAFFOLD,15,2,AMBIGUOUS,2 doc_ids for EQUIP/SCAFFOLD
+DOC-CON-007,안전점검일지(건설),INSP,,4,4,AMBIGUOUS,INSP has 4 doc_ids with same null detail
+DOC-CON-LAW-014,안전점검 실시기록,INSP,,4,4,AMBIGUOUS,INSP has 4 doc_ids with same null detail
+DOC-OSH-007,안전점검일지,INSP,,4,4,AMBIGUOUS,INSP has 4 doc_ids with same null detail
+DOC-OSH-038,안전점검 기록부,INSP,,4,4,AMBIGUOUS,INSP has 4 doc_ids with same null detail
+DOC-OSH-046,보호구 착용 점검기록,PPE,,1,1,RESOLVED,Only 1 doc_id for PPE
+DOC-CON-012,TBM 기록(건설),TBM,,2,2,AMBIGUOUS,2 doc_ids for TBM — construction vs general
+DOC-OSH-056,TBM 기록,TBM,,2,2,AMBIGUOUS,2 doc_ids for TBM — construction vs general
