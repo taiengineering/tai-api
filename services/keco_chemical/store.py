@@ -498,14 +498,14 @@ class KecoReferenceStore:
         run_id: str,
         limit: int,
     ) -> List[dict]:
-        """next_refresh_at <= now の DONE/EMPTY targets を RUNNING に claim して返す."""
+        """next_refresh_at <= now の DONE/EMPTY/RETRY targets を RUNNING に claim して返す."""
         client = _get_supabase_client()
         db = client.schema("msds_ref")
         now = _now_iso()
         rows = (
             db.table("keco_collection_targets")
             .select("id,target_type,target_value,attempt_count")
-            .in_("status", [TARGET_STATUS_DONE, TARGET_STATUS_EMPTY])
+            .in_("status", [TARGET_STATUS_DONE, TARGET_STATUS_EMPTY, TARGET_STATUS_RETRY])
             .lte("next_refresh_at", now)
             .order("next_refresh_at")
             .limit(limit)
