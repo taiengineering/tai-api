@@ -111,7 +111,7 @@ def test_p01_wp1a_regression():
     assert "LEGAL_TEXT_SYNC" not in {s.source_id for s in reg.list_all()}
     assert "KSIC_SYNC" not in {s.source_id for s in reg.list_all()}
     assert reg.get("CSI_ACCIDENT").sync_mode.value == "FILE_SNAPSHOT"
-    assert reg.get("KECO_15149420").credential_pool == "KECO_DEDICATED"
+    assert reg.get("KECO_15149420").credential_pool == "DATA_GO_KR"
     # KOSHA_ACCIDENT_CASES adapter is now registered (Wave1); run_source no longer raises.
     # Without credentials it returns PREFLIGHT_ERROR FAILED instead of raising.
     result = run_source(_SOURCE_ID)

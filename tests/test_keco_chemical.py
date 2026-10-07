@@ -46,10 +46,13 @@ class TestContract:
         from services.keco_chemical.contract import SOURCE_ID
         assert SOURCE_ID == "KECO_15149420"
 
-    def test_service_key_env_single(self):
-        from services.keco_chemical.contract import SERVICE_KEY_ENV
-        assert SERVICE_KEY_ENV == ("KECO_API_SERVICE_KEY",)
-        assert len(SERVICE_KEY_ENV) == 1
+    def test_service_key_env_canonical_first(self):
+        from services.keco_chemical.contract import (
+            SERVICE_KEY_ENV, CANONICAL_SERVICE_KEY_ENV, LEGACY_SERVICE_KEY_ENV,
+        )
+        assert SERVICE_KEY_ENV[0] == CANONICAL_SERVICE_KEY_ENV == "DATA_GO_KR_SERVICE_KEY"
+        assert SERVICE_KEY_ENV[1] == LEGACY_SERVICE_KEY_ENV == "KECO_API_SERVICE_KEY"
+        assert len(SERVICE_KEY_ENV) == 2
 
     def test_probe_max_calls_hard_cap(self):
         from services.keco_chemical.contract import PROBE_MAX_CALLS

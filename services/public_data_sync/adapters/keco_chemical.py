@@ -8,7 +8,7 @@ from services.public_data_sync.adapters.base import SourceAdapter
 from services.public_data_sync.contracts import RunContext, RunResult, RunStatus
 from services.public_data_sync.errors import PreflightError
 
-_REQUIRED_CREDS = ("KECO_API_SERVICE_KEY", "LEG_SUPABASE_URL", "LEG_SUPABASE_SERVICE_ROLE_KEY")
+_REQUIRED_DB_CREDS = ("LEG_SUPABASE_URL", "LEG_SUPABASE_SERVICE_ROLE_KEY")
 _BUDGET_ENV = "KECO_REQUEST_BUDGET"
 _BATCH_ENV = "KECO_REFRESH_BATCH_SIZE"
 
@@ -62,7 +62,12 @@ class KecoChemicalAdapter(SourceAdapter):
     adapter_key = "keco_chemical"
 
     def preflight(self, ctx: RunContext) -> None:
-        for key in _REQUIRED_CREDS:
+        from services.keco_chemical.contract import SERVICE_KEY_ENV
+        if not any((os.getenv(name) or "").strip() for name in SERVICE_KEY_ENV):
+            raise PreflightError(
+                "DATA_GO_KR_SERVICE_KEY or legacy KECO_API_SERVICE_KEY not configured (PREFLIGHT_ERROR)"
+            )
+        for key in _REQUIRED_DB_CREDS:
             if not os.getenv(key):
                 raise PreflightError(f"{key} not configured (PREFLIGHT_ERROR)")
         _parse_capacity()  # raises PreflightError on missing / invalid capacity
