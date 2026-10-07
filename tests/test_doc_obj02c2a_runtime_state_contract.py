@@ -1152,6 +1152,67 @@ def test_C5_version_mismatch_raises():
 
 
 # ═══════════════════════════════════════════════════════
+# AR-tests: Archived reprint (CORR-15)
+# ═══════════════════════════════════════════════════════
+
+def _make_archived_doc(version=DOC_VERSION_APPROVED):
+    return {
+        "id": DOC_ID, "form_schema_id": SCHEMA_ID,
+        "runtime_data_json": {FIELD_KEY: "서울"},
+        "status": "ARCHIVED", "version": version,
+        "created_at": "2026-10-07T00:00:00Z",
+        "updated_at": "2026-10-07T00:00:00Z",
+    }
+
+
+def test_AR1_approved_uses_archive():
+    """AR1: APPROVED_BY_HUMAN → archive body (same as C1, already covered, verify path)."""
+    archive_rows = [{"rendered_body": ARCHIVE_BODY, "document_version": DOC_VERSION_APPROVED}]
+    rdh = _load_render_html_with_sb(lambda: _ArchiveFakeSB(_make_approved_doc(), archive_rows))
+    result = rdh(DOC_ID)
+    assert result == ARCHIVE_BODY
+
+
+def test_AR2_archived_uses_archive():
+    """AR2: ARCHIVED → archive body returned (not fresh render)."""
+    archive_rows = [{"rendered_body": ARCHIVE_BODY, "document_version": DOC_VERSION_APPROVED}]
+    rdh = _load_render_html_with_sb(lambda: _ArchiveFakeSB(_make_archived_doc(), archive_rows))
+    result = rdh(DOC_ID)
+    assert result == ARCHIVE_BODY
+
+
+def test_AR3_archived_no_archive_raises():
+    """AR3: ARCHIVED + no archive row → ValueError (fail-close)."""
+    rdh = _load_render_html_with_sb(lambda: _ArchiveFakeSB(_make_archived_doc(), []))
+    try:
+        rdh(DOC_ID)
+        assert False, "should raise ValueError"
+    except ValueError as e:
+        assert "archive" in str(e).lower() or "not found" in str(e).lower()
+
+
+def test_AR4_archived_empty_body_raises():
+    """AR4: ARCHIVED + archive exists but rendered_body None → ValueError."""
+    archive_rows = [{"rendered_body": None, "document_version": DOC_VERSION_APPROVED}]
+    rdh = _load_render_html_with_sb(lambda: _ArchiveFakeSB(_make_archived_doc(), archive_rows))
+    try:
+        rdh(DOC_ID)
+        assert False, "should raise ValueError"
+    except ValueError:
+        pass
+
+
+def test_AR5_archived_runtime_data_change_output_unchanged():
+    """AR5: ARCHIVED → output is archive body regardless of runtime_data_json."""
+    archive_rows = [{"rendered_body": ARCHIVE_BODY, "document_version": DOC_VERSION_APPROVED}]
+    doc = _make_archived_doc()
+    doc["runtime_data_json"] = {FIELD_KEY: "CHANGED_AFTER_ARCHIVE"}
+    rdh = _load_render_html_with_sb(lambda: _ArchiveFakeSB(doc, archive_rows))
+    result = rdh(DOC_ID)
+    assert result == ARCHIVE_BODY
+
+
+# ═══════════════════════════════════════════════════════
 # P5/P6: Export format tests
 # ═══════════════════════════════════════════════════════
 

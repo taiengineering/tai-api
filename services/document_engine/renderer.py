@@ -52,23 +52,7 @@ async def render_document_html(doc_id: str, data: Dict[str, Any]) -> str:
 async def generate_document_pdf(doc_id: str, data: Dict[str, Any]) -> bytes:
     """HTML을 Gotenberg로 보내 PDF를 생성합니다."""
     html_content = await render_document_html(doc_id, data)
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{GOTENBERG_URL}/forms/chromium/convert/html",
-            files={"index.html": ("index.html", html_content, "text/html")},
-            data={
-                "paperWidth": "8.27",  # A4
-                "paperHeight": "11.69",
-                "marginTop": "0.4",
-                "marginBottom": "0.4",
-                "marginLeft": "0.4",
-                "marginRight": "0.4",
-                "printBackground": "true",
-            },
-        )
-        resp.raise_for_status()
-        return resp.content
+    return await html_to_pdf(html_content)
 
 
 async def html_to_pdf(html_content: str) -> bytes:

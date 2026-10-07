@@ -40,6 +40,9 @@ OBJ02-C2A fixes four runtime workflow breakages identified in the C1 audit:
 | CORR-06 | APPROVED_BY_HUMAN archive: fail-close by (doc_id, version). No fallback to mutable state |
 | CORR-12 | Duplicate resolve_runtime_document_state/render_document_html removed |
 | CORR-13 | generate_document (INSERT PENDING row) = REMOVED. Export is purely transient |
+| CORR-14 | Full runtime authorization: all document instance endpoints require auth + tenant scope |
+| CORR-15 | ARCHIVED reprint: status in ("APPROVED_BY_HUMAN", "ARCHIVED") → archive only |
+| CORR-16 | Single Gotenberg adapter: generate_document_pdf() delegates to html_to_pdf() |
 
 ## generated_document INSERT = 0 (no row created)
 

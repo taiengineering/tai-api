@@ -60,6 +60,12 @@ CANDIDATE availability: candidate schema detail (fields/checklists/evidence_fiel
 - 404: `doc_id` not found in `document_forms`
 - 500: integrity violation (multiple approved schemas — should never happen due to DB constraint)
 
+## Authentication Note (CORR-14)
+
+The catalog endpoint (`GET /document-engine/catalog/{doc_id}`) remains unauthenticated — catalog schema metadata describes document definitions that are not tenant-specific.
+
+All runtime document instance endpoints (`/documents/*`) require authentication + tenant scope enforcement via company_scope helpers.
+
 ## Tests
 
 A1–A3 in `tests/test_doc_obj02c2a_runtime_state_contract.py`

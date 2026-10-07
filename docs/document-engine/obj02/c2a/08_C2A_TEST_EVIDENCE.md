@@ -1,7 +1,7 @@
 ---
 wo: WO-DOC-OBJ02-C2A-RUNTIME-STATE-CONTRACT-001
 contract: TEST_EVIDENCE
-status: CORR-01~13 APPLIED
+status: CORR-01~16 APPLIED
 ---
 
 # C2A Test Evidence
@@ -87,6 +87,40 @@ status: CORR-01~13 APPLIED
 | C3 | APPROVED_BY_HUMAN + no archive row → ValueError (fail-close, no fallback) |
 | C4 | APPROVED_BY_HUMAN + archive exists but rendered_body is None → ValueError |
 | C5 | version mismatch → ValueError |
+
+### AR-tests: Archived Reprint (CORR-15)
+
+| Test | Description |
+|------|-------------|
+| AR1 | APPROVED_BY_HUMAN → archive body (verify path) |
+| AR2 | ARCHIVED → archive body returned (not fresh render) |
+| AR3 | ARCHIVED + no archive row → ValueError (fail-close) |
+| AR4 | ARCHIVED + archive exists but rendered_body None → ValueError |
+| AR5 | ARCHIVED → output is archive body regardless of runtime_data_json changes |
+
+### RT-tests: Router Integration (CORR-14)
+
+| Test | Description |
+|------|-------------|
+| RT1 | no auth token → render endpoint returns 401 or 403 |
+| RT2 | no auth token → generate endpoint returns 401 or 403 |
+| RT3 | unsupported export_type → 422 |
+| RT4 | PDF export → Content-Type application/pdf |
+| RT5 | PDF export → non-empty bytes body |
+| RT6 | HTML export → text/html content-type |
+
+### SEC-tests: Tenant Authorization (CORR-14)
+
+| Test | Description |
+|------|-------------|
+| SEC1 | same company document → render allowed (200) |
+| SEC2 | different company document → render denied (404) |
+| SEC3 | same company, different factory → render denied (404) |
+| SEC4 | same company + own factory → render allowed (200) |
+| SEC5 | no auth → PATCH denied (401/403) |
+| SEC6 | different company → PATCH denied (404) |
+| SEC7 | different company → GET evidence denied (404) |
+| SEC8 | different company → PDF generation denied (404) |
 
 ## Regression Tests
 

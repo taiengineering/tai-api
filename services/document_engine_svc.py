@@ -632,7 +632,7 @@ def render_document_html(doc_id: str) -> str:
     state = resolve_runtime_document_state(doc_id)
     document = state["document"]
 
-    if document.get("status") == "APPROVED_BY_HUMAN":
+    if document.get("status") in ("APPROVED_BY_HUMAN", "ARCHIVED"):
         doc_version = document.get("version")
         sb = get_supabase()
         archive_res = (

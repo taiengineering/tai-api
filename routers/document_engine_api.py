@@ -17,6 +17,9 @@ v1.1.0 (WP-DOCUMENT-ARCH-05B-B1): APPROVED_BY_HUMAN 전이를 인증·인가·�
 
 v1.2.0 (WP-DOCUMENT-ARCH-05B-B1-CORR-01): SUBMITTED_FOR_REVIEW 도 submitted_by 를
   반드시 인증 사용자로 기록한다(위조 차단). Confirm 권한은 제출자 본인.
+
+v1.3.0 (OBJ02-C2A-CORR-14): Full runtime authorization — all document instance endpoints
+  require authentication + tenant scope via company_scope helpers.
 """
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import HTMLResponse, Response
@@ -33,8 +36,42 @@ from services.document_confirm_svc import confirm_document_atomic, ConfirmError
 from services.document_engine.catalog_resolver import resolve_catalog_runtime_schema
 from services.document_engine.renderer import html_to_pdf as _html_to_pdf
 from routers.auth import get_current_user
+from db.supabase_client import get_supabase
+from services.company_scope import (
+    _ensure_own_company,
+    _ensure_factory_own,
+    _forced_company_id,
+    scoped_filter,
+    apply_scoped_filter,
+    DENY,
+)
 
 router = APIRouter(prefix="/document-engine", tags=["문서엔진"])
+
+
+def _check_doc_scope(sb, doc_id: str, current_user: dict) -> dict:
+    """Load runtime_document_data and verify tenant/factory ownership.
+    Raises HTTP 404 if not found or out of scope.
+    Returns {id, company_id, factory_id, status} dict.
+    """
+    res = (
+        sb.table("runtime_document_data")
+        .select("id,company_id,factory_id,status")
+        .eq("id", doc_id)
+        .single()
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(404, "document not found")
+    doc = res.data
+    _ensure_own_company(
+        doc.get("company_id"),
+        current_user,
+        sb,
+        "document not found",
+        resource_factory_id=doc.get("factory_id"),
+    )
+    return doc
 
 
 # ═══════════════════════════════════════════════════════
@@ -72,14 +109,22 @@ def get_schema_detail(schema_id: str):
 # ═══════════════════════════════════════════════════════
 
 @router.post("/documents")
-def create_document(body: DocumentCreateIn):
+def create_document(
+    body: DocumentCreateIn,
+    current_user: dict = Depends(get_current_user),
+):
     """문서 생성 (DRAFT 상태)"""
+    sb = get_supabase()
+    created_by = str(current_user.get("id") or "").strip() or None
+    company_id = _forced_company_id(current_user, sb, body.company_id)
+    if body.factory_id:
+        _ensure_factory_own(sb, body.factory_id, current_user)
     try:
         result = svc.create_document(
             body.form_schema_id,
             body.factory_id,
-            body.company_id,
-            body.created_by,
+            company_id,
+            created_by,
         )
         return {"status": "success", "data": result}
     except ValueError as e:
@@ -93,17 +138,27 @@ def list_documents(
     status: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
 ):
     """문서 목록 조회"""
-    result = svc.list_documents(
-        factory_id, company_id, status, page, page_size
-    )
+    sb = get_supabase()
+    filt = scoped_filter(current_user, sb, ["company_id", "factory_id"])
+    if filt is DENY:
+        return {
+            "status": "success",
+            "data": {"items": [], "total": 0, "page": page, "page_size": page_size},
+        }
+    eff_company_id = filt.get("company_id") or company_id
+    eff_factory_id = filt.get("factory_id") or factory_id
+    result = svc.list_documents(eff_factory_id, eff_company_id, status, page, page_size)
     return {"status": "success", "data": result}
 
 
 @router.get("/documents/{doc_id}")
-def get_document(doc_id: str):
+def get_document(doc_id: str, current_user: dict = Depends(get_current_user)):
     """문서 상세 조회"""
+    sb = get_supabase()
+    _check_doc_scope(sb, doc_id, current_user)
     result = svc.get_document(doc_id)
     if not result:
         raise HTTPException(404, "document not found")
@@ -111,8 +166,14 @@ def get_document(doc_id: str):
 
 
 @router.patch("/documents/{doc_id}")
-def update_document(doc_id: str, body: DocumentUpdateIn):
+def update_document(
+    doc_id: str,
+    body: DocumentUpdateIn,
+    current_user: dict = Depends(get_current_user),
+):
     """문서 데이터 수정 (runtime_data_json, evidence_links)"""
+    sb = get_supabase()
+    _check_doc_scope(sb, doc_id, current_user)
     try:
         result = svc.update_document(
             doc_id,
@@ -145,6 +206,11 @@ def change_status(
     (body.actor_id 사칭 차단). Confirm(APPROVED_BY_HUMAN)은 제출자 본인만 가능하므로,
     제출 시점의 submitted_by 위조를 막는 것이 확정 권한 무결성의 전제다.
     """
+    # Scope check — confirm_document_atomic handles its own authz internally
+    if body.to_status != "APPROVED_BY_HUMAN":
+        _sb = get_supabase()
+        _check_doc_scope(_sb, doc_id, current_user)
+
     if body.to_status == "SUBMITTED_FOR_REVIEW":
         # submitter identity binding — svc 는 그대로 두고 라우터가 인증 actor 만 전달.
         user_id = str(current_user.get("id") or "").strip()
@@ -193,11 +259,14 @@ def list_transitions():
 # ═══════════════════════════════════════════════════════
 
 @router.post("/documents/{doc_id}/evidence")
-def add_evidence(doc_id: str, body: EvidenceLinkIn):
+def add_evidence(
+    doc_id: str,
+    body: EvidenceLinkIn,
+    current_user: dict = Depends(get_current_user),
+):
     """증빙 파일 링크 등록"""
-    doc = svc.get_document(doc_id)
-    if not doc:
-        raise HTTPException(404, "document not found")
+    sb = get_supabase()
+    _check_doc_scope(sb, doc_id, current_user)
     result = svc.link_evidence(
         doc_id,
         body.evidence_type,
@@ -212,8 +281,10 @@ def add_evidence(doc_id: str, body: EvidenceLinkIn):
 
 
 @router.get("/documents/{doc_id}/evidence")
-def list_evidence(doc_id: str):
+def list_evidence(doc_id: str, current_user: dict = Depends(get_current_user)):
     """문서의 증빙 목록"""
+    sb = get_supabase()
+    _check_doc_scope(sb, doc_id, current_user)
     return {"status": "success", "data": svc.list_evidence(doc_id)}
 
 
@@ -242,6 +313,8 @@ async def generate_document(
             f"unsupported export_type: {body.export_type!r}; supported: HTML, PDF",
         )
 
+    _check_doc_scope(get_supabase(), doc_id, current_user)
+
     try:
         html_str = svc.render_document_html(doc_id)
     except ValueError as e:
@@ -260,8 +333,10 @@ async def generate_document(
 
 
 @router.get("/documents/{doc_id}/generated")
-def list_generated(doc_id: str):
+def list_generated(doc_id: str, current_user: dict = Depends(get_current_user)):
     """생성된 문서 목록"""
+    sb = get_supabase()
+    _check_doc_scope(sb, doc_id, current_user)
     return {"status": "success", "data": svc.list_generated(doc_id)}
 
 
@@ -285,8 +360,10 @@ def get_factory_metrics(factory_id: str):
 
 
 @router.get("/documents/{doc_id}/audit-log")
-def get_audit_log(doc_id: str):
+def get_audit_log(doc_id: str, current_user: dict = Depends(get_current_user)):
     """문서 감사 로그"""
+    sb = get_supabase()
+    _check_doc_scope(sb, doc_id, current_user)
     return {"status": "success", "data": svc.get_audit_log(doc_id)}
 
 
@@ -302,6 +379,8 @@ def render_document(doc_id: str, current_user: dict = Depends(get_current_user))
     Returns deterministic HTML from runtime_document_data + schema.
     Does NOT call InspectionFetcher or TbmFetcher.
     """
+    sb = get_supabase()
+    _check_doc_scope(sb, doc_id, current_user)
     try:
         html_str = svc.render_document_html(doc_id)
         return HTMLResponse(content=html_str)
@@ -323,10 +402,11 @@ def get_catalog_runtime(doc_id: str):
     Returns catalog metadata + runtime availability + fields + checklists + evidence_fields.
     can_create=true ONLY when availability==READY_FOR_EDIT.
 
+    Catalog schema metadata is unauthenticated (schema definitions are not tenant-specific).
+
     Args:
         doc_id: document_forms.doc_id string (e.g. "DOC-BLD-002"), NOT a UUID.
     """
-    from db.supabase_client import get_supabase
     sb = get_supabase()
 
     # Lookup document_forms row by doc_id string
