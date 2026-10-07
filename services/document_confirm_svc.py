@@ -24,6 +24,10 @@ from services.document_schema_renderer import (
     build_render_artifacts,
     SchemaRenderError,
 )
+from services.document_signature_svc import (
+    SignatureError,
+    resolve_signature_images_for_render,
+)
 from services.document_snapshot_integrity import (
     compute_confirmed_snapshot_hash,
     SnapshotCanonicalizationError,
@@ -187,7 +191,18 @@ def confirm_document_atomic(
             runtime_values = _normalize_values(locked.get("runtime_data_json"))
             evidence_links = _normalize_evidence(locked.get("evidence_links"))
 
-            # 14. 렌더 (05A) — 락 이후 값으로만
+            # 14a. Signature resolution — downloads immutable document snapshots from Storage
+            #       Runs inside transaction to use lock-verified runtime_values.
+            #       I/O is Supabase Storage (HTTP), separate from psycopg2 connection.
+            try:
+                sig_result = resolve_signature_images_for_render(
+                    runtime_data_json=runtime_values,
+                    fields=fields,
+                )
+            except SignatureError as e:
+                raise ConfirmError(422, "signature resolution failed: %s" % e)
+
+            # 14b. 렌더 (05A) — 락 이후 값으로만, 서명 inline image 포함
             render_doc = {
                 "id": locked["id"],
                 "form_schema_id": schema_id,
@@ -200,6 +215,8 @@ def confirm_document_atomic(
                     schema=schema_row,
                     fields=fields,
                     checklists=checklists,
+                    signature_images=sig_result.get("images"),
+                    signature_manifest=sig_result.get("manifest"),
                 )
             except SchemaRenderError as e:
                 raise ConfirmError(422, "render failed: %s" % e)

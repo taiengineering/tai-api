@@ -33,6 +33,7 @@ from schemas.document_engine import (
 )
 from services import document_engine_svc as svc
 from services.document_confirm_svc import confirm_document_atomic, ConfirmError
+from services.document_signature_svc import SignatureError, apply_profile_to_document
 from services.document_engine.catalog_resolver import resolve_catalog_runtime_schema
 from services.document_engine.renderer import html_to_pdf as _html_to_pdf
 from routers.auth import get_current_user
@@ -374,6 +375,35 @@ def get_factory_metrics(factory_id: str):
         "status": "success",
         "data": svc.get_metrics_by_factory(factory_id),
     }
+
+
+@router.post("/documents/{doc_id}/signature/{field_key}/apply-profile")
+def apply_signature(
+    doc_id: str,
+    field_key: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Canonical profile signature application endpoint (OBJ02-C2-SIG-B).
+
+    Copies the authenticated user's registered profile signature as an immutable
+    snapshot into runtime_data_json[field_key]. The signer_user_id and signed_at
+    are set server-side — no client-supplied values are trusted.
+
+    Requires: document in editable status, field_key exists with input_type=signature,
+              user has a registered profile signature.
+    """
+    sb = get_supabase()
+    _check_doc_scope(sb, doc_id, current_user)
+    try:
+        result = apply_profile_to_document(doc_id, field_key, current_user)
+        return {"status": "success", "data": result}
+    except SignatureError as e:
+        msg = str(e)
+        if "not found" in msg:
+            raise HTTPException(404, msg)
+        if "forbidden" in msg or "cross-user" in msg:
+            raise HTTPException(403, msg)
+        raise HTTPException(400, msg)
 
 
 @router.get("/documents/{doc_id}/audit-log")

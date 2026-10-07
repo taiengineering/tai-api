@@ -446,22 +446,27 @@ def _validate_runtime_keys(sb, schema_id: str, data_json: dict):
     """runtime_field field_key OR checklist UUID key만 허용.
 
     CONTRACT B (OBJ02-C2A):
-    - field_key (str) — registered in runtime_field
+    - field_key (str) — registered in runtime_field (non-UUID, non-signature)
     - checklist UUID (str UUID) — registered in runtime_checklist_item
       - value must be PASS | FAIL | NA (or null/None)
+    - signature input_type field_keys: DENIED via PATCH — use apply-profile endpoint
     Unknown UUID-like keys not registered as checklist IDs → DENIED.
     """
     if not data_json:
         return
 
-    # 1. Load allowed field_keys
+    # 1. Load allowed field_keys + input_type (to detect signature guard)
     res = (
         sb.table("runtime_field")
-        .select("field_key")
+        .select("field_key,input_type")
         .eq("form_schema_id", schema_id)
         .execute()
     )
     allowed_field_keys = {r["field_key"] for r in (res.data or []) if r.get("field_key")}
+    signature_field_keys = {
+        r["field_key"] for r in (res.data or [])
+        if r.get("field_key") and r.get("input_type") == "signature"
+    }
 
     # 2. Load allowed checklist UUIDs
     cl_res = (
@@ -490,6 +495,14 @@ def _validate_runtime_keys(sb, schema_id: str, data_json: dict):
             # Non-UUID key: must be a known field_key
             if key not in allowed_field_keys:
                 unknown_keys.append(key)
+                continue
+            # Signature field guard: must use canonical apply-profile endpoint
+            if key in signature_field_keys:
+                raise ValueError(
+                    f"signature field {key!r} cannot be set via PATCH; "
+                    "use POST /document-engine/documents/{doc_id}"
+                    f"/signature/{key}/apply-profile"
+                )
 
     if unknown_keys:
         raise ValueError(
@@ -655,11 +668,19 @@ def render_document_html(doc_id: str) -> str:
             )
         return body
 
+    from services.document_signature_svc import resolve_signature_images_for_render
+
+    sig_result = resolve_signature_images_for_render(
+        runtime_data_json=document.get("runtime_data_json") or {},
+        fields=state["fields"],
+    )
     artifacts = build_render_artifacts(
         document=document,
         schema=state["schema"],
         fields=state["fields"],
         checklists=state["checklists"],
+        signature_images=sig_result.get("images"),
+        signature_manifest=sig_result.get("manifest"),
     )
     return artifacts["rendered_body"]
 

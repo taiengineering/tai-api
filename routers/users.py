@@ -16,12 +16,18 @@ v2.1.0: APPOINTMENT 이벤트 트리거 추가
 v2.0.0: 퍼사자 일정 미배정 처리
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, date
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
 from services.time import business_today, now_kst, serialize_business_datetime
+from services.document_signature_svc import (
+    SignatureError,
+    get_profile_signature,
+    save_profile_signature,
+)
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -415,3 +421,50 @@ def get_user_factories(user_id: str):
         "id, name, site_type, address_road, employee_count, status_code"
     ).eq("company_id", company_id).order("created_at", desc=True).execute()
     return {"status": "success", "data": {"items": res.data, "total": len(res.data)}}
+
+
+# ============================================================
+# 9. Profile Signature (OBJ02-C2-SIG-B)
+# ============================================================
+
+class SignatureBody(BaseModel):
+    signature_data: str  # data:image/png;base64,...
+
+
+@router.post("/{user_id}/signature")
+def register_signature(
+    user_id: str,
+    body: SignatureBody,
+    current_user: dict = Depends(get_current_user),
+):
+    """Profile signature 등록. path user_id == authenticated user 전용."""
+    auth_id = str(current_user.get("id") or "").strip()
+    if not auth_id:
+        raise HTTPException(401, "authenticated user identity unavailable")
+    if user_id != auth_id:
+        raise HTTPException(403, "cross-user signature registration forbidden")
+    try:
+        result = save_profile_signature(auth_id, body.signature_data)
+        return {"status": "success", "data": result}
+    except SignatureError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/{user_id}/signature")
+def get_signature(
+    user_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Profile signature 조회. path user_id == authenticated user 전용."""
+    auth_id = str(current_user.get("id") or "").strip()
+    if not auth_id:
+        raise HTTPException(401, "authenticated user identity unavailable")
+    if user_id != auth_id:
+        raise HTTPException(403, "cross-user signature read forbidden")
+    try:
+        result = get_profile_signature(auth_id)
+        if result is None:
+            raise HTTPException(404, "no profile signature registered")
+        return {"status": "success", "data": result}
+    except SignatureError as e:
+        raise HTTPException(400, str(e))
