@@ -29,7 +29,14 @@
 <table class="info-table">
   <tr><th>작업일자</th><td>{{ work_date | date_short }}</td><th>작업시간</th><td>{{ work_time }}</td></tr>
   <tr><th>작업장소</th><td>{{ work_location }}</td><th>공종</th><td>{{ work_type }}</td></tr>
-  <tr><th>진행자</th><td>{{ conductor_name }}</td><th>참석인원</th><td>{{ attendee_count }}명</td></tr>
+  <tr><th>진행자</th><td>{{ conductor_name }}</td><th>참석인원</th>
+    <td>
+      {{ attendee_count_registered }}명
+      {% if attendee_count_mismatch %}
+      <span class="b b-w" style="margin-left:4px;" title="원본 기록: {{ attendee_count_recorded }}명">인원 확인 필요</span>
+      {% endif %}
+    </td>
+  </tr>
   <tr><th>작업내용</th><td colspan="3">{{ work_description }}</td></tr>
 </table>
 
@@ -61,9 +68,9 @@
       <td class="c">
         {% if item.level == '상' or item.level == '위험' %}<span class="b b-r">{{ item.level }}</span>
         {% elif item.level == '중' or item.level == '주의' %}<span class="b b-w">{{ item.level }}</span>
-        {% else %}<span class="b b-i">{{ item.level }}</span>{% endif %}
+        {% elif item.level %}<span class="b b-i">{{ item.level }}</span>{% endif %}
       </td>
-      <td>{{ item.countermeasure }}</td>
+      <td>{% if item.countermeasure %}{{ item.countermeasure }}{% else %}<span style="color:#94a3b8;font-size:8pt;">안전대책 미기록</span>{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -79,7 +86,7 @@
       <th style="min-width:64px">직종</th>
       <th>소속</th>
       <th style="width:50px">상태</th>
-      <th style="min-width:44px">서명</th>
+      <th style="min-width:60px">서명</th>
     </tr>
   </thead>
   <tbody>
@@ -90,19 +97,23 @@
       <td>{{ att.job_type }}</td>
       <td>{{ att.subcontractor_name if att.subcontractor_name else company_name }}</td>
       <td>
-        {% if att.issue_flag %}
+        {% if att.issue_flag is none %}
+        <span class="b b-x">확인 정보 없음</span>
+        {% elif att.issue_flag %}
         <span class="b b-r">이상</span>
         {% else %}
         <span class="b b-g">정상</span>
         {% endif %}
       </td>
       <td class="sign-col">
-        {% if att.signature_url %}
+        {% if att.sign_display == 'SIGNED_WITH_EVIDENCE' %}
         <img src="{{ att.signature_url }}" style="max-height:20px;">
-        {% elif att.signed_at %}
-        <span class="b b-i">완료</span>
-        {% else %}
+        {% elif att.sign_display == 'SIGNED_STATUS_ONLY' %}
+        <span class="b b-w" style="font-size:7pt;" title="서명 상태 완료, 증적 미확인">상태완료·증적미확인</span>
+        {% elif att.sign_display == 'UNSIGNED' %}
         <span class="b b-x">미서명</span>
+        {% else %}
+        <span class="b b-x">확인 필요</span>
         {% endif %}
       </td>
     </tr>
@@ -122,7 +133,9 @@
   </tbody>
 </table>
 
-{% if not has_issue %}
+{% if has_issue is none %}
+{# issue_flag 데이터 없음 — 건강·보호구 상태 확인 불가 #}
+{% elif not has_issue %}
 <div style="font-size:8pt;color:#15803d;margin-top:4px;">※ 참석자 전원 보호구 착용 확인, 건강상태 이상 없음</div>
 {% endif %}
 
