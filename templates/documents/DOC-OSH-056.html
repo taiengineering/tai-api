@@ -135,7 +135,7 @@
 
 {% if has_issue is none %}
 {# issue_flag 데이터 없음 — 건강·보호구 상태 확인 불가 #}
-{% elif not has_issue %}
+{% elif not has_issue and not attendee_count_mismatch %}
 <div style="font-size:8pt;color:#15803d;margin-top:4px;">※ 참석자 전원 보호구 착용 확인, 건강상태 이상 없음</div>
 {% endif %}
 

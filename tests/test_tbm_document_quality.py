@@ -341,6 +341,55 @@ def test_C2D8_signed_no_url_status_only():
     assert disp == "SIGNED_STATUS_ONLY"
 
 
+# ── C2-D CORR-003: 인원 불일치 + 전체 정상 문구 정합성 ───────────────────────────
+
+def _render_attendee_status(attendees, attendee_count_recorded, attendee_count_registered):
+    """has_issue 계산 후 template 렌더링."""
+    any_true = any(a.get("issue_flag") is True for a in attendees)
+    all_false = len(attendees) > 0 and all(a.get("issue_flag") is False for a in attendees)
+    has_issue = True if any_true else (False if all_false else None)
+    mismatch = attendee_count_recorded != attendee_count_registered
+    html = asyncio.run(R.render_document_html(
+        "DOC-OSH-056",
+        {"attendees": attendees, "risk_items": [], "empty_rows": [],
+         "attendee_count_registered": attendee_count_registered,
+         "attendee_count_recorded": attendee_count_recorded,
+         "attendee_count_mismatch": mismatch,
+         "has_issue": has_issue},
+    ))
+    return html
+
+
+def test_C3A_mismatch_20_vs_10_all_false_no_all_normal_message():
+    """CORR-003: 기록 20명/등록 10명 전원 False → 전원 정상 문구 미출력."""
+    atts = [{"name": f"P{i}", "issue_flag": False, "sign_display": "UNSIGNED",
+             "job_type": "-", "subcontractor_name": "", "signature_url": None,
+             "issue_note": ""} for i in range(10)]
+    html = _render_attendee_status(atts, attendee_count_recorded=20, attendee_count_registered=10)
+    assert "전원 보호구 착용 확인" not in html
+
+
+def test_C3B_no_mismatch_10_vs_10_all_false_shows_normal_message():
+    """CORR-003: 기록 10명/등록 10명 전원 False → 전원 정상 문구 출력."""
+    atts = [{"name": f"P{i}", "issue_flag": False, "sign_display": "UNSIGNED",
+             "job_type": "-", "subcontractor_name": "", "signature_url": None,
+             "issue_note": ""} for i in range(10)]
+    html = _render_attendee_status(atts, attendee_count_recorded=10, attendee_count_registered=10)
+    assert "전원 보호구 착용 확인" in html
+
+
+def test_C3C_mismatch_with_true_flag_no_all_normal_message():
+    """CORR-003: 기록 20명/등록 10명 중 1명 True → 전원 정상 문구 미출력."""
+    atts = [{"name": "이상자", "issue_flag": True, "sign_display": "UNSIGNED",
+             "job_type": "-", "subcontractor_name": "", "signature_url": None,
+             "issue_note": ""}] + [
+            {"name": f"P{i}", "issue_flag": False, "sign_display": "UNSIGNED",
+             "job_type": "-", "subcontractor_name": "", "signature_url": None,
+             "issue_note": ""} for i in range(9)]
+    html = _render_attendee_status(atts, attendee_count_recorded=20, attendee_count_registered=10)
+    assert "전원 보호구 착용 확인" not in html
+
+
 if __name__ == "__main__":
     g = dict(globals())
     tests = sorted((n, f) for n, f in g.items() if n.startswith("test_") and callable(f))
