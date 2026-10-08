@@ -111,8 +111,8 @@ def project_work_row(row: Mapping[str, Any]) -> Dict[str, bool]:
         return {"has_diving": True}
 
     if work_type == "OBJECT_DROP":
-        # Wave A1. Numeric height_m captured for replay only; object_drop_height_m
-        # projection is HOLD until C2 contract frozen.
+        # Wave A1. Numeric height_m captured in attributes for replay only.
+        # object_drop_height_m multi-row numeric projection handled in project_work_rows().
         return {"has_object_drop": True}
 
     if work_type == "SCAFFOLD":
@@ -224,6 +224,9 @@ def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, 
 
     grinding_wheel_diameter_cm (P02 C2): single active GRINDING row numeric projection.
     Multiple active GRINDING rows → grinding_wheel_diameter_cm absent (no aggregation).
+
+    object_drop_height_m (P03 C2): single active OBJECT_DROP row numeric projection.
+    Multiple active OBJECT_DROP rows → object_drop_height_m absent (no aggregation).
     """
     out: Dict[str, Any] = {}
 
@@ -237,6 +240,9 @@ def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, 
 
     # P02 C2: collect active GRINDING rows for single-row numeric projection
     grinding_active_rows: List[Mapping[str, Any]] = []
+
+    # P03 C2: collect active OBJECT_DROP rows for single-row numeric projection
+    object_drop_active_rows: List[Mapping[str, Any]] = []
 
     for row in rows or ():
         for key, val in project_work_row(row).items():
@@ -260,6 +266,10 @@ def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, 
         # P02 C2: track active GRINDING rows
         if row.get("active") is True and row.get("work_type") == "GRINDING":
             grinding_active_rows.append(row)
+
+        # P03 C2: track active OBJECT_DROP rows
+        if row.get("active") is True and row.get("work_type") == "OBJECT_DROP":
+            object_drop_active_rows.append(row)
 
     # A01b final decision (applies only when TRUE-union did not already set True)
     if a01b_any_true:
@@ -293,5 +303,18 @@ def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, 
             and _d >= 0
         ):
             out["grinding_wheel_diameter_cm"] = _d
+
+    # P03 C2: object_drop_height_m — exactly 1 active OBJECT_DROP row required.
+    # 2+ rows → absent (no MAX/MIN/latest; same-entity cannot be proven across rows).
+    # Missing/invalid height → absent. 0 is a valid distinct value.
+    if len(object_drop_active_rows) == 1:
+        _h = _attrs(object_drop_active_rows[0]).get("height_m")
+        if (
+            isinstance(_h, (int, float))
+            and not isinstance(_h, bool)
+            and math.isfinite(_h)
+            and _h >= 0
+        ):
+            out["object_drop_height_m"] = _h
 
     return out
