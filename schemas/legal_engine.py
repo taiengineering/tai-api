@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
+import math
+
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 
 class DiagnoseStep1Body(BaseModel):
@@ -81,6 +83,32 @@ class SafeIndustrialConsumerInput(BaseModel):
     has_manual_heavy_handling: Optional[bool] = None
     manual_handling_weight_kg: Optional[float] = None
 
+    @field_validator("work_height_m", "truck_loading_height_m", "manual_handling_weight_kg")
+    @classmethod
+    def _non_negative_finite(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None:
+            if not math.isfinite(v):
+                raise ValueError(f"유효하지 않은 수치입니다: {v!r}")
+            if v < 0:
+                raise ValueError(f"음수 입력 불가: {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def _parent_detail_consistency(self) -> "SafeIndustrialConsumerInput":
+        htlu = self.has_truck_loading_unloading
+        tlh = self.truck_loading_height_m
+        if htlu is None and tlh is not None:
+            raise ValueError("truck_loading_height_m 제공 시 has_truck_loading_unloading 필요")
+        if htlu is False and tlh is not None:
+            raise ValueError("has_truck_loading_unloading=false이고 truck_loading_height_m 제공됨")
+        hmhh = self.has_manual_heavy_handling
+        mhwk = self.manual_handling_weight_kg
+        if hmhh is None and mhwk is not None:
+            raise ValueError("manual_handling_weight_kg 제공 시 has_manual_heavy_handling 필요")
+        if hmhh is False and mhwk is not None:
+            raise ValueError("has_manual_heavy_handling=false이고 manual_handling_weight_kg 제공됨")
+        return self
+
 
 class SafeIndustrialLegBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -154,6 +182,32 @@ class SafeConstructionConsumerInput(BaseModel):
     recontracts_received_construction_work: Optional[bool] = None
     # PATCH-C: strict int >= 0; bool/float/string coercion forbidden (matches LEG contract.py).
     same_site_contracted_construction_work_count: Optional[Annotated[StrictInt, Field(ge=0)]] = None
+
+    @field_validator("work_height_m", "truck_loading_height_m", "manual_handling_weight_kg")
+    @classmethod
+    def _non_negative_finite(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None:
+            if not math.isfinite(v):
+                raise ValueError(f"유효하지 않은 수치입니다: {v!r}")
+            if v < 0:
+                raise ValueError(f"음수 입력 불가: {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def _parent_detail_consistency(self) -> "SafeConstructionConsumerInput":
+        htlu = self.has_truck_loading_unloading
+        tlh = self.truck_loading_height_m
+        if htlu is None and tlh is not None:
+            raise ValueError("truck_loading_height_m 제공 시 has_truck_loading_unloading 필요")
+        if htlu is False and tlh is not None:
+            raise ValueError("has_truck_loading_unloading=false이고 truck_loading_height_m 제공됨")
+        hmhh = self.has_manual_heavy_handling
+        mhwk = self.manual_handling_weight_kg
+        if hmhh is None and mhwk is not None:
+            raise ValueError("manual_handling_weight_kg 제공 시 has_manual_heavy_handling 필요")
+        if hmhh is False and mhwk is not None:
+            raise ValueError("has_manual_heavy_handling=false이고 manual_handling_weight_kg 제공됨")
+        return self
 
 
 class SafeConstructionLegBody(BaseModel):
@@ -238,6 +292,32 @@ class SafeBuildingConsumerInput(BaseModel):
     has_wet_land: Optional[bool] = None
     has_water_seepage_risk: Optional[bool] = None
     has_landfill_or_similar_ground: Optional[bool] = None
+
+    @field_validator("work_height_m", "truck_loading_height_m", "manual_handling_weight_kg")
+    @classmethod
+    def _non_negative_finite(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None:
+            if not math.isfinite(v):
+                raise ValueError(f"유효하지 않은 수치입니다: {v!r}")
+            if v < 0:
+                raise ValueError(f"음수 입력 불가: {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def _parent_detail_consistency(self) -> "SafeBuildingConsumerInput":
+        htlu = self.has_truck_loading_unloading
+        tlh = self.truck_loading_height_m
+        if htlu is None and tlh is not None:
+            raise ValueError("truck_loading_height_m 제공 시 has_truck_loading_unloading 필요")
+        if htlu is False and tlh is not None:
+            raise ValueError("has_truck_loading_unloading=false이고 truck_loading_height_m 제공됨")
+        hmhh = self.has_manual_heavy_handling
+        mhwk = self.manual_handling_weight_kg
+        if hmhh is None and mhwk is not None:
+            raise ValueError("manual_handling_weight_kg 제공 시 has_manual_heavy_handling 필요")
+        if hmhh is False and mhwk is not None:
+            raise ValueError("has_manual_heavy_handling=false이고 manual_handling_weight_kg 제공됨")
+        return self
 
 
 class SafeBuildingLegBody(BaseModel):
