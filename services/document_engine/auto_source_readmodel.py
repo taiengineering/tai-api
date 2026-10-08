@@ -1,22 +1,31 @@
-"""AUTO-REUSE-01: AUTO_SOURCE document discovery read model.
+"""AUTO-REUSE-01 CORR-001: AUTO_SOURCE document discovery read model.
 
-Queries completed Inspection and TBM records and builds unified list items.
 Read-only. Zero persistence. Reuses existing scope/resolver patterns.
 
+CORR-001 changes (vs initial implementation):
+  - Inspection scope routes through work_schedules (safety_inspections has no company_id)
+  - Effective status determined by resolve_inspection_record() — raw status is candidate-only
+  - Candidate set expanded to include IN_PROGRESS
+  - Preview/PDF validators (require_auto_inspection_ready / require_auto_tbm_ready)
+    live in document_engine_api.py (HTTP layer, not here)
+
 Sources:
-  INSPECTION → safety_inspections.status_code IN ('COMPLETED','ISSUE','HOLD','completed')
-               joined with work_schedules for summary/company_id
+  INSPECTION → safety_inspections (candidate: status_code IN candidates)
+               scoped via work_schedules.company_id/factory_id through assignment_id
+               effective: resolve_inspection_record() → is_active=True, inspection_status=COMPLETED
   TBM        → tbm_meetings.status_code = 'COMPLETED'
+               scoped via tbm_meetings.company_id/factory_id directly
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
 from services.company_scope import DENY, ScopeFilter, apply_scoped_filter
+from services.inspection_record_resolver import InspectionRecordError, resolve_inspection_record
 
-
-# Raw status values that represent a terminal "completed" inspection
-_INSP_TERMINAL_STATUSES = ("COMPLETED", "ISSUE", "HOLD", "completed")
+# Raw status values used as candidate narrowing only — NOT final authority.
+# IN_PROGRESS is included because journal can produce effective COMPLETED from raw IN_PROGRESS.
+_INSP_CANDIDATE_STATUSES = ("COMPLETED", "ISSUE", "HOLD", "completed", "IN_PROGRESS")
 
 
 def _build_insp_document_key(inspection_id: str) -> str:
@@ -82,7 +91,7 @@ def list_auto_documents(
     """Build unified AUTO document list.
 
     Returns {"items": [...], "total": int, "page": int, "page_size": int, "total_pages": int}
-    Zero DB writes.
+    Zero DB writes. V1 cap: 500 rows/source before pagination.
     """
     if scope_filter is DENY:
         return {"items": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
@@ -95,7 +104,6 @@ def list_auto_documents(
     if source_type in ("ALL", "TBM"):
         items.extend(_fetch_tbm(sb, scope_filter, factory_id=factory_id))
 
-    # Unified sort: occurred_at DESC, then source_type, source_id for stability
     items.sort(
         key=lambda x: (
             x.get("occurred_at") or "",
@@ -119,25 +127,69 @@ def list_auto_documents(
     }
 
 
+def _fetch_inspection_assignment_ids(
+    sb: Any,
+    scope_filter: ScopeFilter,
+) -> Optional[List[str]]:
+    """Return allowed assignment_ids from work_schedules, or None meaning no restriction.
+
+    safety_inspections has no company_id — tenant scope routes through
+    work_schedules.company_id/factory_id via the assignment_id FK.
+
+    Returns:
+        None  — ALL tier (scope_filter = {}), no tenant restriction
+        []    — scope has no matching work_schedules → caller must return empty
+        [ids] — list of assignment_ids the tenant is allowed to see
+    """
+    if not scope_filter:  # {} = ALL tier
+        return None
+    q = sb.table("work_schedules").select("id")
+    q = apply_scoped_filter(q, scope_filter)
+    if q is None:
+        return []
+    res = q.limit(1000).execute()
+    return [r["id"] for r in (res.data or []) if r.get("id")]
+
+
 def _fetch_inspections(
     sb: Any,
     scope_filter: ScopeFilter,
     factory_id: Optional[str] = None,
 ) -> List[dict]:
+    """Fetch effectively-COMPLETED inspections via scope + resolver.
+
+    Scope: routed through work_schedules (safety_inspections has no company_id column).
+    Final inclusion: resolve_inspection_record() is_active=True + inspection_status=COMPLETED.
+    Raw status is candidate narrowing only.
+    """
+    assignment_ids = _fetch_inspection_assignment_ids(sb, scope_filter)
+    if assignment_ids is not None and not assignment_ids:
+        return []  # scope has no matching work_schedules
+
     q = (
         sb.table("safety_inspections")
         .select(
-            "id, inspection_date, status_code, factory_id, "
+            "id, inspection_date, status_code, factory_id, assignment_id, "
             "work_schedules!assignment_id(summary, company_id, factory_id)"
         )
-        .in_("status_code", list(_INSP_TERMINAL_STATUSES))
+        .in_("status_code", list(_INSP_CANDIDATE_STATUSES))
     )
-    q = apply_scoped_filter(q, scope_filter)
+    if assignment_ids is not None:
+        q = q.in_("assignment_id", assignment_ids)
     if factory_id:
         q = q.eq("factory_id", factory_id)
-    # Limit to avoid unbounded table scan (caller applies page-level slicing)
     res = q.order("inspection_date", desc=True).limit(500).execute()
-    return [_insp_item(r) for r in (res.data or [])]
+    candidates = res.data or []
+
+    result = []
+    for row in candidates:
+        try:
+            effective = resolve_inspection_record(row["id"], sb)
+            if effective.get("is_active") and effective.get("inspection_status") == "COMPLETED":
+                result.append(_insp_item(row))
+        except (InspectionRecordError, Exception):
+            pass  # resolver error → exclude (fail-closed)
+    return result
 
 
 def _fetch_tbm(
@@ -151,6 +203,8 @@ def _fetch_tbm(
         .eq("status_code", "COMPLETED")
     )
     q = apply_scoped_filter(q, scope_filter)
+    if q is None:
+        return []
     if factory_id:
         q = q.eq("factory_id", factory_id)
     res = q.order("work_date", desc=True).limit(500).execute()

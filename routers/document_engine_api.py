@@ -23,7 +23,7 @@ v1.3.0 (OBJ02-C2A-CORR-14): Full runtime authorization — all document instance
 """
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import HTMLResponse, Response
-from typing import Optional
+from typing import Any, Optional
 from schemas.document_engine import (
     DocumentCreateIn,
     DocumentUpdateIn,
@@ -38,6 +38,7 @@ from services.document_engine.catalog_resolver import resolve_catalog_runtime_sc
 from services.document_engine.renderer import html_to_pdf as _html_to_pdf
 from services.document_engine.generator import render_html as _render_html, render_pdf as _render_pdf
 from services.document_engine.auto_source_readmodel import list_auto_documents
+from services.inspection_record_resolver import InspectionRecordError, resolve_inspection_record
 from routers.auth import get_current_user
 from routers.inspection_checklist import _ensure_inspection_own
 from routers.tbm import _ensure_tbm_own
@@ -513,6 +514,32 @@ def get_catalog_runtime(doc_id: str):
 _AUTO_SOURCE_TYPES = {"ALL", "INSPECTION", "TBM"}
 
 
+def _require_auto_inspection_ready(sb: Any, inspection_id: str) -> None:
+    """Fail-closed: 404 if inspection is not effectively COMPLETED.
+
+    Reuses resolve_inspection_record() — no new status folding logic.
+    """
+    try:
+        effective = resolve_inspection_record(inspection_id, sb)
+    except (InspectionRecordError, Exception):
+        raise HTTPException(404, "AUTO_DOCUMENT_NOT_READY")
+    if not (effective.get("is_active") and effective.get("inspection_status") == "COMPLETED"):
+        raise HTTPException(404, "AUTO_DOCUMENT_NOT_READY")
+
+
+def _require_auto_tbm_ready(sb: Any, tbm_id: str) -> None:
+    """Fail-closed: 404 if TBM is not COMPLETED."""
+    res = (
+        sb.table("tbm_meetings")
+        .select("status_code")
+        .eq("id", tbm_id)
+        .limit(1)
+        .execute()
+    )
+    if not res.data or res.data[0].get("status_code") != "COMPLETED":
+        raise HTTPException(404, "AUTO_DOCUMENT_NOT_READY")
+
+
 @router.get("/auto-documents")
 def list_auto_documents_endpoint(
     source_type: str = Query("ALL"),
@@ -560,6 +587,7 @@ async def auto_document_preview(
 
     if source_type == "INSPECTION":
         _ensure_inspection_own(sb, source_id, current)
+        _require_auto_inspection_ready(sb, source_id)
         try:
             html = await _render_html("INSP", {"inspection_id": source_id})
         except ValueError as e:
@@ -570,6 +598,7 @@ async def auto_document_preview(
 
     # TBM
     _ensure_tbm_own(sb, source_id, current)
+    _require_auto_tbm_ready(sb, source_id)
     try:
         html = await _render_html("TBM", {"meeting_id": source_id})
     except ValueError as e:
@@ -592,6 +621,7 @@ async def auto_document_pdf(
 
     if source_type == "INSPECTION":
         _ensure_inspection_own(sb, source_id, current)
+        _require_auto_inspection_ready(sb, source_id)
         try:
             pdf_bytes = await _render_pdf("INSP", {"inspection_id": source_id})
         except ValueError as e:
@@ -601,6 +631,7 @@ async def auto_document_pdf(
         filename = f"점검기록_{source_id[:8]}.pdf"
     else:
         _ensure_tbm_own(sb, source_id, current)
+        _require_auto_tbm_ready(sb, source_id)
         try:
             pdf_bytes = await _render_pdf("TBM", {"meeting_id": source_id})
         except ValueError as e:
