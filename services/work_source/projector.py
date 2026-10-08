@@ -123,7 +123,8 @@ def project_work_row(row: Mapping[str, Any]) -> Dict[str, bool]:
         # Each row = one scaffold + one activity; per-row evaluation preserves
         # same-entity binding. missing != false — omit absent keys.
         # Wave A1: has_scaffold emitted for any active SCAFFOLD row.
-        # scaffold_height_m projection is HOLD until C2 contract frozen.
+        # scaffold_height_m numeric projection is finalized in
+        # project_work_rows() under OBJ-P01 C2 contract.
         kind = attrs.get("scaffold_kind")
         out: Dict[str, bool] = {"has_scaffold": True}
 
