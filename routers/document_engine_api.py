@@ -47,6 +47,7 @@ from services.company_scope import (
     _ensure_own_company,
     _ensure_factory_own,
     _forced_company_id,
+    _tier,
     require_scope_ids,
     scoped_filter,
     apply_scoped_filter,
@@ -514,6 +515,57 @@ def get_catalog_runtime(doc_id: str):
 _AUTO_SOURCE_TYPES = {"ALL", "INSPECTION", "TBM"}
 
 
+def _ensure_auto_factory_scope(
+    sb: Any,
+    source_type: str,
+    source_id: str,
+    current: dict,
+) -> None:
+    """Factory-level isolation for AUTO document preview/pdf endpoints only.
+
+    Precondition: company-level check already passed via _ensure_*_own.
+    COMPANY / ALL / PLATFORM: pass through (company isolation sufficient per policy).
+    FACTORY / TEAM / ASSIGNED: require factory_id match. Fail-closed if resource
+    factory_id is unresolvable (None).
+
+    Does NOT modify _ensure_tbm_own or _ensure_inspection_own — zero regression
+    on existing TBM and Inspection operation APIs.
+    """
+    tier = _tier(sb, current.get("role_code"))
+    if tier in ("ALL", "PLATFORM", "COMPANY"):
+        return
+
+    if source_type == "TBM":
+        res = (
+            sb.table("tbm_meetings")
+            .select("factory_id")
+            .eq("id", source_id)
+            .limit(1)
+            .execute()
+        )
+        if not res.data:
+            raise HTTPException(404, "TBM을 찾을 수 없습니다.")
+        resource_fid = res.data[0].get("factory_id")
+        msg = "TBM을 찾을 수 없습니다."
+    else:  # INSPECTION
+        res = (
+            sb.table("safety_inspections")
+            .select("factory_id")
+            .eq("id", source_id)
+            .limit(1)
+            .execute()
+        )
+        if not res.data:
+            raise HTTPException(404, "점검 레코드를 찾을 수 없습니다.")
+        resource_fid = res.data[0].get("factory_id")
+        msg = "점검 레코드를 찾을 수 없습니다."
+
+    if resource_fid is None:
+        raise HTTPException(404, msg)  # fail-closed: factory unresolvable
+    if current.get("factory_id") != resource_fid:
+        raise HTTPException(404, msg)
+
+
 def _require_auto_inspection_ready(sb: Any, inspection_id: str) -> None:
     """Fail-closed: 404 if inspection is not effectively COMPLETED.
 
@@ -587,6 +639,7 @@ async def auto_document_preview(
 
     if source_type == "INSPECTION":
         _ensure_inspection_own(sb, source_id, current)
+        _ensure_auto_factory_scope(sb, "INSPECTION", source_id, current)
         _require_auto_inspection_ready(sb, source_id)
         try:
             html = await _render_html("INSP", {"inspection_id": source_id})
@@ -598,6 +651,7 @@ async def auto_document_preview(
 
     # TBM
     _ensure_tbm_own(sb, source_id, current)
+    _ensure_auto_factory_scope(sb, "TBM", source_id, current)
     _require_auto_tbm_ready(sb, source_id)
     try:
         html = await _render_html("TBM", {"meeting_id": source_id})
@@ -621,6 +675,7 @@ async def auto_document_pdf(
 
     if source_type == "INSPECTION":
         _ensure_inspection_own(sb, source_id, current)
+        _ensure_auto_factory_scope(sb, "INSPECTION", source_id, current)
         _require_auto_inspection_ready(sb, source_id)
         try:
             pdf_bytes = await _render_pdf("INSP", {"inspection_id": source_id})
@@ -631,6 +686,7 @@ async def auto_document_pdf(
         filename = f"점검기록_{source_id[:8]}.pdf"
     else:
         _ensure_tbm_own(sb, source_id, current)
+        _ensure_auto_factory_scope(sb, "TBM", source_id, current)
         _require_auto_tbm_ready(sb, source_id)
         try:
             pdf_bytes = await _render_pdf("TBM", {"meeting_id": source_id})
