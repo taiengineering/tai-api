@@ -44,7 +44,7 @@ Consolidates *research* evidence in reports 03, 08–15. Report 13 had 81 entrie
 | 26 | 사업장 안전정보 문서관리·보존 | E0 | none yet | 문서 개정·배포·보존대장 (research only) | 별지 아닌 운영용 문서 독립 설계 | NOT_RESEARCHED |
 
 ## Coverage summary (method-specific)
-- 26 domains scanned; E2 explicit named form/webpage: 16; E1 workflow only: 5; E0 gap: 5. This **measures research quality, not completeness or legal coverage percentage**. All domains remain OPEN/NOT_RESEARCHED due to unverified original fields and rights.
+- 26 domains scanned; E2 explicit named form/webpage: 15; E1 workflow only: 6; E0 gap: 5. This **measures research quality, not completeness or legal coverage percentage**. All domains remain OPEN/NOT_RESEARCHED due to unverified original fields and rights.
 - Note: E2 attribution reflects *at least one* explicit form in broad family; it does not validate each listed candidate.
 - Source reports are **internal Git documentation** and must be followed to actual government/legal URL for claims.
 
