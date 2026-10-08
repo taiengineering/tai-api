@@ -66,7 +66,10 @@ CELL_PAD   = 3 * mm
 ROW_H_INFO = 7  * mm
 ROW_H_PLAN = 14 * mm
 ROW_H_SIGN = 15 * mm
-ROW_H_GOAL = 15 * mm
+ROW_H_GOAL = 20 * mm
+
+# Orphan control: continuation pages must have at least this many data rows
+MIN_ORPHAN_ROWS = 2
 
 # ─── Paragraph styles ─────────────────────────────────────────────────────────
 
@@ -189,19 +192,80 @@ def build_plan_table(fields, example_rows=None):
     style_cmds = list(_BASE) + [
         ('FONTNAME',   (0, 0), (-1, 0), 'NGBold'),
         ('BACKGROUND', (0, 0), (-1, 0), C_HEADER_BG),
-        ('ROWHEIGHT',  (0, 1), (-1, -1), ROW_H_PLAN),
         ('ALIGN',      (0, 0), (-1, 0), 'CENTER'),
     ]
     for i in range(1, len(rows)):
         if i % 2 == 0:
             style_cmds.append(('BACKGROUND', (0, i), (-1, i), C_ALT_BG))
 
+    # minRowHeights enforces 14mm floor on data rows (ReportLab 5: ROWHEIGHT style cmd unsupported)
+    n_data = len(rows) - 1
     return Table(
         rows,
         colWidths=COL_WIDTHS,
         style=TableStyle(style_cmds),
         repeatRows=1,
+        minRowHeights=[0] + [ROW_H_PLAN] * n_data,
     )
+
+# ─── Orphan-safe plan table builder ──────────────────────────────────────────
+
+def _build_plan_subtable(cols, data_rows):
+    """Build a plan Table with the given data rows (always includes header)."""
+    align_map = {'left': S_BODY, 'center': S_BODY_C, 'right': S_BODY_R}
+    header = [P(c['label'], S_HDR) for c in cols]
+    rows = [header]
+    for ri, row_data in enumerate(data_rows):
+        row = [P(str(row_data[i] or ''), align_map.get(cols[i].get('align', 'left'), S_BODY))
+               for i in range(len(cols))]
+        rows.append(row)
+    style_cmds = list(_BASE) + [
+        ('FONTNAME',   (0, 0), (-1, 0), 'NGBold'),
+        ('BACKGROUND', (0, 0), (-1, 0), C_HEADER_BG),
+        ('ALIGN',      (0, 0), (-1, 0), 'CENTER'),
+    ]
+    for i in range(1, len(rows)):
+        if i % 2 == 0:
+            style_cmds.append(('BACKGROUND', (0, i), (-1, i), C_ALT_BG))
+    n_data = len(rows) - 1
+    return Table(rows, colWidths=COL_WIDTHS, style=TableStyle(style_cmds), repeatRows=1,
+                 minRowHeights=[0] + [ROW_H_PLAN] * n_data)
+
+
+def _orphan_safe_plan_tables(fields, data_rows, avail_first_page):
+    """Return list of Table flowables with orphan control applied.
+
+    If a natural split leaves fewer than MIN_ORPHAN_ROWS data rows on the
+    first continuation page, one row is moved from the end of page-1 to
+    the beginning of page-2.
+    """
+    cols = fields['plan_table']['columns']
+    table = _build_plan_subtable(cols, data_rows)
+
+    w, table_h = table.wrap(CONTENT_W, avail_first_page)
+    if table_h <= avail_first_page:
+        return [table]  # all rows fit on page 1
+
+    parts = table.split(CONTENT_W, avail_first_page)
+    if len(parts) <= 1:
+        return parts
+
+    # Count data rows in the continuation (part[1] has a repeated header row)
+    try:
+        p2_data = len(parts[1]._rowHeights) - 1
+        p1_data = len(parts[0]._rowHeights) - 1
+    except AttributeError:
+        return parts  # cannot introspect, use natural split
+
+    if p2_data >= MIN_ORPHAN_ROWS or p1_data <= MIN_ORPHAN_ROWS:
+        return parts  # fine as-is
+
+    # Orphan detected: push one row from p1 to p2
+    split_at = p1_data - 1
+    t1 = _build_plan_subtable(cols, data_rows[:split_at])
+    t2 = _build_plan_subtable(cols, data_rows[split_at:])
+    return [t1, t2]
+
 
 # ─── Numbered Canvas (N / 전체 페이지) ────────────────────────────────────────
 
@@ -253,17 +317,37 @@ def generate(fields_path, out_path, example_rows=None):
         subject=meta['subject'],
     )
 
-    story = [
+    # Pre-plan elements (used for both height-measurement and story)
+    pre_plan = [
         build_title(fields),
         build_approval(fields),
         build_basic_info(fields),
         Spacer(1, 1 * mm),
         build_corporate_goal(fields),
         Spacer(1, 1 * mm),
-        build_plan_table(fields, example_rows),
-        Spacer(1, 2 * mm),
-        P(fields['plan_table'].get('extra_rows_note', ''), S_SMALL),
     ]
+
+    # Measure available height for the plan table on page 1
+    FRAME_H = PAGE_H - 2 * MARGIN - 12  # 12pt = 6pt top + 6pt bottom frame padding
+    overhead_h = sum(e.wrap(CONTENT_W, FRAME_H)[1] for e in pre_plan)
+    avail_for_plan = FRAME_H - overhead_h
+
+    # Fill data rows to default_row_count
+    n_default = fields['plan_table']['default_row_count']
+    data_rows = list(example_rows) if example_rows else []
+    while len(data_rows) < n_default:
+        data_rows.append([''] * len(fields['plan_table']['columns']))
+
+    plan_flowables = _orphan_safe_plan_tables(fields, data_rows, avail_for_plan)
+
+    story = (
+        pre_plan
+        + plan_flowables
+        + [
+            Spacer(1, 2 * mm),
+            P(fields['plan_table'].get('extra_rows_note', ''), S_SMALL),
+        ]
+    )
 
     doc.build(story, canvasmaker=NumberedCanvas)
     size_kb = os.path.getsize(out_path) / 1024
@@ -294,6 +378,11 @@ MULTIPAGE_ROWS = EXAMPLE_ROWS + [
     ["PSM 정기 감사",                    "연 1회",            "지적 사항 0건",      "안전관리팀", "200", ""],
     ["이상 징후 신고 체계 운영",         "연간",              "신고율 증가",        "안전관리팀",  "30", ""],
     ["안전보건경영시스템 인증 유지",     "연 1회 갱신",       "인증 유지",          "안전관리팀", "500", ""],
+]
+
+# 11행: orphan prevention 검증용 (10+1 → 9+2 자동 조정)
+ORPHAN_TEST_ROWS = EXAMPLE_ROWS + [
+    ["안전 목표 달성률 보고", "연 1회", "보고 완료", "안전관리팀", "0", ""],
 ]
 
 # 30행: 3페이지 분할 검증용
@@ -327,6 +416,8 @@ if __name__ == '__main__':
         generate(fields_path, out_dir / 'TAI-FORM-C002-blank.pdf')
     if mode in ('example', 'all'):
         generate(fields_path, out_dir / 'TAI-FORM-C002-example.pdf', EXAMPLE_ROWS)
+    if mode in ('orphantest', 'all'):
+        generate(fields_path, out_dir / 'TAI-FORM-C002-orphantest.pdf', ORPHAN_TEST_ROWS)
     if mode in ('multipage', 'all'):
         generate(fields_path, out_dir / 'TAI-FORM-C002-multipage.pdf', MULTIPAGE_ROWS)
     if mode in ('longpage', 'all'):
