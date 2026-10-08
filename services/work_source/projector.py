@@ -101,8 +101,8 @@ def project_work_row(row: Mapping[str, Any]) -> Dict[str, bool]:
         return {}
 
     if work_type == "GRINDING":
-        # Wave A1. Numeric wheel_diameter_cm is captured in attributes for replay only;
-        # grinding_wheel_diameter_cm projection is HOLD until C2 contract frozen.
+        # Wave A1. Numeric wheel_diameter_cm captured in attributes for replay only.
+        # grinding_wheel_diameter_cm multi-row numeric projection handled in project_work_rows().
         return {"has_grinding": True}
 
     if work_type == "DIVING":
@@ -221,6 +221,9 @@ def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, 
 
     scaffold_height_m (P01 C2): single active SCAFFOLD row numeric projection.
     Multiple active SCAFFOLD rows → scaffold_height_m absent (no aggregation).
+
+    grinding_wheel_diameter_cm (P02 C2): single active GRINDING row numeric projection.
+    Multiple active GRINDING rows → grinding_wheel_diameter_cm absent (no aggregation).
     """
     out: Dict[str, Any] = {}
 
@@ -231,6 +234,9 @@ def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, 
 
     # P01 C2: collect active SCAFFOLD rows for single-row numeric projection
     scaffold_active_rows: List[Mapping[str, Any]] = []
+
+    # P02 C2: collect active GRINDING rows for single-row numeric projection
+    grinding_active_rows: List[Mapping[str, Any]] = []
 
     for row in rows or ():
         for key, val in project_work_row(row).items():
@@ -251,6 +257,10 @@ def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, 
         if row.get("active") is True and row.get("work_type") == "SCAFFOLD":
             scaffold_active_rows.append(row)
 
+        # P02 C2: track active GRINDING rows
+        if row.get("active") is True and row.get("work_type") == "GRINDING":
+            grinding_active_rows.append(row)
+
     # A01b final decision (applies only when TRUE-union did not already set True)
     if a01b_any_true:
         pass  # already set to True via TRUE-union above
@@ -270,5 +280,18 @@ def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, 
             and _h >= 0
         ):
             out["scaffold_height_m"] = _h
+
+    # P02 C2: grinding_wheel_diameter_cm — exactly 1 active GRINDING row required.
+    # 2+ rows → absent (no MAX/MIN/latest; same-entity cannot be proven across rows).
+    # Missing/invalid diameter → absent. 0 is a valid distinct value.
+    if len(grinding_active_rows) == 1:
+        _d = _attrs(grinding_active_rows[0]).get("wheel_diameter_cm")
+        if (
+            isinstance(_d, (int, float))
+            and not isinstance(_d, bool)
+            and math.isfinite(_d)
+            and _d >= 0
+        ):
+            out["grinding_wheel_diameter_cm"] = _d
 
     return out
