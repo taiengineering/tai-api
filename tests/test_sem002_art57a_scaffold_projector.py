@@ -225,7 +225,7 @@ def test_transport_projected_fact_reaches_build_facility():
             attributes={"is_dalbi": True, "height_m": 3},
         ),
     ]
-    assert project_work_rows(rows) == {"has_scaffold": True, CANON_FIELD: True}
+    assert project_work_rows(rows) == {"has_scaffold": True, CANON_FIELD: True, "scaffold_height_m": 3}
 
     # Merge projection into source facts, then run the existing generic
     # build_unified_leg_input → build_facility loop. No alias, no special-case.
