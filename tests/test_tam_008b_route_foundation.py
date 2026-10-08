@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import pathlib
 import threading
+import time
 import uuid
 
 import psycopg2
@@ -1189,3 +1190,307 @@ def test_r10_no_deadlock_concurrent_different_routes(pg):
     )
     assert len(errors) == 0, f"Unexpected errors: {errors}"
     assert len(results) == 2, f"Expected 2 successes, got {results}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# C01 — create_step blocked by concurrent route+version lock (timing proof)
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_c01_create_step_blocked_by_lock(pg):
+    """R2 C01: create_step blocks >= 0.3s while a concurrent connection holds
+    route+version lock (simulating publish_version in-progress).
+    Proves locking genuinely prevents concurrent step creation."""
+    from services.tam.routes_svc import create_route, create_version, create_step
+
+    route = create_route(USER_A, company_id=CO_A, route_scope="DOCUMENT_TYPE",
+                         scope_key="C01", display_name="C01-Route", dsn=_DSN)
+    ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+
+    gate_held = threading.Event()
+    b_elapsed: list = []
+
+    def _lock_holder():
+        conn_a = psycopg2.connect(_DSN)
+        conn_a.autocommit = False
+        cur_a = conn_a.cursor()
+        cur_a.execute(
+            "SELECT route_id FROM tam_approval_routes WHERE route_id = %s FOR UPDATE",
+            (route["route_id"],))
+        cur_a.execute(
+            "SELECT version_id FROM tam_approval_route_versions WHERE version_id = %s FOR UPDATE",
+            (ver["version_id"],))
+        gate_held.set()
+        time.sleep(0.4)
+        conn_a.rollback()
+        conn_a.close()
+
+    def _step_creator():
+        gate_held.wait()
+        t0 = time.monotonic()
+        try:
+            create_step(USER_A, version_id=ver["version_id"],
+                        step_order=1, step_name="C01-Step", step_type="SEQUENTIAL",
+                        dsn=_DSN)
+        except Exception:
+            pass
+        finally:
+            b_elapsed.append(time.monotonic() - t0)
+
+    t_a = threading.Thread(target=_lock_holder)
+    t_b = threading.Thread(target=_step_creator)
+    t_a.start()
+    t_b.start()
+    t_a.join()
+    t_b.join(timeout=10)
+
+    assert not t_b.is_alive(), "C01: create_step thread did not complete (deadlock?)"
+    assert b_elapsed and b_elapsed[0] >= 0.3, (
+        f"C01: create_step was not blocked by lock (elapsed={b_elapsed[0]:.3f}s < 0.3s)"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# C02 — create_assignee blocked by concurrent route+version lock (timing proof)
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_c02_create_assignee_blocked_by_lock(pg):
+    """R2 C02: create_assignee blocks >= 0.3s while a concurrent connection holds
+    route+version lock. Proves assignee mutation is serialized behind the lock."""
+    from services.tam.routes_svc import create_route, create_version, create_step
+
+    route = create_route(USER_A, company_id=CO_A, route_scope="DOCUMENT_TYPE",
+                         scope_key="C02", display_name="C02-Route", dsn=_DSN)
+    ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+    step  = create_step(USER_A, version_id=ver["version_id"],
+                        step_order=1, step_name="C02-Step", step_type="SEQUENTIAL",
+                        dsn=_DSN)
+
+    gate_held = threading.Event()
+    b_elapsed: list = []
+
+    def _lock_holder():
+        conn_a = psycopg2.connect(_DSN)
+        conn_a.autocommit = False
+        cur_a = conn_a.cursor()
+        cur_a.execute(
+            "SELECT route_id FROM tam_approval_routes WHERE route_id = %s FOR UPDATE",
+            (route["route_id"],))
+        cur_a.execute(
+            "SELECT version_id FROM tam_approval_route_versions WHERE version_id = %s FOR UPDATE",
+            (ver["version_id"],))
+        gate_held.set()
+        time.sleep(0.4)
+        conn_a.rollback()
+        conn_a.close()
+
+    def _assignee_creator():
+        from services.tam.routes_svc import create_assignee
+        gate_held.wait()
+        t0 = time.monotonic()
+        try:
+            create_assignee(USER_A, step_id=step["step_id"], user_id=U2, dsn=_DSN)
+        except Exception:
+            pass
+        finally:
+            b_elapsed.append(time.monotonic() - t0)
+
+    t_a = threading.Thread(target=_lock_holder)
+    t_b = threading.Thread(target=_assignee_creator)
+    t_a.start()
+    t_b.start()
+    t_a.join()
+    t_b.join(timeout=10)
+
+    assert not t_b.is_alive(), "C02: create_assignee thread did not complete (deadlock?)"
+    assert b_elapsed and b_elapsed[0] >= 0.3, (
+        f"C02: create_assignee was not blocked by lock (elapsed={b_elapsed[0]:.3f}s < 0.3s)"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# C03 — Direct SQL step INSERT blocked by trigger's version FOR UPDATE (timing proof)
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_c03_direct_sql_step_insert_blocked_by_trigger_version_lock(pg):
+    """R2 C03: Trigger 3 FOR UPDATE on version row blocks a concurrent direct-SQL INSERT.
+    Thread A holds version lock only; Thread B's INSERT trigger blocks >= 0.3s then
+    succeeds after Thread A rolls back (version stays DRAFT)."""
+    route = _make_route(pg)
+    ver   = _make_version(pg, route["route_id"])
+
+    gate_held = threading.Event()
+    b_elapsed: list = []
+    b_errors:  list = []
+
+    def _version_lock_holder():
+        conn_a = psycopg2.connect(_DSN)
+        conn_a.autocommit = False
+        cur_a = conn_a.cursor()
+        cur_a.execute(
+            "SELECT version_id FROM tam_approval_route_versions "
+            "WHERE version_id = %s FOR UPDATE",
+            (ver["version_id"],))
+        gate_held.set()
+        time.sleep(0.4)
+        conn_a.rollback()   # version stays DRAFT
+        conn_a.close()
+
+    def _direct_step_inserter():
+        conn_b = psycopg2.connect(_DSN)
+        conn_b.autocommit = False
+        cur_b = conn_b.cursor()
+        gate_held.wait()
+        t0 = time.monotonic()
+        try:
+            cur_b.execute(
+                """
+                INSERT INTO tam_approval_route_steps
+                    (version_id, step_order, step_name, step_type)
+                VALUES (%s, 1, 'C03-Step', 'SEQUENTIAL')
+                """,
+                (ver["version_id"],))
+            conn_b.commit()
+        except Exception as e:
+            b_errors.append(str(e))
+            conn_b.rollback()
+        finally:
+            b_elapsed.append(time.monotonic() - t0)
+            conn_b.close()
+
+    t_a = threading.Thread(target=_version_lock_holder)
+    t_b = threading.Thread(target=_direct_step_inserter)
+    t_a.start()
+    t_b.start()
+    t_a.join()
+    t_b.join(timeout=10)
+
+    assert not t_b.is_alive(), "C03: direct INSERT thread did not complete (deadlock?)"
+    assert not b_errors, f"C03: INSERT failed unexpectedly: {b_errors}"
+    assert b_elapsed and b_elapsed[0] >= 0.3, (
+        f"C03: direct INSERT was not blocked by trigger version lock "
+        f"(elapsed={b_elapsed[0]:.3f}s < 0.3s)"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# C04 — Trigger 3 OLD+NEW version check: sequential proof
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_c04_trigger_old_and_new_version_checks_sequential_proof(pg):
+    """R2 C04: Sequential proof that trigger 3 rejects both paths:
+      Path A — UPDATE step in PUBLISHED version (OLD.version_id=PUBLISHED)
+      Path B — Reassign step from DRAFT version to PUBLISHED version (NEW.version_id=PUBLISHED)
+    Both paths must raise psycopg2.Error with 'forbidden' or 'non-draft' message."""
+    route_pub = _make_route(pg, route_scope="COMPANY_DEFAULT", display_name="C04-Pub")
+    ver_pub   = _make_version(pg, route_pub["route_id"])
+    step_pub  = _make_step(pg, ver_pub["version_id"])
+    _make_assignee(pg, step_pub["step_id"])
+    _publish(pg, route_pub["route_id"], ver_pub["version_id"])
+
+    route_dra = _make_route(pg, route_scope="FACTORY_DEFAULT", factory_id=FAC1,
+                             display_name="C04-Dra")
+    ver_dra   = _make_version(pg, route_dra["route_id"])
+    step_dra  = _make_step(pg, ver_dra["version_id"])
+
+    cur = pg.cursor()
+
+    # Path A: UPDATE in PUBLISHED version (OLD side)
+    with pytest.raises(psycopg2.Error) as exc_a:
+        cur.execute(
+            "UPDATE tam_approval_route_steps SET step_name = 'tampered' WHERE step_id = %s",
+            (step_pub["step_id"],))
+        pg.commit()
+    pg.rollback()
+    msg_a = str(exc_a.value).lower()
+    assert "forbidden" in msg_a or "non-draft" in msg_a, (
+        f"C04 Path A: expected 'forbidden'/'non-draft', got {msg_a!r}")
+
+    # Path B: move DRAFT step into PUBLISHED version (NEW side)
+    with pytest.raises(psycopg2.Error) as exc_b:
+        cur.execute(
+            "UPDATE tam_approval_route_steps SET version_id = %s WHERE step_id = %s",
+            (ver_pub["version_id"], step_dra["step_id"]))
+        pg.commit()
+    pg.rollback()
+    msg_b = str(exc_b.value).lower()
+    assert "forbidden" in msg_b or "non-draft" in msg_b, (
+        f"C04 Path B: expected 'forbidden'/'non-draft', got {msg_b!r}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# C05 — 4 concurrent publishes on independent routes: no deadlock
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_c05_four_concurrent_publishes_no_deadlock(pg):
+    """R2 C05: lock ordering (route → version) prevents deadlock with 4 concurrent
+    publish_version calls on independent routes. All 4 must complete within 15s
+    without error."""
+    from services.tam.routes_svc import (create_route, create_version, create_step,
+                                          create_assignee, publish_version)
+
+    def _setup(scope_key: str):
+        route = create_route(USER_A, company_id=CO_A, route_scope="DOCUMENT_TYPE",
+                             scope_key=scope_key, display_name=f"C05-{scope_key}",
+                             dsn=_DSN)
+        ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+        step  = create_step(USER_A, version_id=ver["version_id"],
+                            step_order=1, step_name="S", step_type="SEQUENTIAL",
+                            dsn=_DSN)
+        create_assignee(USER_A, step_id=step["step_id"], user_id=U2, dsn=_DSN)
+        return route["route_id"], ver["version_id"]
+
+    pairs = [_setup(f"C05_R{i}") for i in range(1, 5)]
+
+    results: list = []
+    errors:  list = []
+    mu = threading.Lock()
+
+    def _pub(rid, vid):
+        try:
+            publish_version(USER_A, route_id=rid, version_id=vid, dsn=_DSN)
+            with mu:
+                results.append("ok")
+        except Exception as e:
+            with mu:
+                errors.append(str(e))
+
+    threads = [threading.Thread(target=_pub, args=(rid, vid)) for rid, vid in pairs]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    alive = [t.is_alive() for t in threads]
+    assert not any(alive), (
+        f"C05: Deadlock — {sum(alive)} thread(s) did not complete within 15s")
+    assert not errors, f"C05: Unexpected errors: {errors}"
+    assert len(results) == 4, f"C05: Expected 4 successes, got {results}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# R11 — FACTORY_SCOPE_NOT_FINALIZED: factory-scoped route blocks assignee
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_r11_factory_scoped_assignee_blocked(pg):
+    """R2: create_assignee raises FACTORY_SCOPE_NOT_FINALIZED for factory-scoped routes.
+    Fail-closed until OD-01 factory scope authorization contract is resolved."""
+    from services.tam.routes_svc import (create_route, create_version, create_step,
+                                          create_assignee, TamError)
+    route = create_route(USER_A, company_id=CO_A, factory_id=FAC1,
+                         route_scope="FACTORY_DEFAULT", display_name="R11-Route",
+                         dsn=_DSN)
+    ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+    step  = create_step(USER_A, version_id=ver["version_id"],
+                        step_order=1, step_name="S1", step_type="SEQUENTIAL",
+                        dsn=_DSN)
+
+    with pytest.raises(TamError) as exc:
+        create_assignee(USER_A, step_id=step["step_id"], user_id=U2, dsn=_DSN)
+    assert exc.value.http_status == 422
+    assert exc.value.code == "FACTORY_SCOPE_NOT_FINALIZED"

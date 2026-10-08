@@ -381,6 +381,10 @@ def create_assignee(
       - Route row locked (SELECT FOR UPDATE) before re-checking version status.
       - Assignee user_id validated against users table: must exist, be ACTIVE,
         and belong to the same company as the actor.
+    R2:
+      - Factory-scoped routes (factory_id IS NOT NULL) are fail-closed:
+        assignee designation raises FACTORY_SCOPE_NOT_FINALIZED until the
+        factory scope authorization contract is resolved (OD-01 owner decision).
     """
     actor_company = _user_company(user)
     actor_id = _user_id(user)
@@ -393,7 +397,7 @@ def create_assignee(
         # Tenant check via step → version → route chain (discover route_id; no lock yet)
         cur.execute(
             """
-            SELECT r.company_id, r.route_id, v.version_status
+            SELECT r.company_id, r.route_id, r.factory_id, v.version_status
               FROM tam_approval_route_steps    s
               JOIN tam_approval_route_versions v ON v.version_id = s.version_id
               JOIN tam_approval_routes         r ON r.route_id   = v.route_id
@@ -404,6 +408,14 @@ def create_assignee(
         row = cur.fetchone()
         if not row or str(row["company_id"]) != actor_company:
             raise TamError(404, "STEP_NOT_FOUND", "step not found")
+
+        # R2: fail-closed — factory-scoped routes require factory scope authorization
+        if row["factory_id"] is not None:
+            raise TamError(
+                422, "FACTORY_SCOPE_NOT_FINALIZED",
+                "assignee designation for factory-scoped routes requires factory scope "
+                "authorization (contract pending OD-01 owner decision)",
+            )
 
         # R1: lock route to serialize concurrent publish/assignee operations
         cur.execute(
