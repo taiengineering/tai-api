@@ -111,52 +111,31 @@ function buildTitle(fields) {
     });
 }
 
-// ─── Section: Approval (제목 아래 우측) ──────────────────────────────────────
+// ─── Section: Approval (제목 아래 우측, WO-057B Candidate B) ─────────────────
+// 독립 90mm 우측 정렬 테이블 — 중첩 없음, noBorder 없음
+// Google Docs 변환 시 제목 테이블과 병합되지 않도록 분리 단락과 함께 사용
 
 function buildApproval(fields) {
     const apprF = fields.approval.fields;
-
-    const innerRows = [
-        new TableRow({
-            height: { value: mm(7), rule: HeightRule.ATLEAST },
-            children: apprF.map(f => hdrCell(f.label, APPR_CELL_W, 6)),
-        }),
-        new TableRow({
-            height: { value: ROW_H_SIGN, rule: HeightRule.ATLEAST },
-            children: apprF.map(() => new TableCell({
-                width: { size: APPR_CELL_W, type: WidthType.DXA },
-                borders: border(6),
-                margins: CELL_MARGIN,
-                children: [new Paragraph({ children: [new TextRun({ text: '' })] })],
-            })),
-        }),
-    ];
-
-    const innerApproval = new Table({
-        width: { size: APPROVAL_W, type: WidthType.DXA },
-        layout: TableLayoutType.FIXED,
-        rows: innerRows,
-    });
-
     return new Table({
-        width: { size: CONTENT_W, type: WidthType.DXA },
-        layout: TableLayoutType.FIXED,
-        rows: [new TableRow({
-            children: [
-                new TableCell({
-                    width: { size: TITLE_W, type: WidthType.DXA },
-                    borders: noBorder(),
-                    margins: { top: 0, bottom: 0, left: 0, right: 0 },
+        width:     { size: APPROVAL_W, type: WidthType.DXA },
+        layout:    TableLayoutType.FIXED,
+        alignment: AlignmentType.RIGHT,
+        rows: [
+            new TableRow({
+                height: { value: mm(7), rule: HeightRule.ATLEAST },
+                children: apprF.map(f => hdrCell(f.label, APPR_CELL_W, 6)),
+            }),
+            new TableRow({
+                height: { value: ROW_H_SIGN, rule: HeightRule.ATLEAST },
+                children: apprF.map(() => new TableCell({
+                    width:   { size: APPR_CELL_W, type: WidthType.DXA },
+                    borders: border(6),
+                    margins: CELL_MARGIN,
                     children: [new Paragraph({ children: [new TextRun({ text: '' })] })],
-                }),
-                new TableCell({
-                    width: { size: APPROVAL_W, type: WidthType.DXA },
-                    borders: noBorder(),
-                    margins: { top: 0, bottom: 0, left: 0, right: 0 },
-                    children: [innerApproval],
-                }),
-            ],
-        })],
+                })),
+            }),
+        ],
     });
 }
 
@@ -279,6 +258,11 @@ function buildDoc(fields, exRows) {
         return new Paragraph({ children: [new TextRun({ text: '' })],
                                spacing: { before: 80, after: 80 } });
     }
+    // 제목↔결재란 사이 분리 단락: Google Docs 테이블 병합 방지 (WO-057B)
+    function spacer0() {
+        return new Paragraph({ children: [new TextRun({ text: '' })],
+                               spacing: { before: 0, after: 0 } });
+    }
 
     return new Document({
         creator:        meta.creator,
@@ -296,6 +280,7 @@ function buildDoc(fields, exRows) {
             footers: { default: buildFooter() },
             children: [
                 buildTitle(fields),
+                spacer0(),
                 buildApproval(fields),
                 spacer(),
                 buildBasicInfo(fields),
