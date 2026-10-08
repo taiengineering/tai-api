@@ -28,10 +28,10 @@ const APPR_CELL_W  = Math.round(APPROVAL_W / 3); // 30mm
 
 const COL_W = [56, 26, 22, 26, 22, 18].map(mm);  // F05-F10 (PATCH-1: F08 담당부서 20→26mm)
 
-const ROW_H_INFO = mm(8);
+const ROW_H_INFO = mm(7);   // WO-056: PDF 기준 7mm 통일
 const ROW_H_PLAN = mm(14);
 const ROW_H_SIGN = mm(15);
-const ROW_H_GOAL = mm(22);
+const ROW_H_GOAL = mm(20);  // WO-056: PDF 기준 20mm 통일
 const CELL_MARGIN = { top: mm(3), bottom: mm(3), left: mm(3), right: mm(3) };
 
 const HEADER_BG = 'E8E8E8';
@@ -96,7 +96,7 @@ function buildTitle(fields) {
         width: { size: CONTENT_W, type: WidthType.DXA },
         layout: TableLayoutType.FIXED,
         rows: [new TableRow({
-            height: { value: mm(14), rule: HeightRule.AT_LEAST },
+            height: { value: mm(14), rule: HeightRule.ATLEAST },
             children: [new TableCell({
                 width: { size: CONTENT_W, type: WidthType.DXA },
                 borders: border(4),
@@ -118,11 +118,11 @@ function buildApproval(fields) {
 
     const innerRows = [
         new TableRow({
-            height: { value: mm(7), rule: HeightRule.AT_LEAST },
+            height: { value: mm(7), rule: HeightRule.ATLEAST },
             children: apprF.map(f => hdrCell(f.label, APPR_CELL_W, 6)),
         }),
         new TableRow({
-            height: { value: ROW_H_SIGN, rule: HeightRule.AT_LEAST },
+            height: { value: ROW_H_SIGN, rule: HeightRule.ATLEAST },
             children: apprF.map(() => new TableCell({
                 width: { size: APPR_CELL_W, type: WidthType.DXA },
                 borders: border(6),
@@ -171,14 +171,14 @@ function buildBasicInfo(fields) {
         layout: TableLayoutType.FIXED,
         rows: [
             new TableRow({
-                height: { value: ROW_H_INFO, rule: HeightRule.AT_LEAST },
+                height: { value: ROW_H_INFO, rule: HeightRule.ATLEAST },
                 children: [
                     bodyCell(`${bi.N01.label}: `, half),
                     bodyCell(`${bi.N02.label}:      년     월     일`, half),
                 ],
             }),
             new TableRow({
-                height: { value: ROW_H_INFO, rule: HeightRule.AT_LEAST },
+                height: { value: ROW_H_INFO, rule: HeightRule.ATLEAST },
                 children: [
                     bodyCell(`${bi.N04.label}:      년`, half),
                     bodyCell(`${bi.N03.label}: `, half),
@@ -197,11 +197,11 @@ function buildCorporateGoal(fields) {
         layout: TableLayoutType.FIXED,
         rows: [
             new TableRow({
-                height: { value: mm(7), rule: HeightRule.AT_LEAST },
+                height: { value: mm(7), rule: HeightRule.ATLEAST },
                 children: [hdrCell(cg.label, CONTENT_W)],
             }),
             new TableRow({
-                height: { value: ROW_H_GOAL, rule: HeightRule.AT_LEAST },
+                height: { value: ROW_H_GOAL, rule: HeightRule.ATLEAST },
                 children: [new TableCell({
                     width: { size: CONTENT_W, type: WidthType.DXA },
                     borders: border(4),
@@ -229,7 +229,7 @@ function buildPlanTable(fields, exRows) {
 
     rows.push(new TableRow({
         tableHeader: true,
-        height: { value: mm(8), rule: HeightRule.AT_LEAST },
+        height: { value: mm(8), rule: HeightRule.ATLEAST },
         children: cols.map((c, i) => hdrCell(c.label, COL_W[i])),
     }));
 
@@ -239,7 +239,7 @@ function buildPlanTable(fields, exRows) {
     data.forEach((rowData, ri) => {
         const isAlt = (ri + 1) % 2 === 0;
         rows.push(new TableRow({
-            height: { value: ROW_H_PLAN, rule: HeightRule.AT_LEAST },
+            height: { value: ROW_H_PLAN, rule: HeightRule.ATLEAST },
             children: cols.map((c, i) => bodyCell(
                 rowData[i] || '',
                 COL_W[i],
