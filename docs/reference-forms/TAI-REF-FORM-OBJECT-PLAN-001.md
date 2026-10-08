@@ -14,7 +14,7 @@ Object는 독립적인 검증/완료 단위. 모든 객체는 PURPOSE, IN/OUT, I
 
 ## 1. Object 의존성
 ```text
-REF-00 기준선 → REF-01 안전관리 전업무 조사 → REF-02 중복/정규화
+REF-00 기준선 → REF-01 안전관리 전업무 조사 → REF-02 제공대상 목록/업무 분류 확정
                                             ├→ REF-03 항목·법령·권리 검증 ─┬→ REF-05 DB/RLS
                                             └→ REF-04 SEO/내용 계약 ────────┘
 REF-03 → REF-06 파일 포맷·공통디자인
@@ -32,10 +32,10 @@ PURPOSE 현재 소스/DB/인벤토리 현황을 재현 가능하게 기록. IN �
 PURPOSE 산업별 안전관리 업무의 문서 전수 후보 발굴. IN 공식부처/공단 및 실제 업무 프로세스 조사. OUT 문서 제작·법적 의무 추정. INPUT REF-00, 공공 자료. OUTPUT 업무 트리/문서명/사용시점/출처/추가 필요 자료. SoT 공식 출처와 업무 evidence. CONSUMER REF-02. DEPENDENCY REF-00. STATE BLOCKED. MUTATION 조사파일/docs. HARD BLOCK 특정 218종을 최종 고정. EXIT 업무영역별 coverage/근거/unknown 분리. EVIDENCE URL/확인일. OWNER GPT. ROLLBACK 후보 취소 사유 추적.
 
 ### OBJ-REF-02 — Canonicalization
-PURPOSE 기존 335 레코드+신규 조사 후보의 실무 의도 기준 정규화. IN 이름·필드·업무·사용주기 비교. OUT 이름 동일만으로 병합. INPUT REF-01. OUTPUT canonical ID, exact/alias/related/distinct/unknown verdict, legacy mapping. SoT DB 원본과 판단 evidence. CONSUMER REF-03/04. DEPENDENCY REF-01. STATE BLOCKED. MUTATION 연구 산출물. HARD BLOCK 무증거 중복 제거. EXIT 모든 인풋 처리 및 REVIEW_REQUIRED 계수. EVIDENCE 판정근거. OWNER GPT. ROLLBACK 원본 보존.
+PURPOSE 서식 제공 대상 전체 목록 및 업무·생애주기 분류 확정. IN 공식서식, 산업·업무별 실무문서 및 TAI 자동서식이 제공하는 업무유형(범위 확인용). OUT 기존 TAI DB 대조·중복 판정·기존 TAI 서식 복제. INPUT REF-01. OUTPUT 독립 참고서식 canonical ID, 분류, 제작 우선순위, 조사누락 목록. SoT 공식자료 및 독립 업무 조사 evidence. CONSUMER REF-03/04. DEPENDENCY REF-01. STATE BLOCKED. MUTATION 연구 산출물. HARD BLOCK 무증거 중복 제거. EXIT 서식제공 범위/문서별 업무 목적/미확인 항목을 기록. EVIDENCE 판정근거. OWNER GPT. ROLLBACK 원본 보존.
 
 ### OBJ-REF-03 — Field and rights contract
-PURPOSE 작성항목과 법령 필수성/저작권 게이트. IN 서식별 required/recommended/optional, 사용법, 원본 라이선스. OUT 법령 SoT 추측·저작권 미확인 재배포. INPUT REF-02+LEG/공식법령. OUTPUT field dictionary/source terms/review flags. SoT LEG 및 확인된 정부 자료. CONSUMER REF-05/06. DEPENDENCY REF-02. STATE BLOCKED. MUTATION docs only. HARD BLOCK 무검증 법적 강제성. EXIT 필드 근거와 권리유형 명시. EVIDENCE URL/날짜/법조항. OWNER GPT. ROLLBACK 변경이력.
+PURPOSE 기존 TAI 서식의 복제 없이 작성항목과 법령 필수성/저작권 게이트. IN 서식별 required/recommended/optional, 사용법, 원본 라이선스. OUT 법령 SoT 추측·저작권 미확인 재배포. INPUT REF-02+LEG/공식법령. OUTPUT field dictionary/source terms/review flags. SoT LEG 및 확인된 정부 자료. CONSUMER REF-05/06. DEPENDENCY REF-02. STATE BLOCKED. MUTATION docs only. HARD BLOCK 무검증 법적 강제성. EXIT 필드 근거와 권리유형 명시. EVIDENCE URL/날짜/법조항. OWNER GPT. ROLLBACK 변경이력.
 
 ### OBJ-REF-04 — SEO information contract
 PURPOSE 문서당 canonical/별칭/설명/FAQ/연관서식 정의. IN 검증 검색의도. OUT 키워드만 바꾼 중복페이지. INPUT REF-02. OUTPUT metadata draft + slug collision tests. SoT 승인된 canonical inventory. CONSUMER REF-05/09. DEPENDENCY REF-02. STATE BLOCKED. MUTATION docs only. HARD BLOCK 미검수 자동색인. EXIT 타이틀·내용 정합/유일성. EVIDENCE 검색의도·QA matrix. OWNER GPT. ROLLBACK 이전 승인 버전.
@@ -57,3 +57,9 @@ PURPOSE Owner 승인 자료만 자료실 공개, sitemap, canonical, 성과 측�
 
 ## 3. 첫 작업 지시: WO-REF-00-001
 이 계획서 Git 업로드와 독립확인 후 시작. SQL SELECT만 사용, repo 열람, 기존 엑셀 구조 검사. 3개 기존 테이블 레코드 재계수 및 key 필드 확인. 별도 CMS 테이블 존재 여부 확인. 결과를 docs/reference-forms/OBJ-REF-00-BASELINE.md로 증거화. 이후 REF-01 착수 여부 독립판정. 디비/코드/배포 mutation은 0. 완료하지 않은 체크는 완료 표시 금지.
+
+## Owner scope override — 2026-10-08 (effective immediately)
+- 기존 TAI DB의 335건 비교/매핑/중복제거를 중단한다. 이미 기록된 조사 01~05는 역사적 사실로만 유지하며 앞으로의 작업 게이트가 아니다.
+- OBJ-REF-02의 공식 명칭을 **독립 참고서식 제공 범위 및 업무분류 확정**으로 변경한다. 기존 DB와의 차이/중복 여부를 완료 기준으로 삼지 않는다.
+- TAI 자동서식으로 제공되는 업무 문서들도 독립 참고서식 범위에 포함한다. 자동서식 소스·양식을 복사하지 않고 공식 근거와 업무 목적에서 독립적으로 서식 구성/필드를 설계한다.
+- DOCX/HWPX/XLSX/PDF 개별 제작 및 SEO 계획은 유지한다. 공통 디자인은 인벤토리/필드 분석 뒤 시작한다.
