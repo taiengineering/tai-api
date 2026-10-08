@@ -1,13 +1,13 @@
-"""AUTO-REUSE-01 CORR-001: Auto document discovery tests.
+"""AUTO-REUSE-01 CORR-002: Auto document discovery tests.
 
 Backend contract:
   L1-L10: list_auto_documents() unit tests (mock DB + resolver)
   I1-I4:  identity / document_key format
   R1-R4:  render delegation (mock generator + validators mocked)
   M1-M3:  mutation guard (zero persistence assertions)
-  S1-S2:  scope / DENY guard
-  E1-E4:  effective status via resolver (raw status is candidate-only)
-  SC1-SC2: scope contract (no company_id on safety_inspections)
+  S1-S2:  DENY / base scope guard
+  E1-E5:  effective status via resolver (raw status is candidate-only; E5 = display field)
+  SC1-SC4: tenant/factory isolation (no company_id on safety_inspections)
   RR1-RR4: render readiness guard (IN_PROGRESS/DRAFT → blocked)
 """
 from __future__ import annotations
@@ -38,7 +38,7 @@ def _make_sb(insp_rows=None, tbm_rows=None, ws_rows=None, resolver_map=None):
     """
     insp_rows = insp_rows or []
     tbm_rows = tbm_rows or []
-    ws_rows = ws_rows if ws_rows is not None else [{"id": "ws-default"}]
+    ws_rows = ws_rows if ws_rows is not None else [{"id": "ws-default", "company_id": "co-1"}]
     resolver_map = resolver_map or {}
 
     class _FakeResult:
@@ -48,14 +48,21 @@ def _make_sb(insp_rows=None, tbm_rows=None, ws_rows=None, resolver_map=None):
 
     class _FakeQuery:
         def __init__(self, data):
-            self._data = data
+            self._data = list(data)
             self.eq_calls: Dict[str, Any] = {}
 
         def select(self, *a, **kw): return self
-        def in_(self, col, vals): return self
+
+        def in_(self, col, vals):
+            vals_set = set(vals)
+            self._data = [r for r in self._data if r.get(col) in vals_set]
+            return self
+
         def eq(self, col, val):
             self.eq_calls[col] = val
+            self._data = [r for r in self._data if r.get(col) == val]
             return self
+
         def order(self, *a, **kw): return self
         def limit(self, *a, **kw): return self
         def range(self, *a, **kw): return self
@@ -99,13 +106,13 @@ def _make_sb(insp_rows=None, tbm_rows=None, ws_rows=None, resolver_map=None):
     return _FakeSB()
 
 
-def _insp_row(id="insp-001", status="COMPLETED", factory_id="fac-1"):
+def _insp_row(id="insp-001", status="COMPLETED", factory_id="fac-1", assignment_id="ws-default"):
     return {
         "id": id,
         "status_code": status,
         "inspection_date": "2026-10-08T10:00:00+09:00",
         "factory_id": factory_id,
-        "assignment_id": "ws-default",
+        "assignment_id": assignment_id,
         "work_schedules": {"summary": "전기설비 정기점검", "company_id": "co-1", "factory_id": factory_id},
     }
 
@@ -331,7 +338,7 @@ def test_M3_no_auto_projection_selector_files_on_main():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# S: Scope / DENY guard
+# S: DENY / base scope guard
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_S1_deny_scope_returns_zero_items():
@@ -390,12 +397,7 @@ def test_E4_resolver_error_excluded_fail_closed():
     from services.inspection_record_resolver import InspectionRecordError
 
     row = _insp_row(id="insp-err", status="COMPLETED")
-    sb = _make_sb(
-        insp_rows=[row],
-        resolver_map={"insp-err": {"error": "INSPECTION_NOT_FOUND", "detail": ""}},
-    )
-    # The resolver_map entry with "error" key triggers InspectionRecordError in the real resolver.
-    # Simulate by patching resolve_inspection_record to raise.
+    sb = _make_sb(insp_rows=[row])
     with patch(
         "services.document_engine.auto_source_readmodel.resolve_inspection_record",
         side_effect=InspectionRecordError("INSPECTION_NOT_FOUND"),
@@ -404,18 +406,36 @@ def test_E4_resolver_error_excluded_fail_closed():
     assert result["total"] == 0
 
 
+def test_E5_source_status_reflects_effective_not_raw():
+    """raw=IN_PROGRESS, effective=COMPLETED → item.source_status must be COMPLETED (not IN_PROGRESS)."""
+    row = _insp_row(id="insp-ip2", status="IN_PROGRESS")
+    sb = _make_sb(
+        insp_rows=[row],
+        resolver_map={"insp-ip2": {"is_active": True, "inspection_status": "COMPLETED"}},
+    )
+    result = list_auto_documents(sb, {}, source_type="INSPECTION")
+
+    assert result["total"] == 1
+    item = result["items"][0]
+    assert item["source_status"] == "COMPLETED", (
+        f"source_status must reflect effective (COMPLETED) not raw (IN_PROGRESS); "
+        f"got {item['source_status']!r}"
+    )
+    assert item["source_status"] != "IN_PROGRESS"
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# SC: Scope contract — inspection scope via work_schedules, not company_id column
+# SC: Scope contract — tenant/factory isolation via work_schedules
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_SC1_company_scope_does_not_reference_safety_inspections_company_id():
-    """safety_inspections has no company_id column — must never use it in queries."""
+    """safety_inspections has no company_id column — must never be used in queries."""
+    insp = _insp_row(assignment_id="ws-1")
     sb = _make_sb(
-        insp_rows=[_insp_row()],
-        ws_rows=[{"id": "ws-1"}],  # non-empty so assignment_ids != []
+        insp_rows=[insp],
+        ws_rows=[{"id": "ws-1", "company_id": "co-1"}],
     )
     list_auto_documents(sb, {"company_id": "co-1"}, source_type="INSPECTION")
-    # The safety_inspections query must NOT have received .eq("company_id", ...)
     if sb._insp_query:
         assert "company_id" not in sb._insp_query.eq_calls, (
             "safety_inspections.company_id was referenced — column does not exist in schema"
@@ -425,12 +445,50 @@ def test_SC1_company_scope_does_not_reference_safety_inspections_company_id():
 def test_SC2_empty_work_schedules_in_scope_returns_no_inspections():
     """Company scope with no matching work_schedules → no inspections (cross-tenant guard)."""
     sb = _make_sb(
-        insp_rows=[_insp_row()],  # there ARE inspections in DB
-        ws_rows=[],  # but none belong to this tenant's scope
+        insp_rows=[_insp_row()],
+        ws_rows=[],
     )
     result = list_auto_documents(sb, {"company_id": "co-B"}, source_type="INSPECTION")
     assert result["items"] == []
     assert result["total"] == 0
+
+
+def test_SC3_company_a_cannot_see_company_b_inspections():
+    """Company isolation: scope=co-A → co-A visible, co-B invisible."""
+    insp_a = _insp_row(id="insp-A", assignment_id="ws-A")
+    insp_a["work_schedules"] = {"summary": "A 점검", "company_id": "co-A", "factory_id": "fac-1"}
+    insp_b = _insp_row(id="insp-B", assignment_id="ws-B")
+    insp_b["work_schedules"] = {"summary": "B 점검", "company_id": "co-B", "factory_id": "fac-2"}
+
+    ws_rows = [
+        {"id": "ws-A", "company_id": "co-A", "factory_id": "fac-1"},
+        {"id": "ws-B", "company_id": "co-B", "factory_id": "fac-2"},
+    ]
+    sb = _make_sb(insp_rows=[insp_a, insp_b], ws_rows=ws_rows)
+
+    result = list_auto_documents(sb, {"company_id": "co-A"}, source_type="INSPECTION")
+
+    assert result["total"] == 1
+    assert result["items"][0]["source_id"] == "insp-A"
+
+
+def test_SC4_factory_a_cannot_see_factory_b_inspections():
+    """Factory isolation: scope=fac-A → fac-A visible, fac-B invisible."""
+    insp_a = _insp_row(id="insp-fA", factory_id="fac-A", assignment_id="ws-fA")
+    insp_a["work_schedules"] = {"summary": "A공장 점검", "company_id": "co-1", "factory_id": "fac-A"}
+    insp_b = _insp_row(id="insp-fB", factory_id="fac-B", assignment_id="ws-fB")
+    insp_b["work_schedules"] = {"summary": "B공장 점검", "company_id": "co-1", "factory_id": "fac-B"}
+
+    ws_rows = [
+        {"id": "ws-fA", "company_id": "co-1", "factory_id": "fac-A"},
+        {"id": "ws-fB", "company_id": "co-1", "factory_id": "fac-B"},
+    ]
+    sb = _make_sb(insp_rows=[insp_a, insp_b], ws_rows=ws_rows)
+
+    result = list_auto_documents(sb, {"factory_id": "fac-A"}, source_type="INSPECTION")
+
+    assert result["total"] == 1
+    assert result["items"][0]["source_id"] == "insp-fA"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

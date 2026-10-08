@@ -1,18 +1,19 @@
-"""AUTO-REUSE-01 CORR-001: AUTO_SOURCE document discovery read model.
+"""AUTO-REUSE-01 CORR-002: AUTO_SOURCE document discovery read model.
 
 Read-only. Zero persistence. Reuses existing scope/resolver patterns.
 
-CORR-001 changes (vs initial implementation):
-  - Inspection scope routes through work_schedules (safety_inspections has no company_id)
-  - Effective status determined by resolve_inspection_record() — raw status is candidate-only
-  - Candidate set expanded to include IN_PROGRESS
-  - Preview/PDF validators (require_auto_inspection_ready / require_auto_tbm_ready)
-    live in document_engine_api.py (HTTP layer, not here)
+CORR-002 changes (vs CORR-001):
+  - _insp_item now takes effective record — source_status = effective.inspection_status
+    (raw status_code was being exposed; production counterexample: raw=IN_PROGRESS / effective=COMPLETED)
+  - Effective fields (inspection_date, factory_id, company_id) prefer resolver output, fall back to raw
+  - Resolver error handling: InspectionRecordError → fail-close exclude;
+    unexpected infrastructure errors propagate (don't silently drop hundreds of documents)
 
 Sources:
   INSPECTION → safety_inspections (candidate: status_code IN candidates)
                scoped via work_schedules.company_id/factory_id through assignment_id
                effective: resolve_inspection_record() → is_active=True, inspection_status=COMPLETED
+               item fields from effective record (not raw candidate row)
   TBM        → tbm_meetings.status_code = 'COMPLETED'
                scoped via tbm_meetings.company_id/factory_id directly
 """
@@ -36,14 +37,36 @@ def _build_tbm_document_key(meeting_id: str) -> str:
     return f"auto:v1:TBM:{meeting_id}:TBM:-"
 
 
-def _insp_item(row: dict) -> dict:
+def _insp_item(row: dict, effective: dict) -> dict:
+    """Build inspection AUTO document item.
+
+    source_status and other fields come from the effective resolved record.
+    Falls back to raw row fields if resolver did not provide them.
+    """
     ws = row.get("work_schedules") or {}
     title = ws.get("summary") or "점검 기록"
-    occurred = (
-        row.get("inspection_date")
+
+    # Prefer effective record values over raw candidate row
+    source_status = effective.get("inspection_status") or row.get("status_code") or "COMPLETED"
+    occurred_at = (
+        effective.get("inspection_date")
+        or row.get("inspection_date")
         or row.get("updated_at")
         or row.get("created_at")
     )
+    factory_id = (
+        effective.get("factory_id")
+        or row.get("factory_id")
+        or ws.get("factory_id")
+        or ""
+    )
+    company_id = (
+        effective.get("company_id")
+        or row.get("company_id")
+        or ws.get("company_id")
+        or ""
+    )
+
     return {
         "document_key": _build_insp_document_key(row["id"]),
         "channel": "AUTO_SOURCE",
@@ -51,10 +74,10 @@ def _insp_item(row: dict) -> dict:
         "source_id": str(row["id"]),
         "doc_type": "INSP",
         "title": title,
-        "occurred_at": occurred,
-        "source_status": row.get("status_code", "COMPLETED"),
-        "factory_id": str(row.get("factory_id") or ws.get("factory_id") or ""),
-        "company_id": str(row.get("company_id") or ws.get("company_id") or ""),
+        "occurred_at": occurred_at,
+        "source_status": source_status,
+        "factory_id": str(factory_id),
+        "company_id": str(company_id),
         "can_preview": True,
         "can_pdf": True,
     }
@@ -161,6 +184,7 @@ def _fetch_inspections(
     Scope: routed through work_schedules (safety_inspections has no company_id column).
     Final inclusion: resolve_inspection_record() is_active=True + inspection_status=COMPLETED.
     Raw status is candidate narrowing only.
+    Item fields use effective resolved values (not raw candidate row).
     """
     assignment_ids = _fetch_inspection_assignment_ids(sb, scope_filter)
     if assignment_ids is not None and not assignment_ids:
@@ -185,10 +209,11 @@ def _fetch_inspections(
     for row in candidates:
         try:
             effective = resolve_inspection_record(row["id"], sb)
-            if effective.get("is_active") and effective.get("inspection_status") == "COMPLETED":
-                result.append(_insp_item(row))
-        except (InspectionRecordError, Exception):
-            pass  # resolver error → exclude (fail-closed)
+        except InspectionRecordError:
+            continue  # known domain error → fail-close exclude
+        # Unexpected infrastructure/programming errors propagate — do not silently omit
+        if effective.get("is_active") and effective.get("inspection_status") == "COMPLETED":
+            result.append(_insp_item(row, effective))
     return result
 
 
