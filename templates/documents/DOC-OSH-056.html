@@ -15,7 +15,7 @@
     <div class="doc-company">{{ company_name }}</div>
     <div class="doc-facility">{{ factory_name }}{% if factory_address %} · {{ factory_address }}{% endif %}</div>
     <div class="doc-title">TBM(Tool Box Meeting) 기록</div>
-    <div class="doc-law">{{ law_ref }} · {{ doc_number }}</div>
+    {% if law_ref %}<div class="doc-law">{{ law_ref }}{% if doc_number %} · {{ doc_number }}{% endif %}</div>{% endif %}
   </div>
   <div class="doc-header-right">
     {% if company_logo %}
@@ -27,7 +27,7 @@
 
 <!-- ═══ 1. 기본 정보 ═══ -->
 <table class="info-table">
-  <tr><th>작업일자</th><td>{{ work_date }}</td><th>작업시간</th><td>{{ work_time }}</td></tr>
+  <tr><th>작업일자</th><td>{{ work_date | date_short }}</td><th>작업시간</th><td>{{ work_time }}</td></tr>
   <tr><th>작업장소</th><td>{{ work_location }}</td><th>공종</th><td>{{ work_type }}</td></tr>
   <tr><th>진행자</th><td>{{ conductor_name }}</td><th>참석인원</th><td>{{ attendee_count }}명</td></tr>
   <tr><th>작업내용</th><td colspan="3">{{ work_description }}</td></tr>
@@ -153,7 +153,7 @@
 
 <!-- ═══ 푸터 ═══ -->
 <div class="doc-footer">
-  <span>{{ company_name }} · {{ factory_name }} · {{ work_date }}</span>
+  <span>{{ company_name }} · {{ factory_name }} · {{ work_date | date_short }}</span>
   <span>Powered by TAI Safe</span>
 </div>
 

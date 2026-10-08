@@ -62,9 +62,9 @@ class InspectionFetcher(BaseFetcher):
         else:
             status_code = _STATUS_ALIAS.get(result_summary, result_summary)
 
-        # 2) 대상 설비 + factory_id (asset 경유)
+        # 2) 대상 설비 + factory_id (effective record 우선, asset fallback)
         asset: Dict[str, Any] = {}
-        factory_id = None
+        factory_id = record.get("factory_id")  # effective record authority
         asset_id = record.get("asset_id")
         if asset_id:
             try:
@@ -75,7 +75,8 @@ class InspectionFetcher(BaseFetcher):
                 )
                 if a.data:
                     asset = a.data[0]
-                    factory_id = asset.get("factory_id")
+                    if not factory_id:
+                        factory_id = asset.get("factory_id")
             except Exception as e:
                 log.warning("asset fetch 실패: %s", e)
 
@@ -119,10 +120,34 @@ class InspectionFetcher(BaseFetcher):
         raw_results = record.get("results") or []
         active = [e for e in raw_results if e.get("is_active") is True]
         active.sort(key=lambda e: (e.get("created_at") is None, e.get("created_at") or "", str(e.get("result_id"))))
+
+        # item_name fallback: result → inspection_set_items → "항목명 미등록"
+        # Only query IDs for results where item_name is absent (no N+1, deduped)
+        _item_ids = list(dict.fromkeys(
+            e["inspection_set_item_id"]
+            for e in active
+            if not e.get("item_name") and e.get("inspection_set_item_id")
+        ))
+        _item_name_map: Dict[str, str] = {}
+        if _item_ids:
+            try:
+                _r = sb.table("inspection_set_items").select("id, item_name").in_("id", _item_ids).execute()
+                _item_name_map = {
+                    row["id"]: row.get("item_name")
+                    for row in (_r.data or [])
+                    if row.get("id")
+                }
+            except Exception as exc:
+                log.warning("inspection_set_items fetch 실패: %s", exc)
+
         items = [
             {
                 "id": e.get("result_id"),
-                "item_name": e.get("item_name"),
+                "item_name": (
+                    e.get("item_name")
+                    or _item_name_map.get(e.get("inspection_set_item_id") or "")
+                    or "항목명 미등록"
+                ),
                 "result_code": e.get("result_code"),  # effective canonical (NORMAL/ABNORMAL/HOLD)
                 "note": e.get("note"),
                 "photo_urls": e.get("photo_urls"),

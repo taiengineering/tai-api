@@ -15,7 +15,7 @@
     <div class="doc-company">{{ company_name }}</div>
     <div class="doc-facility">{{ factory_name }}{% if factory_address %} · {{ factory_address }}{% endif %}</div>
     <div class="doc-title">안전점검일지</div>
-    <div class="doc-law">산업안전보건법 제38조</div>
+    {% if doc_law %}<div class="doc-law">{{ doc_law }}</div>{% endif %}
   </div>
   <div class="doc-header-right">
     {% if company_logo %}<img class="logo" src="{{ company_logo }}" alt="{{ company_name }}">{% endif %}
@@ -25,7 +25,7 @@
 
 <!-- ═══ 1. 기본 정보 ═══ -->
 <table class="info-table">
-  <tr><th>점검일자</th><td>{{ inspection_date }}</td><th>점검자</th><td>{{ inspector_name }}</td></tr>
+  <tr><th>점검일자</th><td>{{ inspection_date | date_short }}</td><th>점검자</th><td>{{ inspector_name }}</td></tr>
   <tr><th>점검대상</th><td>{{ asset_name or doc_title }}</td><th>위치</th><td>{{ asset_location }}</td></tr>
 </table>
 
@@ -46,12 +46,12 @@
   </thead>
   <tbody>
     {% for item in items %}
-    <tr{% if (item.result_code or '')|upper == 'ISSUE' %} class="issue-row"{% endif %}>
+    <tr{% if (item.result_code or '')|upper == 'ABNORMAL' %} class="issue-row"{% endif %}>
       <td class="num">{{ loop.index }}</td>
-      <td>{{ item.item_name }}</td>
+      <td>{{ item.item_name or '항목명 미등록' }}</td>
       <td class="c">
         {% set rc = (item.result_code or '')|upper %}
-        {% if rc == 'ISSUE' %}<span class="b b-r">이상</span>
+        {% if rc == 'ABNORMAL' %}<span class="b b-r">이상</span>
         {% elif rc == 'HOLD' %}<span class="b b-w">보류</span>
         {% elif rc == 'NORMAL' %}<span class="b b-g">정상</span>
         {% else %}<span class="b b-i">{{ item.result_code or '-' }}</span>{% endif %}
@@ -72,7 +72,7 @@
   <thead><tr><th style="width:26px">No</th><th>이상 항목</th><th>상세 내용</th></tr></thead>
   <tbody>
     {% for it in issue_items %}
-    <tr class="issue-row"><td class="num">{{ it.no }}</td><td>{{ it.item_name }}</td><td>{{ it.note or '' }}</td></tr>
+    <tr class="issue-row"><td class="num">{{ it.no }}</td><td>{{ it.item_name or '항목명 미등록' }}</td><td>{{ it.note or '' }}</td></tr>
     {% endfor %}
   </tbody>
 </table>
@@ -88,7 +88,7 @@
 
 <!-- ═══ 푸터 ═══ -->
 <div class="doc-footer">
-  <span>{{ company_name }} · {{ factory_name }} · {{ inspection_date }}</span>
+  <span>{{ company_name }} · {{ factory_name }} · {{ inspection_date | date_short }}</span>
   <span>Powered by TAI Safe</span>
 </div>
 

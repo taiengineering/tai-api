@@ -256,4 +256,6 @@ body {
 
 @media print {
   body { padding: 0; max-width: none; }
+  thead { display: table-header-group; }
+  .data-table tr, .sign-table tr { break-inside: avoid; }
 }
