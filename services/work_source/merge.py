@@ -19,7 +19,7 @@ class WorkSourceMergeConflict(ValueError):
 def merge_projected_into_facts(
     explicit: Mapping[str, Any],
     work_rows: Optional[Iterable[Mapping[str, Any]]] = None,
-    projected: Optional[Mapping[str, bool]] = None,
+    projected: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """Return (merged_facts, conflicts).
 
@@ -51,7 +51,7 @@ def merge_projected_into_facts(
 def merge_or_raise(
     explicit: Mapping[str, Any],
     work_rows: Optional[Sequence[Mapping[str, Any]]] = None,
-    projected: Optional[Mapping[str, bool]] = None,
+    projected: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     merged, conflicts = merge_projected_into_facts(
         explicit, work_rows=work_rows, projected=projected

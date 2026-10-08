@@ -5,7 +5,8 @@ SOURCE DATA != LEG CANONICAL FACT. missing != false (omit, do not emit false).
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Mapping, Optional
+import math
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 
 def _attrs(row: Mapping[str, Any]) -> Dict[str, Any]:
@@ -122,7 +123,8 @@ def project_work_row(row: Mapping[str, Any]) -> Dict[str, bool]:
         # Each row = one scaffold + one activity; per-row evaluation preserves
         # same-entity binding. missing != false — omit absent keys.
         # Wave A1: has_scaffold emitted for any active SCAFFOLD row.
-        # scaffold_height_m projection is HOLD until C2 contract frozen.
+        # scaffold_height_m numeric projection is finalized in
+        # project_work_rows() under OBJ-P01 C2 contract.
         kind = attrs.get("scaffold_kind")
         out: Dict[str, bool] = {"has_scaffold": True}
 
@@ -210,19 +212,25 @@ def project_work_row(row: Mapping[str, Any]) -> Dict[str, bool]:
     return {}
 
 
-def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, bool]:
+def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, Any]:
     """Union of projected facts. True stays True. Missing stays absent.
 
     performs_work_with_fall_risk (A01b) uses tri-state multi-row aggregation
     (LFR-013 §8-3): ANY explicit TRUE → TRUE; ALL relevant rows explicit FALSE → FALSE;
     mixed/missing/null → key ABSENT (UNKNOWN). Relevant = active HIGH_PLACE rows only.
+
+    scaffold_height_m (P01 C2): single active SCAFFOLD row numeric projection.
+    Multiple active SCAFFOLD rows → scaffold_height_m absent (no aggregation).
     """
-    out: Dict[str, bool] = {}
+    out: Dict[str, Any] = {}
 
     # A01b tri-state aggregation state (active HIGH_PLACE rows only)
     a01b_relevant_count = 0
     a01b_any_true = False
     a01b_explicit_false_count = 0
+
+    # P01 C2: collect active SCAFFOLD rows for single-row numeric projection
+    scaffold_active_rows: List[Mapping[str, Any]] = []
 
     for row in rows or ():
         for key, val in project_work_row(row).items():
@@ -239,11 +247,28 @@ def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, 
                 a01b_explicit_false_count += 1
             # else: missing/None/non-bool → unresolved, not counted as explicit FALSE
 
+        # P01 C2: track active SCAFFOLD rows
+        if row.get("active") is True and row.get("work_type") == "SCAFFOLD":
+            scaffold_active_rows.append(row)
+
     # A01b final decision (applies only when TRUE-union did not already set True)
     if a01b_any_true:
         pass  # already set to True via TRUE-union above
     elif a01b_relevant_count > 0 and a01b_explicit_false_count == a01b_relevant_count:
         out["performs_work_with_fall_risk"] = False
     # else: key absent (UNKNOWN) — 0 relevant rows, mixed, or all unresolved
+
+    # P01 C2: scaffold_height_m — exactly 1 active SCAFFOLD row required.
+    # 2+ rows → absent (no MAX/MIN/latest; scalar contract cannot prove same-entity).
+    # Missing/invalid height → absent. 0 is a valid distinct value.
+    if len(scaffold_active_rows) == 1:
+        _h = _attrs(scaffold_active_rows[0]).get("height_m")
+        if (
+            isinstance(_h, (int, float))
+            and not isinstance(_h, bool)
+            and math.isfinite(_h)
+            and _h >= 0
+        ):
+            out["scaffold_height_m"] = _h
 
     return out
