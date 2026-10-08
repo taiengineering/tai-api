@@ -86,7 +86,7 @@ def list_cases(
     leg = _get_leg_client()
     q = (
         leg.table("law_update_case")
-        .select(_LIST_SELECT)
+        .select(_LIST_SELECT, count="exact")
         .order("created_at", desc=True)
         .limit(limit)
         .offset(offset)
@@ -96,7 +96,8 @@ def list_cases(
     if law_id:
         q = q.eq("law_id", law_id)
     res = q.execute()
-    return {"status": "success", "data": res.data or [], "count": len(res.data or [])}
+    total = res.count if hasattr(res, "count") and res.count is not None else len(res.data or [])
+    return {"status": "success", "data": res.data or [], "count": total}
 
 
 @router.get("/{case_id}")

@@ -104,10 +104,22 @@ def notify_collected(
     try:
         from datetime import datetime, timezone
         now_iso = datetime.now(timezone.utc).isoformat()
-        leg_supabase.table("law_update_case").update({
-            "slack_collected_notified_at": now_iso,
-            "slack_collected_message_ts": ts,
-        }).eq("case_id", case_id).execute()
+        result = (
+            leg_supabase.table("law_update_case")
+            .update({
+                "slack_collected_notified_at": now_iso,
+                "slack_collected_message_ts": ts,
+            })
+            .eq("case_id", case_id)
+            .is_("slack_collected_notified_at", "null")
+            .execute()
+        )
+        # Supabase REST returns updated rows in result.data.
+        # Empty list means conditional WHERE IS NULL matched 0 rows — concurrent send raced us.
+        # The Slack message was already sent; log the race but do not overwrite the winner's record.
+        if hasattr(result, "data") and result.data is not None and len(result.data) == 0:
+            log.warning("Slack notify race for case %s: conditional UPDATE matched 0 rows", case_id)
+            return True, "SENT_RACE_DUPLICATE"
     except Exception as db_exc:
         log.warning("Slack DB update failed for case %s: %s", case_id, db_exc)
         return True, f"SENT_BUT_DB_UPDATE_FAILED: {db_exc}"
