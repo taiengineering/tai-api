@@ -521,7 +521,7 @@ def _require_auto_inspection_ready(sb: Any, inspection_id: str) -> None:
     """
     try:
         effective = resolve_inspection_record(inspection_id, sb)
-    except (InspectionRecordError, Exception):
+    except InspectionRecordError:
         raise HTTPException(404, "AUTO_DOCUMENT_NOT_READY")
     if not (effective.get("is_active") and effective.get("inspection_status") == "COMPLETED"):
         raise HTTPException(404, "AUTO_DOCUMENT_NOT_READY")

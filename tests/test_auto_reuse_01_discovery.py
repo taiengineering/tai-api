@@ -576,3 +576,35 @@ def test_RR4_draft_tbm_pdf_blocked():
                     asyncio.run(auto_document_pdf("TBM", "tbm-draft", {}))
                 assert exc_info.value.status_code == 404
                 mock_render.assert_not_called()
+
+
+def test_RR5_unexpected_resolver_error_propagates_preview():
+    """resolve_inspection_record raises RuntimeError → propagates (not 404), generator NOT called."""
+    from routers.document_engine_api import auto_document_preview
+
+    with patch("routers.document_engine_api._render_html", new_callable=AsyncMock) as mock_render:
+        with patch("routers.document_engine_api._ensure_inspection_own"):
+            with patch("routers.document_engine_api.get_supabase"):
+                with patch(
+                    "routers.document_engine_api.resolve_inspection_record",
+                    side_effect=RuntimeError("DB connection failed"),
+                ):
+                    with pytest.raises(RuntimeError):
+                        asyncio.run(auto_document_preview("INSPECTION", "insp-err", {}))
+                    mock_render.assert_not_called()
+
+
+def test_RR6_unexpected_resolver_error_propagates_pdf():
+    """resolve_inspection_record raises RuntimeError → propagates (not 404), generator NOT called."""
+    from routers.document_engine_api import auto_document_pdf
+
+    with patch("routers.document_engine_api._render_pdf", new_callable=AsyncMock) as mock_render:
+        with patch("routers.document_engine_api._ensure_inspection_own"):
+            with patch("routers.document_engine_api.get_supabase"):
+                with patch(
+                    "routers.document_engine_api.resolve_inspection_record",
+                    side_effect=RuntimeError("DB connection failed"),
+                ):
+                    with pytest.raises(RuntimeError):
+                        asyncio.run(auto_document_pdf("INSPECTION", "insp-err", {}))
+                    mock_render.assert_not_called()

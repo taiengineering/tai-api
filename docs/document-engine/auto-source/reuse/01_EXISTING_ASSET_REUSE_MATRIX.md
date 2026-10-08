@@ -33,4 +33,4 @@ Migration `20261007182044_doc_auto_src_02b_projection_selector.sql` = PRODUCTION
 |------|------|
 | `services/document_engine/auto_source_readmodel.py` | Read-only list query — INSPECTION + TBM terminal records |
 | `routers/document_engine_api.py` (3 endpoints added) | Thin secure render adapter |
-| `tests/test_auto_reuse_01_discovery.py` | 23 contract tests |
+| `tests/test_auto_reuse_01_discovery.py` | 38 contract tests |

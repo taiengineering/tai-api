@@ -48,16 +48,20 @@ list_auto_documents(
 | `doc_type` | str | `"INSP"` or `"TBM"` |
 | `title` | str | INSP: `work_schedules.summary` or `"점검 기록"` fallback; TBM: `meeting_title` or `"TBM YYYY-MM-DD"` fallback |
 | `occurred_at` | str | INSP: `inspection_date`; TBM: `completed_at` or `work_date` |
-| `source_status` | str | `status_code` from source row |
+| `source_status` | str | `effective.inspection_status` (INSP); `status_code` (TBM) |
 | `factory_id` | str | From row or `work_schedules.factory_id` |
 | `company_id` | str | From row or `work_schedules.company_id` |
 | `can_preview` | bool | Always `True` |
 | `can_pdf` | bool | Always `True` |
 
-## Terminal Status Filters
+## Terminal Status Filters (candidate narrowing only)
 
-- INSPECTION: `status_code IN ('COMPLETED', 'ISSUE', 'HOLD', 'completed')`
+Raw status is used only to narrow DB candidates. Final authority is `resolve_inspection_record()`.
+
+- INSPECTION: `status_code IN ('COMPLETED', 'ISSUE', 'HOLD', 'completed', 'IN_PROGRESS')`
 - TBM: `status_code = 'COMPLETED'`
+
+Effective inclusion requires: `resolve_inspection_record()` returns `is_active=true` AND `inspection_status=COMPLETED`.
 
 ## Guarantees
 

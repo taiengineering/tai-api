@@ -27,12 +27,12 @@ Response: `AutoDocumentListResponse` (items + pagination)
 GET /document-engine/auto-documents/{source_type}/{source_id}/preview
 ```
 
-Auth chain: `get_current_user` → ownership guard → `render_html(doc_type, params)`
+Auth chain: `get_current_user` → ownership guard → source readiness validation → `render_html(doc_type, params)`
 
-| source_type | ownership guard | render call |
-|-------------|----------------|-------------|
-| INSPECTION | `_ensure_inspection_own(sb, source_id, current)` | `_render_html("INSP", {"inspection_id": source_id})` |
-| TBM | `_ensure_tbm_own(sb, source_id, current)` | `_render_html("TBM", {"meeting_id": source_id})` |
+| source_type | ownership guard | readiness validation | render call |
+|-------------|----------------|----------------------|-------------|
+| INSPECTION | `_ensure_inspection_own(sb, source_id, current)` | `_require_auto_inspection_ready()` — `resolve_inspection_record()` must return `is_active=true` + `inspection_status=COMPLETED`; `InspectionRecordError` → 404; unexpected errors propagate | `_render_html("INSP", {"inspection_id": source_id})` |
+| TBM | `_ensure_tbm_own(sb, source_id, current)` | `_require_auto_tbm_ready()` — `tbm_meetings.status_code` must be `COMPLETED` | `_render_html("TBM", {"meeting_id": source_id})` |
 
 Response: `HTMLResponse`
 
@@ -42,12 +42,12 @@ Response: `HTMLResponse`
 GET /document-engine/auto-documents/{source_type}/{source_id}/pdf
 ```
 
-Auth chain: `get_current_user` → ownership guard → `render_pdf(doc_type, params)`
+Auth chain: `get_current_user` → ownership guard → source readiness validation → `render_pdf(doc_type, params)`
 
-| source_type | ownership guard | render call | filename |
-|-------------|----------------|-------------|----------|
-| INSPECTION | `_ensure_inspection_own(sb, source_id, current)` | `_render_pdf("INSP", {"inspection_id": source_id})` | `점검기록_{id[:8]}.pdf` |
-| TBM | `_ensure_tbm_own(sb, source_id, current)` | `_render_pdf("TBM", {"meeting_id": source_id})` | `TBM_{id[:8]}.pdf` |
+| source_type | ownership guard | readiness validation | render call | filename |
+|-------------|----------------|----------------------|-------------|----------|
+| INSPECTION | `_ensure_inspection_own(sb, source_id, current)` | `_require_auto_inspection_ready()` | `_render_pdf("INSP", {"inspection_id": source_id})` | `점검기록_{id[:8]}.pdf` |
+| TBM | `_ensure_tbm_own(sb, source_id, current)` | `_require_auto_tbm_ready()` | `_render_pdf("TBM", {"meeting_id": source_id})` | `TBM_{id[:8]}.pdf` |
 
 Response: `application/pdf` with RFC 5987 `Content-Disposition` header (`filename*=UTF-8''<url-encoded>`)
 
