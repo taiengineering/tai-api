@@ -71,6 +71,7 @@ async def render_document_html(doc_id: str, data: Dict[str, Any]) -> str:
 
     # 공통 변수 주입
     data.setdefault("generated_at", now_kst().strftime("%Y-%m-%d %H:%M"))
+    data.setdefault("doc_id", doc_id)
 
     rendered = template.render(**data)
     return _inline_document_base_css(rendered)
