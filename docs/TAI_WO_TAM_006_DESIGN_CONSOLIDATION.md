@@ -783,9 +783,9 @@ def can_approve(actor_user_id, request, step_order, now):
 | tam_approval_effectiveness_revocations | X | request_id → requests.company_id | 서비스: request 접근 시 company_id 검증 |
 | tam_approval_audit_events | O (NOT NULL) | — | company_id NOT NULL으로 격리 |
 
-**DB 수준 교차회사 참조 방지 — 핵심 관계 트리거:**
+**Layer 1 — DB 참조 무결성 (데이터 저장 경계 방어):**
 
-`tam_approval_requests.resolved_route_id`가 요청 `company_id`와 다른 회사의 route를 참조하지 못하도록 DB 트리거로 강제:
+`resolved_route_id`가 다른 회사의 route를 참조하지 못하도록 DB 트리거로 강제:
 
 ```sql
 -- BEFORE INSERT/UPDATE ON tam_approval_requests:
@@ -798,20 +798,26 @@ def can_approve(actor_user_id, request, step_order, now):
 --   END IF;
 ```
 
-이 트리거가 적용되면 FK 체인 격리 전파:
-- `version → route` FK → route.company_id 검증됨 → version/step/assignee 자동 격리
-- `snapshot/decision → request` FK → request.company_id 검증됨 → 자동 격리
-- `delegation_revocation → delegation` FK → delegation.company_id (NOT NULL) 경유 격리
-- `effectiveness_revocation → request` FK → request.company_id 경유 격리
+이 트리거로 인한 FK 체인 격리 전파:
+- `version/step/assignee → route` FK → route.company_id 검증됨 → 교차회사 저장 차단
+- `snapshot/decision → request` FK → request.company_id 검증됨 → 교차회사 저장 차단
+- `delegation_revocation → delegation` FK → delegation.company_id (NOT NULL) 경유
+- `effectiveness_revocation → request` FK → request.company_id 경유
 
-**서비스 계층 의무 (DB 트리거 보완):**
-- TAM은 service_role로 실행하므로 RLS 없음
-- company_id 직접 보유 엔티티: NOT NULL + 서비스 계층이 `ctx.company_id` 주입으로 강제
-- DB 트리거 + 서비스 검증 이중 방어:
-  1. route 조회·사용 시: `routes.company_id == ctx.company_id`
-  2. request 처리 시: `requests.company_id == ctx.company_id`
-  3. delegation 처리 시: `delegations.company_id == ctx.company_id`
-  4. version/step/assignee 접근 시: route_id 경유 company_id 검증 (트리거가 1차 방어)
+⚠ **DB 참조 무결성만으로 충분하지 않음**: FK·트리거는 데이터가 같은 회사 범위 내에 저장되도록 보장하지만, 인증된 사용자가 해당 회사·사업장에 접근할 권한을 갖는지는 보장하지 않는다.
+
+**Layer 2 — API 접근권한 (인증·인가 경계 방어):**
+
+TAM은 `service_role`로 실행되어 RLS가 우회되므로, **모든 API 요청에서 서비스 계층이 명시적으로 검증**해야 한다:
+
+| 검증 의무 | 내용 |
+|---|---|
+| 사용자 회사 범위 | `ctx.company_id` 가 요청 대상 company_id 와 일치 |
+| 사용자 사업장 범위 | `factory_id` 지정 시 ctx 사용자의 factory 접근권 확인 |
+| TAM 업무 권한 | 6종 권한(ROUTE_MANAGER 등) 보유 여부 확인 |
+| 요청자 본인 확인 | 취소·철회 등 본인 또는 권한자만 허용되는 작업 |
+
+Layer 1(DB) + Layer 2(API) 두 조건이 **모두** 충족되어야 테넌트 격리가 성립한다.
 
 ---
 
@@ -1014,6 +1020,15 @@ Audit:
 | T23 | Chemical 승인 만료 | override_approvals.expires_at 경과 → Posting 거부 |
 | T24 | TAM 장애 시 Fail-closed | TAM API 5xx → Chemical 503 반환 |
 | T25 | 승인 철회와 Posting 경합 | §8.1 TOCTOU 계약 — 8.2 옵션 확정 후 설계 |
+| T26 | current_version_id 복합 FK — 타 route 버전 참조 거부 | tam_routes_current_version_fk: 타 route_id 버전 INSERT 시 FK violation |
+| T27 | current_version_id PUBLISHED 상태 트리거 | DRAFT 버전 포인터 설정 시 RAISE EXCEPTION 'must reference a PUBLISHED version' |
+| T28 | 동시 발행 트랜잭션 직렬화 | 두 세션 동시 발행 시 routes SELECT FOR UPDATE로 순차 처리; 최종 current_version_id 정합 확인 |
+
+**구현 진입 Gate (Version 관리):**
+T26·T27·T28는 기본 결재 경로 구현 진입 전 DB migration에서 통과 필수이다.
+- T26 FAIL: 복합 FK migration 미적용 → 구현 진입 BLOCK
+- T27 FAIL: PUBLISHED 트리거 migration 미적용 → 구현 진입 BLOCK
+- T28 FAIL: 동시성 제어 구현 미완성 → 버전 발행 API 배포 BLOCK
 
 ---
 
@@ -1038,13 +1053,15 @@ WP-07I Semantic Contract와 TAM-006 설계 충돌 분석:
 
 구현 전 Owner 승인이 필요한 미결정 항목:
 
+**기술확인 완료 (Owner 결정 불필요):**
+- btree_gist: AVAILABLE (default_version=1.7), NOT INSTALLED → `CREATE EXTENSION IF NOT EXISTS btree_gist` migration 필요 (확인: pg_available_extensions, 2026-10-09)
+- PostgreSQL 버전: 17.6.1.111 (postgres_engine=17) → NULLS NOT DISTINCT 지원 가능 (확인: Supabase API, 2026-10-09)
+
 | # | 항목 | 옵션 | 비고 |
 |---|---|---|---|
 | OD-01 | 최초 ROUTE_MANAGER 부트스트랩 권한 | (a) TAI Core company owner role, (b) TAI 플랫폼 관리자 | 결정 전 route 생성 전면 BLOCK |
 | OD-02 | TAM APPROVED 효력 만료 기간 | (a) 만료 없음, (b) 24h default, (c) Consumer별 설정 | Chemical override TTL(24h)과 조율 필요 |
 | OD-03 | 교차 DB TOCTOU 계약 옵션 | §8.2 옵션 A/B/C/D | T25 테스트 설계 차단 |
-| OD-04 | btree_gist extension 상태 | TAI API PostgreSQL에 기존 활성 여부 확인 | 위임 Exclusion Constraint 사용 전제 |
-| OD-05 | PostgreSQL 버전 확인 | NULLS NOT DISTINCT (v15+) 지원 여부 | tam_routes_uniq 구현 방식 결정 |
 | OD-06 | SUPPLEMENT 최대 재상신 횟수 | (a) 무제한, (b) per-step max 설정 | 무한 루프 방지 |
 | OD-07 | 단계 반려 후 재상신 허용 여부 | (a) fail-closed default, (b) per-step allow_retry 플래그 | 현재 설계: fail-closed |
 | OD-08 | 감사 이력 보존 기간 | 법령 의무 또는 회사 정책 기준 | 현재 설계: 무기한 (삭제 없음) |
