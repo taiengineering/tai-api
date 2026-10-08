@@ -59,12 +59,12 @@ APPROVAL_W    = 90 * mm               # 결재란 총 너비
 TITLE_W       = CONTENT_W - APPROVAL_W  # 80mm
 APPR_CELL_W   = APPROVAL_W / 3          # 30mm per cell
 
-COL_WIDTHS_MM = [58, 28, 24, 20, 22, 18]   # F05-F10
+COL_WIDTHS_MM = [56, 26, 22, 26, 22, 18]   # F05-F10 (PATCH-1: F08 담당부서 20→26mm)
 COL_WIDTHS    = [w * mm for w in COL_WIDTHS_MM]
 
 CELL_PAD   = 3 * mm
 ROW_H_INFO = 8  * mm
-ROW_H_PLAN = 12 * mm
+ROW_H_PLAN = 14 * mm
 ROW_H_SIGN = 15 * mm
 ROW_H_GOAL = 22 * mm
 
@@ -104,9 +104,17 @@ def ts(*extra):
 
 # ─── Section builders ─────────────────────────────────────────────────────────
 
-def build_title_approval(fields):
-    appr = fields['approval']['fields']
+def build_title(fields):
+    return Table(
+        [[P(fields['document']['title'], S_TITLE)]],
+        colWidths=[CONTENT_W],
+        style=ts(
+            ('FONTNAME', (0, 0), (-1, -1), 'NGBold'),
+        ),
+    )
 
+def build_approval(fields):
+    appr = fields['approval']['fields']
     inner = Table(
         [[P(f['label'], S_HDR) for f in appr], ['', '', '']],
         colWidths=[APPR_CELL_W] * 3,
@@ -117,34 +125,34 @@ def build_title_approval(fields):
             ('LINEWIDTH',   (0, 0), (-1, -1), 0.75),
         ),
     )
-
     return Table(
-        [[P(fields['document']['title'], S_TITLE), inner]],
+        [['', inner]],
         colWidths=[TITLE_W, APPROVAL_W],
         style=TableStyle([
-            ('VALIGN',       (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING',   (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING',(0, 0), (-1, -1), 4),
-            ('LEFTPADDING',  (0, 0), (0, -1), 0),
-            ('RIGHTPADDING', (0, 0), (0, -1), 4),
-            ('LEFTPADDING',  (1, 0), (1, -1), 0),
-            ('RIGHTPADDING', (1, 0), (1, -1), 0),
-            ('BOX',          (0, 0), (-1, -1), 0.5, C_BLACK),
-            ('LINEBEFORE',   (1, 0), (1, -1), 0.5, C_BLACK),
+            ('TOPPADDING',    (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+            ('LINEWIDTH',     (0, 0), (-1, -1), 0),
         ]),
     )
 
 def build_basic_info(fields):
     bi = {f['id']: f for f in fields['basic_info']['fields']}
-    w1, w2, w3 = 55*mm, 70*mm, 45*mm
+    half = CONTENT_W / 2
     return Table(
-        [[
-            P(f"{bi['N01']['label']}: ________________________"),
-            P(f"{bi['N02']['label']}: ______년  ______월  ______일"),
-            P(f"{bi['N04']['label']}: ______년   {bi['N03']['label']}: ________"),
-        ]],
-        colWidths=[w1, w2, w3],
-        rowHeights=[ROW_H_INFO],
+        [
+            [
+                P(f"{bi['N01']['label']}: _________________________________"),
+                P(f"{bi['N02']['label']}: ______년  ______월  ______일"),
+            ],
+            [
+                P(f"{bi['N04']['label']}: ______년"),
+                P(f"{bi['N03']['label']}: ___________________________"),
+            ],
+        ],
+        colWidths=[half, half],
+        rowHeights=[ROW_H_INFO, ROW_H_INFO],
         style=ts(),
     )
 
@@ -246,7 +254,8 @@ def generate(fields_path, out_path, example_rows=None):
     )
 
     story = [
-        build_title_approval(fields),
+        build_title(fields),
+        build_approval(fields),
         Spacer(1, 2 * mm),
         build_basic_info(fields),
         Spacer(1, 2 * mm),

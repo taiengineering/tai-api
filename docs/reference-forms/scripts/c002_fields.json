@@ -33,13 +33,13 @@
   },
   "plan_table": {
     "default_row_count": 5,
-    "min_row_height_mm": 12,
+    "min_row_height_mm": 14,
     "extra_rows_note": "※ 행이 부족할 경우 추가하십시오.",
     "columns": [
-      {"id": "F05", "label": "목표·세부\n추진계획", "width_mm": 58, "align": "left",   "source": "SOURCE_VERIFIED"},
-      {"id": "F06", "label": "추진일정",             "width_mm": 28, "align": "center", "source": "SOURCE_VERIFIED"},
-      {"id": "F07", "label": "성과지표",             "width_mm": 24, "align": "left",   "source": "SOURCE_VERIFIED"},
-      {"id": "F08", "label": "담당부서",             "width_mm": 20, "align": "center", "source": "SOURCE_VERIFIED"},
+      {"id": "F05", "label": "목표·세부\n추진계획", "width_mm": 56, "align": "left",   "source": "SOURCE_VERIFIED"},
+      {"id": "F06", "label": "추진일정",             "width_mm": 26, "align": "center", "source": "SOURCE_VERIFIED"},
+      {"id": "F07", "label": "성과지표",             "width_mm": 22, "align": "left",   "source": "SOURCE_VERIFIED"},
+      {"id": "F08", "label": "담당부서",             "width_mm": 26, "align": "center", "source": "SOURCE_VERIFIED"},
       {"id": "F09", "label": "예산\n(만원)",         "width_mm": 22, "align": "right",  "source": "SOURCE_VERIFIED"},
       {"id": "F10", "label": "달성률",               "width_mm": 18, "align": "center", "source": "SOURCE_VERIFIED"}
     ]

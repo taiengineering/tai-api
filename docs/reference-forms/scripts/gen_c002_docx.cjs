@@ -26,10 +26,10 @@ const APPROVAL_W   = mm(90);
 const TITLE_W      = CONTENT_W - APPROVAL_W;   // 80mm
 const APPR_CELL_W  = Math.round(APPROVAL_W / 3); // 30mm
 
-const COL_W = [58, 28, 24, 20, 22, 18].map(mm);  // F05-F10
+const COL_W = [56, 26, 22, 26, 22, 18].map(mm);  // F05-F10 (PATCH-1: F08 담당부서 20→26mm)
 
 const ROW_H_INFO = mm(8);
-const ROW_H_PLAN = mm(12);
+const ROW_H_PLAN = mm(14);
 const ROW_H_SIGN = mm(15);
 const ROW_H_GOAL = mm(22);
 const CELL_MARGIN = { top: mm(3), bottom: mm(3), left: mm(3), right: mm(3) };
@@ -89,10 +89,31 @@ function emptyCell(widthTwips, { bg } = {}) {
     return bodyCell('', widthTwips, { bg });
 }
 
-// ─── Section: Title + Approval ────────────────────────────────────────────────
+// ─── Section: Title (전체 너비) ───────────────────────────────────────────────
 
-function buildTitleApproval(fields) {
-    const title = fields.document.title;
+function buildTitle(fields) {
+    return new Table({
+        width: { size: CONTENT_W, type: WidthType.DXA },
+        layout: TableLayoutType.FIXED,
+        rows: [new TableRow({
+            height: { value: mm(14), rule: HeightRule.AT_LEAST },
+            children: [new TableCell({
+                width: { size: CONTENT_W, type: WidthType.DXA },
+                borders: border(4),
+                verticalAlign: VerticalAlign.CENTER,
+                margins: { top: mm(4), bottom: mm(4), left: mm(4), right: mm(4) },
+                children: [new Paragraph({
+                    children: [new TextRun({ text: fields.document.title, font: 'NanumGothic', bold: true, size: 32 })],
+                    alignment: AlignmentType.CENTER,
+                })],
+            })],
+        })],
+    });
+}
+
+// ─── Section: Approval (제목 아래 우측) ──────────────────────────────────────
+
+function buildApproval(fields) {
     const apprF = fields.approval.fields;
 
     const innerRows = [
@@ -124,13 +145,9 @@ function buildTitleApproval(fields) {
             children: [
                 new TableCell({
                     width: { size: TITLE_W, type: WidthType.DXA },
-                    borders: border(4),
-                    verticalAlign: VerticalAlign.CENTER,
-                    margins: { top: mm(4), bottom: mm(4), left: mm(4), right: mm(4) },
-                    children: [new Paragraph({
-                        children: [new TextRun({ text: title, font: 'NanumGothic', bold: true, size: 32 })],
-                        alignment: AlignmentType.CENTER,
-                    })],
+                    borders: noBorder(),
+                    margins: { top: 0, bottom: 0, left: 0, right: 0 },
+                    children: [new Paragraph({ children: [new TextRun({ text: '' })] })],
                 }),
                 new TableCell({
                     width: { size: APPROVAL_W, type: WidthType.DXA },
@@ -148,17 +165,26 @@ function buildTitleApproval(fields) {
 function buildBasicInfo(fields) {
     const bi = {};
     fields.basic_info.fields.forEach(f => { bi[f.id] = f; });
+    const half = Math.round(CONTENT_W / 2);
     return new Table({
         width: { size: CONTENT_W, type: WidthType.DXA },
         layout: TableLayoutType.FIXED,
-        rows: [new TableRow({
-            height: { value: ROW_H_INFO, rule: HeightRule.AT_LEAST },
-            children: [
-                bodyCell(`${bi.N01.label}: `, mm(55)),
-                bodyCell(`${bi.N02.label}:       년      월      일`, mm(70)),
-                bodyCell(`${bi.N04.label}:     년   ${bi.N03.label}:`, mm(45)),
-            ],
-        })],
+        rows: [
+            new TableRow({
+                height: { value: ROW_H_INFO, rule: HeightRule.AT_LEAST },
+                children: [
+                    bodyCell(`${bi.N01.label}: `, half),
+                    bodyCell(`${bi.N02.label}:      년     월     일`, half),
+                ],
+            }),
+            new TableRow({
+                height: { value: ROW_H_INFO, rule: HeightRule.AT_LEAST },
+                children: [
+                    bodyCell(`${bi.N04.label}:      년`, half),
+                    bodyCell(`${bi.N03.label}: `, half),
+                ],
+            }),
+        ],
     });
 }
 
@@ -269,7 +295,8 @@ function buildDoc(fields, exRows) {
             },
             footers: { default: buildFooter() },
             children: [
-                buildTitleApproval(fields),
+                buildTitle(fields),
+                buildApproval(fields),
                 spacer(),
                 buildBasicInfo(fields),
                 spacer(),
