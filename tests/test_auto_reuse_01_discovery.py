@@ -38,7 +38,9 @@ def _make_sb(insp_rows=None, tbm_rows=None, ws_rows=None, resolver_map=None):
     """
     insp_rows = insp_rows or []
     tbm_rows = tbm_rows or []
-    ws_rows = ws_rows if ws_rows is not None else [{"id": "ws-default", "company_id": "co-1"}]
+    ws_rows = ws_rows if ws_rows is not None else [
+        {"id": "ws-default", "company_id": "co-1", "factory_id": "fac-1", "summary": "전기설비 정기점검"}
+    ]
     resolver_map = resolver_map or {}
 
     class _FakeResult:
@@ -113,7 +115,6 @@ def _insp_row(id="insp-001", status="COMPLETED", factory_id="fac-1", assignment_
         "inspection_date": "2026-10-08T10:00:00+09:00",
         "factory_id": factory_id,
         "assignment_id": assignment_id,
-        "work_schedules": {"summary": "전기설비 정기점검", "company_id": "co-1", "factory_id": factory_id},
     }
 
 
@@ -202,8 +203,8 @@ def test_L5_inspection_title_from_work_schedule_summary():
 
 def test_L6_inspection_title_fallback_when_no_summary():
     row = _insp_row()
-    row["work_schedules"] = {}
-    sb = _make_sb(insp_rows=[row])
+    ws_rows = [{"id": "ws-default", "company_id": "co-1", "factory_id": "fac-1", "summary": None}]
+    sb = _make_sb(insp_rows=[row], ws_rows=ws_rows)
     result = list_auto_documents(sb, {}, source_type="INSPECTION")
     assert result["items"][0]["title"] == "점검 기록"
 
@@ -456,13 +457,11 @@ def test_SC2_empty_work_schedules_in_scope_returns_no_inspections():
 def test_SC3_company_a_cannot_see_company_b_inspections():
     """Company isolation: scope=co-A → co-A visible, co-B invisible."""
     insp_a = _insp_row(id="insp-A", assignment_id="ws-A")
-    insp_a["work_schedules"] = {"summary": "A 점검", "company_id": "co-A", "factory_id": "fac-1"}
     insp_b = _insp_row(id="insp-B", assignment_id="ws-B")
-    insp_b["work_schedules"] = {"summary": "B 점검", "company_id": "co-B", "factory_id": "fac-2"}
 
     ws_rows = [
-        {"id": "ws-A", "company_id": "co-A", "factory_id": "fac-1"},
-        {"id": "ws-B", "company_id": "co-B", "factory_id": "fac-2"},
+        {"id": "ws-A", "company_id": "co-A", "factory_id": "fac-1", "summary": "A 점검"},
+        {"id": "ws-B", "company_id": "co-B", "factory_id": "fac-2", "summary": "B 점검"},
     ]
     sb = _make_sb(insp_rows=[insp_a, insp_b], ws_rows=ws_rows)
 
@@ -475,13 +474,11 @@ def test_SC3_company_a_cannot_see_company_b_inspections():
 def test_SC4_factory_a_cannot_see_factory_b_inspections():
     """Factory isolation: scope=fac-A → fac-A visible, fac-B invisible."""
     insp_a = _insp_row(id="insp-fA", factory_id="fac-A", assignment_id="ws-fA")
-    insp_a["work_schedules"] = {"summary": "A공장 점검", "company_id": "co-1", "factory_id": "fac-A"}
     insp_b = _insp_row(id="insp-fB", factory_id="fac-B", assignment_id="ws-fB")
-    insp_b["work_schedules"] = {"summary": "B공장 점검", "company_id": "co-1", "factory_id": "fac-B"}
 
     ws_rows = [
-        {"id": "ws-fA", "company_id": "co-1", "factory_id": "fac-A"},
-        {"id": "ws-fB", "company_id": "co-1", "factory_id": "fac-B"},
+        {"id": "ws-fA", "company_id": "co-1", "factory_id": "fac-A", "summary": "A공장 점검"},
+        {"id": "ws-fB", "company_id": "co-1", "factory_id": "fac-B", "summary": "B공장 점검"},
     ]
     sb = _make_sb(insp_rows=[insp_a, insp_b], ws_rows=ws_rows)
 
@@ -608,3 +605,62 @@ def test_RR6_unexpected_resolver_error_propagates_pdf():
                     with pytest.raises(RuntimeError):
                         asyncio.run(auto_document_pdf("INSPECTION", "insp-err", {}))
                     mock_render.assert_not_called()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HF: HOTFIX-001 — PGRST200 regression guard (PostgREST composite FK embed)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_HF1_no_embedded_join_hint_in_source():
+    """PGRST200 regression guard: PostgREST single-column FK embed hint must not be used."""
+    import pathlib
+    src = pathlib.Path("services/document_engine/auto_source_readmodel.py").read_text()
+    assert "work_schedules!assignment_id" not in src, (
+        "PostgREST composite FK embed hint detected — causes PGRST200 in production"
+    )
+
+
+def test_HF2_schedule_metadata_populates_title_and_company():
+    """Eligible inspection: schedule metadata batch lookup populates title/company_id correctly."""
+    row = _insp_row()
+    ws_rows = [{"id": "ws-default", "company_id": "co-1", "factory_id": "fac-1", "summary": "배관 정기점검"}]
+    sb = _make_sb(insp_rows=[row], ws_rows=ws_rows)
+    result = list_auto_documents(sb, {}, source_type="INSPECTION")
+    assert result["total"] == 1
+    item = result["items"][0]
+    assert item["title"] == "배관 정기점검"
+    assert item["company_id"] == "co-1"
+
+
+def test_HF3_schedule_metadata_batch_bounded_by_scope():
+    """Metadata batch lookup does not expand scope — only IDs from allowed inspections are fetched."""
+    insp_a = _insp_row(id="insp-A", assignment_id="ws-A")
+    ws_rows = [
+        {"id": "ws-A", "company_id": "co-A", "factory_id": "fac-1", "summary": "A 점검"},
+        {"id": "ws-B", "company_id": "co-B", "factory_id": "fac-2", "summary": "B 점검"},
+    ]
+    sb = _make_sb(insp_rows=[insp_a], ws_rows=ws_rows)
+    result = list_auto_documents(sb, {"company_id": "co-A"}, source_type="INSPECTION")
+    assert result["total"] == 1
+    assert result["items"][0]["source_id"] == "insp-A"
+    assert result["items"][0]["title"] == "A 점검"
+
+
+def test_HF4_missing_schedule_metadata_no_crash():
+    """No ws_row for assignment_id → title falls back to '점검 기록', no 500."""
+    row = _insp_row(assignment_id="ws-orphan")
+    sb = _make_sb(insp_rows=[row], ws_rows=[])
+    result = list_auto_documents(sb, {}, source_type="INSPECTION")
+    assert result["total"] == 1
+    assert result["items"][0]["title"] == "점검 기록"
+
+
+def test_HF5_all_scope_metadata_batch_lookup():
+    """ALL scope: schedule metadata loaded via batch lookup — no embedded join needed."""
+    row = _insp_row()
+    ws_rows = [{"id": "ws-default", "company_id": "co-1", "factory_id": "fac-1", "summary": "전체 점검"}]
+    sb = _make_sb(insp_rows=[row], ws_rows=ws_rows)
+    result = list_auto_documents(sb, {}, source_type="ALL")
+    insp_items = [i for i in result["items"] if i["source_type"] == "INSPECTION"]
+    assert len(insp_items) == 1
+    assert insp_items[0]["title"] == "전체 점검"

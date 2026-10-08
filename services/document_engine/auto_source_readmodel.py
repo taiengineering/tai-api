@@ -1,17 +1,20 @@
-"""AUTO-REUSE-01 CORR-002: AUTO_SOURCE document discovery read model.
+"""AUTO-REUSE-01: AUTO_SOURCE document discovery read model.
 
 Read-only. Zero persistence. Reuses existing scope/resolver patterns.
 
-CORR-002 changes (vs CORR-001):
-  - _insp_item now takes effective record — source_status = effective.inspection_status
-    (raw status_code was being exposed; production counterexample: raw=IN_PROGRESS / effective=COMPLETED)
-  - Effective fields (inspection_date, factory_id, company_id) prefer resolver output, fall back to raw
-  - Resolver error handling: InspectionRecordError → fail-close exclude;
-    unexpected infrastructure errors propagate (don't silently drop hundreds of documents)
+HOTFIX-001: PostgREST single-column FK embed hint removed (was causing PGRST200).
+  Production FK is composite (assignment_id, factory_id) — hint-based embed fails.
+  Schedule metadata now fetched via separate batch SELECT (_fetch_schedule_metadata).
+
+CORR-002:
+  - _insp_item uses effective record — source_status = effective.inspection_status
+  - Effective fields prefer resolver output, fall back to raw
+  - Resolver error: InspectionRecordError → fail-close exclude; unexpected errors propagate
 
 Sources:
   INSPECTION → safety_inspections (candidate: status_code IN candidates)
                scoped via work_schedules.company_id/factory_id through assignment_id
+               metadata: batch SELECT work_schedules by candidate assignment_ids
                effective: resolve_inspection_record() → is_active=True, inspection_status=COMPLETED
                item fields from effective record (not raw candidate row)
   TBM        → tbm_meetings.status_code = 'COMPLETED'
@@ -174,6 +177,34 @@ def _fetch_inspection_assignment_ids(
     return [r["id"] for r in (res.data or []) if r.get("id")]
 
 
+def _fetch_schedule_metadata(
+    sb: Any,
+    assignment_ids: List[str],
+) -> Dict[str, dict]:
+    """Batch fetch work_schedules metadata for the given assignment_ids.
+
+    Returns {schedule_id: {summary, company_id, factory_id}} map.
+    Avoids PostgREST composite-FK embed hint (PGRST200).
+    """
+    if not assignment_ids:
+        return {}
+    res = (
+        sb.table("work_schedules")
+        .select("id, summary, company_id, factory_id")
+        .in_("id", assignment_ids)
+        .execute()
+    )
+    return {
+        r["id"]: {
+            "summary": r.get("summary"),
+            "company_id": r.get("company_id"),
+            "factory_id": r.get("factory_id"),
+        }
+        for r in (res.data or [])
+        if r.get("id")
+    }
+
+
 def _fetch_inspections(
     sb: Any,
     scope_filter: ScopeFilter,
@@ -185,6 +216,7 @@ def _fetch_inspections(
     Final inclusion: resolve_inspection_record() is_active=True + inspection_status=COMPLETED.
     Raw status is candidate narrowing only.
     Item fields use effective resolved values (not raw candidate row).
+    Schedule metadata fetched via separate batch SELECT (no PostgREST embedded join).
     """
     assignment_ids = _fetch_inspection_assignment_ids(sb, scope_filter)
     if assignment_ids is not None and not assignment_ids:
@@ -192,10 +224,7 @@ def _fetch_inspections(
 
     q = (
         sb.table("safety_inspections")
-        .select(
-            "id, inspection_date, status_code, factory_id, assignment_id, "
-            "work_schedules!assignment_id(summary, company_id, factory_id)"
-        )
+        .select("id, inspection_date, status_code, factory_id, assignment_id")
         .in_("status_code", list(_INSP_CANDIDATE_STATUSES))
     )
     if assignment_ids is not None:
@@ -204,6 +233,14 @@ def _fetch_inspections(
         q = q.eq("factory_id", factory_id)
     res = q.order("inspection_date", desc=True).limit(500).execute()
     candidates = res.data or []
+
+    # Batch-fetch schedule metadata — avoids PGRST200 from composite FK embed hint
+    candidate_assignment_ids = [
+        row["assignment_id"] for row in candidates if row.get("assignment_id")
+    ]
+    schedule_map = _fetch_schedule_metadata(sb, candidate_assignment_ids)
+    for row in candidates:
+        row["work_schedules"] = schedule_map.get(row.get("assignment_id"), {})
 
     result = []
     for row in candidates:
