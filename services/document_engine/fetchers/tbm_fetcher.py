@@ -10,11 +10,16 @@ CORR-B: factory_address, company_name, company_logo, work_time 필드 추가.
          work_time 은 meeting_date 의 HH:MM 으로만 채운다 (created_at fallback 금지).
 CORR-C: 서명 상태(sign_status)와 서명 증적(signature_url)을 sign_display 로 분리.
          SIGNED_WITH_EVIDENCE / SIGNED_STATUS_ONLY / UNSIGNED / UNKNOWN.
+         CORR-002: sign_status 가 SIGNED 가 아닌데 signature_url 이 있으면 상태 충돌 → UNKNOWN.
 CORR-D: attendee_count_recorded(원본 기록값) / attendee_count_registered(실제 rows) 구분.
          불일치 시 attendee_count_mismatch=True.
 CORR-E: risk_items 가 문자열 배열이면 countermeasure=None 명시 — 임의 생성 금지.
 CORR-F: issue_flag 는 DB 값 그대로 전달 — None 이면 None 유지(False 단정 금지).
-         has_issue 는 issue_flag 확인된 참석자 기준; 데이터 없으면 None.
+         has_issue: True=이상자 존재, False=전체 명시적 false(전원 정상 확인),
+         None=미확인 참석자 있거나 참석자 없음.
+         스키마 근거: issue_flag comment "이상 여부(false=정상, true=이상).
+         서명 시 기본값 false. 관리감독자가 이상자에 대해서만 true로 변경."
+         issue_note comment "건강이상/보호구불량/미착용 등" → health+PPE 모두 포함.
 """
 from __future__ import annotations
 
@@ -32,15 +37,25 @@ _DOC_ID = "DOC-OSH-056"
 def _attendee_sign_display(a: dict) -> str:
     """서명 상태와 증적을 구분한 display 코드를 반환한다.
 
+    - SIGNED_WITH_EVIDENCE: sign_status=SIGNED AND signature_url 존재
+    - SIGNED_STATUS_ONLY:   sign_status=SIGNED AND signature_url 없음
+    - UNSIGNED:             비-SIGNED 상태 AND signature_url 없음
+    - UNKNOWN:              sign_status 가 SIGNED 가 아닌데 signature_url 있음(충돌),
+                            또는 알 수 없는 sign_status
+
     signature_url 이 유일한 증적 근거다 — signed_at 타임스탬프만으로
     서명 이미지가 있다고 추론하지 않는다.
     """
-    if a.get("signature_url"):
-        return "SIGNED_WITH_EVIDENCE"
+    sig_url = a.get("signature_url")
     sign_status = (a.get("sign_status") or "").upper()
+
     if sign_status == "SIGNED":
-        return "SIGNED_STATUS_ONLY"
-    if sign_status in ("UNSIGNED", "PENDING", ""):
+        return "SIGNED_WITH_EVIDENCE" if sig_url else "SIGNED_STATUS_ONLY"
+
+    # UNSIGNED, PENDING, SKIPPED, empty, 또는 기타 비-SIGNED 상태
+    if sig_url:
+        return "UNKNOWN"  # 상태 충돌: 비-SIGNED 인데 서명 이미지 존재
+    if sign_status in ("UNSIGNED", "PENDING", "SKIPPED", ""):
         return "UNSIGNED"
     return "UNKNOWN"
 
@@ -190,9 +205,24 @@ class TbmFetcher(BaseFetcher):
             and m["attendee_count"] != attendee_count_registered
         )
 
-        # 8. CORR-F: has_issue — 확인된 issue_flag 기준, 데이터 없으면 None
-        known_flags = [a["issue_flag"] for a in attendees if a["issue_flag"] is not None]
-        has_issue: Optional[bool] = bool(any(known_flags)) if known_flags else None
+        # 8. CORR-F/CORR-002: has_issue 엄격 판정
+        # True  = 이상자(issue_flag=True) 1명 이상 확인
+        # False = 참석자 ≥1 AND 전원 issue_flag 명시적 False (부분 확인은 None)
+        # None  = 참석자 없거나, 1명이라도 issue_flag=None(미확인)
+        #
+        # 스키마: issue_flag default=false; comment "서명 시 기본값 false,
+        # 관리감독자가 이상자에 대해서만 true로 변경."
+        any_true = any(a["issue_flag"] is True for a in attendees)
+        all_explicit_false = (
+            len(attendees) > 0
+            and all(a["issue_flag"] is False for a in attendees)
+        )
+        if any_true:
+            has_issue: Optional[bool] = True
+        elif all_explicit_false:
+            has_issue = False
+        else:
+            has_issue = None
 
         return {
             "company_name": company.get("name", ""),

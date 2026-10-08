@@ -278,6 +278,69 @@ def test_T14_factory_id_params_none_uses_meeting_factory_id():
     assert out["company_name"] == "다른회사"
 
 
+# ── C2-D: CORR-002 추가 테스트 ────────────────────────────────────────────────
+
+def test_C2D1_partial_confirmed_does_not_produce_all_normal():
+    """C2-A: 1명 False + 9명 None → has_issue=None (전원 정상 표시 금지)."""
+    atts = [_attendee(issue_flag=False)] + [_attendee(issue_flag=None) for _ in range(9)]
+    out = _fetch(attendees=atts)
+    assert out["has_issue"] is None
+
+
+def test_C2D2_all_explicit_false_produces_has_issue_false():
+    """C2-A: 전원 issue_flag=False → has_issue=False (정상 확인)."""
+    atts = [_attendee(issue_flag=False) for _ in range(3)]
+    out = _fetch(attendees=atts)
+    assert out["has_issue"] is False
+
+
+def test_C2D3_one_true_rest_none_has_issue_true():
+    """C2-A: 1명 True + 나머지 None → has_issue=True."""
+    atts = [_attendee(issue_flag=True)] + [_attendee(issue_flag=None) for _ in range(4)]
+    out = _fetch(attendees=atts)
+    assert out["has_issue"] is True
+
+
+def test_C2D4_no_attendees_has_issue_none():
+    """C2-A: 참석자 0명 → has_issue=None (전원 정상 표시 금지)."""
+    out = _fetch(attendees=[])
+    assert out["has_issue"] is None
+
+
+def test_C2D5_template_label_is_meeting_time_not_work_time():
+    """C2-B: 템플릿 레이블이 '회의시각' (작업시간 아님)."""
+    src = (R.TEMPLATE_DIR / "DOC-OSH-056.html").read_text(encoding="utf-8")
+    assert "회의시각" in src
+    assert "<th>작업시간</th>" not in src
+
+
+def test_C2D6_unsigned_with_signature_url_returns_unknown():
+    """C2-C: UNSIGNED + signature_url 존재 → 상태 충돌 UNKNOWN."""
+    disp = TF._attendee_sign_display({
+        "sign_status": "UNSIGNED",
+        "signature_url": "https://example.com/sig.png",
+    })
+    assert disp == "UNKNOWN"
+
+
+def test_C2D7_signed_with_signature_url_normal_path():
+    """C2-C: SIGNED + signature_url → SIGNED_WITH_EVIDENCE (정상 경로 유지)."""
+    disp = TF._attendee_sign_display({
+        "sign_status": "SIGNED",
+        "signature_url": "https://example.com/sig.png",
+    })
+    assert disp == "SIGNED_WITH_EVIDENCE"
+
+
+def test_C2D8_signed_no_url_status_only():
+    """C2-C: SIGNED + signature_url 없음 → SIGNED_STATUS_ONLY."""
+    disp = TF._attendee_sign_display({
+        "sign_status": "SIGNED",
+        "signature_url": None,
+    })
+    assert disp == "SIGNED_STATUS_ONLY"
+
+
 if __name__ == "__main__":
     g = dict(globals())
     tests = sorted((n, f) for n, f in g.items() if n.startswith("test_") and callable(f))
