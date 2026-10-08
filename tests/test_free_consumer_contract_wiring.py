@@ -125,11 +125,11 @@ def test_building_fields_preserved():
         "process": [], "equipment": [],
     })
     s1 = _CAPTURED["step1_body"]
-    assert s1.building_use_type == "factory", "building_use_type=%r" % s1.building_use_type
-    assert s1.building_use_type != "\uc0ac\ubb34\uc2e4"
+    assert s1.input.get("building_use_type") == "factory", "input.building_use_type=%r" % s1.input.get("building_use_type")
+    assert s1.input.get("building_use_type") != "\uc0ac\ubb34\uc2e4"
     assert s1.worker_count == 21, "worker_count=%r" % s1.worker_count
-    assert s1.total_floor_area == 6600.0, "total_floor_area=%r" % s1.total_floor_area
-    assert s1.total_floor_area != 400.0
+    assert s1.input.get("total_floor_area") == 6600.0, "input.total_floor_area=%r" % s1.input.get("total_floor_area")
+    assert s1.input.get("total_floor_area") != 400.0
     fac = _CAPTURED["facility"]
     for code, val in (("building_use_type", "factory"), ("worker_count", 21), ("total_floor_area", 6600.0)):
         if code in _LEG_INPUT_FIELDS:
