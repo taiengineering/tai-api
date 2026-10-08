@@ -14,7 +14,6 @@ HTML 템플릿에 데이터를 주입하고, Gotenberg로 PDF를 생성합니다
 from __future__ import annotations
 
 import os
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
@@ -25,11 +24,38 @@ from services.time import now_kst
 # 템플릿 디렉토리
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates" / "documents"
 
+
+def _document_finalize(value: Any) -> Any:
+    if value is None:
+        return ""
+    return value
+
+
+def _format_date(value: Any) -> str:
+    if not value:
+        return ""
+    return str(value)[:10]
+
+
+def _inline_document_base_css(html: str) -> str:
+    css_path = TEMPLATE_DIR / "_base.css"
+    if not css_path.exists():
+        return html
+    css = css_path.read_text(encoding="utf-8")
+    return html.replace(
+        '<link rel="stylesheet" href="_base.css">',
+        f"<style>\n{css}\n</style>",
+        1,
+    )
+
+
 # Jinja2 환경
 _env = Environment(
     loader=FileSystemLoader(str(TEMPLATE_DIR)),
     autoescape=True,
+    finalize=_document_finalize,
 )
+_env.filters["date_short"] = _format_date
 
 # Gotenberg URL (Railway internal)
 GOTENBERG_URL = os.getenv("GOTENBERG_URL", "http://gotenberg.railway.internal:3000")
@@ -46,7 +72,8 @@ async def render_document_html(doc_id: str, data: Dict[str, Any]) -> str:
     # 공통 변수 주입
     data.setdefault("generated_at", now_kst().strftime("%Y-%m-%d %H:%M"))
 
-    return template.render(**data)
+    rendered = template.render(**data)
+    return _inline_document_base_css(rendered)
 
 
 async def generate_document_pdf(doc_id: str, data: Dict[str, Any]) -> bytes:
