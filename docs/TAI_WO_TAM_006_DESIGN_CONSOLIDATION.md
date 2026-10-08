@@ -130,12 +130,27 @@ CREATE TABLE tam_approval_routes (
     )
 );
 
--- current_version_id FK: 순환참조(routes → versions → routes)이므로 versions 테이블 생성 후 추가:
+-- current_version_id 복합 FK: 동일 route 소속 버전만 참조 (타 route 버전 참조 불가)
+-- 순환참조(routes → versions → routes)이므로 versions 생성 후 추가:
+-- 전제: tam_approval_route_versions에 UNIQUE (route_id, version_id) 존재
+--
 -- ALTER TABLE tam_approval_routes
 --     ADD CONSTRAINT tam_routes_current_version_fk
---     FOREIGN KEY (current_version_id)
---     REFERENCES tam_approval_route_versions(version_id)
+--     FOREIGN KEY (route_id, current_version_id)
+--     REFERENCES tam_approval_route_versions(route_id, version_id)
 --     DEFERRABLE INITIALLY DEFERRED;
+--
+-- current_version_id PUBLISHED 상태 검증 트리거 (BEFORE INSERT/UPDATE ON tam_approval_routes):
+--   IF NEW.current_version_id IS NOT NULL THEN
+--     SELECT version_status INTO v_status
+--       FROM tam_approval_route_versions
+--      WHERE version_id = NEW.current_version_id AND route_id = NEW.route_id;
+--     IF v_status IS DISTINCT FROM 'PUBLISHED' THEN
+--       RAISE EXCEPTION 'current_version_id must reference a PUBLISHED version of the same route';
+--     END IF;
+--   END IF;
+--
+-- 동시 발행 경쟁 직렬화: 발행 트랜잭션 내 tam_approval_routes 행 SELECT FOR UPDATE 선행
 
 -- NULL 포함 복합 UNIQUE: PostgreSQL NULLS NOT DISTINCT (v15+)
 -- 또는 하위 버전 대안: expression index 또는 partial unique index per scope
@@ -179,17 +194,13 @@ CREATE TABLE tam_approval_route_versions (
         version_status != 'PUBLISHED'
         OR (published_at IS NOT NULL AND published_by IS NOT NULL)
     ),
-    UNIQUE (route_id, version_number)
+    UNIQUE (route_id, version_number),
+    UNIQUE (route_id, version_id)      -- 복합 FK 참조 대상: routes.(route_id, current_version_id)에 사용
 );
 
--- route_id당 PUBLISHED 버전은 1개만
-CREATE UNIQUE INDEX tam_route_ver_single_published
-    ON tam_approval_route_versions (route_id)
-    WHERE version_status = 'PUBLISHED';
-
 -- 현재 버전 선택: tam_approval_routes.current_version_id → 현재 활성 버전 (원자적 포인터 교체)
--- PUBLISHED 버전은 이력으로 다수 존재 가능; current_version_id가 활성 버전 지정
--- (tam_route_ver_single_published partial index 제거됨 — 포인터 방식으로 대체)
+-- PUBLISHED 버전은 이력으로 다수 공존 가능; 단일 PUBLISHED 제약 없음
+-- (이전 PUBLISHED 버전도 PUBLISHED 상태 유지 — 이력 보존)
 
 -- Append-only policy (PUBLISHED 버전 내용 전체 불변):
 -- BEFORE UPDATE trigger: old.version_status = 'PUBLISHED' → RAISE EXCEPTION (내용·상태 변경 금지)
@@ -772,14 +783,35 @@ def can_approve(actor_user_id, request, step_order, now):
 | tam_approval_effectiveness_revocations | X | request_id → requests.company_id | 서비스: request 접근 시 company_id 검증 |
 | tam_approval_audit_events | O (NOT NULL) | — | company_id NOT NULL으로 격리 |
 
-**DB 수준 교차회사 참조 한계 및 서비스 계층 의무:**
+**DB 수준 교차회사 참조 방지 — 핵심 관계 트리거:**
+
+`tam_approval_requests.resolved_route_id`가 요청 `company_id`와 다른 회사의 route를 참조하지 못하도록 DB 트리거로 강제:
+
+```sql
+-- BEFORE INSERT/UPDATE ON tam_approval_requests:
+--   IF NEW.resolved_route_id IS NOT NULL THEN
+--     SELECT company_id INTO v_company
+--       FROM tam_approval_routes WHERE route_id = NEW.resolved_route_id;
+--     IF v_company IS DISTINCT FROM NEW.company_id THEN
+--       RAISE EXCEPTION 'resolved_route_id cross-company reference forbidden';
+--     END IF;
+--   END IF;
+```
+
+이 트리거가 적용되면 FK 체인 격리 전파:
+- `version → route` FK → route.company_id 검증됨 → version/step/assignee 자동 격리
+- `snapshot/decision → request` FK → request.company_id 검증됨 → 자동 격리
+- `delegation_revocation → delegation` FK → delegation.company_id (NOT NULL) 경유 격리
+- `effectiveness_revocation → request` FK → request.company_id 경유 격리
+
+**서비스 계층 의무 (DB 트리거 보완):**
 - TAM은 service_role로 실행하므로 RLS 없음
 - company_id 직접 보유 엔티티: NOT NULL + 서비스 계층이 `ctx.company_id` 주입으로 강제
-- FK 체인 엔티티: DB에 company_id 없음 → 서비스 계층 필수 검증 목록:
+- DB 트리거 + 서비스 검증 이중 방어:
   1. route 조회·사용 시: `routes.company_id == ctx.company_id`
   2. request 처리 시: `requests.company_id == ctx.company_id`
   3. delegation 처리 시: `delegations.company_id == ctx.company_id`
-  4. version/step/assignee 접근 시: route_id 경유 company_id 검증
+  4. version/step/assignee 접근 시: route_id 경유 company_id 검증 (트리거가 1차 방어)
 
 ---
 
