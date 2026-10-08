@@ -1,0 +1,14 @@
+{
+  "name": "tai-reference-forms-scripts",
+  "version": "1.0.0",
+  "description": "TAI 서식 생성 스크립트 (WO-054)",
+  "scripts": {
+    "gen-docx": "node gen_c002_docx.cjs",
+    "gen-pdf": "python3 gen_c002_pdf.py",
+    "gen-all": "node gen_c002_docx.cjs && python3 gen_c002_pdf.py"
+  },
+  "dependencies": {
+    "docx": "9.9.0"
+  },
+  "license": "MIT"
+}

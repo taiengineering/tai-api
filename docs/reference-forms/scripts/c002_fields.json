@@ -1,0 +1,47 @@
+{
+  "document": {
+    "title": "안전보건 목표 및 추진계획서",
+    "doc_id": "TAI-FORM-C002-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1"
+  },
+  "basic_info": {
+    "fields": [
+      {"id": "N01", "label": "사업장명", "required": false, "source": "TAI_NEW_PROPOSAL"},
+      {"id": "N02", "label": "작성일",   "required": false, "source": "TAI_NEW_PROPOSAL"},
+      {"id": "N03", "label": "문서번호", "required": false, "source": "TAI_NEW_PROPOSAL"},
+      {"id": "N04", "label": "적용 연도","required": false, "source": "TAI_NEW_PROPOSAL"}
+    ]
+  },
+  "approval": {
+    "source": "SOURCE_VERIFIED",
+    "total_width_mm": 90,
+    "min_height_mm": 15,
+    "fields": [
+      {"id": "F01", "label": "작성", "source": "SOURCE_VERIFIED"},
+      {"id": "F02", "label": "검토", "source": "SOURCE_VERIFIED"},
+      {"id": "F03", "label": "승인", "source": "SOURCE_VERIFIED"}
+    ]
+  },
+  "corporate_goal": {
+    "id": "F04",
+    "label": "전사 목표",
+    "source": "SOURCE_VERIFIED",
+    "min_height_mm": 22
+  },
+  "plan_table": {
+    "default_row_count": 5,
+    "min_row_height_mm": 12,
+    "extra_rows_note": "※ 행이 부족할 경우 추가하십시오.",
+    "columns": [
+      {"id": "F05", "label": "목표·세부\n추진계획", "width_mm": 58, "align": "left",   "source": "SOURCE_VERIFIED"},
+      {"id": "F06", "label": "추진일정",             "width_mm": 28, "align": "center", "source": "SOURCE_VERIFIED"},
+      {"id": "F07", "label": "성과지표",             "width_mm": 24, "align": "left",   "source": "SOURCE_VERIFIED"},
+      {"id": "F08", "label": "담당부서",             "width_mm": 20, "align": "center", "source": "SOURCE_VERIFIED"},
+      {"id": "F09", "label": "예산\n(만원)",         "width_mm": 22, "align": "right",  "source": "SOURCE_VERIFIED"},
+      {"id": "F10", "label": "달성률",               "width_mm": 18, "align": "center", "source": "SOURCE_VERIFIED"}
+    ]
+  }
+}
