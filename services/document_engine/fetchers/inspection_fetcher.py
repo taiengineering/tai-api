@@ -62,9 +62,9 @@ class InspectionFetcher(BaseFetcher):
         else:
             status_code = _STATUS_ALIAS.get(result_summary, result_summary)
 
-        # 2) 대상 설비 + factory_id (asset 경유)
+        # 2) 대상 설비 + factory_id (effective record 우선, asset fallback)
         asset: Dict[str, Any] = {}
-        factory_id = None
+        factory_id = record.get("factory_id")  # effective record authority
         asset_id = record.get("asset_id")
         if asset_id:
             try:
@@ -75,7 +75,8 @@ class InspectionFetcher(BaseFetcher):
                 )
                 if a.data:
                     asset = a.data[0]
-                    factory_id = asset.get("factory_id")
+                    if not factory_id:
+                        factory_id = asset.get("factory_id")
             except Exception as e:
                 log.warning("asset fetch 실패: %s", e)
 
@@ -121,7 +122,12 @@ class InspectionFetcher(BaseFetcher):
         active.sort(key=lambda e: (e.get("created_at") is None, e.get("created_at") or "", str(e.get("result_id"))))
 
         # item_name fallback: result → inspection_set_items → "항목명 미등록"
-        _item_ids = [e["inspection_set_item_id"] for e in active if e.get("inspection_set_item_id")]
+        # Only query IDs for results where item_name is absent (no N+1, deduped)
+        _item_ids = list(dict.fromkeys(
+            e["inspection_set_item_id"]
+            for e in active
+            if not e.get("item_name") and e.get("inspection_set_item_id")
+        ))
         _item_name_map: Dict[str, str] = {}
         if _item_ids:
             try:

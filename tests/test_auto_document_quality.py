@@ -291,6 +291,168 @@ def test_T14_inline_css_noop_when_no_link_tag():
     assert result == fake_html
 
 
+# ── C1-C5: CORR-001 — factory_id authority + item_name query scope ───────────
+
+class _FakeTableQuery:
+    """Generic filterable query builder for _FakeSBFull."""
+
+    def __init__(self, data):
+        self._data = list(data)
+        self._eq_filters: dict = {}
+        self._in_filter: tuple = ()
+
+    def select(self, _): return self
+    def limit(self, _): return self
+
+    def eq(self, col, val):
+        self._eq_filters[col] = val
+        return self
+
+    def in_(self, col, vals):
+        self._in_filter = (col, list(vals))
+        return self
+
+    def execute(self):
+        data = self._data
+        for col, val in self._eq_filters.items():
+            data = [r for r in data if r.get(col) == val]
+        if self._in_filter:
+            col, vals = self._in_filter
+            data = [r for r in data if r.get(col) in vals]
+        return _FakeItemsResult(data)
+
+
+class _FakeSBFull:
+    """Fake SB that serves all tables the InspectionFetcher may call."""
+
+    def __init__(self, factory_data=None, company_data=None, asset_data=None, items_data=None):
+        self._tables = {
+            "factories": factory_data or [],
+            "companies": company_data or [],
+            "equipment_assets": asset_data or [],
+            "inspection_set_items": items_data or [],
+            "users": [],
+        }
+
+    def table(self, name):
+        if name in ("safety_inspections", "safety_inspection_results"):
+            raise AssertionError(f"BASE READ FORBIDDEN: {name!r}")
+        if name in self._tables:
+            return _FakeTableQuery(self._tables[name])
+        raise AssertionError(f"unexpected table: {name!r}")
+
+
+class _PatchFull:
+    def __init__(self, record, **sb_kwargs):
+        self._rec = record
+        self._sb = _FakeSBFull(**sb_kwargs)
+        self._orig: dict = {}
+
+    def __enter__(self):
+        self._orig = {"g": F.get_supabase, "r": F.resolve_inspection_record}
+        F.get_supabase = lambda: self._sb
+        F.resolve_inspection_record = lambda iid, sb=None: self._rec
+        return self
+
+    def __exit__(self, *a):
+        F.get_supabase = self._orig["g"]
+        F.resolve_inspection_record = self._orig["r"]
+        return False
+
+
+def _fetch_full(record, **sb_kwargs):
+    fetcher = F.InspectionFetcher.__new__(F.InspectionFetcher)
+    with _PatchFull(record=record, **sb_kwargs):
+        return asyncio.run(fetcher.fetch({"inspection_id": "insp-1"}))
+
+
+def test_C1_null_asset_effective_factory_id_populates_factory_name():
+    """asset_id=NULL + record.factory_id → factories queried, factory_name populated."""
+    factory_data = [{"id": "fac-1", "name": "데모정밀 남동공장", "site_address": "인천광역시", "manager_name": "이재성", "company_id": "co-1"}]
+    company_data = [{"id": "co-1", "name": "데모 제조 (산업)", "logo_url": None, "representative_name": ""}]
+    rec = _record(factory_id="fac-1", asset_id=None)
+    out = _fetch_full(rec, factory_data=factory_data, company_data=company_data)
+    assert out["factory_name"] == "데모정밀 남동공장"
+
+
+def test_C2_null_asset_full_metadata_from_effective_factory():
+    """asset_id=NULL → company_name, factory_address, manager_name all populated."""
+    factory_data = [{"id": "fac-1", "name": "데모정밀 남동공장",
+                     "site_address": "인천광역시 남동구 남동서로 123",
+                     "manager_name": "이재성", "company_id": "co-1"}]
+    company_data = [{"id": "co-1", "name": "데모 제조 (산업)", "logo_url": None, "representative_name": ""}]
+    rec = _record(factory_id="fac-1", asset_id=None)
+    out = _fetch_full(rec, factory_data=factory_data, company_data=company_data)
+    assert out["company_name"] == "데모 제조 (산업)"
+    assert out["factory_name"] == "데모정밀 남동공장"
+    assert out["factory_address"] == "인천광역시 남동구 남동서로 123"
+    assert out["manager_name"] == "이재성"
+
+
+def test_C3_effective_factory_id_wins_over_asset_factory_id():
+    """record.factory_id + asset.factory_id both present → effective record wins."""
+    asset_data = [{"id": "asset-1", "asset_name": "설비A", "asset_code": "A001",
+                   "location_type": "실내", "location_detail": "1층",
+                   "factory_id": "fac-asset"}]
+    factory_data = [{"id": "fac-effective", "name": "유효공장", "site_address": "서울",
+                     "manager_name": "박관리", "company_id": "co-eff"},
+                    {"id": "fac-asset", "name": "자산공장", "site_address": "부산",
+                     "manager_name": "김관리", "company_id": "co-eff"}]
+    company_data = [{"id": "co-eff", "name": "유효회사", "logo_url": None, "representative_name": ""}]
+    rec = _record(factory_id="fac-effective", asset_id="asset-1")
+    out = _fetch_full(rec, factory_data=factory_data, company_data=company_data, asset_data=asset_data)
+    assert out["factory_name"] == "유효공장"  # effective, not "자산공장"
+
+
+def test_C4_asset_factory_id_fallback_when_record_factory_id_absent():
+    """record.factory_id absent → asset.factory_id fallback used."""
+    asset_data = [{"id": "asset-2", "asset_name": "설비B", "asset_code": "B001",
+                   "location_type": "실외", "location_detail": "2층",
+                   "factory_id": "fac-from-asset"}]
+    factory_data = [{"id": "fac-from-asset", "name": "자산공장", "site_address": "부산",
+                     "manager_name": "이관리", "company_id": "co-asset"}]
+    company_data = [{"id": "co-asset", "name": "자산회사", "logo_url": None, "representative_name": ""}]
+    rec = _record(factory_id=None, asset_id="asset-2")
+    out = _fetch_full(rec, factory_data=factory_data, company_data=company_data, asset_data=asset_data)
+    assert out["factory_name"] == "자산공장"
+
+
+def test_C5_item_name_present_excluded_from_batch_query():
+    """result.item_name present → its inspection_set_item_id NOT sent in batch query."""
+    queried_ids: list = []
+
+    class _TrackQuery:
+        def select(self, _): return self
+        def in_(self, col, vals):
+            queried_ids.extend(list(vals))
+            return self
+        def execute(self): return _FakeItemsResult([])
+
+    class _TrackSB:
+        def table(self, name):
+            if name in ("safety_inspections", "safety_inspection_results"):
+                raise AssertionError(f"BASE READ FORBIDDEN: {name!r}")
+            if name == "inspection_set_items":
+                return _TrackQuery()
+            raise AssertionError(f"unexpected table: {name!r}")
+
+    rec = _record(results=[
+        _result("r1", "NORMAL", item_name="직접입력된 항목", inspection_set_item_id="set-1"),
+    ])
+    fetcher = F.InspectionFetcher.__new__(F.InspectionFetcher)
+    orig = {"g": F.get_supabase, "r": F.resolve_inspection_record}
+    F.get_supabase = lambda: _TrackSB()
+    F.resolve_inspection_record = lambda iid, sb=None: rec
+    try:
+        out = asyncio.run(fetcher.fetch({"inspection_id": "insp-1"}))
+    finally:
+        F.get_supabase = orig["g"]
+        F.resolve_inspection_record = orig["r"]
+
+    assert "set-1" not in queried_ids  # not sent because item_name was already present
+    assert out["items"][0]["item_name"] == "직접입력된 항목"
+
+
 if __name__ == "__main__":
     g = dict(globals())
     tests = sorted((n, f) for n, f in g.items() if n.startswith("test_") and callable(f))
