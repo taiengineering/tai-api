@@ -12,6 +12,13 @@ Authorization gate: permission ledger (ROUTE_MANAGER) is OWNER_DECISION_REQUIRED
 Tenant isolation (Layer 2):
   Every operation verifies user['company_id'] == route.company_id before any mutation.
   Existence is hidden behind 404 for cross-company access (no information leak).
+
+R1 concurrency hardening:
+  All write operations acquire SELECT FOR UPDATE on the route row first.
+  publish_version additionally acquires SELECT FOR UPDATE on the version row immediately
+  after the route lock (route → version consistent ordering prevents deadlock).
+  Triggers 3 & 4 acquire FOR UPDATE on the version row within the same transaction,
+  providing an additional guard for direct-SQL access paths.
 """
 from __future__ import annotations
 
@@ -112,6 +119,17 @@ def create_route(
     try:
         conn.autocommit = False
         cur = _cur(conn)
+
+        # R1: validate factory belongs to this company and is ACTIVE
+        if factory_id:
+            cur.execute(
+                "SELECT id FROM factories WHERE id = %s AND company_id = %s AND status_code = 'ACTIVE'",
+                (factory_id, company_id),
+            )
+            if not cur.fetchone():
+                raise TamError(422, "FACTORY_NOT_FOUND",
+                               f"factory {factory_id} not found or not accessible")
+
         cur.execute(
             """
             INSERT INTO tam_approval_routes
@@ -210,7 +228,11 @@ def create_version(
     notes: Optional[str] = None,
     dsn: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Create a new DRAFT version for an existing route."""
+    """Create a new DRAFT version for an existing route.
+
+    R1: Route row is locked (SELECT FOR UPDATE) before computing MAX(version_number)+1
+    to serialize concurrent creates and prevent UNIQUE(route_id, version_number) collisions.
+    """
     actor_company = _user_company(user)
     actor_id = _user_id(user)
 
@@ -219,15 +241,16 @@ def create_version(
         conn.autocommit = False
         cur = _cur(conn)
 
+        # R1: lock route row to serialize concurrent version number assignment
         cur.execute(
-            "SELECT * FROM tam_approval_routes WHERE route_id = %s",
+            "SELECT * FROM tam_approval_routes WHERE route_id = %s FOR UPDATE",
             (route_id,),
         )
         route = cur.fetchone()
         if not route or str(route["company_id"]) != actor_company:
             raise TamError(404, "ROUTE_NOT_FOUND", "route not found")
 
-        # Atomic version_number increment: MAX + 1 within same route
+        # Atomic version_number increment under route lock: MAX + 1 within same route
         cur.execute(
             """
             INSERT INTO tam_approval_route_versions
@@ -257,21 +280,6 @@ def create_version(
 
 # ── Step ──────────────────────────────────────────────────────────────────────
 
-def _version_route_company(cur, version_id: str) -> Optional[str]:
-    """Return the company_id for the route owning this version, or None."""
-    cur.execute(
-        """
-        SELECT r.company_id
-          FROM tam_approval_route_versions v
-          JOIN tam_approval_routes r ON r.route_id = v.route_id
-         WHERE v.version_id = %s
-        """,
-        (version_id,),
-    )
-    row = cur.fetchone()
-    return str(row["company_id"]) if row else None
-
-
 def create_step(
     user: Dict[str, Any],
     *,
@@ -282,6 +290,12 @@ def create_step(
     allow_supplement: bool = False,
     dsn: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """Create a step under a DRAFT version.
+
+    R1: Route row is locked (SELECT FOR UPDATE) before re-checking version status,
+    so a concurrent publish_version cannot promote the version between the tenant
+    check and the INSERT.
+    """
     actor_company = _user_company(user)
     actor_id = _user_id(user)
 
@@ -295,12 +309,29 @@ def create_step(
         conn.autocommit = False
         cur = _cur(conn)
 
-        # Tenant check via route chain
-        ver_company = _version_route_company(cur, version_id)
-        if not ver_company or ver_company != actor_company:
+        # Tenant check via version → route chain (discover route_id; no lock yet)
+        cur.execute(
+            """
+            SELECT r.route_id, r.company_id
+              FROM tam_approval_route_versions v
+              JOIN tam_approval_routes         r ON r.route_id = v.route_id
+             WHERE v.version_id = %s
+            """,
+            (version_id,),
+        )
+        ver_row = cur.fetchone()
+        if not ver_row or str(ver_row["company_id"]) != actor_company:
             raise TamError(404, "VERSION_NOT_FOUND", "version not found")
 
-        # Version must be DRAFT (trigger also enforces, but early rejection here)
+        # R1: lock route to serialize concurrent publish/step operations
+        cur.execute(
+            "SELECT route_id FROM tam_approval_routes WHERE route_id = %s FOR UPDATE",
+            (str(ver_row["route_id"]),),
+        )
+        if not cur.fetchone():
+            raise TamError(404, "VERSION_NOT_FOUND", "version not found")
+
+        # Re-check version status under route lock
         cur.execute(
             "SELECT version_status FROM tam_approval_route_versions WHERE version_id = %s",
             (version_id,),
@@ -344,6 +375,13 @@ def create_assignee(
     user_id: str,
     dsn: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """Add a user as assignee on a DRAFT version's step.
+
+    R1:
+      - Route row locked (SELECT FOR UPDATE) before re-checking version status.
+      - Assignee user_id validated against users table: must exist, be ACTIVE,
+        and belong to the same company as the actor.
+    """
     actor_company = _user_company(user)
     actor_id = _user_id(user)
 
@@ -352,10 +390,10 @@ def create_assignee(
         conn.autocommit = False
         cur = _cur(conn)
 
-        # Tenant check via step → version → route chain
+        # Tenant check via step → version → route chain (discover route_id; no lock yet)
         cur.execute(
             """
-            SELECT r.company_id, v.version_status
+            SELECT r.company_id, r.route_id, v.version_status
               FROM tam_approval_route_steps    s
               JOIN tam_approval_route_versions v ON v.version_id = s.version_id
               JOIN tam_approval_routes         r ON r.route_id   = v.route_id
@@ -366,9 +404,43 @@ def create_assignee(
         row = cur.fetchone()
         if not row or str(row["company_id"]) != actor_company:
             raise TamError(404, "STEP_NOT_FOUND", "step not found")
-        if row["version_status"] != "DRAFT":
+
+        # R1: lock route to serialize concurrent publish/assignee operations
+        cur.execute(
+            "SELECT route_id FROM tam_approval_routes WHERE route_id = %s FOR UPDATE",
+            (str(row["route_id"]),),
+        )
+        if not cur.fetchone():
+            raise TamError(404, "STEP_NOT_FOUND", "step not found")
+
+        # Re-check version status under route lock
+        cur.execute(
+            """
+            SELECT v.version_status
+              FROM tam_approval_route_steps    s
+              JOIN tam_approval_route_versions v ON v.version_id = s.version_id
+             WHERE s.step_id = %s
+            """,
+            (step_id,),
+        )
+        ver_status_row = cur.fetchone()
+        if not ver_status_row or ver_status_row["version_status"] != "DRAFT":
             raise TamError(409, "VERSION_NOT_DRAFT",
                            "can only assign to steps in a DRAFT version")
+
+        # R1: validate assignee — must exist, be ACTIVE, belong to actor's company
+        cur.execute(
+            "SELECT id, company_id, status_code, is_active FROM users WHERE id = %s",
+            (user_id,),
+        )
+        target_user = cur.fetchone()
+        if not target_user:
+            raise TamError(422, "ASSIGNEE_NOT_FOUND", f"user {user_id} not found")
+        if not target_user["is_active"] or target_user["status_code"] != "ACTIVE":
+            raise TamError(422, "ASSIGNEE_INACTIVE", f"user {user_id} is not active")
+        if str(target_user["company_id"]) != actor_company:
+            raise TamError(422, "ASSIGNEE_CROSS_COMPANY",
+                           f"assignee user {user_id} does not belong to actor company")
 
         cur.execute(
             """
@@ -407,15 +479,16 @@ def publish_version(
 ) -> Dict[str, Any]:
     """Atomic publish: DRAFT → PUBLISHED + update routes.current_version_id.
 
-    Transaction:
+    Transaction (R1 lock ordering: route → version):
       1. SELECT route FOR UPDATE  (serialize concurrent publishes per route)
       2. Tenant check
-      3. Version belongs to route + is DRAFT
-      4. All steps have >= 1 assignee
-      5. Steps are sequential starting from 1 (no gaps, no duplicates)
-      6. UPDATE version: DRAFT → PUBLISHED
-      7. UPDATE route: current_version_id = version_id
-      (trigger verifies PUBLISHED status before step 7 commits)
+      3. SELECT version FOR UPDATE  (prevent concurrent step edits while validating)
+      4. Version belongs to route + is DRAFT
+      5. All steps have >= 1 assignee
+      6. Steps are sequential starting from 1 (no gaps, no duplicates)
+      7. UPDATE version: DRAFT → PUBLISHED
+      8. UPDATE route: current_version_id = version_id
+      (trigger 1 verifies PUBLISHED status before step 8 commits)
     """
     actor_company = _user_company(user)
     actor_id = _user_id(user)
@@ -434,9 +507,14 @@ def publish_version(
         if not route or str(route["company_id"]) != actor_company:
             raise TamError(404, "ROUTE_NOT_FOUND", "route not found")
 
-        # 2. Version must belong to this route and be DRAFT
+        # 2. SELECT version FOR UPDATE immediately after route lock (consistent ordering)
+        #    This blocks concurrent step/assignee INSERTs that also lock the version row.
         cur.execute(
-            "SELECT * FROM tam_approval_route_versions WHERE version_id = %s AND route_id = %s",
+            """
+            SELECT * FROM tam_approval_route_versions
+             WHERE version_id = %s AND route_id = %s
+               FOR UPDATE
+            """,
             (version_id, route_id),
         )
         version = cur.fetchone()

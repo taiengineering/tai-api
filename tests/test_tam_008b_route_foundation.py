@@ -1,10 +1,10 @@
-"""TAM-008B — Approval Route Foundation tests.
+"""TAM-008B — Approval Route Foundation tests (R1).
 
-B01–B18 contract tests + T26–T28 implementation gate tests.
+B01–B18 contract tests + T26–T28 implementation gate tests + R01–R10 concurrency/validation tests.
 
 Test environment:
   Local PostgreSQL via TAM_TEST_PG_DSN env var (default: host=localhost dbname=tai_test_tam_foundation)
-  The module-scoped fixture bootstraps schema from migration SQL.
+  The module-scoped fixture bootstraps schema from migration SQL plus stub users/factories tables.
   All DB tests are skipped if the DSN is unreachable.
 
 Categories:
@@ -12,13 +12,13 @@ Categories:
   B08, B12, B15: PostgreSQL integration — publish + history + concurrent
   B18: HTTP router (TestClient, no DB)
   T26–T28: PostgreSQL integration gate tests
+  R01–R10: R1 concurrency/immutability/validation tests
 """
 from __future__ import annotations
 
 import os
 import pathlib
 import threading
-import time
 import uuid
 
 import psycopg2
@@ -45,6 +45,11 @@ U1   = "11111111-1111-1111-1111-111111111111"
 U2   = "22222222-2222-2222-2222-222222222222"
 U3   = "33333333-3333-3333-3333-333333333333"
 
+# R1 additional stubs
+U_INACTIVE      = "99999999-9999-9999-9999-000000000001"   # INACTIVE CO_A
+U_CO_B          = "99999999-9999-9999-9999-000000000002"   # ACTIVE CO_B
+FACTORY_UNKNOWN = "dddddddd-dead-beef-dead-000000000099"   # not in factories stub
+
 USER_A = {"id": U1, "company_id": CO_A, "factory_id": FAC1, "role_code": "001"}
 USER_B = {"id": U2, "company_id": CO_B, "factory_id": FAC2, "role_code": "001"}
 
@@ -66,12 +71,12 @@ _SKIP_DB = pytest.mark.skipif(not _pg_available(), reason="TAM test DB not avail
 
 @pytest.fixture(scope="module")
 def pg():
-    """Bootstrap test DB schema from migration SQL. Yields open connection."""
+    """Bootstrap test DB schema from migration SQL + stub users/factories tables."""
     conn = psycopg2.connect(_DSN)
     conn.autocommit = True
     cur = conn.cursor()
 
-    # Drop and recreate tables to ensure clean state
+    # Drop TAM tables and functions
     cur.execute("""
         DROP TABLE IF EXISTS
             tam_approval_step_assignees,
@@ -86,6 +91,45 @@ def pg():
             tam_assignees_draft_only_fn
         CASCADE;
     """)
+
+    # Drop and recreate stub reference tables (users, factories)
+    cur.execute("""
+        DROP TABLE IF EXISTS users, factories CASCADE;
+    """)
+    cur.execute("""
+        CREATE TABLE factories (
+            id          UUID PRIMARY KEY,
+            company_id  UUID NOT NULL,
+            status_code TEXT NOT NULL DEFAULT 'ACTIVE'
+        );
+        CREATE TABLE users (
+            id          UUID PRIMARY KEY,
+            company_id  UUID NOT NULL,
+            status_code TEXT NOT NULL DEFAULT 'ACTIVE',
+            is_active   BOOLEAN NOT NULL DEFAULT true
+        );
+    """)
+
+    # Insert stable test factories (both CO_A)
+    cur.execute(
+        "INSERT INTO factories (id, company_id, status_code) VALUES (%s, %s, 'ACTIVE'), (%s, %s, 'ACTIVE')",
+        (FAC1, CO_A, FAC2, CO_A),
+    )
+
+    # Insert stable test users
+    cur.execute(
+        """
+        INSERT INTO users (id, company_id, status_code, is_active) VALUES
+            (%s, %s, 'ACTIVE',   true),   -- U1: actor (CO_A)
+            (%s, %s, 'ACTIVE',   true),   -- U2: assignee (CO_A)
+            (%s, %s, 'ACTIVE',   true),   -- U3: assignee (CO_A)
+            (%s, %s, 'INACTIVE', false),  -- U_INACTIVE: inactive (CO_A)
+            (%s, %s, 'ACTIVE',   true)    -- U_CO_B: cross-company (CO_B)
+        """,
+        (U1, CO_A, U2, CO_A, U3, CO_A, U_INACTIVE, CO_A, U_CO_B, CO_B),
+    )
+
+    # Apply TAM migration schema
     cur.execute(_MIGRATION_SQL)
     yield conn
     conn.close()
@@ -93,7 +137,7 @@ def pg():
 
 @pytest.fixture(autouse=True)
 def clean(pg):
-    """Truncate tables before each test."""
+    """Truncate TAM tables before each test (users/factories are stable reference data)."""
     cur = pg.cursor()
     cur.execute("""
         TRUNCATE tam_approval_step_assignees,
@@ -355,7 +399,6 @@ def test_b07_publish_rejects_step_with_no_assignee(pg):
     ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
     create_step(USER_A, version_id=ver["version_id"],
                 step_order=1, step_name="S1", step_type="SEQUENTIAL", dsn=_DSN)
-    # No assignee added
     with pytest.raises(TamError) as exc:
         publish_version(USER_A, route_id=route["route_id"],
                         version_id=ver["version_id"], dsn=_DSN)
@@ -544,14 +587,12 @@ def test_b12_multiple_published_versions_coexist(pg):
     route = _make_route(pg)
     rid   = route["route_id"]
 
-    # Version 1: publish
     v1   = create_version(USER_A, route_id=rid, dsn=_DSN)
     s1   = create_step(USER_A, version_id=v1["version_id"],
                        step_order=1, step_name="S1", step_type="SEQUENTIAL", dsn=_DSN)
     create_assignee(USER_A, step_id=s1["step_id"], user_id=U2, dsn=_DSN)
     publish_version(USER_A, route_id=rid, version_id=v1["version_id"], dsn=_DSN)
 
-    # Version 2: publish
     v2   = create_version(USER_A, route_id=rid, dsn=_DSN)
     s2   = create_step(USER_A, version_id=v2["version_id"],
                        step_order=1, step_name="S1b", step_type="PARALLEL_ANY", dsn=_DSN)
@@ -559,8 +600,6 @@ def test_b12_multiple_published_versions_coexist(pg):
     publish_version(USER_A, route_id=rid, version_id=v2["version_id"], dsn=_DSN)
 
     cur = _dict_cur(pg)
-
-    # Both versions should exist in PUBLISHED state
     cur.execute(
         "SELECT version_id, version_number, version_status "
         "FROM tam_approval_route_versions WHERE route_id = %s ORDER BY version_number",
@@ -570,15 +609,12 @@ def test_b12_multiple_published_versions_coexist(pg):
     assert len(versions) == 2
     assert all(v["version_status"] == "PUBLISHED" for v in versions)
 
-    # current_version_id points to v2 (latest)
     cur.execute(
         "SELECT current_version_id FROM tam_approval_routes WHERE route_id = %s",
         (rid,),
     )
     r = cur.fetchone()
     assert str(r["current_version_id"]) == v2["version_id"]
-
-    # v1 is still PUBLISHED (not SUPERSEDED or deleted)
     assert versions[0]["version_status"] == "PUBLISHED"
 
 
@@ -593,13 +629,11 @@ def test_b13_current_version_id_cross_route_fk_rejected(pg):
     route_b = _make_route(pg, company_id=CO_A, route_scope="FACTORY_DEFAULT",
                           factory_id=FAC1, display_name="RouteB")
 
-    # Create and publish version for route_b
     ver_b = _make_version(pg, route_b["route_id"])
     step_b = _make_step(pg, ver_b["version_id"])
     _make_assignee(pg, step_b["step_id"])
     _publish(pg, route_b["route_id"], ver_b["version_id"])
 
-    # Attempt to point route_a.current_version_id → route_b's version (cross-route)
     cur = pg.cursor()
     with pytest.raises(psycopg2.Error):
         cur.execute(
@@ -618,7 +652,7 @@ def test_b13_current_version_id_cross_route_fk_rejected(pg):
 def test_b14_current_version_id_draft_rejected(pg):
     """T27 gate: PUBLISHED guard trigger rejects DRAFT version pointer."""
     route = _make_route(pg)
-    ver   = _make_version(pg, route["route_id"])  # DRAFT, not published
+    ver   = _make_version(pg, route["route_id"])
 
     cur = pg.cursor()
     with pytest.raises(psycopg2.Error) as exc:
@@ -667,11 +701,9 @@ def test_b15_concurrent_publish_serialized(pg):
     t1.join()
     t2.join()
 
-    # Exactly one succeeds; other fails with PUBLISHED status (not DRAFT)
     assert len(results) == 1, f"Expected 1 success, got {len(results)}"
     assert results[0]["version_status"] == "PUBLISHED"
 
-    # Verify route.current_version_id is consistent
     cur = _dict_cur(pg)
     cur.execute(
         "SELECT current_version_id FROM tam_approval_routes WHERE route_id = %s",
@@ -688,7 +720,6 @@ def test_b15_concurrent_publish_serialized(pg):
 @_SKIP_DB
 def test_b16_cross_company_route_create_rejected(pg):
     from services.tam.routes_svc import create_route, TamError
-    # USER_B (CO_B) tries to create route for CO_A
     with pytest.raises(TamError) as exc:
         create_route(USER_B, company_id=CO_A, route_scope="COMPANY_DEFAULT",
                      display_name="Intrusion", dsn=_DSN)
@@ -701,7 +732,6 @@ def test_b16_cross_company_route_get_hidden(pg):
     from services.tam.routes_svc import create_route, get_route, TamError
     route = create_route(USER_A, company_id=CO_A, route_scope="COMPANY_DEFAULT",
                          display_name="Private", dsn=_DSN)
-    # USER_B cannot see CO_A's route — existence is hidden
     with pytest.raises(TamError) as exc:
         get_route(USER_B, route_id=route["route_id"], dsn=_DSN)
     assert exc.value.http_status == 404
@@ -713,13 +743,12 @@ def test_b16_cross_company_route_get_hidden(pg):
 
 @_SKIP_DB
 def test_b17_sql_error_triggers_rollback(pg):
-    """publish_version ROLLBACK: if trigger raises, no partial state committed."""
+    """publish_version ROLLBACK: if version is already PUBLISHED, no partial state committed."""
     route = _make_route(pg)
     ver   = _make_version(pg, route["route_id"])
     step  = _make_step(pg, ver["version_id"])
     _make_assignee(pg, step["step_id"])
 
-    # Manually mark version as PUBLISHED first (simulating already-published state)
     cur = pg.cursor()
     cur.execute(
         """
@@ -732,14 +761,12 @@ def test_b17_sql_error_triggers_rollback(pg):
     pg.commit()
 
     from services.tam.routes_svc import publish_version, TamError
-    # publish_version must fail: version is already PUBLISHED
     with pytest.raises(TamError) as exc:
         publish_version(USER_A, route_id=route["route_id"],
                         version_id=ver["version_id"], dsn=_DSN)
     assert exc.value.http_status == 409
     assert "NOT_DRAFT" in exc.value.code
 
-    # current_version_id must NOT have been updated (ROLLBACK happened)
     cur2 = _dict_cur(pg)
     cur2.execute(
         "SELECT current_version_id FROM tam_approval_routes WHERE route_id = %s",
@@ -754,8 +781,7 @@ def test_b17_sql_error_triggers_rollback(pg):
 # ═══════════════════════════════════════════════════════════════
 
 def test_b18_router_write_endpoints_return_403():
-    """All route management endpoints must return 403 regardless of auth state.
-    Uses TestClient with mocked get_current_user; no DB required."""
+    """All route management endpoints must return 403 regardless of auth state."""
     import main as app_module
     from routers.auth import get_current_user
 
@@ -794,8 +820,7 @@ def test_b18_router_write_endpoints_return_403():
 
 @_SKIP_DB
 def test_t26_composite_fk_cross_route_rejected(pg):
-    """T26: tam_routes_current_version_fk prevents pointing to another route's version.
-    This is B13 exercised directly against the DB constraint (not via service)."""
+    """T26: tam_routes_current_version_fk prevents pointing to another route's version."""
     route_a = _make_route(pg, route_scope="COMPANY_DEFAULT", display_name="A")
     route_b = _make_route(pg, company_id=CO_A, route_scope="FACTORY_DEFAULT",
                           factory_id=FAC1, display_name="B")
@@ -805,9 +830,6 @@ def test_t26_composite_fk_cross_route_rejected(pg):
     _make_assignee(pg, step_b["step_id"])
     _publish(pg, route_b["route_id"], ver_b["version_id"])
 
-    # DEFERRABLE FK is checked at COMMIT time, but the PUBLISHED guard trigger fires
-    # immediately (BEFORE UPDATE). Either mechanism correctly rejects the cross-route
-    # reference — the invariant is that the UPDATE is rejected at DB level.
     cur = pg.cursor()
     with pytest.raises(psycopg2.Error):
         cur.execute(
@@ -826,7 +848,7 @@ def test_t26_composite_fk_cross_route_rejected(pg):
 def test_t27_published_guard_trigger_rejects_draft_pointer(pg):
     """T27: tam_routes_published_guard_trg raises exception for DRAFT current_version_id."""
     route = _make_route(pg)
-    ver   = _make_version(pg, route["route_id"])  # DRAFT
+    ver   = _make_version(pg, route["route_id"])
 
     cur = pg.cursor()
     with pytest.raises(psycopg2.Error) as exc:
@@ -846,10 +868,7 @@ def test_t27_published_guard_trigger_rejects_draft_pointer(pg):
 @_SKIP_DB
 def test_t28_concurrent_publish_select_for_update_serialization(pg):
     """T28: publish_version uses SELECT FOR UPDATE on routes row.
-    Two concurrent publish attempts on the same version:
-      - One succeeds (PUBLISHED + current_version_id set)
-      - Other fails (version is no longer DRAFT when it acquires the lock)
-    Final current_version_id is consistent — exactly one value."""
+    Three concurrent publish attempts on the same version: exactly one succeeds."""
     from services.tam.routes_svc import (create_route, create_version,
                                           create_step, create_assignee,
                                           publish_version, TamError)
@@ -892,3 +911,281 @@ def test_t28_concurrent_publish_select_for_update_serialization(pg):
     )
     r = cur.fetchone()
     assert str(r["current_version_id"]) == ver["version_id"]
+
+
+# ═══════════════════════════════════════════════════════════════
+# R01 — Route lock serializes concurrent version creation: unique numbers
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_r01_concurrent_version_creation_unique_numbers(pg):
+    """R1: create_version acquires route FOR UPDATE before MAX+1.
+    Three concurrent creates yield unique version numbers [1, 2, 3]."""
+    from services.tam.routes_svc import create_route, create_version
+    route = create_route(USER_A, company_id=CO_A, route_scope="COMPANY_DEFAULT",
+                         display_name="R01-Route", dsn=_DSN)
+
+    results: list = []
+    errors:  list = []
+    lock = threading.Lock()
+
+    def _create():
+        try:
+            v = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+            with lock:
+                results.append(v["version_number"])
+        except Exception as e:
+            with lock:
+                errors.append(str(e))
+
+    threads = [threading.Thread(target=_create) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"Unexpected errors during concurrent create_version: {errors}"
+    assert sorted(results) == [1, 2, 3], (
+        f"Expected unique version numbers [1,2,3], got {sorted(results)}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# R02 — create_step on published version returns 409 (route lock re-check)
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_r02_create_step_after_publish_returns_409(pg):
+    """R1: create_step re-checks version status under route lock.
+    After publish_version completes, create_step returns 409 VERSION_NOT_DRAFT."""
+    from services.tam.routes_svc import (create_route, create_version, create_step,
+                                          create_assignee, publish_version, TamError)
+    route = create_route(USER_A, company_id=CO_A, route_scope="DOCUMENT_TYPE",
+                         scope_key="R02", display_name="R02-Route", dsn=_DSN)
+    ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+    step  = create_step(USER_A, version_id=ver["version_id"],
+                        step_order=1, step_name="S1", step_type="SEQUENTIAL", dsn=_DSN)
+    create_assignee(USER_A, step_id=step["step_id"], user_id=U2, dsn=_DSN)
+    publish_version(USER_A, route_id=route["route_id"], version_id=ver["version_id"], dsn=_DSN)
+
+    with pytest.raises(TamError) as exc:
+        create_step(USER_A, version_id=ver["version_id"],
+                    step_order=2, step_name="S2", step_type="SEQUENTIAL", dsn=_DSN)
+    assert exc.value.http_status == 409
+    assert "NOT_DRAFT" in exc.value.code
+
+
+# ═══════════════════════════════════════════════════════════════
+# R03 — Trigger 3 UPDATE: OLD.version_id check (FOR UPDATE gate)
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_r03_trigger_old_version_check_on_step_update(pg):
+    """R1 trigger 3 UPDATE path: OLD.version_id is PUBLISHED → exception raised."""
+    route = _make_route(pg)
+    ver   = _make_version(pg, route["route_id"])
+    step  = _make_step(pg, ver["version_id"])
+    _make_assignee(pg, step["step_id"])
+    _publish(pg, route["route_id"], ver["version_id"])
+
+    cur = pg.cursor()
+    with pytest.raises(psycopg2.Error) as exc:
+        cur.execute(
+            "UPDATE tam_approval_route_steps SET allow_supplement = true WHERE step_id = %s",
+            (step["step_id"],),
+        )
+        pg.commit()
+    pg.rollback()
+    err_msg = str(exc.value).lower()
+    assert "forbidden" in err_msg or "non-draft" in err_msg
+
+
+# ═══════════════════════════════════════════════════════════════
+# R04 — Trigger 3 UPDATE: NEW.version_id check (cross-version move)
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_r04_trigger_new_version_check_on_step_update(pg):
+    """R1 trigger 3 UPDATE path: NEW.version_id is PUBLISHED → exception raised,
+    even when OLD.version_id was DRAFT."""
+    # Route A — published version
+    route_a = _make_route(pg, route_scope="COMPANY_DEFAULT", display_name="A")
+    ver_pub = _make_version(pg, route_a["route_id"])
+    step_pub = _make_step(pg, ver_pub["version_id"])
+    _make_assignee(pg, step_pub["step_id"])
+    _publish(pg, route_a["route_id"], ver_pub["version_id"])
+
+    # Route B — draft version with a step we will try to reassign
+    route_b = _make_route(pg, route_scope="FACTORY_DEFAULT", factory_id=FAC1)
+    ver_draft = _make_version(pg, route_b["route_id"])
+    step_draft = _make_step(pg, ver_draft["version_id"])
+
+    # Attempt to reassign step_draft to the PUBLISHED version (NEW-side violation)
+    cur = pg.cursor()
+    with pytest.raises(psycopg2.Error) as exc:
+        cur.execute(
+            "UPDATE tam_approval_route_steps SET version_id = %s WHERE step_id = %s",
+            (ver_pub["version_id"], step_draft["step_id"]),
+        )
+        pg.commit()
+    pg.rollback()
+    err_msg = str(exc.value).lower()
+    assert "forbidden" in err_msg or "non-draft" in err_msg
+
+
+# ═══════════════════════════════════════════════════════════════
+# R05 — Trigger 4 UPDATE: OLD step's version check
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_r05_trigger_assignee_update_old_version_check(pg):
+    """R1 trigger 4 UPDATE path: OLD.step_id's version is PUBLISHED → exception raised."""
+    route = _make_route(pg)
+    ver   = _make_version(pg, route["route_id"])
+    step  = _make_step(pg, ver["version_id"])
+    asn   = _make_assignee(pg, step["step_id"])
+    _publish(pg, route["route_id"], ver["version_id"])
+
+    cur = pg.cursor()
+    with pytest.raises(psycopg2.Error):
+        cur.execute(
+            "UPDATE tam_approval_step_assignees SET assigned_by = %s WHERE assignee_id = %s",
+            (U3, asn["assignee_id"]),
+        )
+        pg.commit()
+    pg.rollback()
+
+
+# ═══════════════════════════════════════════════════════════════
+# R06 — ASSIGNEE_INACTIVE: inactive user rejected
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_r06_inactive_assignee_rejected(pg):
+    """R1: create_assignee validates user status; inactive user raises TamError 422."""
+    from services.tam.routes_svc import (create_route, create_version, create_step,
+                                          create_assignee, TamError)
+    route = create_route(USER_A, company_id=CO_A, route_scope="COMPANY_DEFAULT",
+                         display_name="R06-Route", dsn=_DSN)
+    ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+    step  = create_step(USER_A, version_id=ver["version_id"],
+                        step_order=1, step_name="S1", step_type="SEQUENTIAL", dsn=_DSN)
+
+    with pytest.raises(TamError) as exc:
+        create_assignee(USER_A, step_id=step["step_id"], user_id=U_INACTIVE, dsn=_DSN)
+    assert exc.value.http_status == 422
+    assert exc.value.code == "ASSIGNEE_INACTIVE"
+
+
+# ═══════════════════════════════════════════════════════════════
+# R07 — ASSIGNEE_CROSS_COMPANY: different-company user rejected
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_r07_cross_company_assignee_rejected(pg):
+    """R1: create_assignee validates assignee company; CO_B user raises TamError 422."""
+    from services.tam.routes_svc import (create_route, create_version, create_step,
+                                          create_assignee, TamError)
+    route = create_route(USER_A, company_id=CO_A, route_scope="COMPANY_DEFAULT",
+                         display_name="R07-Route", dsn=_DSN)
+    ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+    step  = create_step(USER_A, version_id=ver["version_id"],
+                        step_order=1, step_name="S1", step_type="SEQUENTIAL", dsn=_DSN)
+
+    with pytest.raises(TamError) as exc:
+        create_assignee(USER_A, step_id=step["step_id"], user_id=U_CO_B, dsn=_DSN)
+    assert exc.value.http_status == 422
+    assert exc.value.code == "ASSIGNEE_CROSS_COMPANY"
+
+
+# ═══════════════════════════════════════════════════════════════
+# R08 — FACTORY_NOT_FOUND: unknown factory_id rejected
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_r08_factory_not_found_rejected(pg):
+    """R1: create_route validates factory_id against DB; unknown factory raises TamError 422."""
+    from services.tam.routes_svc import create_route, TamError
+    with pytest.raises(TamError) as exc:
+        create_route(USER_A, company_id=CO_A, factory_id=FACTORY_UNKNOWN,
+                     route_scope="FACTORY_DEFAULT", display_name="R08-Route", dsn=_DSN)
+    assert exc.value.http_status == 422
+    assert exc.value.code == "FACTORY_NOT_FOUND"
+
+
+# ═══════════════════════════════════════════════════════════════
+# R09 — Version lock in publish_version: sequential idempotency
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_r09_publish_version_idempotency_guard(pg):
+    """R1: publish_version acquires version FOR UPDATE.
+    Second call on an already-PUBLISHED version returns 409 NOT_DRAFT."""
+    from services.tam.routes_svc import (create_route, create_version, create_step,
+                                          create_assignee, publish_version, TamError)
+    route = create_route(USER_A, company_id=CO_A, route_scope="DOCUMENT_TYPE",
+                         scope_key="R09", display_name="R09-Route", dsn=_DSN)
+    ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+    step  = create_step(USER_A, version_id=ver["version_id"],
+                        step_order=1, step_name="S1", step_type="SEQUENTIAL", dsn=_DSN)
+    create_assignee(USER_A, step_id=step["step_id"], user_id=U2, dsn=_DSN)
+
+    result = publish_version(USER_A, route_id=route["route_id"],
+                             version_id=ver["version_id"], dsn=_DSN)
+    assert result["version_status"] == "PUBLISHED"
+
+    with pytest.raises(TamError) as exc:
+        publish_version(USER_A, route_id=route["route_id"],
+                        version_id=ver["version_id"], dsn=_DSN)
+    assert exc.value.http_status == 409
+    assert "NOT_DRAFT" in exc.value.code
+
+
+# ═══════════════════════════════════════════════════════════════
+# R10 — No deadlock: concurrent publishes on different routes
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_r10_no_deadlock_concurrent_different_routes(pg):
+    """R1 lock ordering (route → version) prevents deadlock.
+    Two concurrent publishes on independent routes both complete without hanging."""
+    from services.tam.routes_svc import (create_route, create_version, create_step,
+                                          create_assignee, publish_version)
+
+    def _setup(scope_key: str):
+        route = create_route(USER_A, company_id=CO_A, route_scope="DOCUMENT_TYPE",
+                             scope_key=scope_key, display_name=f"R10-{scope_key}", dsn=_DSN)
+        ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+        step  = create_step(USER_A, version_id=ver["version_id"],
+                            step_order=1, step_name="S", step_type="SEQUENTIAL", dsn=_DSN)
+        create_assignee(USER_A, step_id=step["step_id"], user_id=U2, dsn=_DSN)
+        return route["route_id"], ver["version_id"]
+
+    rid1, vid1 = _setup("R10_ROUTE1")
+    rid2, vid2 = _setup("R10_ROUTE2")
+
+    results: list = []
+    errors:  list = []
+    lock = threading.Lock()
+
+    def _pub(rid, vid):
+        try:
+            publish_version(USER_A, route_id=rid, version_id=vid, dsn=_DSN)
+            with lock:
+                results.append("ok")
+        except Exception as e:
+            with lock:
+                errors.append(str(e))
+
+    t1 = threading.Thread(target=_pub, args=(rid1, vid1))
+    t2 = threading.Thread(target=_pub, args=(rid2, vid2))
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    assert not t1.is_alive() and not t2.is_alive(), (
+        "Deadlock detected: one or more threads did not complete within 10s"
+    )
+    assert len(errors) == 0, f"Unexpected errors: {errors}"
+    assert len(results) == 2, f"Expected 2 successes, got {results}"

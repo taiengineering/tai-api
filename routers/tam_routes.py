@@ -8,7 +8,7 @@ Design contract: docs/TAI_WO_TAM_006_DESIGN_CONSOLIDATION.md §6
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict

@@ -192,27 +192,64 @@ CREATE TRIGGER tam_version_immutability_trg
 
 
 -- ════════════════════════════════════════════════════════════════════
--- TRIGGER 3: tam_approval_route_steps — draft-only enforcement
--- INSERT/UPDATE/DELETE forbidden when version is not DRAFT
+-- TRIGGER 3: tam_approval_route_steps — draft-only enforcement (R1)
+-- INSERT/UPDATE/DELETE forbidden when version is not DRAFT.
+-- R1: uses SELECT ... FOR UPDATE on the version row to prevent races with
+--     concurrent publish_version. UPDATE checks BOTH OLD and NEW version_id.
 -- ════════════════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION tam_steps_draft_only_fn()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 DECLARE
     v_status TEXT;
-    v_ver_id UUID;
 BEGIN
-    v_ver_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.version_id ELSE NEW.version_id END;
-    SELECT version_status INTO v_status
-      FROM tam_approval_route_versions
-     WHERE version_id = v_ver_id;
-    IF v_status IS DISTINCT FROM 'DRAFT' THEN
-        RAISE EXCEPTION
-            'tam_approval_route_steps: modifications forbidden on non-DRAFT version (status=%)' ,
-            v_status;
+    IF TG_OP = 'INSERT' THEN
+        SELECT version_status INTO v_status
+          FROM tam_approval_route_versions
+         WHERE version_id = NEW.version_id FOR UPDATE;
+        IF v_status IS DISTINCT FROM 'DRAFT' THEN
+            RAISE EXCEPTION
+                'tam_approval_route_steps: modifications forbidden on non-DRAFT version (status=%)',
+                v_status;
+        END IF;
+        RETURN NEW;
     END IF;
-    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
-    RETURN NEW;
+
+    IF TG_OP = 'UPDATE' THEN
+        -- Check OLD side
+        SELECT version_status INTO v_status
+          FROM tam_approval_route_versions
+         WHERE version_id = OLD.version_id FOR UPDATE;
+        IF v_status IS DISTINCT FROM 'DRAFT' THEN
+            RAISE EXCEPTION
+                'tam_approval_route_steps: modifications forbidden on non-DRAFT version (status=%)',
+                v_status;
+        END IF;
+        -- Check NEW side if version_id changed
+        IF NEW.version_id IS DISTINCT FROM OLD.version_id THEN
+            SELECT version_status INTO v_status
+              FROM tam_approval_route_versions
+             WHERE version_id = NEW.version_id FOR UPDATE;
+            IF v_status IS DISTINCT FROM 'DRAFT' THEN
+                RAISE EXCEPTION
+                    'tam_approval_route_steps: modifications forbidden on non-DRAFT version (status=%)',
+                    v_status;
+            END IF;
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        SELECT version_status INTO v_status
+          FROM tam_approval_route_versions
+         WHERE version_id = OLD.version_id FOR UPDATE;
+        IF v_status IS DISTINCT FROM 'DRAFT' THEN
+            RAISE EXCEPTION
+                'tam_approval_route_steps: modifications forbidden on non-DRAFT version (status=%)',
+                v_status;
+        END IF;
+        RETURN OLD;
+    END IF;
 END;
 $$;
 
@@ -222,28 +259,73 @@ CREATE TRIGGER tam_steps_draft_only_trg
 
 
 -- ════════════════════════════════════════════════════════════════════
--- TRIGGER 4: tam_approval_step_assignees — draft-only enforcement
--- INSERT/UPDATE/DELETE forbidden when step's version is not DRAFT
+-- TRIGGER 4: tam_approval_step_assignees — draft-only enforcement (R1)
+-- INSERT/UPDATE/DELETE forbidden when step's version is not DRAFT.
+-- R1: uses FOR UPDATE OF rv on the version row. UPDATE checks BOTH
+--     OLD.step_id and NEW.step_id (if different) to prevent step
+--     reassignment across version boundaries.
 -- ════════════════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION tam_assignees_draft_only_fn()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 DECLARE
     v_status  TEXT;
-    v_step_id UUID;
 BEGIN
-    v_step_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.step_id ELSE NEW.step_id END;
-    SELECT rv.version_status INTO v_status
-      FROM tam_approval_route_steps    s
-      JOIN tam_approval_route_versions rv ON rv.version_id = s.version_id
-     WHERE s.step_id = v_step_id;
-    IF v_status IS DISTINCT FROM 'DRAFT' THEN
-        RAISE EXCEPTION
-            'tam_approval_step_assignees: modifications forbidden on non-DRAFT version (status=%)',
-            v_status;
+    IF TG_OP = 'INSERT' THEN
+        SELECT rv.version_status INTO v_status
+          FROM tam_approval_route_steps    s
+          JOIN tam_approval_route_versions rv ON rv.version_id = s.version_id
+         WHERE s.step_id = NEW.step_id
+           FOR UPDATE OF rv;
+        IF v_status IS DISTINCT FROM 'DRAFT' THEN
+            RAISE EXCEPTION
+                'tam_approval_step_assignees: modifications forbidden on non-DRAFT version (status=%)',
+                v_status;
+        END IF;
+        RETURN NEW;
     END IF;
-    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
-    RETURN NEW;
+
+    IF TG_OP = 'UPDATE' THEN
+        -- Check OLD step's version
+        SELECT rv.version_status INTO v_status
+          FROM tam_approval_route_steps    s
+          JOIN tam_approval_route_versions rv ON rv.version_id = s.version_id
+         WHERE s.step_id = OLD.step_id
+           FOR UPDATE OF rv;
+        IF v_status IS DISTINCT FROM 'DRAFT' THEN
+            RAISE EXCEPTION
+                'tam_approval_step_assignees: modifications forbidden on non-DRAFT version (status=%)',
+                v_status;
+        END IF;
+        -- Check NEW step's version if step changed
+        IF NEW.step_id IS DISTINCT FROM OLD.step_id THEN
+            SELECT rv.version_status INTO v_status
+              FROM tam_approval_route_steps    s
+              JOIN tam_approval_route_versions rv ON rv.version_id = s.version_id
+             WHERE s.step_id = NEW.step_id
+               FOR UPDATE OF rv;
+            IF v_status IS DISTINCT FROM 'DRAFT' THEN
+                RAISE EXCEPTION
+                    'tam_approval_step_assignees: modifications forbidden on non-DRAFT version (status=%)',
+                    v_status;
+            END IF;
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        SELECT rv.version_status INTO v_status
+          FROM tam_approval_route_steps    s
+          JOIN tam_approval_route_versions rv ON rv.version_id = s.version_id
+         WHERE s.step_id = OLD.step_id
+           FOR UPDATE OF rv;
+        IF v_status IS DISTINCT FROM 'DRAFT' THEN
+            RAISE EXCEPTION
+                'tam_approval_step_assignees: modifications forbidden on non-DRAFT version (status=%)',
+                v_status;
+        END IF;
+        RETURN OLD;
+    END IF;
 END;
 $$;
 
