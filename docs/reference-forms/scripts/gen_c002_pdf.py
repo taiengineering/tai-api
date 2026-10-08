@@ -63,10 +63,10 @@ COL_WIDTHS_MM = [56, 26, 22, 26, 22, 18]   # F05-F10 (PATCH-1: F08 담당부서 
 COL_WIDTHS    = [w * mm for w in COL_WIDTHS_MM]
 
 CELL_PAD   = 3 * mm
-ROW_H_INFO = 8  * mm
+ROW_H_INFO = 7  * mm
 ROW_H_PLAN = 14 * mm
 ROW_H_SIGN = 15 * mm
-ROW_H_GOAL = 22 * mm
+ROW_H_GOAL = 15 * mm
 
 # ─── Paragraph styles ─────────────────────────────────────────────────────────
 
@@ -118,7 +118,7 @@ def build_approval(fields):
     inner = Table(
         [[P(f['label'], S_HDR) for f in appr], ['', '', '']],
         colWidths=[APPR_CELL_W] * 3,
-        rowHeights=[None, ROW_H_SIGN],
+        rowHeights=[7*mm, ROW_H_SIGN],  # 7mm fixed = DOCX 기준 동기화
         style=ts(
             ('FONTNAME',    (0, 0), (-1, 0), 'NGBold'),
             ('BACKGROUND',  (0, 0), (-1, 0), C_HEADER_BG),
@@ -256,11 +256,10 @@ def generate(fields_path, out_path, example_rows=None):
     story = [
         build_title(fields),
         build_approval(fields),
-        Spacer(1, 2 * mm),
         build_basic_info(fields),
-        Spacer(1, 2 * mm),
+        Spacer(1, 1 * mm),
         build_corporate_goal(fields),
-        Spacer(1, 3 * mm),
+        Spacer(1, 1 * mm),
         build_plan_table(fields, example_rows),
         Spacer(1, 2 * mm),
         P(fields['plan_table'].get('extra_rows_note', ''), S_SMALL),
@@ -285,7 +284,7 @@ EXAMPLE_ROWS = [
     ["안전문화 캠페인 실시",             "연 4회",            "인지도 향상",        "인사팀",     "120", ""],
 ]
 
-# 18행: 페이지 분할(QA-03 표 헤더 반복) 검증용
+# 18행: 페이지 분할(표 헤더 반복) 검증용
 MULTIPAGE_ROWS = EXAMPLE_ROWS + [
     ["근골격계 부담작업 유해요인 조사", "격년",              "조사 완료",          "산업보건팀", "300", ""],
     ["밀폐공간 출입 안전 관리",          "작업 전",           "사고 0건",           "공사관리팀", "100", ""],
@@ -295,6 +294,22 @@ MULTIPAGE_ROWS = EXAMPLE_ROWS + [
     ["PSM 정기 감사",                    "연 1회",            "지적 사항 0건",      "안전관리팀", "200", ""],
     ["이상 징후 신고 체계 운영",         "연간",              "신고율 증가",        "안전관리팀",  "30", ""],
     ["안전보건경영시스템 인증 유지",     "연 1회 갱신",       "인증 유지",          "안전관리팀", "500", ""],
+]
+
+# 30행: 3페이지 분할 검증용
+LONGPAGE_ROWS = MULTIPAGE_ROWS + [
+    ["전기안전 점검 및 관리",             "분기 1회",          "무사고 유지",         "시설팀",      "200", ""],
+    ["건강진단 실시 관리",                "연 1회",            "수검율 95%",          "인사팀",      "150", ""],
+    ["긴급구조 훈련 실시",                "상반기",            "훈련 완료",           "안전관리팀",   "80", ""],
+    ["MSDS 정보 게시 및 교육",            "연 2회",            "게시율 100%",         "환경안전팀",   "50", ""],
+    ["중대재해 예방활동 점검",            "월 1회",            "지적 0건",            "안전관리팀",  "100", ""],
+    ["안전관리 위원회 운영",              "분기 1회",          "회의 완료 100%",      "안전관리팀",   "30", ""],
+    ["신규 설비 사전 안전성 검토",        "도입 전",           "검토 완료",           "시설팀",       "50", ""],
+    ["안전담당자 역량 강화 교육",         "연 2회",            "수료율 100%",         "안전관리팀",  "200", ""],
+    ["고령·장애 근로자 배려 지원",        "연간",              "지원 계획 수립",      "인사팀",       "80", ""],
+    ["안전경영 현황 경영진 보고",         "반기",              "보고 완료",           "안전관리팀",    "0", ""],
+    ["안전비용 회계 처리 관리",           "분기별",            "처리율 100%",         "경영지원팀",    "0", ""],
+    ["안전 우수 직원 표창",               "연 1회",            "표창 1건 이상",       "인사팀",       "50", ""],
 ]
 
 if __name__ == '__main__':
@@ -314,4 +329,6 @@ if __name__ == '__main__':
         generate(fields_path, out_dir / 'TAI-FORM-C002-example.pdf', EXAMPLE_ROWS)
     if mode in ('multipage', 'all'):
         generate(fields_path, out_dir / 'TAI-FORM-C002-multipage.pdf', MULTIPAGE_ROWS)
+    if mode in ('longpage', 'all'):
+        generate(fields_path, out_dir / 'TAI-FORM-C002-longpage.pdf', LONGPAGE_ROWS)
     print("Done (PDF).")
