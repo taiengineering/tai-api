@@ -1,10 +1,13 @@
-"""routers/admin_law_updates.py — OBJ-LAU-05B 60% Admin API
+"""routers/admin_law_updates.py — OBJ-LAU-05B 60% Admin + Internal API
 
-GET  /admin/law-updates                    — case list
-GET  /admin/law-updates/{case_id}          — case detail
-POST /admin/law-updates/{case_id}/notify-slack — send LAW_REVISION_COLLECTED Slack
+Admin (get_current_user + _require_admin):
+  GET  /admin/law-updates                    — case list
+  GET  /admin/law-updates/{case_id}          — case detail
+  POST /admin/law-updates/{case_id}/notify-slack — send LAW_REVISION_COLLECTED Slack
 
-인증: get_current_user + _require_admin.
+Internal (X-Internal-Secret):
+  POST /internal/law-updates/{case_id}/notify-slack — same Slack send for runner
+
 Source DB: LEG_SUPABASE_URL + LEG_SUPABASE_SERVICE_ROLE_KEY.
 DB write = 0 (notify-slack updates Slack timestamps only).
 """
@@ -12,7 +15,7 @@ import logging
 import os
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
@@ -21,6 +24,13 @@ from services.company_scope import _require_admin
 log = logging.getLogger("admin_law_updates")
 
 router = APIRouter(prefix="/admin/law-updates", tags=["admin-law-updates"])
+internal_router = APIRouter(prefix="/internal/law-updates", tags=["internal-law-updates"])
+
+
+def _internal_auth(x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret")) -> None:
+    expected = os.environ.get("INTERNAL_API_SECRET")
+    if not expected or x_internal_secret != expected:
+        raise HTTPException(status_code=403, detail="invalid internal secret")
 
 _leg_client = None
 
@@ -140,3 +150,30 @@ def notify_slack(
     from services.law_update_slack import notify_collected
     sent, detail = notify_collected(case_id, rows[0], leg)
     return {"status": "success", "sent": sent, "detail": detail}
+
+
+@internal_router.post("/{case_id}/notify-slack")
+def internal_notify_slack(
+    case_id: str,
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
+):
+    """Runner → Slack 알림 (X-Internal-Secret 인증).
+
+    COLLECTED 케이스의 LAW_REVISION_COLLECTED Slack 알림.
+    Admin notify-slack과 동일 로직, 인증 방식만 다름.
+    """
+    _internal_auth(x_internal_secret)
+    leg = _get_leg_client()
+    res = (
+        leg.table("law_update_case")
+        .select(_DETAIL_SELECT)
+        .eq("case_id", case_id)
+        .execute()
+    )
+    rows = res.data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="case not found")
+
+    from services.law_update_slack import notify_collected
+    sent, detail = notify_collected(case_id, rows[0], leg)
+    return {"status": "ok", "sent": sent, "detail": detail}
