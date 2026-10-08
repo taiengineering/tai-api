@@ -1,14 +1,21 @@
 ---
-doc_id: TAI-DESIGN-COMMON-V0.1
+doc_id: TAI-DESIGN-COMMON-V0.2
 title: TAI 산업안전보건 서식 공통 디자인 규격서
-version: 0.1-DRAFT
-status: PHASE_B_DRAFT — GPT 검토 전
-date: 2026-10-08
+version: 0.2-DRAFT
+status: PHASE_B_V0.2 — GPT CONDITIONAL PASS 반영
+date: 2026-10-09
 branch: docs/tai-reference-forms-charter-obj-20261008
 scope: REF-C002 시범서식 및 이후 5종 확장 기준
+changes_from_v0.1: >
+  § 2.2 폰트 조달 방식 보류 → 재현 가능 조달(다운로드 스크립트) 권장으로 기술.
+  § 4.3 결재란 위치 결정: 제목 아래 오른쪽 배치(우측 정렬).
+  § 4.7 메타데이터 PDF/DOCX/내부 3계층으로 분리.
+  § 6 파이프라인: DOCX 주 편집, PDF 인쇄로 역할 확정. 공통 명세 기반 정합성 검증 설계 추가.
+  § 6.3 UNRESOLVED 해소: 주 형식, 스크립트 경로 확정. 폰트 Git 포함 방식 보류.
+  § 8 QA: DOCX 편집성·페이지 유지 항목 추가.
 ---
 
-# TAI 산업안전보건 서식 공통 디자인 규격서 v0.1
+# TAI 산업안전보건 서식 공통 디자인 규격서 v0.2
 
 ## 0. 목적 및 적용 범위
 
@@ -57,11 +64,19 @@ A4 세로 기준 본문 너비: **170mm** / 가로 기준 본문 너비: **267mm
 
 **OFL 핵심 조건**: 폰트 파일 단독 판매 금지. 문서·제품에 포함 배포 가능. 수정 후 다른 이름으로 재배포 가능.
 
-**조달 방법**: 공식 배포처(https://github.com/naver/nanumfont)에서 OFL 파일 다운로드.  
-macOS MobileAsset 경로(`/System/Library/AssetsV2/...`)는 로컬 전용 — Git 저장소에 복사 불가.  
-대신 `docs/reference-forms/fonts/` 디렉토리에 OFL로 다운로드한 `.ttc` 파일을 배치하고 `.gitattributes`로 LFS 또는 binary 처리.
+**조달 방식 (v0.2 결정)**:
+- **Git 저장소 직접 포함 보류** — 폰트 파일 용량·관리 비용 대비 효용 미확정.
+- **재현 가능한 조달 방법**: 빌드·생성 환경에서 `scripts/setup/download_fonts.sh` (예정)를 통해 공식 OFL 배포처에서 자동 다운로드.
+  - 공식 배포처: https://github.com/naver/nanumfont
+  - 다운로드 대상: `NanumGothic.ttc` (Regular/Bold/ExtraBold 포함 TTC)
+- **로컬 macOS MobileAsset 경로 금지**: `/System/Library/AssetsV2/...` 경로는 시스템 전용 — Git 복사 및 스크립트 참조 불가.
 
-> **UNRESOLVED**: 폰트 파일 Git 저장소 포함 방식(OFL 파일 직접 vs. 다운로드 스크립트) 확정 필요 — GPT 결정 후 진행.
+**DOCX 사용자 환경 폰트 대체 문제**:
+DOCX를 열 때 사용자 시스템에 NanumGothic이 없으면 Word/한글이 대체 폰트를 적용한다.
+이 경우 열 너비·줄 수가 설계와 달라질 수 있다.
+대응: DOCX 배포 시 "NanumGothic 설치 권장" 안내 포함, 또는 PDF를 인쇄용 기준본으로 제공.
+
+> **OPEN**: 폰트 파일 Git 저장소 포함 방식(Git LFS 직접 vs. 다운로드 스크립트) — 다음 WO에서 결정 후 `download_fonts.sh` 구현.
 
 ### 2.3 대체 폰트 (미래 확장용)
 
@@ -118,7 +133,7 @@ Noto Sans KR (Google Fonts, OFL): 웹 서식 HTML 버전에 CSS @font-face 적�
 
 - 열 너비: 균등 3분할 (결재란 총 너비 = 90mm)
 - 최소 행 높이: 15mm (서명 공간)
-- 위치: 우측 상단 또는 문서 제목 아래 전체 너비
+- **v0.2 확정 위치**: 문서 제목 아래 오른쪽 배치 (우측 정렬, 전체 너비 행의 우측 90mm)
 - **원본 근거**: observed_fields 확인 (작성/검토/승인, SOURCE_VERIFIED)
 
 ### 4.4 표 공통 규칙
@@ -132,6 +147,9 @@ Noto Sans KR (Google Fonts, OFL): 웹 서식 HTML 버전에 CSS @font-face 적�
 | 기재란 | 명시적 밑줄 또는 연회색 배경으로 쓰는 공간임을 표시 |
 | 반복 행 | 레지스터·계획표는 빈 행 3–5개 기본 포함, 필요 시 추가 가능 표시 |
 
+**셀 실제 입력 공간 계산법**: 열 너비 − (좌우 여백 2×3mm) = 실제 입력 가능 너비.
+한글 10pt 한 글자 폭 ≈ 3.5–4mm 기준으로 입력 가능 글자 수를 산출한다.
+
 ### 4.5 섹션 구분
 
 섹션 제목: NanumGothic Bold 11pt, 섹션 상단 6pt 공백, 섹션 하단 3pt 공백.  
@@ -143,16 +161,34 @@ Noto Sans KR (Google Fonts, OFL): 웹 서식 HTML 버전에 CSS @font-face 적�
 
 ### 4.7 문서 메타데이터 (파일 내부, 화면 미표시)
 
-| 메타데이터 필드 | 값 (예시) | 비고 |
+메타데이터는 형식별 지원 범위가 다르므로 3계층으로 구분한다.
+
+**PDF 기본 속성** (ReportLab `setTitle` 등, `pdfinfo`로 확인):
+
+| 필드 | 값 (예시) | 비고 |
 |---|---|---|
 | Title | 안전보건 목표 및 추진계획서 | 문서 제목 |
-| Creator | TAI | 제작자 |
-| Producer | TAI Document Pipeline v1 | 파이프라인 식별 |
-| Document ID | TAI-FORM-C002-v0.1 | 임시 ID, 공개 전 확정 |
-| Version | 0.1-DRAFT | 버전 |
-| Subject | 산업안전보건 실무서식 | — |
+| Subject | 산업안전보건 실무서식 | 주제 분류 |
+| Author | TAI | 제작 주체 |
+| Producer | TAI Document Pipeline v1 | 생성 도구 |
+| CreationDate | (생성 시 자동) | — |
 
-PDF의 경우 `pdfinfo` 속성으로 확인 가능. DOCX의 경우 core.xml 속성으로 확인 가능.  
+**DOCX 기본 속성** (`word/docProps/core.xml`, Word 문서 정보에서 확인):
+
+| 필드 | 값 (예시) | 비고 |
+|---|---|---|
+| dc:title | 안전보건 목표 및 추진계획서 | 문서 제목 |
+| dc:creator | TAI | 제작자 |
+| dc:description | 산업안전보건 실무서식 | 설명 |
+| cp:lastModifiedBy | TAI Document Pipeline v1 | 수정자 |
+
+**TAI 내부 식별자** (파일명·내부 참조용, 사용자 화면 미표시):
+
+| 필드 | 값 (예시) | 비고 |
+|---|---|---|
+| Document ID | TAI-FORM-C002-v0.1 | 임시 식별자 — 공개 전 확정 금지 |
+| Version | 0.1-DRAFT | 내부 버전 레이블 |
+
 가짜 URL, 가짜 체크섬을 메타데이터에 포함 금지.
 
 ---
@@ -164,40 +200,55 @@ PDF의 경우 `pdfinfo` 속성으로 확인 가능. DOCX의 경우 core.xml 속�
 | FORM (허가서) | 헤더 → 기본정보 → 결재란 → 단계별 확인 섹션 | REF-C012 |
 | REPORT (보고서) | 헤더 → 기본정보(사고 개요) → 서술 섹션 → 사진 영역 → 대책 | REF-C013 |
 | REGISTER (목록) | 헤더 → 반복 테이블(열 고정) → 비고란 | REF-C003 |
-| PLAN (계획서) | 헤더 → 결재란 → 다중 섹션 계획 테이블 | REF-C002 |
+| PLAN (계획서) | 헤더 → 기본정보 → 결재란(우측 정렬) → 목표 → 계획 테이블 | REF-C002 |
 | EVALUATION (평가표) | 헤더 → 피평가 기본정보 → 평가 테이블(카테고리·항목·배점·점수) → 총점 | REF-C011 |
 
 ---
 
 ## 6. 편집 가능 원본 형식 및 PDF 출력 파이프라인
 
-### 6.1 형식 비교
+### 6.1 형식별 역할 확정 (v0.2)
 
-| 형식 | 편집성 | 재현성 | 한국어 지원 | 도구 | 비고 |
+| 형식 | 역할 | 편집성 | 재현성 | 도구 | 비고 |
 |---|---|---|---|---|---|
-| **DOCX** | 높음 (Word/한글에서 직접 편집) | 중간 (렌더러에 따라 레이아웃 차이) | 기본 내장 | npm `docx` 9.9.0 | CONFIRMED — Korean 9,913bytes 생성 성공 |
-| **PDF** | 낮음 (PDF 편집기 필요) | 높음 (픽셀 수준 고정) | OFL 폰트 임베딩 | ReportLab 5.0.1 | CONFIRMED — A4 표+Korean 45KB 생성 성공 |
-| HTML | 높음 (브라우저 편집 제한) | 낮음 (인쇄 시 레이아웃 불안정) | CSS @font-face | jinja2 | 인쇄용 단독 사용 권장하지 않음 |
-| HWPX | 높음 (한글에서 편집) | 높음 | 기본 내장 | 없음(생성 도구 미존재) | BLOCKED — 생성 파이프라인 없음 |
+| **DOCX** | **주 편집 형식** | 높음 | 중간 | npm `docx` 9.9.0 | 사용자 직접 편집 대상 |
+| **PDF** | **인쇄·배포 형식** | 낮음 | 높음 | ReportLab 5.0.1 | 레이아웃 고정본 |
+| HTML | 미채택 (인쇄 불안정) | — | 낮음 | — | 단독 사용 권장하지 않음 |
+| HWPX | BLOCKED (생성 도구 없음) | — | — | — | 수작업 변환 고려 중 |
 
-### 6.2 권장 파이프라인
+### 6.2 공통 필드 명세 기반 파이프라인
 
 ```
-[설계 명세서 (Markdown)] 
-  → [Python 생성 스크립트 (ReportLab)]  → [PDF 출력]  (인쇄·공식 배포용)
-  → [Node.js 생성 스크립트 (npm docx)]  → [DOCX 출력] (편집 가능 원본)
+[설계 명세서 (Markdown · 이 문서 + 개별 서식 FIELD-SPEC)]
+  → [공통 필드 명세 (JSON/Python dict)] ← 단일 진실 공급원
+        ├── [Python 스크립트 (ReportLab)] → [PDF 출력]   (인쇄·배포용)
+        └── [Node.js 스크립트 (npm docx)] → [DOCX 출력]  (편집 원본)
 ```
 
-- Python 스크립트: 전체 A4 레이아웃 정밀 제어, 폰트 임베딩, 표 헤더 반복 보장
-- Node.js 스크립트: DOCX 형식으로 Word에서 사용자 직접 편집 가능
-- 두 스크립트 모두 동일 필드 명세에서 생성하여 일관성 유지
-- HWPX: 현재 생성 도구 없음 — 추후 Owner 결정에 따라 수작업 변환 고려
+- 두 스크립트는 동일 필드 명세를 소비한다.
+- 필드 누락·순서 불일치는 **형식 간 정합성 검증**(§ 6.3)에서 감지한다.
+- 스크립트 저장 경로: `docs/reference-forms/scripts/`
 
-### 6.3 UNRESOLVED (GPT 결정 필요)
+### 6.3 형식 간 정합성 검증 설계
 
-1. DOCX와 PDF 중 어느 것을 주 제공 형식으로 확정할지
-2. NanumGothic 폰트 파일 Git 포함 방식 (OFL 직접 포함 vs. 빌드 시 다운로드 스크립트)
-3. 생성 스크립트 저장 경로 (`docs/reference-forms/scripts/` vs. 별도 디렉토리)
+DOCX와 PDF가 독립 생성되면 내용이 어긋날 수 있다.
+시제품 단계에서 다음 항목을 수동 대조한다.
+
+| 검증 항목 | 방법 |
+|---|---|
+| 필드 목록 동일 여부 | DOCX와 PDF 헤더·열 라벨 1:1 대조 |
+| 열 순서 일치 여부 | 좌→우 순서 대조 |
+| 필드명 표기 일치 여부 | 예산(만원) vs 예산 등 표기 차이 확인 |
+| 기재란 공간 충분 여부 | 두 형식 모두 8mm / 15mm 기준 충족 확인 |
+
+자동화된 정합성 검증은 추후 WO에서 설계.
+
+### 6.4 잔여 OPEN 항목
+
+| # | 항목 | 상태 |
+|---|---|---|
+| O01 | 폰트 파일 Git 포함 방식 | OPEN — 다음 WO에서 결정 |
+| O02 | `download_fonts.sh` 스크립트 구현 | OPEN — 폰트 방식 확정 후 |
 
 ---
 
@@ -214,15 +265,19 @@ PDF의 경우 `pdfinfo` 속성으로 확인 가능. DOCX의 경우 core.xml 속�
 
 ## 8. QA 체크리스트 (PHASE D 기준)
 
-| # | 항목 | 기대 결과 |
-|---|---|---|
-| Q1 | 한글 렌더링 | 모든 라벨 박스/공백 없이 표시 |
-| Q2 | A4 용지 맞춤 | 클리핑, 오버랩 없음 |
-| Q3 | 표 헤더 반복 | 2페이지 이상에서 헤더 행 재등장 |
-| Q4 | 기재란 공간 | 손글씨 가능 최소 8mm 행 높이 |
-| Q5 | 서명란 공간 | 최소 15mm 셀 높이 |
-| Q6 | 그레이스케일 출력 | 컬러·흑백 모두 가독성 유지 |
-| Q7 | PDF 메타데이터 | Title/Creator/Producer 존재, 가짜 URL 없음 |
-| Q8 | 로고·QR 부재 | 사용자 화면에 로고·QR 없음 |
-| Q9 | 페이지 번호 | 하단 `N / 전체` 형식 |
-| Q10 | 폰트 임베딩 | PDF에 NanumGothic 서브셋 포함 확인 |
+| # | 항목 | 대상 형식 | 기대 결과 |
+|---|---|---|---|
+| Q01 | 한글 렌더링 | PDF + DOCX | 모든 라벨 박스/공백 없이 표시 |
+| Q02 | A4 용지 맞춤 | PDF + DOCX | 클리핑, 오버랩 없음 |
+| Q03 | 표 헤더 반복 | PDF + DOCX | 2페이지 이상에서 헤더 행 재등장 |
+| Q04 | 기재란 공간 | PDF + DOCX | 손글씨 가능 최소 8mm 행 높이 |
+| Q05 | 서명란 공간 | PDF + DOCX | 최소 15mm 셀 높이 |
+| Q06 | 그레이스케일 출력 | PDF + DOCX | 컬러·흑백 모두 가독성 유지 |
+| Q07 | PDF 메타데이터 | PDF | Title/Author/Producer 존재, 가짜 URL 없음 |
+| Q08 | DOCX 메타데이터 | DOCX | dc:title/dc:creator 존재 |
+| Q09 | 로고·QR 부재 | PDF + DOCX | 사용자 화면에 로고·QR 없음 |
+| Q10 | 페이지 번호 | PDF + DOCX | 하단 `N / 전체` 형식 |
+| Q11 | 폰트 임베딩 | PDF | NanumGothic 서브셋 포함 (`pdfinfo` 확인) |
+| Q12 | DOCX 편집 가능 | DOCX | Word/한글에서 셀·텍스트 직접 수정 가능 |
+| Q13 | DOCX 페이지 유지 | DOCX | NanumGothic 설치 환경에서 A4 1페이지 유지 |
+| Q14 | 형식 간 필드 정합 | PDF + DOCX | 필드 목록·순서·표기가 양 형식에서 동일 |
