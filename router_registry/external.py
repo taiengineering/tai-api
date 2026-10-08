@@ -40,6 +40,7 @@ ROUTERS = [
     {"module": "routers.payment_activation_api"},
     {"module": "routers.feedback_api"},
     {"module": "routers.admin_law_updates"},     # OBJ-LAU-05B Admin: GET/POST /admin/law-updates
+    {"module": "routers.admin_law_updates", "attr": "internal_router"},  # OBJ-LAU-05B Internal: POST /internal/law-updates
     {"module": "routers.admin_qa"},             # WO-QA-CONTROL-PHASE2B-001 QA Control Admin API
     {"module": "routers.internal_qa"},          # WO-QA-CONTROL-PHASE2B-001 QA Result Callback (internal)
     {"module": "routers.internal_scheduler"},   # WO-QA-CONTROL-PHASE2E-001 QA Scheduler tick
