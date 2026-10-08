@@ -14,7 +14,7 @@ branch_admin: feat/doc-auto-reuse-library
 | Field | Value |
 |-------|-------|
 | before HEAD (CORR-002) | `f4354cc6` |
-| implementation verified HEAD | `f4354cc6` |
+| verified code/test commit (RELEASE-CORR-001) | `4ed695d2898fdcde0cb4093d74a1fb18c5f4d7e8` |
 | origin/main | `ca03bf5f` |
 | origin/main ancestor | YES |
 | behind_by | 0 |
@@ -133,7 +133,7 @@ New tests added in RELEASE-CORR-001: RR5, RR6
 ```
 AUTO-REUSE-01 RELEASE-CORR-001 = COMPLETE
 
-tai-api  feat/doc-auto-reuse-discovery  impl_verified_HEAD=f4354cc6  behind=0
+tai-api  feat/doc-auto-reuse-discovery  verified_code_test_commit=4ed695d2  behind=0
          tests=38/38 PASS
          resolver error contract: InspectionRecordError→404 / unexpected→propagate
 
