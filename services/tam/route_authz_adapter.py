@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from typing import Optional
+from typing import Optional  # used by _connect/_fetch_route internals only
 
 import psycopg2
 
@@ -95,7 +95,7 @@ def assess_tam_route_authorization_candidate(
     user: dict,
     *,
     route_id: str,
-    dsn: Optional[str] = None,
+    dsn: str,  # required — no implicit env-var fallback to prevent production DSN misuse
 ) -> dict:
     """Assess whether a user is a candidate ROUTE_MANAGER for the given route.
 

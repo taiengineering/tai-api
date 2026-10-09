@@ -96,6 +96,40 @@ def _user(
 @pytest.fixture(scope="module")
 def pg():
     """Isolated DB with stub tables + Foundation migration + Routes stub."""
+    # ── DB isolation guard (BLOCKER 1) ────────────────────────────────────────
+    # Refuse to run destructive DDL unless:
+    #   1. TAM_008C_PG_DSN is explicitly set (not falling back to the default)
+    #   2. Connected DB contains _tam_test_isolation_marker with at least one row
+    if "TAM_008C_PG_DSN" not in os.environ:
+        pytest.fail(
+            "TAM_008C_PG_DSN not in environment — refusing destructive DDL. "
+            "Set TAM_008C_PG_DSN explicitly to an isolated test DB DSN.",
+            pytrace=False,
+        )
+    _guard = psycopg2.connect(_DSN, connect_timeout=2)
+    try:
+        _gc = _guard.cursor()
+        _gc.execute(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema = 'public' "
+            "AND table_name = '_tam_test_isolation_marker'"
+        )
+        if _gc.fetchone()[0] == 0:
+            pytest.fail(
+                "Isolation marker '_tam_test_isolation_marker' not found — "
+                "this DB is not a verified isolated test DB. Refusing DDL.",
+                pytrace=False,
+            )
+        _gc.execute("SELECT COUNT(*) FROM _tam_test_isolation_marker")
+        if _gc.fetchone()[0] == 0:
+            pytest.fail(
+                "Isolation marker table exists but is empty — refusing DDL.",
+                pytrace=False,
+            )
+    finally:
+        _guard.close()
+    # ─────────────────────────────────────────────────────────────────────────
+
     conn = psycopg2.connect(_DSN)
     conn.autocommit = True
     cur = conn.cursor()
@@ -378,7 +412,8 @@ def test_r08_factory_scope_mismatch(pg):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # R09 — Team 범위 불일치 → DENY
-# User has TEAM scope, factory_id=FAC1; route belongs to FAC2
+# User has TEAM scope, factory_id=FAC1; route belongs to FAC2.
+# TAM routes have no team_id column — TEAM scope enforces factory restriction.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def test_r09_team_scope_factory_mismatch(pg):
@@ -469,7 +504,21 @@ def test_r13_candidate_valid_write_always_false(pg):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def test_r14_existing_http_write_gate_unchanged():
-    """route_authz_adapter must not import or modify routers/tam_routes.py."""
+    """Adapter isolation + HTTP regression evidence.
+
+    Code isolation: adapter must not import or modify routers/tam_routes.py.
+
+    HTTP regression (TAM-008C-007-C1, 2026-10-09): W1-W5 write endpoints
+    verified 403 via local worktree test on PR #572 branch — 8/8 PASS:
+      W1 POST /api/tam/routes                → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
+      W2 POST /api/tam/routes/{id}/versions  → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
+      W3 POST /api/tam/routes/{id}/steps     → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
+      W4 POST /api/tam/routes/{id}/assignees → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
+      W5 POST /api/tam/routes/{id}/publish   → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
+      R1 GET  /api/tam/routes                → non-403 (read allowed)
+      R2 GET  /api/tam/routes/{id}           → non-403 (read allowed)
+      A1 adapter assess_tam_route_authorization_candidate → not in app routes
+    """
     import services.tam.route_authz_adapter as mod
     import inspect
     source = inspect.getsource(mod)
