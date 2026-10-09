@@ -79,8 +79,6 @@ def _load_all_modules():
     from router_registry.diagnosis import ROUTERS as DIAG
     from router_registry.construction import ROUTERS as CONST
     from router_registry.external import ROUTERS as EXT
-    from router_registry.tam import ROUTERS as TAM
-
     groups = [
         ("saas_core", SAAS),
         ("legal_engine", LEGAL),
@@ -92,7 +90,6 @@ def _load_all_modules():
         ("diagnosis", DIAG),
         ("construction", CONST),
         ("external", EXT),
-        ("tam", TAM),
     ]
     for name, routers in groups:
         load_module_group(app, name, routers)

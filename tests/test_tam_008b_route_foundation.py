@@ -791,37 +791,42 @@ def test_b17_sql_error_triggers_rollback(pg):
 # ═══════════════════════════════════════════════════════════════
 
 def test_b18_router_write_endpoints_return_403():
-    """All route management endpoints must return 403 regardless of auth state."""
-    import main as app_module
+    """All route management endpoints must return 403 regardless of auth state.
+
+    Uses an isolated FastAPI instance — TAM router is not registered in main.app
+    (PREMERGE-003: passive integration until OD-01 authorized).
+    """
+    from fastapi import FastAPI
     from routers.auth import get_current_user
+    from routers.tam_routes import router as tam_router
 
     mock_user = {"id": U1, "company_id": CO_A, "role_code": "001",
                  "status_code": "ACTIVE", "is_active": True}
 
-    app_module.app.dependency_overrides[get_current_user] = lambda: mock_user
-    client = TestClient(app_module.app, raise_server_exceptions=False)
-    try:
-        endpoints = [
-            ("POST", "/v1/tam/routes",
-             {"company_id": CO_A, "route_scope": "COMPANY_DEFAULT", "display_name": "R"}),
-            ("POST", "/v1/tam/routes/fake-id/versions", {"notes": None}),
-            ("POST", "/v1/tam/routes/fake-id/versions/fake-ver/steps",
-             {"step_order": 1, "step_name": "S", "step_type": "SEQUENTIAL"}),
-            ("POST", "/v1/tam/routes/fake-id/versions/fake-ver/steps/fake-step/assignees",
-             {"user_id": U2}),
-            ("POST", "/v1/tam/routes/fake-id/versions/fake-ver/publish", {}),
-        ]
-        for method, url, body in endpoints:
-            resp = client.request(method, url, json=body)
-            assert resp.status_code == 403, (
-                f"{method} {url} expected 403, got {resp.status_code}: {resp.text}"
-            )
-            detail = resp.json().get("detail", {})
-            assert detail.get("code") == "ROUTE_MANAGER_PERMISSION_REQUIRED", (
-                f"{method} {url}: unexpected code {detail.get('code')!r}"
-            )
-    finally:
-        app_module.app.dependency_overrides.pop(get_current_user, None)
+    isolated_app = FastAPI()
+    isolated_app.include_router(tam_router)
+    isolated_app.dependency_overrides[get_current_user] = lambda: mock_user
+    client = TestClient(isolated_app, raise_server_exceptions=False)
+
+    endpoints = [
+        ("POST", "/v1/tam/routes",
+         {"company_id": CO_A, "route_scope": "COMPANY_DEFAULT", "display_name": "R"}),
+        ("POST", "/v1/tam/routes/fake-id/versions", {"notes": None}),
+        ("POST", "/v1/tam/routes/fake-id/versions/fake-ver/steps",
+         {"step_order": 1, "step_name": "S", "step_type": "SEQUENTIAL"}),
+        ("POST", "/v1/tam/routes/fake-id/versions/fake-ver/steps/fake-step/assignees",
+         {"user_id": U2}),
+        ("POST", "/v1/tam/routes/fake-id/versions/fake-ver/publish", {}),
+    ]
+    for method, url, body in endpoints:
+        resp = client.request(method, url, json=body)
+        assert resp.status_code == 403, (
+            f"{method} {url} expected 403, got {resp.status_code}: {resp.text}"
+        )
+        detail = resp.json().get("detail", {})
+        assert detail.get("code") == "ROUTE_MANAGER_PERMISSION_REQUIRED", (
+            f"{method} {url}: unexpected code {detail.get('code')!r}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1907,9 +1912,14 @@ def test_s04_authorization_fail_closed_regression():
     """S04: Authorization regression — all HTTP write endpoints return 403 (OD-01 pending).
     factory_id match does NOT grant admin rights (PENDING_AUTHORIZATION_CONTRACT).
     Verified for both factory-scoped (factory_id=FAC1) and company-wide (factory_id=None)
-    users; neither bypasses the ROUTE_MANAGER permission gate."""
-    import main as app_module
+    users; neither bypasses the ROUTE_MANAGER permission gate.
+
+    Uses an isolated FastAPI instance — TAM router is not registered in main.app
+    (PREMERGE-003: passive integration until OD-01 authorized).
+    """
+    from fastapi import FastAPI
     from routers.auth import get_current_user
+    from routers.tam_routes import router as tam_router
 
     fac_user  = {"id": U1, "company_id": CO_A, "factory_id": FAC1,
                  "role_code": "001", "status_code": "ACTIVE", "is_active": True}
@@ -1929,17 +1939,16 @@ def test_s04_authorization_fail_closed_regression():
     ]
 
     for actor in (fac_user, co_user):
-        app_module.app.dependency_overrides[get_current_user] = lambda u=actor: u
-        client = TestClient(app_module.app, raise_server_exceptions=False)
-        try:
-            for method, url, body in write_endpoints:
-                resp = client.request(method, url, json=body)
-                assert resp.status_code == 403, (
-                    f"S04: {method} {url} returned {resp.status_code} (factory_id="
-                    f"{actor['factory_id']}), expected 403 — "
-                    f"ROUTE_MANAGER not authorized (OD-01 pending)")
-        finally:
-            app_module.app.dependency_overrides.pop(get_current_user, None)
+        isolated_app = FastAPI()
+        isolated_app.include_router(tam_router)
+        isolated_app.dependency_overrides[get_current_user] = lambda u=actor: u
+        client = TestClient(isolated_app, raise_server_exceptions=False)
+        for method, url, body in write_endpoints:
+            resp = client.request(method, url, json=body)
+            assert resp.status_code == 403, (
+                f"S04: {method} {url} returned {resp.status_code} (factory_id="
+                f"{actor['factory_id']}), expected 403 — "
+                f"ROUTE_MANAGER not authorized (OD-01 pending)")
 
     # PENDING_AUTHORIZATION_CONTRACT: factory_id match is necessary but NOT sufficient.
     # factory scope authorization must be resolved (OD-01) before writes are opened.
