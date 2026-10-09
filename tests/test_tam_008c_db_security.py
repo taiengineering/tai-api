@@ -1,31 +1,36 @@
-"""TAM-008C DB Security tests.
+"""TAM-008C DB Security tests — C1 revision.
 
 S01-S07:  RLS enabled on all 7 TAM tables
-S08-S14:  anon role has zero table privileges
-S15-S21:  authenticated role has zero table privileges
-S22-S28:  service_role has correct grants per table
-S29-S35:  trigger function EXECUTE revoked from PUBLIC (verified via proacl)
+S08-S14:  anon has zero table privileges
+S15-S21:  authenticated has zero table privileges
+S22-S28:  service_role has correct grants per table (append-only = SELECT+INSERT)
+S29-S35:  PUBLIC has no EXECUTE on 7 trigger functions (proacl check)
+S36-S42:  anon has no EXECUTE on 7 trigger functions (has_function_privilege)
+S43-S49:  authenticated has no EXECUTE on 7 trigger functions
 
-Test environment:
-  Local PostgreSQL via TAM_008C_PG_DSN env var
-  (default: host=localhost dbname=tai_test_tam_ledger)
-  Module-scoped fixture creates stub roles (anon/authenticated/service_role),
-  stub reference tables, and applies the two security migrations.
-  All DB tests are skipped if the DSN is unreachable.
+Isolation guard requirements (fail — not skip — on violation):
+  - TAM_008C_PG_DSN must be explicitly set
+  - Target DB must have isolation marker (pre-created, not auto-generated)
+  - All DDL is gated behind the isolation check
+
+Supabase default-privilege simulation:
+  Before applying migrations, ALTER DEFAULT PRIVILEGES grants ALL on TABLES
+  and EXECUTE on FUNCTIONS to anon/authenticated/service_role — replicating
+  what Supabase does automatically for new objects.  The migration REVOKE
+  statements must remove these grants; the tests verify the final state.
 """
 from __future__ import annotations
 
 import os
 import pathlib
-import uuid
 
 import psycopg2
 import psycopg2.extras
 import pytest
 
-# ── DSN ───────────────────────────────────────────────────────────────────────
+# ── DSN & isolation marker ─────────────────────────────────────────────────────
 
-_DSN = os.getenv("TAM_008C_PG_DSN", "host=localhost dbname=tai_test_tam_ledger")
+_ISOLATION_MARKER = "TAM_008C_SECURITY_TEST_ISOLATION"
 
 _MIGRATION_DIR = (
     pathlib.Path(__file__).parent.parent / "supabase" / "migrations"
@@ -65,7 +70,6 @@ _LEDGER_FUNCTIONS = [
 ]
 _ALL_TAM_FUNCTIONS = _ROUTE_FUNCTIONS + _LEDGER_FUNCTIONS
 
-# Expected service_role grants per table (append-only = SELECT+INSERT only)
 _SERVICE_ROLE_GRANTS: dict[str, set[str]] = {
     "tam_approval_routes":         {"SELECT", "INSERT", "UPDATE"},
     "tam_approval_route_versions": {"SELECT", "INSERT", "UPDATE"},
@@ -75,55 +79,89 @@ _SERVICE_ROLE_GRANTS: dict[str, set[str]] = {
     "tam_permission_grants":       {"SELECT", "INSERT"},
     "tam_permission_revocations":  {"SELECT", "INSERT"},
 }
-
 _APPEND_ONLY_TABLES = {
     "tam_approval_audit_events",
     "tam_permission_grants",
     "tam_permission_revocations",
 }
 
-# ── Availability check ─────────────────────────────────────────────────────────
-
-def _pg_available() -> bool:
-    try:
-        conn = psycopg2.connect(_DSN, connect_timeout=2)
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-
-pytestmark = pytest.mark.skipif(not _pg_available(), reason="PostgreSQL unavailable")
-
-# ── Stable UUIDs ──────────────────────────────────────────────────────────────
+# ── Stable UUIDs for stub data ─────────────────────────────────────────────────
 
 _CO_A = "aaaaaaaa-0001-0001-0001-000000000001"
 _CO_B = "bbbbbbbb-0002-0002-0002-000000000002"
 _FAC1 = "ffffffff-0001-0001-0001-000000000001"
 _FAC2 = "ffffffff-0002-0002-0002-000000000002"
 
-# ── Module-scoped fixture ──────────────────────────────────────────────────────
+# ── Module-scoped fixture — isolation-gated ────────────────────────────────────
 
 @pytest.fixture(scope="module")
 def pg():
-    """Bootstrap: stub roles + stub tables + apply security migrations."""
-    conn = psycopg2.connect(_DSN)
+    """Bootstrap security test environment.
+
+    Guard order (each failure prevents DDL):
+      1. TAM_008C_PG_DSN must be set
+      2. DB must be reachable
+      3. Isolation marker must pre-exist in target DB
+      4. Simulate Supabase default privileges
+      5. Apply migrations
+    """
+    # Guard 1: explicit DSN required
+    dsn = os.getenv("TAM_008C_PG_DSN")
+    if not dsn:
+        pytest.fail(
+            "TAM_008C_PG_DSN is not set — security tests require an explicit "
+            "isolated test DB. Set e.g. TAM_008C_PG_DSN='host=localhost dbname=tai_test_tam_ledger'"
+        )
+
+    # Guard 2: connectivity
+    try:
+        conn = psycopg2.connect(dsn, connect_timeout=5)
+    except Exception as exc:
+        pytest.fail(f"Cannot connect to test DB ({dsn}): {exc}")
+
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+    # Guard 3: isolation marker (must pre-exist — never auto-create)
+    cur.execute("""
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name = '_tam_security_isolation_marker'
+        ) AS tbl_exists
+    """)
+    if not cur.fetchone()["tbl_exists"]:
+        conn.close()
+        pytest.fail(
+            "_tam_security_isolation_marker table not found. "
+            "Pre-create it with:\n"
+            "  CREATE TABLE _tam_security_isolation_marker "
+            "      (marker_value TEXT PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT now());\n"
+            f"  INSERT INTO _tam_security_isolation_marker VALUES ('{_ISOLATION_MARKER}');"
+        )
+
+    cur.execute(
+        "SELECT 1 FROM _tam_security_isolation_marker WHERE marker_value = %s",
+        (_ISOLATION_MARKER,),
+    )
+    if cur.fetchone() is None:
+        conn.close()
+        pytest.fail(
+            f"Isolation marker value '{_ISOLATION_MARKER}' not present. "
+            f"Run: INSERT INTO _tam_security_isolation_marker VALUES ('{_ISOLATION_MARKER}');"
+        )
+
     # Create Supabase-equivalent roles if absent
     for role in ("anon", "authenticated", "service_role"):
-        cur.execute(
-            f"""
+        cur.execute(f"""
             DO $$ BEGIN
                 IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
                     CREATE ROLE {role};
                 END IF;
             END $$;
-            """
-        )
+        """)
 
-    # Drop existing TAM tables (dependency order)
+    # Drop existing TAM objects (dependency order)
     cur.execute("""
         DROP TABLE IF EXISTS
             tam_approval_step_assignees,
@@ -134,10 +172,6 @@ def pg():
             tam_permission_grants,
             tam_approval_audit_events
         CASCADE;
-    """)
-
-    # Drop existing TAM trigger functions
-    cur.execute("""
         DROP FUNCTION IF EXISTS
             tam_routes_published_guard_fn,
             tam_version_immutability_fn,
@@ -149,8 +183,7 @@ def pg():
         CASCADE;
     """)
 
-    # Create stub reference tables (factories includes UNIQUE constraint
-    # needed for tam_grants_factory_scope FK — same as 20261009010000)
+    # Create stub reference tables (UNIQUE on factories already included)
     cur.execute("""
         DROP TABLE IF EXISTS users, factories, companies CASCADE;
 
@@ -173,22 +206,56 @@ def pg():
         );
     """)
 
-    cur.execute(
-        "INSERT INTO companies (id) VALUES (%s), (%s)",
-        (_CO_A, _CO_B),
-    )
+    cur.execute("INSERT INTO companies (id) VALUES (%s), (%s)", (_CO_A, _CO_B))
     cur.execute(
         "INSERT INTO factories (id, company_id) VALUES (%s, %s), (%s, %s)",
         (_FAC1, _CO_A, _FAC2, _CO_A),
     )
 
-    # Apply security migrations
+    # Simulate Supabase default privileges:
+    # In Supabase, every new TABLE and FUNCTION automatically receives
+    # ALL / EXECUTE for anon, authenticated, and service_role.
+    # The migration REVOKE statements must neutralise these auto-grants.
+    cur.execute("""
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT ALL ON TABLES TO anon;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT ALL ON TABLES TO authenticated;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT ALL ON TABLES TO service_role;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT EXECUTE ON FUNCTIONS TO anon;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT EXECUTE ON FUNCTIONS TO authenticated;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT EXECUTE ON FUNCTIONS TO service_role;
+    """)
+
+    # Apply security migrations (DDL + REVOKE/GRANT)
     cur.execute(_MIG_ROUTES)
     cur.execute(_MIG_LEDGER)
 
     yield cur
 
-    # Teardown: remove route tables so ledger test D16 isolation is preserved
+    # ── Teardown ────────────────────────────────────────────────────────────────
+
+    # Reset DEFAULT PRIVILEGES to not affect other test modules
+    cur.execute("""
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            REVOKE ALL ON TABLES FROM anon;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            REVOKE ALL ON TABLES FROM authenticated;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            REVOKE ALL ON TABLES FROM service_role;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            REVOKE EXECUTE ON FUNCTIONS FROM anon;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            REVOKE EXECUTE ON FUNCTIONS FROM authenticated;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            REVOKE EXECUTE ON FUNCTIONS FROM service_role;
+    """)
+
+    # Drop route tables so ledger test D16 isolation is preserved
     cur.execute("""
         DROP TABLE IF EXISTS
             tam_approval_step_assignees,
@@ -275,7 +342,7 @@ def test_authenticated_no_privileges(pg, table, sid):
         )
 
 
-# ── S22-S28: service_role has correct grants ───────────────────────────────────
+# ── S22-S28: service_role has exact grants ────────────────────────────────────
 
 @pytest.mark.parametrize("table,sid", [
     ("tam_approval_routes",         "S22"),
@@ -309,7 +376,7 @@ def test_service_role_grants(pg, table, sid):
             )
 
 
-# ── S29-S35: trigger function EXECUTE revoked from PUBLIC ─────────────────────
+# ── S29-S35: PUBLIC has no EXECUTE on trigger functions (proacl) ──────────────
 
 @pytest.mark.parametrize("fn_name,sid", [
     ("tam_routes_published_guard_fn",   "S29"),
@@ -320,29 +387,26 @@ def test_service_role_grants(pg, table, sid):
     ("tam_grants_immutability_fn",      "S34"),
     ("tam_revocations_immutability_fn", "S35"),
 ])
-def test_trigger_fn_execute_revoked_from_public(pg, fn_name, sid):
+def test_trigger_fn_public_execute_revoked(pg, fn_name, sid):
     """EXECUTE must be revoked from PUBLIC for all TAM trigger functions.
 
-    proacl IS NULL means the default ACL applies (PUBLIC has EXECUTE).
-    After REVOKE EXECUTE ... FROM PUBLIC, proacl is explicitly set —
-    the absence of a '=X...' entry confirms PUBLIC has no EXECUTE.
+    proacl IS NULL means default ACL is in effect (PUBLIC has EXECUTE).
+    After REVOKE, proacl is explicitly set and contains no '=X' (PUBLIC execute).
     """
     pg.execute(
         """
         SELECT
-            proacl IS NOT NULL                                   AS acl_explicit,
+            proacl IS NOT NULL AS acl_explicit,
             CASE
                 WHEN proacl IS NULL THEN FALSE
                 ELSE NOT EXISTS (
-                    SELECT 1
-                    FROM unnest(proacl) AS a
+                    SELECT 1 FROM unnest(proacl) AS a
                     WHERE a::text ~ '^=[^/]*X'
                 )
-            END                                                  AS public_execute_revoked
+            END AS public_execute_revoked
         FROM pg_proc
         JOIN pg_namespace ON pg_namespace.oid = pg_proc.pronamespace
-        WHERE proname = %s
-          AND nspname = 'public'
+        WHERE proname = %s AND nspname = 'public'
         """,
         (fn_name,),
     )
@@ -353,4 +417,68 @@ def test_trigger_fn_execute_revoked_from_public(pg, fn_name, sid):
     )
     assert row["public_execute_revoked"] is True, (
         f"{sid}: PUBLIC still has EXECUTE on {fn_name}"
+    )
+
+
+# ── S36-S42: anon has no EXECUTE on trigger functions ─────────────────────────
+
+@pytest.mark.parametrize("fn_name,sid", [
+    ("tam_routes_published_guard_fn",   "S36"),
+    ("tam_version_immutability_fn",     "S37"),
+    ("tam_steps_draft_only_fn",         "S38"),
+    ("tam_assignees_draft_only_fn",     "S39"),
+    ("tam_audit_immutability_fn",       "S40"),
+    ("tam_grants_immutability_fn",      "S41"),
+    ("tam_revocations_immutability_fn", "S42"),
+])
+def test_trigger_fn_anon_execute_revoked(pg, fn_name, sid):
+    """anon must not have EXECUTE on any TAM trigger function.
+
+    Supabase auto-grants EXECUTE to anon for new functions; the migration
+    must explicitly revoke it.  Checked via has_function_privilege on the
+    function OID to avoid signature ambiguity.
+    """
+    pg.execute(
+        """
+        SELECT has_function_privilege('anon', p.oid, 'EXECUTE') AS can_execute
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE p.proname = %s AND n.nspname = 'public'
+        """,
+        (fn_name,),
+    )
+    row = pg.fetchone()
+    assert row is not None, f"{sid}: function {fn_name} not found"
+    assert row["can_execute"] is False, (
+        f"{sid}: anon still has EXECUTE on {fn_name} "
+        "(REVOKE FROM anon missing or Supabase auto-grant not neutralised)"
+    )
+
+
+# ── S43-S49: authenticated has no EXECUTE on trigger functions ────────────────
+
+@pytest.mark.parametrize("fn_name,sid", [
+    ("tam_routes_published_guard_fn",   "S43"),
+    ("tam_version_immutability_fn",     "S44"),
+    ("tam_steps_draft_only_fn",         "S45"),
+    ("tam_assignees_draft_only_fn",     "S46"),
+    ("tam_audit_immutability_fn",       "S47"),
+    ("tam_grants_immutability_fn",      "S48"),
+    ("tam_revocations_immutability_fn", "S49"),
+])
+def test_trigger_fn_authenticated_execute_revoked(pg, fn_name, sid):
+    """authenticated must not have EXECUTE on any TAM trigger function."""
+    pg.execute(
+        """
+        SELECT has_function_privilege('authenticated', p.oid, 'EXECUTE') AS can_execute
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE p.proname = %s AND n.nspname = 'public'
+        """,
+        (fn_name,),
+    )
+    row = pg.fetchone()
+    assert row is not None, f"{sid}: function {fn_name} not found"
+    assert row["can_execute"] is False, (
+        f"{sid}: authenticated still has EXECUTE on {fn_name}"
     )

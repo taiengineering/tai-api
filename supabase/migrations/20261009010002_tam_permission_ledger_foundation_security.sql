@@ -222,6 +222,10 @@ CREATE TRIGGER tam_revocations_immutability_trg
 
 -- ════════════════════════════════════════════════════════════════════
 -- SECURITY: RLS + Grant matrix for all 3 permission ledger tables
+--
+-- Supabase auto-grants ALL to anon/authenticated/service_role on
+-- every new table. Revoke ALL explicitly from each role before
+-- re-granting the minimum required privileges to service_role only.
 -- Append-only tables: service_role gets SELECT + INSERT only.
 -- UPDATE/DELETE are additionally blocked by immutability triggers.
 -- ════════════════════════════════════════════════════════════════════
@@ -231,6 +235,7 @@ ALTER TABLE tam_approval_audit_events ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE tam_approval_audit_events FROM PUBLIC;
 REVOKE ALL ON TABLE tam_approval_audit_events FROM anon;
 REVOKE ALL ON TABLE tam_approval_audit_events FROM authenticated;
+REVOKE ALL ON TABLE tam_approval_audit_events FROM service_role;
 GRANT SELECT, INSERT ON TABLE tam_approval_audit_events TO service_role;
 
 -- tam_permission_grants (append-only)
@@ -238,6 +243,7 @@ ALTER TABLE tam_permission_grants ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE tam_permission_grants FROM PUBLIC;
 REVOKE ALL ON TABLE tam_permission_grants FROM anon;
 REVOKE ALL ON TABLE tam_permission_grants FROM authenticated;
+REVOKE ALL ON TABLE tam_permission_grants FROM service_role;
 GRANT SELECT, INSERT ON TABLE tam_permission_grants TO service_role;
 
 -- tam_permission_revocations (append-only)
@@ -245,9 +251,22 @@ ALTER TABLE tam_permission_revocations ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE tam_permission_revocations FROM PUBLIC;
 REVOKE ALL ON TABLE tam_permission_revocations FROM anon;
 REVOKE ALL ON TABLE tam_permission_revocations FROM authenticated;
+REVOKE ALL ON TABLE tam_permission_revocations FROM service_role;
 GRANT SELECT, INSERT ON TABLE tam_permission_revocations TO service_role;
 
--- Trigger function EXECUTE revoked from PUBLIC
+-- Trigger function EXECUTE revoked from all roles
+-- (Supabase auto-grants EXECUTE to anon/authenticated/service_role for new functions)
 REVOKE EXECUTE ON FUNCTION tam_audit_immutability_fn() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION tam_audit_immutability_fn() FROM anon;
+REVOKE EXECUTE ON FUNCTION tam_audit_immutability_fn() FROM authenticated;
+REVOKE EXECUTE ON FUNCTION tam_audit_immutability_fn() FROM service_role;
+
 REVOKE EXECUTE ON FUNCTION tam_grants_immutability_fn() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION tam_grants_immutability_fn() FROM anon;
+REVOKE EXECUTE ON FUNCTION tam_grants_immutability_fn() FROM authenticated;
+REVOKE EXECUTE ON FUNCTION tam_grants_immutability_fn() FROM service_role;
+
 REVOKE EXECUTE ON FUNCTION tam_revocations_immutability_fn() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION tam_revocations_immutability_fn() FROM anon;
+REVOKE EXECUTE ON FUNCTION tam_revocations_immutability_fn() FROM authenticated;
+REVOKE EXECUTE ON FUNCTION tam_revocations_immutability_fn() FROM service_role;

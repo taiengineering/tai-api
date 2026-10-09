@@ -338,6 +338,10 @@ CREATE TRIGGER tam_assignees_draft_only_trg
 
 -- ════════════════════════════════════════════════════════════════════
 -- SECURITY: RLS + Grant matrix for all 4 approval route tables
+--
+-- Supabase auto-grants ALL to anon/authenticated/service_role on
+-- every new table. Revoke ALL explicitly from each role before
+-- re-granting the minimum required privileges to service_role only.
 -- ════════════════════════════════════════════════════════════════════
 
 -- tam_approval_routes
@@ -345,6 +349,7 @@ ALTER TABLE tam_approval_routes ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE tam_approval_routes FROM PUBLIC;
 REVOKE ALL ON TABLE tam_approval_routes FROM anon;
 REVOKE ALL ON TABLE tam_approval_routes FROM authenticated;
+REVOKE ALL ON TABLE tam_approval_routes FROM service_role;
 GRANT SELECT, INSERT, UPDATE ON TABLE tam_approval_routes TO service_role;
 
 -- tam_approval_route_versions
@@ -352,6 +357,7 @@ ALTER TABLE tam_approval_route_versions ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE tam_approval_route_versions FROM PUBLIC;
 REVOKE ALL ON TABLE tam_approval_route_versions FROM anon;
 REVOKE ALL ON TABLE tam_approval_route_versions FROM authenticated;
+REVOKE ALL ON TABLE tam_approval_route_versions FROM service_role;
 GRANT SELECT, INSERT, UPDATE ON TABLE tam_approval_route_versions TO service_role;
 
 -- tam_approval_route_steps
@@ -359,6 +365,7 @@ ALTER TABLE tam_approval_route_steps ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE tam_approval_route_steps FROM PUBLIC;
 REVOKE ALL ON TABLE tam_approval_route_steps FROM anon;
 REVOKE ALL ON TABLE tam_approval_route_steps FROM authenticated;
+REVOKE ALL ON TABLE tam_approval_route_steps FROM service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE tam_approval_route_steps TO service_role;
 
 -- tam_approval_step_assignees
@@ -366,10 +373,27 @@ ALTER TABLE tam_approval_step_assignees ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE tam_approval_step_assignees FROM PUBLIC;
 REVOKE ALL ON TABLE tam_approval_step_assignees FROM anon;
 REVOKE ALL ON TABLE tam_approval_step_assignees FROM authenticated;
+REVOKE ALL ON TABLE tam_approval_step_assignees FROM service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE tam_approval_step_assignees TO service_role;
 
--- Trigger function EXECUTE revoked from PUBLIC
+-- Trigger function EXECUTE revoked from all roles
+-- (Supabase auto-grants EXECUTE to anon/authenticated/service_role for new functions)
 REVOKE EXECUTE ON FUNCTION tam_routes_published_guard_fn() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION tam_routes_published_guard_fn() FROM anon;
+REVOKE EXECUTE ON FUNCTION tam_routes_published_guard_fn() FROM authenticated;
+REVOKE EXECUTE ON FUNCTION tam_routes_published_guard_fn() FROM service_role;
+
 REVOKE EXECUTE ON FUNCTION tam_version_immutability_fn() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION tam_version_immutability_fn() FROM anon;
+REVOKE EXECUTE ON FUNCTION tam_version_immutability_fn() FROM authenticated;
+REVOKE EXECUTE ON FUNCTION tam_version_immutability_fn() FROM service_role;
+
 REVOKE EXECUTE ON FUNCTION tam_steps_draft_only_fn() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION tam_steps_draft_only_fn() FROM anon;
+REVOKE EXECUTE ON FUNCTION tam_steps_draft_only_fn() FROM authenticated;
+REVOKE EXECUTE ON FUNCTION tam_steps_draft_only_fn() FROM service_role;
+
 REVOKE EXECUTE ON FUNCTION tam_assignees_draft_only_fn() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION tam_assignees_draft_only_fn() FROM anon;
+REVOKE EXECUTE ON FUNCTION tam_assignees_draft_only_fn() FROM authenticated;
+REVOKE EXECUTE ON FUNCTION tam_assignees_draft_only_fn() FROM service_role;
