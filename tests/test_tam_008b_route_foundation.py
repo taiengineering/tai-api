@@ -195,6 +195,7 @@ def clean(request):
         CASCADE;
     """)
     pg_conn.commit()
+    yield
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
