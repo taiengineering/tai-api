@@ -1,0 +1,103 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-059 Phase B-2",
+    "form_type": "PLAN",
+    "source_id": "REF-C014",
+    "schema_version": "common-v1",
+    "legal_review_status": "PENDING",
+    "source_fields_status": "NATIVE_HWP_BODYTEXT_LABEL",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "source_checksum": "e94d8d8a271c148973111ff0c74b4d67ba2f9884aff59e87301e261b5794aefe",
+    "source_access": "OWNER_UPLOADED_HWP_TEXT_PARSED_PARTIAL",
+    "observed_fields_count": 10,
+    "observed_fields_batch": "OWNER-HWP-02"
+  },
+  "document": {
+    "title": "재해 감소대책 수립 및 실행 계획서 작성 서식",
+    "doc_id": "TAI-FORM-C014-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1"
+  },
+  "sections": [
+    {
+      "type": "repeat_table",
+      "default_row_count": 10,
+      "extra_rows_note": "10행 기본; 감소대책 수에 따라 확장",
+      "columns": [
+        {
+          "id": "C01",
+          "label": "구분",
+          "width_mm": 10,
+          "source": "NATIVE_HWP_BODYTEXT_LABEL",
+          "requiredness": "UNVERIFIED"
+        },
+        {
+          "id": "C02",
+          "label": "유해·위험요인 파악",
+          "width_mm": 32,
+          "source": "NATIVE_HWP_BODYTEXT_LABEL",
+          "requiredness": "UNVERIFIED"
+        },
+        {
+          "id": "C03",
+          "label": "관련근거",
+          "width_mm": 18,
+          "source": "NATIVE_HWP_BODYTEXT_LABEL",
+          "requiredness": "UNVERIFIED"
+        },
+        {
+          "id": "C04",
+          "label": "현재 위험성",
+          "width_mm": 16,
+          "source": "NATIVE_HWP_BODYTEXT_LABEL",
+          "requiredness": "UNVERIFIED"
+        },
+        {
+          "id": "C05",
+          "label": "감소대책",
+          "width_mm": 28,
+          "source": "NATIVE_HWP_BODYTEXT_LABEL",
+          "requiredness": "UNVERIFIED"
+        },
+        {
+          "id": "C06",
+          "label": "개선 후 위험성",
+          "width_mm": 16,
+          "source": "NATIVE_HWP_BODYTEXT_LABEL",
+          "requiredness": "UNVERIFIED"
+        },
+        {
+          "id": "C07",
+          "label": "담당자",
+          "width_mm": 12,
+          "source": "NATIVE_HWP_BODYTEXT_LABEL",
+          "requiredness": "UNVERIFIED"
+        },
+        {
+          "id": "C08",
+          "label": "조치 요구일",
+          "width_mm": 13,
+          "source": "NATIVE_HWP_BODYTEXT_LABEL",
+          "requiredness": "UNVERIFIED"
+        },
+        {
+          "id": "C09",
+          "label": "조치 완료일",
+          "width_mm": 13,
+          "source": "NATIVE_HWP_BODYTEXT_LABEL",
+          "requiredness": "UNVERIFIED"
+        },
+        {
+          "id": "C10",
+          "label": "완료 확인",
+          "width_mm": 12,
+          "source": "NATIVE_HWP_BODYTEXT_LABEL",
+          "requiredness": "UNVERIFIED"
+        }
+      ]
+    }
+  ]
+}
