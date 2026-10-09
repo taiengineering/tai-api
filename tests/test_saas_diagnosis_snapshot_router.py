@@ -218,3 +218,34 @@ def test_r08_company_role_matching_company(monkeypatch):
     body = resp.json()
     assert body["status"] == "success"
     assert body["data"]["diagnosis_id"] == _DIAG_ID
+
+
+# ── R09 — all unconfirmed fields stripped from customer-facing response ───────
+
+def test_r09_unconfirmed_fields_not_in_response(monkeypatch):
+    """All four internal unconfirmed fields must be absent from the HTTP response.
+    Internal DB storage is unchanged; only the HTTP response is filtered.
+    review_required / review_required_count / unconfirmed / unconfirmed_count
+    """
+    row_with_rr = dict(_VALID_ROW)
+    row_with_rr["full_result"] = {
+        **_VALID_FULL_RESULT,
+        "review_required": [{"atom_id": "A1", "reason": "UNKNOWN"}],
+        "review_required_count": 1,
+        "unconfirmed": [{"atom_id": "A1"}],
+        "unconfirmed_count": 1,
+    }
+    seed = {
+        "anonymous_diagnosis_results": [row_with_rr],
+        "role_data_scope": [{"role_code": "001", "scope_type": "ALL"}],
+    }
+    fake = FakeSB(seed)
+    client = _make_client(fake, monkeypatch, _USER_OWN)
+    resp = client.get(f"/legal-engine/diagnose/snapshot/{_DIAG_ID}")
+    assert resp.status_code == 200
+    body = resp.json()
+    full = body["data"]["full_result"]
+    for key in ("review_required", "review_required_count", "unconfirmed", "unconfirmed_count"):
+        assert key not in full, f"{key!r} must be stripped from customer response"
+    # Confirmed obligations still present
+    assert "obligations_raw" in full

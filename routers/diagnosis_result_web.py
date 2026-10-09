@@ -736,4 +736,9 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
         payload["data"]["governing_ministry"] = leg_ministry
     if _paid_product is not None:
         payload["data"]["premium_result_v1"] = build_public_premium_result_v1(_paid_product)
+    # diagnosis_pending: boolean signal for paid path only.
+    # True when full_result.review_required is non-empty (LEG could not evaluate some atoms).
+    # Does NOT reveal count or details — only yes/no. FREE path uses review_required_count separately.
+    if not is_free:
+        payload["data"]["diagnosis_pending"] = (_review_required_count(full_result) > 0)
     return payload

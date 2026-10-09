@@ -387,6 +387,18 @@ def get_diagnosis_snapshot(diagnosis_id: str, authorization: Optional[str] = Hea
         "진단 결과를 찾을 수 없습니다.",
     )
 
+    # Strip all unconfirmed-related fields from customer-facing response.
+    # Internal DB storage unchanged. Customers receive only confirmed obligation facts.
+    _INTERNAL_UNCONFIRMED_KEYS = frozenset({
+        "review_required",
+        "review_required_count",
+        "unconfirmed",
+        "unconfirmed_count",
+    })
+    _safe_full = {
+        k: v for k, v in (snapshot["full_result"] or {}).items()
+        if k not in _INTERNAL_UNCONFIRMED_KEYS
+    }
     return {
         "status": "success",
         "data": {
@@ -395,7 +407,7 @@ def get_diagnosis_snapshot(diagnosis_id: str, authorization: Optional[str] = Hea
             "sector": snapshot["sector"],
             "engine_version": snapshot["engine_version"],
             "created_at": snapshot["created_at"],
-            "full_result": snapshot["full_result"],
+            "full_result": _safe_full,
         },
     }
 

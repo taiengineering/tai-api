@@ -1,3 +1,4 @@
+import math
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
@@ -118,6 +119,55 @@ class DiagnosisRunBody(BaseModel):
     # Neither field mutates factory_work_facts or factory_materials (transient only).
     work_rows: Optional[List[WorkRowInput]] = Field(None, description="Wave A1: Paid 일시적 작업 rows. work_source validate_payload + projector 경유. DB 저장 없음.")
     material_rows: Optional[List[MaterialRowInput]] = Field(None, description="Wave A1: Paid 일시적 자재 rows. material_master_key → catalog 경유. classification_codes 금지. DB 저장 없음.")
+
+    @field_validator("form_data", mode="before")
+    @classmethod
+    def _validate_form_data_numerics(cls, v):
+        """Block negative / non-finite numbers in form_data.
+        0 is valid (present, zero value). None/absent fields are not checked.
+
+        Parent-child contract (matches FF-06 SafeXxxConsumerInput):
+          truck_loading_height_m  requires has_truck_loading_unloading=true
+          manual_handling_weight_kg requires has_manual_heavy_handling=true
+        parent absent or false + child present → rejected.
+        """
+        if not isinstance(v, dict):
+            return v
+        for key, val in v.items():
+            if isinstance(val, bool):
+                continue
+            if isinstance(val, (int, float)):
+                if not math.isfinite(val):
+                    raise ValueError(f"form_data[{key!r}] must be a finite number")
+                if val < 0:
+                    raise ValueError(f"form_data[{key!r}] must be non-negative (got {val})")
+        # Strict type guard for fields that must be a finite number when present.
+        # Strings, lists, dicts, and other non-numeric types are rejected — not coerced.
+        _NUMERIC_STRICT = frozenset({"work_height_m", "truck_loading_height_m", "manual_handling_weight_kg"})
+        for key in _NUMERIC_STRICT:
+            val = v.get(key)
+            if val is None:
+                continue
+            if isinstance(val, bool) or not isinstance(val, (int, float)):
+                raise ValueError(
+                    f"form_data[{key!r}] must be a number, got {type(val).__name__!r}"
+                )
+        # Parent-child enforcement — FF-06 contract parity on form_data envelope.
+        _PARENT_CHILD: dict = {
+            "truck_loading_height_m": "has_truck_loading_unloading",
+            "manual_handling_weight_kg": "has_manual_heavy_handling",
+        }
+        for child_key, parent_key in _PARENT_CHILD.items():
+            child_val = v.get(child_key)
+            if child_val is None:
+                continue  # absent child: allowed regardless of parent
+            parent_val = v.get(parent_key)  # None = key absent from form_data
+            if parent_val is not True:
+                raise ValueError(
+                    f"form_data[{child_key!r}] requires {parent_key!r}=true "
+                    f"(got parent={'absent' if parent_key not in v else repr(parent_val)})"
+                )
+        return v
 
     @field_validator("appendix3_item_no", mode="before")
     @classmethod
