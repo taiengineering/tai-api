@@ -28,12 +28,16 @@ R3 factory scope gate (fail-closed):
 """
 from __future__ import annotations
 
+import logging
 import os
+import uuid as _uuid
 from typing import Any, Dict, List, Optional
 
 import psycopg2
 import psycopg2.extras
 import psycopg2.errors
+
+log = logging.getLogger("tam.routes")
 
 __all__ = [
     "TamError",
@@ -181,8 +185,21 @@ def get_route(
     route_id: str,
     dsn: Optional[str] = None,
 ) -> Dict[str, Any]:
+    try:
+        _uuid.UUID(str(route_id))
+    except (ValueError, AttributeError):
+        raise TamError(422, "INVALID_ROUTE_ID", "route_id는 UUID 형식이어야 합니다")
+
     actor_company = _user_company(user)
-    conn = _connect(dsn)
+
+    try:
+        conn = _connect(dsn)
+    except TamError:
+        raise
+    except Exception as exc:
+        log.error("tam.routes: get_route DB 연결 실패: %s", type(exc).__name__)
+        raise TamError(503, "SERVICE_UNAVAILABLE", "서비스를 일시적으로 이용할 수 없습니다") from exc
+
     try:
         cur = _cur(conn)
         cur.execute(
@@ -206,8 +223,9 @@ def get_route(
         return dict(row)
     except TamError:
         raise
-    except Exception as e:
-        raise TamError(500, "INTERNAL_ERROR", str(e)) from e
+    except Exception as exc:
+        log.error("tam.routes: get_route SQL 오류: %s", type(exc).__name__)
+        raise TamError(503, "SERVICE_UNAVAILABLE", "서비스를 일시적으로 이용할 수 없습니다") from exc
     finally:
         conn.close()
 
@@ -236,7 +254,14 @@ def list_routes(
                 "(contract pending OD-01 owner decision)",
             )
 
-    conn = _connect(dsn)
+    try:
+        conn = _connect(dsn)
+    except TamError:
+        raise
+    except Exception as exc:
+        log.error("tam.routes: list_routes DB 연결 실패: %s", type(exc).__name__)
+        raise TamError(503, "SERVICE_UNAVAILABLE", "서비스를 일시적으로 이용할 수 없습니다") from exc
+
     try:
         cur = _cur(conn)
         sql = "SELECT * FROM tam_approval_routes WHERE company_id = %s"
@@ -260,8 +285,9 @@ def list_routes(
         return [dict(r) for r in cur.fetchall()]
     except TamError:
         raise
-    except Exception as e:
-        raise TamError(500, "INTERNAL_ERROR", str(e)) from e
+    except Exception as exc:
+        log.error("tam.routes: list_routes SQL 오류: %s", type(exc).__name__)
+        raise TamError(503, "SERVICE_UNAVAILABLE", "서비스를 일시적으로 이용할 수 없습니다") from exc
     finally:
         conn.close()
 
