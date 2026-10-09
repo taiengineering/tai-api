@@ -1225,8 +1225,8 @@ def test_C0502_c014_docx_10_default_rows(c014_v1, tmp_path):
     assert len(rows) == 11, f"Expected 11 rows (1 header + 10 default), got {len(rows)}"
 
 def test_C0502_c014_docx_landscape_pgsz(c014_v1, tmp_path):
-    """DOCX pgSz must set orient=landscape. docx library stores physical paper dims:
-    w:w=11905 (210mm short side), w:h=16837 (297mm long side), w:orient='landscape'."""
+    """DOCX pgSz must encode A4 landscape correctly: w:w≈16837(297mm), w:h≈11905(210mm), w:orient=landscape.
+    Engine passes portrait dims (210×297mm) + LANDSCAPE flag; docx library swaps them so w:w becomes the wide side."""
     v1_path = tmp_path / 'c014_v1.json'
     out_path = tmp_path / 'c014_blank.docx'
     v1_path.write_text(json.dumps(c014_v1, ensure_ascii=False), encoding='utf-8')
@@ -1238,12 +1238,13 @@ def test_C0502_c014_docx_landscape_pgsz(c014_v1, tmp_path):
         root = ET.fromstring(z.read('word/document.xml'))
     pgsz = root.find(f'.//{{{NS_W}}}pgSz')
     assert pgsz is not None, "w:pgSz element not found in document.xml"
-    # orient attribute must be 'landscape'
     orient = pgsz.get(f'{{{NS_W}}}orient', '')
     assert orient == 'landscape', f"pgSz orient='{orient}', expected 'landscape'"
-    # docx library stores physical A4 dims with orient flag: h = 297mm = 16837 twips
+    w_val = int(pgsz.get(f'{{{NS_W}}}w', '0'))
     h_val = int(pgsz.get(f'{{{NS_W}}}h', '0'))
-    assert h_val >= 16000, f"pgSz h={h_val} < 16000 twips (expected 297mm=16837 in landscape OOXML)"
+    assert w_val >= 16000, f"pgSz w={w_val} < 16000 twips (expected 297mm≈16837 as landscape width)"
+    assert h_val <= 12500, f"pgSz h={h_val} > 12500 twips (expected 210mm≈11905 as landscape height)"
+    assert w_val > h_val, f"pgSz w={w_val} <= h={h_val}: width must exceed height in landscape"
 
 # ─── C05-03: REF-C014 PDF 생성 ───────────────────────────────────────
 
@@ -1497,7 +1498,8 @@ def test_C0602_portrait_isolation_after_landscape(c003_v1, c014_v1, tmp_path):
 # ─── C06-03: Node.js Landscape 컨텍스트 정합성 ───────────────────────
 
 def test_C0603_node_landscape_ctx_correct():
-    """Node.js layoutCtx for landscape must return 16837/11905/14570 twips."""
+    """Node.js layoutCtx for landscape must return pageW=11905(210mm), pageH=16837(297mm), contentW=14570(257mm).
+    Engine passes standard A4 portrait dims to library; library swaps them for landscape OOXML output."""
     script = (
         "const {layoutCtx} = require('./common_v1_engine.cjs');"
         "const c = layoutCtx({document:{page:{orientation:'landscape'}}});"
@@ -1509,8 +1511,8 @@ def test_C0603_node_landscape_ctx_correct():
     )
     assert result.returncode == 0, f"node script failed: {result.stderr}"
     data = json.loads(result.stdout)
-    assert data['pw'] == 16837, f"pageW={data['pw']}, expected 16837 (297mm)"
-    assert data['ph'] == 11905, f"pageH={data['ph']}, expected 11905 (210mm)"
+    assert data['pw'] == 11905, f"pageW={data['pw']}, expected 11905 (210mm — pre-swap input to library)"
+    assert data['ph'] == 16837, f"pageH={data['ph']}, expected 16837 (297mm — pre-swap input to library)"
     assert data['cw'] == 14570, f"contentW={data['cw']}, expected 14570 (257mm)"
     assert data['o'] == 'landscape', f"orientation={data['o']!r}, expected 'landscape'"
 
@@ -1532,11 +1534,11 @@ def test_C0603_node_invalid_orientation_raises():
 # ─── C06-04: 공통 엔진 SHA256 회귀 ──────────────────────────────────
 
 def test_C0604_common_engines_sha256():
-    """공통 엔진 파일 SHA256 불변 검증 — 기준본: WO-REF01-059-B2-L01-PATCH-1."""
+    """공통 엔진 파일 SHA256 불변 검증 — 기준본: WO-REF01-059-B2-L01-PATCH-2."""
     import hashlib
     expected = {
         'common_v1_engine.py':  '0dd50affb2150b4fd1cb8fa46513cd33df79878a067f71a3689812ad64acd3d7',
-        'common_v1_engine.cjs': 'ec3a0fa9de6823e1d6f3aabfdff023e21d2d3bff57198cabedcfa80c3c2f0c4c',
+        'common_v1_engine.cjs': '2efd456d2888dbed3528528c9d981fbb3148bf58dd0879e4e10a4894dd09f70f',
         'c014_v1.json':         'c50a99c5dcd9369e1751e754bdd004c0027065ec0ccd739448b9e70b4c45ce90',
     }
     for fname, exp_sha in expected.items():

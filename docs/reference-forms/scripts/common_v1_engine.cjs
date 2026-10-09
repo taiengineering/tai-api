@@ -36,7 +36,7 @@ function layoutCtx(fields) {
     const orientation = ('orientation' in pageCfg) ? pageCfg.orientation : 'portrait';
     if (orientation === 'landscape') {
         return {
-            pageW: mm(297), pageH: mm(210),
+            pageW: mm(210), pageH: mm(297),
             contentW: mm(257),
             orientation: PageOrientation.LANDSCAPE,
         };
