@@ -19,9 +19,8 @@ Design anchor: c388a7f6 (TAM-008C-003 FROZEN)
 from __future__ import annotations
 
 import logging
-import os
 import uuid
-from typing import Optional  # used by _connect/_fetch_route internals only
+from typing import Optional
 
 import psycopg2
 
@@ -29,8 +28,6 @@ from services.tam.authz_svc import check_tam_effective_authorization
 from services.tam.permissions_svc import TamError
 
 log = logging.getLogger("tam.route_authz")
-
-_TAM_PG_DSN: Optional[str] = os.getenv("TAM_PG_DSN") or os.getenv("DATABASE_URL")
 
 _ROUTE_SQL = """
 SELECT
@@ -51,12 +48,11 @@ def _is_valid_uuid(value: str) -> bool:
         return False
 
 
-def _connect(dsn: Optional[str] = None):
-    url = dsn or _TAM_PG_DSN
-    if not url:
+def _connect(dsn: str):
+    if not dsn:
         raise TamError(503, "DB_NOT_CONFIGURED", "TAM database DSN is not configured")
     try:
-        return psycopg2.connect(url)
+        return psycopg2.connect(dsn)
     except TamError:
         raise
     except Exception as exc:
@@ -64,7 +60,7 @@ def _connect(dsn: Optional[str] = None):
         raise TamError(503, "SERVICE_UNAVAILABLE", "Route authorization service temporarily unavailable")
 
 
-def _fetch_route(route_id: str, company_id: str, dsn: Optional[str] = None) -> Optional[dict]:
+def _fetch_route(route_id: str, company_id: str, dsn: str) -> Optional[dict]:
     """Return route dict or None. Route-not-found and cross-company both return None."""
     conn = _connect(dsn)
     try:
