@@ -9,6 +9,17 @@ Trigger Code Set을 keyword_pattern으로 semantic_clause에서 검색해
   BUSINESS:REGISTERED → condition_text IS NULL 특수 처리
 
 DB 쓰기 없음. obligation_adapter 무수정.
+
+DEV-IN-004 (production trigger detection 개선):
+  (A) [DEV-IN-004V 검증 후 철회] 누락 스펙 6종은 emitter(trigger_generator)에
+      해당 has_X/equipment canonical 이 없어 NOT_DECLARED(dead) → 계약 확장 금지 원칙에
+      따라 제거함. 필요 시 factories 계약 확장은 별도 승인 작업.
+  (B) _match_clause 검색 범위를 구조적 what_text·where_text 로 확장
+      (raw 원문/상위문맥은 과탐 위험 → 미포함. 구조적 목적어/장소만).
+  매칭 근거(matched_field/matched_pattern/matched_text)를 후보에 기록.
+  주의: requirement_atom_v2_dryrun(미커밋 벤치마크) 19건 회복을 주장하지 않음.
+        이 수정은 committed production candidate 검출기 개선이며,
+        회복률은 tai-api 파이프라인 재실행으로만 확정.
 """
 from __future__ import annotations
 
@@ -31,6 +42,13 @@ _TRIGGER_PRIORITY = {
     "THRESHOLD": 20,
     "BUSINESS": 10,
 }
+
+# (B) 구조적 주어·문맥 확장에 사용할 clause 필드.
+# raw source_text / source_part_text 는 과탐 위험이 커 제외하고,
+# 구조적 목적어(what_text)·장소(where_text)만 보조 매칭에 사용.
+_PRIMARY_MATCH_FIELDS = ("condition_text", "action_text")
+_STRUCTURAL_MATCH_FIELDS = ("what_text", "where_text")
+_NO_EVIDENCE: Dict[str, Any] = {"matched_field": None, "matched_pattern": None, "matched_text": None}
 
 
 class TriggerSpec:
@@ -161,15 +179,49 @@ def _compiled_pattern(pattern: str) -> re.Pattern[str]:
     return re.compile(pattern)
 
 
-def _match_clause(clause: Dict[str, Any], spec: TriggerSpec) -> bool:
+def _match_clause_ev(clause: Dict[str, Any], spec: TriggerSpec) -> Tuple[bool, Dict[str, Any]]:
+    """clause 매칭 + 매칭 근거(matched_field/pattern/text) 반환.
+
+    (A) null_condition 모드는 기존과 동일.
+    (B) 검색 순서: ① condition_text+action_text 결합(기존 동작 보존)
+                   ② 구조적 what_text → where_text (신규 확장)
+        raw source_text / source_part_text 는 과탐 위험으로 사용하지 않는다.
+    """
     condition = clause.get("condition_text")
     action = clause.get("action_text") or ""
+
     if spec.mode == "null_condition":
-        return condition is None or str(condition).strip() == ""
+        ok = condition is None or str(condition).strip() == ""
+        if ok:
+            return True, {"matched_field": "condition_text", "matched_pattern": None, "matched_text": None}
+        return False, dict(_NO_EVIDENCE)
+
     if not spec.pattern:
-        return False
+        return False, dict(_NO_EVIDENCE)
+
+    pat = _compiled_pattern(spec.pattern)
+
+    # ① 기존 동작 보존: condition_text + action_text 결합 매칭
     hay = f"{condition or ''}{action}"
-    return _compiled_pattern(spec.pattern).search(hay) is not None
+    m = pat.search(hay)
+    if m:
+        return True, {"matched_field": "condition_action", "matched_pattern": spec.pattern, "matched_text": m.group(0)}
+
+    # ② (B) 구조적 주어·문맥 확장: what_text, where_text (개별 필드, raw 원문 아님)
+    for field in _STRUCTURAL_MATCH_FIELDS:
+        val = clause.get(field)
+        if not val:
+            continue
+        m = pat.search(str(val))
+        if m:
+            return True, {"matched_field": field, "matched_pattern": spec.pattern, "matched_text": m.group(0)}
+
+    return False, dict(_NO_EVIDENCE)
+
+
+def _match_clause(clause: Dict[str, Any], spec: TriggerSpec) -> bool:
+    """하위호환 bool 래퍼."""
+    return _match_clause_ev(clause, spec)[0]
 
 
 def _load_obligation_clauses(
@@ -185,7 +237,8 @@ def _load_obligation_clauses(
                 supabase.table(_CLAUSE_TABLE)
                 .select(
                     "id, source_article_id, source_part_id, executor_text, "
-                    "condition_text, action_text, content_type, sector"
+                    "condition_text, action_text, what_text, where_text, "
+                    "content_type, sector"
                 )
                 .in_("content_type", list(_OBLIGATION_TYPES))
                 .eq("executor_text", executor_text)
@@ -209,7 +262,9 @@ def _candidate_from_clause(
     clause: Dict[str, Any],
     trigger_code: str,
     confidence: str,
+    evidence: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    ev = evidence or _NO_EVIDENCE
     return {
         "clause_id": str(clause.get("id") or ""),
         "source_article_id": str(clause.get("source_article_id") or ""),
@@ -221,6 +276,10 @@ def _candidate_from_clause(
         "content_type": clause.get("content_type"),
         "sector": clause.get("sector"),
         "confidence": confidence,
+        # DEV-IN-004: 매칭 근거 (어느 필드/패턴/텍스트로 매칭됐는지)
+        "matched_field": ev.get("matched_field"),
+        "matched_pattern": ev.get("matched_pattern"),
+        "matched_text": ev.get("matched_text"),
     }
 
 
@@ -264,12 +323,13 @@ def generate_obligation_candidates(
 
     for clause in clauses:
         for trigger_code, spec in specs:
-            if not _match_clause(clause, spec):
+            ok, evidence = _match_clause_ev(clause, spec)
+            if not ok:
                 continue
             aid = str(clause.get("source_article_id") or "")
             if not aid:
                 continue
-            cand = _candidate_from_clause(clause, trigger_code, spec.confidence)
+            cand = _candidate_from_clause(clause, trigger_code, spec.confidence, evidence)
             prev = by_article.get(aid)
             if prev is None:
                 by_article[aid] = cand
