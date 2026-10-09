@@ -3444,29 +3444,48 @@ def test_C1301_batch_runner_dry_run_approved():
     assert 'SCHEMA_ERROR' not in out, "기존 승인 서식에서 SCHEMA_ERROR 발생"
 
 def test_C1301_batch_runner_dry_run_new_specs():
-    """배치 실행기 --dry-run으로 신규 4건(C007/C008/C009/C011) SCHEMA_VALID."""
+    """배치 실행기 --dry-run으로 신규 5건(C007/C008/C009/C011/C013) SCHEMA_VALID."""
     import subprocess, sys
     result = subprocess.run(
         [sys.executable, 'batch_build.py', '--dry-run',
-         'c007', 'c008', 'c009', 'c011'],
+         'c007', 'c008', 'c009', 'c011', 'c013'],
         capture_output=True, text=True, cwd=str(BASE),
     )
     assert result.returncode == 0, f"batch_build.py 실패:\n{result.stderr}"
     out = result.stdout
-    for cid in ('C007', 'C008', 'C009', 'C011'):
+    for cid in ('C007', 'C008', 'C009', 'C011', 'C013'):
         assert 'SCHEMA_VALID' in out, f"{cid} SCHEMA_VALID 없음"
     assert 'SCHEMA_ERROR' not in out
 
 def test_C1301_batch_runner_frozen_guard():
-    """--build 모드에서 승인 서식 덮어쓰기 방지(SKIPPED_FROZEN)."""
+    """--build 모드에서 승인 서식 덮어쓰기 방지 — exit nonzero + BLOCKED 메시지."""
     import subprocess, sys
     result = subprocess.run(
         [sys.executable, 'batch_build.py', '--build', 'c015'],
         capture_output=True, text=True, cwd=str(BASE),
     )
-    assert result.returncode == 0
-    assert 'SKIPPED' in result.stdout or 'frozen' in result.stdout.lower(), \
-        "승인 서식에 --build 실행 시 SKIPPED 메시지 없음"
+    assert result.returncode != 0, "승인 서식 --build는 반드시 nonzero exit"
+    assert 'BLOCKED' in result.stdout or 'frozen' in result.stdout.lower(), \
+        "승인 서식에 --build 실행 시 BLOCKED 메시지 없음"
+
+def test_C1301_batch_runner_build_approved_empty():
+    """BUILD_APPROVED_IDS가 비어있으면 --build 단독 실행 시 exit nonzero."""
+    import subprocess, sys
+    result = subprocess.run(
+        [sys.executable, 'batch_build.py', '--build'],
+        capture_output=True, text=True, cwd=str(BASE),
+    )
+    assert result.returncode != 0, "--build with empty BUILD_APPROVED_IDS는 nonzero exit"
+
+def test_C1301_batch_runner_build_new_blocked():
+    """신규 서식(c013)에 --build 실행 시 BUILD_APPROVED_IDS 미포함으로 BLOCKED."""
+    import subprocess, sys
+    result = subprocess.run(
+        [sys.executable, 'batch_build.py', '--build', 'c013'],
+        capture_output=True, text=True, cwd=str(BASE),
+    )
+    assert result.returncode != 0, "미승인 신규 서식 --build는 nonzero exit"
+    assert 'BLOCKED' in result.stdout, "미승인 서식 BLOCKED 메시지 없음"
 
 # ─── C13-02: 신규 스펙 JSON 구조 검증 ───────────────────────────────────
 
@@ -3486,48 +3505,63 @@ def c009_v1():
 def c011_v1():
     return json.loads((BASE / 'c011_v1.json').read_text(encoding='utf-8'))
 
-def test_C1302_new_specs_schema_version(c007_v1, c008_v1, c009_v1, c011_v1):
-    """신규 4건 모두 schema_version=common-v1."""
-    for data, name in [(c007_v1,'C007'),(c008_v1,'C008'),(c009_v1,'C009'),(c011_v1,'C011')]:
+@pytest.fixture
+def c013_v1():
+    return json.loads((BASE / 'c013_v1.json').read_text(encoding='utf-8'))
+
+def test_C1302_new_specs_schema_version(c007_v1, c008_v1, c009_v1, c011_v1, c013_v1):
+    """신규 5건 모두 schema_version=common-v1."""
+    for data, name in [(c007_v1,'C007'),(c008_v1,'C008'),(c009_v1,'C009'),(c011_v1,'C011'),(c013_v1,'C013')]:
         assert data['_meta']['schema_version'] == 'common-v1', f"{name} schema_version 오류"
 
-def test_C1302_new_specs_design_gate_status(c007_v1, c008_v1, c009_v1, c011_v1):
-    """신규 4건 모두 design_gate_status 필드 포함 및 GPT 승인 대기 명시."""
-    for data, name in [(c007_v1,'C007'),(c008_v1,'C008'),(c009_v1,'C009'),(c011_v1,'C011')]:
+def test_C1302_new_specs_design_gate_status(c007_v1, c008_v1, c009_v1, c011_v1, c013_v1):
+    """신규 5건 모두 design_gate_status 필드 포함 및 GPT 승인 대기 명시."""
+    for data, name in [(c007_v1,'C007'),(c008_v1,'C008'),(c009_v1,'C009'),(c011_v1,'C011'),(c013_v1,'C013')]:
         status = data['_meta'].get('design_gate_status', '')
         assert status, f"{name} design_gate_status 없음"
         assert 'EDITABLE_VARIANT_REVIEW' in status or 'ENGINE_GAP' in status, \
             f"{name} design_gate_status 인식 불가: {status!r}"
 
-def test_C1302_new_specs_layout_variant(c007_v1, c008_v1, c009_v1, c011_v1):
-    """신규 4건 모두 layout_variant=TAI_EDITABLE_VARIANT."""
-    for data, name in [(c007_v1,'C007'),(c008_v1,'C008'),(c009_v1,'C009'),(c011_v1,'C011')]:
+def test_C1302_new_specs_layout_variant(c007_v1, c008_v1, c009_v1, c011_v1, c013_v1):
+    """신규 5건 모두 layout_variant=TAI_EDITABLE_VARIANT."""
+    for data, name in [(c007_v1,'C007'),(c008_v1,'C008'),(c009_v1,'C009'),(c011_v1,'C011'),(c013_v1,'C013')]:
         assert data['_meta']['layout_variant'] == 'TAI_EDITABLE_VARIANT', \
             f"{name} layout_variant 오류"
 
 def test_C1302_c007_budget_structure(c007_v1):
-    """C007: repeat_table(입력) + text_flow(참조) 2섹션. 4열 구성."""
+    """C007: repeat_table(입력) + text_flow(참조) 2섹션. 3열(구분/2021/2022) 구성."""
     secs = c007_v1['sections']
     assert len(secs) == 2
     assert secs[0]['type'] == 'repeat_table'
     assert secs[1]['type'] == 'text_flow'
     cols = secs[0]['columns']
-    assert len(cols) == 4
+    assert len(cols) == 3, f"C007 컬럼 수 오류: {len(cols)} (expected 3)"
     labels = [c['label'] for c in cols]
-    assert '구분' in labels and '연도' in labels and '금액(원)' in labels
+    assert '구분' in labels and '2021' in labels and '2022' in labels, \
+        f"C007 컬럼 레이블 오류: {labels}"
+    paras = {p['id']: p['text'] for p in secs[1]['paragraphs']}
+    assert any('교육 지원' in t for t in paras.values()), "C007 교육 지원 참조 항목 없음"
+    assert any('시설 지원' in t for t in paras.values()), "C007 시설 지원 참조 항목 없음"
 
 def test_C1302_c008_evaluation_structure(c008_v1):
-    """C008: text_flow(기준) + repeat_table(평가표). header_groups 포함, 6열."""
+    """C008: text_flow(기준) + repeat_table(평가표) + text_flow(직무참조). 3섹션."""
     secs = c008_v1['sections']
-    assert len(secs) == 2
+    assert len(secs) == 3, f"C008 섹션 수 오류: {len(secs)} (expected 3)"
     assert secs[0]['type'] == 'text_flow'
     assert secs[1]['type'] == 'repeat_table'
+    assert secs[2]['type'] == 'text_flow'
     rt = secs[1]
     assert 'header_groups' in rt, "C008 평가 header_groups 없음"
     assert len(rt['columns']) == 6
     col_labels = [c['label'] for c in rt['columns']]
     for lbl in ('직책', '성명', '담당업무', '미흡', '보통', '양호'):
         assert lbl in col_labels, f"C008 컬럼 {lbl!r} 없음"
+    s01_texts = ' '.join(p['text'] for p in secs[0]['paragraphs'])
+    assert '반기' in s01_texts, "C008 평가기준에 반기 주기 없음"
+    assert '법령에 따른 업무수행' in s01_texts, "C008 양호 기준 원문 없음"
+    s03_texts = ' '.join(p['text'] for p in secs[2]['paragraphs'])
+    for role in ('안전보건관리책임자', '관리감독자', '안전보건총괄책임자'):
+        assert role in s03_texts, f"C008 직무참조에 {role!r} 없음"
 
 def test_C1302_c009_register_structure(c009_v1):
     """C009: repeat_table(배치) + text_flow(직무 참조). 4열 구성."""
@@ -3561,13 +3595,33 @@ def test_C1302_c009_duty_reference_content(c009_v1):
         assert role in texts, f"C009 역할 {role!r} 참조 텍스트 없음"
     assert '산안법' in texts or '산업안전보건법' in texts
 
-def test_C1302_source_sections_correct(c007_v1, c008_v1, c009_v1, c011_v1):
-    """신규 4건 source_section이 HWP-07/08/09/11 정확히 반영."""
+def test_C1302_c013_accident_report_structure(c013_v1):
+    """C013: basic_info + freeform_area 조합 12섹션. 사고조사반/사고명일시/피해/경위/대책."""
+    secs = c013_v1['sections']
+    assert len(secs) == 12, f"C013 섹션 수 오류: {len(secs)} (expected 12)"
+    types = [s['type'] for s in secs]
+    assert types[0] == 'basic_info', "C013 S01 basic_info(사고조사반) 아님"
+    assert types[1] == 'basic_info', "C013 S02 basic_info(사고명/일시) 아님"
+    assert all(t == 'freeform_area' for t in types[2:4]), "C013 S03-S04 freeform_area 아님"
+    assert types[4] == 'basic_info', "C013 S05 basic_info(장소/부위/형태) 아님"
+    assert all(t == 'freeform_area' for t in types[5:]), "C013 S06-S12 freeform_area 아님"
+    s01_fields = [f['label'] for f in secs[0]['fields']]
+    assert any('소속' in l for l in s01_fields), "C013 S01 소속 필드 없음"
+    assert any('성명' in l for l in s01_fields), "C013 S01 성명 필드 없음"
+    s05_fields = [f['label'] for f in secs[4]['fields']]
+    assert any('사고장소' in l for l in s05_fields), "C013 S05 사고장소 없음"
+    labels = [s.get('label','') for s in secs if s['type'] == 'freeform_area']
+    for expected in ('인적 피해', '사고내용', '사고원인', '재발방지 대책', '사고조사 사진'):
+        assert any(expected in l for l in labels), f"C013 freeform_area '{expected}' 없음"
+
+def test_C1302_source_sections_correct(c007_v1, c008_v1, c009_v1, c011_v1, c013_v1):
+    """신규 5건 source_section이 HWP-07/08/09/11/13 정확히 반영."""
     checks = [
         (c007_v1, 'C007', 'HWP-07'),
         (c008_v1, 'C008', 'HWP-08'),
         (c009_v1, 'C009', 'HWP-09'),
         (c011_v1, 'C011', 'HWP-11'),
+        (c013_v1, 'C013', 'HWP-13'),
     ]
     for data, name, hwp in checks:
         ss = data['_meta'].get('source_section', '')
@@ -3631,12 +3685,26 @@ def test_C1303_c011_pdf_generates(c011_v1, tmp_path):
         assert abs(p.width / 2.835 - 210) < 3
         assert abs(p.height / 2.835 - 297) < 3
 
+def test_C1303_c013_pdf_generates(c013_v1, tmp_path):
+    """C013 PDF 생성 성공 및 Portrait A4."""
+    import sys as _sys, pdfplumber
+    _sys.path.insert(0, str(BASE))
+    from common_v1_engine import generate_from_dict, register_fonts
+    register_fonts()
+    out = tmp_path / 'c013.pdf'
+    generate_from_dict(c013_v1, str(out))
+    assert out.exists() and out.stat().st_size > 5000
+    with pdfplumber.open(str(out)) as pdf:
+        p = pdf.pages[0]
+        assert abs(p.width / 2.835 - 210) < 3
+        assert abs(p.height / 2.835 - 297) < 3
+
 # ─── C13-04: 신규 스펙 DOCX 생성 시험 ──────────────────────────────────
 
 def test_C1304_new_specs_docx_generate(tmp_path):
-    """신규 4건 DOCX 생성 성공."""
+    """신규 5건 DOCX 생성 성공."""
     import subprocess
-    for cid in ('c007', 'c008', 'c009', 'c011'):
+    for cid in ('c007', 'c008', 'c009', 'c011', 'c013'):
         json_path = BASE / f'{cid}_v1.json'
         out_path  = tmp_path / f'{cid}_blank.docx'
         result = subprocess.run(

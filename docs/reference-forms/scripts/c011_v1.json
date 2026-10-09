@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-059-B7-BATCH-PRODUCTION-001",
+    "wo": "WO-REF01-059-B7-BATCH-REMEDIATION-002",
     "form_type": "EVALUATION",
     "source_id": "REF-C011",
     "schema_version": "common-v1",
@@ -15,10 +15,10 @@
     "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
-    "layout_variant_note": "원본 계층형 채점표(도메인 → 세부항목 → 평가기준 + 배점/점수 열)를 text_flow(평가 기준 참조) + repeat_table(점수 입력)으로 분리. 계층 병합 셀 구조는 현 엔진 미지원(ENGINE_LIMITATION).",
+    "layout_variant_note": "원본 계층형 채점표(도메인 → 세부항목 → 평가기준 + 배점/점수 열)를 text_flow(평가항목 및 평가기준 전문 수록) + repeat_table(점수 입력)으로 분리. 계층 병합 셀 구조는 현 엔진 미지원(ENGINE_LIMITATION). 도메인별 평가기준 원문 전문 포함.",
     "naming_note": "blank = 기존 출력 명명 규칙 유지",
     "design_gate_status": "EDITABLE_VARIANT_REVIEW — GPT 승인 대기",
-    "design_gate_notes": "원본은 I/II 도메인 + 세부항목 + 배점/점수 계층 채점표 (총 100점). repeat_table로는 평가항목/배점 고정 행 표현 불가(ENGINE_LIMITATION). TAI 변형안: text_flow로 평가기준 전문 수록 + repeat_table(세부항목/배점/점수/비고)로 입력 분리. 배점 합계(100점) 자동 계산 미지원 — 사용자가 수동 계산."
+    "design_gate_notes": "원본은 I/II 도메인 + 세부항목 + 배점/점수 계층 채점표 (총 100점). repeat_table로는 평가항목/배점 고정 행 표현 불가(ENGINE_LIMITATION). TAI 변형안: text_flow로 평가기준 전문 수록(seq 6991-7204) + repeat_table(세부항목/배점/점수/비고)으로 입력 분리. 배점 합계(100점) 자동 계산 미지원 — 사용자가 수동 계산."
   },
   "document": {
     "title": "도급·용역·위탁 업체 안전보건 수준 평가",
@@ -35,19 +35,21 @@
     {
       "type": "text_flow",
       "id": "S01",
-      "source_note": "HWP-11 Para 1599-1645. 원본 평가항목·평가기준·배점 전문. 계층형 구조를 순차 텍스트로 재배치(TAI_EDITABLE_VARIANT).",
+      "source_note": "HWP-11 Para 1599-1645. seq 6976-7204. 원본 평가항목·평가기준·배점 전문. 계층형 구조를 순차 텍스트로 재배치(TAI_EDITABLE_VARIANT).",
       "paragraphs": [
         { "id": "H00", "text": "평가항목 및 기준 (총 100점)", "align": "center" },
-        { "id": "D1_head", "text": "I. 안전보건관리체계 (40점)", "align": "left" },
+        { "id": "D1_head", "text": "I. 안전보건관리체계 (40점): 도급·용역·위탁받는 자의 안전보건관리 체계 구축 수준", "align": "left" },
         { "id": "D1_sub1", "text": "  1-1. 리더십 (10점): 경영방침, 인력·시설·장비 등 자원 배정의 적정성 등", "align": "left" },
         { "id": "D1_sub2", "text": "  1-2. 근로자 참여 (10점): 종사자 의견수렴 절차 및 이행 적정성", "align": "left" },
-        { "id": "D1_sub3", "text": "  1-3. 위험요인 파악 및 제거·대체·통제 (10점)", "align": "left" },
-        { "id": "D1_sub4", "text": "  1-4. 비상조치계획 (10점)", "align": "left" },
-        { "id": "D2_head", "text": "II. 도급·용역·위탁 안전보건 관리계획 (60점)", "align": "left" },
-        { "id": "D2_sub1", "text": "  2-1. 위험요인 파악 및 제거·대체·통제 (15점)", "align": "left" },
-        { "id": "D2_sub2", "text": "  2-2. 자원 배정(시설·장비) (15점)", "align": "left" },
-        { "id": "D2_sub3", "text": "  2-3. 자원 배정(인력) (15점)", "align": "left" },
-        { "id": "D2_sub4", "text": "  2-4. 비상조치계획 (15점)", "align": "left" }
+        { "id": "D1_sub3", "text": "  1-3. 위험요인 파악 및 제거·대체·통제 (10점): 위험요인 파악 및 개선절차 및 수준의 적정성", "align": "left" },
+        { "id": "D1_sub4", "text": "  1-4. 비상조치계획 (10점): 비상조치계획 적정성", "align": "left" },
+        { "id": "D2_head", "text": "II. 도급·용역·위탁 안전보건 관리계획 (60점): 도급·용역·위탁받는 업무에 대한 안전보건관리계획 적정성", "align": "left" },
+        { "id": "D2_sub1", "text": "  2-1. 위험요인 파악 및 제거·대체·통제 (15점): 도급·용역·위탁받는 업무에 대한 위험요인 파악, 제거·대체 및 통제 방법의 적정성(위험성평가 및 대책의 적정성)", "align": "left" },
+        { "id": "D2_sub2a", "text": "  2-2. 자원 배정(시설·장비) (15점): 도급·용역·위탁받는 업무의 위험요인 관리에 적합한 시설·장비 배정 및 운영", "align": "left" },
+        { "id": "D2_sub2b", "text": "       사용 기계·기구 및 설비의 종류 및 관리계획", "align": "left" },
+        { "id": "D2_sub3a", "text": "  2-3. 자원 배정(인력) (15점): 도급·용역·위탁받는 업무의 위험요인 관리에 적합한 인력 배정 및 운영", "align": "left" },
+        { "id": "D2_sub3b", "text": "       도급·용역·위탁받는 업무 관련 실적, 작업자 이력·자격·경력 현황", "align": "left" },
+        { "id": "D2_sub4", "text": "  2-4. 비상조치계획 (15점): 도급·용역·위탁받는 업무 시 발생 가능한 비상상황 및 대처에 적합한 비상조치계획", "align": "left" }
       ]
     },
     {
@@ -57,10 +59,10 @@
       "default_row_count": 8,
       "min_row_height_mm": 10,
       "columns": [
-        { "id": "F01_ITEM",   "label": "평가항목",   "width_mm": 74 },
-        { "id": "F02_WEIGHT", "label": "배점",       "width_mm": 20 },
-        { "id": "F03_SCORE",  "label": "점수",       "width_mm": 20 },
-        { "id": "F04_REMARK", "label": "비고",       "width_mm": 56 }
+        { "id": "F01_ITEM",   "label": "평가항목", "width_mm": 74 },
+        { "id": "F02_WEIGHT", "label": "배점",     "width_mm": 20 },
+        { "id": "F03_SCORE",  "label": "점수",     "width_mm": 20 },
+        { "id": "F04_REMARK", "label": "비고",     "width_mm": 56 }
       ]
     }
   ]

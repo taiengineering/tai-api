@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-059-B7-BATCH-PRODUCTION-001",
+    "wo": "WO-REF01-059-B7-BATCH-REMEDIATION-002",
     "form_type": "EVALUATION",
     "source_id": "REF-C008",
     "schema_version": "common-v1",
@@ -15,11 +15,11 @@
     "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
-    "layout_variant_note": "Sub-section A(평가기준) → text_flow. Sub-section B(평가표)의 역할별 고정 행을 repeat_table 반복 입력 행으로 재배치. 평가(미흡/보통/양호) 3열 → header_groups 적용. 기능·내용 보존.",
+    "layout_variant_note": "Sub-section A(평가기준) → text_flow. Sub-section B(평가표)의 역할별 고정 행을 repeat_table 반복 입력 행으로 재배치. 평가(미흡/보통/양호) 3열 → header_groups 적용. Sub-section C(직무 참조) → text_flow. 기능·내용 보존.",
     "source_title_note": "SoT source_title: '안전보건 전문이력 평가 기준 및 평가표' ('이력' 오탈자 가능성 WO-048 기록). HWP 원문: '안전보건 전문인력 평가 기준 및 평가표 예시' (인력). TAI 서식 제목은 HWP 원문 따름.",
     "naming_note": "blank = 기존 출력 명명 규칙 유지",
     "design_gate_status": "EDITABLE_VARIANT_REVIEW — GPT 승인 대기",
-    "design_gate_notes": "평가기준(text_flow) + 평가표(repeat_table + header_groups) 구조. 원본 역할별 고정 행 대신 반복 입력 행 사용. 직책 입력 행으로 교체."
+    "design_gate_notes": "평가기준(text_flow) + 평가표(repeat_table + header_groups) + 직무 참조(text_flow) 3구역 구조. 원본 역할별 고정 행 대신 반복 입력 행 사용. 평가기준 원본 텍스트(양호/보통/미흡) + 반기 주기(반기 1회 이상) 포함. 3개 역할(안전보건관리책임자 10항, 관리감독자 6항, 안전보건총괄책임자 5항) 직무 참조 텍스트 포함."
   },
   "document": {
     "title": "안전보건 전문인력 평가 기준 및 평가표",
@@ -36,12 +36,13 @@
     {
       "type": "text_flow",
       "id": "S01",
-      "source_note": "HWP-08 Sub-section A: 평가기준 (Para 1292-1299). 원본 양호/보통/미흡 기준 텍스트.",
+      "source_note": "HWP-08 Sub-section A: 평가기준 (Para 1292-1299). 원본 양호/보통/미흡 기준 텍스트 (seq 5693-5718) + 평가 주기(seq 6171).",
       "paragraphs": [
         { "id": "H00", "text": "평가기준", "align": "center" },
-        { "id": "G01", "text": "양호: 법적 의무를 이행하고 자발적 안전보건관리 활동을 하는 경우", "align": "left" },
-        { "id": "G02", "text": "보통: 법적 의무를 이행하는 경우", "align": "left" },
-        { "id": "G03", "text": "미흡: 법적 의무를 이행하지 않는 경우", "align": "left" }
+        { "id": "G01", "text": "양호: 법령에 따른 업무수행으로 수립된 안전보건목표를 달성하고 재해예방에 기여함", "align": "left" },
+        { "id": "G02", "text": "보통: 법령에 따른 업무를 적정하게 수행함", "align": "left" },
+        { "id": "G03", "text": "미흡: 법령에 따른 업무를 일부 수행하지 않음", "align": "left" },
+        { "id": "G04", "text": "* 평가 주기: 반기 1회 이상 평가", "align": "left" }
       ]
     },
     {
@@ -58,12 +59,44 @@
         }
       ],
       "columns": [
-        { "id": "F01_ROLE",   "label": "직책",   "width_mm": 46 },
-        { "id": "F02_NAME",   "label": "성명",   "width_mm": 22 },
+        { "id": "F01_ROLE",   "label": "직책",     "width_mm": 46 },
+        { "id": "F02_NAME",   "label": "성명",     "width_mm": 22 },
         { "id": "F03_DUTY",   "label": "담당업무", "width_mm": 54 },
-        { "id": "F04_UNFAV",  "label": "미흡",   "width_mm": 16 },
-        { "id": "F05_FAIR",   "label": "보통",   "width_mm": 16 },
-        { "id": "F06_GOOD",   "label": "양호",   "width_mm": 16 }
+        { "id": "F04_UNFAV",  "label": "미흡",     "width_mm": 16 },
+        { "id": "F05_FAIR",   "label": "보통",     "width_mm": 16 },
+        { "id": "F06_GOOD",   "label": "양호",     "width_mm": 16 }
+      ]
+    },
+    {
+      "type": "text_flow",
+      "id": "S03",
+      "source_note": "HWP-08 직무 참조: 안전보건관리책임자(seq 5789-5942, 10항), 관리감독자(seq 5972-6057, 6항), 안전보건총괄책임자(seq 6087-6155, 5항).",
+      "paragraphs": [
+        { "id": "H00", "text": "【직책별 직무 참조】 (산업안전보건법)", "align": "center" },
+        { "id": "R01_head", "text": "안전보건관리책임자", "align": "left" },
+        { "id": "R01_01", "text": "  1. 사업장의 산재예방계획 수립에 관한 사항", "align": "left" },
+        { "id": "R01_02", "text": "  2. 안전보건관리규정(산안법 제25조, 제26조)의 작성 및 변경에 관한 사항", "align": "left" },
+        { "id": "R01_03", "text": "  3. 근로자에 대한 안전보건교육(산안법 제29조)에 관한 사항", "align": "left" },
+        { "id": "R01_04", "text": "  4. 작업환경의 점검 및 개선에 관한 사항", "align": "left" },
+        { "id": "R01_05", "text": "  5. 근로자의 건강진단 등 건강관리에 관한 사항", "align": "left" },
+        { "id": "R01_06", "text": "  6. 산업재해의 원인 조사 및 재발 방지대책 수립에 관한 사항", "align": "left" },
+        { "id": "R01_07", "text": "  7. 산업재해에 관한 통계의 기록 및 유지관리에 관한 사항", "align": "left" },
+        { "id": "R01_08", "text": "  8. 안전장치 및 보호구 구입 시 적격품 여부 확인에 관한 사항", "align": "left" },
+        { "id": "R01_09", "text": "  9. 위험성평가의 실시에 관한 사항", "align": "left" },
+        { "id": "R01_10", "text": "  10. 안전보건규칙에서 정하는 근로자의 위험 또는 건강장해의 방지에 관한 사항", "align": "left" },
+        { "id": "R02_head", "text": "관리감독자", "align": "left" },
+        { "id": "R02_01", "text": "  1. 사업장 내 관리감독자가 지휘·감독하는 작업과 관련된 기계·기구 또는 설비의 안전·보건 점검 및 이상 유무의 확인", "align": "left" },
+        { "id": "R02_02", "text": "  2. 관리감독자에게 소속된 근로자의 작업복·보호구 및 방호장치의 점검과 그 착용·사용에 관한 교육·지도", "align": "left" },
+        { "id": "R02_03", "text": "  3. 해당 작업에서 발생한 산업재해에 관한 보고 및 이에 대한 응급조치", "align": "left" },
+        { "id": "R02_04", "text": "  4. 해당 작업의 작업장 정리·정돈 및 통로 확보에 대한 확인·감독", "align": "left" },
+        { "id": "R02_05", "text": "  5. 안전관리자, 보건관리자, 안전보건관리담당자, 산업보건의의 지도·조언에 대한 협조", "align": "left" },
+        { "id": "R02_06", "text": "  6. 위험성평가를 위한 유해·위험요인의 파악 및 개선조치 시행에 참여", "align": "left" },
+        { "id": "R03_head", "text": "안전보건총괄책임자", "align": "left" },
+        { "id": "R03_01", "text": "  1. 위험성평가의 실시에 관한 사항", "align": "left" },
+        { "id": "R03_02", "text": "  2. 산업재해가 발생할 급박한 위험이 있는 경우 및 중대재해 발생 시 작업의 중지", "align": "left" },
+        { "id": "R03_03", "text": "  3. 도급 시 산업재해 예방조치", "align": "left" },
+        { "id": "R03_04", "text": "  4. 산업안전보건관리비의 관계수급인 간의 사용에 관한 협의·조정 및 그 집행의 감독", "align": "left" },
+        { "id": "R03_05", "text": "  5. 안전인증대상기계 등과 자율안전확인대상기계 등의 사용 여부 확인", "align": "left" }
       ]
     }
   ]
