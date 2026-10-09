@@ -3,7 +3,7 @@ wo: WO-REF01-060-B8-WAVE2-BUILD-003
 evidence_type: BUILD_RESULT
 status: BUILT
 date: 2026-10-10
-engine_py_sha8: ad0777bf
+engine_py_sha8: be4899da
 engine_cjs_sha8: 375250c7
 ---
 
@@ -18,7 +18,7 @@ WO-REF01-060-B8-WAVE2-BUILD-003 B8 Wave2 14건 일괄 제작 결과.
 | 로컬 HEAD = 원격 HEAD | 69930826 = 69930826 PASS |
 | working tree clean | PASS |
 | engine CJS SHA (375250c7) | PASS |
-| engine Python runner SHA | ad0777bf (FIX-002 반영, 변경 예상) |
+| engine Python runner SHA | be4899da (common_v1_engine.py — frozen; AUTO-QA-004에서 정정) |
 | FROZEN_SHA 24/24 일치 | PASS |
 | BUILD_APPROVED_IDS 초기 상태 | frozenset() (비어 있음 확인) |
 | 신규 28개 출력 경로 비어 있음 | PASS |
