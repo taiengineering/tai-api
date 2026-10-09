@@ -220,16 +220,20 @@ def test_r08_company_role_matching_company(monkeypatch):
     assert body["data"]["diagnosis_id"] == _DIAG_ID
 
 
-# ── R09 — review_required stripped from customer-facing response ──────────────
+# ── R09 — all unconfirmed fields stripped from customer-facing response ───────
 
-def test_r09_review_required_not_in_response(monkeypatch):
-    """review_required must NOT appear in full_result of customer response.
-    Internal storage (DB) is unchanged; only HTTP response is filtered.
+def test_r09_unconfirmed_fields_not_in_response(monkeypatch):
+    """All four internal unconfirmed fields must be absent from the HTTP response.
+    Internal DB storage is unchanged; only the HTTP response is filtered.
+    review_required / review_required_count / unconfirmed / unconfirmed_count
     """
     row_with_rr = dict(_VALID_ROW)
     row_with_rr["full_result"] = {
         **_VALID_FULL_RESULT,
         "review_required": [{"atom_id": "A1", "reason": "UNKNOWN"}],
+        "review_required_count": 1,
+        "unconfirmed": [{"atom_id": "A1"}],
+        "unconfirmed_count": 1,
     }
     seed = {
         "anonymous_diagnosis_results": [row_with_rr],
@@ -241,6 +245,7 @@ def test_r09_review_required_not_in_response(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     full = body["data"]["full_result"]
-    assert "review_required" not in full, "review_required must be stripped from customer response"
+    for key in ("review_required", "review_required_count", "unconfirmed", "unconfirmed_count"):
+        assert key not in full, f"{key!r} must be stripped from customer response"
     # Confirmed obligations still present
     assert "obligations_raw" in full

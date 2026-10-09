@@ -141,6 +141,17 @@ class DiagnosisRunBody(BaseModel):
                     raise ValueError(f"form_data[{key!r}] must be a finite number")
                 if val < 0:
                     raise ValueError(f"form_data[{key!r}] must be non-negative (got {val})")
+        # Strict type guard for fields that must be a finite number when present.
+        # Strings, lists, dicts, and other non-numeric types are rejected — not coerced.
+        _NUMERIC_STRICT = frozenset({"work_height_m", "truck_loading_height_m", "manual_handling_weight_kg"})
+        for key in _NUMERIC_STRICT:
+            val = v.get(key)
+            if val is None:
+                continue
+            if isinstance(val, bool) or not isinstance(val, (int, float)):
+                raise ValueError(
+                    f"form_data[{key!r}] must be a number, got {type(val).__name__!r}"
+                )
         # Parent-child enforcement — FF-06 contract parity on form_data envelope.
         _PARENT_CHILD: dict = {
             "truck_loading_height_m": "has_truck_loading_unloading",

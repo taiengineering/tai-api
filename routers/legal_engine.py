@@ -387,9 +387,18 @@ def get_diagnosis_snapshot(diagnosis_id: str, authorization: Optional[str] = Hea
         "진단 결과를 찾을 수 없습니다.",
     )
 
-    # Strip review_required from customer-facing response — internal storage unchanged.
-    # Customers receive only confirmed obligation facts; review_required is internal LEG evidence.
-    _safe_full = {k: v for k, v in (snapshot["full_result"] or {}).items() if k != "review_required"}
+    # Strip all unconfirmed-related fields from customer-facing response.
+    # Internal DB storage unchanged. Customers receive only confirmed obligation facts.
+    _INTERNAL_UNCONFIRMED_KEYS = frozenset({
+        "review_required",
+        "review_required_count",
+        "unconfirmed",
+        "unconfirmed_count",
+    })
+    _safe_full = {
+        k: v for k, v in (snapshot["full_result"] or {}).items()
+        if k not in _INTERNAL_UNCONFIRMED_KEYS
+    }
     return {
         "status": "success",
         "data": {
