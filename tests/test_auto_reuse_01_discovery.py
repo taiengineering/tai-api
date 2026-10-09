@@ -254,10 +254,11 @@ def test_R1_inspection_preview_delegates_to_render_html():
         from routers.document_engine_api import auto_document_preview
 
         with patch("routers.document_engine_api._ensure_inspection_own"):
-            with patch("routers.document_engine_api._require_auto_inspection_ready"):
-                with patch("routers.document_engine_api.get_supabase"):
-                    asyncio.run(auto_document_preview("INSPECTION", "insp-uuid", {}))
-                    mock_render.assert_called_once_with("INSP", {"inspection_id": "insp-uuid"})
+            with patch("routers.document_engine_api._ensure_auto_factory_scope"):
+                with patch("routers.document_engine_api._require_auto_inspection_ready"):
+                    with patch("routers.document_engine_api.get_supabase"):
+                        asyncio.run(auto_document_preview("INSPECTION", "insp-uuid", {}))
+                        mock_render.assert_called_once_with("INSP", {"inspection_id": "insp-uuid"})
 
 
 def test_R2_tbm_preview_delegates_to_render_html():
@@ -269,10 +270,11 @@ def test_R2_tbm_preview_delegates_to_render_html():
         from routers.document_engine_api import auto_document_preview
 
         with patch("routers.document_engine_api._ensure_tbm_own"):
-            with patch("routers.document_engine_api._require_auto_tbm_ready"):
-                with patch("routers.document_engine_api.get_supabase"):
-                    asyncio.run(auto_document_preview("TBM", "tbm-uuid", {}))
-                    mock_render.assert_called_once_with("TBM", {"meeting_id": "tbm-uuid"})
+            with patch("routers.document_engine_api._ensure_auto_factory_scope"):
+                with patch("routers.document_engine_api._require_auto_tbm_ready"):
+                    with patch("routers.document_engine_api.get_supabase"):
+                        asyncio.run(auto_document_preview("TBM", "tbm-uuid", {}))
+                        mock_render.assert_called_once_with("TBM", {"meeting_id": "tbm-uuid"})
 
 
 def test_R3_inspection_pdf_delegates_to_render_pdf():
@@ -284,11 +286,12 @@ def test_R3_inspection_pdf_delegates_to_render_pdf():
         from routers.document_engine_api import auto_document_pdf
 
         with patch("routers.document_engine_api._ensure_inspection_own"):
-            with patch("routers.document_engine_api._require_auto_inspection_ready"):
-                with patch("routers.document_engine_api.get_supabase"):
-                    resp = asyncio.run(auto_document_pdf("INSPECTION", "insp-uuid", {}))
-                    mock_render.assert_called_once_with("INSP", {"inspection_id": "insp-uuid"})
-                    assert resp.media_type == "application/pdf"
+            with patch("routers.document_engine_api._ensure_auto_factory_scope"):
+                with patch("routers.document_engine_api._require_auto_inspection_ready"):
+                    with patch("routers.document_engine_api.get_supabase"):
+                        resp = asyncio.run(auto_document_pdf("INSPECTION", "insp-uuid", {}))
+                        mock_render.assert_called_once_with("INSP", {"inspection_id": "insp-uuid"})
+                        assert resp.media_type == "application/pdf"
 
 
 def test_R4_tbm_pdf_delegates_to_render_pdf():
@@ -300,10 +303,11 @@ def test_R4_tbm_pdf_delegates_to_render_pdf():
         from routers.document_engine_api import auto_document_pdf
 
         with patch("routers.document_engine_api._ensure_tbm_own"):
-            with patch("routers.document_engine_api._require_auto_tbm_ready"):
-                with patch("routers.document_engine_api.get_supabase"):
-                    asyncio.run(auto_document_pdf("TBM", "tbm-uuid", {}))
-                    mock_render.assert_called_once_with("TBM", {"meeting_id": "tbm-uuid"})
+            with patch("routers.document_engine_api._ensure_auto_factory_scope"):
+                with patch("routers.document_engine_api._require_auto_tbm_ready"):
+                    with patch("routers.document_engine_api.get_supabase"):
+                        asyncio.run(auto_document_pdf("TBM", "tbm-uuid", {}))
+                        mock_render.assert_called_once_with("TBM", {"meeting_id": "tbm-uuid"})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -516,16 +520,17 @@ def test_RR1_in_progress_inspection_preview_blocked():
 
     with patch("routers.document_engine_api._render_html", new_callable=AsyncMock) as mock_render:
         with patch("routers.document_engine_api._ensure_inspection_own"):
-            with patch("routers.document_engine_api.get_supabase"):
-                with patch(
-                    "routers.document_engine_api.resolve_inspection_record",
-                    return_value={"is_active": True, "inspection_status": "IN_PROGRESS"},
-                ):
-                    with pytest.raises(HTTPException) as exc_info:
-                        asyncio.run(auto_document_preview("INSPECTION", "insp-ip", {}))
-                    assert exc_info.value.status_code == 404
-                    assert exc_info.value.detail == "AUTO_DOCUMENT_NOT_READY"
-                    mock_render.assert_not_called()
+            with patch("routers.document_engine_api._ensure_auto_factory_scope"):
+                with patch("routers.document_engine_api.get_supabase"):
+                    with patch(
+                        "routers.document_engine_api.resolve_inspection_record",
+                        return_value={"is_active": True, "inspection_status": "IN_PROGRESS"},
+                    ):
+                        with pytest.raises(HTTPException) as exc_info:
+                            asyncio.run(auto_document_preview("INSPECTION", "insp-ip", {}))
+                        assert exc_info.value.status_code == 404
+                        assert exc_info.value.detail == "AUTO_DOCUMENT_NOT_READY"
+                        mock_render.assert_not_called()
 
 
 def test_RR2_draft_tbm_preview_blocked():
@@ -535,12 +540,13 @@ def test_RR2_draft_tbm_preview_blocked():
 
     with patch("routers.document_engine_api._render_html", new_callable=AsyncMock) as mock_render:
         with patch("routers.document_engine_api._ensure_tbm_own"):
-            with patch("routers.document_engine_api.get_supabase", return_value=_make_rr_sb_for_tbm("DRAFT")):
-                with pytest.raises(HTTPException) as exc_info:
-                    asyncio.run(auto_document_preview("TBM", "tbm-draft", {}))
-                assert exc_info.value.status_code == 404
-                assert exc_info.value.detail == "AUTO_DOCUMENT_NOT_READY"
-                mock_render.assert_not_called()
+            with patch("routers.document_engine_api._ensure_auto_factory_scope"):
+                with patch("routers.document_engine_api.get_supabase", return_value=_make_rr_sb_for_tbm("DRAFT")):
+                    with pytest.raises(HTTPException) as exc_info:
+                        asyncio.run(auto_document_preview("TBM", "tbm-draft", {}))
+                    assert exc_info.value.status_code == 404
+                    assert exc_info.value.detail == "AUTO_DOCUMENT_NOT_READY"
+                    mock_render.assert_not_called()
 
 
 def test_RR3_in_progress_inspection_pdf_blocked():
@@ -581,14 +587,15 @@ def test_RR5_unexpected_resolver_error_propagates_preview():
 
     with patch("routers.document_engine_api._render_html", new_callable=AsyncMock) as mock_render:
         with patch("routers.document_engine_api._ensure_inspection_own"):
-            with patch("routers.document_engine_api.get_supabase"):
-                with patch(
-                    "routers.document_engine_api.resolve_inspection_record",
-                    side_effect=RuntimeError("DB connection failed"),
-                ):
-                    with pytest.raises(RuntimeError):
-                        asyncio.run(auto_document_preview("INSPECTION", "insp-err", {}))
-                    mock_render.assert_not_called()
+            with patch("routers.document_engine_api._ensure_auto_factory_scope"):
+                with patch("routers.document_engine_api.get_supabase"):
+                    with patch(
+                        "routers.document_engine_api.resolve_inspection_record",
+                        side_effect=RuntimeError("DB connection failed"),
+                    ):
+                        with pytest.raises(RuntimeError):
+                            asyncio.run(auto_document_preview("INSPECTION", "insp-err", {}))
+                        mock_render.assert_not_called()
 
 
 def test_RR6_unexpected_resolver_error_propagates_pdf():
@@ -597,14 +604,15 @@ def test_RR6_unexpected_resolver_error_propagates_pdf():
 
     with patch("routers.document_engine_api._render_pdf", new_callable=AsyncMock) as mock_render:
         with patch("routers.document_engine_api._ensure_inspection_own"):
-            with patch("routers.document_engine_api.get_supabase"):
-                with patch(
-                    "routers.document_engine_api.resolve_inspection_record",
-                    side_effect=RuntimeError("DB connection failed"),
-                ):
-                    with pytest.raises(RuntimeError):
-                        asyncio.run(auto_document_pdf("INSPECTION", "insp-err", {}))
-                    mock_render.assert_not_called()
+            with patch("routers.document_engine_api._ensure_auto_factory_scope"):
+                with patch("routers.document_engine_api.get_supabase"):
+                    with patch(
+                        "routers.document_engine_api.resolve_inspection_record",
+                        side_effect=RuntimeError("DB connection failed"),
+                    ):
+                        with pytest.raises(RuntimeError):
+                            asyncio.run(auto_document_pdf("INSPECTION", "insp-err", {}))
+                        mock_render.assert_not_called()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

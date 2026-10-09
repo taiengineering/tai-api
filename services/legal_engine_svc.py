@@ -89,6 +89,7 @@ def run_diagnose_step2(supabase, body, engine_version: str) -> Dict[str, Any]:
     if work_type_codes_direct:
         work_types = list(set(work_types + work_type_codes_direct))
     sector_db_s2 = normalize_sector_db(sector)
+    sector_groups = get_sector_groups(sector_db_s2)
     rules = fetch_diagnosis_rules(
         supabase,
         sector_db=sector_db_s2,
