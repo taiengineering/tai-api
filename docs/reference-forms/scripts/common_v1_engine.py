@@ -227,6 +227,37 @@ def validate(fields):
                 )
             if 'min_row_height_mm' in s:
                 _pos(s['min_row_height_mm'], f"sections[{i}] repeat_table.min_row_height_mm")
+            if 'header_groups' in s:
+                groups = s['header_groups']
+                if not isinstance(groups, list) or len(groups) < 1:
+                    raise ValueError(f"sections[{i}] repeat_table: header_groups must be a non-empty list")
+                col_ids = [c['id'] for c in s['columns']]
+                assigned = set()
+                for gi, g in enumerate(groups):
+                    if not g.get('id'):
+                        raise ValueError(f"sections[{i}] repeat_table header_groups[{gi}]: missing 'id'")
+                    if not g.get('label'):
+                        raise ValueError(f"sections[{i}] repeat_table header_groups[{gi}]: missing 'label'")
+                    cids = g.get('column_ids', [])
+                    if not isinstance(cids, list) or len(cids) < 2:
+                        raise ValueError(
+                            f"sections[{i}] repeat_table header_groups[{gi}]: column_ids must have >= 2 entries")
+                    for cid in cids:
+                        if cid not in col_ids:
+                            raise ValueError(
+                                f"sections[{i}] repeat_table header_groups[{gi}]: "
+                                f"column_id '{cid}' not found in columns")
+                        if cid in assigned:
+                            raise ValueError(
+                                f"sections[{i}] repeat_table header_groups[{gi}]: "
+                                f"column_id '{cid}' appears in multiple groups")
+                        assigned.add(cid)
+                    indices = sorted(col_ids.index(cid) for cid in cids)
+                    for k in range(1, len(indices)):
+                        if indices[k] != indices[k-1] + 1:
+                            raise ValueError(
+                                f"sections[{i}] repeat_table header_groups[{gi}]: "
+                                f"column_ids must be consecutive in columns")
 
         if t == 'text_flow':
             paras = s['paragraphs']
@@ -360,29 +391,84 @@ def build_repeat_table(section, ex_rows=None, content_w=None):
     n_def   = section['default_row_count']
     col_w   = [c['width_mm']*mm for c in cols]
     align_m = {'left':S_BODY,'center':S_BODY_C,'right':S_BODY_R}
+    groups  = section.get('header_groups', [])
 
-    header = [P(c['label'], S_HDR) for c in cols]
-    data   = list(ex_rows) if ex_rows else []
+    data = list(ex_rows) if ex_rows else []
     while len(data) < n_def:
         data.append(['']*len(cols))
 
-    rows = [header]
-    for ri, rd in enumerate(data):
-        rows.append([P(str(rd[i] or ''), align_m.get(cols[i].get('align','left'), S_BODY))
-                     for i in range(len(cols))])
+    row_h = section.get('min_row_height_mm', 14) * mm
+
+    if not groups:
+        # ── Single-header (existing behavior) ──────────────────────
+        header = [P(c['label'], S_HDR) for c in cols]
+        rows   = [header]
+        for ri, rd in enumerate(data):
+            rows.append([P(str(rd[i] or ''), align_m.get(cols[i].get('align','left'), S_BODY))
+                         for i in range(len(cols))])
+        cmds = list(_BASE) + [
+            ('FONTNAME',  (0,0),(-1,0),'NGBold'),
+            ('BACKGROUND',(0,0),(-1,0),C_HEADER_BG),
+            ('ALIGN',     (0,0),(-1,0),'CENTER'),
+        ]
+        for i in range(1, len(rows)):
+            if i % 2 == 0:
+                cmds.append(('BACKGROUND',(0,i),(-1,i),C_ALT_BG))
+        tbl = Table(rows, colWidths=col_w, style=TableStyle(cmds),
+                    repeatRows=1, minRowHeights=[0]+[row_h]*len(data))
+        return [tbl]
+
+    # ── Two-level header ───────────────────────────────────────────
+    col_ids = [c['id'] for c in cols]
+    group_by_col = {}
+    for g in groups:
+        for cid in g['column_ids']:
+            group_by_col[cid] = g
+    group_spans = {}  # group_id → (start_idx, end_idx)
+    for g in groups:
+        indices = sorted(col_ids.index(cid) for cid in g['column_ids'])
+        group_spans[g['id']] = (indices[0], indices[-1])
+
+    row0 = []   # group-level header row
+    row1 = []   # leaf-level header row
+    span_cmds = []
+    processed_groups = set()
+    i = 0
+    while i < len(cols):
+        col = cols[i]
+        g = group_by_col.get(col['id'])
+        if g and g['id'] not in processed_groups:
+            g_start, g_end = group_spans[g['id']]
+            row0.append(P(g['label'], S_HDR))
+            row0.extend([''] * (g_end - g_start))
+            span_cmds.append(('SPAN', (g_start, 0), (g_end, 0)))
+            for ci in range(g_start, g_end + 1):
+                row1.append(P(cols[ci]['label'], S_HDR))
+            processed_groups.add(g['id'])
+            i = g_end + 1
+        else:
+            row0.append(P(col['label'], S_HDR))
+            row1.append('')
+            span_cmds.append(('SPAN', (i, 0), (i, 1)))
+            i += 1
+
+    rows = [row0, row1]
+    for rd in data:
+        rows.append([P(str(rd[j] or ''), align_m.get(cols[j].get('align','left'), S_BODY))
+                     for j in range(len(cols))])
 
     cmds = list(_BASE) + [
-        ('FONTNAME',  (0,0),(-1,0),'NGBold'),
-        ('BACKGROUND',(0,0),(-1,0),C_HEADER_BG),
-        ('ALIGN',     (0,0),(-1,0),'CENTER'),
-    ]
-    for i in range(1, len(rows)):
-        if i % 2 == 0:
+        ('FONTNAME',  (0,0),(-1,1),'NGBold'),
+        ('BACKGROUND',(0,0),(-1,1),C_HEADER_BG),
+        ('ALIGN',     (0,0),(-1,1),'CENTER'),
+        ('VALIGN',    (0,0),(-1,1),'MIDDLE'),
+    ] + span_cmds
+    for i in range(2, len(rows)):
+        if (i - 2) % 2 == 1:
             cmds.append(('BACKGROUND',(0,i),(-1,i),C_ALT_BG))
 
-    row_h = section.get('min_row_height_mm', 14) * mm
     tbl = Table(rows, colWidths=col_w, style=TableStyle(cmds),
-                repeatRows=1, minRowHeights=[0]+[row_h]*len(data))
+                repeatRows=2, minRowHeights=[0, 0]+[row_h]*len(data))
     return [tbl]
 
 def build_text_flow(section, content_w=None):

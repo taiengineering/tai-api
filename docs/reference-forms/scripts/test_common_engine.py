@@ -1534,11 +1534,11 @@ def test_C0603_node_invalid_orientation_raises():
 # ─── C06-04: 공통 엔진 SHA256 회귀 ──────────────────────────────────
 
 def test_C0604_common_engines_sha256():
-    """공통 엔진 파일 SHA256 불변 검증 — 기준본: WO-REF01-059-B3-B-PATCH-1 (xml_escape + align 계약 일치 + P06 원본 복원)."""
+    """공통 엔진 파일 SHA256 불변 검증 — 기준본: WO-REF01-059-B4-B (header_groups 2단 헤더 추가)."""
     import hashlib
     expected = {
-        'common_v1_engine.py':  '34d810ba7bbaa22cb8555fe5a2ad9030fa68d912462c7292952d4579c9120ae8',
-        'common_v1_engine.cjs': '87b3778f1755ccb35eec3de63ce8d0ba300ffb74c4309140c3942f9dc2d11946',
+        'common_v1_engine.py':  '634ecd25416d9f82ab465def1d070cf16c355f73999a93a23fb7ae33c07af370',
+        'common_v1_engine.cjs': '375250c74ef1e22786526c1fa2446d989bbed95e8e513e85deeccc3bfb727925',
         'c014_v1.json':         'c50a99c5dcd9369e1751e754bdd004c0027065ec0ccd739448b9e70b4c45ce90',
         'c001_v1.json':         'c6a8e70dd0e3304bc066d36772a114554d4c98dbbd35c8d7c89352b2efaf7fea',
     }
@@ -2040,3 +2040,526 @@ def test_C0704_c012_source_unchanged():
         actual = hashlib.sha256(p.read_bytes()).hexdigest()
         assert actual == exp_sha, \
             f"{fname}: SHA256 changed\n  expected: {exp_sha}\n  actual:   {actual}"
+
+# ═══════════════════════════════════════════════════════════════════════
+# WO-REF01-059-B4-B — REF-C004 유해·위험물질 목록 / 2단 헤더 공통 엔진 확장
+# ═══════════════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def c004_v1():
+    return json.loads((BASE / 'c004_v1.json').read_text(encoding='utf-8'))
+
+# ─── C08-01: c004_v1.json 스키마 검증 ────────────────────────────────
+
+def test_C0801_c004_schema_version(c004_v1):
+    assert c004_v1['_meta']['schema_version'] == 'common-v1'
+
+def test_C0801_c004_form_type(c004_v1):
+    assert c004_v1['_meta']['form_type'] == 'REGISTER'
+
+def test_C0801_c004_title(c004_v1):
+    assert c004_v1['document']['title'] == '유해·위험물질 목록 작성 서식'
+
+def test_C0801_c004_orientation_landscape(c004_v1):
+    assert c004_v1['document']['page']['orientation'] == 'landscape'
+
+def test_C0801_c004_validates(c004_v1):
+    assert validate(c004_v1) is True
+
+def test_C0801_c004_15_columns(c004_v1):
+    cols = c004_v1['sections'][0]['columns']
+    assert len(cols) == 15, f"Expected 15 columns, got {len(cols)}"
+
+def test_C0801_c004_column_widths_sum_257(c004_v1):
+    total = sum(c['width_mm'] for c in c004_v1['sections'][0]['columns'])
+    assert abs(total - 257) < 0.5, f"Column widths sum={total}mm, expected 257mm"
+
+def test_C0801_c004_header_group_G01(c004_v1):
+    groups = c004_v1['sections'][0]['header_groups']
+    assert len(groups) == 1
+    assert groups[0]['id'] == 'G01'
+    assert groups[0]['label'] == '폭발한계(%)'
+    assert set(groups[0]['column_ids']) == {'F04_EXPL_LOWER', 'F04_EXPL_UPPER'}
+
+def test_C0801_c004_explosion_lower_upper_consecutive(c004_v1):
+    cols = c004_v1['sections'][0]['columns']
+    col_ids = [c['id'] for c in cols]
+    i_lower = col_ids.index('F04_EXPL_LOWER')
+    i_upper = col_ids.index('F04_EXPL_UPPER')
+    assert i_upper == i_lower + 1, "하한/상한 columns must be consecutive"
+
+def test_C0801_c004_notes_section_exists(c004_v1):
+    secs = c004_v1['sections']
+    assert len(secs) == 2
+    assert secs[1]['type'] == 'text_flow'
+
+def test_C0801_c004_notes_6_paragraphs(c004_v1):
+    paras = c004_v1['sections'][1]['paragraphs']
+    assert len(paras) == 6, f"Expected 6 note paragraphs, got {len(paras)}"
+
+def test_C0801_c004_notes_ids_N01_to_N06(c004_v1):
+    ids = [p['id'] for p in c004_v1['sections'][1]['paragraphs']]
+    assert ids == ['N01', 'N02', 'N03', 'N04', 'N05', 'N06']
+
+def test_C0801_c004_notes_original_text(c004_v1):
+    paras = c004_v1['sections'][1]['paragraphs']
+    texts = {p['id']: p['text'] for p in paras}
+    assert '제출대상 설비' in texts['N01'], "N01 must contain original ① text"
+    assert '증기압은 상온' in texts['N02'], "N02 must contain original ② text"
+    assert '있으면 ○' in texts['N03'], "N03 must contain original ③ text"
+    assert '이상반응을 일으키는' in texts['N04'], "N04 must contain original ④ text"
+    assert 'TWA' in texts['N05'], "N05 must contain original ⑤ text"
+    assert 'LD50' in texts['N06'], "N06 must contain original ⑥ text"
+
+# ─── C08-02: header_groups 유효성 검사 ───────────────────────────────
+
+def test_C0802_no_header_groups_existing_behavior():
+    """header_groups 미지정 시 기존 단일 헤더 유지 (repeat_table)."""
+    fields = {
+        '_meta': {'schema_version': 'common-v1'},
+        'document': {'title': 'T', 'doc_id': 'T1', 'creator': 'TAI',
+                     'page': {'orientation': 'portrait'}},
+        'sections': [{'type': 'repeat_table', 'default_row_count': 2,
+                      'columns': [
+                          {'id': 'A', 'label': '항목A', 'width_mm': 85},
+                          {'id': 'B', 'label': '항목B', 'width_mm': 85},
+                      ]}],
+    }
+    assert validate(fields) is True
+
+def test_C0802_valid_header_group():
+    """유효한 2단 헤더 그룹 검증."""
+    fields = {
+        '_meta': {'schema_version': 'common-v1'},
+        'document': {'title': 'T', 'doc_id': 'T1', 'creator': 'TAI',
+                     'page': {'orientation': 'portrait'}},
+        'sections': [{'type': 'repeat_table', 'default_row_count': 2,
+                      'header_groups': [{'id': 'G1', 'label': '그룹', 'column_ids': ['B', 'C']}],
+                      'columns': [
+                          {'id': 'A', 'label': '항목A', 'width_mm': 50},
+                          {'id': 'B', 'label': '하위1', 'width_mm': 60},
+                          {'id': 'C', 'label': '하위2', 'width_mm': 60},
+                      ]}],
+    }
+    assert validate(fields) is True
+
+def test_C0802_invalid_group_id_raises():
+    """존재하지 않는 column_id 참조 시 FAIL-CLOSED."""
+    fields = {
+        '_meta': {'schema_version': 'common-v1'},
+        'document': {'title': 'T', 'doc_id': 'T1', 'creator': 'TAI'},
+        'sections': [{'type': 'repeat_table', 'default_row_count': 2,
+                      'header_groups': [{'id': 'G1', 'label': '그룹', 'column_ids': ['B', 'NONEXISTENT']}],
+                      'columns': [
+                          {'id': 'A', 'label': 'A', 'width_mm': 85},
+                          {'id': 'B', 'label': 'B', 'width_mm': 85},
+                      ]}],
+    }
+    with pytest.raises((ValueError, KeyError)):
+        validate(fields)
+
+def test_C0802_duplicate_column_in_groups_raises():
+    """같은 column_id가 여러 그룹에 중복 등장 시 FAIL-CLOSED."""
+    fields = {
+        '_meta': {'schema_version': 'common-v1'},
+        'document': {'title': 'T', 'doc_id': 'T1', 'creator': 'TAI'},
+        'sections': [{'type': 'repeat_table', 'default_row_count': 2,
+                      'header_groups': [
+                          {'id': 'G1', 'label': 'G1', 'column_ids': ['A', 'B']},
+                          {'id': 'G2', 'label': 'G2', 'column_ids': ['B', 'C']},
+                      ],
+                      'columns': [
+                          {'id': 'A', 'label': 'A', 'width_mm': 57},
+                          {'id': 'B', 'label': 'B', 'width_mm': 57},
+                          {'id': 'C', 'label': 'C', 'width_mm': 56},
+                      ]}],
+    }
+    with pytest.raises((ValueError, KeyError)):
+        validate(fields)
+
+def test_C0802_nonconsecutive_group_raises():
+    """비연속 column_ids 그룹 시 FAIL-CLOSED."""
+    fields = {
+        '_meta': {'schema_version': 'common-v1'},
+        'document': {'title': 'T', 'doc_id': 'T1', 'creator': 'TAI'},
+        'sections': [{'type': 'repeat_table', 'default_row_count': 2,
+                      'header_groups': [{'id': 'G1', 'label': 'G', 'column_ids': ['A', 'C']}],
+                      'columns': [
+                          {'id': 'A', 'label': 'A', 'width_mm': 57},
+                          {'id': 'B', 'label': 'B', 'width_mm': 57},
+                          {'id': 'C', 'label': 'C', 'width_mm': 56},
+                      ]}],
+    }
+    with pytest.raises(ValueError):
+        validate(fields)
+
+def test_C0802_group_single_column_raises():
+    """column_ids < 2인 그룹은 FAIL-CLOSED."""
+    fields = {
+        '_meta': {'schema_version': 'common-v1'},
+        'document': {'title': 'T', 'doc_id': 'T1', 'creator': 'TAI'},
+        'sections': [{'type': 'repeat_table', 'default_row_count': 2,
+                      'header_groups': [{'id': 'G1', 'label': 'G', 'column_ids': ['A']}],
+                      'columns': [
+                          {'id': 'A', 'label': 'A', 'width_mm': 85},
+                          {'id': 'B', 'label': 'B', 'width_mm': 85},
+                      ]}],
+    }
+    with pytest.raises(ValueError):
+        validate(fields)
+
+def test_C0802_node_valid_header_group():
+    """Node.js 엔진 header_groups 유효성 검증 PASS."""
+    fields = {
+        '_meta': {'schema_version': 'common-v1'},
+        'document': {'title': 'T', 'doc_id': 'T1', 'creator': 'TAI',
+                     'page': {'orientation': 'portrait'}},
+        'sections': [{'type': 'repeat_table', 'default_row_count': 2,
+                      'header_groups': [{'id': 'G1', 'label': '그룹', 'column_ids': ['B', 'C']}],
+                      'columns': [
+                          {'id': 'A', 'label': '항목A', 'width_mm': 50},
+                          {'id': 'B', 'label': '하위1', 'width_mm': 60},
+                          {'id': 'C', 'label': '하위2', 'width_mm': 60},
+                      ]}],
+    }
+    import json as _json, subprocess as _sub
+    result = _sub.run(
+        ['node', '-e',
+         f"const e=require('./common_v1_engine.cjs'); "
+         f"try{{e.validate({_json.dumps(fields)});console.log('PASS');}}catch(err){{console.error('FAIL:',err.message);process.exit(1);}}"],
+        cwd=str(BASE), capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, f"Node validate FAIL: {result.stderr}"
+    assert 'PASS' in result.stdout
+
+def test_C0802_node_invalid_group_id_raises():
+    """Node.js 엔진 존재하지 않는 column_id 참조 시 오류."""
+    import json as _json, subprocess as _sub
+    fields = {
+        '_meta': {'schema_version': 'common-v1'},
+        'document': {'title': 'T', 'doc_id': 'T1', 'creator': 'TAI'},
+        'sections': [{'type': 'repeat_table', 'default_row_count': 2,
+                      'header_groups': [{'id': 'G1', 'label': 'G', 'column_ids': ['B', 'NONE']}],
+                      'columns': [
+                          {'id': 'A', 'label': 'A', 'width_mm': 85},
+                          {'id': 'B', 'label': 'B', 'width_mm': 85},
+                      ]}],
+    }
+    result = _sub.run(
+        ['node', '-e',
+         f"const e=require('./common_v1_engine.cjs'); "
+         f"try{{e.validate({_json.dumps(fields)});console.log('PASS');}}catch(err){{console.log('RAISED:',err.message);}}"],
+        cwd=str(BASE), capture_output=True, text=True, timeout=10
+    )
+    assert 'RAISED' in result.stdout, f"Expected RAISED, got: {result.stdout}"
+
+def test_C0802_node_duplicate_column_raises():
+    """Node.js 엔진 중복 column_id 시 오류."""
+    import json as _json, subprocess as _sub
+    fields = {
+        '_meta': {'schema_version': 'common-v1'},
+        'document': {'title': 'T', 'doc_id': 'T1', 'creator': 'TAI'},
+        'sections': [{'type': 'repeat_table', 'default_row_count': 2,
+                      'header_groups': [
+                          {'id': 'G1', 'label': 'G1', 'column_ids': ['A', 'B']},
+                          {'id': 'G2', 'label': 'G2', 'column_ids': ['B', 'C']},
+                      ],
+                      'columns': [
+                          {'id': 'A', 'label': 'A', 'width_mm': 57},
+                          {'id': 'B', 'label': 'B', 'width_mm': 57},
+                          {'id': 'C', 'label': 'C', 'width_mm': 56},
+                      ]}],
+    }
+    result = _sub.run(
+        ['node', '-e',
+         f"const e=require('./common_v1_engine.cjs'); "
+         f"try{{e.validate({_json.dumps(fields)});console.log('PASS');}}catch(err){{console.log('RAISED:',err.message);}}"],
+        cwd=str(BASE), capture_output=True, text=True, timeout=10
+    )
+    assert 'RAISED' in result.stdout, f"Expected RAISED, got: {result.stdout}"
+
+def test_C0802_node_nonconsecutive_group_raises():
+    """Node.js 엔진 비연속 column_ids 시 오류."""
+    import json as _json, subprocess as _sub
+    fields = {
+        '_meta': {'schema_version': 'common-v1'},
+        'document': {'title': 'T', 'doc_id': 'T1', 'creator': 'TAI'},
+        'sections': [{'type': 'repeat_table', 'default_row_count': 2,
+                      'header_groups': [{'id': 'G1', 'label': 'G', 'column_ids': ['A', 'C']}],
+                      'columns': [
+                          {'id': 'A', 'label': 'A', 'width_mm': 57},
+                          {'id': 'B', 'label': 'B', 'width_mm': 57},
+                          {'id': 'C', 'label': 'C', 'width_mm': 56},
+                      ]}],
+    }
+    result = _sub.run(
+        ['node', '-e',
+         f"const e=require('./common_v1_engine.cjs'); "
+         f"try{{e.validate({_json.dumps(fields)});console.log('PASS');}}catch(err){{console.log('RAISED:',err.message);}}"],
+        cwd=str(BASE), capture_output=True, text=True, timeout=10
+    )
+    assert 'RAISED' in result.stdout, f"Expected RAISED, got: {result.stdout}"
+
+# ─── C08-03: C004 PDF 생성 검증 ──────────────────────────────────────
+
+def test_C0803_c004_pdf_generates(c004_v1, tmp_path):
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_blank.pdf'
+    generate_from_dict(c004_v1, out)
+    assert out.exists()
+    assert out.stat().st_size > 10_000
+
+def test_C0803_c004_pdf_landscape(c004_v1, tmp_path):
+    """C004 PDF가 A4 landscape (297×210mm)로 생성됨."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_landscape.pdf'
+    generate_from_dict(c004_v1, out)
+    doc = pymupdf.open(str(out))
+    page = doc[0]
+    w_mm = page.rect.width / 2.8346
+    h_mm = page.rect.height / 2.8346
+    assert abs(w_mm - 297) < 2, f"Page width {w_mm:.1f}mm expected ~297mm (landscape)"
+    assert abs(h_mm - 210) < 2, f"Page height {h_mm:.1f}mm expected ~210mm (landscape)"
+
+def test_C0803_c004_pdf_title_present(c004_v1, tmp_path):
+    """제목 '유해·위험물질 목록 작성 서식'이 PDF에 포함됨."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_title.pdf'
+    generate_from_dict(c004_v1, out)
+    doc = pymupdf.open(str(out))
+    full_text = ''.join(p.get_text() for p in doc)
+    assert '유해' in full_text, "Title text not found in PDF"
+
+def test_C0803_c004_pdf_header_labels(c004_v1, tmp_path):
+    """PDF에 폭발한계, 화학물질, CAS 헤더가 포함됨. 좁은 열(10mm)은 공백 제거 후 검사."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_hdrs.pdf'
+    generate_from_dict(c004_v1, out)
+    doc = pymupdf.open(str(out))
+    full_text = ''.join(p.get_text() for p in doc)
+    joined = full_text.replace('\n', '').replace(' ', '')
+    for label in ['폭발한계', '화학물질', 'CAS']:
+        assert label in full_text, f"Header label '{label}' not found in PDF"
+    # Narrow columns (10mm) may have line-split labels — check in whitespace-stripped text
+    for label in ['하한', '상한']:
+        assert label in joined, f"Header label '{label}' not found in PDF (whitespace-stripped)"
+
+def test_C0803_c004_pdf_10_blank_rows(c004_v1, tmp_path):
+    """default_row_count=10인 경우 빈 행 10개 이상 생성됨."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_rows.pdf'
+    generate_from_dict(c004_v1, out)
+    assert out.exists()
+    doc = pymupdf.open(str(out))
+    assert doc.page_count >= 1
+
+def test_C0803_c004_pdf_notes_present(c004_v1, tmp_path):
+    """주석 ①-⑥ 원본 텍스트가 PDF에 모두 포함됨."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_notes.pdf'
+    generate_from_dict(c004_v1, out)
+    doc = pymupdf.open(str(out))
+    full_text = ''.join(p.get_text() for p in doc)
+    for marker in ['제출대상 설비', '증기압은 상온', '있으면 ○', '이상반응을', 'TWA', 'LD50']:
+        assert marker in full_text, f"Note marker '{marker}' not found in PDF"
+
+def test_C0803_c004_pdf_30_rows_pagination(c004_v1, tmp_path):
+    """30개 데이터 행 삽입 시 페이지 분할 발생 (>1 page)."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_30rows.pdf'
+    cols = c004_v1['sections'][0]['columns']
+    ex_rows = [[''] * len(cols)] * 30
+    generate_from_dict(c004_v1, out, ex_rows=ex_rows)
+    doc = pymupdf.open(str(out))
+    assert doc.page_count > 1, f"30 rows should require >1 page, got {doc.page_count}"
+
+def test_C0803_c004_pdf_header_repeats_on_page2(c004_v1, tmp_path):
+    """30행 삽입 시 페이지 2에도 헤더(폭발한계)가 반복됨."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_hdr_repeat.pdf'
+    cols = c004_v1['sections'][0]['columns']
+    ex_rows = [[''] * len(cols)] * 30
+    generate_from_dict(c004_v1, out, ex_rows=ex_rows)
+    doc = pymupdf.open(str(out))
+    if doc.page_count > 1:
+        page2_text = doc[1].get_text()
+        assert '폭발한계' in page2_text or '하한' in page2_text, \
+            "Header must repeat on page 2 (repeatRows=2)"
+
+# ─── C08-04: C004 DOCX 생성 검증 ─────────────────────────────────────
+
+def test_C0804_c004_docx_generates(c004_v1, tmp_path):
+    v1_path = tmp_path / 'c004_v1.json'
+    out_path = tmp_path / 'c004_blank.docx'
+    v1_path.write_text(json.dumps(c004_v1, ensure_ascii=False), encoding='utf-8')
+    result = subprocess.run(
+        ['node', '-e',
+         f"require('./common_v1_engine.cjs').generate('{v1_path}', '{out_path}').catch(e=>{{console.error(e);process.exit(1)}})"],
+        cwd=str(BASE), capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, f"DOCX generation failed: {result.stderr}"
+    assert out_path.exists() and out_path.stat().st_size > 5_000
+
+def test_C0804_c004_docx_landscape(c004_v1, tmp_path):
+    """C004 DOCX가 landscape 방향 설정을 포함함."""
+    import zipfile, re as _re
+    v1_path = tmp_path / 'c004_v1.json'
+    out_path = tmp_path / 'c004_land.docx'
+    v1_path.write_text(json.dumps(c004_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(
+        ['node', '-e',
+         f"require('./common_v1_engine.cjs').generate('{v1_path}', '{out_path}').catch(e=>process.exit(1))"],
+        cwd=str(BASE), capture_output=True, timeout=30, check=True,
+    )
+    with zipfile.ZipFile(out_path) as z:
+        xml = z.read('word/document.xml').decode('utf-8')
+    assert 'landscape' in xml.lower(), "DOCX must contain landscape orientation"
+
+def test_C0804_c004_docx_gridspan_2(c004_v1, tmp_path):
+    """DOCX에 gridSpan=2 (폭발한계(%) 병합 셀) 존재."""
+    import zipfile, re as _re
+    v1_path = tmp_path / 'c004_v1.json'
+    out_path = tmp_path / 'c004_gs.docx'
+    v1_path.write_text(json.dumps(c004_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(
+        ['node', '-e',
+         f"require('./common_v1_engine.cjs').generate('{v1_path}', '{out_path}').catch(e=>process.exit(1))"],
+        cwd=str(BASE), capture_output=True, timeout=30, check=True,
+    )
+    with zipfile.ZipFile(out_path) as z:
+        xml = z.read('word/document.xml').decode('utf-8')
+    spans = _re.findall(r'<w:gridSpan w:val="(\d+)"', xml)
+    assert '2' in spans, f"gridSpan=2 not found (폭발한계 column merge). Found: {spans}"
+
+def test_C0804_c004_docx_vmerge_restart(c004_v1, tmp_path):
+    """DOCX에 vMerge restart (비그룹 열 세로 병합) 존재."""
+    import zipfile, re as _re
+    v1_path = tmp_path / 'c004_v1.json'
+    out_path = tmp_path / 'c004_vm.docx'
+    v1_path.write_text(json.dumps(c004_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(
+        ['node', '-e',
+         f"require('./common_v1_engine.cjs').generate('{v1_path}', '{out_path}').catch(e=>process.exit(1))"],
+        cwd=str(BASE), capture_output=True, timeout=30, check=True,
+    )
+    with zipfile.ZipFile(out_path) as z:
+        xml = z.read('word/document.xml').decode('utf-8')
+    restart_count = len(_re.findall(r'<w:vMerge w:val="restart"', xml))
+    assert restart_count >= 13, f"Expected >= 13 vMerge restart (13 non-group cols), got {restart_count}"
+
+def test_C0804_c004_docx_notes_present(c004_v1, tmp_path):
+    """DOCX에 주석 ①-⑥ 원본 텍스트가 포함됨."""
+    import zipfile
+    v1_path = tmp_path / 'c004_v1.json'
+    out_path = tmp_path / 'c004_notes.docx'
+    v1_path.write_text(json.dumps(c004_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(
+        ['node', '-e',
+         f"require('./common_v1_engine.cjs').generate('{v1_path}', '{out_path}').catch(e=>process.exit(1))"],
+        cwd=str(BASE), capture_output=True, timeout=30, check=True,
+    )
+    with zipfile.ZipFile(out_path) as z:
+        xml = z.read('word/document.xml').decode('utf-8')
+    for marker in ['제출대상 설비', '증기압은', 'TWA', 'LD50']:
+        assert marker in xml, f"Note marker '{marker}' not found in DOCX XML"
+
+def test_C0804_c004_docx_15_col_headers_present(c004_v1, tmp_path):
+    """DOCX XML에 15개 열 레이블이 모두 존재."""
+    import zipfile
+    v1_path = tmp_path / 'c004_v1.json'
+    out_path = tmp_path / 'c004_cols.docx'
+    v1_path.write_text(json.dumps(c004_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(
+        ['node', '-e',
+         f"require('./common_v1_engine.cjs').generate('{v1_path}', '{out_path}').catch(e=>process.exit(1))"],
+        cwd=str(BASE), capture_output=True, timeout=30, check=True,
+    )
+    with zipfile.ZipFile(out_path) as z:
+        xml = z.read('word/document.xml').decode('utf-8')
+    expected_labels = [
+        '화학물질', 'CAS No', '분자식', '폭발한계(%)', '하한', '상한',
+        '노출기준', '독성치', '인화점', '발화점', '증기압', '부식성유무',
+        '이상반응유무', '일일사용량', '저장량', '비고',
+    ]
+    for label in expected_labels:
+        assert label in xml, f"Column label '{label}' not found in DOCX XML"
+
+# ─── C08-05: 기존 서식 회귀 ──────────────────────────────────────────
+
+def test_C0805_c004_existing_forms_unchanged():
+    """B4-B 변경 후 기존 JSON 파일 SHA256 불변."""
+    import hashlib
+    expected = {
+        'c001_v1.json': 'c6a8e70dd0e3304bc066d36772a114554d4c98dbbd35c8d7c89352b2efaf7fea',
+        'c003_v1.json': 'b7ec9cffb05157680a85d1a8cf233559e82f3a1ee853264ff36390995d1d594a',
+        'c014_v1.json': 'c50a99c5dcd9369e1751e754bdd004c0027065ec0ccd739448b9e70b4c45ce90',
+    }
+    for fname, exp_sha in expected.items():
+        p = BASE / fname
+        actual = hashlib.sha256(p.read_bytes()).hexdigest()
+        assert actual == exp_sha, f"{fname}: SHA256 changed"
+
+def test_C0805_c003_still_validates(c003_v1):
+    """header_groups 추가 후 기존 C003 유효성 검증 유지."""
+    assert validate(c003_v1) is True
+
+def test_C0805_c014_still_validates(c014_v1):
+    """header_groups 추가 후 기존 C014 landscape 유효성 검증 유지."""
+    assert validate(c014_v1) is True
+
+def test_C0805_c004_source_files_sha256():
+    """C004 소스 파일 SHA256 기준본 검증."""
+    import hashlib
+    expected = {
+        'c004_v1.json':         '713b605b8e8d8e7fff52ba4d774fee0f002d855934fc489a71cbfa377598b44d',
+        'common_v1_engine.py':  '634ecd25416d9f82ab465def1d070cf16c355f73999a93a23fb7ae33c07af370',
+        'common_v1_engine.cjs': '375250c74ef1e22786526c1fa2446d989bbed95e8e513e85deeccc3bfb727925',
+    }
+    for fname, exp_sha in expected.items():
+        p = BASE / fname
+        actual = hashlib.sha256(p.read_bytes()).hexdigest()
+        assert actual == exp_sha, f"{fname}: SHA256 changed"
+
+def test_C0805_c004_field_order_original(c004_v1):
+    """15개 열이 원본 관찰 순서(화학물질→비고)를 유지함."""
+    cols = c004_v1['sections'][0]['columns']
+    col_ids = [c['id'] for c in cols]
+    expected_order = [
+        'F01_CHEMICAL', 'F02_CAS_NO', 'F03_FORMULA',
+        'F04_EXPL_LOWER', 'F04_EXPL_UPPER',
+        'F05_EXPOSURE', 'F06_TOXICITY', 'F07_FLASH', 'F08_IGNITION',
+        'F09_VAPOR', 'F10_CORROSION', 'F11_REACTION',
+        'F12_DAILY_USE', 'F13_STOCK', 'F14_REMARK',
+    ]
+    assert col_ids == expected_order, f"Column order mismatch: {col_ids}"

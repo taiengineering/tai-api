@@ -1,17 +1,17 @@
 ---
-doc_id: TAI-DESIGN-COMMON-ENGINE-V0.4
+doc_id: TAI-DESIGN-COMMON-ENGINE-V0.5
 title: TAI 서식 공통 렌더러 스키마 설계서
-version: 0.4-DRAFT
-status: PHASE_B3_B — GPT 독립검증 대기
+version: 0.5-DRAFT
+status: PHASE_B4_B — GPT 독립검증 대기
 date: 2026-10-09
 branch: docs/tai-reference-forms-charter-obj-20261008
-scope: common-v1 스키마 블록 타입 정의, 가변 결재란 계약, 공통 assembler 계약, C002/C012 매핑 비교, 페이지 방향(orientation) 계약, text_flow 블록 계약
-wo: WO-REF01-059-B3-B
-supersedes: TAI-DESIGN-COMMON-ENGINE-V0.3
-change_reason: WO-REF01-059-B3-B text_flow 블록 구현 반영 — paragraphs 배열 계약, align 선택 속성, PDF/DOCX 빌더 계약, C001 적용
+scope: common-v1 스키마 블록 타입 정의, 가변 결재란 계약, 공통 assembler 계약, C002/C012 매핑 비교, 페이지 방향(orientation) 계약, text_flow 블록 계약, repeat_table 2단 병합 헤더(header_groups) 계약
+wo: WO-REF01-059-B4-B
+supersedes: TAI-DESIGN-COMMON-ENGINE-V0.4
+change_reason: WO-REF01-059-B4-B header_groups 2단 병합 헤더 구현 반영 — repeat_table 선택 속성 header_groups 계약, PDF SPAN/DOCX gridSpan+vMerge 빌더 계약, C004 적용
 ---
 
-# TAI 서식 공통 렌더러 스키마 설계서 v0.4
+# TAI 서식 공통 렌더러 스키마 설계서 v0.5-DRAFT
 
 ## 0. 목적
 
@@ -319,6 +319,83 @@ const cellW = Math.round(mm(section.total_width_mm) / apprF.length);  // dynamic
   - 예) REF-C014: 10행 × 10mm = 100mm + 제목/헤더 ~28mm ≈ 128mm < 170mm → 1페이지.
 - 기존 서식(C002/C003): 미기재 → 14mm 적용, 기존 출력 불변.
 
+#### `header_groups` 선택 속성 (v0.5 신규)
+
+`repeat_table`에 2단 병합 헤더를 추가한다. `header_groups`가 없으면 기존 단일 헤더 유지.
+
+```json
+{
+  "type": "repeat_table",
+  "default_row_count": 5,
+  "header_groups": [
+    {
+      "id": "G01",
+      "label": "폭발한계(%)",
+      "column_ids": ["F04_EXPL_LOWER", "F04_EXPL_UPPER"]
+    }
+  ],
+  "columns": [
+    { "id": "F01_CHEMICAL",   "label": "화학물질",  "width_mm": 22 },
+    { "id": "F04_EXPL_LOWER", "label": "하한",      "width_mm": 10 },
+    { "id": "F04_EXPL_UPPER", "label": "상한",      "width_mm": 10 }
+  ]
+}
+```
+
+**렌더링 결과:**
+
+```
+┌──────────┬──────────────────────┐
+│ 화학물질 │     폭발한계(%)      │  ← Row 0: 그룹 헤더
+│          ├──────────┬───────────┤
+│          │   하한   │   상한    │  ← Row 1: 리프 헤더
+├──────────┼──────────┼───────────┤
+│          │          │           │  ← 데이터 행
+```
+
+비그룹 열 `화학물질`은 Row 0+1을 세로 병합. 그룹 열 `폭발한계(%)`는 하위 열 너비 합산으로 가로 병합.
+
+##### 속성 정의
+
+| 속성 | 위치 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| `header_groups` | 블록 최상위 | array | 선택 | 길이 ≥ 1 (지정 시) |
+| `header_groups[].id` | 각 그룹 | string | **필수** | 고유 식별자 |
+| `header_groups[].label` | 각 그룹 | string | **필수** | 그룹 헤더 레이블 |
+| `header_groups[].column_ids` | 각 그룹 | array | **필수** | 포함할 column.id 목록 (길이 ≥ 2) |
+
+##### 유효성 규칙
+
+1. `header_groups` 미지정: 기존 단일 헤더 유지 (하위 호환)
+2. 지정 시 2단 헤더 적용
+3. `column_ids`는 2개 이상
+4. `column_ids`의 각 ID는 `columns[]`에 존재해야 함
+5. `column_ids`는 `columns[]` 내에서 연속해야 함
+6. 그룹 간 `column_ids` 중복 금지
+7. 유효하지 않은 그룹 정의 → FAIL-CLOSED (오류 발생)
+
+##### PDF 엔진 계약 (Python — SPAN)
+
+- `header_groups` 있으면 `repeatRows=2` (2단 헤더 전체 반복)
+- 그룹 열: `SPAN (g_start, 0)-(g_end, 0)` (가로 병합, row 0)
+- 비그룹 열: `SPAN (col_idx, 0)-(col_idx, 1)` (세로 병합)
+- row 0: 그룹 레이블 + 비그룹 열 레이블
+- row 1: 그룹 내 리프 레이블만 (비그룹 열 → 빈 문자열)
+
+##### DOCX 엔진 계약 (Node.js — OOXML)
+
+- 그룹 열: `columnSpan: N` (N = 그룹 내 열 수, gridSpan)
+- 비그룹 열: `rowSpan: 2` (vMerge restart → continue)
+- row 1에는 그룹 소속 열만 TableCell로 생성 (비그룹 열 생략 — rowSpan이 차지)
+- `tableHeader: true`를 row 0, row 1 모두에 적용 (페이지 분할 시 헤더 반복)
+
+##### REF-C004 적용 사례
+
+- 15개 leaf column, 1개 그룹 (G01: 폭발한계(%) → 하한/상한)
+- 비그룹 13열은 모두 세로 병합 (Row 0+1)
+- 페이지 방향: A4 landscape (TAI 설계 선택)
+- 주석 ①-⑥: `text_flow` 블록 적용
+
 ---
 
 ### 3.6 `text_flow` — 순서 있는 단락 목록
@@ -468,6 +545,10 @@ function assemble(fields, exRows) {
 - `repeat_table.min_row_height_mm` 존재 + 음수 또는 0 → 오류 발생
 - `text_flow.paragraphs` 빈 배열 (길이 0) → 오류 발생
 - `text_flow.paragraphs[].align` 알 수 없는 값 → `"left"` 적용 (fail-safe, 오류 아님)
+- `repeat_table.header_groups` 지정 시 `column_ids` < 2 → 오류 발생
+- `repeat_table.header_groups` 지정 시 존재하지 않는 column ID 참조 → 오류 발생
+- `repeat_table.header_groups` 지정 시 column_ids 중복 (그룹 간) → 오류 발생
+- `repeat_table.header_groups` 지정 시 column_ids 비연속 → 오류 발생
 
 ### 4.3 블록 타입별 필수 속성
 

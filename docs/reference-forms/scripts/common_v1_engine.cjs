@@ -186,6 +186,32 @@ function validate(fields) {
                     `sections[${i}] repeat_table: column widths sum to ${total}mm, expected ${expectedContentW}mm`
                 );
             if ('min_row_height_mm' in s) posCheck(s.min_row_height_mm, `sections[${i}] repeat_table.min_row_height_mm`);
+            if ('header_groups' in s) {
+                const groups = s.header_groups;
+                if (!Array.isArray(groups) || groups.length < 1)
+                    throw new Error(`sections[${i}] repeat_table: header_groups must be a non-empty list`);
+                const colIds = s.columns.map(c => c.id);
+                const assigned = new Set();
+                groups.forEach((g, gi) => {
+                    if (!g.id)    throw new Error(`sections[${i}] repeat_table header_groups[${gi}]: missing 'id'`);
+                    if (!g.label) throw new Error(`sections[${i}] repeat_table header_groups[${gi}]: missing 'label'`);
+                    const cids = g.column_ids || [];
+                    if (!Array.isArray(cids) || cids.length < 2)
+                        throw new Error(`sections[${i}] repeat_table header_groups[${gi}]: column_ids must have >= 2 entries`);
+                    cids.forEach(cid => {
+                        if (!colIds.includes(cid))
+                            throw new Error(`sections[${i}] repeat_table header_groups[${gi}]: column_id '${cid}' not found in columns`);
+                        if (assigned.has(cid))
+                            throw new Error(`sections[${i}] repeat_table header_groups[${gi}]: column_id '${cid}' appears in multiple groups`);
+                        assigned.add(cid);
+                    });
+                    const indices = cids.map(cid => colIds.indexOf(cid)).sort((a, b) => a - b);
+                    for (let k = 1; k < indices.length; k++) {
+                        if (indices[k] !== indices[k-1] + 1)
+                            throw new Error(`sections[${i}] repeat_table header_groups[${gi}]: column_ids must be consecutive in columns`);
+                    }
+                });
+            }
         }
         if (t === 'text_flow') {
             if (!Array.isArray(s.paragraphs) || s.paragraphs.length < 1)
@@ -334,22 +360,106 @@ function buildFreeformArea(section, contentW) {
 }
 
 function buildRepeatTable(section, exRows, contentW) {
-    const cw    = contentW || CONTENT_W;
-    const cols  = section.columns;
-    const n     = section.default_row_count;
-    const colW  = cols.map(c => mm(c.width_mm));
-    const rowH  = mm(section.min_row_height_mm ?? 14);
+    const cols   = section.columns;
+    const n      = section.default_row_count;
+    const colW   = cols.map(c => mm(c.width_mm));
+    const rowH   = mm(section.min_row_height_mm ?? 14);
     const alignM = { left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT };
-    const rows  = [];
+    const groups = section.header_groups || null;
+    const rows   = [];
+
+    const data = exRows ? [...exRows] : [];
+    while (data.length < n) data.push(Array(cols.length).fill(''));
+    const tblW = colW.reduce((a, b) => a + b, 0);
+
+    if (!groups) {
+        // ── Single-header (existing behavior) ──────────────────────
+        rows.push(new TableRow({
+            tableHeader: true,
+            height: { value: mm(8), rule: HeightRule.ATLEAST },
+            children: cols.map((c, i) => hdrCell(c.label, colW[i])),
+        }));
+        data.forEach((rd, ri) => {
+            const isAlt = (ri + 1) % 2 === 0;
+            rows.push(new TableRow({
+                height: { value: rowH, rule: HeightRule.ATLEAST },
+                children: cols.map((c, i) => bodyCell(
+                    rd[i] || '', colW[i],
+                    { bg: isAlt ? ALT_BG : 'ffffff', align: alignM[c.align] || AlignmentType.LEFT }
+                )),
+            }));
+        });
+        return new Table({ width: { size: tblW, type: WidthType.DXA }, layout: TableLayoutType.FIXED, rows });
+    }
+
+    // ── Two-level header ───────────────────────────────────────────
+    const colIds = cols.map(c => c.id);
+    const groupByCol = {};
+    groups.forEach(g => g.column_ids.forEach(cid => { groupByCol[cid] = g; }));
+    const groupSpans = {};
+    groups.forEach(g => {
+        const indices = g.column_ids.map(cid => colIds.indexOf(cid)).sort((a, b) => a - b);
+        groupSpans[g.id] = { start: indices[0], end: indices[indices.length - 1] };
+    });
+
+    // Row 0: group headers + non-group cols with rowSpan=2
+    const row0Cells = [];
+    const processedGroups = new Set();
+    let ci = 0;
+    while (ci < cols.length) {
+        const col = cols[ci];
+        const g = groupByCol[col.id];
+        if (g && !processedGroups.has(g.id)) {
+            const { start, end } = groupSpans[g.id];
+            const spanW = colW.slice(start, end + 1).reduce((a, b) => a + b, 0);
+            row0Cells.push(new TableCell({
+                columnSpan: end - start + 1,
+                width: { size: spanW, type: WidthType.DXA },
+                borders: border(4), shading: shading(HEADER_BG),
+                verticalAlign: VerticalAlign.CENTER, margins: CELL_MARGIN,
+                children: [new Paragraph({
+                    children: [new TextRun({ text: g.label, font: 'NanumGothic', bold: true, size: 20 })],
+                    alignment: AlignmentType.CENTER,
+                })],
+            }));
+            processedGroups.add(g.id);
+            ci = end + 1;
+        } else {
+            row0Cells.push(new TableCell({
+                rowSpan: 2,
+                width: { size: colW[ci], type: WidthType.DXA },
+                borders: border(4), shading: shading(HEADER_BG),
+                verticalAlign: VerticalAlign.CENTER, margins: CELL_MARGIN,
+                children: [new Paragraph({
+                    children: [new TextRun({ text: col.label, font: 'NanumGothic', bold: true, size: 20 })],
+                    alignment: AlignmentType.CENTER,
+                })],
+            }));
+            ci++;
+        }
+    }
+
+    // Row 1: leaf labels for grouped cols only (non-group cols already spanned)
+    const row1Cells = [];
+    cols.forEach((col, i) => {
+        const g = groupByCol[col.id];
+        if (g) {
+            row1Cells.push(hdrCell(col.label, colW[i]));
+        }
+        // non-group cols: omitted (rowSpan handles them)
+    });
 
     rows.push(new TableRow({
         tableHeader: true,
         height: { value: mm(8), rule: HeightRule.ATLEAST },
-        children: cols.map((c, i) => hdrCell(c.label, colW[i])),
+        children: row0Cells,
+    }));
+    rows.push(new TableRow({
+        tableHeader: true,
+        height: { value: mm(8), rule: HeightRule.ATLEAST },
+        children: row1Cells,
     }));
 
-    const data = exRows ? [...exRows] : [];
-    while (data.length < n) data.push(Array(cols.length).fill(''));
     data.forEach((rd, ri) => {
         const isAlt = (ri + 1) % 2 === 0;
         rows.push(new TableRow({
@@ -360,8 +470,7 @@ function buildRepeatTable(section, exRows, contentW) {
             )),
         }));
     });
-    // Table width = sum of column widths (from JSON, already correct for portrait/landscape)
-    const tblW = colW.reduce((a, b) => a + b, 0);
+
     return new Table({ width: { size: tblW, type: WidthType.DXA }, layout: TableLayoutType.FIXED, rows });
 }
 
