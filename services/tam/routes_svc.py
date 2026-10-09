@@ -224,7 +224,7 @@ def get_route(
     except TamError:
         raise
     except Exception as exc:
-        log.error("tam.routes: get_route SQL 오류: %s", type(exc).__name__, exc_info=True)
+        log.error("tam.routes: get_route SQL 오류: %s", type(exc).__name__)
         raise TamError(503, "SERVICE_UNAVAILABLE", "서비스를 일시적으로 이용할 수 없습니다") from exc
     finally:
         conn.close()
@@ -286,7 +286,7 @@ def list_routes(
     except TamError:
         raise
     except Exception as exc:
-        log.error("tam.routes: list_routes SQL 오류: %s", type(exc).__name__, exc_info=True)
+        log.error("tam.routes: list_routes SQL 오류: %s", type(exc).__name__)
         raise TamError(503, "SERVICE_UNAVAILABLE", "서비스를 일시적으로 이용할 수 없습니다") from exc
     finally:
         conn.close()

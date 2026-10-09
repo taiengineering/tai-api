@@ -91,10 +91,20 @@ class TestInvalidRouteId:
         assert r.status_code in (404, 422)
 
     def test_e03_sql_injection_attempt_route_id(self):
-        """SQL injection string in route_id must be rejected before DB call."""
-        client = _isolated_client(ACTIVE_USER)
-        r = client.get("/v1/tam/routes/'; DROP TABLE tam_approval_routes; --")
-        assert r.status_code in (404, 422)  # router may 404 on path special chars
+        """SQL injection-style non-UUID is rejected by UUID guard, not by DB/router."""
+        from services.tam import routes_svc
+        with _no_dsn(routes_svc):
+            # With DSN=None, any DB call would return 500 DB_NOT_CONFIGURED.
+            # Getting 422 proves UUID validation fires before DB is reached.
+            client = _isolated_client(ACTIVE_USER)
+            r = client.get("/v1/tam/routes/1-OR-1-EQUALS-1-DROP-TABLE")
+        assert r.status_code == 422
+        detail = r.json()["detail"]
+        assert detail["code"] == "INVALID_ROUTE_ID"
+        # Original input must not appear in the error response
+        assert "DROP" not in detail["message"]
+        assert "TABLE" not in detail["message"]
+        _assert_no_leak(detail["message"])
 
     def test_e04_uuid_format_is_validated_before_db_call(self):
         """UUID validation fires before any DB connection attempt."""
@@ -314,15 +324,24 @@ class TestWriteGateRegression:
             assert r.json()["detail"]["code"] == "ROUTE_MANAGER_PERMISSION_REQUIRED"
 
     def test_p02_write_enabled_always_false(self):
+        """write_enabled is always False even when authorization check grants ROUTE_MANAGER."""
         from services.tam.route_authz_adapter import assess_tam_route_authorization_candidate
-        import os
-        dsn = os.getenv("TAM_TEST_PG_DSN") or os.getenv("DATABASE_URL", "")
-        if not dsn:
-            pytest.skip("no DSN available for adapter test")
-        # adapter never sets write_enabled=True regardless of auth result
-        result = assess_tam_route_authorization_candidate(
-            ACTIVE_USER, route_id=str(uuid.uuid4()), dsn=dsn
-        )
+
+        mock_route = {
+            "route_id":   U1,
+            "company_id": CO_A,
+            "factory_id": None,
+        }
+        mock_authz = {"authorized": True, "grant_id": U1, "code": "AUTHORIZED"}
+
+        with patch("services.tam.route_authz_adapter._fetch_route", return_value=mock_route), \
+             patch("services.tam.route_authz_adapter.check_tam_effective_authorization",
+                   return_value=mock_authz):
+            result = assess_tam_route_authorization_candidate(
+                ACTIVE_USER, route_id=U1, dsn="postgresql://mock/mock"
+            )
+
+        assert result["candidate_valid"] is True
         assert result["write_enabled"] is False
 
 
