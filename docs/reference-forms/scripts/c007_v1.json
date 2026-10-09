@@ -1,0 +1,77 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-059-B7-BATCH-PRODUCTION-001",
+    "form_type": "PLAN",
+    "source_id": "REF-C007",
+    "schema_version": "common-v1",
+    "legal_review_status": "PENDING",
+    "source_text_status": "NATIVE_PARAGRAPH_VERIFIED (WO-047 HWP-07 Para 1233-1290)",
+    "source_visual_layout_status": "PDF_CROSSCHECK_VERIFIED (Page 98, WO-047)",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_checksum": "e94d8d8a271c148973111ff0c74b4d67ba2f9884aff59e87301e261b5794aefe",
+    "source_access": "OWNER_UPLOADED_HWP_TEXT_PARSED_PARTIAL",
+    "source_section": "HWP-07 Para 1233-1290",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "layout_variant_note": "원본 도메인별 고정 행 예산표(인력·안전·보건·기타 4개 도메인 + 소계 + 예비비)를 repeat_table(빈 입력 행) + text_flow(편성항목 참조 목록)으로 재배치. 기능·내용 보존.",
+    "source_title_note": "SoT source_title: '안전보건예산 편성 서식'. HWP 원문 제목: '안전보건 예산 편성항목 예시'. TAI 서식 제목은 일반 명칭 사용.",
+    "naming_note": "blank = 기존 출력 명명 규칙 유지",
+    "design_gate_status": "EDITABLE_VARIANT_REVIEW — GPT 승인 대기",
+    "design_gate_notes": "원본은 영역별 고정 행 예산표. 현 엔진에서 선행 라벨 고정 행 지원 없음(ENGINE_LIMITATION). TAI_EDITABLE_VARIANT: 빈 입력 행 + 참조 텍스트 제공. 연도 컬럼을 범용 '구분·연도·금액·비고' 구조로 재배치."
+  },
+  "document": {
+    "title": "안전보건 예산 편성 서식",
+    "doc_id": "TAI-FORM-C007-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "repeat_table",
+      "id": "S01",
+      "source_note": "HWP-07 Para 1236-1290. 구분/연도/금액/비고 구조. 원본 고정 행 대신 반복 입력 행(TAI_EDITABLE_VARIANT).",
+      "default_row_count": 8,
+      "min_row_height_mm": 10,
+      "columns": [
+        { "id": "F01_CATEGORY", "label": "구분",   "width_mm": 70 },
+        { "id": "F02_YEAR",     "label": "연도",   "width_mm": 22 },
+        { "id": "F03_AMOUNT",   "label": "금액(원)", "width_mm": 52 },
+        { "id": "F04_REMARK",   "label": "비고",   "width_mm": 26 }
+      ]
+    },
+    {
+      "type": "text_flow",
+      "id": "S02",
+      "source_note": "HWP-07 Para 1239-1288. 원본 예산 편성항목 예시 목록. 참조 구역으로 재배치(TAI_EDITABLE_VARIANT).",
+      "paragraphs": [
+        { "id": "H00", "text": "【예산 편성항목 예시】 (원본 HWP-07)", "align": "center" },
+        { "id": "D01", "text": "인력 및 시설분야", "align": "left" },
+        { "id": "D01_01", "text": "  · 위험시설 정비 및 개보수", "align": "left" },
+        { "id": "D01_02", "text": "  · 안전검사 실시", "align": "left" },
+        { "id": "D01_03", "text": "  · 안전시설 신규 설치 및 투자", "align": "left" },
+        { "id": "D01_04", "text": "  · 안전보건조직 노무관리", "align": "left" },
+        { "id": "D02", "text": "안전분야", "align": "left" },
+        { "id": "D02_01", "text": "  · 안전인력 육성 및 교육", "align": "left" },
+        { "id": "D02_02", "text": "  · 안전보건 진단 및 컨설팅", "align": "left" },
+        { "id": "D02_03", "text": "  · 위험성평가 실시", "align": "left" },
+        { "id": "D02_04", "text": "  · 안전보호구 구입", "align": "left" },
+        { "id": "D03", "text": "보건분야", "align": "left" },
+        { "id": "D03_01", "text": "  · 작업환경측정 실시", "align": "left" },
+        { "id": "D03_02", "text": "  · 특수건강검진 실시", "align": "left" },
+        { "id": "D03_03", "text": "  · 근골격계질환 예방", "align": "left" },
+        { "id": "D03_04", "text": "  · 휴게·위생시설 관리", "align": "left" },
+        { "id": "D04", "text": "기타", "align": "left" },
+        { "id": "D04_01", "text": "  · 협력사 안전관리 역량 지원", "align": "left" },
+        { "id": "D04_02", "text": "  · 안전보건 캠페인 추진", "align": "left" },
+        { "id": "D05", "text": "예비비", "align": "left" }
+      ]
+    }
+  ]
+}

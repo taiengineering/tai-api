@@ -1,0 +1,70 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-059-B7-BATCH-PRODUCTION-001",
+    "form_type": "EVALUATION",
+    "source_id": "REF-C008",
+    "schema_version": "common-v1",
+    "legal_review_status": "PENDING",
+    "source_text_status": "NATIVE_PARAGRAPH_VERIFIED (WO-047 HWP-08 Para 1291-1404)",
+    "source_visual_layout_status": "PDF_CROSSCHECK_VERIFIED (Page 100, WO-047)",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_checksum": "e94d8d8a271c148973111ff0c74b4d67ba2f9884aff59e87301e261b5794aefe",
+    "source_access": "OWNER_UPLOADED_HWP_TEXT_PARSED_PARTIAL",
+    "source_section": "HWP-08 Para 1291-1404",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "layout_variant_note": "Sub-section A(평가기준) → text_flow. Sub-section B(평가표)의 역할별 고정 행을 repeat_table 반복 입력 행으로 재배치. 평가(미흡/보통/양호) 3열 → header_groups 적용. 기능·내용 보존.",
+    "source_title_note": "SoT source_title: '안전보건 전문이력 평가 기준 및 평가표' ('이력' 오탈자 가능성 WO-048 기록). HWP 원문: '안전보건 전문인력 평가 기준 및 평가표 예시' (인력). TAI 서식 제목은 HWP 원문 따름.",
+    "naming_note": "blank = 기존 출력 명명 규칙 유지",
+    "design_gate_status": "EDITABLE_VARIANT_REVIEW — GPT 승인 대기",
+    "design_gate_notes": "평가기준(text_flow) + 평가표(repeat_table + header_groups) 구조. 원본 역할별 고정 행 대신 반복 입력 행 사용. 직책 입력 행으로 교체."
+  },
+  "document": {
+    "title": "안전보건 전문인력 평가 기준 및 평가표",
+    "doc_id": "TAI-FORM-C008-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "text_flow",
+      "id": "S01",
+      "source_note": "HWP-08 Sub-section A: 평가기준 (Para 1292-1299). 원본 양호/보통/미흡 기준 텍스트.",
+      "paragraphs": [
+        { "id": "H00", "text": "평가기준", "align": "center" },
+        { "id": "G01", "text": "양호: 법적 의무를 이행하고 자발적 안전보건관리 활동을 하는 경우", "align": "left" },
+        { "id": "G02", "text": "보통: 법적 의무를 이행하는 경우", "align": "left" },
+        { "id": "G03", "text": "미흡: 법적 의무를 이행하지 않는 경우", "align": "left" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "HWP-08 Sub-section B: 평가표(안) (Para 1301-1404). 직책/성명/담당업무/평가(미흡/보통/양호) 4열+평가 3열. 역할별 고정 행을 반복 입력 행으로 재배치(TAI_EDITABLE_VARIANT).",
+      "default_row_count": 5,
+      "min_row_height_mm": 12,
+      "header_groups": [
+        {
+          "id": "G01",
+          "label": "평가",
+          "column_ids": ["F04_UNFAV", "F05_FAIR", "F06_GOOD"]
+        }
+      ],
+      "columns": [
+        { "id": "F01_ROLE",   "label": "직책",   "width_mm": 46 },
+        { "id": "F02_NAME",   "label": "성명",   "width_mm": 22 },
+        { "id": "F03_DUTY",   "label": "담당업무", "width_mm": 54 },
+        { "id": "F04_UNFAV",  "label": "미흡",   "width_mm": 16 },
+        { "id": "F05_FAIR",   "label": "보통",   "width_mm": 16 },
+        { "id": "F06_GOOD",   "label": "양호",   "width_mm": 16 }
+      ]
+    }
+  ]
+}

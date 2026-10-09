@@ -3416,6 +3416,261 @@ def test_C1204_c015_sha256_regression():
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# WO-REF01-059-B7-BATCH-PRODUCTION-001 — 배치 실행기 + 신규 4건 스펙
+# ═══════════════════════════════════════════════════════════════════════
+
+# ─── C13-01: 배치 실행기 구조 검증 ──────────────────────────────────────
+
+def test_C1301_batch_runner_exists():
+    """batch_build.py 존재 및 필수 모드 플래그 포함."""
+    p = BASE / 'batch_build.py'
+    assert p.exists(), "batch_build.py 없음"
+    src = p.read_text(encoding='utf-8')
+    for flag in ('--dry-run', '--verify-only', '--build', '--list', 'APPROVED_IDS'):
+        assert flag in src, f"batch_build.py에 {flag!r} 없음"
+
+def test_C1301_batch_runner_dry_run_approved():
+    """배치 실행기 --dry-run 모드로 기존 승인 서식 7건 SCHEMA_VALID."""
+    import subprocess, sys
+    result = subprocess.run(
+        [sys.executable, 'batch_build.py', '--dry-run',
+         'c001', 'c003', 'c004', 'c005', 'c014', 'c015', 'c016'],
+        capture_output=True, text=True, cwd=str(BASE),
+    )
+    assert result.returncode == 0, f"batch_build.py 실패:\n{result.stderr}"
+    out = result.stdout
+    for cid in ('C001', 'C003', 'C004', 'C005', 'C014', 'C015', 'C016'):
+        assert 'SCHEMA_VALID' in out, f"{cid} SCHEMA_VALID 없음"
+    assert 'SCHEMA_ERROR' not in out, "기존 승인 서식에서 SCHEMA_ERROR 발생"
+
+def test_C1301_batch_runner_dry_run_new_specs():
+    """배치 실행기 --dry-run으로 신규 4건(C007/C008/C009/C011) SCHEMA_VALID."""
+    import subprocess, sys
+    result = subprocess.run(
+        [sys.executable, 'batch_build.py', '--dry-run',
+         'c007', 'c008', 'c009', 'c011'],
+        capture_output=True, text=True, cwd=str(BASE),
+    )
+    assert result.returncode == 0, f"batch_build.py 실패:\n{result.stderr}"
+    out = result.stdout
+    for cid in ('C007', 'C008', 'C009', 'C011'):
+        assert 'SCHEMA_VALID' in out, f"{cid} SCHEMA_VALID 없음"
+    assert 'SCHEMA_ERROR' not in out
+
+def test_C1301_batch_runner_frozen_guard():
+    """--build 모드에서 승인 서식 덮어쓰기 방지(SKIPPED_FROZEN)."""
+    import subprocess, sys
+    result = subprocess.run(
+        [sys.executable, 'batch_build.py', '--build', 'c015'],
+        capture_output=True, text=True, cwd=str(BASE),
+    )
+    assert result.returncode == 0
+    assert 'SKIPPED' in result.stdout or 'frozen' in result.stdout.lower(), \
+        "승인 서식에 --build 실행 시 SKIPPED 메시지 없음"
+
+# ─── C13-02: 신규 스펙 JSON 구조 검증 ───────────────────────────────────
+
+@pytest.fixture
+def c007_v1():
+    return json.loads((BASE / 'c007_v1.json').read_text(encoding='utf-8'))
+
+@pytest.fixture
+def c008_v1():
+    return json.loads((BASE / 'c008_v1.json').read_text(encoding='utf-8'))
+
+@pytest.fixture
+def c009_v1():
+    return json.loads((BASE / 'c009_v1.json').read_text(encoding='utf-8'))
+
+@pytest.fixture
+def c011_v1():
+    return json.loads((BASE / 'c011_v1.json').read_text(encoding='utf-8'))
+
+def test_C1302_new_specs_schema_version(c007_v1, c008_v1, c009_v1, c011_v1):
+    """신규 4건 모두 schema_version=common-v1."""
+    for data, name in [(c007_v1,'C007'),(c008_v1,'C008'),(c009_v1,'C009'),(c011_v1,'C011')]:
+        assert data['_meta']['schema_version'] == 'common-v1', f"{name} schema_version 오류"
+
+def test_C1302_new_specs_design_gate_status(c007_v1, c008_v1, c009_v1, c011_v1):
+    """신규 4건 모두 design_gate_status 필드 포함 및 GPT 승인 대기 명시."""
+    for data, name in [(c007_v1,'C007'),(c008_v1,'C008'),(c009_v1,'C009'),(c011_v1,'C011')]:
+        status = data['_meta'].get('design_gate_status', '')
+        assert status, f"{name} design_gate_status 없음"
+        assert 'EDITABLE_VARIANT_REVIEW' in status or 'ENGINE_GAP' in status, \
+            f"{name} design_gate_status 인식 불가: {status!r}"
+
+def test_C1302_new_specs_layout_variant(c007_v1, c008_v1, c009_v1, c011_v1):
+    """신규 4건 모두 layout_variant=TAI_EDITABLE_VARIANT."""
+    for data, name in [(c007_v1,'C007'),(c008_v1,'C008'),(c009_v1,'C009'),(c011_v1,'C011')]:
+        assert data['_meta']['layout_variant'] == 'TAI_EDITABLE_VARIANT', \
+            f"{name} layout_variant 오류"
+
+def test_C1302_c007_budget_structure(c007_v1):
+    """C007: repeat_table(입력) + text_flow(참조) 2섹션. 4열 구성."""
+    secs = c007_v1['sections']
+    assert len(secs) == 2
+    assert secs[0]['type'] == 'repeat_table'
+    assert secs[1]['type'] == 'text_flow'
+    cols = secs[0]['columns']
+    assert len(cols) == 4
+    labels = [c['label'] for c in cols]
+    assert '구분' in labels and '연도' in labels and '금액(원)' in labels
+
+def test_C1302_c008_evaluation_structure(c008_v1):
+    """C008: text_flow(기준) + repeat_table(평가표). header_groups 포함, 6열."""
+    secs = c008_v1['sections']
+    assert len(secs) == 2
+    assert secs[0]['type'] == 'text_flow'
+    assert secs[1]['type'] == 'repeat_table'
+    rt = secs[1]
+    assert 'header_groups' in rt, "C008 평가 header_groups 없음"
+    assert len(rt['columns']) == 6
+    col_labels = [c['label'] for c in rt['columns']]
+    for lbl in ('직책', '성명', '담당업무', '미흡', '보통', '양호'):
+        assert lbl in col_labels, f"C008 컬럼 {lbl!r} 없음"
+
+def test_C1302_c009_register_structure(c009_v1):
+    """C009: repeat_table(배치) + text_flow(직무 참조). 4열 구성."""
+    secs = c009_v1['sections']
+    assert len(secs) == 2
+    assert secs[0]['type'] == 'repeat_table'
+    assert secs[1]['type'] == 'text_flow'
+    cols = secs[0]['columns']
+    assert len(cols) == 4
+    col_labels = [c['label'] for c in cols]
+    for lbl in ('직책', '성명', '담당업무', '비고'):
+        assert lbl in col_labels, f"C009 컬럼 {lbl!r} 없음"
+
+def test_C1302_c011_scoring_structure(c011_v1):
+    """C011: text_flow(기준 100점) + repeat_table(점수 입력). 4열 구성."""
+    secs = c011_v1['sections']
+    assert len(secs) == 2
+    assert secs[0]['type'] == 'text_flow'
+    assert secs[1]['type'] == 'repeat_table'
+    paras = {p['id']: p['text'] for p in secs[0]['paragraphs']}
+    assert any('100점' in t for t in paras.values()), "C011 100점 기준 없음"
+    col_labels = [c['label'] for c in secs[1]['columns']]
+    for lbl in ('평가항목', '배점', '점수'):
+        assert lbl in col_labels, f"C011 컬럼 {lbl!r} 없음"
+
+def test_C1302_c009_duty_reference_content(c009_v1):
+    """C009: 4개 역할별 산안법 조항 참조 텍스트 포함."""
+    s02 = next(s for s in c009_v1['sections'] if s.get('id') == 'S02')
+    texts = ' '.join(p['text'] for p in s02['paragraphs'])
+    for role in ('안전관리자', '보건관리자', '안전보건관리담당자', '산업보건의'):
+        assert role in texts, f"C009 역할 {role!r} 참조 텍스트 없음"
+    assert '산안법' in texts or '산업안전보건법' in texts
+
+def test_C1302_source_sections_correct(c007_v1, c008_v1, c009_v1, c011_v1):
+    """신규 4건 source_section이 HWP-07/08/09/11 정확히 반영."""
+    checks = [
+        (c007_v1, 'C007', 'HWP-07'),
+        (c008_v1, 'C008', 'HWP-08'),
+        (c009_v1, 'C009', 'HWP-09'),
+        (c011_v1, 'C011', 'HWP-11'),
+    ]
+    for data, name, hwp in checks:
+        ss = data['_meta'].get('source_section', '')
+        assert hwp in ss, f"{name} source_section에 {hwp} 없음: {ss!r}"
+
+# ─── C13-03: 신규 스펙 PDF 생성 시험 ────────────────────────────────────
+
+def test_C1303_c007_pdf_generates(c007_v1, tmp_path):
+    """C007 PDF 생성 성공 및 Portrait A4."""
+    import sys as _sys, pdfplumber
+    _sys.path.insert(0, str(BASE))
+    from common_v1_engine import generate_from_dict, register_fonts
+    register_fonts()
+    out = tmp_path / 'c007.pdf'
+    generate_from_dict(c007_v1, str(out))
+    assert out.exists() and out.stat().st_size > 5000
+    with pdfplumber.open(str(out)) as pdf:
+        p = pdf.pages[0]
+        assert abs(p.width / 2.835 - 210) < 3
+        assert abs(p.height / 2.835 - 297) < 3
+
+def test_C1303_c008_pdf_generates(c008_v1, tmp_path):
+    """C008 PDF 생성 성공 및 Portrait A4."""
+    import sys as _sys, pdfplumber
+    _sys.path.insert(0, str(BASE))
+    from common_v1_engine import generate_from_dict, register_fonts
+    register_fonts()
+    out = tmp_path / 'c008.pdf'
+    generate_from_dict(c008_v1, str(out))
+    assert out.exists() and out.stat().st_size > 5000
+    with pdfplumber.open(str(out)) as pdf:
+        p = pdf.pages[0]
+        assert abs(p.width / 2.835 - 210) < 3
+        assert abs(p.height / 2.835 - 297) < 3
+
+def test_C1303_c009_pdf_generates(c009_v1, tmp_path):
+    """C009 PDF 생성 성공 및 Portrait A4."""
+    import sys as _sys, pdfplumber
+    _sys.path.insert(0, str(BASE))
+    from common_v1_engine import generate_from_dict, register_fonts
+    register_fonts()
+    out = tmp_path / 'c009.pdf'
+    generate_from_dict(c009_v1, str(out))
+    assert out.exists() and out.stat().st_size > 5000
+    with pdfplumber.open(str(out)) as pdf:
+        p = pdf.pages[0]
+        assert abs(p.width / 2.835 - 210) < 3
+        assert abs(p.height / 2.835 - 297) < 3
+
+def test_C1303_c011_pdf_generates(c011_v1, tmp_path):
+    """C011 PDF 생성 성공 및 Portrait A4."""
+    import sys as _sys, pdfplumber
+    _sys.path.insert(0, str(BASE))
+    from common_v1_engine import generate_from_dict, register_fonts
+    register_fonts()
+    out = tmp_path / 'c011.pdf'
+    generate_from_dict(c011_v1, str(out))
+    assert out.exists() and out.stat().st_size > 5000
+    with pdfplumber.open(str(out)) as pdf:
+        p = pdf.pages[0]
+        assert abs(p.width / 2.835 - 210) < 3
+        assert abs(p.height / 2.835 - 297) < 3
+
+# ─── C13-04: 신규 스펙 DOCX 생성 시험 ──────────────────────────────────
+
+def test_C1304_new_specs_docx_generate(tmp_path):
+    """신규 4건 DOCX 생성 성공."""
+    import subprocess
+    for cid in ('c007', 'c008', 'c009', 'c011'):
+        json_path = BASE / f'{cid}_v1.json'
+        out_path  = tmp_path / f'{cid}_blank.docx'
+        result = subprocess.run(
+            ['node', 'gen_c002_docx_common.cjs', str(json_path), str(out_path)],
+            capture_output=True, text=True, cwd=str(BASE),
+        )
+        assert result.returncode == 0, f"{cid.upper()} DOCX 생성 실패:\n{result.stderr}"
+        assert out_path.exists() and out_path.stat().st_size > 3000, \
+            f"{cid.upper()} DOCX 파일 크기 이상"
+
+# ─── C13-05: 엔진·기존 출력물 불변 확인 ────────────────────────────────
+
+def test_C1305_engine_and_approved_outputs_unchanged():
+    """B7 작업 후 공통 엔진 및 기존 승인 서식 SHA256 불변."""
+    import hashlib
+    checks = {
+        'scripts/common_v1_engine.py':      ('be4899da', True),
+        'output/TAI-FORM-C015-blank.pdf':   ('77481eea', False),
+        'output/TAI-FORM-C015-blank.docx':  ('ec558785', False),
+        'output/TAI-FORM-C016-blank.pdf':   ('a12fe50a', False),
+        'output/TAI-FORM-C016-blank.docx':  ('bad68d52', False),
+        'output/TAI-FORM-C005-blank.pdf':   ('93cff8f9', False),
+        'output/TAI-FORM-C005-blank.docx':  ('39099daa', False),
+    }
+    for rel, (prefix, full) in checks.items():
+        p = BASE.parent / rel
+        assert p.exists(), f"{p.name} 없음"
+        sha = hashlib.sha256(p.read_bytes()).hexdigest()
+        if full:
+            assert sha.startswith(prefix), f"{p.name} SHA 변경: {sha[:8]}"
+        else:
+            assert sha.startswith(prefix), f"{p.name} SHA 변경: expected={prefix} actual={sha[:8]}"
+
+# ═══════════════════════════════════════════════════════════════════════
 # WO-REF01-059-B5-B2-RESUME-001 — REF-C016 연간 교육계획 수립 서식
 # ═══════════════════════════════════════════════════════════════════════
 
