@@ -1,11 +1,15 @@
 {
   "name": "tai-reference-forms-scripts",
   "version": "1.0.0",
-  "description": "TAI 서식 생성 스크립트 (WO-054)",
+  "description": "TAI 서식 생성 스크립트 (WO-054/WO-058)",
   "scripts": {
-    "gen-docx": "node gen_c002_docx.cjs",
-    "gen-pdf": "python3 gen_c002_pdf.py",
-    "gen-all": "node gen_c002_docx.cjs && python3 gen_c002_pdf.py"
+    "gen-c002-docx": "node gen_c002_docx.cjs",
+    "gen-c002-pdf":  "python3 gen_c002_pdf.py",
+    "gen-c002-all":  "node gen_c002_docx.cjs && python3 gen_c002_pdf.py",
+    "gen-c012-docx": "node gen_c012_docx.cjs",
+    "gen-c012-pdf":  "python3 gen_c012_pdf.py",
+    "gen-c012-all":  "node gen_c012_docx.cjs && python3 gen_c012_pdf.py",
+    "gen-all":       "npm run gen-c002-all && npm run gen-c012-all"
   },
   "dependencies": {
     "docx": "9.9.0"
