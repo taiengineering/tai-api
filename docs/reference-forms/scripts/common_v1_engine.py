@@ -3,7 +3,7 @@
 TAI 서식 공통 렌더러 엔진 — common-v1
 WO-058 Phase C-01 / WO-REF01-059-B2-L01 (landscape 지원)
 """
-import json, os, sys
+import html, json, os, sys
 from pathlib import Path
 from reportlab.lib.pagesizes import A4, landscape as _landscape_size
 from reportlab.lib.units import mm
@@ -396,7 +396,7 @@ def build_text_flow(section, content_w=None):
             textColor=C_BLACK, alignment=align,
             spaceBefore=2, spaceAfter=2,
         )
-        result.append(Paragraph(para['text'], style))
+        result.append(Paragraph(html.escape(para['text']), style))
     return result
 
 # ─── Common assembler ──────────────────────────────────────────────

@@ -198,7 +198,7 @@ function validate(fields) {
                     throw new Error(`sections[${i}] text_flow paragraphs[${pi}]: missing required attr 'text'`);
                 if (typeof para.text !== 'string')
                     throw new Error(`sections[${i}] text_flow paragraphs[${pi}]: text must be a string`);
-                const align = para.align || 'left';
+                const align = para.align === undefined ? 'left' : para.align;
                 if (!validAligns.has(align))
                     throw new Error(
                         `sections[${i}] text_flow paragraphs[${pi}]: align must be left/center/right, got '${align}'`

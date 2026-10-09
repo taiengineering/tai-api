@@ -1534,13 +1534,13 @@ def test_C0603_node_invalid_orientation_raises():
 # ─── C06-04: 공통 엔진 SHA256 회귀 ──────────────────────────────────
 
 def test_C0604_common_engines_sha256():
-    """공통 엔진 파일 SHA256 불변 검증 — 기준본: WO-REF01-059-B3-B (text_flow 추가)."""
+    """공통 엔진 파일 SHA256 불변 검증 — 기준본: WO-REF01-059-B3-B-PATCH-1 (xml_escape + align 계약 일치 + P06 원본 복원)."""
     import hashlib
     expected = {
-        'common_v1_engine.py':  '729725eff3a76ac480c3f9b4689673240982a63ace500dac8947e3c9c7749ac2',
-        'common_v1_engine.cjs': '0e4ef1a6faf952f90a2557541e77397b078706a1862d8c15907c6ad45d1010cf',
+        'common_v1_engine.py':  '34d810ba7bbaa22cb8555fe5a2ad9030fa68d912462c7292952d4579c9120ae8',
+        'common_v1_engine.cjs': '87b3778f1755ccb35eec3de63ce8d0ba300ffb74c4309140c3942f9dc2d11946',
         'c014_v1.json':         'c50a99c5dcd9369e1751e754bdd004c0027065ec0ccd739448b9e70b4c45ce90',
-        'c001_v1.json':         '36ee492af86b847e8d3a2663f90fc6f7eb43fc2949e0c992162969c1f449ea06',
+        'c001_v1.json':         'c6a8e70dd0e3304bc066d36772a114554d4c98dbbd35c8d7c89352b2efaf7fea',
     }
     for fname, exp_sha in expected.items():
         p = BASE / fname
@@ -1611,6 +1611,16 @@ def test_C0701_c001_source_checksum_present(c001_v1):
     assert c001_v1['_meta']['source_checksum'] == \
         'e94d8d8a271c148973111ff0c74b4d67ba2f9884aff59e87301e261b5794aefe'
 
+def test_C0701_c001_p06_ascii_quote(c001_v1):
+    """P06 따옴표는 ASCII 단따옴표(U+0027)여야 함 — B-3-A2 원본 기준."""
+    p06 = next(p for p in c001_v1['sections'][0]['paragraphs'] if p['id'] == 'P06')
+    for ch in p06['text']:
+        assert ord(ch) not in (0x2018, 0x2019, 0x201A, 0x201B, 0x201C, 0x201D), \
+            f"P06 contains curly/smart quote U+{ord(ch):04X}; expected ASCII U+0027"
+    # Must contain the ASCII apostrophe form
+    assert "'근로자의 생명 보호'" in p06['text'], "P06 must contain ASCII-quoted '근로자의 생명 보호'"
+    assert "'안전한 작업환경 조성'" in p06['text'], "P06 must contain ASCII-quoted '안전한 작업환경 조성'"
+
 # ─── C07-01: text_flow 스키마 검증 (fail-closed) ──────────────────────
 
 def test_C0701_text_flow_valid_passes(minimal):
@@ -1665,6 +1675,16 @@ def test_C0701_text_flow_invalid_align_raises(minimal):
     with pytest.raises(ValueError, match="align"):
         validate(f)
 
+def test_C0701_text_flow_empty_align_raises(minimal):
+    """명시적 빈 문자열 align은 Python 엔진에서 거부 (fail-closed)."""
+    import copy
+    f = copy.deepcopy(minimal)
+    f['sections'] = [{'type': 'text_flow', 'paragraphs': [
+        {'id': 'P1', 'text': '안전', 'align': ''}
+    ]}]
+    with pytest.raises(ValueError, match="align"):
+        validate(f)
+
 def test_C0701_text_flow_node_valid_passes():
     script = (
         "const {validate}=require('./common_v1_engine.cjs');"
@@ -1713,6 +1733,33 @@ def test_C0701_text_flow_node_invalid_align_raises():
     assert result.returncode == 0 and result.stdout == 'RAISED', \
         f"Expected RAISED but got rc={result.returncode} stdout={result.stdout!r}"
 
+def test_C0701_text_flow_node_empty_align_raises():
+    """Node 엔진: 명시적 빈 문자열 align은 거부 (Python과 계약 일치)."""
+    script = (
+        "const {validate}=require('./common_v1_engine.cjs');"
+        "try{validate({document:{title:'T',doc_id:'D',creator:'C'},"
+        "sections:[{type:'text_flow',paragraphs:[{id:'P1',text:'x',align:''}]}]});"
+        "process.exit(1);}catch(e){process.stdout.write('RAISED');}"
+    )
+    result = subprocess.run(['node', '-e', script], cwd=str(BASE),
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0 and result.stdout == 'RAISED', \
+        f"Expected RAISED but got rc={result.returncode} stdout={result.stdout!r}"
+
+def test_C0701_text_flow_node_null_align_raises():
+    """Node 엔진: 명시적 null align은 거부 (Python과 계약 일치)."""
+    script = (
+        "const {validate}=require('./common_v1_engine.cjs');"
+        "const f=JSON.parse('{\"document\":{\"title\":\"T\",\"doc_id\":\"D\",\"creator\":\"C\"},"
+        "\"sections\":[{\"type\":\"text_flow\",\"paragraphs\":"
+        "[{\"id\":\"P1\",\"text\":\"x\",\"align\":null}]}]}');"
+        "try{validate(f);process.exit(1);}catch(e){process.stdout.write('RAISED');}"
+    )
+    result = subprocess.run(['node', '-e', script], cwd=str(BASE),
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0 and result.stdout == 'RAISED', \
+        f"Expected RAISED but got rc={result.returncode} stdout={result.stdout!r}"
+
 # ─── C07-02: REF-C001 PDF 생성 ───────────────────────────────────────
 
 def test_C0702_c001_pdf_generates(c001_v1, tmp_path):
@@ -1737,7 +1784,7 @@ def test_C0702_c001_pdf_title_once(c001_v1, tmp_path):
     doc = pymupdf.open(str(out))
     full_text = ''.join(p.get_text() for p in doc)
     count = full_text.count('안전보건경영방침')
-    assert count >= 1, "Title '안전보건경영방침' not found in PDF"
+    assert count == 1, f"Title '안전보건경영방침' must appear exactly once, got {count}"
 
 def test_C0702_c001_pdf_policy_items_present(c001_v1, tmp_path):
     """원본 정책항목 1~8이 PDF에 모두 존재."""
@@ -1817,6 +1864,30 @@ def test_C0702_c001_pdf_footer(c001_v1, tmp_path):
     doc = pymupdf.open(str(out))
     full_text = doc[0].get_text()
     assert '1 /' in full_text, f"Footer '1 /' not found. text={full_text[:200]}"
+
+def test_C0702_c001_pdf_xml_escape(tmp_path):
+    """text_flow에 <, >, & 특수문자가 있어도 PDF 생성이 정상 완료됨."""
+    import pymupdf
+    from common_v1_engine import register_fonts, generate_from_dict as gen
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    fields = {
+        '_meta': {'schema_version': 'common-v1'},
+        'document': {'title': 'XML 안전 테스트', 'doc_id': 'T001', 'creator': 'TAI'},
+        'sections': [{'type': 'text_flow', 'paragraphs': [
+            {'id': 'P1', 'text': '5 < 10 이면 안전'},
+            {'id': 'P2', 'text': '관계 a > b 성립'},
+            {'id': 'P3', 'text': '법령 & 규정 준수'},
+        ]}],
+    }
+    out = tmp_path / 'xml_safe.pdf'
+    gen(fields, out)
+    assert out.exists() and out.stat().st_size > 1_000
+    doc = pymupdf.open(str(out))
+    full_text = ''.join(p.get_text() for p in doc)
+    assert '안전' in full_text, "Text with '<' must render correctly"
+    assert '법령' in full_text, "Text with '&' must render correctly"
 
 # ─── C07-03: REF-C001 DOCX 생성 ──────────────────────────────────────
 
@@ -1913,6 +1984,27 @@ def test_C0703_c001_docx_portrait_pgsz(c001_v1, tmp_path):
     assert w_val <= 12500, f"pgSz w={w_val} > 12500 (expected ≈11905 for 210mm portrait width)"
     assert h_val >= 16000, f"pgSz h={h_val} < 16000 (expected ≈16837 for 297mm portrait height)"
 
+def test_C0703_c001_docx_full_text_match(c001_v1, tmp_path):
+    """DOCX P04~P15 전체 12개 단락 핵심 텍스트가 OOXML에 완전히 존재함."""
+    import html as html_mod
+    v1_path = tmp_path / 'c001_v1.json'
+    out_path = tmp_path / 'c001_blank.docx'
+    v1_path.write_text(json.dumps(c001_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    with zipfile.ZipFile(out_path) as z:
+        raw_xml = z.read('word/document.xml').decode('utf-8')
+    # Unescape XML entities (&apos; → ' etc.) before plain-text search
+    decoded = html_mod.unescape(raw_xml)
+    paras = c001_v1['sections'][0]['paragraphs']
+    for para in paras:
+        marker = para['text'][:15]
+        assert marker in decoded, \
+            f"Paragraph {para['id']} text not in OOXML: {marker!r}"
+    # P06 must use ASCII quote (U+0027) — curly quote U+2018 must be absent in raw XML
+    assert '\u2018' not in raw_xml, "P06 curly left-quote U+2018 must not appear in OOXML"
+    assert '&#x2018;' not in raw_xml, "P06 curly left-quote entity must not appear in OOXML"
+
 # ─── C07-04: 기존 서식 회귀 ──────────────────────────────────────────
 
 def test_C0704_c001_regression_c003_c014_unchanged():
@@ -1934,3 +2026,17 @@ def test_C0704_c001_c003_still_validates(c003_v1):
 def test_C0704_c001_c014_still_validates(c014_v1):
     """text_flow 추가 후 기존 C014 landscape 유효성 검증이 유지됨."""
     assert validate(c014_v1) is True
+
+def test_C0704_c012_source_unchanged():
+    """C012 생성기 소스 파일이 PATCH-1에서 변경되지 않았음을 SHA256으로 검증."""
+    import hashlib
+    expected = {
+        'gen_c012_docx.cjs': '6717387fe40518971584bfc32cdb02c0c8b6020c7ccb94cede0e0d50fbf0e308',
+        'c012_fields.json':  '25f5514bed0d8db968fc99b43915dae93e2a0db755edcbebf4adbdececce39cd',
+    }
+    for fname, exp_sha in expected.items():
+        p = BASE / fname
+        assert p.exists(), f"{fname} must exist"
+        actual = hashlib.sha256(p.read_bytes()).hexdigest()
+        assert actual == exp_sha, \
+            f"{fname}: SHA256 changed\n  expected: {exp_sha}\n  actual:   {actual}"
