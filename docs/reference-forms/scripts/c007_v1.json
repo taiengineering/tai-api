@@ -18,7 +18,8 @@
     "layout_variant_note": "원본 도메인별 고정 행 예산표(구분/2021/2022 2개년 비교, 단위: 백만원)를 repeat_table(빈 입력 행) + text_flow(편성항목 참조 목록)으로 재배치. 기능·내용 보존.",
     "source_title_note": "SoT source_title: '안전보건예산 편성 서식'. HWP 원문 제목: '안전보건 예산 편성항목 예시'. TAI 서식 제목은 일반 명칭 사용.",
     "naming_note": "blank = 기존 출력 명명 규칙 유지",
-    "design_gate_status": "EDITABLE_VARIANT_REVIEW — GPT 승인 대기",
+    "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
+    "design_gate_ref": "WO-REF01-059-B7-BATCH-BUILD-005",
     "design_gate_notes": "원본은 구분/2021/2022 2개년 비교 예산표(단위: 백만원). 현 엔진에서 선행 라벨 고정 행 지원 없음(ENGINE_LIMITATION). TAI_EDITABLE_VARIANT: 빈 입력 행(구분/2021/2022) + 참조 텍스트 제공."
   },
   "document": {

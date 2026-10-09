@@ -17,7 +17,8 @@
     "source_layout_exact": false,
     "layout_variant_note": "원본 역할별 고정 행(안전관리자/보건관리자/안전보건관리담당자/산업보건의)과 직무 참조 텍스트를 repeat_table(입력행) + text_flow(직무 참조)로 분리. 기능·내용 보존. 직무 텍스트는 HWP 원문 전문 수록.",
     "naming_note": "blank = 기존 출력 명명 규칙 유지",
-    "design_gate_status": "EDITABLE_VARIANT_REVIEW — GPT 승인 대기",
+    "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
+    "design_gate_ref": "WO-REF01-059-B7-BATCH-BUILD-005",
     "design_gate_notes": "원본은 역할별 고정 행 + 산안법 직무 참조 텍스트. 현 엔진은 반복 입력 행(repeat_table)만 지원하므로 TAI_EDITABLE_VARIANT 적용. 직무 참조 텍스트는 text_flow로 별도 구역에 배치. 안전관리자 10항(제17조)/보건관리자 14항(제18조)/안전보건관리담당자 6항(제19조)/산업보건의 3항(제22조) 전문 수록."
   },
   "document": {

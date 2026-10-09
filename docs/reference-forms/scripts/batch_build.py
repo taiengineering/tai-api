@@ -72,7 +72,7 @@ REGISTRY = {
 APPROVED_IDS = frozenset({"c001", "c003", "c004", "c005", "c014", "c015", "c016"})
 
 # Explicit GPT-approved IDs for --build. Must be added here after GPT approval.
-BUILD_APPROVED_IDS = frozenset()   # empty until GPT approves new batch
+BUILD_APPROVED_IDS = frozenset({"c007", "c008", "c009", "c011", "c013"})  # WO-REF01-059-B7-BATCH-BUILD-005
 
 # SHA256 of regression-frozen output files (full hex). Used by --verify-only.
 FROZEN_SHA = {
@@ -430,8 +430,11 @@ def run_build(ids):
             try:
                 _write_exclusive(docx_tmp, docx_out)
             except FileExistsError:
-                pdf_out.unlink()
-                msg = "ROLLED_BACK — DOCX collision; PDF removed"
+                try:
+                    pdf_out.unlink()
+                    msg = "ROLLED_BACK — DOCX collision; PDF removed"
+                except Exception:
+                    msg = "RECOVERY_REQUIRED — DOCX collision; PDF rollback failed"
                 print(f"  ✗ {cid.upper():6s}  {msg}")
                 row["status"] = msg
                 results.append(row)

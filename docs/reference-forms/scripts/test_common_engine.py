@@ -3468,24 +3468,23 @@ def test_C1301_batch_runner_frozen_guard():
     assert 'BLOCKED' in result.stdout or 'frozen' in result.stdout.lower(), \
         "승인 서식에 --build 실행 시 BLOCKED 메시지 없음"
 
-def test_C1301_batch_runner_build_approved_empty():
+def test_C1301_batch_runner_build_approved_empty(monkeypatch):
     """BUILD_APPROVED_IDS가 비어있으면 --build 단독 실행 시 exit nonzero."""
-    import subprocess, sys
-    result = subprocess.run(
-        [sys.executable, 'batch_build.py', '--build'],
-        capture_output=True, text=True, cwd=str(BASE),
-    )
-    assert result.returncode != 0, "--build with empty BUILD_APPROVED_IDS는 nonzero exit"
+    bb = _load_bb()
+    monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset())
+    monkeypatch.setattr(sys, 'argv', ['batch_build.py', '--build'])
+    ret = bb.main()
+    assert ret != 0, "--build with empty BUILD_APPROVED_IDS는 nonzero exit"
 
-def test_C1301_batch_runner_build_new_blocked():
-    """신규 서식(c013)에 --build 실행 시 BUILD_APPROVED_IDS 미포함으로 BLOCKED."""
-    import subprocess, sys
-    result = subprocess.run(
-        [sys.executable, 'batch_build.py', '--build', 'c013'],
-        capture_output=True, text=True, cwd=str(BASE),
-    )
-    assert result.returncode != 0, "미승인 신규 서식 --build는 nonzero exit"
-    assert 'BLOCKED' in result.stdout, "미승인 서식 BLOCKED 메시지 없음"
+def test_C1301_batch_runner_build_new_blocked(monkeypatch, tmp_path):
+    """BUILD_APPROVED_IDS 미포함 서식에 run_build → BLOCKED."""
+    bb = _load_bb()
+    monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset())
+    monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
+    results, failures = bb.run_build(['c013'])
+    assert 'c013' in failures, "미승인 신규 서식은 failures에 포함"
+    statuses = [r.get('status', '') for r in results if r.get('id') == 'c013']
+    assert any('BLOCKED' in s for s in statuses), "미승인 서식 BLOCKED 메시지 없음"
 
 # ─── C13-02: 신규 스펙 JSON 구조 검증 ───────────────────────────────────
 
@@ -3515,12 +3514,11 @@ def test_C1302_new_specs_schema_version(c007_v1, c008_v1, c009_v1, c011_v1, c013
         assert data['_meta']['schema_version'] == 'common-v1', f"{name} schema_version 오류"
 
 def test_C1302_new_specs_design_gate_status(c007_v1, c008_v1, c009_v1, c011_v1, c013_v1):
-    """신규 5건 모두 design_gate_status 필드 포함 및 GPT 승인 대기 명시."""
+    """신규 5건 모두 design_gate_status=GPT_APPROVED_INTERNAL_POC_BUILD."""
     for data, name in [(c007_v1,'C007'),(c008_v1,'C008'),(c009_v1,'C009'),(c011_v1,'C011'),(c013_v1,'C013')]:
         status = data['_meta'].get('design_gate_status', '')
-        assert status, f"{name} design_gate_status 없음"
-        assert 'EDITABLE_VARIANT_REVIEW' in status or 'ENGINE_GAP' in status, \
-            f"{name} design_gate_status 인식 불가: {status!r}"
+        assert status == 'GPT_APPROVED_INTERNAL_POC_BUILD', \
+            f"{name} design_gate_status 오류: {status!r}"
 
 def test_C1302_new_specs_layout_variant(c007_v1, c008_v1, c009_v1, c011_v1, c013_v1):
     """신규 5건 모두 layout_variant=TAI_EDITABLE_VARIANT."""
@@ -4051,14 +4049,15 @@ def _load_bb():
     return _importlib.import_module('batch_build')
 
 
-def test_C1306_01_build_unapproved_blocked():
-    """--build c013 → BLOCKED (not in BUILD_APPROVED_IDS); exit nonzero."""
-    r = subprocess.run(
-        [sys.executable, str(BASE / 'batch_build.py'), '--build', 'c013'],
-        capture_output=True, text=True, cwd=str(BASE),
-    )
-    assert r.returncode != 0
-    assert 'BLOCKED' in r.stdout or 'BLOCKED' in r.stderr
+def test_C1306_01_build_unapproved_blocked(monkeypatch, tmp_path):
+    """BUILD_APPROVED_IDS 미포함 서식에 run_build → BLOCKED (not in BUILD_APPROVED_IDS)."""
+    bb = _load_bb()
+    monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset())
+    monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
+    results, failures = bb.run_build(['c013'])
+    assert 'c013' in failures
+    statuses = [r.get('status', '') for r in results if r.get('id') == 'c013']
+    assert any('BLOCKED' in s for s in statuses)
 
 
 def test_C1306_02_build_frozen_blocked():

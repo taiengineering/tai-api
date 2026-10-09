@@ -17,7 +17,8 @@
     "source_layout_exact": false,
     "layout_variant_note": "원본 계층형 채점표(도메인 → 세부항목 → 평가기준 + 배점/점수 열)를 text_flow(평가항목 및 평가기준 전문 수록) + repeat_table(점수 입력)으로 분리. 계층 병합 셀 구조는 현 엔진 미지원(ENGINE_LIMITATION). 도메인별 평가기준 원문 전문 포함.",
     "naming_note": "blank = 기존 출력 명명 규칙 유지",
-    "design_gate_status": "EDITABLE_VARIANT_REVIEW — GPT 승인 대기",
+    "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
+    "design_gate_ref": "WO-REF01-059-B7-BATCH-BUILD-005",
     "design_gate_notes": "원본은 I/II 도메인 + 세부항목 + 배점/점수 계층 채점표 (총 100점). repeat_table로는 평가항목/배점 고정 행 표현 불가(ENGINE_LIMITATION). TAI 변형안: text_flow로 평가기준 전문 수록(seq 6991-7204) + repeat_table(세부항목/배점/점수/비고)으로 입력 분리. 배점 합계(100점) 자동 계산 미지원 — 사용자가 수동 계산."
   },
   "document": {

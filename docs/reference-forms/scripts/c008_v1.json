@@ -18,7 +18,8 @@
     "layout_variant_note": "Sub-section A(평가기준) → text_flow. Sub-section B(평가표)의 역할별 고정 행을 repeat_table 반복 입력 행으로 재배치. 평가(미흡/보통/양호) 3열 → header_groups 적용. Sub-section C(직무 참조) → text_flow. 기능·내용 보존.",
     "source_title_note": "SoT source_title: '안전보건 전문이력 평가 기준 및 평가표' ('이력' 오탈자 가능성 WO-048 기록). HWP 원문: '안전보건 전문인력 평가 기준 및 평가표 예시' (인력). TAI 서식 제목은 HWP 원문 따름.",
     "naming_note": "blank = 기존 출력 명명 규칙 유지",
-    "design_gate_status": "EDITABLE_VARIANT_REVIEW — GPT 승인 대기",
+    "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
+    "design_gate_ref": "WO-REF01-059-B7-BATCH-BUILD-005",
     "design_gate_notes": "평가기준(text_flow) + 평가표(repeat_table + header_groups) + 직무 참조(text_flow) 3구역 구조. 원본 역할별 고정 행 대신 반복 입력 행 사용. 평가기준 원본 텍스트(양호/보통/미흡) + 반기 주기(반기 1회 이상) 포함. 3개 역할(안전보건관리책임자 10항, 관리감독자 6항, 안전보건총괄책임자 5항) 직무 참조 텍스트 포함."
   },
   "document": {

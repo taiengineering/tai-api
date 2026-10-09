@@ -17,7 +17,8 @@
     "source_layout_exact": false,
     "layout_variant_note": "원본 사고조사 보고서(사고조사반 2인+사고명/일시+인적·물적 피해+사고장소·상해부위·사고형태+서술 5항+기타+사진)를 basic_info(기본정보) + freeform_area(서술 구역) 조합으로 재배치. 기능·내용 보존. B6-B2에서 ENGINE_GAP BLOCKED → B7-REMEDIATION-002에서 TAI_EDITABLE_VARIANT로 재설계.",
     "naming_note": "blank = 기존 출력 명명 규칙 유지",
-    "design_gate_status": "EDITABLE_VARIANT_REVIEW — GPT 승인 대기",
+    "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
+    "design_gate_ref": "WO-REF01-059-B7-BATCH-BUILD-005",
     "design_gate_notes": "원본은 사고조사반 sub-table(2인 4셀) + 서술형 행 혼합 구조. 현 엔진 반복 테이블 내 sub-table 미지원. TAI_EDITABLE_VARIANT: basic_info(사고조사반 4필드) + basic_info(사고명/일시) + freeform_area(피해/경위/원인/대책 구역) 조합. seq 7936-8110."
   },
   "document": {
