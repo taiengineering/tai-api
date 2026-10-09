@@ -158,6 +158,8 @@ B8_SHA_28_MATCH         = 28/28
 
 ```
 BASE_HEAD               = 9259e0b8dc8308ea51a1bc115fdfcae5b765bd22
+NEW_HEAD                = 4124b3bc52b4cc524630d44e4bda49ecc2cd8004
+REMOTE_HEAD             = 4124b3bc52b4cc524630d44e4bda49ecc2cd8004
 EXISTING_OUTPUT_SHA     = 28/28 MATCH
 FROZEN_SHA              = 24/24 MATCH
 ENGINE_SHA              = Python be4899da MATCH / CJS 375250c7 MATCH
