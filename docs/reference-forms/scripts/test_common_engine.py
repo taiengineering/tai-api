@@ -3106,6 +3106,300 @@ def test_C1004_c005_engine_sha256_unchanged():
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# WO-REF01-059-B6-B1 — REF-C015 아차 사고 보고서
+# ═══════════════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def c015_v1():
+    return json.loads((BASE / 'c015_v1.json').read_text(encoding='utf-8'))
+
+# ─── C12-01: REF-C015 JSON 스키마 검증 ──────────────────────────────
+
+def test_C1201_c015_schema_version(c015_v1):
+    assert c015_v1['_meta']['schema_version'] == 'common-v1'
+
+def test_C1201_c015_form_type_and_orientation(c015_v1):
+    assert c015_v1['_meta']['form_type'] == 'REPORT'
+    assert c015_v1['document']['page']['orientation'] == 'portrait'
+
+def test_C1201_c015_layout_variant_metadata(c015_v1):
+    """TAI_EDITABLE_VARIANT 메타데이터 및 source_layout_exact=false 확인."""
+    assert c015_v1['_meta']['layout_variant'] == 'TAI_EDITABLE_VARIANT'
+    assert c015_v1['_meta']['source_layout_exact'] is False
+
+def test_C1201_c015_basic_info_2_fields(c015_v1):
+    """basic_info S01: 작업명·등급 2개 항목."""
+    s01 = c015_v1['sections'][0]
+    assert s01['type'] == 'basic_info'
+    assert s01['id'] == 'S01'
+    labels = [f['label'] for f in s01['fields']]
+    assert any('작업명' in l for l in labels), f"작업명 missing: {labels}"
+    assert any('등급' in l for l in labels), f"등급 missing: {labels}"
+    assert len(s01['fields']) == 2, f"Expected 2 fields, got {len(s01['fields'])}"
+
+def test_C1201_c015_5_freeform_areas(c015_v1):
+    """freeform_area 5개: 작업내용·사고내용·발생원인·예방대책·작업현장."""
+    free = [s for s in c015_v1['sections'] if s['type'] == 'freeform_area']
+    assert len(free) == 5, f"Expected 5 freeform_area, got {len(free)}"
+    expected_labels = ['작업내용', '사고내용', '발생원인', '예방대책', '작업현장']
+    for exp in expected_labels:
+        assert any(exp in s['label'] for s in free), f"'{exp}' not in freeform labels"
+
+def test_C1201_c015_7_original_fields_preserved(c015_v1):
+    """원본 7개 필드(작업명·등급·작업내용·사고내용·발생원인·예방대책·작업현장) 누락 없음."""
+    all_text = ' '.join(
+        f.get('label', '') for s in c015_v1['sections']
+        for f in (s.get('fields', []) if s['type'] == 'basic_info' else [])
+    ) + ' ' + ' '.join(
+        s.get('label', '') for s in c015_v1['sections']
+        if s['type'] == 'freeform_area'
+    )
+    for field in ['작업명', '등급', '작업내용', '사고내용', '발생원인', '예방대책', '작업현장']:
+        assert field in all_text, f"Original field '{field}' missing"
+
+def test_C1201_c015_no_extra_fields(c015_v1):
+    """원본 항목 외 임의 freeform 추가 없음 — freeform 정확히 5개."""
+    free = [s for s in c015_v1['sections'] if s['type'] == 'freeform_area']
+    assert len(free) == 5, f"Expected exactly 5 freeform, got {len(free)}"
+
+def test_C1201_c015_grade_classification_in_text_flow(c015_v1):
+    """등급 분류기준(A/B/C)과 중상·경상 설명이 text_flow S07에 존재."""
+    s07 = next(s for s in c015_v1['sections'] if s['type'] == 'text_flow' and s.get('id') == 'S07')
+    all_para_text = ' '.join(p['text'] for p in s07['paragraphs'])
+    for key in ['A등급', 'B등급', 'C등급', '중대재해', '산업재해', '중상*', '경상**', '중상:', '경상:']:
+        assert key in all_para_text, f"'{key}' missing from text_flow S07"
+
+def test_C1201_c015_grade_content_integrity(c015_v1):
+    """A/B/C 위험정도·조치 연결 정합성: 각 등급 위험정도와 조치 텍스트 대조."""
+    s07 = next(s for s in c015_v1['sections'] if s['type'] == 'text_flow' and s.get('id') == 'S07')
+    paras = {p['id']: p['text'] for p in s07['paragraphs']}
+    # A등급
+    assert '중대재해가 예상되는 경우' in paras['G01'], "A등급 위험정도 오류"
+    assert '조업 중단' in paras['G01b'], "A등급 조치 오류"
+    # B등급
+    assert '중상*' in paras['G02'], "B등급 위험정도(중상*) 오류"
+    assert '임시 조치' in paras['G02b'], "B등급 조치(임시조치) 오류"
+    # C등급
+    assert '경상**' in paras['G03'], "C등급 위험정도(경상**) 오류"
+    assert '안전관리 조치' in paras['G03b'], "C등급 조치 오류"
+    # 중상·경상 설명
+    assert '하루 이상 입원' in paras['N01'], "중상 정의 오류"
+    assert '사망, 중상을 제외한' in paras['N02'], "경상 정의 오류"
+
+# ─── C12-02: REF-C015 DOCX 생성 ────────────────────────────────────
+
+def test_C1202_c015_docx_generates(c015_v1, tmp_path):
+    """DOCX 생성 성공 및 Portrait 방향 확인."""
+    v1_path = tmp_path / 'c015_v1.json'
+    out_path = tmp_path / 'c015_blank.docx'
+    v1_path.write_text(json.dumps(c015_v1, ensure_ascii=False), encoding='utf-8')
+    result = subprocess.run(
+        ['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+        cwd=str(BASE), capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, f"DOCX generation failed: {result.stderr}"
+    assert out_path.exists() and out_path.stat().st_size > 3000
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    pgSz = root.find('.//w:pgSz', {'w': NS})
+    assert pgSz is not None
+    orient = pgSz.get(f'{{{NS}}}orient', '')
+    assert orient != 'landscape', f"C015 should be Portrait, got {orient!r}"
+
+def test_C1202_c015_docx_table_structure(c015_v1, tmp_path):
+    """DOCX: 7개 테이블(제목·basic_info·freeform×5)."""
+    v1_path = tmp_path / 'c015_v1.json'
+    out_path = tmp_path / 'c015_blank.docx'
+    v1_path.write_text(json.dumps(c015_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    tables = root.findall('.//w:tbl', {'w': NS})
+    assert len(tables) == 7, f"Expected 7 tables (title+basic_info+5×freeform), got {len(tables)}"
+
+def test_C1202_c015_docx_basic_info_2_cells(c015_v1, tmp_path):
+    """DOCX basic_info 행: 작업명·등급 2셀 확인."""
+    v1_path = tmp_path / 'c015_v1.json'
+    out_path = tmp_path / 'c015_blank.docx'
+    v1_path.write_text(json.dumps(c015_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    tables = root.findall('.//w:tbl', {'w': NS})
+    basic_tbl = tables[1]  # title=0, basic_info=1
+    rows = basic_tbl.findall('w:tr', {'w': NS})
+    assert len(rows) == 1, f"basic_info should have 1 row, got {len(rows)}"
+    cells = rows[0].findall('w:tc', {'w': NS})
+    assert len(cells) == 2, f"basic_info row should have 2 cells, got {len(cells)}"
+    full_text = ''.join(r.text or '' for r in basic_tbl.findall('.//w:t', {'w': NS}))
+    assert '작업명' in full_text
+    assert '등급' in full_text
+
+def test_C1202_c015_docx_freeform_editable_rows(c015_v1, tmp_path):
+    """DOCX freeform_area: 각 영역이 입력 가능한 빈 행 보유."""
+    v1_path = tmp_path / 'c015_v1.json'
+    out_path = tmp_path / 'c015_blank.docx'
+    v1_path.write_text(json.dumps(c015_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    tables = root.findall('.//w:tbl', {'w': NS})
+    # Tables 2-6 are freeform_area (index 2..6)
+    for ti in range(2, 7):
+        tbl = tables[ti]
+        rows = tbl.findall('w:tr', {'w': NS})
+        assert len(rows) == 2, f"freeform table {ti} should have 2 rows (header+empty), got {len(rows)}"
+
+def test_C1202_c015_docx_grade_not_confused_with_input(c015_v1, tmp_path):
+    """DOCX: 입력용 등급 셀(basic_info)과 분류기준 텍스트(text_flow 단락)가 혼동 없이 분리."""
+    v1_path = tmp_path / 'c015_v1.json'
+    out_path = tmp_path / 'c015_blank.docx'
+    v1_path.write_text(json.dumps(c015_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    tables = root.findall('.//w:tbl', {'w': NS})
+    # basic_info table (index 1) must NOT contain "A등급 위험정도"
+    basic_text = ''.join(r.text or '' for r in tables[1].findall('.//w:t', {'w': NS}))
+    assert 'A등급 위험정도' not in basic_text, "Grade definition should not appear in input field"
+    # text_flow paragraphs (outside tables) must contain "A등급"
+    body = root.find('w:body', {'w': NS})
+    para_texts = ''.join(
+        r.text or '' for p in body
+        if p.tag == f'{{{NS}}}p'
+        for r in p.findall('.//w:t', {'w': NS})
+    )
+    assert 'A등급' in para_texts, "A등급 must appear in text_flow paragraphs"
+    assert 'B등급' in para_texts
+    assert 'C등급' in para_texts
+
+# ─── C12-03: REF-C015 PDF 렌더링 검증 ──────────────────────────────
+
+def test_C1203_c015_pdf_generates(c015_v1, tmp_path):
+    """PDF 생성 성공: A4 Portrait 1페이지."""
+    import sys, pdfplumber
+    sys.path.insert(0, str(BASE))
+    from common_v1_engine import generate_from_dict, register_fonts
+    register_fonts()
+    out_path = tmp_path / 'c015_blank.pdf'
+    generate_from_dict(c015_v1, str(out_path))
+    assert out_path.exists() and out_path.stat().st_size > 5000
+    with pdfplumber.open(str(out_path)) as pdf:
+        assert len(pdf.pages) == 1, f"Expected 1 page, got {len(pdf.pages)}"
+        p = pdf.pages[0]
+        assert abs(p.width / 2.835 - 210) < 2, f"Width {p.width/2.835:.1f}mm != 210mm"
+        assert abs(p.height / 2.835 - 297) < 2, f"Height {p.height/2.835:.1f}mm != 297mm"
+
+def test_C1203_c015_pdf_7_fields_present(c015_v1, tmp_path):
+    """PDF: 원본 7개 입력 항목 모두 존재."""
+    import sys, pdfplumber; sys.path.insert(0, str(BASE))
+    from common_v1_engine import generate_from_dict, register_fonts
+    register_fonts()
+    out_path = tmp_path / 'c015_blank.pdf'
+    generate_from_dict(c015_v1, str(out_path))
+    with pdfplumber.open(str(out_path)) as pdf:
+        text = pdf.pages[0].extract_text() or ''
+    for field in ['작업명', '등급', '작업내용', '사고내용', '발생원인', '예방대책', '작업현장']:
+        assert field in text, f"PDF missing field: '{field}'"
+
+def test_C1203_c015_pdf_grade_abc_all_present(c015_v1, tmp_path):
+    """PDF: A/B/C 등급 분류기준 모두 존재."""
+    import sys, pdfplumber; sys.path.insert(0, str(BASE))
+    from common_v1_engine import generate_from_dict, register_fonts
+    register_fonts()
+    out_path = tmp_path / 'c015_blank.pdf'
+    generate_from_dict(c015_v1, str(out_path))
+    with pdfplumber.open(str(out_path)) as pdf:
+        text = pdf.pages[0].extract_text() or ''
+    for key in ['A등급', 'B등급', 'C등급']:
+        assert key in text, f"PDF missing grade: '{key}'"
+
+def test_C1203_c015_pdf_grade_criteria_complete(c015_v1, tmp_path):
+    """PDF: 등급별 위험정도·조치 및 중상·경상 정의 누락 없음."""
+    import sys, pdfplumber; sys.path.insert(0, str(BASE))
+    from common_v1_engine import generate_from_dict, register_fonts
+    register_fonts()
+    out_path = tmp_path / 'c015_blank.pdf'
+    generate_from_dict(c015_v1, str(out_path))
+    with pdfplumber.open(str(out_path)) as pdf:
+        text = pdf.pages[0].extract_text() or ''
+    criteria = [
+        '중대재해가 예상되는 경우',    # A 위험정도
+        '조업 중단',                  # A 조치
+        '중상*',                       # B 위험정도
+        '임시 조치',                   # B 조치
+        '경상**',                      # C 위험정도
+        '안전관리 조치',               # C 조치
+        '하루 이상 입원',              # 중상 정의
+        '사망, 중상을 제외한',         # 경상 정의
+    ]
+    missing = [c for c in criteria if c not in text]
+    assert not missing, f"PDF missing criteria: {missing}"
+
+def test_C1203_c015_pdf_no_content_clipping(c015_v1, tmp_path):
+    """PDF: 콘텐츠 잘림 없음 (우측·하단 경계 초과 텍스트 없음)."""
+    import sys, pdfplumber; sys.path.insert(0, str(BASE))
+    from common_v1_engine import generate_from_dict, register_fonts
+    register_fonts()
+    out_path = tmp_path / 'c015_blank.pdf'
+    generate_from_dict(c015_v1, str(out_path))
+    with pdfplumber.open(str(out_path)) as pdf:
+        p = pdf.pages[0]
+        page_w_mm = p.width / 2.835
+        page_h_mm = p.height / 2.835
+        words = p.extract_words()
+        content_words = [w for w in words if '/' not in w['text'] and w['text'].isdigit() is False]
+        clipped = [
+            w for w in content_words
+            if w['x1'] / 2.835 > page_w_mm - 3 or w['bottom'] / 2.835 > page_h_mm - 8
+        ]
+        assert len(clipped) == 0, f"Clipped words near edge: {[(w['text'], w['x1']/2.835, w['bottom']/2.835) for w in clipped]}"
+
+# ─── C12-04: REF-C015 SHA256 회귀 ────────────────────────────────────
+
+def test_C1204_c015_sha256_regression():
+    """C015 json/pdf/docx SHA256 기준본 및 기존 엔진·C005·C016 불변."""
+    import hashlib
+    c015_expected = {
+        'scripts/c015_v1.json':               '370c46ebcc99e41036dafe926f9a45d4135ac139041b5cb7838148d30b0a05fe',
+        'output/TAI-FORM-C015-blank.pdf':  '77481eeae8eff7e27ef2fc50d452eb5cfa9fc018d02b45e7c6aab0ce0578235b',
+        'output/TAI-FORM-C015-blank.docx': 'ec558785f4cec658af9a80134e78dd84a2ad7af88396fe38aa9cb5e9fa9739b9',
+    }
+    engine_expected = {
+        'scripts/common_v1_engine.py':  'be4899daf4f1ffd5ed59c4c2f26cc8e45c1d8e35e97a04eb8e944b1d0f5bc95a',
+        'scripts/common_v1_engine.cjs': '375250c7',  # partial prefix check
+    }
+    existing_expected = {
+        'scripts/c016_v1.json':               'c7166ff4d4590a6311a4200679d74b278757cbd073754eb6ec54805559c9adf3',
+        'output/TAI-FORM-C016-blank.pdf':  'a12fe50aba41a3bc78d72c176a37ca47099539cb9f229d4e622f0213567f32bd',
+        'output/TAI-FORM-C016-blank.docx': 'bad68d52f6370c8be347a64524ef3de270ec0fad6b87889a3fe125f72cfcbfe5',
+        'output/TAI-FORM-C005-blank.pdf':  '93cff8f970e68278f7c2dc2adc21ce2392d7ad9cbddc58dcbe174799d1d23d88',
+        'output/TAI-FORM-C005-blank.docx': '39099daa2156afcdaa8bbcc86a6200f91c5e8ca67b921ea2c4af7a9636326967',
+    }
+    for rel_path, exp_sha in {**c015_expected, **existing_expected}.items():
+        p = BASE.parent / rel_path
+        assert p.exists(), f"{p.name} must exist"
+        actual = hashlib.sha256(p.read_bytes()).hexdigest()
+        assert actual == exp_sha, f"{p.name}: SHA256 changed\n  expected: {exp_sha}\n  actual:   {actual}"
+    # Engine: full SHA check
+    py_path = BASE.parent / 'scripts/common_v1_engine.py'
+    py_sha = hashlib.sha256(py_path.read_bytes()).hexdigest()
+    assert py_sha.startswith('be4899da'), f"Engine PY SHA changed: {py_sha[:8]}"
+    cjs_path = BASE.parent / 'scripts/common_v1_engine.cjs'
+    cjs_sha = hashlib.sha256(cjs_path.read_bytes()).hexdigest()
+    assert cjs_sha.startswith('375250c7'), f"Engine CJS SHA changed: {cjs_sha[:8]}"
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # WO-REF01-059-B5-B2-RESUME-001 — REF-C016 연간 교육계획 수립 서식
 # ═══════════════════════════════════════════════════════════════════════
 
