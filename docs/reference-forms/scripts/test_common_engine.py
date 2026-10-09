@@ -739,7 +739,7 @@ def test_C0304_c012_multipage_all_labels_preserved(c012, tmp_path):
         assert label in all_text, f"Label '{label}' missing in multipage C012 PDF"
 
 def test_C0304_c012_multipage_docx_generation(c012, tmp_path):
-    """C012 DOCX with tall freeform: DOCX generated successfully (page breaks = GUI_UNVERIFIED)."""
+    """C012 DOCX with tall freeform (150mm): verify file created and OOXML row heights correct."""
     import copy
     tall = copy.deepcopy(c012)
     for s in tall['sections']:
@@ -749,13 +749,34 @@ def test_C0304_c012_multipage_docx_generation(c012, tmp_path):
     out_path = tmp_path / 'c012_tall.docx'
     v1_path.write_text(json.dumps(tall, ensure_ascii=False), encoding='utf-8')
     result = subprocess.run(
-        ['node', str(BASE / 'gen_c012_docx.cjs'), 'blank'],
+        ['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
         cwd=str(BASE), capture_output=True, text=True, timeout=30,
     )
-    # Note: gen_c012_docx.cjs uses c012_fields.json (original, not tall fixture).
-    # This test verifies the engine accepts tall freeform via Node validation.
-    tall['sections'][0]['fields'][0]['label']  # touch — ensures fixture is valid
-    assert validate(tall) is True  # DOCX page-break layout = GUI_UNVERIFIED
+    if result.returncode != 0:
+        pytest.fail(f"C012 tall DOCX failed (rc={result.returncode}):\n{result.stderr[:500]}")
+    assert out_path.exists(), f"DOCX not created: {out_path}"
+    assert out_path.stat().st_size > 3_000, f"DOCX too small: {out_path.stat().st_size}"
+
+    tables = _ooxml_tables(out_path)
+    assert len(tables) == 5, f"Expected 5 tables, got {len(tables)}"
+
+    # Verify OOXML freeform content row heights ≈ 150mm (8504 twips)
+    NS_W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    NS = {'w': NS_W}
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    all_tbls = root.findall('.//w:tbl', NS)
+    for tbl_idx in [3, 4]:  # T4 and T5 = two freeform tables
+        rows = all_tbls[tbl_idx].findall('.//w:tr', NS)
+        content_row = rows[1]  # row index 1 = content (row 0 = header)
+        trPr = content_row.find('w:trPr', NS)
+        assert trPr is not None, f"Table {tbl_idx+1} content row missing trPr"
+        trHeight = trPr.find('w:trHeight', NS)
+        assert trHeight is not None, f"Table {tbl_idx+1} content row missing trHeight"
+        val = int(trHeight.get(f'{{{NS_W}}}val', '0'))
+        # 150mm ≈ 8504 twips; allow ±20 for rounding
+        assert abs(val - 8504) <= 20, \
+            f"Table {tbl_idx+1} freeform height: expected ~8504 twips (150mm), got {val}"
 
 # ─── C03-05: SHA256 원본 무결성 ───────────────────────────────────────
 
@@ -772,3 +793,64 @@ def test_C0305_c002_originals_sha256():
         actual_sha = hashlib.sha256(p.read_bytes()).hexdigest()
         assert actual_sha == exp_sha, \
             f"{fname}: SHA256 changed\n  expected: {exp_sha}\n  actual:   {actual_sha}"
+
+# ─── C03-06: C002 PDF 페이지 경계 QA ─────────────────────────────────
+
+def test_C0306_c002_pdf_10rows_1page(c002_v1, tmp_path):
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c002_10rows.pdf'
+    generate_from_dict(c002_v1, out, ex_rows=[[''] * 6] * 10)
+    doc = pymupdf.open(str(out))
+    assert len(doc) == 1, f"C002 with 10 rows must be 1 page, got {len(doc)}"
+
+def test_C0306_c002_pdf_11rows_1page(c002_v1, tmp_path):
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c002_11rows.pdf'
+    generate_from_dict(c002_v1, out, ex_rows=[[''] * 6] * 11)
+    doc = pymupdf.open(str(out))
+    assert len(doc) == 1, f"C002 with 11 rows must be 1 page, got {len(doc)}"
+
+def test_C0306_c002_pdf_15rows_2pages(c002_v1, tmp_path):
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c002_15rows_boundary.pdf'
+    generate_from_dict(c002_v1, out, ex_rows=[[''] * 6] * 15)
+    doc = pymupdf.open(str(out))
+    assert len(doc) >= 2, f"C002 with 15 rows must be >=2 pages, got {len(doc)}"
+
+def test_C0306_c002_pdf_18rows_2pages(c002_v1, tmp_path):
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c002_18rows.pdf'
+    generate_from_dict(c002_v1, out, ex_rows=[[''] * 6] * 18)
+    doc = pymupdf.open(str(out))
+    assert len(doc) >= 2, f"C002 with 18 rows must be >=2 pages, got {len(doc)}"
+
+def test_C0306_c002_pdf_18rows_no_data_loss(c002_v1, tmp_path):
+    """All 18 data rows must appear in PDF across the page split."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c002_18rows_dataloss.pdf'
+    ex_rows = [[f'ROW{i:02d}', '', '', '', '', ''] for i in range(18)]
+    generate_from_dict(c002_v1, out, ex_rows=ex_rows)
+    doc = pymupdf.open(str(out))
+    all_text = ''.join(p.get_text() for p in doc)
+    missing = [f'ROW{i:02d}' for i in range(18) if f'ROW{i:02d}' not in all_text]
+    assert not missing, f"Data rows missing from PDF: {missing}"
