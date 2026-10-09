@@ -1127,6 +1127,17 @@ def test_C0501_c014_orientation_landscape(c014_v1):
     orientation = c014_v1['document']['page']['orientation']
     assert orientation == 'landscape', f"Expected 'landscape', got {orientation!r}"
 
+def test_C0501_c014_metadata_source_batch(c014_v1):
+    assert c014_v1['_meta']['observed_fields_batch'] == 'OWNER-HWP-02'
+
+def test_C0501_c014_metadata_source_checksum(c014_v1):
+    assert 'source_checksum' in c014_v1['_meta'], "source_checksum must be present"
+    assert c014_v1['_meta']['source_checksum'] == \
+        'e94d8d8a271c148973111ff0c74b4d67ba2f9884aff59e87301e261b5794aefe'
+
+def test_C0501_c014_min_row_height_mm(c014_v1):
+    assert c014_v1['sections'][0]['min_row_height_mm'] == 10
+
 def test_C0501_c014_engine_schema_validation(c014_v1):
     assert validate(c014_v1) is True
 
@@ -1236,8 +1247,8 @@ def test_C0502_c014_docx_landscape_pgsz(c014_v1, tmp_path):
 
 # ─── C05-03: REF-C014 PDF 생성 ───────────────────────────────────────
 
-def test_C0503_c014_pdf_generates_landscape(c014_v1, tmp_path):
-    """C014 landscape PDF generates successfully and page is 297mm wide."""
+def test_C0503_c014_pdf_1page_default(c014_v1, tmp_path):
+    """C014 landscape with min_row_height_mm=10 fits 10 default rows on 1 page and is 297mm wide."""
     import pymupdf
     from common_v1_engine import register_fonts
     if not FONTS_OK:
@@ -1245,9 +1256,8 @@ def test_C0503_c014_pdf_generates_landscape(c014_v1, tmp_path):
     register_fonts()
     out = tmp_path / 'c014_blank.pdf'
     generate_from_dict(c014_v1, out)
-    assert out.stat().st_size > 5000, "PDF too small"
     doc = pymupdf.open(str(out))
-    assert doc.page_count >= 1, "PDF must have at least 1 page"
+    assert doc.page_count == 1, f"C014 default (10 rows, min_row_height_mm=10) must be 1 page, got {doc.page_count}"
     width_mm = doc[0].rect.width / 2.8346
     assert abs(width_mm - 297) < 2, f"Page 1 width {width_mm:.1f}mm, expected ~297mm (landscape)"
 
@@ -1276,16 +1286,34 @@ def test_C0503_c014_pdf_2pages_30rows(c014_v1, tmp_path):
     doc = pymupdf.open(str(out))
     assert doc.page_count >= 2, f"C014 30 rows must be >=2 pages, got {doc.page_count}"
 
-def test_C0503_c014_pdf_30rows_no_data_loss(c014_v1, tmp_path):
-    """30행 DOCX: OOXML repeat_table에 30행 손실 없이 존재."""
+def test_C0503_c014_pdf_30rows_data_preserved(c014_v1, tmp_path):
+    """30행 PDF: 각 행의 고유 마커(R00~R29)가 전 페이지에 보존됨을 확인."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c014_30rows_data.pdf'
+    nCols = len(c014_v1['sections'][0]['columns'])
+    # C05 감소대책 (43mm) — wide enough to display markers without clipping
+    ex_rows = [[''] * nCols for _ in range(30)]
+    for i, row in enumerate(ex_rows):
+        row[4] = f'R{i:02d}'
+    generate_from_dict(c014_v1, out, ex_rows=ex_rows)
+    doc = pymupdf.open(str(out))
+    all_text = ''.join(p.get_text() for p in doc)
+    missing = [f'R{i:02d}' for i in range(30) if f'R{i:02d}' not in all_text]
+    assert not missing, f"Data markers missing from PDF across all pages: {missing}"
+
+def test_C0503_c014_docx_30rows_structural_integrity(c014_v1, tmp_path):
+    """30행 DOCX 구조 검증: OOXML repeat_table에 정확히 31행(헤더1+데이터30) 존재.
+    Note: Node CLI는 blank rows만 지원하므로 행 수 구조를 검증.
+          실제 데이터 값 보존은 test_C0503_c014_pdf_30rows_data_preserved에서 검증."""
     v1_path = tmp_path / 'c014_v1.json'
     out_path = tmp_path / 'c014_30rows.docx'
     v1_path.write_text(json.dumps(c014_v1, ensure_ascii=False), encoding='utf-8')
-    nCols = len(c014_v1['sections'][0]['columns'])
-    ex_rows = [[''] * nCols for _ in range(30)]
     result = subprocess.run(
-        ['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path),
-         str(len(ex_rows))],
+        ['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path), '30'],
         cwd=str(BASE), capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, f"30rows DOCX failed: {result.stderr}"
@@ -1343,6 +1371,92 @@ def test_C0601_portrait_landscape_cols_raises(c014_v1):
     f = copy.deepcopy(c014_v1)
     f['document']['page']['orientation'] = 'portrait'
     with pytest.raises(ValueError, match="257mm"):
+        validate(f)
+
+def test_C0601_null_orientation_python_raises(minimal):
+    """Explicit null orientation must raise ValueError (fail-closed)."""
+    import copy
+    f = copy.deepcopy(minimal)
+    f['document']['page'] = {'orientation': None}
+    with pytest.raises(ValueError, match="orientation"):
+        validate(f)
+
+def test_C0601_empty_orientation_python_raises(minimal):
+    """Explicit empty-string orientation must raise ValueError (fail-closed)."""
+    import copy
+    f = copy.deepcopy(minimal)
+    f['document']['page'] = {'orientation': ''}
+    with pytest.raises(ValueError, match="orientation"):
+        validate(f)
+
+def test_C0601_numeric_orientation_python_raises(minimal):
+    """Numeric orientation must raise ValueError (fail-closed)."""
+    import copy
+    f = copy.deepcopy(minimal)
+    f['document']['page'] = {'orientation': 1}
+    with pytest.raises(ValueError, match="orientation"):
+        validate(f)
+
+def test_C0601_null_orientation_node_raises():
+    """Node.js engine must raise for explicit null orientation (fail-closed)."""
+    script = (
+        "const {validate}=require('./common_v1_engine.cjs');"
+        "try{validate({document:{title:'T',doc_id:'D',creator:'C',"
+        "page:{orientation:null}},sections:[]});process.exit(1);}"
+        "catch(e){process.stdout.write('RAISED');}"
+    )
+    result = subprocess.run(['node', '-e', script], cwd=str(BASE),
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0 and result.stdout == 'RAISED', \
+        f"Expected RAISED but got rc={result.returncode} stdout={result.stdout!r}"
+
+def test_C0601_empty_orientation_node_raises():
+    """Node.js engine must raise for explicit empty-string orientation (fail-closed)."""
+    script = (
+        "const {validate}=require('./common_v1_engine.cjs');"
+        "try{validate({document:{title:'T',doc_id:'D',creator:'C',"
+        "page:{orientation:''}},sections:[]});process.exit(1);}"
+        "catch(e){process.stdout.write('RAISED');}"
+    )
+    result = subprocess.run(['node', '-e', script], cwd=str(BASE),
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0 and result.stdout == 'RAISED', \
+        f"Expected RAISED but got rc={result.returncode} stdout={result.stdout!r}"
+
+def test_C0601_numeric_orientation_node_raises():
+    """Node.js engine must raise for numeric orientation (fail-closed)."""
+    script = (
+        "const {validate}=require('./common_v1_engine.cjs');"
+        "try{validate({document:{title:'T',doc_id:'D',creator:'C',"
+        "page:{orientation:1}},sections:[]});process.exit(1);}"
+        "catch(e){process.stdout.write('RAISED');}"
+    )
+    result = subprocess.run(['node', '-e', script], cwd=str(BASE),
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0 and result.stdout == 'RAISED', \
+        f"Expected RAISED but got rc={result.returncode} stdout={result.stdout!r}"
+
+def test_C0601_min_row_height_mm_valid(minimal):
+    """repeat_table with positive min_row_height_mm must pass validation."""
+    import copy
+    f = copy.deepcopy(minimal)
+    f['sections'] = [{
+        'type': 'repeat_table', 'default_row_count': 5,
+        'min_row_height_mm': 10,
+        'columns': [{'id': 'C1', 'label': 'A', 'width_mm': 170}],
+    }]
+    assert validate(f) is True
+
+def test_C0601_min_row_height_mm_negative_raises(minimal):
+    """repeat_table with negative min_row_height_mm must fail validation."""
+    import copy
+    f = copy.deepcopy(minimal)
+    f['sections'] = [{
+        'type': 'repeat_table', 'default_row_count': 5,
+        'min_row_height_mm': -5,
+        'columns': [{'id': 'C1', 'label': 'A', 'width_mm': 170}],
+    }]
+    with pytest.raises(ValueError, match="positive"):
         validate(f)
 
 # ─── C06-02: Landscape PDF 치수 ──────────────────────────────────────
@@ -1418,12 +1532,12 @@ def test_C0603_node_invalid_orientation_raises():
 # ─── C06-04: 공통 엔진 SHA256 회귀 ──────────────────────────────────
 
 def test_C0604_common_engines_sha256():
-    """공통 엔진 파일 SHA256 불변 검증 — 기준본: WO-REF01-059-B2-L01."""
+    """공통 엔진 파일 SHA256 불변 검증 — 기준본: WO-REF01-059-B2-L01-PATCH-1."""
     import hashlib
     expected = {
-        'common_v1_engine.py':  '59d0dbc6fcec808d147bbfc168d912f5e271e0b5fd2e7676321d404aca9dce1e',
-        'common_v1_engine.cjs': '248c1479217eb61d765a984873621461de80b8a6216bd1d4f0cf821eaddc4a58',
-        'c014_v1.json':         '92d6639389378f140c9933d4b920c615af8df38f29fe3ccdd93c2f9df29989d9',
+        'common_v1_engine.py':  '0dd50affb2150b4fd1cb8fa46513cd33df79878a067f71a3689812ad64acd3d7',
+        'common_v1_engine.cjs': 'ec3a0fa9de6823e1d6f3aabfdff023e21d2d3bff57198cabedcfa80c3c2f0c4c',
+        'c014_v1.json':         'c50a99c5dcd9369e1751e754bdd004c0027065ec0ccd739448b9e70b4c45ce90',
     }
     for fname, exp_sha in expected.items():
         p = BASE / fname

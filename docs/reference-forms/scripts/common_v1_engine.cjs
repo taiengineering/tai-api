@@ -33,7 +33,7 @@ const GRAY_TEXT   = '505050';
 
 function layoutCtx(fields) {
     const pageCfg     = (fields.document || {}).page || {};
-    const orientation = pageCfg.orientation || 'portrait';
+    const orientation = ('orientation' in pageCfg) ? pageCfg.orientation : 'portrait';
     if (orientation === 'landscape') {
         return {
             pageW: mm(297), pageH: mm(210),
@@ -132,12 +132,12 @@ function validate(fields) {
         if (typeof doc[a] !== 'string') throw new Error(`document.${a} must be a string`);
     }
 
-    // Validate orientation if specified
+    // Validate orientation if specified — fail-closed: only unspecified key defaults to 'portrait'
     const pageCfg     = (doc.page || {});
-    const orientation = pageCfg.orientation || 'portrait';
-    if (!['portrait', 'landscape'].includes(orientation))
+    const orientation = ('orientation' in pageCfg) ? pageCfg.orientation : 'portrait';
+    if (typeof orientation !== 'string' || !['portrait', 'landscape'].includes(orientation))
         throw new Error(
-            `document.page.orientation must be 'portrait' or 'landscape', got '${orientation}'`
+            `document.page.orientation must be 'portrait' or 'landscape', got ${JSON.stringify(orientation)}`
         );
     const expectedContentW = orientation === 'landscape' ? 257 : 170;
 
@@ -184,6 +184,7 @@ function validate(fields) {
                 throw new Error(
                     `sections[${i}] repeat_table: column widths sum to ${total}mm, expected ${expectedContentW}mm`
                 );
+            if ('min_row_height_mm' in s) posCheck(s.min_row_height_mm, `sections[${i}] repeat_table.min_row_height_mm`);
         }
     });
     return true;
@@ -318,6 +319,7 @@ function buildRepeatTable(section, exRows, contentW) {
     const cols  = section.columns;
     const n     = section.default_row_count;
     const colW  = cols.map(c => mm(c.width_mm));
+    const rowH  = mm(section.min_row_height_mm ?? 14);
     const alignM = { left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT };
     const rows  = [];
 
@@ -332,7 +334,7 @@ function buildRepeatTable(section, exRows, contentW) {
     data.forEach((rd, ri) => {
         const isAlt = (ri + 1) % 2 === 0;
         rows.push(new TableRow({
-            height: { value: ROW_H_PLAN, rule: HeightRule.ATLEAST },
+            height: { value: rowH, rule: HeightRule.ATLEAST },
             children: cols.map((c, i) => bodyCell(
                 rd[i] || '', colW[i],
                 { bg: isAlt ? ALT_BG : 'ffffff', align: alignM[c.align] || AlignmentType.LEFT }

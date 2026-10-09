@@ -8,9 +8,10 @@
     "source_fields_status": "NATIVE_HWP_BODYTEXT_LABEL",
     "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
     "rights_status": "RIGHTS_UNVERIFIED",
+    "source_checksum": "e94d8d8a271c148973111ff0c74b4d67ba2f9884aff59e87301e261b5794aefe",
     "source_access": "OWNER_UPLOADED_HWP_TEXT_PARSED_PARTIAL",
     "observed_fields_count": 10,
-    "observed_fields_batch": "OWNER-HWP-01"
+    "observed_fields_batch": "OWNER-HWP-02"
   },
   "document": {
     "title": "재해 감소대책 수립 및 실행 계획서 작성 서식",
@@ -27,6 +28,7 @@
     {
       "type": "repeat_table",
       "default_row_count": 10,
+      "min_row_height_mm": 10,
       "extra_rows_note": "10행 기본; 위험요인 수에 따라 확장",
       "columns": [
         {

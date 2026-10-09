@@ -224,6 +224,8 @@ def validate(fields):
                     f"sections[{i}] repeat_table: column widths sum to {total_mm}mm, "
                     f"expected {expected_content_w}mm"
                 )
+            if 'min_row_height_mm' in s:
+                _pos(s['min_row_height_mm'], f"sections[{i}] repeat_table.min_row_height_mm")
 
     return True
 
@@ -356,9 +358,9 @@ def build_repeat_table(section, ex_rows=None, content_w=None):
         if i % 2 == 0:
             cmds.append(('BACKGROUND',(0,i),(-1,i),C_ALT_BG))
 
-    ROW_H_PLAN = 14 * mm
+    row_h = section.get('min_row_height_mm', 14) * mm
     tbl = Table(rows, colWidths=col_w, style=TableStyle(cmds),
-                repeatRows=1, minRowHeights=[0]+[ROW_H_PLAN]*len(data))
+                repeatRows=1, minRowHeights=[0]+[row_h]*len(data))
     return [tbl]
 
 # ─── Common assembler ──────────────────────────────────────────────
