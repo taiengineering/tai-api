@@ -1534,10 +1534,10 @@ def test_C0603_node_invalid_orientation_raises():
 # ─── C06-04: 공통 엔진 SHA256 회귀 ──────────────────────────────────
 
 def test_C0604_common_engines_sha256():
-    """공통 엔진 파일 SHA256 불변 검증 — 기준본: WO-REF01-059-B4-B (header_groups 2단 헤더 추가)."""
+    """공통 엔진 파일 SHA256 불변 검증 — 기준본: WO-REF01-059-B4-B-PATCH-1 (_MinHeightTable 추가)."""
     import hashlib
     expected = {
-        'common_v1_engine.py':  '634ecd25416d9f82ab465def1d070cf16c355f73999a93a23fb7ae33c07af370',
+        'common_v1_engine.py':  'be4899dad868d4336756ce61134546748ac2b0f5f4eb4dbbf7488e795d3f2aba',
         'common_v1_engine.cjs': '375250c74ef1e22786526c1fa2446d989bbed95e8e513e85deeccc3bfb727925',
         'c014_v1.json':         'c50a99c5dcd9369e1751e754bdd004c0027065ec0ccd739448b9e70b4c45ce90',
         'c001_v1.json':         'c6a8e70dd0e3304bc066d36772a114554d4c98dbbd35c8d7c89352b2efaf7fea',
@@ -2539,11 +2539,11 @@ def test_C0805_c014_still_validates(c014_v1):
     assert validate(c014_v1) is True
 
 def test_C0805_c004_source_files_sha256():
-    """C004 소스 파일 SHA256 기준본 검증."""
+    """C004 소스 파일 SHA256 기준본 검증 — PATCH-1 기준."""
     import hashlib
     expected = {
         'c004_v1.json':         '713b605b8e8d8e7fff52ba4d774fee0f002d855934fc489a71cbfa377598b44d',
-        'common_v1_engine.py':  '634ecd25416d9f82ab465def1d070cf16c355f73999a93a23fb7ae33c07af370',
+        'common_v1_engine.py':  'be4899dad868d4336756ce61134546748ac2b0f5f4eb4dbbf7488e795d3f2aba',
         'common_v1_engine.cjs': '375250c74ef1e22786526c1fa2446d989bbed95e8e513e85deeccc3bfb727925',
     }
     for fname, exp_sha in expected.items():
@@ -2563,3 +2563,192 @@ def test_C0805_c004_field_order_original(c004_v1):
         'F12_DAILY_USE', 'F13_STOCK', 'F14_REMARK',
     ]
     assert col_ids == expected_order, f"Column order mismatch: {col_ids}"
+
+# ═══════════════════════════════════════════════════════════════════════
+# WO-REF01-059-B4-B-PATCH-1 — PDF 페이지 분할 시 최소 행 높이 보존
+# ═══════════════════════════════════════════════════════════════════════
+
+MIN_ROW_H_MM = 14.0
+TOLERANCE_MM = 0.15  # pdfplumber bbox 측정 허용 오차
+
+def _measure_data_row_heights(pdf_path, n_hdr_page1=3, n_hdr_rest=2):
+    """PDF 파일에서 각 페이지의 데이터 행 높이(mm)를 pdfplumber 표 경계선으로 측정."""
+    import pdfplumber
+    heights = []
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        for pi, page in enumerate(pdf.pages):
+            tbls = page.find_tables({'vertical_strategy': 'lines', 'horizontal_strategy': 'lines'})
+            if not tbls:
+                continue
+            rows = tbls[0].rows
+            skip = n_hdr_page1 if pi == 0 else n_hdr_rest
+            for r in rows[skip:]:
+                h = (r.bbox[3] - r.bbox[1]) / 2.8346
+                heights.append(round(h, 2))
+    return heights
+
+
+# ─── C09-01: 최초 분할 조각 최소 행 높이 ─────────────────────────────
+
+def test_C0901_first_split_fragment_min_row_height(c004_v1, tmp_path):
+    """페이지 분할 후 첫 번째 계속 페이지의 데이터 행이 14mm 이상."""
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_split1.pdf'
+    cols = c004_v1['sections'][0]['columns']
+    ex_rows = [[f'R{i:02d}'] + [''] * (len(cols) - 1) for i in range(30)]
+    generate_from_dict(c004_v1, out, ex_rows=ex_rows)
+    heights = _measure_data_row_heights(out)
+    assert len(heights) == 30, f"Expected 30 data rows, got {len(heights)}"
+    below = [h for h in heights if h < MIN_ROW_H_MM - TOLERANCE_MM]
+    assert not below, f"Rows below {MIN_ROW_H_MM}mm on continued pages: {below}"
+
+
+# ─── C09-02: 반복 분할 조각 최소 행 높이 ────────────────────────────
+
+def test_C0902_repeated_split_fragment_min_row_height(c004_v1, tmp_path):
+    """3페이지 이상 분할 시 모든 계속 페이지의 데이터 행이 14mm 이상."""
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_split_multi.pdf'
+    cols = c004_v1['sections'][0]['columns']
+    ex_rows = [[f'R{i:02d}'] + [''] * (len(cols) - 1) for i in range(30)]
+    generate_from_dict(c004_v1, out, ex_rows=ex_rows)
+    import pdfplumber
+    with pdfplumber.open(str(out)) as pdf:
+        assert len(pdf.pages) >= 3, f"30 rows should span ≥3 pages"
+    heights = _measure_data_row_heights(out)
+    below = [h for h in heights if h < MIN_ROW_H_MM - TOLERANCE_MM]
+    assert not below, f"Rows below {MIN_ROW_H_MM}mm: {below}"
+
+
+# ─── C09-03: 마지막 페이지 최소 행 높이 ──────────────────────────────
+
+def test_C0903_last_page_min_row_height(c004_v1, tmp_path):
+    """마지막 페이지의 데이터 행도 14mm 이상."""
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_last_page.pdf'
+    cols = c004_v1['sections'][0]['columns']
+    ex_rows = [[f'R{i:02d}'] + [''] * (len(cols) - 1) for i in range(30)]
+    generate_from_dict(c004_v1, out, ex_rows=ex_rows)
+    import pdfplumber
+    with pdfplumber.open(str(out)) as pdf:
+        last = pdf.pages[-1]
+        tbls = last.find_tables({'vertical_strategy': 'lines', 'horizontal_strategy': 'lines'})
+        assert tbls, "Last page must have a table"
+        rows = tbls[0].rows
+        data_rows = rows[2:]  # skip 2 repeated header rows
+        assert data_rows, "Last page must have data rows"
+        for r in data_rows:
+            h = round((r.bbox[3] - r.bbox[1]) / 2.8346, 2)
+            assert h >= MIN_ROW_H_MM - TOLERANCE_MM, \
+                f"Last page row height {h}mm < {MIN_ROW_H_MM}mm"
+
+
+# ─── C09-04: 긴 텍스트 행 14mm 초과 확장 ────────────────────────────
+
+def test_C0904_long_text_row_expands_beyond_14mm(c004_v1, tmp_path):
+    """긴 텍스트가 있는 행은 14mm보다 크게 확장 가능."""
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_longtext.pdf'
+    cols = c004_v1['sections'][0]['columns']
+    ex_rows = [[''] * len(cols)] * 10
+    # Insert long text in first row, first column
+    long_text = '2-에틸헥사놀(2-Ethyl-1-hexanol, CAS 104-76-7, 분자량 130.23, 끓는점 184.3℃)'
+    ex_rows[0] = [long_text] + [''] * (len(cols) - 1)
+    generate_from_dict(c004_v1, out, ex_rows=ex_rows)
+    heights = _measure_data_row_heights(out)
+    assert heights, "Must have measured data rows"
+    max_h = max(heights)
+    assert max_h > MIN_ROW_H_MM + 1.0, \
+        f"Long text row should exceed {MIN_ROW_H_MM}mm, got max={max_h}mm"
+    below = [h for h in heights if h < MIN_ROW_H_MM - TOLERANCE_MM]
+    assert not below, f"Other rows below minimum: {below}"
+
+
+# ─── C09-05: R00~R29 전수 검증 ───────────────────────────────────────
+
+def test_C0905_r00_r29_no_missing_no_duplicate(c004_v1, tmp_path):
+    """R00~R29 30개 식별자가 각 정확히 1회 출력됨."""
+    import re, pdfplumber
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_r00r29.pdf'
+    cols = c004_v1['sections'][0]['columns']
+    ex_rows = [[f'R{i:02d}'] + [''] * (len(cols) - 1) for i in range(30)]
+    generate_from_dict(c004_v1, out, ex_rows=ex_rows)
+    found = {}
+    with pdfplumber.open(str(out)) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ''
+            for rid in re.findall(r'R\d{2}', text):
+                if int(rid[1:]) < 30:
+                    found[rid] = found.get(rid, 0) + 1
+    missing = [f'R{i:02d}' for i in range(30) if f'R{i:02d}' not in found]
+    dups = [k for k, v in found.items() if v > 1]
+    assert not missing, f"Missing identifiers: {missing}"
+    assert not dups, f"Duplicate identifiers: {dups}"
+    assert len(found) == 30, f"Expected 30, found {len(found)}"
+
+
+# ─── C09-06: 2단 헤더 전 페이지 반복 ────────────────────────────────
+
+def test_C0906_two_tier_header_repeats_all_pages(c004_v1, tmp_path):
+    """데이터 행이 있는 모든 페이지에서 폭발한계 헤더가 반복됨."""
+    import re, pdfplumber
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c004_hdr_all.pdf'
+    cols = c004_v1['sections'][0]['columns']
+    ex_rows = [[f'R{i:02d}'] + [''] * (len(cols) - 1) for i in range(30)]
+    generate_from_dict(c004_v1, out, ex_rows=ex_rows)
+    with pdfplumber.open(str(out)) as pdf:
+        for pi, page in enumerate(pdf.pages):
+            text = page.extract_text() or ''
+            has_data = bool(re.search(r'R\d{2}', text))
+            if has_data:
+                assert '화학물질' in text or '폭발한계' in text, \
+                    f"Page {pi+1} has data rows but no header"
+
+
+# ─── C09-07: 기존 출력물 SHA256 불변 (PDF 제외 — 재생성 허용) ─────────
+
+def test_C0907_existing_outputs_unchanged():
+    """PATCH-1 후 DOCX 및 비C004 PDF 출력물 SHA256 불변."""
+    import hashlib
+    expected = {
+        'TAI-FORM-C004-blank.docx':  'ca0ef2d3f160b1ae88809c5aa8ceb10cd84be50e8c3ef10a665299dbf408f645',
+    }
+    for fname, exp_sha in expected.items():
+        p = OUTPUT / fname
+        assert p.exists(), f"{fname} must exist"
+        actual = hashlib.sha256(p.read_bytes()).hexdigest()
+        assert actual == exp_sha, \
+            f"{fname}: SHA256 changed\n  expected: {exp_sha}\n  actual:   {actual}"
+
+
+# ─── C09-08: 신규 C004 PDF SHA256 ────────────────────────────────────
+
+def test_C0908_c004_pdf_patch1_sha256():
+    """PATCH-1 재생성 후 C004 PDF SHA256 기준본 검증."""
+    import hashlib
+    p = OUTPUT / 'TAI-FORM-C004-blank.pdf'
+    assert p.exists(), "TAI-FORM-C004-blank.pdf must exist"
+    actual = hashlib.sha256(p.read_bytes()).hexdigest()
+    expected = 'd2be9950cbdee03d00ec0a9e25d2efd9af643bf6352b0b342ac55ff48dcf99ec'
+    assert actual == expected, \
+        f"C004 PDF SHA256 mismatch\n  expected: {expected}\n  actual:   {actual}"

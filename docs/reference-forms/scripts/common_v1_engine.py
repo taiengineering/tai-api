@@ -386,6 +386,32 @@ def build_freeform_area(section, content_w=None):
         ),
     )
 
+class _MinHeightTable(Table):
+    """Table subclass that preserves data-row minRowHeights across ReportLab page splits.
+
+    ReportLab 5.x does not forward minRowHeights to split fragments when SPAN
+    commands are present.  This subclass re-applies the constraint after each
+    split so every page fragment enforces the same minimum row height.
+    """
+    def __init__(self, *args, _n_hdr=0, _min_data_h=0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._n_hdr = _n_hdr
+        self._min_data_h = _min_data_h
+
+    def split(self, availWidth, availHeight):
+        fragments = super().split(availWidth, availHeight)
+        for frag in fragments:
+            if not isinstance(frag, Table):
+                continue
+            n = len(frag._argH) if frag._argH else 0
+            nh = min(self._n_hdr, n)
+            frag._minRowHeights = [0] * nh + [self._min_data_h] * (n - nh)
+            frag._n_hdr = self._n_hdr
+            frag._min_data_h = self._min_data_h
+            frag.__class__ = _MinHeightTable
+        return fragments
+
+
 def build_repeat_table(section, ex_rows=None, content_w=None):
     cols    = section['columns']
     n_def   = section['default_row_count']
@@ -467,8 +493,9 @@ def build_repeat_table(section, ex_rows=None, content_w=None):
         if (i - 2) % 2 == 1:
             cmds.append(('BACKGROUND',(0,i),(-1,i),C_ALT_BG))
 
-    tbl = Table(rows, colWidths=col_w, style=TableStyle(cmds),
-                repeatRows=2, minRowHeights=[0, 0]+[row_h]*len(data))
+    tbl = _MinHeightTable(rows, colWidths=col_w, style=TableStyle(cmds),
+                          repeatRows=2, minRowHeights=[0, 0]+[row_h]*len(data),
+                          _n_hdr=2, _min_data_h=row_h)
     return [tbl]
 
 def build_text_flow(section, content_w=None):
