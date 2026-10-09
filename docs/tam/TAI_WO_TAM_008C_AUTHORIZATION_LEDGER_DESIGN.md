@@ -1,8 +1,8 @@
 ---
-doc_id: TAI-WO-TAM-008C-AUTHZ-LEDGER-V0.5
+doc_id: TAI-WO-TAM-008C-AUTHZ-LEDGER-V0.6
 title: TAM 공통 결재 권한 원장 상세설계
 status: GPT_REVIEW_REQUIRED
-version: 0.5
+version: 0.6
 created: 2026-10-09
 revised: 2026-10-09
 author: GPT (설계) / Claude Code (문서화)
@@ -21,6 +21,7 @@ base_sha: 1c349397c3052fd496b5270f0f42d82e3e0167e0
 | 0.3  | 2026-10-09 | R2 추가 — 논리 키 잠금 모델, 직렬화 흐름, Factory 무결성 옵션, Idempotency 보완, P26~P35 | GPT/Claude |
 | 0.4  | 2026-10-09 | R3 수정 — Bootstrap 회사 단위 잠금(§4.6.5), 복수 앵커 전역 정렬(§4.7), Idempotency granted_by·reason·operation 추가(§4.5), FK 잠금 기술 정정(§7.4.2), P36~P40 | GPT/Claude |
 | 0.5  | 2026-10-09 | R4 단순화 — tam_permission_grant_locks 제거, Company 행 잠금으로 통합(§4.6), Idempotency authenticated_actor_id 통일(§4.5), 직렬화 흐름 재작성(§4.7·§5.4), P01~P40 정합화 | GPT/Claude |
+| 0.6  | 2026-10-09 | R5 보정 — §5.4 Revoke 권한 재확인 STEP 5 추가, P32·P38·P39 DB granted_by 컬럼 계약 명시, §9.3 SENTINEL 잔류 참조 제거, §9.1·§8.1·§8.4·§11.3 정합화 | GPT/Claude |
 
 ---
 
@@ -48,7 +49,7 @@ TAM(TAI Approval Management)은 결재경로, 결재 요청, 결재 실행을 �
 ### 1.3 구현 Gate
 
 ```
-TAM-008C-003 DESIGN = 이 문서 (v0.5)
+TAM-008C-003 DESIGN = 이 문서 (v0.6)
 TAM-008C-003 IMPLEMENTATION = BLOCKED (GPT 독립검증 후 별도 WO 발행)
 PR #572 MERGE = OWNER APPROVAL REQUIRED
 BOOTSTRAP API ACTIVATION = BLOCKED (OD-01 Owner 승인 필요)
@@ -653,11 +654,24 @@ STEP 4: 이미 철회됐는지 확인
   → 있고 (STEP 3에서 처리 안 된 경우): ROLLBACK (409 ALREADY_REVOKED)
   → 없음: 계속
 
-STEP 5: Revocation + 감사 INSERT (동일 트랜잭션)
+STEP 5: 철회 권한 재확인 (OD-03 활성화 후 적용)
+  -- 현재 API HTTP Gate = BLOCKED; 이 단계는 Gate 해제 후 구현
+  -- Company 잠금 획득 후 요청자 권한을 재조회하므로 stale read 없음
+  -- 아래 조건 모두 충족 시에만 STEP 6 진행:
+  --   1. 요청자(authenticated_actor_id) ACTIVE 상태
+  --   2. 요청자 company_id == Grant.company_id (교차 회사 철회 금지)
+  --   3. 요청자의 명시적 철회 권한 Grant 보유 (OD-03에서 허용된 권한 코드)
+  --   4. 철회 권한 Grant 유효기간 내 (§5.3 기준)
+  --   5. 철회 권한 Grant 자체 미철회
+  --   6. 자기 자신 권한 철회 정책 (Owner 미확정 → BLOCKED)
+  -- 조건 불충족 → ROLLBACK (403 FORBIDDEN)
+  -- Revocation INSERT 및 Audit INSERT 모두 금지 (Fail-closed)
+
+STEP 6: Revocation + 감사 INSERT (동일 트랜잭션)
   INSERT INTO tam_permission_revocations (...) RETURNING revocation_id;
   INSERT INTO tam_approval_audit_events (...);
 
-STEP 6: COMMIT
+STEP 7: COMMIT
   -- Company 행 잠금 해제
 ```
 
@@ -903,7 +917,7 @@ CURRENT_IMPLEMENTATION = BEFORE INSERT TRIGGER (§4.1.1, Option B 경량 버전)
 응답 403: FORBIDDEN (권한 없음 / 자기 상승 / 교차 회사)
 응답 422: 입력 오류
 
-내부 처리: §4.7 8단계 직렬화 흐름
+내부 처리: §4.7 7단계 직렬화 흐름
 
 동일 트랜잭션:
   INSERT tam_permission_grants
@@ -948,7 +962,7 @@ CURRENT_IMPLEMENTATION = BEFORE INSERT TRIGGER (§4.1.1, Option B 경량 버전)
 응답 403: FORBIDDEN (교차 회사 / 권한 없음)
 응답 404: Grant 없음 또는 교차 회사
 
-내부 처리: §5.4 8단계 직렬화 흐름
+내부 처리: §5.4 7단계 직렬화 흐름
 
 동일 트랜잭션:
   INSERT tam_permission_revocations
@@ -991,8 +1005,8 @@ CURRENT_IMPLEMENTATION = BEFORE INSERT TRIGGER (§4.1.1, Option B 경량 버전)
 ### 9.1 Grant 직렬화
 
 ```
-논리 키 잠금 앵커 (§4.6) + SELECT FOR UPDATE (§4.7 STEP 3) → Write Skew 방지
-동시 동일 논리 키 Grant 시도 → 직렬화 (순차 처리)
+Company 행 배타 잠금 (§4.6.2) + SELECT FOR UPDATE (§4.7 STEP 2) → Write Skew 방지
+동시 동일 Grant 시도 → 직렬화 (순차 처리)
 IntegrityError(UniqueViolation on idempotency_key) → 기존 행 조회 후 200 반환
 ```
 
@@ -1008,10 +1022,9 @@ IntegrityError(UniqueViolation on idempotency_key) → 기존 행 조회 후 200
 ### 9.3 Bootstrap 동시 요청
 
 ```
-회사 단위 잠금 앵커 (§4.6.5) FOR UPDATE:
-  앵커 = (company_id, SENTINEL_UUID, BOOTSTRAP_COMPANY_SENTINEL, 'ROUTE_MANAGER')
-  → 서로 다른 대상 사용자(U1, U2)에 대한 동시 Bootstrap도 동일 앵커를 경쟁 → 직렬화
-  → 첫 번째 Tx COMMIT 후 두 번째 Tx 재개 → STEP 6 C04 재확인에서 이력 발견 → ROLLBACK
+Company 행 배타 잠금 (§4.6.2) FOR UPDATE:
+  → 서로 다른 대상 사용자(U1, U2)에 대한 동시 Bootstrap도 동일 Company 행을 경쟁 → 직렬화
+  → 첫 번째 Tx COMMIT 후 두 번째 Tx 재개 → C04 재확인에서 이력 발견 → ROLLBACK
   → 동시 Bootstrap 두 요청 → 하나만 성공, 나머지 409 BOOTSTRAP_ALREADY_EXISTS
 ```
 
@@ -1153,6 +1166,7 @@ TOCTOU 방지:
 ```
 잠금 획득 순서:
   1. Company 행 FOR UPDATE (§5.4 STEP 2) — 단일 잠금, Deadlock 불가능
+  2. 철회 권한 재확인 (§5.4 STEP 5, OD-03 활성화 후) — 잠금 없이 SELECT
 
 철회 COMMIT 이후 시작된 작업은 이전 Grant를 사용할 수 없다:
   READ COMMITTED에서 COMMIT된 revocation은 이후 모든 조회에서 보인다.
@@ -1287,12 +1301,12 @@ Connection B: POST /grants (C1, null, U1, ROUTE_MANAGER, valid_from=t1, valid_un
 시나리오 1 (A가 먼저 잠금 획득):
   A: STEP 2(Company 잠금 획득) → STEP 4(G1 이미 철회 아님 확인)
   B: STEP 2(BLOCKS)
-  A: STEP 5(INSERT R1 + audit) → STEP 6 COMMIT
+  A: STEP 6(INSERT R1 + audit) → STEP 7 COMMIT   -- STEP 5 권한 재확인 = OD-03 BLOCKED
   B: 재개 → STEP 5(G1 확인 → 철회됨 → 중복 검사 제외 → 중복 없음) → INSERT G2
 
 시나리오 2 (B가 먼저 잠금 획득):
   B: STEP 2(Company 잠금 획득) → STEP 5(G1 활성 → 기간 중복 → ROLLBACK) → 409 DUPLICATE_GRANT
-  A: STEP 2 획득 → STEP 5(INSERT R1 + audit) → COMMIT
+  A: STEP 2 획득 → STEP 6(INSERT R1 + audit) → STEP 7 COMMIT   -- STEP 5 권한 재확인 = OD-03 BLOCKED
 
 두 시나리오 모두 최종 DB 상태는 결정적:
   시나리오 1: G1(revoked) + G2(active) — 2 audit events
@@ -1357,7 +1371,7 @@ COMMIT 순서: A COMMIT → B ROLLBACK (내부 처리 후 200 반환)
 
 ```
 초기 DB 상태:
-  tam_permission_grants: G1 (idempotency_key=K1, valid_until=null, authenticated_actor_id=ADMIN1)
+  tam_permission_grants: G1 (idempotency_key=K1, valid_until=null, granted_by=ADMIN1)
 
 Connection A: POST /grants (..., idempotency_key=K1, valid_until=2027-01-01T00:00:00Z)
 
@@ -1515,8 +1529,13 @@ Deadlock 없음 (Company 잠금은 단일 앵커 — 순환 불가)
 **P38 — Idempotency 히트 + authenticated_actor_id 불일치 차단**
 
 ```
+컬럼 계약:
+  API 요청:   authenticated_actor_id = JWT에서 확인한 사용자 ID
+  DB 저장:    tam_permission_grants.granted_by = authenticated_actor_id 저장 컬럼
+  비교 기준:  G1.granted_by(DB) == 현재 JWT authenticated_actor_id(API)
+
 초기 DB 상태:
-  tam_permission_grants: G1 (idempotency_key=K1, authenticated_actor_id=ADMIN1,
+  tam_permission_grants: G1 (idempotency_key=K1, granted_by=ADMIN1,
                               company=C1, null, U1, ROUTE_MANAGER,
                               valid_from=t0, valid_until=null)
 
@@ -1524,14 +1543,15 @@ Connection A: POST /grants (idempotency_key=K1, authenticated_actor_id=ADMIN2, �
 
 잠금 순서:
   A: STEP 2(Company 잠금 획득) → STEP 3(SELECT WHERE idempotency_key=K1 → G1 발견)
-     payload 비교: authenticated_actor_id: G1=ADMIN1, 요청=ADMIN2 → MISMATCH
+     payload 비교: G1.granted_by(DB)=ADMIN1 vs 요청.authenticated_actor_id=ADMIN2 → MISMATCH
      ROLLBACK
 
 기대 API 오류: 409 IDEMPOTENCY_CONFLICT
 기대 최종 DB 상태: G1 변경 없음
 
 검증 포인트:
-  - authenticated_actor_id가 정규화 payload에 포함되어 다른 요청자의 재시도를 차단
+  - API authenticated_actor_id는 DB granted_by 컬럼에 저장됨 (신규 컬럼 없음)
+  - Idempotency 비교 시 G1.granted_by(DB) 기준으로 현재 JWT 요청자와 대조
   - ADMIN2에게 G1의 grant_id가 반환되는 정보 누출 없음
 ```
 
@@ -1542,7 +1562,7 @@ Connection A: POST /grants (idempotency_key=K1, authenticated_actor_id=ADMIN2, �
 ```
 초기 DB 상태:
   tam_permission_grants: G1 (idempotency_key=K1, reason="초기 설정",
-                              authenticated_actor_id=ADMIN1, company=C1, null, U1, ROUTE_MANAGER)
+                              granted_by=ADMIN1, company=C1, null, U1, ROUTE_MANAGER)
 
 Connection A: POST /grants (idempotency_key=K1, reason="수정된 이유",
                             authenticated_actor_id=ADMIN1, 나머지 payload 동일)
@@ -1618,13 +1638,16 @@ Connection A: POST /grants (idempotency_key=K1, payload=G1과 동일)
 | Idempotency payload 요청자 정보 누출        | RESOLVED (R3→R4)  | authenticated_actor_id / reason 정규화 payload 포함 (§4.5)           |
 | Idempotency 히트 후 철회 Grant 재활성화      | RESOLVED (R3)     | 재인가 확인 — still_valid=false → 403 IDEMPOTENCY_HIT_GRANT_INVALID (§4.5) |
 | FK 잠금 기술 오류 (SHARE ROW EXCLUSIVE)     | RESOLVED (R3)     | KEY SHARE / ROW SHARE 정정; CREATE UNIQUE INDEX CONCURRENTLY 주의사항 추가 (§7.4.2) |
+| §5.4 Revoke 권한 재확인 누락                | RESOLVED (R5)     | STEP 5 철회 권한 재확인 추가 — OD-03 활성화 후 구현; Fail-closed (§5.4) |
+| P38 DB 컬럼 오참조 (authenticated_actor_id) | RESOLVED (R5)     | API authenticated_actor_id → DB granted_by 컬럼 계약 명시; P32·P39도 정정 (§12) |
+| §9.3 SENTINEL_UUID 잔류 참조               | RESOLVED (R5)     | Company 행 배타 잠금으로 갱신; SENTINEL_UUID/BOOTSTRAP_COMPANY_SENTINEL 참조 제거 (§9.3) |
 
 ---
 
 ## 15. 구현 Gate
 
 ```
-TAM-008C-003 DESIGN DOCUMENT (v0.5)  = 이 문서 (R4 단순화 완료)
+TAM-008C-003 DESIGN DOCUMENT (v0.6)  = 이 문서 (R5 최종 계약 보정 완료)
 IMPLEMENTATION                        = BLOCKED (GPT 독립검증 후 별도 WO)
 
 PR #572 MERGE                         = OWNER APPROVAL REQUIRED
