@@ -65,7 +65,10 @@ def _pg_available() -> bool:
         return False
 
 
-_SKIP_DB = pytest.mark.skipif(not _pg_available(), reason="TAM test DB not available")
+_SKIP_DB = pytest.mark.skipif(
+    "TAM_TEST_PG_DSN" not in os.environ or not _pg_available(),
+    reason="TAM_TEST_PG_DSN not configured or test DB not reachable",
+)
 
 
 # ── Module-scoped DB fixture ───────────────────────────────────────────────────
@@ -73,6 +76,46 @@ _SKIP_DB = pytest.mark.skipif(not _pg_available(), reason="TAM test DB not avail
 @pytest.fixture(scope="module")
 def pg():
     """Bootstrap test DB schema from migration SQL + stub users/factories tables."""
+    # Guard 1: TAM_TEST_PG_DSN must be explicitly set — no DATABASE_URL fallback
+    if "TAM_TEST_PG_DSN" not in os.environ:
+        pytest.fail(
+            "TAM_TEST_PG_DSN must be explicitly set — refusing destructive DDL on undefined DSN. "
+            "Set TAM_TEST_PG_DSN to a local test DB before running DB tests.",
+            pytrace=False,
+        )
+    # Guard 2: must not match DATABASE_URL (production guard)
+    _prod_url = os.environ.get("DATABASE_URL", "")
+    if _prod_url and _DSN.strip() == _prod_url.strip():
+        pytest.fail(
+            "TAM_TEST_PG_DSN must not match DATABASE_URL — refusing to run destructive DDL "
+            "against the production database.",
+            pytrace=False,
+        )
+    # Guard 3: isolation marker must exist and be non-empty before any destructive DDL
+    _guard_conn = psycopg2.connect(_DSN, connect_timeout=2)
+    try:
+        _gc = _guard_conn.cursor()
+        _gc.execute(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = '_tam_test_isolation_marker'"
+        )
+        if _gc.fetchone()[0] == 0:
+            pytest.fail(
+                "Isolation marker '_tam_test_isolation_marker' not found in test DB. "
+                "Create the marker table and insert a row before running destructive DB tests. "
+                "Do NOT auto-create this marker in test code.",
+                pytrace=False,
+            )
+        _gc.execute("SELECT COUNT(*) FROM _tam_test_isolation_marker")
+        if _gc.fetchone()[0] == 0:
+            pytest.fail(
+                "Isolation marker table '_tam_test_isolation_marker' exists but is empty. "
+                "Insert a row into the marker table to confirm this is a safe test DB.",
+                pytrace=False,
+            )
+    finally:
+        _guard_conn.close()
+
     conn = psycopg2.connect(_DSN)
     conn.autocommit = True
     cur = conn.cursor()
@@ -137,9 +180,13 @@ def pg():
 
 
 @pytest.fixture(autouse=True)
-def clean(pg):
-    """Truncate TAM tables before each test (users/factories are stable reference data)."""
-    cur = pg.cursor()
+def clean(request):
+    """Truncate TAM tables before each test. No-op when test DB is not configured or reachable."""
+    if "TAM_TEST_PG_DSN" not in os.environ or not _pg_available():
+        yield
+        return
+    pg_conn = request.getfixturevalue("pg")
+    cur = pg_conn.cursor()
     cur.execute("""
         TRUNCATE tam_approval_step_assignees,
                  tam_approval_route_steps,
@@ -147,7 +194,7 @@ def clean(pg):
                  tam_approval_routes
         CASCADE;
     """)
-    pg.commit()
+    pg_conn.commit()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

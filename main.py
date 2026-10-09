@@ -79,6 +79,7 @@ def _load_all_modules():
     from router_registry.diagnosis import ROUTERS as DIAG
     from router_registry.construction import ROUTERS as CONST
     from router_registry.external import ROUTERS as EXT
+
     groups = [
         ("saas_core", SAAS),
         ("legal_engine", LEGAL),
