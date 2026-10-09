@@ -4558,11 +4558,20 @@ def test_C1308_01_b7_now_in_approved_ids():
         assert cid in bb.APPROVED_IDS, f"{cid} not in APPROVED_IDS after B7 freeze"
 
 
-def test_C1308_02_build_approved_empty_after_b7_freeze():
-    """B7 freeze 후 BUILD_APPROVED_IDS는 비어 있어야 한다."""
+def test_C1308_02_build_approved_contains_b8(monkeypatch):
+    """BUILD-003 승인 후 BUILD_APPROVED_IDS에 B8 14건이 포함돼야 한다.
+    빈 목록 차단 동작은 monkeypatch로 별도 검증한다."""
     bb = _load_bb()
-    assert bb.BUILD_APPROVED_IDS == frozenset(), \
-        f"BUILD_APPROVED_IDS should be empty, got {bb.BUILD_APPROVED_IDS}"
+    for cid in _B8_IDS:
+        assert cid in bb.BUILD_APPROVED_IDS, \
+            f"{cid} not in BUILD_APPROVED_IDS after BUILD-003 activation"
+    # 빈 목록 차단: monkeypatch로 비운 상태에서 run_build → BLOCKED
+    import tempfile
+    monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset())
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setattr(bb, 'OUTPUT', Path(td))
+        results, failures = bb.run_build(['c026'])
+        assert 'c026' in failures, "empty BUILD_APPROVED_IDS should block c026"
 
 
 def test_C1308_03_frozen_sha_includes_b7():
@@ -4590,13 +4599,16 @@ def test_C1308_05_b8_json_schema_version():
 
 
 def test_C1308_06_b8_design_gate_status():
-    """B8 14건 모두 design_gate_status=GPT_REVIEW_REQUIRED."""
+    """B8 14건 모두 design_gate_status=GPT_APPROVED_INTERNAL_POC_BUILD (BUILD-003 승인 후)."""
     for cid in _B8_IDS:
         fname = cid + '_v1.json'
         data = json.loads((BASE / fname).read_text(encoding='utf-8'))
         status = data['_meta'].get('design_gate_status', '')
-        assert status == 'GPT_REVIEW_REQUIRED', \
+        assert status == 'GPT_APPROVED_INTERNAL_POC_BUILD', \
             f"{cid} design_gate_status 오류: {status!r}"
+        ref = data['_meta'].get('design_gate_ref', '')
+        assert ref == 'WO-REF01-060-B8-WAVE2-BUILD-003', \
+            f"{cid} design_gate_ref 오류: {ref!r}"
 
 
 def test_C1308_07_b8_authoring_class():
@@ -4609,19 +4621,35 @@ def test_C1308_07_b8_authoring_class():
             f"{cid} authoring_class 오류: {cls!r}"
 
 
-def test_C1308_08_b8_build_blocked():
-    """B8 14건은 BUILD_APPROVED_IDS 미포함 → run_build BLOCKED."""
-    bb = _load_bb()
+def test_C1308_08_b8_build_approved_tmpdir(monkeypatch):
+    """BUILD-003 승인 후 B8 run_build는 임시 디렉터리에서 성공해야 한다.
+    실제 output/ 디렉터리를 건드리지 않는다."""
     import tempfile
+    bb = _load_bb()
     with tempfile.TemporaryDirectory() as td:
-        from unittest.mock import patch as _patch
-        with _patch.object(bb, 'OUTPUT', Path(td)):
-            for cid in _B8_IDS:
-                results, failures = bb.run_build([cid])
-                assert cid in failures, f"{cid} should be BLOCKED"
-                statuses = [r.get('status', '') for r in results if r.get('id') == cid]
-                assert any('BLOCKED' in s for s in statuses), \
-                    f"{cid} no BLOCKED status in results"
+        monkeypatch.setattr(bb, 'OUTPUT', Path(td))
+        results, failures = bb.run_build(_B8_IDS)
+        assert not failures, f"B8 run_build unexpected failures: {failures}"
+        for cid in _B8_IDS:
+            row = next((r for r in results if r.get('id') == cid), {})
+            assert row.get('status') == 'BUILT', \
+                f"{cid} expected BUILT, got {row.get('status')!r}"
+
+
+def test_C1308_08b_unapproved_id_still_blocked(monkeypatch):
+    """BUILD_APPROVED_IDS에 없는 ID는 여전히 BLOCKED 처리돼야 한다."""
+    import tempfile
+    bb = _load_bb()
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setattr(bb, 'OUTPUT', Path(td))
+        # c026을 목록에서 제거한 상태로 시도 → BLOCKED
+        restricted = bb.BUILD_APPROVED_IDS - frozenset({'c026'})
+        monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', restricted)
+        results, failures = bb.run_build(['c026'])
+        assert 'c026' in failures, "c026 removed from BUILD_APPROVED_IDS should be BLOCKED"
+        statuses = [r.get('status', '') for r in results if r.get('id') == 'c026']
+        assert any('BLOCKED' in s for s in statuses), \
+            f"c026 no BLOCKED status: {statuses}"
 
 
 def test_C1308_09_b8_sections_non_empty():

@@ -90,7 +90,12 @@ APPROVED_IDS = frozenset({
 })
 
 # Explicit GPT-approved IDs for --build. Must be added here after GPT approval.
-BUILD_APPROVED_IDS = frozenset()  # empty — B8 forms await GPT design review
+BUILD_APPROVED_IDS = frozenset({          # WO-REF01-060-B8-WAVE2-BUILD-003
+    "c026", "c027", "c028", "c029",
+    "c031", "c033", "c037",
+    "c039", "c040", "c041", "c042",
+    "c043", "c044", "gov-01",
+})
 
 # SHA256 of regression-frozen output files (full hex). Used by --verify-only.
 FROZEN_SHA = {
