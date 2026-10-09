@@ -4037,3 +4037,232 @@ def test_C1104_c016_sha256_regression():
         assert p.exists(), f"{p.name} must exist"
         actual = hashlib.sha256(p.read_bytes()).hexdigest()
         assert actual == exp_sha, f"{p.name}: SHA256 changed\n  expected: {exp_sha}\n  actual:   {actual}"
+
+
+# ─── C13-06: batch_build.py safety hardening (B7-FINAL-GATE-FIX-003) ─────────
+
+import importlib as _importlib
+
+def _load_bb():
+    """Return the batch_build module (cached by sys.modules)."""
+    import sys as _sys
+    if 'batch_build' not in _sys.modules:
+        _sys.path.insert(0, str(BASE))
+    return _importlib.import_module('batch_build')
+
+
+def test_C1306_01_build_unapproved_blocked():
+    """--build c013 → BLOCKED (not in BUILD_APPROVED_IDS); exit nonzero."""
+    r = subprocess.run(
+        [sys.executable, str(BASE / 'batch_build.py'), '--build', 'c013'],
+        capture_output=True, text=True, cwd=str(BASE),
+    )
+    assert r.returncode != 0
+    assert 'BLOCKED' in r.stdout or 'BLOCKED' in r.stderr
+
+
+def test_C1306_02_build_frozen_blocked():
+    """--build c001 → BLOCKED (APPROVED frozen form); exit nonzero."""
+    r = subprocess.run(
+        [sys.executable, str(BASE / 'batch_build.py'), '--build', 'c001'],
+        capture_output=True, text=True, cwd=str(BASE),
+    )
+    assert r.returncode != 0
+    assert 'BLOCKED' in r.stdout or 'BLOCKED' in r.stderr
+
+
+def test_C1306_03_build_duplicate_id():
+    """--build c013 c013 → DUPLICATE_ID; failures non-empty."""
+    bb = _load_bb()
+    results, failures = bb.run_build(['c013', 'c013'])
+    assert failures, "Expected non-empty failures for duplicate IDs"
+    assert any('DUPLICATE' in str(f) for f in failures)
+
+
+def test_C1306_04_build_first_write_failure(tmp_path, monkeypatch):
+    """PDF _write_exclusive raises → form in failures; no output written."""
+    bb = _load_bb()
+    monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset({'c013'}))
+    monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
+
+    def _fake_pdf(entry, out_path):
+        Path(out_path).write_bytes(b'%PDF-1.4 fake')
+    def _fake_docx(entry, out_path):
+        import io
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as z:
+            z.writestr('word/document.xml', '<root/>')
+        Path(out_path).write_bytes(buf.getvalue())
+    monkeypatch.setattr(bb, 'generate_pdf',  _fake_pdf)
+    monkeypatch.setattr(bb, 'generate_docx', _fake_docx)
+    monkeypatch.setattr(bb, 'verify_pdf',    lambda p: 1)
+    monkeypatch.setattr(bb, 'verify_docx',   lambda p: True)
+    def _always_fail(src, dst):
+        raise OSError("injected PDF write error")
+    monkeypatch.setattr(bb, '_write_exclusive', _always_fail)
+
+    results, failures = bb.run_build(['c013'])
+    assert 'c013' in failures
+    assert not (tmp_path / bb.REGISTRY['c013']['pdf_name']).exists()
+
+
+def test_C1306_05_build_second_write_rollback(tmp_path, monkeypatch):
+    """DOCX _write_exclusive raises → PDF rolled back from output/."""
+    import shutil as _shutil
+    bb = _load_bb()
+    monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset({'c013'}))
+    monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
+
+    def _fake_pdf(entry, out_path):
+        Path(out_path).write_bytes(b'%PDF-1.4 fake')
+    def _fake_docx(entry, out_path):
+        import io
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as z:
+            z.writestr('word/document.xml', '<root/>')
+        Path(out_path).write_bytes(buf.getvalue())
+    monkeypatch.setattr(bb, 'generate_pdf',  _fake_pdf)
+    monkeypatch.setattr(bb, 'generate_docx', _fake_docx)
+    monkeypatch.setattr(bb, 'verify_pdf',    lambda p: 1)
+    monkeypatch.setattr(bb, 'verify_docx',   lambda p: True)
+
+    call_count = [0]
+    def _write_exc(src, dst):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            _shutil.copy2(str(src), str(dst))
+        else:
+            raise OSError("injected DOCX write error")
+    monkeypatch.setattr(bb, '_write_exclusive', _write_exc)
+
+    results, failures = bb.run_build(['c013'])
+    assert 'c013' in failures
+    pdf_name = bb.REGISTRY['c013']['pdf_name']
+    assert not (tmp_path / pdf_name).exists(), "PDF orphan not rolled back"
+
+
+def test_C1306_06_build_collision_blocked(tmp_path, monkeypatch):
+    """Pre-existing output PDF → BLOCKED_COLLISION in results; form in failures."""
+    bb = _load_bb()
+    monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset({'c013'}))
+    monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
+
+    pdf_name = bb.REGISTRY['c013']['pdf_name']
+    (tmp_path / pdf_name).write_bytes(b'dummy existing')
+
+    results, failures = bb.run_build(['c013'])
+    assert 'c013' in failures
+    statuses = [r.get('status', '') for r in results if r.get('id') == 'c013']
+    assert any('BLOCKED' in s for s in statuses)
+
+
+def test_C1306_07_report_to_output_blocked():
+    """--report into output/ → rejected before execution; exit nonzero."""
+    report_target = str(OUTPUT / 'test_report_c1306.json')
+    r = subprocess.run(
+        [sys.executable, str(BASE / 'batch_build.py'), '--dry-run',
+         '--report', report_target],
+        capture_output=True, text=True, cwd=str(BASE),
+    )
+    assert r.returncode != 0
+    combined = r.stdout + r.stderr
+    assert 'output' in combined.lower()
+    assert not (OUTPUT / 'test_report_c1306.json').exists()
+
+
+def test_C1306_08_report_to_scripts_blocked():
+    """--report into scripts/ → rejected before execution; exit nonzero."""
+    report_target = str(BASE / 'test_report_c1306.json')
+    r = subprocess.run(
+        [sys.executable, str(BASE / 'batch_build.py'), '--dry-run',
+         '--report', report_target],
+        capture_output=True, text=True, cwd=str(BASE),
+    )
+    assert r.returncode != 0
+    combined = r.stdout + r.stderr
+    assert 'scripts' in combined.lower()
+    assert not (BASE / 'test_report_c1306.json').exists()
+
+
+def test_C1306_09_dry_run_schema_error_exits_nonzero(tmp_path, monkeypatch):
+    """run_dry_run with a bad JSON spec → failures non-empty."""
+    bb = _load_bb()
+
+    bad_json = tmp_path / 'cbad_v1.json'
+    bad_json.write_text(
+        '{"_meta": {"schema_version": "common-v1"}, "MISSING_SECTIONS": []}',
+        encoding='utf-8')
+    fake_entry = {
+        'id': 'cbad', 'json': bad_json,
+        'pdf_name': 'TAI-FORM-CBAD-blank.pdf',
+        'docx_name': 'TAI-FORM-CBAD-blank.docx',
+    }
+    monkeypatch.setattr(bb, 'REGISTRY', {**bb.REGISTRY, 'cbad': fake_entry})
+
+    results, failures = bb.run_dry_run(['cbad'])
+    assert 'cbad' in failures, "Schema-error form must be in failures"
+
+
+def test_C1306_10_verify_only_frozen_missing(tmp_path, monkeypatch):
+    """verify-only: approved form output file absent → doc_ok=False → failures."""
+    bb = _load_bb()
+    monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
+
+    def _fake_pdf(entry, out_path):
+        Path(out_path).write_bytes(b'%PDF-1.4 fake')
+    def _fake_docx(entry, out_path):
+        import io
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as z:
+            z.writestr('word/document.xml', '<root/>')
+        Path(out_path).write_bytes(buf.getvalue())
+    monkeypatch.setattr(bb, 'generate_pdf',  _fake_pdf)
+    monkeypatch.setattr(bb, 'generate_docx', _fake_docx)
+    monkeypatch.setattr(bb, 'verify_pdf',    lambda p: 1)
+    monkeypatch.setattr(bb, 'verify_docx',   lambda p: True)
+
+    results, failures = bb.run_verify_only(['c001'])
+    assert 'c001' in failures
+    row = next((r for r in results if r['id'] == 'c001'), {})
+    assert row.get('status') == 'FAILED'
+    assert row.get('frozen_pdf') == 'MISSING' or row.get('frozen_docx') == 'MISSING'
+
+
+def test_C1306_11_verify_only_frozen_hash_mismatch(tmp_path, monkeypatch):
+    """verify-only: approved form output with wrong SHA256 → failures."""
+    bb = _load_bb()
+    monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
+
+    (tmp_path / bb.REGISTRY['c001']['pdf_name']).write_bytes(b'wrong content')
+    (tmp_path / bb.REGISTRY['c001']['docx_name']).write_bytes(b'wrong content')
+
+    def _fake_pdf(entry, out_path):
+        Path(out_path).write_bytes(b'%PDF-1.4 fake')
+    def _fake_docx(entry, out_path):
+        import io
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as z:
+            z.writestr('word/document.xml', '<root/>')
+        Path(out_path).write_bytes(buf.getvalue())
+    monkeypatch.setattr(bb, 'generate_pdf',  _fake_pdf)
+    monkeypatch.setattr(bb, 'generate_docx', _fake_docx)
+    monkeypatch.setattr(bb, 'verify_pdf',    lambda p: 1)
+    monkeypatch.setattr(bb, 'verify_docx',   lambda p: True)
+
+    results, failures = bb.run_verify_only(['c001'])
+    assert 'c001' in failures
+    row = next((r for r in results if r['id'] == 'c001'), {})
+    assert row.get('status') == 'FAILED'
+    assert 'MISMATCH' in row.get('frozen_pdf', '') or 'MISMATCH' in row.get('frozen_docx', '')
+
+
+def test_C1306_12_c013_metadata_correctness():
+    """C013 _meta: para range = 1807-1845, page = 113."""
+    data = json.loads((BASE / 'c013_v1.json').read_text(encoding='utf-8'))
+    meta = data['_meta']
+    assert '1807-1845' in meta['source_text_status'], (
+        f"source_text_status: expected Para 1807-1845, got: {meta['source_text_status']}")
+    assert '1807-1845' in meta['source_section'], (
+        f"source_section: expected 1807-1845, got: {meta['source_section']}")
+    assert 'Page 113' in meta['source_visual_layout_status'], (
+        f"source_visual_layout_status: expected Page 113, got: {meta['source_visual_layout_status']}")

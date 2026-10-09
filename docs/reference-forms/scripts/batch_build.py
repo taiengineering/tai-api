@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-batch_build.py — WO-REF01-059-B7-BATCH-REMEDIATION-002
+batch_build.py — WO-REF01-059-B7-FINAL-GATE-FIX-003
 Common-v1 engine batch runner.
 
 Modes (default: --dry-run):
   --dry-run      Validate schemas via engine validate(); no file writes.
-  --verify-only  Regenerate to tmp; verify structure. No writes to output/.
+  --verify-only  Regenerate to tmp; verify structure + frozen SHA. No writes to output/.
   --build        Generate to output/ — only for BUILD_APPROVED_IDS.
 
 Safety rules:
@@ -13,9 +13,15 @@ Safety rules:
     There is no --force option. Any collision → BLOCKED.
   - --build with no IDs → builds only BUILD_APPROVED_IDS.
   - --build with explicit IDs → only if every ID is in BUILD_APPROVED_IDS.
+  - Duplicate IDs in a --build request → rejected immediately.
   - Both PDF and DOCX must succeed in tmp before writing to output/.
     Partial success is NOT reported as BUILT.
+  - PDF is written first; if DOCX write fails, PDF is rolled back.
   - Any failure in a batch → exit code nonzero.
+  - --dry-run schema errors → exit code nonzero.
+  - --verify-only: frozen approved-form outputs checked against FROZEN_SHA;
+    MISSING or MISMATCH → failure.
+  - --report path must not be inside output/ or scripts/.
 
 Usage:
   python3 batch_build.py [--dry-run|--verify-only|--build] [ID ...]
@@ -25,7 +31,6 @@ Usage:
 import argparse
 import hashlib
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -69,12 +74,37 @@ APPROVED_IDS = frozenset({"c001", "c003", "c004", "c005", "c014", "c015", "c016"
 # Explicit GPT-approved IDs for --build. Must be added here after GPT approval.
 BUILD_APPROVED_IDS = frozenset()   # empty until GPT approves new batch
 
+# SHA256 of regression-frozen output files (full hex). Used by --verify-only.
+FROZEN_SHA = {
+    "c001_pdf":  "27002fc4bc21e6160e697f50c180d8bbf7369b55c27177803f50816afc960599",
+    "c001_docx": "64955972e13c83602fb19ff00ee4369d4807041bcc0d5e21fd407f886928786d",
+    "c003_pdf":  "5916f14da3d396fb1a2acce731d55a8dc6aafc3ee2ec9c87bb7c89285b0f35ec",
+    "c003_docx": "e5167726323827448863d9efb5d73cbcdcd9532231530b1df3fb65d611651420",
+    "c004_pdf":  "d2be9950cbdee03d00ec0a9e25d2efd9af643bf6352b0b342ac55ff48dcf99ec",
+    "c004_docx": "ca0ef2d3f160b1ae88809c5aa8ceb10cd84be50e8c3ef10a665299dbf408f645",
+    "c005_pdf":  "93cff8f970e68278f7c2dc2adc21ce2392d7ad9cbddc58dcbe174799d1d23d88",
+    "c005_docx": "39099daa2156afcdaa8bbcc86a6200f91c5e8ca67b921ea2c4af7a9636326967",
+    "c014_pdf":  "adbfc9ca8a26b7ad94a73e75d7781ee244d118869bfd553d2ed4559cf4e77ba6",
+    "c014_docx": "afe75179f622405955864d2610eb8ad32e096d5b8492d0800907225e402f6583",
+    "c015_pdf":  "77481eeae8eff7e27ef2fc50d452eb5cfa9fc018d02b45e7c6aab0ce0578235b",
+    "c015_docx": "ec558785f4cec658af9a80134e78dd84a2ad7af88396fe38aa9cb5e9fa9739b9",
+    "c016_pdf":  "a12fe50aba41a3bc78d72c176a37ca47099539cb9f229d4e622f0213567f32bd",
+    "c016_docx": "bad68d52f6370c8be347a64524ef3de270ec0fad6b87889a3fe125f72cfcbfe5",
+}
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def sha256_file(path):
     h = hashlib.sha256(Path(path).read_bytes())
     return h.hexdigest()
+
+
+def _write_exclusive(src: Path, dst: Path):
+    """Copy src → dst using exclusive creation; raises FileExistsError if dst exists."""
+    data = src.read_bytes()
+    with open(str(dst), 'xb') as f:
+        f.write(data)
 
 
 def validate_schema(entry):
@@ -158,9 +188,10 @@ def output_collision(entry):
 # ── Mode implementations ───────────────────────────────────────────────────────
 
 def run_dry_run(ids):
-    """Engine schema validation; no file generation."""
+    """Engine schema validation; no file generation. Returns (results, failures)."""
     print("\n=== DRY-RUN (engine validate) ===")
     results = []
+    failures = []
     for cid in ids:
         entry   = REGISTRY[cid]
         approved = cid in APPROVED_IDS
@@ -177,13 +208,15 @@ def run_dry_run(ids):
             orient = data.get("document", {}).get("page", {}).get("orientation", "?")
             n_sec  = len(data.get("sections", []))
             print(f"         orientation={orient}  sections={n_sec}")
-    return results
+        else:
+            failures.append(cid)
+    return results, failures
 
 
 def run_verify_only(ids):
-    """Regenerate to tmp; structural verification. PDF/DOCX non-deterministic."""
+    """Regenerate to tmp; structural + frozen SHA verification. No writes to output/."""
     print("\n=== VERIFY-ONLY ===")
-    print("  Regenerating to tmp — structure verification (not SHA comparison)\n")
+    print("  Regenerating to tmp — structure + frozen SHA verification\n")
     results = []
     failures = []
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -231,13 +264,22 @@ def run_verify_only(ids):
 
             # Frozen-file integrity check for approved forms
             if approved:
-                for fname, key in [(entry["pdf_name"], "frozen_pdf"),
-                                   (entry["docx_name"], "frozen_docx")]:
+                for file_type, fname in [("pdf", entry["pdf_name"]),
+                                         ("docx", entry["docx_name"])]:
                     p = OUTPUT / fname
-                    if p.exists():
-                        row[key] = f"EXISTS sha8={sha256_file(p)[:8]}"
+                    sha_key = f"{cid}_{file_type}"
+                    expected = FROZEN_SHA.get(sha_key)
+                    if not p.exists():
+                        row[f"frozen_{file_type}"] = "MISSING"
+                        doc_ok = False
                     else:
-                        row[key] = "MISSING"
+                        actual_sha = sha256_file(p)
+                        if expected and actual_sha != expected:
+                            row[f"frozen_{file_type}"] = (
+                                f"MISMATCH sha8={actual_sha[:8]} exp={expected[:8]}")
+                            doc_ok = False
+                        else:
+                            row[f"frozen_{file_type}"] = f"EXISTS sha8={actual_sha[:8]}"
 
             row["status"] = "OK" if doc_ok else "FAILED"
             if not doc_ok:
@@ -251,11 +293,19 @@ def run_build(ids):
     """
     Generate PDF+DOCX to output/. Only BUILD_APPROVED_IDS are allowed.
     Both must succeed in tmp before writing to output/.
+    PDF written first; DOCX write failure triggers PDF rollback.
     Any failure → that document is not written; batch exits nonzero.
     """
     print("\n=== BUILD ===")
     results = []
     failures = []
+
+    # Duplicate ID guard
+    if len(ids) != len(set(ids)):
+        seen = set()
+        dupes = [i for i in ids if i in seen or seen.add(i)]
+        print(f"ERROR: duplicate form IDs in request: {list(set(dupes))}", file=sys.stderr)
+        return [], ["DUPLICATE_ID"]
 
     # Pre-flight: verify all requested IDs are BUILD_APPROVED
     for cid in ids:
@@ -283,7 +333,7 @@ def run_build(ids):
     if failures:
         return results, failures
 
-    # Generate in tmp, validate, then copy atomically
+    # Generate in tmp, validate, then write exclusively to output/
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         for cid in ids:
@@ -331,11 +381,49 @@ def run_build(ids):
                 failures.append(cid)
                 continue
 
-            # Both succeeded — copy to output/
+            # Both succeeded — write to output/ exclusively
             pdf_out  = OUTPUT / entry["pdf_name"]
             docx_out = OUTPUT / entry["docx_name"]
-            shutil.copy2(str(pdf_tmp),  str(pdf_out))
-            shutil.copy2(str(docx_tmp), str(docx_out))
+
+            try:
+                _write_exclusive(pdf_tmp, pdf_out)
+            except FileExistsError:
+                msg = f"BLOCKED_COLLISION — {entry['pdf_name']} already exists"
+                print(f"  ✗ {cid.upper():6s}  {msg}")
+                row["status"] = msg
+                results.append(row)
+                failures.append(cid)
+                continue
+            except Exception as e:
+                msg = f"PDF_WRITE_FAILED — {e}"
+                print(f"  ✗ {cid.upper():6s}  {msg}")
+                row["status"] = msg
+                results.append(row)
+                failures.append(cid)
+                continue
+
+            try:
+                _write_exclusive(docx_tmp, docx_out)
+            except FileExistsError:
+                pdf_out.unlink()
+                msg = "ROLLED_BACK — DOCX collision; PDF removed"
+                print(f"  ✗ {cid.upper():6s}  {msg}")
+                row["status"] = msg
+                results.append(row)
+                failures.append(cid)
+                continue
+            except Exception as e:
+                try:
+                    pdf_out.unlink()
+                    msg = f"ROLLED_BACK — DOCX write failed ({e}); PDF removed"
+                except Exception:
+                    msg = f"RECOVERY_REQUIRED — DOCX write failed ({e}); PDF may be orphaned"
+                print(f"  ✗ {cid.upper():6s}  {msg}")
+                row["status"] = msg
+                results.append(row)
+                failures.append(cid)
+                continue
+
             row["pdf_sha256"]  = sha256_file(pdf_out)
             row["docx_sha256"] = sha256_file(docx_out)
             row["status"] = "BUILT"
@@ -349,7 +437,7 @@ def run_build(ids):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="batch_build.py — common-v1 engine batch runner (B7-REMEDIATION-002)"
+        description="batch_build.py — common-v1 engine batch runner (B7-FINAL-GATE-FIX-003)"
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--dry-run",      action="store_true", default=False)
@@ -377,6 +465,20 @@ def main():
             print(f"  {cid.upper():6s} [{tag:10s}] json={js}  {col}")
         return 0
 
+    # --report path protection: must not write into output/ or scripts/
+    report_path = None
+    if args.report:
+        report_path = Path(args.report).resolve()
+        for zone_path, zone_name in [(OUTPUT.resolve(), "output"),
+                                     (BASE.resolve(), "scripts")]:
+            try:
+                report_path.relative_to(zone_path)
+                print(f"ERROR: --report path must not be inside {zone_name}/",
+                      file=sys.stderr)
+                return 1
+            except ValueError:
+                pass
+
     # Resolve IDs
     if args.build and not args.ids:
         ids = list(BUILD_APPROVED_IDS)
@@ -397,7 +499,7 @@ def main():
     # Execute
     failures = []
     if args.dry_run:
-        results = run_dry_run(ids)
+        results, failures = run_dry_run(ids)
     elif args.verify_only:
         results, failures = run_verify_only(ids)
     elif args.build:
@@ -411,10 +513,10 @@ def main():
                  "verify-only" if args.verify_only else "build"),
         "ids": ids, "failures": failures, "results": results,
     }
-    if args.report:
-        Path(args.report).write_text(
+    if report_path:
+        report_path.write_text(
             json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-        print(f"\nReport written to {args.report}")
+        print(f"\nReport written to {report_path}")
 
     if failures:
         print(f"\nFAILED: {failures}")
