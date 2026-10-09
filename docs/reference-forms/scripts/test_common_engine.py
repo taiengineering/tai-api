@@ -3103,3 +3103,304 @@ def test_C1004_c005_engine_sha256_unchanged():
         p = BASE / fname
         actual = hashlib.sha256(p.read_bytes()).hexdigest()
         assert actual == exp_sha, f"{fname}: SHA256 changed"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# WO-REF01-059-B5-B2-RESUME-001 — REF-C016 연간 교육계획 수립 서식
+# ═══════════════════════════════════════════════════════════════════════
+
+MIN_ROW_H_C016_MM = 14.0
+TOLERANCE_C016_MM = 0.5
+# Page 1: title + approval_hdr + approval_sig + group_hdr + col_hdr = 5 rows
+# Other pages: group_hdr + col_hdr = 2 rows
+C016_N_HDR_P1  = 5
+C016_N_HDR_REST = 2
+
+@pytest.fixture
+def c016_v1():
+    return json.loads((BASE / 'c016_v1.json').read_text(encoding='utf-8'))
+
+# ─── C11-01: REF-C016 JSON 스키마 검증 ───────────────────────────────
+
+def test_C1101_c016_schema_version(c016_v1):
+    assert c016_v1['_meta']['schema_version'] == 'common-v1'
+
+def test_C1101_c016_form_type_and_orientation(c016_v1):
+    assert c016_v1['_meta']['form_type'] == 'PLAN'
+    assert c016_v1['document']['page']['orientation'] == 'landscape'
+
+def test_C1101_c016_sections_approval_and_repeat(c016_v1):
+    types = [s['type'] for s in c016_v1['sections']]
+    assert types == ['approval', 'repeat_table'], f"Expected [approval, repeat_table], got {types}"
+    appr = c016_v1['sections'][0]
+    assert appr['label'] == '연간 교육계획'
+    assert len(appr['fields']) == 3
+
+def test_C1101_c016_20_columns_257mm(c016_v1):
+    cols = c016_v1['sections'][1]['columns']
+    assert len(cols) == 20, f"Expected 20 columns, got {len(cols)}"
+    total = sum(c['width_mm'] for c in cols)
+    assert total == 257, f"Column widths sum {total}mm != 257mm"
+
+def test_C1101_c016_header_groups_and_month_widths(c016_v1):
+    sec = c016_v1['sections'][1]
+    groups = sec.get('header_groups', [])
+    assert len(groups) == 2, f"Expected 2 header_groups, got {len(groups)}"
+    g01 = next(g for g in groups if g['id'] == 'G01')
+    g02 = next(g for g in groups if g['id'] == 'G02')
+    assert len(g01['column_ids']) == 3, f"G01 should cover 3 columns"
+    assert len(g02['column_ids']) == 12, f"G02 should cover 12 columns"
+    col_by_id = {c['id']: c['width_mm'] for c in sec['columns']}
+    # 1-9월 = 10mm, 10-12월 = 12mm
+    for mid in ['F06_M01','F07_M02','F08_M03','F09_M04','F10_M05',
+                'F11_M06','F12_M07','F13_M08','F14_M09']:
+        assert col_by_id[mid] == 10, f"{mid} expected 10mm, got {col_by_id[mid]}mm"
+    for mid in ['F15_M10','F16_M11','F17_M12']:
+        assert col_by_id[mid] == 12, f"{mid} expected 12mm, got {col_by_id[mid]}mm"
+
+def test_C1101_c016_engine_schema_validation(c016_v1):
+    assert validate(c016_v1) is True
+
+# ─── C11-02: REF-C016 DOCX 생성 ──────────────────────────────────────
+
+def test_C1102_c016_docx_generates(c016_v1, tmp_path):
+    v1_path = tmp_path / 'c016_v1.json'
+    out_path = tmp_path / 'c016_blank.docx'
+    v1_path.write_text(json.dumps(c016_v1, ensure_ascii=False), encoding='utf-8')
+    result = subprocess.run(
+        ['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+        cwd=str(BASE), capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, f"DOCX generation failed: {result.stderr}"
+    assert out_path.exists() and out_path.stat().st_size > 3000
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    pgSz = root.find('.//w:pgSz', {'w': NS})
+    assert pgSz is not None
+    orient = pgSz.get(f'{{{NS}}}orient', '')
+    assert orient == 'landscape', f"Expected landscape, got {orient!r}"
+
+def test_C1102_c016_docx_20_grid_cols(c016_v1, tmp_path):
+    """DOCX 반복 표 그리드가 정확히 20열, 합계 257mm."""
+    v1_path = tmp_path / 'c016_v1.json'
+    out_path = tmp_path / 'c016_blank.docx'
+    v1_path.write_text(json.dumps(c016_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    tables = root.findall('.//w:tbl', {'w': NS})
+    repeat_tbl = tables[2]  # title / approval / repeat
+    grid = repeat_tbl.find('.//w:tblGrid', {'w': NS})
+    cols = grid.findall('w:gridCol', {'w': NS})
+    assert len(cols) == 20, f"Expected 20 grid columns, got {len(cols)}"
+    total_twips = sum(int(c.get(f'{{{NS}}}w', 0)) for c in cols)
+    total_mm = total_twips * 25.4 / 1440
+    assert abs(total_mm - 257) < 1, f"Grid total {total_mm:.1f}mm != 257mm"
+
+def test_C1102_c016_docx_header_group_spans(c016_v1, tmp_path):
+    """DOCX 헤더 행 0의 교육구분 gridSpan=3, 일정 gridSpan=12."""
+    v1_path = tmp_path / 'c016_v1.json'
+    out_path = tmp_path / 'c016_blank.docx'
+    v1_path.write_text(json.dumps(c016_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    tables = root.findall('.//w:tbl', {'w': NS})
+    repeat_tbl = tables[2]
+    rows = repeat_tbl.findall('w:tr', {'w': NS})
+    row0 = rows[0]
+    cells = row0.findall('w:tc', {'w': NS})
+    spans = {}
+    for tc in cells:
+        text = ''.join(r.text or '' for r in tc.findall('.//w:t', {'w': NS}))
+        tcPr = tc.find('w:tcPr', {'w': NS})
+        gs_el = tcPr.find('w:gridSpan', {'w': NS}) if tcPr is not None else None
+        gs = int(gs_el.get(f'{{{NS}}}val', 1)) if gs_el is not None else 1
+        if text.strip():
+            spans[text.strip()] = gs
+    assert spans.get('교육구분') == 3, f"교육구분 gridSpan={spans.get('교육구분')}, expected 3"
+    assert spans.get('일정') == 12, f"일정 gridSpan={spans.get('일정')}, expected 12"
+
+def test_C1102_c016_docx_month_labels_and_default_rows(c016_v1, tmp_path):
+    """DOCX row[1]에 10월/11월/12월 포함, 반복 표 행 수 = 2 헤더 + 5 데이터 = 7."""
+    v1_path = tmp_path / 'c016_v1.json'
+    out_path = tmp_path / 'c016_blank.docx'
+    v1_path.write_text(json.dumps(c016_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    with zipfile.ZipFile(out_path) as z:
+        full_xml = z.read('word/document.xml').decode('utf-8')
+    for label in ['10월', '11월', '12월']:
+        assert label in full_xml, f"Label '{label}' not found in DOCX"
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    root = ET.fromstring(full_xml)
+    tables = root.findall('.//w:tbl', {'w': NS})
+    repeat_tbl = tables[2]
+    rows = repeat_tbl.findall('w:tr', {'w': NS})
+    assert len(rows) == 7, f"Expected 7 rows (2 hdr + 5 data), got {len(rows)}"
+
+# ─── C11-03: REF-C016 PDF 생성 검증 ──────────────────────────────────
+
+def test_C1103_c016_pdf_generates(c016_v1, tmp_path):
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c016_blank.pdf'
+    generate_from_dict(c016_v1, out)
+    assert out.exists() and out.stat().st_size > 10_000
+    import pymupdf
+    doc = pymupdf.open(str(out))
+    assert len(doc) == 1, f"Expected 1 page, got {len(doc)}"
+    page = doc[0]
+    assert abs(page.rect.width / 2.8346 - 297) < 2
+    assert abs(page.rect.height / 2.8346 - 210) < 2
+
+def test_C1103_c016_pdf_labels_readable(c016_v1, tmp_path):
+    """PDF에 주요 헤더 레이블이 포함됨 (교육과정·비고 가독성 포함)."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c016_labels.pdf'
+    generate_from_dict(c016_v1, out)
+    doc = pymupdf.open(str(out))
+    full_text = ''.join(p.get_text() for p in doc).replace('\n', '').replace(' ', '')
+    for keyword in ['연간교육계획', '교육과정', '비고', '교육구분', '일정']:
+        assert keyword in full_text, f"'{keyword}' not found in PDF (whitespace-stripped)"
+
+def test_C1103_c016_pdf_month_header_no_char_split(c016_v1, tmp_path):
+    """10월/11월/12월 헤더가 3줄 분리 없음 — '10'/'11'/'12'가 단일 토큰으로 추출."""
+    from common_v1_engine import register_fonts
+    import pdfplumber
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c016_month.pdf'
+    generate_from_dict(c016_v1, out)
+    with pdfplumber.open(str(out)) as pdf:
+        words = pdf.pages[0].extract_words()
+    # 헤더 영역 (y < 250pt) 내 단어만 검사
+    hdr_words = {w['text'] for w in words if w['top'] < 250}
+    # '10'/'11'/'12'가 단일 토큰으로 존재해야 함 (3줄이면 '1'+'0'+'월' 각각 추출됨)
+    for token in ['10', '11', '12']:
+        assert token in hdr_words, \
+            f"'{token}' not found as single token in header area — possible 3-line split"
+    # 1~9월 digit도 단일 토큰으로 존재
+    for d in range(1, 10):
+        assert str(d) in hdr_words, f"'{d}' not found in header area"
+
+def test_C1103_c016_pdf_5_blank_rows(c016_v1, tmp_path):
+    """기본 5행 PDF: page 1에서 5개 데이터 행."""
+    import pdfplumber
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c016_blank.pdf'
+    generate_from_dict(c016_v1, out)
+    with pdfplumber.open(str(out)) as pdf:
+        tbls = pdf.pages[0].find_tables({'vertical_strategy': 'lines', 'horizontal_strategy': 'lines'})
+        rows = tbls[0].rows
+        data_rows = rows[C016_N_HDR_P1:]
+        assert len(data_rows) == 5, f"Expected 5 data rows, got {len(data_rows)}"
+
+def test_C1103_c016_pdf_example_8rows(c016_v1, tmp_path):
+    """예시 8행 출력: PDF 생성 성공, 8행 모두 존재."""
+    from common_v1_engine import register_fonts
+    import pymupdf
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c016_8rows.pdf'
+    cols = c016_v1['sections'][1]['columns']
+    ex_rows = [[f'E{i:02d}'] + [''] * (len(cols) - 1) for i in range(8)]
+    generate_from_dict(c016_v1, out, ex_rows=ex_rows)
+    assert out.exists() and out.stat().st_size > 10_000
+    doc = pymupdf.open(str(out))
+    # 좁은 NO 열(8mm)에서 문자 분리 가능 — 공백 제거 후 검사
+    joined = ''.join(p.get_text() for p in doc).replace('\n', '').replace(' ', '')
+    for i in range(8):
+        tag = f'E{i:02d}'
+        assert tag in joined, f"Example row '{tag}' not found in PDF (whitespace-stripped)"
+
+def test_C1103_c016_pdf_30rows_no_missing(c016_v1, tmp_path):
+    """30행 고유 식별자 R00~R29 누락 없음. NO 열(8mm)에서 문자 분리 — 공백 제거 후 검사."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c016_30rows.pdf'
+    cols = c016_v1['sections'][1]['columns']
+    ex_rows = [[f'R{i:02d}'] + [''] * (len(cols) - 1) for i in range(30)]
+    generate_from_dict(c016_v1, out, ex_rows=ex_rows)
+    doc = pymupdf.open(str(out))
+    joined = ''.join(p.get_text() for p in doc).replace('\n', '').replace(' ', '')
+    missing = []
+    for i in range(30):
+        tag = f'R{i:02d}'
+        if tag not in joined:
+            missing.append(tag)
+    assert not missing, f"Missing rows (whitespace-stripped): {missing}"
+
+def test_C1103_c016_pdf_all_data_rows_min_14mm(c016_v1, tmp_path):
+    """30행 분할 후 모든 데이터 행이 14mm 이상."""
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c016_30rows_minheight.pdf'
+    cols = c016_v1['sections'][1]['columns']
+    ex_rows = [[f'R{i:02d}'] + [''] * (len(cols) - 1) for i in range(30)]
+    generate_from_dict(c016_v1, out, ex_rows=ex_rows)
+    heights = _measure_data_row_heights(out, n_hdr_page1=C016_N_HDR_P1, n_hdr_rest=C016_N_HDR_REST)
+    assert len(heights) == 30, f"Expected 30 data rows, got {len(heights)}"
+    below = [h for h in heights if h < MIN_ROW_H_C016_MM - TOLERANCE_C016_MM]
+    assert not below, f"Rows below {MIN_ROW_H_C016_MM}mm: {below}"
+
+def test_C1103_c016_pdf_header_repeats_multipage(c016_v1, tmp_path):
+    """30행 분할 시 모든 페이지에 교육구분/일정 헤더가 반복."""
+    import pdfplumber
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c016_30rows_hdr.pdf'
+    cols = c016_v1['sections'][1]['columns']
+    ex_rows = [[f'R{i:02d}'] + [''] * (len(cols) - 1) for i in range(30)]
+    generate_from_dict(c016_v1, out, ex_rows=ex_rows)
+    with pdfplumber.open(str(out)) as pdf:
+        assert len(pdf.pages) >= 2, "30 rows should span multiple pages"
+        for pi, page in enumerate(pdf.pages):
+            words = {w['text'] for w in page.extract_words()}
+            assert '교육구분' in words or '교육과정' in words, \
+                f"Page {pi+1}: group header not found"
+
+# ─── C11-04: REF-C016 SHA256 회귀 ────────────────────────────────────
+
+def test_C1104_c016_sha256_regression():
+    """C016 json/pdf/docx SHA256 기준본 및 기존 C004/C005 출력물 불변."""
+    import hashlib
+    c016_expected = {
+        'scripts/c016_v1.json':               'c7166ff4d4590a6311a4200679d74b278757cbd073754eb6ec54805559c9adf3',
+        'output/TAI-FORM-C016-blank.pdf':  'a12fe50aba41a3bc78d72c176a37ca47099539cb9f229d4e622f0213567f32bd',
+        'output/TAI-FORM-C016-blank.docx': 'bad68d52f6370c8be347a64524ef3de270ec0fad6b87889a3fe125f72cfcbfe5',
+    }
+    existing_expected = {
+        'output/TAI-FORM-C004-blank.pdf':  'd2be9950cbdee03d00ec0a9e25d2efd9af643bf6352b0b342ac55ff48dcf99ec',
+        'output/TAI-FORM-C004-blank.docx': 'ca0ef2d3f160b1ae88809c5aa8ceb10cd84be50e8c3ef10a665299dbf408f645',
+        'output/TAI-FORM-C005-blank.pdf':  '93cff8f970e68278f7c2dc2adc21ce2392d7ad9cbddc58dcbe174799d1d23d88',
+        'output/TAI-FORM-C005-blank.docx': '39099daa2156afcdaa8bbcc86a6200f91c5e8ca67b921ea2c4af7a9636326967',
+    }
+    for rel_path, exp_sha in {**c016_expected, **existing_expected}.items():
+        p = BASE.parent / rel_path
+        assert p.exists(), f"{p.name} must exist"
+        actual = hashlib.sha256(p.read_bytes()).hexdigest()
+        assert actual == exp_sha, f"{p.name}: SHA256 changed\n  expected: {exp_sha}\n  actual:   {actual}"
