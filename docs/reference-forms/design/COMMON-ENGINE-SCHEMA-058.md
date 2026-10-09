@@ -1,23 +1,25 @@
 ---
-doc_id: TAI-DESIGN-COMMON-ENGINE-V0.1
+doc_id: TAI-DESIGN-COMMON-ENGINE-V0.2
 title: TAI 서식 공통 렌더러 스키마 설계서
-version: 0.1-DRAFT
-status: PHASE_B_R1_DRAFT — GPT 독립검증 대기
+version: 0.2-DRAFT
+status: PHASE_B_R2_DRAFT — GPT 독립검증 대기
 date: 2026-10-09
 branch: docs/tai-reference-forms-charter-obj-20261008
-scope: common-v1 스키마 블록 타입 정의 및 C002/C012 매핑 비교
-wo: WO-058 Phase B-R1
+scope: common-v1 스키마 블록 타입 정의, 가변 결재란 계약, 공통 assembler 계약, C002/C012 매핑 비교
+wo: WO-058 Phase B-R2
+supersedes: TAI-DESIGN-COMMON-ENGINE-V0.1
+change_reason: B-R2 GPT 지적 반영 — 결재 가변 열 너비 계약, basic_info 블록 추가, repeat_table 열 너비 JSON 기반, 공통 assembler 필수화, fail-closed 검증 규칙
 ---
 
-# TAI 서식 공통 렌더러 스키마 설계서 v0.1
+# TAI 서식 공통 렌더러 스키마 설계서 v0.2
 
 ## 0. 목적
 
-여러 서식(C002, C012 등)을 단일 렌더러가 처리할 수 있도록, JSON 필드 명세의 `sections` 배열에서 사용하는 블록 타입(block type)을 정의한다. 이 문서는 **설계 명세**이며, 생성기 구현은 Phase C에서 수행한다.
+여러 서식(C002, C012 등)을 단일 렌더러가 처리할 수 있도록 JSON 필드 명세의 구조와 공통 assembler 계약을 정의한다. 이 문서는 **설계 명세**이며, 생성기 구현은 Phase C에서 수행한다.
 
 ---
 
-## 1. 스키마 식별자
+## 1. 스키마 식별자 및 최상위 구조
 
 ```
 schema_version: "common-v1"
@@ -25,17 +27,14 @@ schema_version: "common-v1"
 
 모든 서식 필드 명세 JSON의 `_meta.schema_version`에 기재한다.
 
----
-
-## 2. 최상위 구조
+### 1.1 최상위 구조
 
 ```json
 {
   "_meta": {
-    "wo": "...",
+    "schema_version": "common-v1",
     "form_type": "FORM | PLAN | CHECKLIST | ...",
     "source_id": "REF-Cxxx",
-    "schema_version": "common-v1",
     ...
   },
   "document": {
@@ -50,31 +49,72 @@ schema_version: "common-v1"
 }
 ```
 
-렌더러는 `sections` 배열을 순서대로 처리한다. 각 블록은 `type` 키로 분기한다.
+렌더러는 다음 순서로 처리한다:
+1. `document.title`로 제목 행을 **항상 첫 번째**로 렌더링한다 — `sections` 배열에 `title` 항목 없음.
+2. `sections` 배열을 순서대로 처리한다.
+
+---
+
+## 2. C002 레거시 구조와 common-v1의 관계
+
+**현재 상태**: `c002_fields.json`은 flat 구조 (`document / basic_info / approval / corporate_goal / plan_table` 최상위 키)를 사용하며 `sections` 배열이 없다. **이 파일은 변경하지 않는다.**
+
+**공통 스키마 표현 가능 확인**: C002를 common-v1 sections 형식으로 표현하면 아래와 같다. 이는 설계 비교용이며 실제 파일 변경이 아니다.
+
+```json
+// C002 if expressed in common-v1 (DESIGN ONLY — c002_fields.json NOT changed)
+{
+  "_meta": { "schema_version": "common-v1", ... },
+  "document": { "title": "안전보건 목표 및 추진계획서", ... },
+  "sections": [
+    {
+      "type": "approval",
+      "total_width_mm": 90,
+      "fields": [
+        {"id": "F01", "label": "작성"},
+        {"id": "F02", "label": "검토"},
+        {"id": "F03", "label": "승인"}
+      ]
+    },
+    {
+      "type": "basic_info",
+      "layout": "2col_2row",
+      "fields": [
+        {"id": "N01", "label": "사업장명"},
+        {"id": "N02", "label": "작성일"},
+        {"id": "N03", "label": "문서번호"},
+        {"id": "N04", "label": "적용 연도"}
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "F04",
+      "label": "전사 목표",
+      "min_height_mm": 22
+    },
+    {
+      "type": "repeat_table",
+      "default_row_count": 5,
+      "columns": [
+        {"id": "F05", "label": "목표·세부\n추진계획", "width_mm": 56, "align": "left"},
+        {"id": "F06", "label": "추진일정",             "width_mm": 26, "align": "center"},
+        {"id": "F07", "label": "성과지표",             "width_mm": 22, "align": "left"},
+        {"id": "F08", "label": "담당부서",             "width_mm": 26, "align": "center"},
+        {"id": "F09", "label": "예산\n(만원)",         "width_mm": 22, "align": "right"},
+        {"id": "F10", "label": "달성률",               "width_mm": 18, "align": "center"}
+      ]
+    }
+  ]
+}
+```
+
+이로써 C002와 C012 **모두** common-v1 sections 형식으로 표현 가능하다.
 
 ---
 
 ## 3. 블록 타입 정의
 
-### 3.1 `title`
-
-문서 제목 행. 170mm 전체 너비, 중앙 굵은 글씨.
-
-```json
-{
-  "type": "title"
-}
-```
-
-렌더러는 `document.title`을 읽어 출력한다. 별도 데이터 필드 없음.
-
-**현재 구현 상태**: `buildTitle(fields)` / `build_title(fields)` — C002에서 이미 구현됨. 그대로 재사용.
-
----
-
-### 3.2 `approval`
-
-결재란. 우측 정렬 90mm 테이블. 헤더 행(레이블) + 서명 행.
+### 3.1 `approval` — 결재란
 
 ```json
 {
@@ -83,170 +123,253 @@ schema_version: "common-v1"
   "min_header_height_mm": 7,
   "min_sign_height_mm": 15,
   "fields": [
-    { "id": "AP01", "label": "레이블1", "source": "...", "requiredness": "UNVERIFIED" },
-    { "id": "AP02", "label": "레이블2", "source": "...", "requiredness": "UNVERIFIED" }
+    { "id": "AP01", "label": "신청", "requiredness": "UNVERIFIED" },
+    { "id": "AP02", "label": "허가", "requiredness": "UNVERIFIED" }
   ]
 }
 ```
 
-- `fields` 배열의 길이로 열 수를 결정 (C002=3열, C012=2열).
-- 열 너비 = `total_width_mm / fields.length`.
-- 레이블은 `f.label`에서 읽음 — 하드코딩 없음.
+#### 가변 열 너비 계약 (R2-01)
 
-**현재 구현 상태**: `buildApproval(fields)` / `build_approval(fields)` — C002에서 이미 구현됨. `fields.approval.fields` 배열을 그대로 소비하는 구조. C012에서는 `sections`의 `approval` 블록 `fields` 배열을 동일 방식으로 전달하면 됨. **코드 수정 불필요 (GAP-03 = NONE 재확인).**
+```
+cell_width = total_width_mm / len(fields)
+```
+
+- C002 (3열): `90mm / 3 = 30mm`
+- C012 (2열): `90mm / 2 = 45mm`
+
+**현재 생성기 결함 확인:**
+
+| 생성기 | 결함 위치 | 결함 내용 |
+|---|---|---|
+| PDF `gen_c002_pdf.py` line 60 | `APPR_CELL_W = APPROVAL_W / 3` | 제수(divisor) 3 하드코딩 |
+| PDF line 122–123 | `['', '', '']`, `colWidths=[APPR_CELL_W] * 3` | 3열 행과 너비 하드코딩 |
+| DOCX `gen_c002_docx.cjs` line 27 | `Math.round(APPROVAL_W / 3)` | 제수 3 하드코딩 |
+| DOCX lines 127–135 | `hdrCell(..., APPR_CELL_W)` | 셀 수는 `apprF.map()`으로 동적이나 너비 30mm 고정 |
+
+**Phase C 구현 계약:**
+
+```python
+# PDF — build_approval(section)
+appr = section['fields']
+n = len(appr)
+cell_w = section['total_width_mm'] * mm / n
+inner = Table(
+    [[P(f['label'], S_HDR) for f in appr],
+     ['' for _ in appr]],           # dynamic: not hardcoded 3
+    colWidths=[cell_w] * n,         # dynamic: not hardcoded 3
+    rowHeights=[section.get('min_header_height_mm', 7)*mm,
+                section.get('min_sign_height_mm', 15)*mm],
+)
+```
+
+```js
+// DOCX — buildApproval(section)
+const apprF = section.fields;
+const cellW = Math.round(mm(section.total_width_mm) / apprF.length);  // dynamic
+// rows already use apprF.map() — keep as-is, pass cellW per iteration
+```
+
+**requiredness 보존 규칙**: `requiredness=UNVERIFIED` 필드는 렌더링을 건너뛰지 않는다. 모든 필드는 requiredness 값과 무관하게 렌더링된다.
+
+**현재 구현 상태**: C002 생성기에서 `fields.approval.fields`를 읽어 `f.label`을 사용하므로 레이블은 JSON 기반 ✓. 단, 열 너비 하드코딩 수정 필요 (Phase C).
 
 ---
 
-### 3.3 `labeled_grid`
+### 3.2 `basic_info` — 기본 정보 행
 
-2열 그리드 기본정보 섹션. 각 셀에 라벨+기재란.
+```json
+{
+  "type": "basic_info",
+  "layout": "2col_2row",
+  "fields": [
+    { "id": "N01", "label": "사업장명",   "requiredness": "UNVERIFIED" },
+    { "id": "N02", "label": "작성일",     "requiredness": "UNVERIFIED" },
+    { "id": "N03", "label": "문서번호",   "requiredness": "UNVERIFIED" },
+    { "id": "N04", "label": "적용 연도",  "requiredness": "UNVERIFIED" }
+  ]
+}
+```
+
+- `layout` 값: `"2col_2row"` (기본) — N열 2행 배치.
+- `fields` 순서: 좌상→우상→좌하→우하.
+- C012 기본 서식에는 없음 (D05 결정: 신규 제안 필드 제외).
+
+**현재 구현 상태**: C002 전용 `buildBasicInfo(fields)` / `build_basic_info(fields)` 존재. `fields.basic_info.fields` 배열을 소비하나 ID (N01/N02/N03/N04)를 하드코딩. **GAP-04: 파라미터화 필요 (Phase C 이후).**
+
+---
+
+### 3.3 `labeled_grid` — 2열 그리드 기본정보
 
 ```json
 {
   "type": "labeled_grid",
-  "section_label": "섹션 제목 (선택)",
+  "section_label": "작업 기본 정보",
   "row_height_mm": 7,
   "rows": [
     [
-      { "id": "F01", "label": "라벨A", "source": "...", "requiredness": "UNVERIFIED" },
-      { "id": "F02", "label": "라벨B", "source": "...", "requiredness": "UNVERIFIED" }
-    ],
-    ...
+      { "id": "F01", "label": "작업종류", "requiredness": "UNVERIFIED" },
+      { "id": "F02", "label": "신청부서(업체명)", "requiredness": "UNVERIFIED" }
+    ]
   ]
 }
 ```
 
-- `rows`는 행 배열. 각 행은 정확히 2개의 셀 객체를 가진다.
-- 열 너비: `CONTENT_W / 2` = 85mm (각 열).
-- `section_label` 존재 시 상단 전체너비 헤더 행 추가.
+- `rows`: 행 배열. 각 행은 정확히 2개 셀.
+- `section_label` 존재 시 전체너비 헤더 행 선행.
+- 열 너비: `CONTENT_W / 2 = 85mm`.
 
-**현재 구현 상태**: **없음** — C002에 유사 패턴 없음. **GAP-01 신규 빌더 필요.**
-
-예상 인터페이스:
-```python
-# PDF
-def build_labeled_grid(section_label, rows, col_half_w=CONTENT_W/2, row_h=ROW_H_INFO):
-    """rows: [[{id, label}, {id, label}], ...]"""
-```
-```js
-// DOCX
-function buildLabeledGrid(sectionLabel, rows, colHalfW = mm(85), rowH = ROW_H_INFO)
-```
+**현재 구현 상태**: **없음** — **GAP-01 신규 빌더 필요.**
 
 ---
 
-### 3.4 `freeform_area`
-
-전체 너비 자유 기재란. 라벨 헤더 행 + 빈 기재 공간 행.
+### 3.4 `freeform_area` — 전체너비 자유 기재란
 
 ```json
 {
   "type": "freeform_area",
   "id": "F09",
   "label": "작업내용",
-  "source": "...",
   "min_height_mm": 20,
   "requiredness": "UNVERIFIED"
 }
 ```
 
-- 전체 너비 170mm.
-- `min_height_mm`로 기재 공간 최소 높이 제어.
-- 라벨 헤더 행 높이: 7mm (ROW_H_INFO).
+- 전체 너비 170mm, 라벨 헤더 행(7mm) + 기재 공간 행(`min_height_mm`).
+- `id` 및 `requiredness`: 렌더링에 영향 없는 메타데이터. `requiredness=UNVERIFIED`여도 렌더링.
 
-**현재 구현 상태**: C002의 `buildCorporateGoal(fields)` / `build_corporate_goal(fields)` 패턴과 동일하나 "전사목표" 하드코딩됨. **GAP-02: 파라미터화 필요.**
-
-예상 인터페이스:
-```python
-# PDF
-def build_freeform_area(label, min_height_mm=20):
-    """라벨 헤더 행 + 빈 기재 공간 행"""
-```
-```js
-// DOCX
-function buildFreeformArea(label, minHeightMm = 20)
-```
+**현재 구현 상태**: C002 `build_corporate_goal()` / `buildCorporateGoal()` 패턴 동일하나 "전사목표" 하드코딩. **GAP-02: 파라미터화 필요.**
 
 ---
 
-### 3.5 `repeat_table`
-
-다중 행 반복 테이블 (계획표, 목록표 등). C002 `plan_table`이 이 유형.
+### 3.5 `repeat_table` — 반복 테이블
 
 ```json
 {
   "type": "repeat_table",
-  "default_row_count": 10,
-  "extra_rows_note": "... (선택)",
+  "default_row_count": 5,
+  "extra_rows_note": "※ 행이 부족할 경우 추가하십시오.",
   "columns": [
-    { "id": "C01", "label": "열 제목", "width_mm": 56, "align": "left" },
-    ...
+    { "id": "F05", "label": "목표·세부\n추진계획", "width_mm": 56, "align": "left" },
+    { "id": "F06", "label": "추진일정",             "width_mm": 26, "align": "center" }
   ]
 }
 ```
 
-**현재 구현 상태**: `buildPlanTable(fields, exRows)` / `build_plan_table(fields)` — C002에서 구현됨. `COL_WIDTHS`가 C002 전용으로 하드코딩됨. `columns[].width_mm`으로 구동하도록 파라미터화 필요 — **GAP-08 (Phase C 이후 검토).**
+- `columns[].width_mm`으로 열 너비 지정 (JSON 기반). `COL_WIDTHS` 상수 의존 금지.
+- C002 `columns`에 이미 `width_mm` 존재 (c002_fields.json line 39–45) ✓.
+- 단, `gen_c002_pdf.py`의 `COL_WIDTHS = [56,26,22,26,22,18]` 상수는 아직 `columns[].width_mm`을 읽지 않음. **GAP-08: Phase C 이후 연동.**
 
 ---
 
-## 4. C002 vs C012 공통 스키마 비교
+## 4. 공통 assembler 계약 (MANDATORY)
 
-| 섹션 순서 | C002 블록 타입 | C002 블록 내용 | C012 블록 타입 | C012 블록 내용 |
-|---|---|---|---|---|
-| 1 | `title` | 안전보건관리 계획서 | `title` | 안전작업 허가서 |
-| 2 | `approval` | 작성/검토/승인 (3역할) | `approval` | 신청/허가 (2역할) |
-| 3 | `basic_info` (미분류) | N01~N04 2행 4필드 | — (없음) | 기본 서식에서 제외 |
-| 4 | `freeform_area` | 전사목표 (단일) | `labeled_grid` | F01~F08 2열 4행 그리드 |
-| 5 | `repeat_table` | 6열 계획표 | `freeform_area` | 작업내용 F09 (20mm) |
-| 6 | — | — | `freeform_area` | 안전조치사항 F10 (30mm) |
+서식별 별도 조립 함수 작성은 금지한다. C012 생성기는 반드시 아래 공통 assembler를 사용한다.
 
-**공통 블록 재사용**: `title` (100%), `approval` (레이블/칸수만 다름, 코드 동일).
+### 4.1 assembler 계약
 
-**C002 전용 미분류 블록**: `basic_info` — common-v1에 아직 미정의. C002 기존 구현(`buildBasicInfo`) 유지. C012에는 해당 섹션 없음 → 영향 없음.
+```python
+# PDF (gen_c012_pdf.py — Phase C 구현)
+def assemble(fields, ex_rows=None):
+    """
+    Returns list of ReportLab flowables.
+    Title is always first (from document.title).
+    Sections are processed in array order.
+    Unknown block type → ValueError (fail-closed).
+    """
+    story = []
+    story.append(build_title(fields))        # always first — not in sections
+    story.append(Spacer(1, 1*mm))
 
----
+    for section in fields.get('sections', []):
+        t = section['type']
+        if   t == 'approval':      story.append(build_approval(section))
+        elif t == 'basic_info':    story.append(build_basic_info(section))
+        elif t == 'labeled_grid':  story.append(build_labeled_grid(section))
+        elif t == 'freeform_area': story.append(build_freeform_area(section))
+        elif t == 'repeat_table':  story += build_repeat_table(section, ex_rows)
+        else:
+            raise ValueError(f"Unsupported block type: {t!r}")  # fail-closed
+        story.append(Spacer(1, 1*mm))
 
-## 5. 렌더러 조립 로직 (assembler) — Phase C 설계 방향
-
-현재 `buildDoc()` / `generate()`는 섹션 순서를 함수 호출로 하드코딩한다.
-
-Phase C에서 `sections` 배열을 순회하며 `type`에 따라 빌더 함수를 호출하는 공통 assembler로 교체 가능:
+    return story
+```
 
 ```js
-// 개념 코드 (구현 아님)
-for (const section of fields.sections) {
-  switch (section.type) {
-    case 'title':         children.push(buildTitle(fields)); break;
-    case 'approval':      children.push(buildApproval(section)); break;
-    case 'labeled_grid':  children.push(buildLabeledGrid(section)); break;
-    case 'freeform_area': children.push(buildFreeformArea(section.label, section.min_height_mm)); break;
-    case 'repeat_table':  children.push(buildRepeatTable(section, exRows)); break;
+// DOCX (gen_c012_docx.cjs — Phase C 구현)
+function assemble(fields, exRows) {
+  const children = [buildTitle(fields), spacer0()];
+
+  for (const section of (fields.sections ?? [])) {
+    switch (section.type) {
+      case 'approval':      children.push(buildApproval(section));         break;
+      case 'basic_info':    children.push(buildBasicInfo(section));         break;
+      case 'labeled_grid':  children.push(buildLabeledGrid(section));       break;
+      case 'freeform_area': children.push(buildFreeformArea(section));      break;
+      case 'repeat_table':  children.push(...buildRepeatTable(section, exRows)); break;
+      default:
+        throw new Error(`Unsupported block type: ${section.type}`); // fail-closed
+    }
+    children.push(spacer());
   }
+  return children;
 }
 ```
 
-**GAP-05**: 이 assembler 교체는 **NICE_TO_HAVE** — C012 전용 생성기는 하드코딩 assembler로도 구현 가능. 5형식 이상 확장 시 중요.
+### 4.2 fail-closed 규칙
+
+- 알 수 없는 `type` 값 → 오류 발생 (silent skip 금지)
+- 블록 필수 속성 누락 → 오류 발생
+- `requiredness=UNVERIFIED` → 렌더링 스킵 금지 (모든 필드 렌더링)
+
+### 4.3 블록 타입별 필수 속성
+
+| 블록 타입 | 필수 속성 |
+|---|---|
+| `approval` | `type`, `total_width_mm`, `fields` (길이 ≥ 1) |
+| `basic_info` | `type`, `fields` (길이 ≥ 1) |
+| `labeled_grid` | `type`, `rows` (각 행 길이 = 2) |
+| `freeform_area` | `type`, `label`, `min_height_mm` |
+| `repeat_table` | `type`, `columns` (길이 ≥ 1), `default_row_count` |
 
 ---
 
-## 6. Phase C 착수 전 최소 GAP 해소 목록
+## 5. C002 vs C012 공통 스키마 매핑표
 
-| GAP ID | 분류 | 설명 | 영향 서식 | 우선순위 |
-|---|---|---|---|---|
-| GAP-01 | 신규 빌더 | `labeled_grid` 빌더 — 2열 그리드 정보 섹션 | PDF + DOCX | **REQUIRED** |
-| GAP-02 | 파라미터화 | `freeform_area` 빌더 — `build_corporate_goal` 파라미터화 | PDF + DOCX | **REQUIRED** |
-| GAP-03 | — | `approval` 이미 JSON-driven — 코드 수정 불필요 | — | **NONE** |
-| GAP-04 | 선택 | `basic_info` 파라미터화 — C012에 basic_info 없으므로 C012 착수에 불필요 | PDF + DOCX | **NOT REQUIRED for C012** |
-| GAP-05 | 아키텍처 | assembler JSON-driven화 | PDF + DOCX | NICE_TO_HAVE |
-| GAP-06 | 인프라 | `package.json` scripts 다중 서식 지원 | Node.js | **REQUIRED** |
-| GAP-07 | 인프라 | Python entry point 다중 서식 지원 | Python | **REQUIRED** |
+| 섹션 순서 | C002 (common-v1 표현) | C012 (실제 c012_fields.json) |
+|---|---|---|
+| 제목 | `document.title` → build_title (sections 외부) | `document.title` → build_title (sections 외부) |
+| 1 | `approval` — 작성/검토/승인 (3역할, 30mm/셀) | `approval` — 신청/허가 (2역할, 45mm/셀) |
+| 2 | `basic_info` — N01~N04 2col×2row | (없음) |
+| 3 | `freeform_area` — 전사목표 22mm | `labeled_grid` — F01~F08 4행 |
+| 4 | `repeat_table` — 6열 계획표 | `freeform_area` — 작업내용 F09 20mm |
+| 5 | (없음) | `freeform_area` — 안전조치사항 F10 30mm |
 
-**Phase C 착수 조건**: GAP-01, GAP-02, GAP-06, GAP-07 해소 + 이 문서 GPT 독립검증 PASS.
+**결론**: 두 서식 모두 `approval`, `freeform_area` 블록을 공통으로 사용. 열 수·너비는 JSON 기반으로 결정. assembler 로직은 단일 코드로 처리 가능.
+
+---
+
+## 6. GAP 목록 (v0.2 최종)
+
+| GAP ID | 분류 | 설명 | C012 Phase C 필수 여부 |
+|---|---|---|---|
+| GAP-01 | 신규 빌더 | `labeled_grid` 빌더 (PDF + DOCX) | **REQUIRED** |
+| GAP-02 | 파라미터화 | `freeform_area` — `build_corporate_goal` 파라미터화 | **REQUIRED** |
+| GAP-03 | — | NONE — approval 이미 JSON-driven (레이블). 단 열 너비 계산 수정 필요 | **REQUIRED (열 너비 한정)** |
+| GAP-04 | 파라미터화 | `basic_info` 파라미터화 | NOT REQUIRED (C012 기본 서식에 없음) |
+| GAP-05 | 아키텍처 | 공통 assembler — Phase C에서 **MANDATORY** | **REQUIRED** |
+| GAP-06 | 인프라 | `package.json` scripts 다중 서식 지원 | **REQUIRED** |
+| GAP-07 | 인프라 | Python entry point 다중 서식 지원 | **REQUIRED** |
+| GAP-08 | 파라미터화 | `repeat_table` 열 너비 `columns[].width_mm` 연동 | NOT REQUIRED (C012에 repeat_table 없음) |
+
+**v0.1 변경**: GAP-03을 "NONE"에서 "REQUIRED (열 너비 한정)"으로 격상. GAP-05를 "NICE_TO_HAVE"에서 "REQUIRED (MANDATORY)"로 격상.
 
 ---
 
 ## 7. 제약 사항
 
 - 이 문서는 설계 명세이며 구현 코드가 아님
-- Phase C 구현은 GPT 독립검증 PASS + 블로커(SOURCE_FIELDS_UNVERIFIED / LEGAL_REVIEW_PENDING / RIGHTS_UNVERIFIED) 해소 방침 결정 후 착수
-- c002_fields.json 기존 구조 변경 금지 (C002 기존 생성기 호환성 유지)
+- `c002_fields.json` 변경 금지 (C002 기존 생성기 호환성 유지)
+- C002 기존 생성기(`gen_c002_pdf.py`, `gen_c002_docx.cjs`) 변경 금지
+- Phase C 구현 시 C012 생성기는 반드시 공통 assembler를 사용
+- Phase C 착수 조건: GAP-01/02/03(열너비)/05/06/07 해소 + GPT 독립검증 PASS
