@@ -1,14 +1,14 @@
 ---
-doc_id: TAI-DESIGN-COMMON-ENGINE-V0.2
+doc_id: TAI-DESIGN-COMMON-ENGINE-V0.3
 title: TAI 서식 공통 렌더러 스키마 설계서
-version: 0.2-DRAFT
-status: PHASE_B_R2_DRAFT — GPT 독립검증 대기
+version: 0.3-DRAFT
+status: PHASE_B2_L01_DOC — GPT 독립검증 대기
 date: 2026-10-09
 branch: docs/tai-reference-forms-charter-obj-20261008
-scope: common-v1 스키마 블록 타입 정의, 가변 결재란 계약, 공통 assembler 계약, C002/C012 매핑 비교
-wo: WO-058 Phase B-R2
-supersedes: TAI-DESIGN-COMMON-ENGINE-V0.1
-change_reason: B-R2 GPT 지적 반영 — 결재 가변 열 너비 계약, basic_info 블록 추가, repeat_table 열 너비 JSON 기반, 공통 assembler 필수화, fail-closed 검증 규칙
+scope: common-v1 스키마 블록 타입 정의, 가변 결재란 계약, 공통 assembler 계약, C002/C012 매핑 비교, 페이지 방향(orientation) 계약
+wo: WO-REF01-059-B2-L01-DOC-001
+supersedes: TAI-DESIGN-COMMON-ENGINE-V0.2
+change_reason: WO-REF01-059-B2-L01 Landscape 엔진 구현 반영 — document.page.orientation 계약, A4 치수/콘텐츠 너비, DOCX 치수 전달 계약, repeat_table.min_row_height_mm, fail-closed 규칙 추가, 하위 호환성 명시
 ---
 
 # TAI 서식 공통 렌더러 스키마 설계서 v0.2
@@ -43,7 +43,10 @@ schema_version: "common-v1"
     "version": "...",
     "subject": "...",
     "creator": "...",
-    "producer": "..."
+    "producer": "...",
+    "page": {                         // optional — 생략 시 portrait 기본값
+      "orientation": "landscape"      // "portrait" | "landscape"
+    }
   },
   "sections": [ <block>, <block>, ... ]
 }
@@ -52,6 +55,50 @@ schema_version: "common-v1"
 렌더러는 다음 순서로 처리한다:
 1. `document.title`로 제목 행을 **항상 첫 번째**로 렌더링한다 — `sections` 배열에 `title` 항목 없음.
 2. `sections` 배열을 순서대로 처리한다.
+
+---
+
+### 1.2 페이지 방향 계약
+
+#### 1.2.1 orientation 필드
+
+| 속성 | 위치 | 타입 | 기본값 | 허용값 |
+|---|---|---|---|---|
+| `orientation` | `document.page.orientation` | string | `"portrait"` | `"portrait"`, `"landscape"` |
+
+- `document.page` key 자체가 없으면 portrait 적용 (C002/C012/C003 하위 호환).
+- `document.page` key 존재 + `orientation` key 없으면 portrait 적용.
+- `document.page.orientation` key 존재 + invalid value (null / empty string / 숫자 등) → **오류 발생 (fail-closed)**.
+
+#### 1.2.2 A4 용지 치수 및 콘텐츠 너비
+
+| 방향 | 용지 | 콘텐츠 너비 | 콘텐츠 높이 |
+|---|---|---|---|
+| portrait | 210 × 297mm | **170mm** (여백 20mm × 양측) | 257mm |
+| landscape | 297 × 210mm | **257mm** (여백 20mm × 양측) | 170mm |
+
+#### 1.2.3 PDF 엔진 처리 (Python — common_v1_engine.py)
+
+- Portrait: `reportlab.lib.pagesizes.A4` (210 × 297mm)
+- Landscape: `reportlab.lib.pagesizes.landscape(A4)` (297 × 210mm)
+- `_canvas_factory(page_w)` 클로저로 푸터 중앙 좌표를 orientation별로 계산.
+
+#### 1.2.4 DOCX 엔진 처리 (Node.js — common_v1_engine.cjs)
+
+- `layoutCtx()` 반환값: `{ pageW, pageH, contentW, orientation }`
+- **치수 전달 계약**: docx 라이브러리에 항상 **표준 A4 세로 치수(210×297mm)**를 전달하고, `PageOrientation.LANDSCAPE`로 방향을 지정한다. 라이브러리가 내부에서 w/h를 교환하여 OOXML에 기록한다.
+
+```
+입력 (layoutCtx 반환): pageW=mm(210), pageH=mm(297), orientation=LANDSCAPE
+라이브러리 내부 swap →
+OOXML 출력: w:w=16837(297mm), w:h=11905(210mm), w:orient=landscape
+```
+
+- Portrait: `pageW=mm(210), pageH=mm(297), orientation=PORTRAIT` → OOXML: `w:w=11905, w:h=16837`
+
+#### 1.2.5 하위 호환성
+
+`document.page` 없는 기존 서식(C002/C012/C003)은 portrait으로 자동 처리된다. 기존 출력물에 변화 없음.
 
 ---
 
@@ -248,6 +295,7 @@ const cellW = Math.round(mm(section.total_width_mm) / apprF.length);  // dynamic
 {
   "type": "repeat_table",
   "default_row_count": 5,
+  "min_row_height_mm": 10,
   "extra_rows_note": "※ 행이 부족할 경우 추가하십시오.",
   "columns": [
     { "id": "F05", "label": "목표·세부\n추진계획", "width_mm": 56, "align": "left" },
@@ -259,6 +307,17 @@ const cellW = Math.round(mm(section.total_width_mm) / apprF.length);  // dynamic
 - `columns[].width_mm`으로 열 너비 지정 (JSON 기반). `COL_WIDTHS` 상수 의존 금지.
 - C002 `columns`에 이미 `width_mm` 존재 (c002_fields.json line 39–45) ✓.
 - 단, `gen_c002_pdf.py`의 `COL_WIDTHS = [56,26,22,26,22,18]` 상수는 아직 `columns[].width_mm`을 읽지 않음. **GAP-08: Phase C 이후 연동.**
+
+#### `min_row_height_mm` 선택 속성
+
+| 속성 | 타입 | 기본값 | 허용 범위 |
+|---|---|---|---|
+| `min_row_height_mm` | number | **14** | 양수(> 0) |
+
+- 생략 시 기본값 14mm 적용. 음수·0 → 오류 발생 (fail-closed).
+- 용도: landscape 서식에서 행 수 × 행 높이가 content_h(170mm)를 초과하지 않도록 조정.
+  - 예) REF-C014: 10행 × 10mm = 100mm + 제목/헤더 ~28mm ≈ 128mm < 170mm → 1페이지.
+- 기존 서식(C002/C003): 미기재 → 14mm 적용, 기존 출력 불변.
 
 ---
 
@@ -321,6 +380,9 @@ function assemble(fields, exRows) {
 - 알 수 없는 `type` 값 → 오류 발생 (silent skip 금지)
 - 블록 필수 속성 누락 → 오류 발생
 - `requiredness=UNVERIFIED` → 렌더링 스킵 금지 (모든 필드 렌더링)
+- `document.page.orientation` key 존재 + invalid value (null / empty string / 숫자) → 오류 발생
+- `document.page.orientation` key 부재 → `"portrait"` 기본값 (오류 아님)
+- `repeat_table.min_row_height_mm` 존재 + 음수 또는 0 → 오류 발생
 
 ### 4.3 블록 타입별 필수 속성
 
