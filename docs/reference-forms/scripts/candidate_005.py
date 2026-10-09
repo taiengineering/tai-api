@@ -1,5 +1,5 @@
 """
-WO-REF01-060-B8-WAVE2-VISUAL-REPAIR-005  Phase 1
+WO-REF01-060-B8-WAVE2-VISUAL-REPAIR-005  Phase 1 / 005A / 005B
 Candidate JSON generation, PDF/DOCX creation (temp only), border-collision detection,
 150 DPI PNG rasterization, and DOCX roundtrip for C031/C043/C044.
 """
@@ -41,6 +41,25 @@ CORRECTIONS = {
 
 TARGETS = [("c031","C031"), ("c043","C043"), ("c044","C044")]
 
+# ── 005B: candidate metadata ───────────────────────────────────────────────
+CANDIDATE_META = {
+    "candidate_for_review": "WO-REF01-060-B8-WAVE2-VISUAL-REPAIR-005B",
+    "candidate_status":     "REVIEW_ONLY_NOT_CANONICAL",
+}
+
+# ── 005B: C031 입력 안내 text_flow ─────────────────────────────────────────
+C031_GUIDANCE_SECTION = {
+    "id":   "S04",
+    "type": "text_flow",
+    "paragraphs": [
+        {
+            "id":    "P01",
+            "text":  "【작성 안내】 출석증빙·보관란에는 출석 증빙의 종류(예: 참석자 서명부)와 실제 보관 위치를 함께 기재하십시오.",
+            "align": "left",
+        }
+    ],
+}
+
 
 def sha256(p):
     return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
@@ -48,6 +67,7 @@ def sha256(p):
 
 def apply_corrections(spec, cid):
     s = copy.deepcopy(spec)
+    # Label corrections
     corr = CORRECTIONS.get(cid, {})
     for section in s["sections"]:
         sid = section.get("id")
@@ -56,6 +76,11 @@ def apply_corrections(spec, cid):
             for field in section.get("fields", []):
                 if field["id"] in field_corr:
                     field["label"] = field_corr[field["id"]]
+    # 005B: add candidate metadata to _meta
+    s["_meta"].update(CANDIDATE_META)
+    # 005B: C031 only — append text_flow guidance at end of sections
+    if cid == "c031":
+        s["sections"].append(copy.deepcopy(C031_GUIDANCE_SECTION))
     return s
 
 
@@ -191,7 +216,7 @@ def docx_roundtrip(docx_path, cid, spec_cand):
 # ── Main ───────────────────────────────────────────────────────────────────
 
 def main():
-    print("=== WO-REF01-060-B8-WAVE2-VISUAL-REPAIR-005A Phase 1 Supplement ===\n")
+    print("=== WO-REF01-060-B8-WAVE2-VISUAL-REPAIR-005B Phase 1 Final ===\n")
 
     results = {}
 
@@ -274,6 +299,23 @@ def main():
             roundtrip_status = "PASS" if not missing else f"FAIL({len(missing)}/{total} lost)"
             print(f"  DOCX roundtrip: {roundtrip_status}")
 
+            # 005B: C031 — verify guidance text exists in PDF and DOCX
+            guidance_pdf_ok  = None
+            guidance_docx_ok = None
+            if cid == "c031":
+                guidance_snippet = "작성 안내"
+                pdf_text = pymupdf.open(str(cand_pdf))[0].get_text("text")
+                guidance_pdf_ok = guidance_snippet in pdf_text
+                wd_check = python_docx.Document(str(cand_docx))
+                all_text = "\n".join(p.text for p in wd_check.paragraphs)
+                guidance_docx_ok = guidance_snippet in all_text
+                print(f"  Guidance in PDF: {guidance_pdf_ok}  DOCX: {guidance_docx_ok}")
+
+            # 005B: verify candidate metadata present
+            meta_ok = (
+                spec_cand.get("_meta", {}).get("candidate_status") == "REVIEW_ONLY_NOT_CANONICAL"
+            )
+
             results[code] = {
                 "orig_collisions": len(orig_collisions),
                 "orig_collision_texts": [c["text"] for c in orig_collisions[:5]],
@@ -284,6 +326,9 @@ def main():
                 "docx_roundtrip": roundtrip_status,
                 "markers_total": total,
                 "markers_found": found,
+                "candidate_metadata": "PRESENT" if meta_ok else "MISSING",
+                "guidance_pdf": ("PRESENT" if guidance_pdf_ok else "MISSING") if cid == "c031" else "N/A",
+                "guidance_docx": ("PRESENT" if guidance_docx_ok else "MISSING") if cid == "c031" else "N/A",
                 "label_corrections": {
                     f"{sid}.{fid}": {"from": next(f["label"] for s in spec_orig["sections"]
                                                    if s["id"]==sid
@@ -292,7 +337,8 @@ def main():
                     for sid, fields in corr.items()
                     for fid, new_lbl in fields.items()
                 },
-                "status": "PASS" if not cand_collisions and n_pages == 1 and not missing else "HOLD",
+                "status": "PASS" if (not cand_collisions and n_pages == 1 and not missing
+                                     and meta_ok) else "HOLD",
             }
 
             print()

@@ -15,6 +15,9 @@
     "docx_roundtrip": "PASS",
     "markers_total": 23,
     "markers_found": 23,
+    "candidate_metadata": "PRESENT",
+    "guidance_pdf": "PRESENT",
+    "guidance_docx": "PRESENT",
     "label_corrections": {
       "S01.F06": {
         "from": "사용 교육자료(명칭·버전)",
@@ -42,6 +45,9 @@
     "docx_roundtrip": "PASS",
     "markers_total": 22,
     "markers_found": 22,
+    "candidate_metadata": "PRESENT",
+    "guidance_pdf": "N/A",
+    "guidance_docx": "N/A",
     "label_corrections": {
       "S01.F05": {
         "from": "훈련 참여자/명단 참조",
@@ -66,6 +72,9 @@
     "docx_roundtrip": "PASS",
     "markers_total": 21,
     "markers_found": 21,
+    "candidate_metadata": "PRESENT",
+    "guidance_pdf": "N/A",
+    "guidance_docx": "N/A",
     "label_corrections": {
       "S01.F01": {
         "from": "화학물질/제품명",
