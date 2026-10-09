@@ -3186,6 +3186,22 @@ def test_C1201_c015_grade_content_integrity(c015_v1):
     assert '하루 이상 입원' in paras['N01'], "중상 정의 오류"
     assert '사망, 중상을 제외한' in paras['N02'], "경상 정의 오류"
 
+def test_C1201_c015_source_section_metadata(c015_v1):
+    """WO-META-FIX-001: source_section/source_text_status/source_note에 HWP-15/15b 정확히 반영."""
+    meta = c015_v1['_meta']
+    assert 'HWP-15 Para 1954-1973' in meta['source_section'], "source_section에 HWP-15 누락"
+    assert 'HWP-15b Para 1974-1993' in meta['source_section'], "source_section에 HWP-15b 누락"
+    assert 'HWP-16' not in meta['source_section'], "source_section에 HWP-16 잔류 (C016 구간)"
+    assert 'HWP-15 Para 1954-1973' in meta['source_text_status'], "source_text_status에 HWP-15 누락"
+    assert 'HWP-15b Para 1974-1993' in meta['source_text_status'], "source_text_status에 HWP-15b 누락"
+    assert 'HWP-16' not in meta['source_text_status'], "source_text_status에 HWP-16 잔류"
+    s01 = next(s for s in c015_v1['sections'] if s.get('id') == 'S01')
+    assert 'HWP-15 Para 1954-1973' in s01['source_note'], "S01 source_note에 HWP-15 누락"
+    assert 'HWP-16' not in s01['source_note'], "S01 source_note에 HWP-16 잔류"
+    s07 = next(s for s in c015_v1['sections'] if s.get('id') == 'S07')
+    assert 'HWP-15b Para 1974-1993' in s07['source_note'], "S07 source_note에 HWP-15b 누락"
+    assert 'HWP-16' not in s07['source_note'], "S07 source_note에 HWP-16 잔류"
+
 # ─── C12-02: REF-C015 DOCX 생성 ────────────────────────────────────
 
 def test_C1202_c015_docx_generates(c015_v1, tmp_path):
@@ -3370,7 +3386,7 @@ def test_C1204_c015_sha256_regression():
     """C015 json/pdf/docx SHA256 기준본 및 기존 엔진·C005·C016 불변."""
     import hashlib
     c015_expected = {
-        'scripts/c015_v1.json':               '370c46ebcc99e41036dafe926f9a45d4135ac139041b5cb7838148d30b0a05fe',
+        'scripts/c015_v1.json':               '233fbc6bc57ce0ab91efa176a360052fd5c507dea143d71044079ca3783ee3ba',
         'output/TAI-FORM-C015-blank.pdf':  '77481eeae8eff7e27ef2fc50d452eb5cfa9fc018d02b45e7c6aab0ce0578235b',
         'output/TAI-FORM-C015-blank.docx': 'ec558785f4cec658af9a80134e78dd84a2ad7af88396fe38aa9cb5e9fa9739b9',
     }
