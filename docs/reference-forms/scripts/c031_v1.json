@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B8-WAVE2-BATCH-001",
+    "wo": "WO-REF01-060-B8-WAVE2-SPEC-FIX-002",
     "form_type": "RECORD",
     "source_id": "REF-C031",
     "schema_version": "common-v1",
@@ -18,12 +18,12 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. 문서 작성만으로 법정 교육 의무가 이행됐다고 표시하지 않음. 출석 증빙은 별도. GPT 검토 전 빌드 차단."
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. 문서 작성만으로 법정 교육 의무가 이행됐다고 표시하지 않음. 출석 증빙은 별도. FIX-002: 교육자료·출석증빙 필드 추가. GPT 검토 전 빌드 차단."
   },
   "document": {
     "title": "안전보건교육 실시일지",
-    "doc_id": "TAI-FORM-C031-v0.1",
-    "version": "0.1-DRAFT",
+    "doc_id": "TAI-FORM-C031-v0.2",
+    "version": "0.2-DRAFT",
     "subject": "산업안전보건 실무서식",
     "creator": "TAI",
     "producer": "TAI Document Pipeline v1",
@@ -35,13 +35,15 @@
     {
       "type": "basic_info",
       "id": "S01",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 교육 기본정보.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 교육 기본정보. FIX-002: 교육자료·출석증빙 필드 추가.",
       "fields": [
         { "id": "F01", "label": "교육 구분" },
         { "id": "F02", "label": "교육 주제" },
         { "id": "F03", "label": "교육 일시" },
         { "id": "F04", "label": "장소" },
-        { "id": "F05", "label": "교육자(강사)" }
+        { "id": "F05", "label": "교육자(강사)" },
+        { "id": "F06", "label": "사용 교육자료(명칭·버전)" },
+        { "id": "F07", "label": "출석 증빙 종류·보관 위치" }
       ]
     },
     {
@@ -54,7 +56,7 @@
     {
       "type": "repeat_table",
       "id": "S03",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 참석자 확인표. 서명란은 빈 입력 칸 제공.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 참석자 확인표. 서명란은 빈 입력 칸 제공. 서명란 존재가 실제 서명·출석 증거 확보를 보장하지 않음.",
       "default_row_count": 10,
       "min_row_height_mm": 10,
       "columns": [

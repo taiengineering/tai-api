@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B8-WAVE2-BATCH-001",
+    "wo": "WO-REF01-060-B8-WAVE2-SPEC-FIX-002",
     "form_type": "RECORD",
     "source_id": "REF-C043",
     "schema_version": "common-v1",
@@ -18,12 +18,12 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). source_evidence=MIXED(참조 존재 미확인). 화학물질 누출 비상대응 훈련기록 실무 기반. 문서 작성만으로 법정 훈련 의무 이행 주장 금지. GPT 검토 전 빌드 차단."
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). source_evidence=MIXED(참조 존재 미확인). 화학물질 누출 비상대응 훈련기록 실무 기반. 문서 작성만으로 법정 훈련 의무 이행 주장 금지. FIX-002: 훈련 참여자·재확인 필드 추가. GPT 검토 전 빌드 차단."
   },
   "document": {
     "title": "화학물질 누출 비상대응 훈련기록",
-    "doc_id": "TAI-FORM-C043-v0.1",
-    "version": "0.1-DRAFT",
+    "doc_id": "TAI-FORM-C043-v0.2",
+    "version": "0.2-DRAFT",
     "subject": "산업안전보건 실무서식",
     "creator": "TAI",
     "producer": "TAI Document Pipeline v1",
@@ -35,12 +35,13 @@
     {
       "type": "basic_info",
       "id": "S01",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 훈련 기본정보.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 훈련 기본정보. FIX-002: 훈련 참여자/명단 참조 추가.",
       "fields": [
         { "id": "F01", "label": "훈련명" },
         { "id": "F02", "label": "훈련 일시" },
         { "id": "F03", "label": "장소" },
-        { "id": "F04", "label": "담당자" }
+        { "id": "F04", "label": "담당자" },
+        { "id": "F05", "label": "훈련 참여자/명단 참조" }
       ]
     },
     {
@@ -60,13 +61,15 @@
     {
       "type": "repeat_table",
       "id": "S04",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 문제점·개선책 기록표.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 문제점·개선책 기록표. FIX-002: 재확인일·재확인 결과 추가. 문서 작성이 법정 훈련 이수 확인을 보장하지 않음.",
       "default_row_count": 4,
       "min_row_height_mm": 14,
       "columns": [
-        { "id": "F01_PROBLEM", "label": "문제점",   "width_mm": 72 },
-        { "id": "F02_ACTION",  "label": "개선책",   "width_mm": 72 },
-        { "id": "F03_OWNER",   "label": "담당자",   "width_mm": 26 }
+        { "id": "F01_PROBLEM",      "label": "문제점",        "width_mm": 54 },
+        { "id": "F02_ACTION",       "label": "개선책",        "width_mm": 54 },
+        { "id": "F03_OWNER",        "label": "담당자",        "width_mm": 20 },
+        { "id": "F04_RECHECK_DATE", "label": "재확인일",      "width_mm": 20 },
+        { "id": "F05_RECHECK_RSLT", "label": "재확인 결과",  "width_mm": 22 }
       ]
     }
   ]

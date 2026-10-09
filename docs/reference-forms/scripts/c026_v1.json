@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B8-WAVE2-BATCH-001",
+    "wo": "WO-REF01-060-B8-WAVE2-SPEC-FIX-002",
     "form_type": "EVALUATION",
     "source_id": "REF-C026",
     "schema_version": "common-v1",
@@ -18,12 +18,12 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. 위험수준 자동 판정 없음 — 사용자 직접 기재. GPT 검토 전 빌드 차단."
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. 위험수준 자동 판정 없음 — 사용자 직접 기재. 개선 후 재확인 필드 추가(FIX-002). GPT 검토 전 빌드 차단."
   },
   "document": {
     "title": "위험성평가 기록표(3단계 판단법)",
-    "doc_id": "TAI-FORM-C026-v0.1",
-    "version": "0.1-DRAFT",
+    "doc_id": "TAI-FORM-C026-v0.2",
+    "version": "0.2-DRAFT",
     "subject": "산업안전보건 실무서식",
     "creator": "TAI",
     "producer": "TAI Document Pipeline v1",
@@ -46,16 +46,18 @@
     {
       "type": "repeat_table",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 위험성평가 항목 반복 입력표. 위험수준은 사용자 직접 기재(자동계산 미지원).",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 위험성평가 항목 반복 입력표. 위험수준은 사용자 직접 기재(자동계산 미지원). FIX-002: 개선 후 확인 결과·재확인일 추가.",
       "default_row_count": 8,
       "min_row_height_mm": 12,
       "columns": [
-        { "id": "F01_TASK",     "label": "작업·공정",       "width_mm": 35 },
-        { "id": "F02_HAZARD",   "label": "위험요인",         "width_mm": 33 },
-        { "id": "F03_CURRENT",  "label": "현재 조치사항",    "width_mm": 30 },
-        { "id": "F04_LEVEL",    "label": "위험수준(입력)",   "width_mm": 18 },
-        { "id": "F05_ACTION",   "label": "개선 대책",        "width_mm": 30 },
-        { "id": "F06_OWNER",    "label": "담당자/기한",      "width_mm": 24 }
+        { "id": "F01_TASK",     "label": "작업·공정",         "width_mm": 26 },
+        { "id": "F02_HAZARD",   "label": "위험요인",           "width_mm": 24 },
+        { "id": "F03_CURRENT",  "label": "현재 조치사항",      "width_mm": 22 },
+        { "id": "F04_LEVEL",    "label": "위험수준(입력)",     "width_mm": 14 },
+        { "id": "F05_ACTION",   "label": "개선 대책",          "width_mm": 28 },
+        { "id": "F06_OWNER",    "label": "담당자/기한",        "width_mm": 18 },
+        { "id": "F07_VERIFY",   "label": "개선 후 확인 결과", "width_mm": 20 },
+        { "id": "F08_RECHECK",  "label": "재확인일/확인자",    "width_mm": 18 }
       ]
     },
     {
@@ -63,7 +65,7 @@
       "id": "S03",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 위험수준 입력 안내.",
       "paragraphs": [
-        { "id": "N01", "text": "【입력 안내】 위험수준란에는 사용 사업장의 평가기준에 따라 직접 기재하십시오(예: 상/중/하, 1~5 등). 이 서식은 특정 등급 체계나 법정 평가 방법을 강제하지 않습니다.", "align": "left" }
+        { "id": "N01", "text": "【입력 안내】 위험수준란에는 사용 사업장의 평가기준에 따라 직접 기재하십시오(예: 상/중/하, 1~5 등). 이 서식은 특정 등급 체계나 법정 평가 방법을 강제하지 않습니다. 개선 후 확인 결과란에는 개선조치 완료 여부와 현황을 기재하고, 재확인일/확인자란에 실제 점검일과 확인자를 기재하십시오.", "align": "left" }
       ]
     }
   ]

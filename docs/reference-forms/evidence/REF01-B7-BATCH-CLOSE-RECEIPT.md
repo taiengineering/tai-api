@@ -35,30 +35,38 @@ c013_pdf:  58fe149a510cc942679de0cd10253767b088d1e0d6a8423c344a11d0fdac190e
 c013_docx: a7435672d3cbe8e3f12273579ed41251b8d310e415159d90094e9735928bbd7b
 ```
 
-## Owner --verify-only 결과 (5/5 PASS)
+## GPT 독립검증 판정
+
+WO-REF01-059-B7-BATCH-BUILD-005에 대한 GPT 독립검증: **CLOSED FINAL**.
+
+GPT는 GitHub 원격 커밋 `ccc7ce33`을 직접 확인 후 B7 5건 빌드 결과, SHA256 10개, APPROVED_IDS 편입을 승인.
+
+## CLI --verify-only 자동검증 결과 (5/5 PASS)
+
+아래는 GPT 승인 이후 배치 파이프라인을 통한 자동 재확인 결과.
 
 ```
---verify-only c007 c008 c009 c011 c013
+python3 batch_build.py --verify-only c007 c008 c009 c011 c013
 
-✓ PDF  C007   [APPROVED]  1p 55KB
-✓ DOCX C007   [APPROVED]  11KB
-✓ PDF  C008   [APPROVED]  2p 75KB
-✓ DOCX C008   [APPROVED]  12KB
-✓ PDF  C009   [APPROVED]  2p 76KB
-✓ DOCX C009   [APPROVED]  12KB
-✓ PDF  C011   [APPROVED]  1p 62KB
-✓ DOCX C011   [APPROVED]  12KB
-✓ PDF  C013   [APPROVED]  2p 46KB
-✓ DOCX C013   [APPROVED]  11KB
+✓ PDF  C007   [APPROVED]  1p 55KB  SHA256=MATCH
+✓ DOCX C007   [APPROVED]  11KB     SHA256=MATCH
+✓ PDF  C008   [APPROVED]  2p 75KB  SHA256=MATCH
+✓ DOCX C008   [APPROVED]  12KB     SHA256=MATCH
+✓ PDF  C009   [APPROVED]  2p 76KB  SHA256=MATCH
+✓ DOCX C009   [APPROVED]  12KB     SHA256=MATCH
+✓ PDF  C011   [APPROVED]  1p 62KB  SHA256=MATCH
+✓ DOCX C011   [APPROVED]  12KB     SHA256=MATCH
+✓ PDF  C013   [APPROVED]  2p 46KB  SHA256=MATCH
+✓ DOCX C013   [APPROVED]  11KB     SHA256=MATCH
 ```
 
 ## 전체 테스트 결과 (B7 FROZEN 상태 기준)
 
-- 총 PASS: 363/363
+- 총 PASS: 363/363 (B8 스펙 등록 전 시점)
 - FAIL: 0
 - 테스트 파일: docs/reference-forms/scripts/test_common_engine.py
 
 ## B7 APPROVED_IDS 편입 확정
 
-WO-REF01-059-B7-BATCH-BUILD-005 완료. c007/c008/c009/c011/c013 전원 APPROVED_IDS 편입.
+WO-REF01-059-B7-BATCH-BUILD-005 GPT CLOSED FINAL 판정. c007/c008/c009/c011/c013 전원 APPROVED_IDS 편입.
 BUILD_APPROVED_IDS = frozenset() (B8 대기 상태로 초기화).

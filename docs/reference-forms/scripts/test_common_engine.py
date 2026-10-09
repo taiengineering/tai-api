@@ -4661,3 +4661,185 @@ def test_C1308_12_b8_dry_run_schema_valid():
     for row in results:
         assert row.get('schema') == 'SCHEMA_VALID', \
             f"{row.get('id')} dry-run schema: {row.get('schema')}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# C13-09: B8-WAVE2 필드 커버리지 검증 (WO-REF01-060-B8-WAVE2-SPEC-FIX-002)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# proposed_fields 대비 JSON 필드 커버리지 스냅샷
+# COVERED / COVERED_BY_COMBINATION / EXPLICITLY_EXCLUDED_WITH_REASON / MISSING
+_B8_FIELD_COVERAGE = {
+    'c026': {'status': 'COVERED', 'fix': 'FIX-002',
+             'note': 'F07_VERIFY(개선 후 확인 결과)+F08_RECHECK(재확인일/확인자) 추가'},
+    'c027': {'status': 'COVERED', 'fix': 'NONE',
+             'note': 'GPT PASS 원본'},
+    'c028': {'status': 'COVERED', 'fix': 'NONE',
+             'note': 'GPT PASS 원본'},
+    'c029': {'status': 'COVERED_BY_COMBINATION', 'fix': 'FIX-002',
+             'note': 'DB 가능성→빈도/가능성(입력), 중대성→강도/중대성(입력) 병기'},
+    'c031': {'status': 'COVERED', 'fix': 'FIX-002',
+             'note': 'F06(교육자료)+F07(출석 증빙 종류·보관 위치) 추가'},
+    'c033': {'status': 'COVERED', 'fix': 'NONE',
+             'note': 'GPT PASS 원본'},
+    'c037': {'status': 'COVERED', 'fix': 'FIX-002',
+             'note': 'F03_HAZARD(위험요인)+F04_SUGGEST(건의 내용) 분리, landscape 전환'},
+    'c039': {'status': 'COVERED', 'fix': 'NONE',
+             'note': 'GPT PASS 원본'},
+    'c040': {'status': 'COVERED', 'fix': 'NONE',
+             'note': 'GPT PASS 원본'},
+    'c041': {'status': 'COVERED', 'fix': 'NONE',
+             'note': 'GPT PASS 원본'},
+    'c042': {'status': 'COVERED', 'fix': 'NONE',
+             'note': 'GPT PASS 원본'},
+    'c043': {'status': 'COVERED', 'fix': 'FIX-002',
+             'note': 'F05(훈련 참여자)+F04_RECHECK_DATE+F05_RECHECK_RSLT 추가'},
+    'c044': {'status': 'COVERED', 'fix': 'FIX-002',
+             'note': 'F04(작업대상)+S04 freeform(후속조치 내용 및 확인) 추가'},
+    'gov-01': {'status': 'COVERED', 'fix': 'FIX-002',
+               'note': 'F04(회의록 확인자)+F06_SIGN(서명/확인) 추가'},
+}
+
+_B8_EXPECTED_SOURCE_EVIDENCE = {
+    'c026': 'TAI_PROPOSED',
+    'c027': 'TAI_PROPOSED',
+    'c028': 'TAI_PROPOSED',
+    'c029': 'TAI_PROPOSED',
+    'c031': 'TAI_PROPOSED',
+    'c033': 'TAI_PROPOSED',
+    'c037': 'TAI_PROPOSED',
+    'c039': 'MIXED',
+    'c040': 'MIXED',
+    'c041': 'MIXED',
+    'c042': 'MIXED',
+    'c043': 'MIXED',
+    'c044': 'MIXED',
+    'gov-01': 'OFFICIAL_PROCESS_AND_TAI_HYPOTHESIS',
+}
+
+_PORTRAIT_MAX_MM  = 170
+_LANDSCAPE_MAX_MM = 257
+
+
+def test_C1309_01_coverage_map_all_forms_present():
+    """필드 커버리지 스냅샷에 B8 14건이 모두 존재해야 한다."""
+    for cid in _B8_IDS:
+        assert cid in _B8_FIELD_COVERAGE, f"{cid} missing from coverage map"
+
+
+def test_C1309_02_no_unexplained_missing():
+    """커버리지 스냅샷에 설명 없는 MISSING 항목이 없어야 한다."""
+    for cid, entry in _B8_FIELD_COVERAGE.items():
+        assert entry['status'] != 'MISSING', \
+            f"{cid} has MISSING status with no justification"
+
+
+def test_C1309_03_source_evidence_matches_json():
+    """B8 14건 JSON의 source_evidence가 스냅샷 기준값과 일치해야 한다."""
+    for cid in _B8_IDS:
+        fname = cid + '_v1.json'
+        data = json.loads((BASE / fname).read_text(encoding='utf-8'))
+        actual = data['_meta'].get('source_evidence', '')
+        expected = _B8_EXPECTED_SOURCE_EVIDENCE[cid]
+        assert actual == expected, \
+            f"{cid} source_evidence 불일치: JSON={actual!r}, expected={expected!r}"
+
+
+def test_C1309_04_repeat_table_width_within_orientation():
+    """B8 14건 repeat_table 열 합계가 방향별 최대폭(portrait=170, landscape=257) 이하여야 한다."""
+    for cid in _B8_IDS:
+        fname = cid + '_v1.json'
+        data = json.loads((BASE / fname).read_text(encoding='utf-8'))
+        orientation = data['document']['page']['orientation']
+        max_mm = _LANDSCAPE_MAX_MM if orientation == 'landscape' else _PORTRAIT_MAX_MM
+        for s in data.get('sections', []):
+            if s.get('type') == 'repeat_table':
+                total = sum(c.get('width_mm', 0) for c in s.get('columns', []))
+                assert total <= max_mm, \
+                    f"{cid} {s['id']} total width {total}mm > {max_mm}mm ({orientation})"
+
+
+def test_C1309_05_c026_has_verify_recheck_columns():
+    """C026 S02에 개선 후 확인 결과(F07_VERIFY)와 재확인일(F08_RECHECK) 열이 있어야 한다."""
+    data = json.loads((BASE / 'c026_v1.json').read_text(encoding='utf-8'))
+    table = next(s for s in data['sections'] if s['id'] == 'S02')
+    col_ids = [c['id'] for c in table['columns']]
+    assert 'F07_VERIFY' in col_ids, "C026 S02 missing F07_VERIFY"
+    assert 'F08_RECHECK' in col_ids, "C026 S02 missing F08_RECHECK"
+    assert len(col_ids) == 8, f"C026 S02 expected 8 columns, got {len(col_ids)}"
+
+
+def test_C1309_06_c029_columns_include_db_terms():
+    """C029 S02 빈도·강도 열 레이블에 가능성·중대성 병기가 포함돼야 한다."""
+    data = json.loads((BASE / 'c029_v1.json').read_text(encoding='utf-8'))
+    table = next(s for s in data['sections'] if s['id'] == 'S02')
+    labels = [c['label'] for c in table['columns']]
+    assert any('가능성' in lbl for lbl in labels), \
+        f"C029 S02 no label containing '가능성': {labels}"
+    assert any('중대성' in lbl for lbl in labels), \
+        f"C029 S02 no label containing '중대성': {labels}"
+
+
+def test_C1309_07_c031_has_material_and_attendance_fields():
+    """C031 S01에 교육자료(F06)와 출석증빙(F07) 필드가 있어야 한다."""
+    data = json.loads((BASE / 'c031_v1.json').read_text(encoding='utf-8'))
+    s01 = next(s for s in data['sections'] if s['id'] == 'S01')
+    labels = [f['label'] for f in s01['fields']]
+    assert any('교육자료' in lbl for lbl in labels), \
+        f"C031 S01 no '교육자료' field: {labels}"
+    assert any('출석 증빙' in lbl for lbl in labels), \
+        f"C031 S01 no '출석 증빙' field: {labels}"
+
+
+def test_C1309_08_c037_landscape_split_columns():
+    """C037은 landscape이어야 하고, S02에 위험요인과 건의 내용 열이 분리돼야 한다."""
+    data = json.loads((BASE / 'c037_v1.json').read_text(encoding='utf-8'))
+    assert data['document']['page']['orientation'] == 'landscape', \
+        "C037 should be landscape"
+    table = next(s for s in data['sections'] if s['id'] == 'S02')
+    col_ids = [c['id'] for c in table['columns']]
+    assert 'F03_HAZARD' in col_ids, "C037 S02 missing F03_HAZARD (위험요인)"
+    assert 'F04_SUGGEST' in col_ids, "C037 S02 missing F04_SUGGEST (건의 내용)"
+    assert len(col_ids) == 8, f"C037 S02 expected 8 columns, got {len(col_ids)}"
+
+
+def test_C1309_09_c043_participant_and_recheck():
+    """C043 S01에 참여자 필드, S04에 재확인 열 2개가 있어야 한다."""
+    data = json.loads((BASE / 'c043_v1.json').read_text(encoding='utf-8'))
+    s01 = next(s for s in data['sections'] if s['id'] == 'S01')
+    s01_labels = [f['label'] for f in s01['fields']]
+    assert any('참여자' in lbl for lbl in s01_labels), \
+        f"C043 S01 no '참여자' field: {s01_labels}"
+    table = next(s for s in data['sections'] if s['id'] == 'S04')
+    col_ids = [c['id'] for c in table['columns']]
+    assert 'F04_RECHECK_DATE' in col_ids, "C043 S04 missing F04_RECHECK_DATE"
+    assert 'F05_RECHECK_RSLT' in col_ids, "C043 S04 missing F05_RECHECK_RSLT"
+    assert len(col_ids) == 5, f"C043 S04 expected 5 columns, got {len(col_ids)}"
+
+
+def test_C1309_10_c044_work_target_and_followup():
+    """C044 S01에 작업대상 필드, S04 freeform 섹션이 있어야 한다."""
+    data = json.loads((BASE / 'c044_v1.json').read_text(encoding='utf-8'))
+    s01 = next(s for s in data['sections'] if s['id'] == 'S01')
+    labels = [f['label'] for f in s01['fields']]
+    assert any('작업대상' in lbl for lbl in labels), \
+        f"C044 S01 no '작업대상' field: {labels}"
+    s04 = next((s for s in data['sections'] if s['id'] == 'S04'), None)
+    assert s04 is not None, "C044 missing S04 section"
+    assert s04['type'] == 'freeform_area', \
+        f"C044 S04 expected freeform_area, got {s04['type']}"
+    assert '후속조치' in s04.get('label', ''), \
+        f"C044 S04 label should contain '후속조치': {s04.get('label')}"
+
+
+def test_C1309_11_gov01_confirmer_and_sign():
+    """GOV-01 S01에 확인자 필드, S04에 서명/확인 열이 있어야 한다."""
+    data = json.loads((BASE / 'gov-01_v1.json').read_text(encoding='utf-8'))
+    s01 = next(s for s in data['sections'] if s['id'] == 'S01')
+    labels = [f['label'] for f in s01['fields']]
+    assert any('확인자' in lbl for lbl in labels), \
+        f"GOV-01 S01 no '확인자' field: {labels}"
+    table = next(s for s in data['sections'] if s['id'] == 'S04')
+    col_ids = [c['id'] for c in table['columns']]
+    assert 'F06_SIGN' in col_ids, "GOV-01 S04 missing F06_SIGN"
+    assert len(col_ids) == 6, f"GOV-01 S04 expected 6 columns, got {len(col_ids)}"
