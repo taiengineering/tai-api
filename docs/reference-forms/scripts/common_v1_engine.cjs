@@ -1,7 +1,7 @@
 'use strict';
 /**
  * TAI 서식 공통 렌더러 엔진 (DOCX) — common-v1
- * WO-058 Phase C-01
+ * WO-058 Phase C-01 / WO-REF01-059-B2-L01 (landscape 지원)
  */
 const fs   = require('fs');
 const path = require('path');
@@ -12,14 +12,14 @@ const {
     Table, TableRow, TableCell,
     AlignmentType, WidthType, HeightRule, BorderStyle,
     TableLayoutType, ShadingType, VerticalAlign,
-    Footer, PageNumber,
+    Footer, PageNumber, PageOrientation,
     convertMillimetersToTwip,
 } = require(DOCX_DIR);
 
 const mm = convertMillimetersToTwip;
 
-// ─── Layout constants ─────────────────────────────────────────────
-const CONTENT_W   = mm(170);
+// ─── Layout constants (portrait defaults) ─────────────────────────
+const CONTENT_W   = mm(170);   // portrait default — kept for backward compat
 const PAGE_MARGIN = mm(20);
 const ROW_H_INFO  = mm(7);
 const ROW_H_SIGN  = mm(15);
@@ -28,6 +28,30 @@ const CELL_MARGIN = { top: mm(3), bottom: mm(3), left: mm(3), right: mm(3) };
 const HEADER_BG   = 'E8E8E8';
 const ALT_BG      = 'F5F5F5';
 const GRAY_TEXT   = '505050';
+
+// ─── Layout context ───────────────────────────────────────────────
+
+function layoutCtx(fields) {
+    const pageCfg     = (fields.document || {}).page || {};
+    const orientation = pageCfg.orientation || 'portrait';
+    if (orientation === 'landscape') {
+        return {
+            pageW: mm(297), pageH: mm(210),
+            contentW: mm(257),
+            orientation: PageOrientation.LANDSCAPE,
+        };
+    } else if (orientation === 'portrait') {
+        return {
+            pageW: mm(210), pageH: mm(297),
+            contentW: CONTENT_W,
+            orientation: PageOrientation.PORTRAIT,
+        };
+    } else {
+        throw new Error(
+            `document.page.orientation must be 'portrait' or 'landscape', got '${orientation}'`
+        );
+    }
+}
 
 // ─── Cell helpers ─────────────────────────────────────────────────
 function border(pt = 4) {
@@ -107,6 +131,16 @@ function validate(fields) {
         if (!doc[a]) throw new Error(`document.${a} is required`);
         if (typeof doc[a] !== 'string') throw new Error(`document.${a} must be a string`);
     }
+
+    // Validate orientation if specified
+    const pageCfg     = (doc.page || {});
+    const orientation = pageCfg.orientation || 'portrait';
+    if (!['portrait', 'landscape'].includes(orientation))
+        throw new Error(
+            `document.page.orientation must be 'portrait' or 'landscape', got '${orientation}'`
+        );
+    const expectedContentW = orientation === 'landscape' ? 257 : 170;
+
     const sections = fields.sections;
     if (!Array.isArray(sections)) throw new Error("'sections' must be an array");
 
@@ -146,8 +180,10 @@ function validate(fields) {
                 if (!col.id) throw new Error(`sections[${i}] repeat_table columns[${ci}]: missing required attr 'id'`);
             });
             const total = s.columns.reduce((acc, c) => acc + (c.width_mm || 0), 0);
-            if (Math.abs(total - 170) > 0.5)
-                throw new Error(`sections[${i}] repeat_table: column widths sum to ${total}mm, expected 170mm`);
+            if (Math.abs(total - expectedContentW) > 0.5)
+                throw new Error(
+                    `sections[${i}] repeat_table: column widths sum to ${total}mm, expected ${expectedContentW}mm`
+                );
         }
     });
     return true;
@@ -155,14 +191,15 @@ function validate(fields) {
 
 // ─── Section builders ─────────────────────────────────────────────
 
-function buildTitle(fields) {
+function buildTitle(fields, contentW) {
+    const cw = contentW || CONTENT_W;
     return new Table({
-        width: { size: CONTENT_W, type: WidthType.DXA },
+        width: { size: cw, type: WidthType.DXA },
         layout: TableLayoutType.FIXED,
         rows: [new TableRow({
             height: { value: mm(14), rule: HeightRule.ATLEAST },
             children: [new TableCell({
-                width: { size: CONTENT_W, type: WidthType.DXA },
+                width: { size: cw, type: WidthType.DXA },
                 borders: border(4), verticalAlign: VerticalAlign.CENTER,
                 margins: { top: mm(4), bottom: mm(4), left: mm(4), right: mm(4) },
                 children: [new Paragraph({
@@ -174,13 +211,14 @@ function buildTitle(fields) {
     });
 }
 
-function buildApproval(section) {
-    const apprF = section.fields;
-    const n     = apprF.length;
-    const totW  = mm(section.total_width_mm);
-    const cellW = Math.round(totW / n);
-    const hdrH  = mm(section.min_header_height_mm ?? 7);
-    const signH = mm(section.min_sign_height_mm  ?? 15);
+function buildApproval(section, contentW) {
+    const cw     = contentW || CONTENT_W;
+    const apprF  = section.fields;
+    const n      = apprF.length;
+    const totW   = mm(section.total_width_mm);
+    const cellW  = Math.round(totW / n);
+    const hdrH   = mm(section.min_header_height_mm ?? 7);
+    const signH  = mm(section.min_sign_height_mm  ?? 15);
 
     return new Table({
         width: { size: totW, type: WidthType.DXA },
@@ -203,9 +241,10 @@ function buildApproval(section) {
     });
 }
 
-function buildBasicInfo(section) {
+function buildBasicInfo(section, contentW) {
+    const cw   = contentW || CONTENT_W;
     const flds = section.fields;
-    const half = Math.round(CONTENT_W / 2);
+    const half = Math.round(cw / 2);
     const rows = [];
     for (let i = 0; i < flds.length; i += 2) {
         const L = flds[i], R = flds[i + 1];
@@ -217,12 +256,13 @@ function buildBasicInfo(section) {
             ],
         }));
     }
-    return new Table({ width: { size: CONTENT_W, type: WidthType.DXA }, layout: TableLayoutType.FIXED, rows });
+    return new Table({ width: { size: cw, type: WidthType.DXA }, layout: TableLayoutType.FIXED, rows });
 }
 
-function buildLabeledGrid(section) {
+function buildLabeledGrid(section, contentW) {
+    const cw = contentW || CONTENT_W;
     const { section_label, rows: rowsData, row_height_mm = 7 } = section;
-    const half   = Math.round(CONTENT_W / 2);
+    const half   = Math.round(cw / 2);
     const rowH   = mm(row_height_mm);
     const tRows  = [];
 
@@ -231,7 +271,7 @@ function buildLabeledGrid(section) {
             height: { value: mm(7), rule: HeightRule.ATLEAST },
             children: [new TableCell({
                 columnSpan: 2,
-                width: { size: CONTENT_W, type: WidthType.DXA },
+                width: { size: cw, type: WidthType.DXA },
                 borders: border(4), shading: shading(HEADER_BG),
                 verticalAlign: VerticalAlign.CENTER, margins: CELL_MARGIN,
                 children: [new Paragraph({
@@ -247,23 +287,24 @@ function buildLabeledGrid(section) {
             children: row.map(cell => labelCell(cell.label, half)),
         }));
     }
-    return new Table({ width: { size: CONTENT_W, type: WidthType.DXA }, layout: TableLayoutType.FIXED, rows: tRows });
+    return new Table({ width: { size: cw, type: WidthType.DXA }, layout: TableLayoutType.FIXED, rows: tRows });
 }
 
-function buildFreeformArea(section) {
+function buildFreeformArea(section, contentW) {
+    const cw   = contentW || CONTENT_W;
     const minH = mm(section.min_height_mm);
     return new Table({
-        width: { size: CONTENT_W, type: WidthType.DXA },
+        width: { size: cw, type: WidthType.DXA },
         layout: TableLayoutType.FIXED,
         rows: [
             new TableRow({
                 height: { value: mm(7), rule: HeightRule.ATLEAST },
-                children: [hdrCell(section.label, CONTENT_W)],
+                children: [hdrCell(section.label, cw)],
             }),
             new TableRow({
                 height: { value: minH, rule: HeightRule.ATLEAST },
                 children: [new TableCell({
-                    width: { size: CONTENT_W, type: WidthType.DXA },
+                    width: { size: cw, type: WidthType.DXA },
                     borders: border(4), shading: shading(ALT_BG), margins: CELL_MARGIN,
                     children: [new Paragraph({ children: [new TextRun({ text: '' })] })],
                 })],
@@ -272,12 +313,13 @@ function buildFreeformArea(section) {
     });
 }
 
-function buildRepeatTable(section, exRows) {
-    const cols   = section.columns;
-    const n      = section.default_row_count;
-    const colW   = cols.map(c => mm(c.width_mm));
+function buildRepeatTable(section, exRows, contentW) {
+    const cw    = contentW || CONTENT_W;
+    const cols  = section.columns;
+    const n     = section.default_row_count;
+    const colW  = cols.map(c => mm(c.width_mm));
     const alignM = { left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT };
-    const rows   = [];
+    const rows  = [];
 
     rows.push(new TableRow({
         tableHeader: true,
@@ -297,20 +339,23 @@ function buildRepeatTable(section, exRows) {
             )),
         }));
     });
-    return new Table({ width: { size: CONTENT_W, type: WidthType.DXA }, layout: TableLayoutType.FIXED, rows });
+    // Table width = sum of column widths (from JSON, already correct for portrait/landscape)
+    const tblW = colW.reduce((a, b) => a + b, 0);
+    return new Table({ width: { size: tblW, type: WidthType.DXA }, layout: TableLayoutType.FIXED, rows });
 }
 
 // ─── Common assembler ──────────────────────────────────────────────
 
-function assemble(fields, exRows) {
-    const children = [buildTitle(fields), spacer0()];
+function assemble(fields, exRows, contentW) {
+    const cw = contentW || CONTENT_W;
+    const children = [buildTitle(fields, cw), spacer0()];
     for (const s of (fields.sections ?? [])) {
         switch (s.type) {
-            case 'approval':      children.push(buildApproval(s));            break;
-            case 'basic_info':    children.push(buildBasicInfo(s));           break;
-            case 'labeled_grid':  children.push(buildLabeledGrid(s));         break;
-            case 'freeform_area': children.push(buildFreeformArea(s));        break;
-            case 'repeat_table':  children.push(buildRepeatTable(s, exRows)); break;
+            case 'approval':      children.push(buildApproval(s, cw));            break;
+            case 'basic_info':    children.push(buildBasicInfo(s, cw));           break;
+            case 'labeled_grid':  children.push(buildLabeledGrid(s, cw));         break;
+            case 'freeform_area': children.push(buildFreeformArea(s, cw));        break;
+            case 'repeat_table':  children.push(buildRepeatTable(s, exRows, cw)); break;
             default: throw new Error(`Unsupported block type: ${s.type}`);
         }
         children.push(spacer());
@@ -323,17 +368,22 @@ function assemble(fields, exRows) {
 async function generate(fieldsPath, outPath, exRows) {
     const fields = JSON.parse(fs.readFileSync(fieldsPath, 'utf8'));
     validate(fields);
+    const ctx  = layoutCtx(fields);
     const meta = fields.document;
-    const doc = new Document({
+    const doc  = new Document({
         creator: meta.creator, title: meta.title,
         description: meta.subject || '', lastModifiedBy: meta.producer || 'TAI Document Pipeline v1',
         sections: [{
             properties: { page: {
-                size:   { width: mm(210), height: mm(297) },
+                size: {
+                    width:       ctx.pageW,
+                    height:      ctx.pageH,
+                    orientation: ctx.orientation,
+                },
                 margin: { top: PAGE_MARGIN, bottom: PAGE_MARGIN, left: PAGE_MARGIN, right: PAGE_MARGIN },
             }},
             footers: { default: buildFooter() },
-            children: assemble(fields, exRows),
+            children: assemble(fields, exRows, ctx.contentW),
         }],
     });
     const buf = await Packer.toBuffer(doc);
@@ -341,7 +391,7 @@ async function generate(fieldsPath, outPath, exRows) {
     console.log(`  DOCX → ${outPath}  (${(buf.length/1024).toFixed(1)} KB)`);
 }
 
-module.exports = { validate, buildTitle, buildApproval, buildBasicInfo,
+module.exports = { validate, layoutCtx, buildTitle, buildApproval, buildBasicInfo,
     buildLabeledGrid, buildFreeformArea, buildRepeatTable,
     buildFooter, assemble, generate, spacer, spacer0,
     CONTENT_W, PAGE_MARGIN };

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 TAI 서식 공통 렌더러 엔진 — common-v1
-WO-058 Phase C-01
+WO-058 Phase C-01 / WO-REF01-059-B2-L01 (landscape 지원)
 """
 import json, os, sys
 from pathlib import Path
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape as _landscape_size
 from reportlab.lib.units import mm
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -45,10 +45,10 @@ C_HEADER_BG = colors.HexColor('#E8E8E8')
 C_ALT_BG    = colors.HexColor('#F5F5F5')
 C_GRAY_TEXT = colors.HexColor('#505050')
 
-# ─── Layout constants ─────────────────────────────────────────────
-PAGE_W, PAGE_H = A4
+# ─── Layout constants (portrait defaults) ─────────────────────────
+PAGE_W, PAGE_H = A4          # 210mm × 297mm in points
 MARGIN    = 20 * mm
-CONTENT_W = PAGE_W - 2 * MARGIN   # 170mm
+CONTENT_W = PAGE_W - 2 * MARGIN   # 170mm — portrait default, kept for backward compat
 CELL_PAD  = 3 * mm
 ROW_H_INFO = 7  * mm
 ROW_H_SIGN = 15 * mm
@@ -85,10 +85,27 @@ _BASE = [
 def ts(*extra):
     return TableStyle(list(_BASE) + list(extra))
 
+# ─── Layout context ───────────────────────────────────────────────
+
+def _layout_ctx(fields):
+    """Return (page_w, page_h, content_w) from document.page.orientation."""
+    page_cfg = ((fields.get('document') or {}).get('page') or {})
+    orientation = page_cfg.get('orientation', 'portrait')
+    if orientation == 'landscape':
+        pw, ph = _landscape_size(A4)   # (297mm, 210mm) in points
+        return pw, ph, pw - 2 * MARGIN
+    elif orientation == 'portrait':
+        return PAGE_W, PAGE_H, CONTENT_W
+    else:
+        raise ValueError(
+            f"document.page.orientation must be 'portrait' or 'landscape', got {orientation!r}"
+        )
+
 # ─── NumberedCanvas ───────────────────────────────────────────────
 class NumberedCanvas(pdfcanvas.Canvas):
     def __init__(self, *args, **kwargs):
         pdfcanvas.Canvas.__init__(self, *args, **kwargs)
+        self._page_w = PAGE_W   # overridden by _canvas_factory for landscape
         self.setProducer('TAI Document Pipeline v1')
         self._saved_page_states = []
 
@@ -113,8 +130,17 @@ class NumberedCanvas(pdfcanvas.Canvas):
         self.saveState()
         self.setFont('NG', 8)
         self.setFillColor(C_GRAY_TEXT)
-        self.drawCentredString(PAGE_W / 2, 10 * mm, f"{self._pageNumber} / {total}")
+        self.drawCentredString(self._page_w / 2, 10 * mm, f"{self._pageNumber} / {total}")
         self.restoreState()
+
+
+def _canvas_factory(page_w):
+    """Return a canvasmaker that sets _page_w for correct footer centering."""
+    def make(*args, **kwargs):
+        c = NumberedCanvas(*args, **kwargs)
+        c._page_w = page_w
+        return c
+    return make
 
 # ─── Schema validator ─────────────────────────────────────────────
 SUPPORTED_TYPES = {'approval', 'basic_info', 'labeled_grid', 'freeform_area', 'repeat_table'}
@@ -140,6 +166,15 @@ def validate(fields):
             raise ValueError(f"document.{attr} is required")
         if not isinstance(doc[attr], str):
             raise ValueError(f"document.{attr} must be a string")
+
+    # Validate orientation if specified
+    page_cfg = (doc.get('page') or {})
+    orientation = page_cfg.get('orientation', 'portrait')
+    if orientation not in ('portrait', 'landscape'):
+        raise ValueError(
+            f"document.page.orientation must be 'portrait' or 'landscape', got {orientation!r}"
+        )
+    expected_content_w = 257 if orientation == 'landscape' else 170
 
     sections = fields.get('sections')
     if sections is None:
@@ -184,26 +219,31 @@ def validate(fields):
                 if not col.get('id'):
                     raise ValueError(f"sections[{i}] repeat_table columns[{ci}]: missing required attr 'id'")
             total_mm = sum(c.get('width_mm', 0) for c in s['columns'])
-            if abs(total_mm - 170) > 0.5:
-                raise ValueError(f"sections[{i}] repeat_table: column widths sum to {total_mm}mm, expected 170mm")
+            if abs(total_mm - expected_content_w) > 0.5:
+                raise ValueError(
+                    f"sections[{i}] repeat_table: column widths sum to {total_mm}mm, "
+                    f"expected {expected_content_w}mm"
+                )
 
     return True
 
 # ─── Section builders ─────────────────────────────────────────────
 
-def build_title(fields):
+def build_title(fields, content_w=None):
+    cw = content_w if content_w is not None else CONTENT_W
     return Table(
         [[P(fields['document']['title'], S_TITLE)]],
-        colWidths=[CONTENT_W],
+        colWidths=[cw],
         style=ts(('FONTNAME',(0,0),(-1,-1),'NGBold')),
     )
 
-def build_approval(section):
+def build_approval(section, content_w=None):
+    cw    = content_w if content_w is not None else CONTENT_W
     appr  = section['fields']
     n     = len(appr)
     tot_w = section['total_width_mm'] * mm
     cell_w = tot_w / n
-    title_w = CONTENT_W - tot_w
+    title_w = cw - tot_w
     hdr_h = section.get('min_header_height_mm', 7) * mm
     sign_h = section.get('min_sign_height_mm', 15) * mm
 
@@ -229,9 +269,10 @@ def build_approval(section):
         ]),
     )
 
-def build_basic_info(section):
+def build_basic_info(section, content_w=None):
+    cw   = content_w if content_w is not None else CONTENT_W
     flds = section['fields']
-    half = CONTENT_W / 2
+    half = cw / 2
     rows = []
     for i in range(0, len(flds), 2):
         left  = flds[i]   if i     < len(flds) else None
@@ -243,11 +284,12 @@ def build_basic_info(section):
     return Table(rows, colWidths=[half, half],
                  rowHeights=[ROW_H_INFO]*len(rows), style=ts())
 
-def build_labeled_grid(section):
+def build_labeled_grid(section, content_w=None):
+    cw        = content_w if content_w is not None else CONTENT_W
     label     = section.get('section_label')
     rows_data = section['rows']
     row_h     = section.get('row_height_mm', 7) * mm
-    half      = CONTENT_W / 2
+    half      = cw / 2
 
     tbl_rows   = []
     style_cmds = list(_BASE)
@@ -275,11 +317,12 @@ def build_labeled_grid(section):
     return Table(tbl_rows, colWidths=[half, half],
                  rowHeights=row_heights, style=TableStyle(style_cmds))
 
-def build_freeform_area(section):
+def build_freeform_area(section, content_w=None):
+    cw    = content_w if content_w is not None else CONTENT_W
     min_h = section['min_height_mm'] * mm
     return Table(
         [[P(section['label'], S_HDR)], ['']],
-        colWidths=[CONTENT_W],
+        colWidths=[cw],
         rowHeights=[7*mm, min_h],
         style=ts(
             ('FONTNAME',  (0,0),(-1,0),'NGBold'),
@@ -288,7 +331,7 @@ def build_freeform_area(section):
         ),
     )
 
-def build_repeat_table(section, ex_rows=None):
+def build_repeat_table(section, ex_rows=None, content_w=None):
     cols    = section['columns']
     n_def   = section['default_row_count']
     col_w   = [c['width_mm']*mm for c in cols]
@@ -320,15 +363,16 @@ def build_repeat_table(section, ex_rows=None):
 
 # ─── Common assembler ──────────────────────────────────────────────
 
-def assemble(fields, ex_rows=None):
-    story = [build_title(fields), Spacer(1, 1*mm)]
+def assemble(fields, ex_rows=None, content_w=None):
+    cw = content_w if content_w is not None else CONTENT_W
+    story = [build_title(fields, content_w=cw), Spacer(1, 1*mm)]
     for s in fields.get('sections', []):
         t = s['type']
-        if   t == 'approval':      story.append(build_approval(s))
-        elif t == 'basic_info':    story.append(build_basic_info(s))
-        elif t == 'labeled_grid':  story.append(build_labeled_grid(s))
-        elif t == 'freeform_area': story.append(build_freeform_area(s))
-        elif t == 'repeat_table':  story += build_repeat_table(s, ex_rows)
+        if   t == 'approval':      story.append(build_approval(s, content_w=cw))
+        elif t == 'basic_info':    story.append(build_basic_info(s, content_w=cw))
+        elif t == 'labeled_grid':  story.append(build_labeled_grid(s, content_w=cw))
+        elif t == 'freeform_area': story.append(build_freeform_area(s, content_w=cw))
+        elif t == 'repeat_table':  story += build_repeat_table(s, ex_rows, content_w=cw)
         else:
             raise ValueError(f"Unsupported block type: {t!r}")
         story.append(Spacer(1, 1*mm))
@@ -338,15 +382,17 @@ def assemble(fields, ex_rows=None):
 
 def generate_from_dict(fields, out_path, ex_rows=None):
     validate(fields)
+    page_w, page_h, content_w = _layout_ctx(fields)
     meta = fields['document']
     doc = SimpleDocTemplate(
-        str(out_path), pagesize=A4,
+        str(out_path), pagesize=(page_w, page_h),
         leftMargin=MARGIN, rightMargin=MARGIN,
         topMargin=MARGIN, bottomMargin=MARGIN,
         title=meta['title'], author=meta.get('creator', 'TAI'),
         subject=meta.get('subject', ''),
     )
-    doc.build(assemble(fields, ex_rows), canvasmaker=NumberedCanvas)
+    doc.build(assemble(fields, ex_rows, content_w=content_w),
+              canvasmaker=_canvas_factory(page_w))
     kb = os.path.getsize(out_path) / 1024
     print(f"  PDF → {out_path}  ({kb:.0f} KB)")
 

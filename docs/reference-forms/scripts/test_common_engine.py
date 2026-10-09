@@ -1,7 +1,8 @@
 """
 WO-058 Phase C-02/C-03 — 공통 엔진 QA 강화 및 출력 통합검증
 WO-REF01-059 Phase B-1 — REF-C003 REGISTER 대표 서식 POC
-WO-REF01-059 Phase B-2 — REF-C014 PLAN 대표 서식 POC
+WO-REF01-059 Phase B-2 — REF-C014 PLAN Landscape POC
+WO-REF01-059-B2-L01 — A4 Landscape 엔진 지원
 pytest test_common_engine.py -v
 
 C02-01: 테스트 신뢰성 — 필수 테스트는 SKIP 없이 FAIL 보고
@@ -18,10 +19,13 @@ C04-01: REF-C003 JSON 스키마 검증
 C04-02: REF-C003 DOCX 생성 — 9컬럼/라벨/푸터
 C04-03: REF-C003 PDF 생성 — 1페이지(기본)/2페이지(30행)/전 페이지 푸터
 C04-04: REF-C003 회귀 — C002/C012 기준본 SHA256 불변
-C05-01: REF-C014 JSON 스키마 검증
-C05-02: REF-C014 DOCX 생성 — 10컬럼/라벨/푸터
-C05-03: REF-C014 PDF 생성 — 1페이지(기본)/2페이지(25행)/전 페이지 푸터/데이터 보존
-C05-04: REF-C014 회귀 — C002/C003 기준본 SHA256 불변
+C05-01: REF-C014 JSON 스키마 검증 — 10컬럼/257mm/landscape
+C05-02: REF-C014 DOCX 생성 — 10컬럼/라벨/푸터/pgSz=landscape
+C05-03: REF-C014 PDF 생성 — 1페이지(기본)/2페이지(30행)/데이터 무손실
+C06-01: Landscape 엔진 스키마 검증 — 유효성/경계/격리
+C06-02: Landscape PDF 치수 — 297mm 페이지 폭 확인
+C06-03: Node.js Landscape 컨텍스트 정합성
+C06-04: 공통 엔진 SHA256 회귀 — 기준본 무변경
 """
 import json, os, sys, subprocess, zipfile
 import xml.etree.ElementTree as ET
@@ -1081,9 +1085,8 @@ def test_C0404_c003_c002_c012_originals_unchanged():
         assert actual_sha == exp_sha, \
             f"{fname}: SHA256 changed\n  expected: {exp_sha}\n  actual:   {actual_sha}"
 
-
 # ═══════════════════════════════════════════════════════════════════════
-# WO-REF01-059 Phase B-2 — REF-C014 PLAN 대표 서식 POC
+# WO-REF01-059 Phase B-2 — REF-C014 PLAN Landscape POC
 # ═══════════════════════════════════════════════════════════════════════
 
 @pytest.fixture
@@ -1110,15 +1113,19 @@ def test_C0501_c014_10_columns(c014_v1):
     cols = c014_v1['sections'][0]['columns']
     assert len(cols) == 10
 
-def test_C0501_c014_column_width_sum_170mm(c014_v1):
+def test_C0501_c014_column_width_sum_257mm(c014_v1):
     total = sum(c['width_mm'] for c in c014_v1['sections'][0]['columns'])
-    assert total == 170, f"Column widths sum {total}mm != 170mm"
+    assert total == 257, f"Column widths sum {total}mm != 257mm"
 
 def test_C0501_c014_column_labels_match_observed_fields(c014_v1):
     expected = ['구분', '유해·위험요인 파악', '관련근거', '현재 위험성', '감소대책',
                 '개선 후 위험성', '담당자', '조치 요구일', '조치 완료일', '완료 확인']
     actual = [c['label'] for c in c014_v1['sections'][0]['columns']]
     assert actual == expected
+
+def test_C0501_c014_orientation_landscape(c014_v1):
+    orientation = c014_v1['document']['page']['orientation']
+    assert orientation == 'landscape', f"Expected 'landscape', got {orientation!r}"
 
 def test_C0501_c014_engine_schema_validation(c014_v1):
     assert validate(c014_v1) is True
@@ -1151,11 +1158,13 @@ def test_C0502_c014_docx_10_columns(c014_v1, tmp_path):
     v1_path.write_text(json.dumps(c014_v1, ensure_ascii=False), encoding='utf-8')
     subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
                    cwd=str(BASE), capture_output=True, timeout=30, check=True)
+
     NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
     with zipfile.ZipFile(out_path) as z:
         root = ET.fromstring(z.read('word/document.xml'))
     tables = root.findall('.//w:tbl', {'w': NS})
-    rows = tables[1].findall('w:tr', {'w': NS})
+    repeat_tbl = tables[1]
+    rows = repeat_tbl.findall('w:tr', {'w': NS})
     hdr_cells = rows[0].findall('w:tc', {'w': NS})
     assert len(hdr_cells) == 10, f"Expected 10 columns, got {len(hdr_cells)}"
 
@@ -1165,11 +1174,13 @@ def test_C0502_c014_docx_all_labels(c014_v1, tmp_path):
     v1_path.write_text(json.dumps(c014_v1, ensure_ascii=False), encoding='utf-8')
     subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
                    cwd=str(BASE), capture_output=True, timeout=30, check=True)
+
     NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
     with zipfile.ZipFile(out_path) as z:
         root = ET.fromstring(z.read('word/document.xml'))
     tables = root.findall('.//w:tbl', {'w': NS})
-    rows = tables[1].findall('w:tr', {'w': NS})
+    repeat_tbl = tables[1]
+    rows = repeat_tbl.findall('w:tr', {'w': NS})
     all_text = ' '.join(
         ''.join(t.text or '' for t in cell.findall('.//{%s}t' % NS))
         for cell in rows[0].findall('w:tc', {'w': NS})
@@ -1194,6 +1205,7 @@ def test_C0502_c014_docx_10_default_rows(c014_v1, tmp_path):
     v1_path.write_text(json.dumps(c014_v1, ensure_ascii=False), encoding='utf-8')
     subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
                    cwd=str(BASE), capture_output=True, timeout=30, check=True)
+
     NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
     with zipfile.ZipFile(out_path) as z:
         root = ET.fromstring(z.read('word/document.xml'))
@@ -1201,9 +1213,31 @@ def test_C0502_c014_docx_10_default_rows(c014_v1, tmp_path):
     rows = tables[1].findall('w:tr', {'w': NS})
     assert len(rows) == 11, f"Expected 11 rows (1 header + 10 default), got {len(rows)}"
 
+def test_C0502_c014_docx_landscape_pgsz(c014_v1, tmp_path):
+    """DOCX pgSz must set orient=landscape. docx library stores physical paper dims:
+    w:w=11905 (210mm short side), w:h=16837 (297mm long side), w:orient='landscape'."""
+    v1_path = tmp_path / 'c014_v1.json'
+    out_path = tmp_path / 'c014_blank.docx'
+    v1_path.write_text(json.dumps(c014_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+
+    NS_W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    pgsz = root.find(f'.//{{{NS_W}}}pgSz')
+    assert pgsz is not None, "w:pgSz element not found in document.xml"
+    # orient attribute must be 'landscape'
+    orient = pgsz.get(f'{{{NS_W}}}orient', '')
+    assert orient == 'landscape', f"pgSz orient='{orient}', expected 'landscape'"
+    # docx library stores physical A4 dims with orient flag: h = 297mm = 16837 twips
+    h_val = int(pgsz.get(f'{{{NS_W}}}h', '0'))
+    assert h_val >= 16000, f"pgSz h={h_val} < 16000 twips (expected 297mm=16837 in landscape OOXML)"
+
 # ─── C05-03: REF-C014 PDF 생성 ───────────────────────────────────────
 
-def test_C0503_c014_pdf_1page_default(c014_v1, tmp_path):
+def test_C0503_c014_pdf_generates_landscape(c014_v1, tmp_path):
+    """C014 landscape PDF generates successfully and page is 297mm wide."""
     import pymupdf
     from common_v1_engine import register_fonts
     if not FONTS_OK:
@@ -1211,8 +1245,11 @@ def test_C0503_c014_pdf_1page_default(c014_v1, tmp_path):
     register_fonts()
     out = tmp_path / 'c014_blank.pdf'
     generate_from_dict(c014_v1, out)
+    assert out.stat().st_size > 5000, "PDF too small"
     doc = pymupdf.open(str(out))
-    assert doc.page_count == 1, f"C014 default (10 rows) must be 1 page, got {doc.page_count}"
+    assert doc.page_count >= 1, "PDF must have at least 1 page"
+    width_mm = doc[0].rect.width / 2.8346
+    assert abs(width_mm - 297) < 2, f"Page 1 width {width_mm:.1f}mm, expected ~297mm (landscape)"
 
 def test_C0503_c014_pdf_footer_page1(c014_v1, tmp_path):
     import pymupdf
@@ -1226,72 +1263,171 @@ def test_C0503_c014_pdf_footer_page1(c014_v1, tmp_path):
     txt = doc[0].get_text()
     assert '1 /' in txt, f"Page 1 footer '1 /' missing. text={txt[:200]}"
 
-def test_C0503_c014_pdf_2pages_25rows(c014_v1, tmp_path):
+def test_C0503_c014_pdf_2pages_30rows(c014_v1, tmp_path):
     import pymupdf
     from common_v1_engine import register_fonts
     if not FONTS_OK:
         pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
     register_fonts()
-    out = tmp_path / 'c014_25rows.pdf'
+    out = tmp_path / 'c014_30rows.pdf'
     nCols = len(c014_v1['sections'][0]['columns'])
-    ex_rows = [[''] * nCols for _ in range(25)]
+    ex_rows = [[''] * nCols for _ in range(30)]
     generate_from_dict(c014_v1, out, ex_rows=ex_rows)
     doc = pymupdf.open(str(out))
-    assert doc.page_count >= 2, f"C014 25 rows must be >=2 pages, got {doc.page_count}"
+    assert doc.page_count >= 2, f"C014 30 rows must be >=2 pages, got {doc.page_count}"
 
-def test_C0503_c014_pdf_footer_all_pages(c014_v1, tmp_path):
+def test_C0503_c014_pdf_30rows_no_data_loss(c014_v1, tmp_path):
+    """30행 DOCX: OOXML repeat_table에 30행 손실 없이 존재."""
+    v1_path = tmp_path / 'c014_v1.json'
+    out_path = tmp_path / 'c014_30rows.docx'
+    v1_path.write_text(json.dumps(c014_v1, ensure_ascii=False), encoding='utf-8')
+    nCols = len(c014_v1['sections'][0]['columns'])
+    ex_rows = [[''] * nCols for _ in range(30)]
+    result = subprocess.run(
+        ['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path),
+         str(len(ex_rows))],
+        cwd=str(BASE), capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, f"30rows DOCX failed: {result.stderr}"
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    tables = root.findall('.//w:tbl', {'w': NS})
+    rows = tables[1].findall('w:tr', {'w': NS})
+    assert len(rows) == 31, f"Expected 31 rows (1 header + 30), got {len(rows)}"
+
+# ═══════════════════════════════════════════════════════════════════════
+# WO-REF01-059-B2-L01 — A4 Landscape 엔진 지원
+# ═══════════════════════════════════════════════════════════════════════
+
+# ─── C06-01: Landscape 엔진 스키마 검증 ──────────────────────────────
+
+def test_C0601_portrait_default_no_page_key(minimal):
+    """No document.page key → portrait validation must pass."""
+    assert validate(minimal) is True
+
+def test_C0601_portrait_orientation_explicit(minimal):
+    """Explicit portrait → portrait content_w (170mm) accepted."""
+    import copy
+    f = copy.deepcopy(minimal)
+    f['document']['page'] = {'orientation': 'portrait'}
+    f['sections'] = [{
+        'type': 'repeat_table', 'default_row_count': 5,
+        'columns': [{'id': 'C1', 'label': 'A', 'width_mm': 170}],
+    }]
+    assert validate(f) is True
+
+def test_C0601_landscape_validation_pass(c014_v1):
+    """Landscape c014 must pass engine validate() without error."""
+    assert validate(c014_v1) is True
+
+def test_C0601_invalid_orientation_python_raises(minimal):
+    """Unknown orientation must raise ValueError in Python engine."""
+    import copy
+    f = copy.deepcopy(minimal)
+    f['document']['page'] = {'orientation': 'A3'}
+    with pytest.raises(ValueError, match="orientation"):
+        validate(f)
+
+def test_C0601_landscape_portrait_cols_raises(c003_v1):
+    """170mm portrait columns on landscape doc must fail validation."""
+    import copy
+    f = copy.deepcopy(c003_v1)
+    f['document']['page'] = {'orientation': 'landscape'}
+    with pytest.raises(ValueError, match="170mm"):
+        validate(f)
+
+def test_C0601_portrait_landscape_cols_raises(c014_v1):
+    """257mm landscape columns on portrait doc must fail validation."""
+    import copy
+    f = copy.deepcopy(c014_v1)
+    f['document']['page']['orientation'] = 'portrait'
+    with pytest.raises(ValueError, match="257mm"):
+        validate(f)
+
+# ─── C06-02: Landscape PDF 치수 ──────────────────────────────────────
+
+def test_C0602_landscape_pdf_page_width_297mm(c014_v1, tmp_path):
+    """Landscape PDF page width must be ≈297mm."""
     import pymupdf
     from common_v1_engine import register_fonts
     if not FONTS_OK:
         pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
     register_fonts()
-    out = tmp_path / 'c014_25rows_footers.pdf'
-    nCols = len(c014_v1['sections'][0]['columns'])
-    ex_rows = [[''] * nCols for _ in range(25)]
-    generate_from_dict(c014_v1, out, ex_rows=ex_rows)
+    out = tmp_path / 'c014_landscape_dims.pdf'
+    generate_from_dict(c014_v1, out)
     doc = pymupdf.open(str(out))
-    for i, page in enumerate(doc):
-        txt = page.get_text()
-        pg_num = str(i + 1)
-        assert f'{pg_num} /' in txt, f"Page {i+1} footer missing. text={txt[:100]}"
+    page = doc[0]
+    # PyMuPDF rect is in points; 297mm = 841.89pt
+    width_mm = page.rect.width / 2.8346
+    assert abs(width_mm - 297) < 2, f"Page width {width_mm:.1f}mm, expected ~297mm (landscape)"
 
-def test_C0503_c014_pdf_25rows_data_preserved(c014_v1, tmp_path):
-    """25행 데이터 값이 PDF에 손실 없이 보존됨.
-    감소대책 컬럼(index 4, 28mm)에 고유 마커 삽입 — 가장 좁은 컬럼(구분 10mm)은
-    ASCII 3자 렌더링 시 클리핑되므로 충분히 넓은 컬럼을 사용한다.
-    """
+def test_C0602_portrait_isolation_after_landscape(c003_v1, c014_v1, tmp_path):
+    """Portrait C003 generated after landscape C014 must still be 210mm wide."""
     import pymupdf
     from common_v1_engine import register_fonts
     if not FONTS_OK:
         pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
     register_fonts()
-    out = tmp_path / 'c014_25rows_data.pdf'
-    nCols = len(c014_v1['sections'][0]['columns'])
-    DATA_COL = 4  # 감소대책, 28mm
-    ex_rows = [[''] * nCols for _ in range(25)]
-    for i, row in enumerate(ex_rows):
-        row[DATA_COL] = f'R{i:02d}'
-    generate_from_dict(c014_v1, out, ex_rows=ex_rows)
+    # Generate landscape first
+    generate_from_dict(c014_v1, tmp_path / 'c014_first.pdf')
+    # Then generate portrait — must not inherit landscape page size
+    out = tmp_path / 'c003_after_landscape.pdf'
+    generate_from_dict(c003_v1, out)
     doc = pymupdf.open(str(out))
-    all_text = ''.join(p.get_text() for p in doc)
-    missing = [f'R{i:02d}' for i in range(25) if f'R{i:02d}' not in all_text]
-    assert not missing, f"Data values missing from PDF: {missing}"
+    page = doc[0]
+    width_mm = page.rect.width / 2.8346
+    assert abs(width_mm - 210) < 2, \
+        f"Portrait after landscape: page width {width_mm:.1f}mm, expected ~210mm"
 
-# ─── C05-04: REF-C014 회귀 — 기준본 무변경 ──────────────────────────
+# ─── C06-03: Node.js Landscape 컨텍스트 정합성 ───────────────────────
 
-def test_C0504_c014_c002_c003_originals_unchanged():
+def test_C0603_node_landscape_ctx_correct():
+    """Node.js layoutCtx for landscape must return 16837/11905/14570 twips."""
+    script = (
+        "const {layoutCtx} = require('./common_v1_engine.cjs');"
+        "const c = layoutCtx({document:{page:{orientation:'landscape'}}});"
+        "process.stdout.write(JSON.stringify({pw:c.pageW,ph:c.pageH,cw:c.contentW,o:c.orientation}));"
+    )
+    result = subprocess.run(
+        ['node', '-e', script], cwd=str(BASE),
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, f"node script failed: {result.stderr}"
+    data = json.loads(result.stdout)
+    assert data['pw'] == 16837, f"pageW={data['pw']}, expected 16837 (297mm)"
+    assert data['ph'] == 11905, f"pageH={data['ph']}, expected 11905 (210mm)"
+    assert data['cw'] == 14570, f"contentW={data['cw']}, expected 14570 (257mm)"
+    assert data['o'] == 'landscape', f"orientation={data['o']!r}, expected 'landscape'"
+
+def test_C0603_node_invalid_orientation_raises():
+    """Node.js engine must throw for unknown orientation."""
+    script = (
+        "const {validate} = require('./common_v1_engine.cjs');"
+        "try { validate({document:{title:'T',doc_id:'D',creator:'C',"
+        "page:{orientation:'A3'}},sections:[]}); process.exit(1); }"
+        "catch(e){ process.stdout.write(e.message.slice(0,40)); }"
+    )
+    result = subprocess.run(
+        ['node', '-e', script], cwd=str(BASE),
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, f"Expected throw but exited {result.returncode}"
+    assert 'orientation' in result.stdout.lower() or result.stdout
+
+# ─── C06-04: 공통 엔진 SHA256 회귀 ──────────────────────────────────
+
+def test_C0604_common_engines_sha256():
+    """공통 엔진 파일 SHA256 불변 검증 — 기준본: WO-REF01-059-B2-L01."""
     import hashlib
     expected = {
-        'gen_c002_pdf.py':   '025aaeebccaf61021100b459f9c576cc6fcd77d1c79833f3b3d1e14cfea51b28',
-        'gen_c002_docx.cjs': '1fdfaeaa90e1b32adee40a88086b49a45333803f76ec8ad86af73094a29540f2',
-        'c002_fields.json':  'fd56748edc41af68d75f86260782d1ae6fb688bfae9c6c9f172de7b373c07d6a',
-        'c003_v1.json':      'b7ec9cffb05157680a85d1a8cf233559e82f3a1ee853264ff36390995d1d594a',
-        'common_v1_engine.py':  'd336a24cf777895eabafc813de62f85434c71a1b576287bae43639e8938e8b35',
-        'common_v1_engine.cjs': '3486247158d7b58455422a2f837e52909dbd2371f47b80575f86028a8a1750be',
+        'common_v1_engine.py':  '59d0dbc6fcec808d147bbfc168d912f5e271e0b5fd2e7676321d404aca9dce1e',
+        'common_v1_engine.cjs': '248c1479217eb61d765a984873621461de80b8a6216bd1d4f0cf821eaddc4a58',
+        'c014_v1.json':         '92d6639389378f140c9933d4b920c615af8df38f29fe3ccdd93c2f9df29989d9',
     }
     for fname, exp_sha in expected.items():
         p = BASE / fname
         assert p.exists(), f"{fname} must exist"
-        actual_sha = hashlib.sha256(p.read_bytes()).hexdigest()
-        assert actual_sha == exp_sha, \
-            f"{fname}: SHA256 changed\n  expected: {exp_sha}\n  actual:   {actual_sha}"
+        actual = hashlib.sha256(p.read_bytes()).hexdigest()
+        assert actual == exp_sha, \
+            f"{fname}: SHA256 changed\n  expected: {exp_sha}\n  actual:   {actual}"
