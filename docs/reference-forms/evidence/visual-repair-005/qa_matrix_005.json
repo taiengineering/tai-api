@@ -13,8 +13,8 @@
     "orig_png": "reference-forms/evidence/visual-repair-005/ORIG_C031_pdf_page1.png",
     "cand_png": "reference-forms/evidence/visual-repair-005/CAND_C031_pdf_page1.png",
     "docx_roundtrip": "PASS",
-    "markers_total": 22,
-    "markers_found": 22,
+    "markers_total": 23,
+    "markers_found": 23,
     "label_corrections": {
       "S01.F06": {
         "from": "사용 교육자료(명칭·버전)",
@@ -22,7 +22,7 @@
       },
       "S01.F07": {
         "from": "출석 증빙 종류·보관 위치",
-        "to": "증빙종류·보관"
+        "to": "출석증빙·보관"
       }
     },
     "status": "PASS"
@@ -40,12 +40,12 @@
     "orig_png": "reference-forms/evidence/visual-repair-005/ORIG_C043_pdf_page1.png",
     "cand_png": "reference-forms/evidence/visual-repair-005/CAND_C043_pdf_page1.png",
     "docx_roundtrip": "PASS",
-    "markers_total": 20,
-    "markers_found": 20,
+    "markers_total": 22,
+    "markers_found": 22,
     "label_corrections": {
       "S01.F05": {
         "from": "훈련 참여자/명단 참조",
-        "to": "참여자/명단"
+        "to": "참여/명단참조"
       }
     },
     "status": "PASS"
@@ -64,8 +64,8 @@
     "orig_png": "reference-forms/evidence/visual-repair-005/ORIG_C044_pdf_page1.png",
     "cand_png": "reference-forms/evidence/visual-repair-005/CAND_C044_pdf_page1.png",
     "docx_roundtrip": "PASS",
-    "markers_total": 19,
-    "markers_found": 19,
+    "markers_total": 21,
+    "markers_found": 21,
     "label_corrections": {
       "S01.F01": {
         "from": "화학물질/제품명",
@@ -73,7 +73,7 @@
       },
       "S01.F04": {
         "from": "작업대상 또는 적용 작업",
-        "to": "적용 작업대상"
+        "to": "대상·적용 작업"
       }
     },
     "status": "PASS"

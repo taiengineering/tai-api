@@ -19,9 +19,7 @@
     "source_layout_exact": false,
     "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
     "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. 문서 작성만으로 법정 교육 의무가 이행됐다고 표시하지 않음. 출석 증빙은 별도. FIX-002: 교육자료·출석증빙 필드 추가. GPT 검토 전 빌드 차단.",
-    "design_gate_ref": "WO-REF01-060-B8-WAVE2-BUILD-003",
-    "candidate_for_review": "WO-REF01-060-B8-WAVE2-VISUAL-REPAIR-005",
-    "candidate_status": "REVIEW_ONLY_NOT_CANONICAL"
+    "design_gate_ref": "WO-REF01-060-B8-WAVE2-BUILD-003"
   },
   "document": {
     "title": "안전보건교육 실시일지",
@@ -66,7 +64,7 @@
         },
         {
           "id": "F07",
-          "label": "증빙종류·보관"
+          "label": "출석증빙·보관"
         }
       ]
     },

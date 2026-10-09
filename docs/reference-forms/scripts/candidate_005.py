@@ -22,19 +22,19 @@ MARKER_PREFIX = "TAI_QA_005_"
 CORRECTIONS = {
     "c031": {
         "S01": {
-            "F06": "교육자료·버전",            # was "사용 교육자료(명칭·버전)"
-            "F07": "증빙종류·보관",             # was "출석 증빙 종류·보관 위치"
+            "F06": "교육자료·버전",            # was "사용 교육자료(명칭·버전)"  217.73pt OK
+            "F07": "출석증빙·보관",            # was "출석 증빙 종류·보관 위치"  217.73pt OK  (005A: 출석 보존)
         }
     },
     "c043": {
         "S01": {
-            "F05": "참여자/명단",              # was "훈련 참여자/명단 참조"
+            "F05": "참여/명단참조",            # was "훈련 참여자/명단 참조"     218.58pt OK  (005A: 참조 복원)
         }
     },
     "c044": {
         "S01": {
-            "F01": "물질명/제품명",            # was "화학물질/제품명"
-            "F04": "적용 작업대상",            # was "작업대상 또는 적용 작업"
+            "F01": "물질명/제품명",            # was "화학물질/제품명"           219.34pt OK
+            "F04": "대상·적용 작업",           # was "작업대상 또는 적용 작업"  220.53pt OK  (005A: 두 개념 구분 유지)
         }
     },
 }
@@ -119,8 +119,8 @@ def rasterize_png(pdf_path, out_png, dpi=150):
 
 def docx_roundtrip(docx_path, cid, spec_cand):
     """
-    Inject markers into basic_info and repeat_table cells, save, reopen, verify.
-    Returns (markers_total, markers_found, missing).
+    Inject markers into basic_info, repeat_table, and freeform_area cells,
+    save, reopen, verify. Returns (markers_total, markers_found, missing).
     """
     spec = spec_cand
 
@@ -142,7 +142,7 @@ def docx_roundtrip(docx_path, cid, spec_cand):
                     if rid < len(tbl.rows) and cid2 < len(tbl.rows[rid].cells):
                         tbl.rows[rid].cells[cid2].paragraphs[-1].add_run(val)
 
-        # repeat_table
+        # repeat_table: >2-col tables
         rep_tbls = [t for t in wd.tables if t.rows and len(t.rows[0].cells) > 2]
         rti = 0
         for sec in spec["sections"]:
@@ -160,6 +160,21 @@ def docx_roundtrip(docx_path, cid, spec_cand):
                             tbl.rows[r].cells[j].paragraphs[-1].add_run(val)
             rti += 1
 
+        # freeform_area: 1-col tables (skip T0 title at index 0)
+        ff_tbls = [t for t in wd.tables if t.rows and len(t.rows[0].cells) == 1][1:]
+        ffi = 0
+        for sec in spec["sections"]:
+            if sec.get("type") != "freeform_area":
+                continue
+            if ffi < len(ff_tbls):
+                tbl = ff_tbls[ffi]
+                key = f"{sec['id']}_content"
+                val = f"{MARKER_PREFIX}{key}"
+                markers[key] = val
+                if len(tbl.rows) > 1:
+                    tbl.rows[1].cells[0].paragraphs[-1].add_run(val)
+            ffi += 1
+
         wd.save(str(tmp))
         wd2 = python_docx.Document(str(tmp))
         text2 = "\n".join(p.text for p in wd2.paragraphs)
@@ -176,7 +191,7 @@ def docx_roundtrip(docx_path, cid, spec_cand):
 # ── Main ───────────────────────────────────────────────────────────────────
 
 def main():
-    print("=== WO-REF01-060-B8-WAVE2-VISUAL-REPAIR-005 Phase 1 ===\n")
+    print("=== WO-REF01-060-B8-WAVE2-VISUAL-REPAIR-005A Phase 1 Supplement ===\n")
 
     results = {}
 
@@ -201,9 +216,12 @@ def main():
                     orig_fld = next(f for f in orig_sec.get("fields", []) if f["id"] == fid)
                     print(f"  {sid}.{fid}: '{orig_fld['label']}' → '{new_lbl}'")
 
-            # Write candidate JSON to temp
+            # Write candidate JSON to temp AND to evidence (REVIEW_ONLY_NOT_CANONICAL)
             cand_json = tmpdir / f"{cid}_candidate.json"
-            cand_json.write_text(json.dumps(spec_cand, ensure_ascii=False, indent=2), encoding="utf-8")
+            payload = json.dumps(spec_cand, ensure_ascii=False, indent=2)
+            cand_json.write_text(payload, encoding="utf-8")
+            ev_json = EVIDENCE / f"{cid}_candidate_v1.json"
+            ev_json.write_text(payload, encoding="utf-8")
 
             # Generate candidate PDF + DOCX using existing engine
             cand_pdf  = tmpdir / f"TAI-FORM-{code}-candidate.pdf"
