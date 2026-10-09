@@ -1,4 +1,4 @@
-"""Obligation Adapter Service — v1.2.0 (CURSOR-TASK-002)
+"""Obligation Adapter Service — v1.3.0 (WO-ADAPTER-LAW-ENRICHMENT-001)
 
 B안 어댑터: V4 verdict → result_data.obligations 스키마 변환.
 
@@ -22,6 +22,9 @@ v1.1.0: build_result_data() 추가 — factory_diagnosis_results.result_data 조
 v1.2.0: build_obligations_from_trigger_candidates() 추가 (CURSOR-TASK-002)
         Trigger 기반 semantic_clause 후보 → result_data.obligations 변환.
         기존 V4 흐름 무수정. FastAPI import 없음.
+v1.3.0: Trigger 경로 obligation에 law_name/law_article/evidence 보강
+        (WO-ADAPTER-LAW-ENRICHMENT-001). 값은 Glue(_resolve_law_for_candidates)가
+        채운 candidate 필드를 그대로 사용 — 어댑터는 조합만, 새 판단/법령 생성 없음.
 """
 from __future__ import annotations
 
@@ -63,7 +66,7 @@ def _category_from_action_type(action_type: str) -> str:
 
 
 def _category_from_trigger(trigger_code: str) -> str:
-    """trigger_code 타입 �리 → category. 예: WORK:CONFINED_SPACE → '점검'."""
+    """trigger_code 타입 머리 → category. 예: WORK:CONFINED_SPACE → '점검'."""
     family = trigger_code.split(":", 1)[0] if ":" in trigger_code else ""
     return _TRIGGER_TO_CATEGORY.get(family, "서류")
 
@@ -104,6 +107,8 @@ def _build_obligation_from_candidate(candidate: Dict[str, Any]) -> Dict[str, Any
 
     semantic_clause 후보를 정제레이어 호환 포맷으로 변환.
     새 판단 없음. candidate에 있는 데이터만 사용.
+    law_name/law_article/evidence는 Glue(_resolve_law_for_candidates)가 채운
+    값을 그대로 사용 — 새 법령 생성 아님, 조합만.
     """
     trigger_code = candidate.get("trigger_code") or ""
     action_text = str(candidate.get("action_text") or "").strip()
@@ -113,12 +118,17 @@ def _build_obligation_from_candidate(candidate: Dict[str, Any]) -> Dict[str, Any
     # 제목: action_text 앞 50자
     title = action_text[:50] if action_text else "의무사항"
 
+    # 법령정보 (Glue가 보강한 값. 없으면 빈 값 — 새 생성 아님)
+    law_name = str(candidate.get("law_name") or "").strip()
+    law_article = str(candidate.get("law_article") or "").strip()
+    legal_basis = " ".join(p for p in (law_name, law_article) if p)
+
     return {
         "id": candidate.get("clause_id") or candidate.get("source_article_id") or "",
         "category": category,
         "title": title,
-        "law_name": "",           # semantic_clause에 법령명 없음 → 빈 문자열
-        "law_article": "",        # 이후 JOIN으로 보강 가능
+        "law_name": law_name,          # Glue 보강
+        "law_article": law_article,    # Glue 보강
         "rule_type": _CONTENT_TYPE_TO_RULE_TYPE.get(
             candidate.get("content_type") or "", "OBLIGATION"
         ),
@@ -127,7 +137,7 @@ def _build_obligation_from_candidate(candidate: Dict[str, Any]) -> Dict[str, Any
         "condition": condition_text or None,
         "trigger_code": trigger_code,
         "confidence": candidate.get("confidence") or "MEDIUM",
-        "evidence": [],
+        "evidence": [legal_basis] if legal_basis else [],   # Glue 보강
         "required_count": None,
         "auto_schedulable": False,
     }
