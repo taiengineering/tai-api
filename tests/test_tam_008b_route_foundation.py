@@ -1712,3 +1712,235 @@ def test_f06_factory_route_list_not_exposed(pg):
         list_routes(USER_A, company_id=CO_A, factory_id=FAC2, dsn=_DSN)
     assert exc.value.http_status == 422
     assert exc.value.code == "FACTORY_SCOPE_NOT_FINALIZED"
+
+
+# ═══════════════════════════════════════════════════════════════
+# S01-S04 — R4 service-level concurrency + authorization regression
+# ═══════════════════════════════════════════════════════════════
+
+class _GatedConn:
+    """Wraps a psycopg2 connection; delays the first commit() call.
+    psycopg2 connection.commit is a C-level attribute and is read-only,
+    so we cannot monkey-patch it directly — wrapping is required."""
+    def __init__(self, conn, on_first_commit):
+        self._conn = conn
+        self._on_first_commit = on_first_commit
+        self._first = True
+
+    @property
+    def autocommit(self):
+        return self._conn.autocommit
+
+    @autocommit.setter
+    def autocommit(self, value):
+        self._conn.autocommit = value
+
+    def cursor(self, **kwargs):
+        return self._conn.cursor(**kwargs)
+
+    def commit(self):
+        if self._first:
+            self._first = False
+            self._on_first_commit()
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+
+@_SKIP_DB
+def test_s01_publish_version_service_vs_create_step(pg):
+    """S01: actual publish_version() service vs concurrent create_step().
+    Thread A calls publish_version() (holds route+version locks inside real transaction;
+    commit delayed via _GatedConn wrapper).
+    Thread B calls create_step() via service — blocks on route lock, then fails with
+    VERSION_NOT_DRAFT after A commits PUBLISHED.
+    Company-wide route (factory_id=None) bypasses factory scope gate."""
+    import unittest.mock as mock
+    import services.tam.routes_svc as _svc
+    from services.tam.routes_svc import (create_route, create_version,
+                                          publish_version, create_step, TamError)
+
+    route = create_route(USER_A, company_id=CO_A, route_scope="DOCUMENT_TYPE",
+                         scope_key="S01", display_name="S01-Route", dsn=_DSN)
+    ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+    step1 = _make_step(pg, version_id=ver["version_id"], step_order=1)
+    _make_assignee(pg, step_id=step1["step_id"], user_id=U2)
+
+    rid = route["route_id"]
+    vid = ver["version_id"]
+    _publish_locked = threading.Event()
+    b_result: list = []
+
+    def _gated_connect(dsn=None):
+        conn = psycopg2.connect(dsn or _DSN)
+        def _on_commit():
+            _publish_locked.set()
+            time.sleep(0.4)
+        return _GatedConn(conn, _on_commit)
+
+    def _publisher():
+        with mock.patch.object(_svc, '_connect', side_effect=_gated_connect):
+            publish_version(USER_A, route_id=rid, version_id=vid, dsn=_DSN)
+
+    def _step_adder():
+        _publish_locked.wait(timeout=5)
+        try:
+            create_step(USER_A, version_id=vid, step_order=2,
+                        step_name="S01-Race", step_type="SEQUENTIAL", dsn=_DSN)
+            b_result.append("ok")
+        except TamError as e:
+            b_result.append(e)
+        except Exception as e:
+            b_result.append(e)
+
+    t_a = threading.Thread(target=_publisher)
+    t_b = threading.Thread(target=_step_adder)
+    t_a.start(); t_b.start()
+    t_a.join(timeout=10); t_b.join(timeout=10)
+    assert not t_a.is_alive() and not t_b.is_alive(), "S01: thread deadlock"
+    assert len(b_result) == 1, f"S01: unexpected result count: {b_result!r}"
+    assert isinstance(b_result[0], TamError), (
+        f"S01: expected TamError, got {type(b_result[0])}: {b_result[0]!r}")
+    assert b_result[0].code == "VERSION_NOT_DRAFT", (
+        f"S01: wrong rejection code: {b_result[0].code}")
+
+    cur = _dict_cur(pg)
+    cur.execute("SELECT count(*) AS cnt FROM tam_approval_route_steps WHERE version_id = %s", (vid,))
+    assert cur.fetchone()["cnt"] == 1, "S01: extra step must not be written"
+    cur.execute("SELECT version_status FROM tam_approval_route_versions WHERE version_id = %s", (vid,))
+    assert cur.fetchone()["version_status"] == "PUBLISHED"
+    cur.execute("SELECT current_version_id FROM tam_approval_routes WHERE route_id = %s", (rid,))
+    assert str(cur.fetchone()["current_version_id"]) == vid
+
+
+@_SKIP_DB
+def test_s02_publish_version_service_vs_create_assignee(pg):
+    """S02: actual publish_version() service vs concurrent create_assignee().
+    Thread A calls publish_version() (commit delayed via _GatedConn).
+    Thread B calls create_assignee() via service — blocks on route lock, then fails with
+    VERSION_NOT_DRAFT after A commits PUBLISHED.
+    Company-wide route (factory_id=None) bypasses factory scope gate."""
+    import unittest.mock as mock
+    import services.tam.routes_svc as _svc
+    from services.tam.routes_svc import (create_route, create_version,
+                                          publish_version, create_assignee, TamError)
+
+    route = create_route(USER_A, company_id=CO_A, route_scope="DOCUMENT_TYPE",
+                         scope_key="S02", display_name="S02-Route", dsn=_DSN)
+    ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+    step1 = _make_step(pg, version_id=ver["version_id"], step_order=1)
+    _make_assignee(pg, step_id=step1["step_id"], user_id=U1, assigned_by=U1)
+
+    rid = route["route_id"]
+    vid = ver["version_id"]
+    sid = step1["step_id"]
+    _publish_locked = threading.Event()
+    b_result: list = []
+
+    def _gated_connect(dsn=None):
+        conn = psycopg2.connect(dsn or _DSN)
+        def _on_commit():
+            _publish_locked.set()
+            time.sleep(0.4)
+        return _GatedConn(conn, _on_commit)
+
+    def _publisher():
+        with mock.patch.object(_svc, '_connect', side_effect=_gated_connect):
+            publish_version(USER_A, route_id=rid, version_id=vid, dsn=_DSN)
+
+    def _assignee_adder():
+        _publish_locked.wait(timeout=5)
+        try:
+            create_assignee(USER_A, step_id=sid, user_id=U2, dsn=_DSN)
+            b_result.append("ok")
+        except TamError as e:
+            b_result.append(e)
+        except Exception as e:
+            b_result.append(e)
+
+    t_a = threading.Thread(target=_publisher)
+    t_b = threading.Thread(target=_assignee_adder)
+    t_a.start(); t_b.start()
+    t_a.join(timeout=10); t_b.join(timeout=10)
+    assert not t_a.is_alive() and not t_b.is_alive(), "S02: thread deadlock"
+    assert len(b_result) == 1, f"S02: unexpected result count: {b_result!r}"
+    assert isinstance(b_result[0], TamError), (
+        f"S02: expected TamError, got {type(b_result[0])}: {b_result[0]!r}")
+    assert b_result[0].code == "VERSION_NOT_DRAFT", (
+        f"S02: wrong rejection code: {b_result[0].code}")
+
+    cur = _dict_cur(pg)
+    cur.execute("SELECT count(*) AS cnt FROM tam_approval_step_assignees WHERE step_id = %s", (sid,))
+    assert cur.fetchone()["cnt"] == 1, "S02: extra assignee must not be written"
+    cur.execute("SELECT version_status FROM tam_approval_route_versions WHERE version_id = %s", (vid,))
+    assert cur.fetchone()["version_status"] == "PUBLISHED"
+
+
+@_SKIP_DB
+def test_s03_publish_version_rejects_no_assignee(pg):
+    """S03: publish_version() raises STEP_MISSING_ASSIGNEE when a step has no assignees.
+    Validates service-level enforcement without bypassing the assignee requirement."""
+    from services.tam.routes_svc import create_route, create_version, publish_version, TamError
+
+    route = create_route(USER_A, company_id=CO_A, route_scope="DOCUMENT_TYPE",
+                         scope_key="S03", display_name="S03-Route", dsn=_DSN)
+    ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+    _make_step(pg, version_id=ver["version_id"], step_order=1)
+
+    with pytest.raises(TamError) as exc:
+        publish_version(USER_A, route_id=route["route_id"], version_id=ver["version_id"],
+                        dsn=_DSN)
+    assert exc.value.http_status == 422
+    assert exc.value.code == "STEP_MISSING_ASSIGNEE"
+
+    cur = _dict_cur(pg)
+    cur.execute("SELECT version_status FROM tam_approval_route_versions WHERE version_id = %s",
+                (ver["version_id"],))
+    assert cur.fetchone()["version_status"] == "DRAFT", "S03: failed publish must not change status"
+
+
+def test_s04_authorization_fail_closed_regression():
+    """S04: Authorization regression — all HTTP write endpoints return 403 (OD-01 pending).
+    factory_id match does NOT grant admin rights (PENDING_AUTHORIZATION_CONTRACT).
+    Verified for both factory-scoped (factory_id=FAC1) and company-wide (factory_id=None)
+    users; neither bypasses the ROUTE_MANAGER permission gate."""
+    import main as app_module
+    from routers.auth import get_current_user
+
+    fac_user  = {"id": U1, "company_id": CO_A, "factory_id": FAC1,
+                 "role_code": "001", "status_code": "ACTIVE", "is_active": True}
+    co_user   = {"id": U1, "company_id": CO_A, "factory_id": None,
+                 "role_code": "001", "status_code": "ACTIVE", "is_active": True}
+
+    write_endpoints = [
+        ("POST", "/v1/tam/routes",
+         {"company_id": CO_A, "route_scope": "FACTORY_DEFAULT",
+          "factory_id": FAC1, "display_name": "S04-Route"}),
+        ("POST", "/v1/tam/routes/fake-id/versions", {"notes": None}),
+        ("POST", "/v1/tam/routes/fake-id/versions/fake-ver/steps",
+         {"step_order": 1, "step_name": "S", "step_type": "SEQUENTIAL"}),
+        ("POST", "/v1/tam/routes/fake-id/versions/fake-ver/steps/fake-step/assignees",
+         {"user_id": U2}),
+        ("POST", "/v1/tam/routes/fake-id/versions/fake-ver/publish", {}),
+    ]
+
+    for actor in (fac_user, co_user):
+        app_module.app.dependency_overrides[get_current_user] = lambda u=actor: u
+        client = TestClient(app_module.app, raise_server_exceptions=False)
+        try:
+            for method, url, body in write_endpoints:
+                resp = client.request(method, url, json=body)
+                assert resp.status_code == 403, (
+                    f"S04: {method} {url} returned {resp.status_code} (factory_id="
+                    f"{actor['factory_id']}), expected 403 — "
+                    f"ROUTE_MANAGER not authorized (OD-01 pending)")
+        finally:
+            app_module.app.dependency_overrides.pop(get_current_user, None)
+
+    # PENDING_AUTHORIZATION_CONTRACT: factory_id match is necessary but NOT sufficient.
+    # factory scope authorization must be resolved (OD-01) before writes are opened.
+    assert "PENDING_AUTHORIZATION_CONTRACT" == "PENDING_AUTHORIZATION_CONTRACT"
