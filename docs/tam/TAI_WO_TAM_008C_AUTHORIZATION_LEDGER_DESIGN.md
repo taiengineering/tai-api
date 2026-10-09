@@ -1,8 +1,8 @@
 ---
-doc_id: TAI-WO-TAM-008C-AUTHZ-LEDGER-V0.3
+doc_id: TAI-WO-TAM-008C-AUTHZ-LEDGER-V0.4
 title: TAM 공통 결재 권한 원장 상세설계
 status: GPT_REVIEW_REQUIRED
-version: 0.3
+version: 0.4
 created: 2026-10-09
 revised: 2026-10-09
 author: GPT (설계) / Claude Code (문서화)
@@ -19,6 +19,7 @@ base_sha: 1c349397c3052fd496b5270f0f42d82e3e0167e0
 | 0.1  | 2026-10-09 | 초안 — GPT 확정 설계 기반 문서화                                                          | GPT/Claude |
 | 0.2  | 2026-10-09 | R1 수정 — FAIL-01~04 + 권한위임·멱등성·감사 정합성 7건 보정                                | GPT/Claude |
 | 0.3  | 2026-10-09 | R2 추가 — 논리 키 잠금 모델, 직렬화 흐름, Factory 무결성 옵션, Idempotency 보완, P26~P35 | GPT/Claude |
+| 0.4  | 2026-10-09 | R3 수정 — Bootstrap 회사 단위 잠금(§4.6.5), 복수 앵커 전역 정렬(§4.7), Idempotency granted_by·reason·operation 추가(§4.5), FK 잠금 기술 정정(§7.4.2), P36~P40 | GPT/Claude |
 
 ---
 
@@ -36,16 +37,18 @@ TAM(TAI Approval Management)은 결재경로, 결재 요청, 결재 실행을 �
 | tam_permission_grants 테이블 명세                  | TAM 결재 실행 로직 (TAM-008D 이후)    |
 | tam_permission_revocations 테이블 명세             | Chemical WP-07I 연동 계약           |
 | Bootstrap API 명세 (활성화 BLOCKED)                | 기존 TAI Core 권한 구조 변경           |
-| P01~P35 테스트 설계                                | 운영 DB Migration 실행              |
+| P01~P40 테스트 설계                                | 운영 DB Migration 실행              |
 | Factory Scope 정책                               | OD-01~OD-09 Owner 미결 정책 결정    |
 | Factory FK 제약 조사 결과 및 옵션 비교 (§7.4)           |                                   |
 | Grant 논리 키 잠금 모델 (§4.6)                       |                                   |
 | Grant 생성·철회 직렬화 흐름 (§4.7, §5.4)              |                                   |
+| Bootstrap 회사 단위 잠금 (§4.6.5)                    |                                   |
+| 복수 앵커 전역 정렬 원칙 (§4.7)                        |                                   |
 
 ### 1.3 구현 Gate
 
 ```
-TAM-008C-003 DESIGN = 이 문서 (v0.3)
+TAM-008C-003 DESIGN = 이 문서 (v0.4)
 TAM-008C-003 IMPLEMENTATION = BLOCKED (GPT 독립검증 후 별도 WO 발행)
 PR #572 MERGE = OWNER APPROVAL REQUIRED
 BOOTSTRAP API ACTIVATION = BLOCKED (OD-01 Owner 승인 필요)
@@ -384,19 +387,33 @@ valid_until < now() → 만료 (DENY, PERMISSION_GRANT_EXPIRED 이벤트 기록)
 
 정규화 Payload (동일성 비교 기준):
   {
+    operation:         string ("GRANT"),          -- 작업 종류 고정 문자열
     company_id:        UUID (lowercase),
     factory_id:        UUID (lowercase) | null,
     subject_user_id:   UUID (lowercase),
     permission_code:   string (exact),
     valid_from:        ISO8601 (UTC, 초 단위),
-    valid_until:       ISO8601 (UTC, 초 단위) | null
+    valid_until:       ISO8601 (UTC, 초 단위) | null,
+    granted_by:        UUID (lowercase),           -- JWT에서 추출한 요청자 ID
+    grant_reason:      string (trim 후 정규화)       -- null이면 빈 문자열 ""로 정규화
   }
-  * granted_by / grant_reason은 정규화 Payload에 포함하지 않는다.
+
+  granted_by / grant_reason 포함 이유:
+    → 동일 idempotency_key를 서로 다른 요청자가 재사용할 경우
+      첫 번째 요청자의 Grant가 두 번째 요청자에게 반환되는 정보 누출 방지
+    → 부여자(granted_by)가 다른 두 요청은 동일 의도가 아니므로 409 IDEMPOTENCY_CONFLICT
 
 동일 요청 재시도 vs 중복 Grant 구분:
-  동일 재시도:   idempotency_key 동일 + payload 동일 → 기존 grant_id 반환 (200)
+  동일 재시도:   idempotency_key 동일 + payload 동일 → 기존 grant_id 반환 (200, 재인가 확인 후)
   Key 충돌:      idempotency_key 동일 + payload 다름 → 409 IDEMPOTENCY_CONFLICT
   중복 Grant:    idempotency_key 다름 + 기간 중복    → 409 DUPLICATE_GRANT (§4.2 규칙 E)
+
+  재인가 확인 (idempotency 히트 + payload 동일 경우):
+    기존 Grant의 유효 여부 재검사 (§5.3):
+      still_valid = grant 유효(철회 없음 + 기간 내)
+    → still_valid = true:  기존 grant_id 반환 (200, is_new: false)
+    → still_valid = false: IDEMPOTENCY_HIT_GRANT_INVALID — 403 반환
+      이유: 이미 무효화된 Grant를 재시도로 복원하면 안 됨 (불변 원칙)
 
 적용 범위:
   idempotency_key는 API 작업 종류(Grant / Revoke)와 Company scope를 암묵적으로 포함한다.
@@ -477,22 +494,89 @@ Advisory Lock 사용하지 않는 이유:
   → 잠금 앵커 행 방식은 논리 키 충돌이 불가능
 ```
 
+#### 4.6.5 Bootstrap 회사 단위 잠금 (BOOTSTRAP_COMPANY_SENTINEL)
+
+일반 잠금 앵커 키의 `subject_user_id` 필드에는 실제 대상 사용자 UUID가 들어간다.
+이 구조에서 동시에 두 명의 사용자(U1, U2)를 대상으로 FIRST_BOOTSTRAP이 요청되면,
+두 요청이 서로 다른 앵커 행 — `(company_id, SENTINEL, U1, ROUTE_MANAGER)`와
+`(company_id, SENTINEL, U2, ROUTE_MANAGER)` — 을 각각 독립적으로 획득한다.
+
+```
+문제 시나리오 (subject_user_id 기반 앵커 사용 시):
+  Tx A (Bootstrap → U1): STEP 3 — lock (C1, SENTINEL, U1, ROUTE_MANAGER)
+  Tx B (Bootstrap → U2): STEP 3 — lock (C1, SENTINEL, U2, ROUTE_MANAGER)
+  → 서로 다른 앵커이므로 두 Tx 모두 동시에 STEP 6(C04 재확인)에 진입
+  → 두 Tx 모두 "ROUTE_MANAGER 이력 없음" 확인 후 각각 INSERT
+  → 결과: 동일 회사에 Bootstrap Grant 2건 삽입 (C07 위반)
+```
+
+이를 방지하기 위해 FIRST_BOOTSTRAP 전용 **회사 단위 잠금 앵커**를 도입한다.
+
+```
+SENTINEL_UUID             = '00000000-0000-0000-0000-000000000000'
+BOOTSTRAP_COMPANY_SENTINEL = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
+
+Bootstrap 잠금 앵커:
+  (company_id, SENTINEL_UUID, BOOTSTRAP_COMPANY_SENTINEL, 'ROUTE_MANAGER')
+```
+
+- `subject_user_id` 자리에 `BOOTSTRAP_COMPANY_SENTINEL`을 사용한다.
+  `tam_permission_grant_locks.subject_user_id`는 UUID 컬럼이며 FK 없음 → 삽입 가능.
+- 동일 회사에서 Bootstrap을 시도하는 두 요청은 **동일한 앵커** 행을 경쟁하므로 직렬화된다.
+- COMMIT된 첫 번째 Bootstrap 이후, 두 번째 Tx의 STEP 6(C04 재확인)에서 이력이 발견되어 ROLLBACK된다.
+- 이 앵커는 Bootstrap 전용이며, 일반 Grant 생성 경로의 앵커와 충돌하지 않는다.
+
+**tam_permission_grant_locks permission_code CHECK 제약 범위에 변경 없음:**
+```
+Bootstrap 잠금 앵커의 permission_code = 'ROUTE_MANAGER' — 기존 CHECK에 포함됨
+subject_user_id = BOOTSTRAP_COMPANY_SENTINEL — UUID 컬럼 타입, FK 제약 없음 → 삽입 가능
+```
+
+**Bootstrap 완료 후 일반 Grant 경로와의 분리:**
+```
+일반 ROUTE_MANAGER Grant 생성: 앵커 = (C1, SENTINEL, U1, ROUTE_MANAGER)
+Bootstrap 잠금:                앵커 = (C1, SENTINEL, BOOTSTRAP_COMPANY_SENTINEL, ROUTE_MANAGER)
+→ subject_user_id 값이 다르므로 두 앵커는 별개 행 → 독립적
+```
+
 ### 4.7 Grant 생성 직렬화 흐름
 
 모든 Grant INSERT는 아래 8단계를 순서대로 수행한다.
+
+**복수 앵커 전역 정렬 원칙:**
+```
+한 트랜잭션이 둘 이상의 잠금 앵커를 획득해야 하는 경우
+(예: OD-03 활성화 후 부여자 논리 키 앵커 추가 획득, 또는 미래 배치 Grant),
+모든 앵커를 사전에 수집하고 아래 기준으로 정렬한 뒤 순서대로 UPSERT / FOR UPDATE한다.
+
+정렬 기준 (lexicographic, 오름차순):
+  1. company_id (UUID 문자열 소문자)
+  2. factory_key (UUID 문자열 소문자)
+  3. subject_user_id (UUID 문자열 소문자)
+  4. permission_code (문자열 알파벳 순)
+
+이유: 여러 트랜잭션이 동일한 앵커 집합을 역순으로 획득하면 순환 잠금(Deadlock)이
+발생한다. 전역 결정적 순서를 모든 트랜잭션에서 동일하게 적용하면 순환이 불가능해진다.
+
+단일 앵커 트랜잭션(일반 Grant 경로): 정렬이 자명하므로 순서 추가 처리 불필요.
+Bootstrap: 회사 단위 앵커 1개 (§4.6.5) → 단일 앵커, 정렬 자명.
+```
 
 ```
 STEP 1: 트랜잭션 시작
   BEGIN;
 
-STEP 2: 잠금 앵커 행 확보 (UPSERT)
+STEP 2: 잠금 앵커 행 확보 (UPSERT, 전역 정렬 순서 적용)
+  -- 필요한 모든 잠금 앵커를 수집 (일반 Grant = 1개, 복수 앵커 시 전역 정렬)
+  -- Bootstrap 경로: $subject_user_id = BOOTSTRAP_COMPANY_SENTINEL (§4.6.5)
   INSERT INTO tam_permission_grant_locks
     (company_id, factory_key, subject_user_id, permission_code)
   VALUES ($company_id, $factory_key, $subject_user_id, $permission_code)
   ON CONFLICT DO NOTHING;
   -- 행이 이미 존재하면 아무 것도 하지 않는다
+  -- 복수 앵커 시: 전역 정렬 순서대로 각 앵커에 대해 반복
 
-STEP 3: 논리 키 행 잠금 획득 (FOR UPDATE)
+STEP 3: 논리 키 행 잠금 획득 (FOR UPDATE, 전역 정렬 순서 동일 적용)
   SELECT * FROM tam_permission_grant_locks
   WHERE company_id = $company_id
     AND factory_key = $factory_key
@@ -501,6 +585,7 @@ STEP 3: 논리 키 행 잠금 획득 (FOR UPDATE)
   FOR UPDATE;
   -- 동일 논리 키를 처리하는 다른 트랜잭션을 BLOCK한다
   -- BLOCK된 트랜잭션은 COMMIT 후 재개되어 STEP 4부터 다시 수행한다
+  -- 복수 앵커 시: 동일한 전역 정렬 순서로 각 앵커에 대해 반복
 
 STEP 4: Idempotency Key 확인 (제공된 경우)
   SELECT grant_id, <정규화_payload_컬럼들>
@@ -670,7 +755,9 @@ Bootstrap은 두 가지 별개의 행위로 구분한다.
 실행 주체: role_code == "001" (플랫폼 관리자) — OD-01 미결, API 비활성
 보장:
   - 회사별 최초 1회 (C04: 발행 이력 자체가 없어야 함 — 철회된 과거 Grant 있으면 해당 안 됨)
-  - 동시 요청 직렬화 (논리 키 잠금 앵커 FOR UPDATE)
+  - 동시 요청 직렬화 — 회사 단위 잠금 앵커 FOR UPDATE (§4.6.5)
+      잠금 앵커 = (company_id, SENTINEL_UUID, BOOTSTRAP_COMPANY_SENTINEL, 'ROUTE_MANAGER')
+      → 서로 다른 대상 사용자(U1, U2)에 대한 동시 Bootstrap도 동일 앵커에서 직렬화됨
   - 최초 부여 사실 불변 기록 (audit event_data.bootstrap = true)
 
 OD-01 Owner 승인 전: 무조건 503 BOOTSTRAP_NOT_AUTHORIZED
@@ -803,8 +890,19 @@ CHECK-A5: 신규 UNIQUE 인덱스 생성의 Production 영향
 ```
 - factory_id 소속 회사 검증을 DB FK로 완전히 보장
 - factory 행의 company_id 변경 경합 자동 방어
-  (FK는 참조 컬럼에 대해 SHARE ROW EXCLUSIVE 잠금 획득)
+  (FK 참조 테이블 INSERT 시 참조 대상 행에 KEY SHARE 잠금 획득;
+   factory 행 DELETE/UPDATE를 시도하는 Tx는 ROW SHARE 잠금과 충돌 → 방어)
 - 현재 BEFORE INSERT TRIGGER 제거 가능 (또는 단순 중복 검사로 교체)
+```
+
+**Option A 인덱스 생성 방법:**
+```sql
+-- Production 적용 시 잠금 없이 추가 (트랜잭션 외부에서 단독 실행):
+CREATE UNIQUE INDEX CONCURRENTLY uq_factories_company_id ON factories (company_id, id);
+-- CONCURRENTLY는 명시적 트랜잭션 블록 내에서 실행할 수 없음 → 별도 psql 명령으로 실행
+-- 생성 완료 후 ALTER TABLE로 CONSTRAINT 등록:
+ALTER TABLE factories ADD CONSTRAINT uq_factories_company_id
+    UNIQUE USING INDEX uq_factories_company_id;
 ```
 
 #### 7.4.3 Option B — Factory 행 잠금 기반 Trigger
@@ -984,8 +1082,10 @@ IntegrityError(UniqueViolation on idempotency_key) → 기존 행 조회 후 200
 ### 9.3 Bootstrap 동시 요청
 
 ```
-논리 키 앵커 (ROUTE_MANAGER, company_id, SENTINEL_UUID, subject) FOR UPDATE +
-  STEP 6 C04 재확인 (이력 있음 → ROLLBACK)
+회사 단위 잠금 앵커 (§4.6.5) FOR UPDATE:
+  앵커 = (company_id, SENTINEL_UUID, BOOTSTRAP_COMPANY_SENTINEL, 'ROUTE_MANAGER')
+  → 서로 다른 대상 사용자(U1, U2)에 대한 동시 Bootstrap도 동일 앵커를 경쟁 → 직렬화
+  → 첫 번째 Tx COMMIT 후 두 번째 Tx 재개 → STEP 6 C04 재확인에서 이력 발견 → ROLLBACK
   → 동시 Bootstrap 두 요청 → 하나만 성공, 나머지 409 BOOTSTRAP_ALREADY_EXISTS
 ```
 
@@ -1391,8 +1491,8 @@ Connection B: UPDATE factories SET company_id=C2 WHERE id=F1_UUID
 시나리오 (Option A — 복합 FK 채택 시):
   A: FK 검사 — factories(C1, F1_UUID) 참조 → F1의 company_id가 C1이면 성공
   B: F1의 company_id를 C2로 변경하려 하면
-     → A의 FK가 F1 행에 SHARE ROW EXCLUSIVE 잠금 유지 중
-     → B BLOCKS 또는 DEADLOCK 방지 로직에 의해 순서 결정
+     → A의 FK INSERT가 F1 참조 행에 KEY SHARE 잠금을 획득 중
+     → B의 UPDATE는 KEY SHARE와 충돌 → BLOCKS
 
 시나리오 (Option B — Trigger FOR SHARE 사용 시):
   A: SELECT FROM factories WHERE id=F1 FOR SHARE (SHARE 잠금)
@@ -1430,6 +1530,158 @@ Connection A: POST /grants (C1, null, U1, ROUTE_MANAGER)
   tam_approval_audit_events: 0행 (ROLLBACK으로 취소됨)
 ```
 
+### 12.3 P36~P40 (R3 추가 — Bootstrap 직렬화·Idempotency·정렬)
+
+> 각 항목은 초기 DB 상태 / Connection A / Connection B (있는 경우) / 잠금 순서 / COMMIT 순서 / 기대 API 오류 / 기대 최종 DB 상태를 명시한다.
+
+---
+
+**P36 — 서로 다른 대상 사용자에 대한 동시 Bootstrap 직렬화**
+
+```
+초기 DB 상태:
+  tam_permission_grants: 없음 (company=C1에 ROUTE_MANAGER 이력 없음)
+  tam_permission_grant_locks: 없음
+
+Connection A: POST /bootstrap (company=C1, subject=U1)
+Connection B: POST /bootstrap (company=C1, subject=U2)
+
+잠금 순서:
+  A: STEP 2(UPSERT anchor (C1, SENTINEL, BOOTSTRAP_COMPANY_SENTINEL, ROUTE_MANAGER))
+     STEP 3(FOR UPDATE — 획득)
+  B: STEP 2(UPSERT anchor — ON CONFLICT DO NOTHING, 행 이미 존재)
+     STEP 3(FOR UPDATE — BLOCKS, A가 잠금 보유)
+  A: STEP 6 C04(이력 없음 확인) → STEP 7(INSERT G_U1, audit bootstrap=true) → STEP 8 COMMIT
+  B: 재개 → STEP 6 C04(G_U1 이력 있음 → C04 실패) → ROLLBACK
+
+COMMIT 순서: A COMMIT → B ROLLBACK
+기대 API 오류: B → 409 BOOTSTRAP_ALREADY_EXISTS
+기대 최종 DB 상태:
+  tam_permission_grant_locks: 1행 (C1, SENTINEL, BOOTSTRAP_COMPANY_SENTINEL, ROUTE_MANAGER)
+  tam_permission_grants: 1행 (G_U1, permission_code=ROUTE_MANAGER)
+  tam_approval_audit_events: 1행 (PERMISSION_GRANTED, bootstrap=true)
+
+검증 포인트:
+  - BOOTSTRAP_COMPANY_SENTINEL 앵커가 두 요청을 직렬화
+  - B의 STEP 6 C04가 A COMMIT 이후의 G_U1을 읽음 (READ COMMITTED)
+  - U2에 대한 Grant 없음 (동시 Bootstrap 방어)
+```
+
+---
+
+**P37 — 복수 앵커 전역 정렬 Deadlock 방지 (OD-03 활성화 후 적용)**
+
+```
+초기 DB 상태:
+  tam_permission_grants: G_A (C1, null, A, ROUTE_MANAGER, active)
+                         G_B (C1, null, B, ROUTE_MANAGER, active)
+  tam_permission_grant_locks: (C1, SENTINEL, A, ROUTE_MANAGER)
+                               (C1, SENTINEL, B, ROUTE_MANAGER)
+
+Connection A: POST /grants (C1, null, U1, ASSIGNEE_MANAGER, granted_by=A)
+  필요 앵커: target=(C1, SENTINEL, U1, ASSIGNEE_MANAGER), granter_anchor=(C1, SENTINEL, A, ROUTE_MANAGER)
+  전역 정렬 (subject_user_id 기준): A < U1 → [anchor_A, anchor_U1] 순서로 획득
+
+Connection B: POST /grants (C1, null, U2, ASSIGNEE_MANAGER, granted_by=B)
+  필요 앵커: target=(C1, SENTINEL, U2, ASSIGNEE_MANAGER), granter_anchor=(C1, SENTINEL, B, ROUTE_MANAGER)
+  전역 정렬: B < U2 → [anchor_B, anchor_U2] 순서로 획득
+
+잠금 순서 (전역 정렬 적용):
+  A: UPSERT anchor_A (이미 존재) → FOR UPDATE anchor_A (획득)
+     UPSERT anchor_U1 → FOR UPDATE anchor_U1 (획득)
+  B: UPSERT anchor_B (이미 존재) → FOR UPDATE anchor_B (획득)
+     UPSERT anchor_U2 → FOR UPDATE anchor_U2 (획득)
+  → A와 B가 필요한 앵커가 완전히 다름 → 독립 병렬 처리
+
+비교 — 전역 정렬 없이 target-first로 획득하는 경우:
+  A: FOR UPDATE anchor_U1 → FOR UPDATE anchor_A
+  B: FOR UPDATE anchor_U2 → FOR UPDATE anchor_B
+  → 이 경우에도 앵커가 서로 다르므로 Deadlock 없음
+  (이 예시에서는 공유 앵커가 없음 — P37의 핵심 가치는 미래 공유 앵커 시나리오를 위한 원칙)
+
+가치: OD-03 활성화 후 부여자 앵커를 다수가 공유하는 시나리오
+(예: 동일 Manager M이 동시에 두 명에게 부여 → anchor_M이 공유됨)
+→ 전역 정렬로 anchor_M을 항상 target 앵커보다 먼저 획득하면 순환 불가
+
+기대 API 응답: A → 201 G_U1 / B → 201 G_U2 (둘 다 성공, 독립)
+기대 최종 DB 상태: G_U1 + G_U2 (신규 2건), 기존 G_A / G_B 변경 없음
+```
+
+---
+
+**P38 — Idempotency 히트 + granted_by 불일치 차단**
+
+```
+초기 DB 상태:
+  tam_permission_grants: G1 (idempotency_key=K1, granted_by=ADMIN1,
+                              company=C1, null, U1, ROUTE_MANAGER,
+                              valid_from=t0, valid_until=null)
+
+Connection A: POST /grants (idempotency_key=K1, granted_by=ADMIN2, 나머지 payload 동일)
+
+잠금 순서:
+  A: STEP 3(논리 키 앵커 FOR UPDATE)
+     STEP 4(SELECT WHERE idempotency_key=K1 → G1 발견)
+     payload 비교: granted_by: G1=ADMIN1, 요청=ADMIN2 → MISMATCH
+     ROLLBACK
+
+기대 API 오류: 409 IDEMPOTENCY_CONFLICT
+기대 최종 DB 상태: G1 변경 없음
+
+검증 포인트:
+  - granted_by가 정규화 payload에 포함되어 다른 요청자의 재시도를 차단
+  - ADMIN2에게 G1의 grant_id가 반환되는 정보 누출 없음
+```
+
+---
+
+**P39 — Idempotency 히트 + grant_reason 불일치 차단**
+
+```
+초기 DB 상태:
+  tam_permission_grants: G1 (idempotency_key=K1, grant_reason="초기 설정",
+                              granted_by=ADMIN1, company=C1, null, U1, ROUTE_MANAGER)
+
+Connection A: POST /grants (idempotency_key=K1, grant_reason="수정된 이유",
+                            granted_by=ADMIN1, 나머지 payload 동일)
+
+잠금 순서:
+  A: STEP 4(SELECT WHERE idempotency_key=K1 → G1 발견)
+     payload 비교: grant_reason: "초기 설정" vs "수정된 이유" → MISMATCH (trim 후 비교)
+     ROLLBACK
+
+기대 API 오류: 409 IDEMPOTENCY_CONFLICT
+기대 최종 DB 상태: G1 변경 없음
+```
+
+---
+
+**P40 — Idempotency 히트 + Grant 이미 철회됨 → 재활성화 금지**
+
+```
+초기 DB 상태:
+  tam_permission_grants: G1 (idempotency_key=K1, company=C1, null, U1, ROUTE_MANAGER, active)
+  tam_permission_revocations: R1 (grant_id=G1)
+
+Connection A: POST /grants (idempotency_key=K1, payload=G1과 동일)
+
+잠금 순서:
+  A: STEP 3(논리 키 앵커 FOR UPDATE)
+     STEP 4(SELECT WHERE idempotency_key=K1 → G1 발견)
+     payload 비교: 동일 → 재인가 확인 진입
+     재인가: G1 유효성 검사 → R1 존재 → still_valid=false
+     ROLLBACK
+
+기대 API 오류: 403 IDEMPOTENCY_HIT_GRANT_INVALID
+기대 최종 DB 상태:
+  tam_permission_grants: G1 변경 없음 (revoked 상태 그대로)
+  tam_permission_revocations: R1 변경 없음
+
+검증 포인트:
+  - 철회된 Grant를 idempotency 재시도로 되살릴 수 없음 (불변 원칙 준수)
+  - 새 Grant가 필요하면 새 idempotency_key로 새 요청 제출
+```
+
 ---
 
 ## 13. 미결정 Owner 정책 (OD)
@@ -1461,13 +1713,18 @@ Connection A: POST /grants (C1, null, U1, ROUTE_MANAGER)
 | READ COMMITTED Write Skew                | RESOLVED (R2)     | 논리 키 잠금 앵커 + FOR UPDATE 직렬화 (§4.6, §4.7)                  |
 | Grant/Revoke 경합 Deadlock 방지             | RESOLVED (R2)     | 잠금 순서 고정: 논리 키 → Grant 행 (§5.4, §11)                      |
 | Idempotency payload 정규화                 | RESOLVED (R2)     | 정규화 payload 명세 + API 작업 종류별 독립 키 권고 (§4.5)               |
+| Bootstrap 동시 요청 Write Skew             | RESOLVED (R3)     | BOOTSTRAP_COMPANY_SENTINEL 회사 단위 앵커로 직렬화 (§4.6.5, §6.1, §9.3) |
+| 복수 앵커 획득 순서 Deadlock 방지            | RESOLVED (R3)     | 전역 결정적 정렬 원칙 명시 (§4.7)                                     |
+| Idempotency payload 요청자 정보 누출        | RESOLVED (R3)     | granted_by / grant_reason / operation 정규화 payload 포함 (§4.5) |
+| Idempotency 히트 후 철회 Grant 재활성화      | RESOLVED (R3)     | 재인가 확인 — still_valid=false → 403 IDEMPOTENCY_HIT_GRANT_INVALID (§4.5) |
+| FK 잠금 기술 오류 (SHARE ROW EXCLUSIVE)     | RESOLVED (R3)     | KEY SHARE / ROW SHARE 정정; CREATE UNIQUE INDEX CONCURRENTLY 주의사항 추가 (§7.4.2) |
 
 ---
 
 ## 15. 구현 Gate
 
 ```
-TAM-008C-003 DESIGN DOCUMENT (v0.3)  = 이 문서 (R2 추가 완료)
+TAM-008C-003 DESIGN DOCUMENT (v0.4)  = 이 문서 (R3 수정 완료)
 IMPLEMENTATION                        = BLOCKED (GPT 독립검증 후 별도 WO)
 
 PR #572 MERGE                         = OWNER APPROVAL REQUIRED
