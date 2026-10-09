@@ -101,10 +101,32 @@ def sha256_file(path):
 
 
 def _write_exclusive(src: Path, dst: Path):
-    """Copy src → dst using exclusive creation; raises FileExistsError if dst exists."""
+    """Copy src → dst using exclusive creation.
+
+    - Raises FileExistsError if dst already exists (never overwrites).
+    - On write failure after file creation: removes only the newly created partial dst.
+    - If removal also fails: raises RuntimeError with RECOVERY_REQUIRED.
+    - A dst that pre-existed (FileExistsError) is never touched.
+    """
+    dst = Path(dst)
     data = src.read_bytes()
-    with open(str(dst), 'xb') as f:
-        f.write(data)
+    created = False
+    try:
+        with open(str(dst), 'xb') as f:
+            created = True
+            f.write(data)
+    except FileExistsError:
+        raise
+    except Exception as write_err:
+        if created:
+            try:
+                dst.unlink(missing_ok=True)
+            except Exception as cleanup_err:
+                raise RuntimeError(
+                    f"RECOVERY_REQUIRED — write failed ({write_err}); "
+                    f"cleanup failed ({cleanup_err}): {dst}"
+                ) from write_err
+        raise
 
 
 def validate_schema(entry):
@@ -274,7 +296,10 @@ def run_verify_only(ids):
                         doc_ok = False
                     else:
                         actual_sha = sha256_file(p)
-                        if expected and actual_sha != expected:
+                        if expected is None:
+                            row[f"frozen_{file_type}"] = "MISSING_BASELINE"
+                            doc_ok = False
+                        elif actual_sha != expected:
                             row[f"frozen_{file_type}"] = (
                                 f"MISMATCH sha8={actual_sha[:8]} exp={expected[:8]}")
                             doc_ok = False
@@ -514,8 +539,17 @@ def main():
         "ids": ids, "failures": failures, "results": results,
     }
     if report_path:
-        report_path.write_text(
-            json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+        report_json = json.dumps(report, indent=2, ensure_ascii=False)
+        try:
+            with open(str(report_path), 'x', encoding='utf-8') as rf:
+                rf.write(report_json)
+        except FileExistsError:
+            print(f"ERROR: --report target already exists: {report_path}",
+                  file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(f"ERROR: --report write failed: {e}", file=sys.stderr)
+            return 1
         print(f"\nReport written to {report_path}")
 
     if failures:

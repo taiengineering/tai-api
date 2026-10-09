@@ -4266,3 +4266,268 @@ def test_C1306_12_c013_metadata_correctness():
         f"source_section: expected 1807-1845, got: {meta['source_section']}")
     assert 'Page 113' in meta['source_visual_layout_status'], (
         f"source_visual_layout_status: expected Page 113, got: {meta['source_visual_layout_status']}")
+
+
+# ─── C13-07: batch_build.py final safety hardening (B7-RUNNER-CLOSE-004) ─────
+
+import builtins as _builtins_mod
+from pathlib import Path as _PPath
+
+
+def test_C1307_01_write_exclusive_midwrite_cleanup(tmp_path, monkeypatch):
+    """_write_exclusive: xb file created, f.write raises → partial file removed."""
+    bb = _load_bb()
+    src = tmp_path / 'src.bin'
+    src.write_bytes(b'test data content')
+    dst = tmp_path / 'dst.bin'
+    dst_str = str(dst)
+
+    _real_open = _builtins_mod.open
+
+    class _FailWrite:
+        def __init__(self, real_fh):
+            self._fh = real_fh
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            try:
+                self._fh.close()
+            except Exception:
+                pass
+            return False
+        def write(self, data):
+            raise OSError("injected mid-write failure")
+
+    def _mock_open(path, mode='r', *args, **kwargs):
+        if isinstance(mode, str) and 'x' in mode and str(path) == dst_str:
+            return _FailWrite(_real_open(path, mode, *args, **kwargs))
+        return _real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(_builtins_mod, 'open', _mock_open)
+
+    with pytest.raises(OSError, match="injected mid-write"):
+        bb._write_exclusive(src, dst)
+
+    assert not dst.exists(), "Partial file must be cleaned up after mid-write failure"
+
+
+def test_C1307_02_write_exclusive_rollback_failure(tmp_path, monkeypatch):
+    """_write_exclusive: write fails + cleanup fails → RuntimeError RECOVERY_REQUIRED."""
+    bb = _load_bb()
+    src = tmp_path / 'src.bin'
+    src.write_bytes(b'test data')
+    dst = tmp_path / 'dst.bin'
+    dst_str = str(dst)
+
+    _real_open = _builtins_mod.open
+
+    class _FailWriteAndCleanup:
+        def __init__(self, real_fh):
+            self._fh = real_fh
+        def __enter__(self): return self
+        def __exit__(self, *a):
+            try:
+                self._fh.close()
+            except Exception:
+                pass
+            return False
+        def write(self, data):
+            raise OSError("injected write failure")
+
+    def _mock_open(path, mode='r', *args, **kwargs):
+        if isinstance(mode, str) and 'x' in mode and str(path) == dst_str:
+            return _FailWriteAndCleanup(_real_open(path, mode, *args, **kwargs))
+        return _real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(_builtins_mod, 'open', _mock_open)
+
+    _orig_unlink = _PPath.unlink
+
+    def _fail_unlink(self, missing_ok=False):
+        if self == dst:
+            raise OSError("simulated cleanup failure")
+        return _orig_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(_PPath, 'unlink', _fail_unlink)
+
+    with pytest.raises(RuntimeError, match="RECOVERY_REQUIRED"):
+        bb._write_exclusive(src, dst)
+
+
+def test_C1307_03_run_build_docx_midwrite_rollback(tmp_path, monkeypatch):
+    """run_build: DOCX _write_exclusive mid-write failure → DOCX cleaned + PDF rolled back."""
+    import shutil as _shutil
+    bb = _load_bb()
+    monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset({'c013'}))
+    monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
+
+    pdf_name  = bb.REGISTRY['c013']['pdf_name']
+    docx_name = bb.REGISTRY['c013']['docx_name']
+    docx_out_str = str(tmp_path / docx_name)
+
+    def _fake_pdf(entry, out_path):
+        Path(out_path).write_bytes(b'%PDF-1.4 fake')
+    def _fake_docx(entry, out_path):
+        import io
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as z:
+            z.writestr('word/document.xml', '<root/>')
+        Path(out_path).write_bytes(buf.getvalue())
+    monkeypatch.setattr(bb, 'generate_pdf',  _fake_pdf)
+    monkeypatch.setattr(bb, 'generate_docx', _fake_docx)
+    monkeypatch.setattr(bb, 'verify_pdf',    lambda p: 1)
+    monkeypatch.setattr(bb, 'verify_docx',   lambda p: True)
+
+    _real_open = _builtins_mod.open
+
+    class _FailWriteDocx:
+        def __init__(self, real_fh): self._fh = real_fh
+        def __enter__(self): return self
+        def __exit__(self, *a):
+            try: self._fh.close()
+            except Exception: pass
+            return False
+        def write(self, data): raise OSError("injected DOCX mid-write failure")
+
+    def _mock_open(path, mode='r', *args, **kwargs):
+        if isinstance(mode, str) and 'x' in mode and str(path) == docx_out_str:
+            return _FailWriteDocx(_real_open(path, mode, *args, **kwargs))
+        return _real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(_builtins_mod, 'open', _mock_open)
+
+    results, failures = bb.run_build(['c013'])
+    assert 'c013' in failures
+    assert not (tmp_path / pdf_name).exists(),  "PDF must be rolled back"
+    assert not (tmp_path / docx_name).exists(), "DOCX partial must be cleaned up by _write_exclusive"
+
+
+def test_C1307_04_run_build_pdf_rollback_failure(tmp_path, monkeypatch):
+    """run_build: DOCX write fails + PDF unlink fails → RECOVERY_REQUIRED in status."""
+    import shutil as _shutil
+    bb = _load_bb()
+    monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset({'c013'}))
+    monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
+
+    def _fake_pdf(entry, out_path):
+        Path(out_path).write_bytes(b'%PDF-1.4 fake')
+    def _fake_docx(entry, out_path):
+        import io
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as z:
+            z.writestr('word/document.xml', '<root/>')
+        Path(out_path).write_bytes(buf.getvalue())
+    monkeypatch.setattr(bb, 'generate_pdf',  _fake_pdf)
+    monkeypatch.setattr(bb, 'generate_docx', _fake_docx)
+    monkeypatch.setattr(bb, 'verify_pdf',    lambda p: 1)
+    monkeypatch.setattr(bb, 'verify_docx',   lambda p: True)
+
+    call_count = [0]
+
+    def _write_exc(src, dst):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            _shutil.copy2(str(src), str(dst))
+        else:
+            raise OSError("injected DOCX failure")
+
+    monkeypatch.setattr(bb, '_write_exclusive', _write_exc)
+
+    pdf_name = bb.REGISTRY['c013']['pdf_name']
+    _orig_unlink = _PPath.unlink
+
+    def _fail_pdf_unlink(self, missing_ok=False):
+        if self.name == pdf_name:
+            raise OSError("cannot remove PDF")
+        return _orig_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(_PPath, 'unlink', _fail_pdf_unlink)
+
+    results, failures = bb.run_build(['c013'])
+    assert 'c013' in failures
+    row = next((r for r in results if r.get('id') == 'c013'), {})
+    assert 'RECOVERY_REQUIRED' in row.get('status', ''), (
+        f"Expected RECOVERY_REQUIRED in status, got: {row.get('status')}")
+
+
+def test_C1307_05_write_exclusive_no_overwrite(tmp_path):
+    """_write_exclusive: FileExistsError → pre-existing file content unchanged."""
+    bb = _load_bb()
+    src = tmp_path / 'src.bin'
+    src.write_bytes(b'new content')
+    dst = tmp_path / 'dst.bin'
+    original = b'original content'
+    dst.write_bytes(original)
+
+    with pytest.raises(FileExistsError):
+        bb._write_exclusive(src, dst)
+
+    assert dst.read_bytes() == original, "Existing file must not be modified"
+
+
+def test_C1307_06_report_existing_file_blocked(tmp_path):
+    """--report to an existing file → rejected; existing content unchanged."""
+    existing = tmp_path / 'existing_report.json'
+    original_content = '{"existing": true}'
+    existing.write_text(original_content, encoding='utf-8')
+
+    r = subprocess.run(
+        [sys.executable, str(BASE / 'batch_build.py'), '--dry-run',
+         '--report', str(existing)],
+        capture_output=True, text=True, cwd=str(BASE),
+    )
+    assert r.returncode != 0
+    assert existing.read_text(encoding='utf-8') == original_content, \
+        "Existing report file must not be overwritten"
+
+
+def test_C1307_07_report_symlink_bypass_blocked(tmp_path):
+    """--report via symlink that resolves into output/ → rejected; target not created."""
+    import os
+    target = OUTPUT / '_symlink_test_report.json'
+    link   = tmp_path / 'report_link.json'
+    os.symlink(str(target), str(link))
+
+    r = subprocess.run(
+        [sys.executable, str(BASE / 'batch_build.py'), '--dry-run',
+         '--report', str(link)],
+        capture_output=True, text=True, cwd=str(BASE),
+    )
+    assert r.returncode != 0
+    combined = r.stdout + r.stderr
+    assert 'output' in combined.lower()
+    assert not target.exists(), "Symlink target inside output/ must not be created"
+
+
+def test_C1307_08_verify_only_frozen_missing_baseline(tmp_path, monkeypatch):
+    """verify-only: FROZEN_SHA entry absent for approved form → MISSING_BASELINE failure."""
+    bb = _load_bb()
+    monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
+
+    pdf_name  = bb.REGISTRY['c001']['pdf_name']
+    docx_name = bb.REGISTRY['c001']['docx_name']
+    (tmp_path / pdf_name).write_bytes(b'some content')
+    (tmp_path / docx_name).write_bytes(b'some content')
+
+    frozen_no_c001 = {k: v for k, v in bb.FROZEN_SHA.items() if not k.startswith('c001')}
+    monkeypatch.setattr(bb, 'FROZEN_SHA', frozen_no_c001)
+
+    def _fake_pdf(entry, out_path):
+        Path(out_path).write_bytes(b'%PDF-1.4 fake')
+    def _fake_docx(entry, out_path):
+        import io
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as z:
+            z.writestr('word/document.xml', '<root/>')
+        Path(out_path).write_bytes(buf.getvalue())
+    monkeypatch.setattr(bb, 'generate_pdf',  _fake_pdf)
+    monkeypatch.setattr(bb, 'generate_docx', _fake_docx)
+    monkeypatch.setattr(bb, 'verify_pdf',    lambda p: 1)
+    monkeypatch.setattr(bb, 'verify_docx',   lambda p: True)
+
+    results, failures = bb.run_verify_only(['c001'])
+    assert 'c001' in failures
+    row = next((r for r in results if r['id'] == 'c001'), {})
+    assert row.get('status') == 'FAILED'
+    assert ('MISSING_BASELINE' in row.get('frozen_pdf', '')
+            or 'MISSING_BASELINE' in row.get('frozen_docx', ''))
