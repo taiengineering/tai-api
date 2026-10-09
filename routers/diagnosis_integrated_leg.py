@@ -92,7 +92,7 @@ async def _run_leg_impl(body: DiagnosisRunBody, current_user: Optional[dict] = N
         except Exception as e:  # noqa: BLE001
             log.warning("[free-diag slack] dispatch failed: %s", e)
 
-    return {
+    resp: dict = {
         "status": "success",
         "publicToken": result.get("public_token"),
         "diagnosisId": result.get("diagnosis_id"),
@@ -105,6 +105,12 @@ async def _run_leg_impl(body: DiagnosisRunBody, current_user: Optional[dict] = N
         "obligationCount": full.get("applicable_count"),
         "partialResult": _build_partial(full),
     }
+    # diagnosis_pending: paid-only boolean. True when LEG could not evaluate some atoms.
+    # Boolean only — count/details/atom names NOT exposed.
+    if result.get("is_free") is not True:
+        _rr = full.get("review_required")
+        resp["diagnosis_pending"] = bool(isinstance(_rr, list) and _rr)
+    return resp
 
 
 @router.post("/run-leg")
