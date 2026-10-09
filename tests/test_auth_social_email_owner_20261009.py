@@ -1,8 +1,9 @@
-"""WO-WWW-AUTH-NAVER-001: /auth/ensure-user account ownership regression.
+"""WO-WWW-AUTH-NAVER-001 + WO-API-NAVER-EMAILLESS-001: /auth/ensure-user account ownership regression.
 
 This suite patches _auth_user_from_token; NO real DB, OAuth credential, or network.
 Existing Google/Kakao users whose public.users.auth_id matches remain idempotent.
 Email-only account linking (including legacy NULL auth_id) must fail closed.
+Naver email-optional users (custom:naver-oauth2) may create accounts without email.
 """
 from types import SimpleNamespace
 
@@ -61,13 +62,17 @@ class _Query:
         return SimpleNamespace(data=rows[:1])
 
 
-def _run(monkeypatch, existing, *, auth_id="auth-new", email="person@example.com"):
+_NAVER_APP_META = {"provider": "custom:naver-oauth2"}
+
+
+def _run(monkeypatch, existing, *, auth_id="auth-new", email="person@example.com",
+         app_metadata=None):
     db = _Users(existing)
     auth_user = SimpleNamespace(
         id=auth_id,
         email=email,
         user_metadata={"name": "테스트"},
-        app_metadata={"provider": "custom:naver"},
+        app_metadata=app_metadata if app_metadata is not None else {"provider": "custom:naver"},
     )
     monkeypatch.setattr(auth_mod, "_auth_user_from_token", lambda _: (db, auth_user))
     return db, lambda: auth_mod.ensure_user("Bearer fixture")
@@ -96,7 +101,7 @@ def test_same_email_different_or_unbound_auth_id_is_409(monkeypatch, linked):
 
 
 @pytest.mark.parametrize("missing_email", [None, "", "  "])
-def test_missing_email_is_422_without_create(monkeypatch, missing_email):
+def test_missing_email_non_naver_is_422(monkeypatch, missing_email):
     db, invoke = _run(monkeypatch, [], email=missing_email)
     with pytest.raises(HTTPException) as captured:
         invoke()
@@ -127,4 +132,70 @@ def test_matching_existing_email_is_not_used_as_other_identity(monkeypatch):
         {"id": "new-user", "auth_id": "auth-new", "email": "person@example.com"},
     ])
     assert invoke()["data"]["id"] == "new-user"
+    assert not db.inserts and not db.updates
+
+
+# ── Naver email-optional tests (WO-API-NAVER-EMAILLESS-001) ──────────────────
+
+def test_naver_missing_email_creates_row_with_null_email(monkeypatch):
+    db, invoke = _run(monkeypatch, [], email=None, app_metadata=_NAVER_APP_META)
+    result = invoke()
+    assert result["created"] is True
+    assert result["data"]["auth_id"] == "auth-new"
+    assert result["data"]["email"] is None
+    assert result["data"]["allow_email"] is False
+    assert result["data"]["social_provider"] == "custom:naver-oauth2"
+    assert result["data"]["identity_verified"] is False
+    assert len(db.inserts) == 1
+    assert not db.updates
+
+
+def test_naver_missing_email_idempotent(monkeypatch):
+    db, invoke = _run(monkeypatch, [], email=None, app_metadata=_NAVER_APP_META)
+    first = invoke()
+    assert first["created"] is True
+    second = invoke()
+    assert second["created"] is False
+    assert second["data"]["auth_id"] == "auth-new"
+    assert len(db.inserts) == 1
+    assert not db.updates
+
+
+def test_naver_contact_email_in_metadata_does_not_rebind(monkeypatch):
+    # naver_contact_email from user_metadata is user-editable; must never cause
+    # email-based account ownership or collision detection.
+    existing = [{"id": "existing-1", "auth_id": "auth-other", "email": "shared@example.com"}]
+    db = _Users(existing)
+    auth_user = SimpleNamespace(
+        id="auth-new",
+        email=None,
+        user_metadata={"name": "테스트", "custom_claims": {"naver_contact_email": "shared@example.com"}},
+        app_metadata={"provider": "custom:naver-oauth2"},
+    )
+    monkeypatch.setattr(auth_mod, "_auth_user_from_token", lambda _: (db, auth_user))
+    result = auth_mod.ensure_user("Bearer fixture")
+    assert result["created"] is True
+    assert result["data"]["email"] is None
+    assert result["data"]["auth_id"] == "auth-new"
+    assert db.rows[0]["auth_id"] == "auth-other"
+    assert not db.updates
+
+
+def test_naver_providers_list_also_grants_emailless(monkeypatch):
+    app_meta = {"provider": "custom:naver-oauth2", "providers": ["custom:naver-oauth2"]}
+    db, invoke = _run(monkeypatch, [], email=None, app_metadata=app_meta)
+    result = invoke()
+    assert result["created"] is True
+    assert result["data"]["email"] is None
+    assert result["data"]["allow_email"] is False
+
+
+@pytest.mark.parametrize("provider", ["google", "kakao", "custom:naver", "email", None])
+def test_non_naver_missing_email_still_422(monkeypatch, provider):
+    app_meta = {"provider": provider} if provider else {}
+    db, invoke = _run(monkeypatch, [], email=None, app_metadata=app_meta)
+    with pytest.raises(HTTPException) as captured:
+        invoke()
+    assert captured.value.status_code == 422
+    assert captured.value.detail["code"] == "SOCIAL_EMAIL_REQUIRED"
     assert not db.inserts and not db.updates
