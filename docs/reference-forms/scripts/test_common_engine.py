@@ -1,5 +1,6 @@
 """
 WO-058 Phase C-02/C-03 — 공통 엔진 QA 강화 및 출력 통합검증
+WO-REF01-059 Phase B-1 — REF-C003 REGISTER 대표 서식 POC
 pytest test_common_engine.py -v
 
 C02-01: 테스트 신뢰성 — 필수 테스트는 SKIP 없이 FAIL 보고
@@ -11,6 +12,11 @@ C03-02: C002 DOCX 회귀 — 원본과 구조 비교 (5테이블/열수/라벨)
 C03-03: C002 PDF 다중페이지 — 15행 시 2페이지 전환
 C03-04: C012 장문·다중페이지 — 150mm freeform × 2 시 2페이지
 C03-05: SHA256 원본 무결성 확인
+C03-06: C002 PDF 페이지 경계 QA — 10/11/15/18행 페이지 수 및 데이터 무손실
+C04-01: REF-C003 JSON 스키마 검증
+C04-02: REF-C003 DOCX 생성 — 9컬럼/라벨/푸터
+C04-03: REF-C003 PDF 생성 — 1페이지(기본)/2페이지(30행)/전 페이지 푸터
+C04-04: REF-C003 회귀 — C002/C012 기준본 SHA256 불변
 """
 import json, os, sys, subprocess, zipfile
 import xml.etree.ElementTree as ET
@@ -854,3 +860,218 @@ def test_C0306_c002_pdf_18rows_no_data_loss(c002_v1, tmp_path):
     all_text = ''.join(p.get_text() for p in doc)
     missing = [f'ROW{i:02d}' for i in range(18) if f'ROW{i:02d}' not in all_text]
     assert not missing, f"Data rows missing from PDF: {missing}"
+
+# ═══════════════════════════════════════════════════════════════════════
+# WO-REF01-059 Phase B-1 — REF-C003 REGISTER 대표 서식 POC
+# ═══════════════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def c003_v1():
+    return json.loads((BASE / 'c003_v1.json').read_text(encoding='utf-8'))
+
+# ─── C04-01: REF-C003 JSON 스키마 검증 ───────────────────────────────
+
+def test_C0401_c003_schema_version(c003_v1):
+    assert c003_v1['_meta']['schema_version'] == 'common-v1'
+
+def test_C0401_c003_form_type(c003_v1):
+    assert c003_v1['_meta']['form_type'] == 'REGISTER'
+
+def test_C0401_c003_title(c003_v1):
+    assert c003_v1['document']['title'] == '위험기계·기구·설비 목록 작성 서식'
+
+def test_C0401_c003_single_repeat_table(c003_v1):
+    secs = c003_v1['sections']
+    assert len(secs) == 1
+    assert secs[0]['type'] == 'repeat_table'
+
+def test_C0401_c003_9_columns(c003_v1):
+    cols = c003_v1['sections'][0]['columns']
+    assert len(cols) == 9
+
+def test_C0401_c003_column_width_sum_170mm(c003_v1):
+    total = sum(c['width_mm'] for c in c003_v1['sections'][0]['columns'])
+    assert total == 170, f"Column widths sum {total}mm != 170mm"
+
+def test_C0401_c003_column_labels_match_observed_fields(c003_v1):
+    expected = ['순번', '기계·기구·설비명(관리번호)', '용량', '단위작업 장소', '수량',
+                '검사대상', '방호장치', '점검주기', '발생가능 재해형태']
+    actual = [c['label'] for c in c003_v1['sections'][0]['columns']]
+    assert actual == expected
+
+def test_C0401_c003_engine_schema_validation(c003_v1):
+    assert validate(c003_v1) is True
+
+# ─── C04-02: REF-C003 DOCX 생성 ──────────────────────────────────────
+
+def test_C0402_c003_docx_generates(c003_v1, tmp_path):
+    v1_path = tmp_path / 'c003_v1.json'
+    out_path = tmp_path / 'c003_blank.docx'
+    v1_path.write_text(json.dumps(c003_v1, ensure_ascii=False), encoding='utf-8')
+    result = subprocess.run(
+        ['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+        cwd=str(BASE), capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, f"DOCX generation failed: {result.stderr}"
+    assert out_path.exists() and out_path.stat().st_size > 3000
+
+def test_C0402_c003_docx_table_count(c003_v1, tmp_path):
+    v1_path = tmp_path / 'c003_v1.json'
+    out_path = tmp_path / 'c003_blank.docx'
+    v1_path.write_text(json.dumps(c003_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    tables = _ooxml_tables(out_path)
+    assert len(tables) == 2, f"Expected 2 tables (title+repeat), got {len(tables)}"
+
+def test_C0402_c003_docx_9_columns(c003_v1, tmp_path):
+    v1_path = tmp_path / 'c003_v1.json'
+    out_path = tmp_path / 'c003_blank.docx'
+    v1_path.write_text(json.dumps(c003_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    tables = root.findall('.//w:tbl', {'w': NS})
+    repeat_tbl = tables[1]
+    rows = repeat_tbl.findall('w:tr', {'w': NS})
+    hdr_cells = rows[0].findall('w:tc', {'w': NS})
+    assert len(hdr_cells) == 9, f"Expected 9 columns, got {len(hdr_cells)}"
+
+def test_C0402_c003_docx_all_labels(c003_v1, tmp_path):
+    v1_path = tmp_path / 'c003_v1.json'
+    out_path = tmp_path / 'c003_blank.docx'
+    v1_path.write_text(json.dumps(c003_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    tables = root.findall('.//w:tbl', {'w': NS})
+    repeat_tbl = tables[1]
+    rows = repeat_tbl.findall('w:tr', {'w': NS})
+    all_text = ' '.join(
+        ''.join(t.text or '' for t in cell.findall('.//{%s}t' % NS))
+        for cell in rows[0].findall('w:tc', {'w': NS})
+    )
+    for label in ['순번', '기계·기구·설비명(관리번호)', '용량', '단위작업 장소', '수량',
+                  '검사대상', '방호장치', '점검주기', '발생가능 재해형태']:
+        assert label in all_text, f"Column label missing: '{label}'"
+
+def test_C0402_c003_docx_footer_present(c003_v1, tmp_path):
+    v1_path = tmp_path / 'c003_v1.json'
+    out_path = tmp_path / 'c003_blank.docx'
+    v1_path.write_text(json.dumps(c003_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    with zipfile.ZipFile(out_path) as z:
+        footer = z.read('word/footer1.xml')
+    assert b'PAGE' in footer and b'NUMPAGES' in footer
+
+def test_C0402_c003_docx_10_default_rows(c003_v1, tmp_path):
+    v1_path = tmp_path / 'c003_v1.json'
+    out_path = tmp_path / 'c003_blank.docx'
+    v1_path.write_text(json.dumps(c003_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    tables = root.findall('.//w:tbl', {'w': NS})
+    rows = tables[1].findall('w:tr', {'w': NS})
+    assert len(rows) == 11, f"Expected 11 rows (1 header + 10 default), got {len(rows)}"
+
+# ─── C04-03: REF-C003 PDF 생성 ───────────────────────────────────────
+
+def test_C0403_c003_pdf_1page_default(c003_v1, tmp_path):
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c003_blank.pdf'
+    generate_from_dict(c003_v1, out)
+    doc = pymupdf.open(str(out))
+    assert doc.page_count == 1, f"C003 default (10 rows) must be 1 page, got {doc.page_count}"
+
+def test_C0403_c003_pdf_footer_page1(c003_v1, tmp_path):
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c003_blank_footer.pdf'
+    generate_from_dict(c003_v1, out)
+    doc = pymupdf.open(str(out))
+    txt = doc[0].get_text()
+    assert '1 /' in txt, f"Page 1 footer '1 /' missing. text={txt[:200]}"
+
+def test_C0403_c003_pdf_2pages_30rows(c003_v1, tmp_path):
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c003_30rows.pdf'
+    nCols = len(c003_v1['sections'][0]['columns'])
+    ex_rows = [[''] * nCols for _ in range(30)]
+    generate_from_dict(c003_v1, out, ex_rows=ex_rows)
+    doc = pymupdf.open(str(out))
+    assert doc.page_count >= 2, f"C003 30 rows must be >=2 pages, got {doc.page_count}"
+
+def test_C0403_c003_pdf_footer_all_pages(c003_v1, tmp_path):
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c003_30rows_footers.pdf'
+    nCols = len(c003_v1['sections'][0]['columns'])
+    ex_rows = [[''] * nCols for _ in range(30)]
+    generate_from_dict(c003_v1, out, ex_rows=ex_rows)
+    doc = pymupdf.open(str(out))
+    for i, page in enumerate(doc):
+        txt = page.get_text()
+        pg_num = str(i + 1)
+        assert f'{pg_num} /' in txt, f"Page {i+1} footer missing. text={txt[:100]}"
+
+def test_C0403_c003_pdf_30rows_no_data_loss(c003_v1, tmp_path):
+    """30행 추가 시 OOXML repeat_table에 손실 없이 30행 존재."""
+    v1_path = tmp_path / 'c003_v1.json'
+    out_path = tmp_path / 'c003_30rows.docx'
+    v1_path.write_text(json.dumps(c003_v1, ensure_ascii=False), encoding='utf-8')
+    nCols = len(c003_v1['sections'][0]['columns'])
+    ex_rows = [[''] * nCols for _ in range(30)]
+    result = subprocess.run(
+        ['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path),
+         str(len(ex_rows))],
+        cwd=str(BASE), capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, f"30rows DOCX failed: {result.stderr}"
+    NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    tables = root.findall('.//w:tbl', {'w': NS})
+    rows = tables[1].findall('w:tr', {'w': NS})
+    assert len(rows) == 31, f"Expected 31 rows (1 header + 30), got {len(rows)}"
+
+# ─── C04-04: REF-C003 회귀 — 기준본 무변경 ──────────────────────────
+
+def test_C0404_c003_c002_c012_originals_unchanged():
+    import hashlib
+    expected = {
+        'gen_c002_pdf.py':   '025aaeebccaf61021100b459f9c576cc6fcd77d1c79833f3b3d1e14cfea51b28',
+        'gen_c002_docx.cjs': '1fdfaeaa90e1b32adee40a88086b49a45333803f76ec8ad86af73094a29540f2',
+        'c002_fields.json':  'fd56748edc41af68d75f86260782d1ae6fb688bfae9c6c9f172de7b373c07d6a',
+        'c003_v1.json':      'b7ec9cffb05157680a85d1a8cf233559e82f3a1ee853264ff36390995d1d594a',
+    }
+    for fname, exp_sha in expected.items():
+        p = BASE / fname
+        assert p.exists(), f"{fname} must exist"
+        actual_sha = hashlib.sha256(p.read_bytes()).hexdigest()
+        assert actual_sha == exp_sha, \
+            f"{fname}: SHA256 changed\n  expected: {exp_sha}\n  actual:   {actual_sha}"
