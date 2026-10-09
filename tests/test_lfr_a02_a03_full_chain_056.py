@@ -16,6 +16,9 @@ SOURCE CHANGE = 0 / DB WRITE = 0 / DEPLOY = 0
 """
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from clients.leg_runtime_client import build_facility
 from schemas.legal_engine import (
     SafeIndustrialConsumerInput,
@@ -82,21 +85,21 @@ def test_ind_a02_parent_absent_from_facility():
 
 
 def test_ind_a02_detail_value_in_facility():
-    fac = _ind(truck_height=2.0)
+    fac = _ind(has_truck=True, truck_height=2.0)
     assert fac.get("truck_loading_height_m") == 2.0
 
 
 def test_ind_a02_detail_zero_preserved():
     """0.0 != ABSENT — preserved in facility."""
-    fac = _ind(truck_height=0.0)
+    fac = _ind(has_truck=True, truck_height=0.0)
     assert "truck_loading_height_m" in fac
     assert fac["truck_loading_height_m"] == 0.0
 
 
-def test_ind_a02_detail_negative_preserved():
-    """Negative value transported as-is; LEG evaluates, not API."""
-    fac = _ind(truck_height=-1.0)
-    assert fac.get("truck_loading_height_m") == -1.0
+def test_ind_a02_detail_without_parent_schema_rejects():
+    """detail without parent → ValidationError (FF-06 _parent_detail_consistency)."""
+    with pytest.raises(ValidationError):
+        SafeIndustrialConsumerInput(truck_loading_height_m=2.0)
 
 
 def test_ind_a02_detail_absent_from_facility():
@@ -129,13 +132,13 @@ def test_ind_a03_parent_absent_from_facility():
 
 
 def test_ind_a03_detail_value_in_facility():
-    fac = _ind(manual_weight=25.0)
+    fac = _ind(has_manual=True, manual_weight=25.0)
     assert fac.get("manual_handling_weight_kg") == 25.0
 
 
 def test_ind_a03_detail_zero_preserved():
     """0.0 != ABSENT — preserved in facility."""
-    fac = _ind(manual_weight=0.0)
+    fac = _ind(has_manual=True, manual_weight=0.0)
     assert "manual_handling_weight_kg" in fac
     assert fac["manual_handling_weight_kg"] == 0.0
 
@@ -164,12 +167,12 @@ def test_cst_a02_parent_absent_from_facility():
 
 
 def test_cst_a02_detail_value_in_facility():
-    fac = _cst(truck_height=1.9)
+    fac = _cst(has_truck=True, truck_height=1.9)
     assert fac.get("truck_loading_height_m") == 1.9
 
 
 def test_cst_a02_detail_zero_preserved():
-    fac = _cst(truck_height=0.0)
+    fac = _cst(has_truck=True, truck_height=0.0)
     assert "truck_loading_height_m" in fac
     assert fac["truck_loading_height_m"] == 0.0
 
@@ -180,12 +183,12 @@ def test_cst_a03_parent_true_in_facility():
 
 
 def test_cst_a03_detail_value_in_facility():
-    fac = _cst(manual_weight=5.0)
+    fac = _cst(has_manual=True, manual_weight=5.0)
     assert fac.get("manual_handling_weight_kg") == 5.0
 
 
 def test_cst_a03_detail_zero_preserved():
-    fac = _cst(manual_weight=0.0)
+    fac = _cst(has_manual=True, manual_weight=0.0)
     assert "manual_handling_weight_kg" in fac
     assert fac["manual_handling_weight_kg"] == 0.0
 
@@ -209,12 +212,12 @@ def test_bld_a02_parent_absent_from_facility():
 
 
 def test_bld_a02_detail_value_in_facility():
-    fac = _bld(truck_height=2.0)
+    fac = _bld(has_truck=True, truck_height=2.0)
     assert fac.get("truck_loading_height_m") == 2.0
 
 
 def test_bld_a02_detail_zero_preserved():
-    fac = _bld(truck_height=0.0)
+    fac = _bld(has_truck=True, truck_height=0.0)
     assert "truck_loading_height_m" in fac
     assert fac["truck_loading_height_m"] == 0.0
 
@@ -225,12 +228,12 @@ def test_bld_a03_parent_true_in_facility():
 
 
 def test_bld_a03_detail_value_in_facility():
-    fac = _bld(manual_weight=10.0)
+    fac = _bld(has_manual=True, manual_weight=10.0)
     assert fac.get("manual_handling_weight_kg") == 10.0
 
 
 def test_bld_a03_detail_zero_preserved():
-    fac = _bld(manual_weight=0.0)
+    fac = _bld(has_manual=True, manual_weight=0.0)
     assert "manual_handling_weight_kg" in fac
     assert fac["manual_handling_weight_kg"] == 0.0
 
@@ -267,14 +270,14 @@ def test_all_sectors_a03_parent_true_parity():
 
 def test_all_sectors_a02_detail_zero_parity():
     """All 3 sectors preserve 0 for truck_loading_height_m (0 != absent)."""
-    for fac in [_ind(truck_height=0.0), _cst(truck_height=0.0), _bld(truck_height=0.0)]:
+    for fac in [_ind(has_truck=True, truck_height=0.0), _cst(has_truck=True, truck_height=0.0), _bld(has_truck=True, truck_height=0.0)]:
         assert "truck_loading_height_m" in fac
         assert fac["truck_loading_height_m"] == 0.0
 
 
 def test_all_sectors_a03_detail_zero_parity():
     """All 3 sectors preserve 0 for manual_handling_weight_kg (0 != absent)."""
-    for fac in [_ind(manual_weight=0.0), _cst(manual_weight=0.0), _bld(manual_weight=0.0)]:
+    for fac in [_ind(has_manual=True, manual_weight=0.0), _cst(has_manual=True, manual_weight=0.0), _bld(has_manual=True, manual_weight=0.0)]:
         assert "manual_handling_weight_kg" in fac
         assert fac["manual_handling_weight_kg"] == 0.0
 
