@@ -1,17 +1,17 @@
 ---
-doc_id: TAI-DESIGN-COMMON-ENGINE-V0.3
+doc_id: TAI-DESIGN-COMMON-ENGINE-V0.4
 title: TAI 서식 공통 렌더러 스키마 설계서
-version: 0.3-DRAFT
-status: PHASE_B2_L01_DOC — GPT 독립검증 대기
+version: 0.4-DRAFT
+status: PHASE_B3_B — GPT 독립검증 대기
 date: 2026-10-09
 branch: docs/tai-reference-forms-charter-obj-20261008
-scope: common-v1 스키마 블록 타입 정의, 가변 결재란 계약, 공통 assembler 계약, C002/C012 매핑 비교, 페이지 방향(orientation) 계약
-wo: WO-REF01-059-B2-L01-DOC-001
-supersedes: TAI-DESIGN-COMMON-ENGINE-V0.2
-change_reason: WO-REF01-059-B2-L01 Landscape 엔진 구현 반영 — document.page.orientation 계약, A4 치수/콘텐츠 너비, DOCX 치수 전달 계약, repeat_table.min_row_height_mm, fail-closed 규칙 추가, 하위 호환성 명시
+scope: common-v1 스키마 블록 타입 정의, 가변 결재란 계약, 공통 assembler 계약, C002/C012 매핑 비교, 페이지 방향(orientation) 계약, text_flow 블록 계약
+wo: WO-REF01-059-B3-B
+supersedes: TAI-DESIGN-COMMON-ENGINE-V0.3
+change_reason: WO-REF01-059-B3-B text_flow 블록 구현 반영 — paragraphs 배열 계약, align 선택 속성, PDF/DOCX 빌더 계약, C001 적용
 ---
 
-# TAI 서식 공통 렌더러 스키마 설계서 v0.3
+# TAI 서식 공통 렌더러 스키마 설계서 v0.4
 
 ## 0. 목적
 
@@ -321,6 +321,87 @@ const cellW = Math.round(mm(section.total_width_mm) / apprF.length);  // dynamic
 
 ---
 
+### 3.6 `text_flow` — 순서 있는 단락 목록
+
+반복 표 없이 순서가 있는 단락들을 렌더링하는 블록. policy document template, 선언문, 방침서 등에 사용한다.
+
+```json
+{
+  "type": "text_flow",
+  "id": "S01",
+  "paragraphs": [
+    { "id": "P04", "text": "○○기업은 경영활동 전반에...", "align": "left" },
+    { "id": "P05", "text": "이를 위해...", "align": "left" },
+    { "id": "P14", "text": "○○○○년 ○○ 월 ○○ 일", "align": "right" },
+    { "id": "P15", "text": "○○ 기업 대표이사  (서명)", "align": "right" }
+  ]
+}
+```
+
+#### 속성 정의
+
+| 속성 | 위치 | 타입 | 필수 | 기본값 | 허용값 |
+|---|---|---|---|---|---|
+| `type` | 블록 최상위 | string | **필수** | — | `"text_flow"` |
+| `paragraphs` | 블록 최상위 | array | **필수** | — | 길이 ≥ 1 |
+| `paragraphs[].id` | 각 항목 | string | **필수** | — | 고유 식별자 |
+| `paragraphs[].text` | 각 항목 | string | **필수** | — | 출력할 단락 텍스트 |
+| `paragraphs[].align` | 각 항목 | string | 선택 | `"left"` | `"left"`, `"center"`, `"right"` |
+
+#### PDF 엔진 계약 (common_v1_engine.py)
+
+```python
+def build_text_flow(section, content_w=None):
+    align_map = {'left': TA_LEFT, 'center': TA_CENTER, 'right': TA_RIGHT}
+    result = []
+    for para in section['paragraphs']:
+        align = align_map.get(para.get('align', 'left'), TA_LEFT)
+        style = ParagraphStyle(
+            name=f'tf_{para["id"]}',
+            fontName='NG', fontSize=10, leading=14,
+            textColor=C_BLACK, alignment=align,
+            spaceBefore=2, spaceAfter=2,
+        )
+        result.append(Paragraph(para['text'], style))
+    return result
+```
+
+- `align` 누락 시 `TA_LEFT` 적용 (fail-safe).
+- 알 수 없는 `align` 값 → `TA_LEFT` 적용 (fail-safe).
+- `assemble()`에서 `story += build_text_flow(s, content_w=cw)` (리스트 확장).
+
+#### DOCX 엔진 계약 (common_v1_engine.cjs)
+
+```js
+function buildTextFlow(section, contentW) {
+    const alignMap = {
+        left:   AlignmentType.LEFT,
+        center: AlignmentType.CENTER,
+        right:  AlignmentType.RIGHT,
+    };
+    return section.paragraphs.map(para => new Paragraph({
+        children: [new TextRun({ text: para.text || '', font: 'NanumGothic', size: 20 })],
+        alignment: alignMap[para.align || 'left'] ?? AlignmentType.LEFT,
+        spacing:   { before: 40, after: 40 },
+    }));
+}
+```
+
+- `size: 20` = 10pt (OOXML half-point 단위).
+- `spacing.before/after: 40` = 2pt (OOXML 20분의 1 포인트 단위).
+- `assemble()`에서 `case 'text_flow': children.push(...buildTextFlow(section, layoutCtx.contentW)); break;`.
+
+#### C001 적용 예시
+
+REF-C001 (안전보건경영방침) — HWP-01 Para 4–15, 12개 단락:
+- P04–P13: `align: "left"` (오프닝 + 정책항목 8개)
+- P14: `align: "right"` (날짜)
+- P15: `align: "right"` (대표이사 서명란)
+
+**현재 구현 상태**: `common_v1_engine.py` + `common_v1_engine.cjs` 모두 `text_flow` 빌더 구현 완료 (WO-REF01-059-B3-B). C001 출력 생성 완료.
+
+---
+
 ## 4. 공통 assembler 계약 (MANDATORY)
 
 서식별 별도 조립 함수 작성은 금지한다. C012 생성기는 반드시 아래 공통 assembler를 사용한다.
@@ -347,6 +428,7 @@ def assemble(fields, ex_rows=None):
         elif t == 'labeled_grid':  story.append(build_labeled_grid(section))
         elif t == 'freeform_area': story.append(build_freeform_area(section))
         elif t == 'repeat_table':  story += build_repeat_table(section, ex_rows)
+        elif t == 'text_flow':     story += build_text_flow(section, content_w=cw)
         else:
             raise ValueError(f"Unsupported block type: {t!r}")  # fail-closed
         story.append(Spacer(1, 1*mm))
@@ -361,11 +443,12 @@ function assemble(fields, exRows) {
 
   for (const section of (fields.sections ?? [])) {
     switch (section.type) {
-      case 'approval':      children.push(buildApproval(section));         break;
-      case 'basic_info':    children.push(buildBasicInfo(section));         break;
-      case 'labeled_grid':  children.push(buildLabeledGrid(section));       break;
-      case 'freeform_area': children.push(buildFreeformArea(section));      break;
-      case 'repeat_table':  children.push(...buildRepeatTable(section, exRows)); break;
+      case 'approval':      children.push(buildApproval(section));                            break;
+      case 'basic_info':    children.push(buildBasicInfo(section));                            break;
+      case 'labeled_grid':  children.push(buildLabeledGrid(section));                          break;
+      case 'freeform_area': children.push(buildFreeformArea(section));                         break;
+      case 'repeat_table':  children.push(...buildRepeatTable(section, exRows));               break;
+      case 'text_flow':     children.push(...buildTextFlow(section, layoutCtx.contentW));      break;
       default:
         throw new Error(`Unsupported block type: ${section.type}`); // fail-closed
     }
@@ -383,6 +466,8 @@ function assemble(fields, exRows) {
 - `document.page.orientation` key 존재 + invalid value (null / empty string / 숫자) → 오류 발생
 - `document.page.orientation` key 부재 → `"portrait"` 기본값 (오류 아님)
 - `repeat_table.min_row_height_mm` 존재 + 음수 또는 0 → 오류 발생
+- `text_flow.paragraphs` 빈 배열 (길이 0) → 오류 발생
+- `text_flow.paragraphs[].align` 알 수 없는 값 → `"left"` 적용 (fail-safe, 오류 아님)
 
 ### 4.3 블록 타입별 필수 속성
 
@@ -393,6 +478,7 @@ function assemble(fields, exRows) {
 | `labeled_grid` | `type`, `rows` (각 행 길이 = 2) |
 | `freeform_area` | `type`, `label`, `min_height_mm` |
 | `repeat_table` | `type`, `columns` (길이 ≥ 1), `default_row_count` |
+| `text_flow` | `type`, `paragraphs` (길이 ≥ 1, 각 항목에 `id`/`text` 필수) |
 
 ---
 

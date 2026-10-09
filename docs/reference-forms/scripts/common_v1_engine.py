@@ -10,7 +10,7 @@ from reportlab.lib.units import mm
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.enums import TA_LEFT, TA_CENTER
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdfcanvas
@@ -143,7 +143,7 @@ def _canvas_factory(page_w):
     return make
 
 # ─── Schema validator ─────────────────────────────────────────────
-SUPPORTED_TYPES = {'approval', 'basic_info', 'labeled_grid', 'freeform_area', 'repeat_table'}
+SUPPORTED_TYPES = {'approval', 'basic_info', 'labeled_grid', 'freeform_area', 'repeat_table', 'text_flow'}
 
 _REQUIRED = {
     'approval':      ['type','total_width_mm','fields'],
@@ -151,6 +151,7 @@ _REQUIRED = {
     'labeled_grid':  ['type','rows'],
     'freeform_area': ['type','label','min_height_mm'],
     'repeat_table':  ['type','columns','default_row_count'],
+    'text_flow':     ['type','paragraphs'],
 }
 
 def _pos(val, label):
@@ -226,6 +227,27 @@ def validate(fields):
                 )
             if 'min_row_height_mm' in s:
                 _pos(s['min_row_height_mm'], f"sections[{i}] repeat_table.min_row_height_mm")
+
+        if t == 'text_flow':
+            paras = s['paragraphs']
+            if not isinstance(paras, list) or len(paras) < 1:
+                raise ValueError(f"sections[{i}] text_flow: paragraphs must have >= 1 entry")
+            valid_aligns = {'left', 'center', 'right'}
+            for pi, para in enumerate(paras):
+                if not para.get('id'):
+                    raise ValueError(
+                        f"sections[{i}] text_flow paragraphs[{pi}]: missing required attr 'id'")
+                if 'text' not in para:
+                    raise ValueError(
+                        f"sections[{i}] text_flow paragraphs[{pi}]: missing required attr 'text'")
+                if not isinstance(para['text'], str):
+                    raise ValueError(
+                        f"sections[{i}] text_flow paragraphs[{pi}]: text must be a string")
+                align = para.get('align', 'left')
+                if align not in valid_aligns:
+                    raise ValueError(
+                        f"sections[{i}] text_flow paragraphs[{pi}]: "
+                        f"align must be left/center/right, got {align!r}")
 
     return True
 
@@ -363,6 +385,20 @@ def build_repeat_table(section, ex_rows=None, content_w=None):
                 repeatRows=1, minRowHeights=[0]+[row_h]*len(data))
     return [tbl]
 
+def build_text_flow(section, content_w=None):
+    align_map = {'left': TA_LEFT, 'center': TA_CENTER, 'right': TA_RIGHT}
+    result = []
+    for para in section['paragraphs']:
+        align = align_map.get(para.get('align', 'left'), TA_LEFT)
+        style = ParagraphStyle(
+            name=f'tf_{para["id"]}',
+            fontName='NG', fontSize=10, leading=14,
+            textColor=C_BLACK, alignment=align,
+            spaceBefore=2, spaceAfter=2,
+        )
+        result.append(Paragraph(para['text'], style))
+    return result
+
 # ─── Common assembler ──────────────────────────────────────────────
 
 def assemble(fields, ex_rows=None, content_w=None):
@@ -375,6 +411,7 @@ def assemble(fields, ex_rows=None, content_w=None):
         elif t == 'labeled_grid':  story.append(build_labeled_grid(s, content_w=cw))
         elif t == 'freeform_area': story.append(build_freeform_area(s, content_w=cw))
         elif t == 'repeat_table':  story += build_repeat_table(s, ex_rows, content_w=cw)
+        elif t == 'text_flow':     story += build_text_flow(s, content_w=cw)
         else:
             raise ValueError(f"Unsupported block type: {t!r}")
         story.append(Spacer(1, 1*mm))

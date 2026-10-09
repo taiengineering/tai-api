@@ -110,13 +110,14 @@ function buildFooter() {
 }
 
 // ─── Schema validator ─────────────────────────────────────────────
-const SUPPORTED_TYPES = new Set(['approval','basic_info','labeled_grid','freeform_area','repeat_table']);
+const SUPPORTED_TYPES = new Set(['approval','basic_info','labeled_grid','freeform_area','repeat_table','text_flow']);
 const REQUIRED_ATTRS  = {
     approval:      ['type','total_width_mm','fields'],
     basic_info:    ['type','fields'],
     labeled_grid:  ['type','rows'],
     freeform_area: ['type','label','min_height_mm'],
     repeat_table:  ['type','columns','default_row_count'],
+    text_flow:     ['type','paragraphs'],
 };
 
 function posCheck(val, label) {
@@ -185,6 +186,24 @@ function validate(fields) {
                     `sections[${i}] repeat_table: column widths sum to ${total}mm, expected ${expectedContentW}mm`
                 );
             if ('min_row_height_mm' in s) posCheck(s.min_row_height_mm, `sections[${i}] repeat_table.min_row_height_mm`);
+        }
+        if (t === 'text_flow') {
+            if (!Array.isArray(s.paragraphs) || s.paragraphs.length < 1)
+                throw new Error(`sections[${i}] text_flow: paragraphs must have >= 1 entry`);
+            const validAligns = new Set(['left', 'center', 'right']);
+            s.paragraphs.forEach((para, pi) => {
+                if (!para.id)
+                    throw new Error(`sections[${i}] text_flow paragraphs[${pi}]: missing required attr 'id'`);
+                if (!('text' in para))
+                    throw new Error(`sections[${i}] text_flow paragraphs[${pi}]: missing required attr 'text'`);
+                if (typeof para.text !== 'string')
+                    throw new Error(`sections[${i}] text_flow paragraphs[${pi}]: text must be a string`);
+                const align = para.align || 'left';
+                if (!validAligns.has(align))
+                    throw new Error(
+                        `sections[${i}] text_flow paragraphs[${pi}]: align must be left/center/right, got '${align}'`
+                    );
+            });
         }
     });
     return true;
@@ -346,6 +365,23 @@ function buildRepeatTable(section, exRows, contentW) {
     return new Table({ width: { size: tblW, type: WidthType.DXA }, layout: TableLayoutType.FIXED, rows });
 }
 
+function buildTextFlow(section, contentW) {
+    const alignMap = {
+        left:   AlignmentType.LEFT,
+        center: AlignmentType.CENTER,
+        right:  AlignmentType.RIGHT,
+    };
+    return section.paragraphs.map(para => new Paragraph({
+        children: [new TextRun({
+            text:  para.text || '',
+            font:  'NanumGothic',
+            size:  20,
+        })],
+        alignment: alignMap[para.align || 'left'] ?? AlignmentType.LEFT,
+        spacing:   { before: 40, after: 40 },
+    }));
+}
+
 // ─── Common assembler ──────────────────────────────────────────────
 
 function assemble(fields, exRows, contentW) {
@@ -358,6 +394,7 @@ function assemble(fields, exRows, contentW) {
             case 'labeled_grid':  children.push(buildLabeledGrid(s, cw));         break;
             case 'freeform_area': children.push(buildFreeformArea(s, cw));        break;
             case 'repeat_table':  children.push(buildRepeatTable(s, exRows, cw)); break;
+            case 'text_flow':     buildTextFlow(s, cw).forEach(p => children.push(p)); break;
             default: throw new Error(`Unsupported block type: ${s.type}`);
         }
         children.push(spacer());
@@ -394,6 +431,6 @@ async function generate(fieldsPath, outPath, exRows) {
 }
 
 module.exports = { validate, layoutCtx, buildTitle, buildApproval, buildBasicInfo,
-    buildLabeledGrid, buildFreeformArea, buildRepeatTable,
+    buildLabeledGrid, buildFreeformArea, buildRepeatTable, buildTextFlow,
     buildFooter, assemble, generate, spacer, spacer0,
     CONTENT_W, PAGE_MARGIN };

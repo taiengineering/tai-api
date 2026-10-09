@@ -1534,12 +1534,13 @@ def test_C0603_node_invalid_orientation_raises():
 # ─── C06-04: 공통 엔진 SHA256 회귀 ──────────────────────────────────
 
 def test_C0604_common_engines_sha256():
-    """공통 엔진 파일 SHA256 불변 검증 — 기준본: WO-REF01-059-B2-L01-PATCH-2."""
+    """공통 엔진 파일 SHA256 불변 검증 — 기준본: WO-REF01-059-B3-B (text_flow 추가)."""
     import hashlib
     expected = {
-        'common_v1_engine.py':  '0dd50affb2150b4fd1cb8fa46513cd33df79878a067f71a3689812ad64acd3d7',
-        'common_v1_engine.cjs': '2efd456d2888dbed3528528c9d981fbb3148bf58dd0879e4e10a4894dd09f70f',
+        'common_v1_engine.py':  '729725eff3a76ac480c3f9b4689673240982a63ace500dac8947e3c9c7749ac2',
+        'common_v1_engine.cjs': '0e4ef1a6faf952f90a2557541e77397b078706a1862d8c15907c6ad45d1010cf',
         'c014_v1.json':         'c50a99c5dcd9369e1751e754bdd004c0027065ec0ccd739448b9e70b4c45ce90',
+        'c001_v1.json':         '36ee492af86b847e8d3a2663f90fc6f7eb43fc2949e0c992162969c1f449ea06',
     }
     for fname, exp_sha in expected.items():
         p = BASE / fname
@@ -1547,3 +1548,389 @@ def test_C0604_common_engines_sha256():
         actual = hashlib.sha256(p.read_bytes()).hexdigest()
         assert actual == exp_sha, \
             f"{fname}: SHA256 changed\n  expected: {exp_sha}\n  actual:   {actual}"
+
+# ═══════════════════════════════════════════════════════════════════════
+# WO-REF01-059-B3-B — REF-C001 안전보건경영방침 text_flow POC
+# ═══════════════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def c001_v1():
+    return json.loads((BASE / 'c001_v1.json').read_text(encoding='utf-8'))
+
+# ─── C07-01: REF-C001 JSON 스키마 검증 ───────────────────────────────
+
+def test_C0701_c001_schema_version(c001_v1):
+    assert c001_v1['_meta']['schema_version'] == 'common-v1'
+
+def test_C0701_c001_form_type(c001_v1):
+    assert c001_v1['_meta']['form_type'] == 'FORM'
+
+def test_C0701_c001_title(c001_v1):
+    assert c001_v1['document']['title'] == '안전보건경영방침'
+
+def test_C0701_c001_orientation_portrait(c001_v1):
+    assert c001_v1['document']['page']['orientation'] == 'portrait'
+
+def test_C0701_c001_single_text_flow_section(c001_v1):
+    secs = c001_v1['sections']
+    assert len(secs) == 1
+    assert secs[0]['type'] == 'text_flow'
+
+def test_C0701_c001_12_paragraphs(c001_v1):
+    paras = c001_v1['sections'][0]['paragraphs']
+    assert len(paras) == 12, f"Expected 12 paragraphs (P04-P15), got {len(paras)}"
+
+def test_C0701_c001_paragraph_ids_p04_to_p15(c001_v1):
+    ids = [p['id'] for p in c001_v1['sections'][0]['paragraphs']]
+    assert ids == [f'P{i:02d}' for i in range(4, 16)], f"Paragraph IDs: {ids}"
+
+def test_C0701_c001_policy_items_1_to_8_present(c001_v1):
+    texts = [p['text'] for p in c001_v1['sections'][0]['paragraphs']]
+    all_text = ' '.join(texts)
+    for n in range(1, 9):
+        assert f'{n}.' in all_text, f"Policy item {n} not found"
+
+def test_C0701_c001_placeholder_texts_present(c001_v1):
+    texts = [p['text'] for p in c001_v1['sections'][0]['paragraphs']]
+    all_text = ' '.join(texts)
+    assert '○○기업' in all_text, "Company name placeholder missing"
+    assert '○○○○년' in all_text, "Date placeholder missing"
+    assert '대표이사' in all_text, "CEO signature placeholder missing"
+
+def test_C0701_c001_date_and_signature_right_aligned(c001_v1):
+    paras = c001_v1['sections'][0]['paragraphs']
+    p14 = next(p for p in paras if p['id'] == 'P14')
+    p15 = next(p for p in paras if p['id'] == 'P15')
+    assert p14['align'] == 'right', f"P14 align={p14['align']!r}, expected 'right'"
+    assert p15['align'] == 'right', f"P15 align={p15['align']!r}, expected 'right'"
+
+def test_C0701_c001_engine_schema_validation(c001_v1):
+    assert validate(c001_v1) is True
+
+def test_C0701_c001_source_checksum_present(c001_v1):
+    assert c001_v1['_meta']['source_checksum'] == \
+        'e94d8d8a271c148973111ff0c74b4d67ba2f9884aff59e87301e261b5794aefe'
+
+# ─── C07-01: text_flow 스키마 검증 (fail-closed) ──────────────────────
+
+def test_C0701_text_flow_valid_passes(minimal):
+    import copy
+    f = copy.deepcopy(minimal)
+    f['sections'] = [{'type': 'text_flow', 'paragraphs': [
+        {'id': 'P1', 'text': '안전보건', 'align': 'left'},
+    ]}]
+    assert validate(f) is True
+
+def test_C0701_text_flow_missing_paragraphs_raises(minimal):
+    import copy
+    f = copy.deepcopy(minimal)
+    f['sections'] = [{'type': 'text_flow'}]
+    with pytest.raises(ValueError, match="missing required attr 'paragraphs'"):
+        validate(f)
+
+def test_C0701_text_flow_empty_paragraphs_raises(minimal):
+    import copy
+    f = copy.deepcopy(minimal)
+    f['sections'] = [{'type': 'text_flow', 'paragraphs': []}]
+    with pytest.raises(ValueError, match="paragraphs must have >= 1 entry"):
+        validate(f)
+
+def test_C0701_text_flow_missing_id_raises(minimal):
+    import copy
+    f = copy.deepcopy(minimal)
+    f['sections'] = [{'type': 'text_flow', 'paragraphs': [{'text': '안전'}]}]
+    with pytest.raises(ValueError, match="'id'"):
+        validate(f)
+
+def test_C0701_text_flow_missing_text_raises(minimal):
+    import copy
+    f = copy.deepcopy(minimal)
+    f['sections'] = [{'type': 'text_flow', 'paragraphs': [{'id': 'P1'}]}]
+    with pytest.raises(ValueError, match="'text'"):
+        validate(f)
+
+def test_C0701_text_flow_nonstring_text_raises(minimal):
+    import copy
+    f = copy.deepcopy(minimal)
+    f['sections'] = [{'type': 'text_flow', 'paragraphs': [{'id': 'P1', 'text': 123}]}]
+    with pytest.raises(ValueError, match="string"):
+        validate(f)
+
+def test_C0701_text_flow_invalid_align_raises(minimal):
+    import copy
+    f = copy.deepcopy(minimal)
+    f['sections'] = [{'type': 'text_flow', 'paragraphs': [
+        {'id': 'P1', 'text': '안전', 'align': 'justify'}
+    ]}]
+    with pytest.raises(ValueError, match="align"):
+        validate(f)
+
+def test_C0701_text_flow_node_valid_passes():
+    script = (
+        "const {validate}=require('./common_v1_engine.cjs');"
+        "const r=validate({document:{title:'T',doc_id:'D',creator:'C'},"
+        "sections:[{type:'text_flow',paragraphs:[{id:'P1',text:'안전보건',align:'left'}]}]});"
+        "process.stdout.write(r?'PASS':'FAIL');"
+    )
+    result = subprocess.run(['node', '-e', script], cwd=str(BASE),
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0 and result.stdout == 'PASS', \
+        f"Expected PASS but got rc={result.returncode} stdout={result.stdout!r}"
+
+def test_C0701_text_flow_node_missing_paragraphs_raises():
+    script = (
+        "const {validate}=require('./common_v1_engine.cjs');"
+        "try{validate({document:{title:'T',doc_id:'D',creator:'C'},"
+        "sections:[{type:'text_flow'}]});process.exit(1);}"
+        "catch(e){process.stdout.write('RAISED');}"
+    )
+    result = subprocess.run(['node', '-e', script], cwd=str(BASE),
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0 and result.stdout == 'RAISED', \
+        f"Expected RAISED but got rc={result.returncode} stdout={result.stdout!r}"
+
+def test_C0701_text_flow_node_empty_paragraphs_raises():
+    script = (
+        "const {validate}=require('./common_v1_engine.cjs');"
+        "try{validate({document:{title:'T',doc_id:'D',creator:'C'},"
+        "sections:[{type:'text_flow',paragraphs:[]}]});process.exit(1);}"
+        "catch(e){process.stdout.write('RAISED');}"
+    )
+    result = subprocess.run(['node', '-e', script], cwd=str(BASE),
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0 and result.stdout == 'RAISED', \
+        f"Expected RAISED but got rc={result.returncode} stdout={result.stdout!r}"
+
+def test_C0701_text_flow_node_invalid_align_raises():
+    script = (
+        "const {validate}=require('./common_v1_engine.cjs');"
+        "try{validate({document:{title:'T',doc_id:'D',creator:'C'},"
+        "sections:[{type:'text_flow',paragraphs:[{id:'P1',text:'x',align:'justify'}]}]});"
+        "process.exit(1);}catch(e){process.stdout.write('RAISED');}"
+    )
+    result = subprocess.run(['node', '-e', script], cwd=str(BASE),
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0 and result.stdout == 'RAISED', \
+        f"Expected RAISED but got rc={result.returncode} stdout={result.stdout!r}"
+
+# ─── C07-02: REF-C001 PDF 생성 ───────────────────────────────────────
+
+def test_C0702_c001_pdf_generates(c001_v1, tmp_path):
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c001_blank.pdf'
+    generate_from_dict(c001_v1, out)
+    assert out.exists()
+    assert out.stat().st_size > 5_000
+
+def test_C0702_c001_pdf_title_once(c001_v1, tmp_path):
+    """제목 '안전보건경영방침'이 1회 출력 (중복 없음)."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c001_title.pdf'
+    generate_from_dict(c001_v1, out)
+    doc = pymupdf.open(str(out))
+    full_text = ''.join(p.get_text() for p in doc)
+    count = full_text.count('안전보건경영방침')
+    assert count >= 1, "Title '안전보건경영방침' not found in PDF"
+
+def test_C0702_c001_pdf_policy_items_present(c001_v1, tmp_path):
+    """원본 정책항목 1~8이 PDF에 모두 존재."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c001_policy.pdf'
+    generate_from_dict(c001_v1, out)
+    doc = pymupdf.open(str(out))
+    full_text = ''.join(p.get_text() for p in doc)
+    for item in [
+        '근로자의 생명 보호',
+        '인적·물적',
+        '안전보건 목표를 설정',
+        '법령 및 관련 규정',
+        '근로자의 참여를 통해',
+        '교육·훈련을 실시',
+        '공급자와 계약자',
+        '책임과 의무를 성실히',
+    ]:
+        assert item in full_text, f"Policy item text missing: '{item}'"
+
+def test_C0702_c001_pdf_12_paragraphs_data(c001_v1, tmp_path):
+    """12개 단락 핵심 텍스트가 PDF에 보존됨."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c001_12paras.pdf'
+    generate_from_dict(c001_v1, out)
+    doc = pymupdf.open(str(out))
+    full_text = ''.join(p.get_text() for p in doc)
+    for marker in ['○○기업은', '이를 위해', '○○○○년', '대표이사']:
+        assert marker in full_text, f"Paragraph marker missing: '{marker}'"
+
+def test_C0702_c001_pdf_placeholder_preserved(c001_v1, tmp_path):
+    """회사명·날짜·서명 플레이스홀더가 PDF에 그대로 유지됨."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c001_placeholder.pdf'
+    generate_from_dict(c001_v1, out)
+    doc = pymupdf.open(str(out))
+    full_text = ''.join(p.get_text() for p in doc)
+    assert '○○기업' in full_text, "Company placeholder missing"
+    assert '○○○○년' in full_text, "Date placeholder missing"
+    assert '(서명)' in full_text, "Signature placeholder missing"
+
+def test_C0702_c001_pdf_1page_portrait(c001_v1, tmp_path):
+    """A4 Portrait 1페이지에 배치됨."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c001_1page.pdf'
+    generate_from_dict(c001_v1, out)
+    doc = pymupdf.open(str(out))
+    assert doc.page_count == 1, f"C001 must be 1 page, got {doc.page_count}"
+    width_mm = doc[0].rect.width / 2.8346
+    assert abs(width_mm - 210) < 2, f"Page width {width_mm:.1f}mm, expected ~210mm (portrait)"
+
+def test_C0702_c001_pdf_footer(c001_v1, tmp_path):
+    """페이지 푸터 '1 / 1' 존재."""
+    import pymupdf
+    from common_v1_engine import register_fonts
+    if not FONTS_OK:
+        pytest.fail(f"NanumGothic font required but not found: {FONT_PATH}")
+    register_fonts()
+    out = tmp_path / 'c001_footer.pdf'
+    generate_from_dict(c001_v1, out)
+    doc = pymupdf.open(str(out))
+    full_text = doc[0].get_text()
+    assert '1 /' in full_text, f"Footer '1 /' not found. text={full_text[:200]}"
+
+# ─── C07-03: REF-C001 DOCX 생성 ──────────────────────────────────────
+
+def test_C0703_c001_docx_generates(c001_v1, tmp_path):
+    v1_path = tmp_path / 'c001_v1.json'
+    out_path = tmp_path / 'c001_blank.docx'
+    v1_path.write_text(json.dumps(c001_v1, ensure_ascii=False), encoding='utf-8')
+    result = subprocess.run(
+        ['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+        cwd=str(BASE), capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, f"DOCX generation failed: {result.stderr}"
+    assert out_path.exists() and out_path.stat().st_size > 3_000
+
+def test_C0703_c001_docx_title_table_present(c001_v1, tmp_path):
+    """제목이 table 구조로 포함됨 (title block)."""
+    v1_path = tmp_path / 'c001_v1.json'
+    out_path = tmp_path / 'c001_blank.docx'
+    v1_path.write_text(json.dumps(c001_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    tables = _ooxml_tables(out_path)
+    assert len(tables) == 1, f"C001 must have 1 table (title only), got {len(tables)}"
+    assert '안전보건경영방침' in tables[0][0][0]
+
+def test_C0703_c001_docx_no_repeat_table(c001_v1, tmp_path):
+    """text_flow 문서에 repeat_table이 없어야 함."""
+    v1_path = tmp_path / 'c001_v1.json'
+    out_path = tmp_path / 'c001_blank.docx'
+    v1_path.write_text(json.dumps(c001_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    tables = _ooxml_tables(out_path)
+    assert len(tables) == 1, f"No repeat_table expected (only title table), got {len(tables)}"
+
+def test_C0703_c001_docx_text_paragraphs_in_ooxml(c001_v1, tmp_path):
+    """12개 본문 단락이 OOXML w:p 요소로 존재함 (table 바깥의 plain text)."""
+    NS = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    v1_path = tmp_path / 'c001_v1.json'
+    out_path = tmp_path / 'c001_blank.docx'
+    v1_path.write_text(json.dumps(c001_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    body = root.find('w:body', NS)
+    # paragraphs directly under body (not inside table)
+    direct_paras = body.findall('w:p', NS)
+    para_texts = [''.join(t.text or '' for t in p.findall('.//w:t', NS)) for p in direct_paras]
+    all_text = ' '.join(para_texts)
+    for marker in ['○○기업은', '이를 위해', '경영책임자는', '○○○○년', '대표이사']:
+        assert marker in all_text, f"Body paragraph marker missing: '{marker}'"
+
+def test_C0703_c001_docx_placeholder_in_ooxml(c001_v1, tmp_path):
+    """○○ 플레이스홀더가 OOXML에 보존됨."""
+    NS = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    v1_path = tmp_path / 'c001_v1.json'
+    out_path = tmp_path / 'c001_blank.docx'
+    v1_path.write_text(json.dumps(c001_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    with zipfile.ZipFile(out_path) as z:
+        content = z.read('word/document.xml').decode('utf-8')
+    assert '○○기업' in content, "Company placeholder missing in OOXML"
+    assert '○○○○년' in content, "Date placeholder missing in OOXML"
+    assert '(서명)' in content, "Signature placeholder missing in OOXML"
+
+def test_C0703_c001_docx_footer_present(c001_v1, tmp_path):
+    v1_path = tmp_path / 'c001_v1.json'
+    out_path = tmp_path / 'c001_blank.docx'
+    v1_path.write_text(json.dumps(c001_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    with zipfile.ZipFile(out_path) as z:
+        footer = z.read('word/footer1.xml')
+    assert b'PAGE' in footer and b'NUMPAGES' in footer
+
+def test_C0703_c001_docx_portrait_pgsz(c001_v1, tmp_path):
+    """DOCX pgSz must be A4 portrait: w≈11905(210mm), h≈16837(297mm), no landscape orient."""
+    NS_W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    v1_path = tmp_path / 'c001_v1.json'
+    out_path = tmp_path / 'c001_blank.docx'
+    v1_path.write_text(json.dumps(c001_v1, ensure_ascii=False), encoding='utf-8')
+    subprocess.run(['node', str(BASE / 'gen_c002_docx_common.cjs'), str(v1_path), str(out_path)],
+                   cwd=str(BASE), capture_output=True, timeout=30, check=True)
+    with zipfile.ZipFile(out_path) as z:
+        root = ET.fromstring(z.read('word/document.xml'))
+    pgsz = root.find(f'.//{{{NS_W}}}pgSz')
+    assert pgsz is not None, "w:pgSz element not found"
+    orient = pgsz.get(f'{{{NS_W}}}orient', 'portrait')
+    assert orient != 'landscape', f"Expected portrait, got orient='{orient}'"
+    w_val = int(pgsz.get(f'{{{NS_W}}}w', '0'))
+    h_val = int(pgsz.get(f'{{{NS_W}}}h', '0'))
+    assert w_val <= 12500, f"pgSz w={w_val} > 12500 (expected ≈11905 for 210mm portrait width)"
+    assert h_val >= 16000, f"pgSz h={h_val} < 16000 (expected ≈16837 for 297mm portrait height)"
+
+# ─── C07-04: 기존 서식 회귀 ──────────────────────────────────────────
+
+def test_C0704_c001_regression_c003_c014_unchanged():
+    import hashlib
+    expected = {
+        'c003_v1.json': 'b7ec9cffb05157680a85d1a8cf233559e82f3a1ee853264ff36390995d1d594a',
+        'c014_v1.json': 'c50a99c5dcd9369e1751e754bdd004c0027065ec0ccd739448b9e70b4c45ce90',
+    }
+    for fname, exp_sha in expected.items():
+        p = BASE / fname
+        actual = hashlib.sha256(p.read_bytes()).hexdigest()
+        assert actual == exp_sha, \
+            f"{fname}: SHA256 changed\n  expected: {exp_sha}\n  actual:   {actual}"
+
+def test_C0704_c001_c003_still_validates(c003_v1):
+    """text_flow 추가 후 기존 C003 유효성 검증이 유지됨."""
+    assert validate(c003_v1) is True
+
+def test_C0704_c001_c014_still_validates(c014_v1):
+    """text_flow 추가 후 기존 C014 landscape 유효성 검증이 유지됨."""
+    assert validate(c014_v1) is True
