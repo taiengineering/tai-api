@@ -10,8 +10,12 @@ S43-S49:  authenticated has no EXECUTE on 7 trigger functions
 
 Isolation guard requirements (fail — not skip — on violation):
   - TAM_008C_PG_DSN must be explicitly set
+  - DSN must not reference production Supabase project (vwlahtguyggrhvslabax)
+  - DSN host must be local (localhost / 127.0.0.1)
+  - DSN must not match DATABASE_URL (normalized param comparison + raw string)
+  - Connected DB name must be in the allowed isolation list
   - Target DB must have isolation marker (pre-created, not auto-generated)
-  - All DDL is gated behind the isolation check
+  - All DDL is gated behind every isolation check
 
 Supabase default-privilege simulation:
   Before applying migrations, ALTER DEFAULT PRIVILEGES grants ALL on TABLES
@@ -25,12 +29,16 @@ import os
 import pathlib
 
 import psycopg2
+import psycopg2.extensions
 import psycopg2.extras
 import pytest
 
-# ── DSN & isolation marker ─────────────────────────────────────────────────────
+# ── DSN & isolation constants ──────────────────────────────────────────────────
 
-_ISOLATION_MARKER = "TAM_008C_SECURITY_TEST_ISOLATION"
+_ISOLATION_MARKER    = "TAM_008C_SECURITY_TEST_ISOLATION"
+_PROD_SUPABASE_REF   = "vwlahtguyggrhvslabax"
+_ALLOWED_TEST_DBNAMES: frozenset[str] = frozenset({"tai_test_tam_ledger"})
+_LOCAL_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1", ""})
 
 _MIGRATION_DIR = (
     pathlib.Path(__file__).parent.parent / "supabase" / "migrations"
@@ -85,6 +93,28 @@ _APPEND_ONLY_TABLES = {
     "tam_permission_revocations",
 }
 
+# ── DSN helpers ───────────────────────────────────────────────────────────────
+
+def _parse_dsn(dsn: str) -> dict:
+    """Parse a DSN (key=value or postgresql:// URI) into a parameter dict."""
+    try:
+        return psycopg2.extensions.parse_dsn(dsn)
+    except Exception:
+        return {}
+
+
+def _dsns_same_db(a: dict, b: dict) -> bool:
+    """True if two parsed DSN dicts target the same PostgreSQL database."""
+    def _norm_host(d: dict) -> str:
+        h = d.get("host", "localhost").lower()
+        return "localhost" if h in ("127.0.0.1", "::1", "") else h
+    return (
+        _norm_host(a) == _norm_host(b)
+        and a.get("port", "5432") == b.get("port", "5432")
+        and a.get("dbname", "") == b.get("dbname", "")
+    )
+
+
 # ── Stable UUIDs for stub data ─────────────────────────────────────────────────
 
 _CO_A = "aaaaaaaa-0001-0001-0001-000000000001"
@@ -100,29 +130,70 @@ def pg():
 
     Guard order (each failure prevents DDL):
       1. TAM_008C_PG_DSN must be set
-      2. DB must be reachable
-      3. Isolation marker must pre-exist in target DB
-      4. Simulate Supabase default privileges
-      5. Apply migrations
+      2. Production DB rejected (Supabase ref, non-local host, DATABASE_URL match)
+      3. DB must be reachable
+      4. Connected DB name must be in allowed isolation list
+      5. Isolation marker must pre-exist (no auto-create)
+      6. Simulate Supabase default privileges
+      7. Apply migrations
     """
     # Guard 1: explicit DSN required
     dsn = os.getenv("TAM_008C_PG_DSN")
     if not dsn:
         pytest.fail(
             "TAM_008C_PG_DSN is not set — security tests require an explicit "
-            "isolated test DB. Set e.g. TAM_008C_PG_DSN='host=localhost dbname=tai_test_tam_ledger'"
+            "isolated test DB, e.g. TAM_008C_PG_DSN='host=localhost dbname=tai_test_tam_ledger'",
+            pytrace=False,
         )
 
-    # Guard 2: connectivity
+    # Guard 2: production DB checks — all evaluated before any connection
+    if _PROD_SUPABASE_REF in dsn:
+        pytest.fail(
+            f"TAM_008C_PG_DSN contains production Supabase project ref '{_PROD_SUPABASE_REF}' "
+            "— refusing destructive DDL against production DB.",
+            pytrace=False,
+        )
+
+    _test_params = _parse_dsn(dsn)
+    _test_host = _test_params.get("host", "localhost")
+    if _test_host not in _LOCAL_HOSTS:
+        pytest.fail(
+            f"TAM_008C_PG_DSN targets non-local host '{_test_host}'. "
+            "Only localhost / 127.0.0.1 are allowed for destructive security tests.",
+            pytrace=False,
+        )
+
+    _prod_url = os.environ.get("DATABASE_URL", "")
+    if _prod_url:
+        _prod_params = _parse_dsn(_prod_url)
+        if _dsns_same_db(_test_params, _prod_params) or dsn.strip() == _prod_url.strip():
+            pytest.fail(
+                "TAM_008C_PG_DSN targets the same DB as DATABASE_URL (production guard) "
+                "— refusing destructive DDL.",
+                pytrace=False,
+            )
+
+    # Guard 3: connectivity
     try:
         conn = psycopg2.connect(dsn, connect_timeout=5)
     except Exception as exc:
-        pytest.fail(f"Cannot connect to test DB ({dsn}): {exc}")
+        pytest.fail(f"Cannot connect to test DB ({dsn}): {exc}", pytrace=False)
 
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Guard 3: isolation marker (must pre-exist — never auto-create)
+    # Guard 4: connected DB name must be in the allowed isolation list
+    cur.execute("SELECT current_database() AS db_name")
+    _actual_dbname = cur.fetchone()["db_name"]
+    if _actual_dbname not in _ALLOWED_TEST_DBNAMES:
+        conn.close()
+        pytest.fail(
+            f"Connected DB '{_actual_dbname}' is not in the allowed test DB list "
+            f"{sorted(_ALLOWED_TEST_DBNAMES)} — refusing destructive DDL.",
+            pytrace=False,
+        )
+
+    # Guard 5: isolation marker must pre-exist — never auto-create
     cur.execute("""
         SELECT EXISTS (
             SELECT 1 FROM information_schema.tables
@@ -137,7 +208,8 @@ def pg():
             "Pre-create it with:\n"
             "  CREATE TABLE _tam_security_isolation_marker "
             "      (marker_value TEXT PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT now());\n"
-            f"  INSERT INTO _tam_security_isolation_marker VALUES ('{_ISOLATION_MARKER}');"
+            f"  INSERT INTO _tam_security_isolation_marker VALUES ('{_ISOLATION_MARKER}');",
+            pytrace=False,
         )
 
     cur.execute(
@@ -147,8 +219,10 @@ def pg():
     if cur.fetchone() is None:
         conn.close()
         pytest.fail(
-            f"Isolation marker value '{_ISOLATION_MARKER}' not present. "
-            f"Run: INSERT INTO _tam_security_isolation_marker VALUES ('{_ISOLATION_MARKER}');"
+            f"Isolation marker value '{_ISOLATION_MARKER}' not present in "
+            "_tam_security_isolation_marker. "
+            f"Run: INSERT INTO _tam_security_isolation_marker VALUES ('{_ISOLATION_MARKER}');",
+            pytrace=False,
         )
 
     # Create Supabase-equivalent roles if absent
