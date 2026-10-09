@@ -387,9 +387,6 @@ def get_diagnosis_snapshot(diagnosis_id: str, authorization: Optional[str] = Hea
         "진단 결과를 찾을 수 없습니다.",
     )
 
-    # Strip review_required from customer-facing response — internal storage unchanged.
-    # Customers receive only confirmed obligation facts; review_required is internal LEG evidence.
-    _safe_full = {k: v for k, v in (snapshot["full_result"] or {}).items() if k != "review_required"}
     return {
         "status": "success",
         "data": {
@@ -398,7 +395,7 @@ def get_diagnosis_snapshot(diagnosis_id: str, authorization: Optional[str] = Hea
             "sector": snapshot["sector"],
             "engine_version": snapshot["engine_version"],
             "created_at": snapshot["created_at"],
-            "full_result": _safe_full,
+            "full_result": snapshot["full_result"],
         },
     }
 
