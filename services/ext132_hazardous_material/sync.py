@@ -88,6 +88,7 @@ def collect_all(
 
     page_no = max(1, start_page_no)
     first_page = True
+    seen_api_total: int | None = None  # REPAIR-B: mid-collection totalCount consistency guard
 
     while page_no <= MAX_PAGES_SAFETY_CAP:
         try:
@@ -165,6 +166,25 @@ def collect_all(
                 )
         first_page = False
 
+        # REPAIR-B: mid-collection totalCount consistency — detect changes after page 1
+        if page.total_count is not None:
+            if seen_api_total is None:
+                seen_api_total = page.total_count
+            elif page.total_count != seen_api_total:
+                logger.warning(
+                    "ext132 totalCount changed mid-collection page_no=%d first=%d current=%d — aborting",
+                    page_no, seen_api_total, page.total_count,
+                )
+                return SyncResult(
+                    status=SyncStatus.ABORTED_TOTAL_CHANGED,
+                    fetched=len(items),
+                    items=items,
+                    pages_fetched=pages_fetched,
+                    budget_used=budget.used,
+                    error_code="TOTAL_COUNT_CHANGED",
+                    error_message=f"first={seen_api_total} current={page.total_count}",
+                )
+
         pages_fetched += 1
         items.extend(page.items)
 
@@ -201,8 +221,18 @@ def collect_all(
                     error_code="SAVE_ERROR",
                     error_message=str(exc)[:200],
                 )
-            except Exception:
-                pass  # other non-critical callback errors remain non-fatal
+            except Exception as exc:
+                # REPAIR-B: unknown callback errors are fatal — silent pass was swallowing data loss
+                logger.error("ext132 callback error page_no=%d: %s", page_no, type(exc).__name__)
+                return SyncResult(
+                    status=SyncStatus.FAILED,
+                    fetched=len(items),
+                    items=items,
+                    pages_fetched=pages_fetched,
+                    budget_used=budget.used,
+                    error_code="CALLBACK_ERROR",
+                    error_message=type(exc).__name__,
+                )
 
         if not page.items:
             # PATCH-003-02: 조기 빈 페이지 감지 — totalCount 미달 시 PARTIAL 반환 (수집 불완전)

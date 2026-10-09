@@ -98,7 +98,7 @@ class Ext132HazardousMaterialAdapter(SourceAdapter):
                 initial_items_count=initial_db_count,
             )
         except Exception as exc:
-            self._safe_fail_snapshot(snapshot_id, type(exc).__name__)
+            self._safe_fail_snapshot(snapshot_id, type(exc).__name__, run_id=ctx.run_id)
             return self._fail(ctx, "COLLECT_EXCEPTION", type(exc).__name__)
 
         # PATCH-003: PARTIAL/FENCED → preserve STAGING snapshot for resume (no fail_snapshot)
@@ -123,7 +123,7 @@ class Ext132HazardousMaterialAdapter(SourceAdapter):
 
         # PATCH-002-03: only COMPLETED is eligible for promotion
         if sync.status != SyncStatus.COMPLETED:
-            self._safe_fail_snapshot(snapshot_id, sync.error_code or "INCOMPLETE")
+            self._safe_fail_snapshot(snapshot_id, sync.error_code or "INCOMPLETE", run_id=ctx.run_id)
             return RunResult(
                 run_id=ctx.run_id,
                 source_id=ctx.source_id,
@@ -144,7 +144,7 @@ class Ext132HazardousMaterialAdapter(SourceAdapter):
 
         # PATCH-003: completeness guard — DB count must meet API-reported total
         if last_api_total[0] is not None and total_in_db[0] < last_api_total[0]:
-            self._safe_fail_snapshot(snapshot_id, "INCOMPLETE_COLLECTION")
+            self._safe_fail_snapshot(snapshot_id, "INCOMPLETE_COLLECTION", run_id=ctx.run_id)
             return self._fail(ctx, "INCOMPLETE_COLLECTION", f"db={total_in_db[0]} api_total={last_api_total[0]}")
 
         # GAP-D/R3-03: atomic promotion — RPC verifies run ownership + item count
@@ -157,7 +157,7 @@ class Ext132HazardousMaterialAdapter(SourceAdapter):
                 run_id=ctx.run_id,
             )
         except Exception as exc:
-            self._safe_fail_snapshot(snapshot_id, type(exc).__name__)
+            self._safe_fail_snapshot(snapshot_id, type(exc).__name__, run_id=ctx.run_id)
             return self._fail(ctx, "PROMOTE_ERROR", type(exc).__name__)
 
         if not promoted:
@@ -183,12 +183,12 @@ class Ext132HazardousMaterialAdapter(SourceAdapter):
         )
 
     @staticmethod
-    def _safe_fail_snapshot(snapshot_id: str | None, reason: str) -> None:
-        if snapshot_id is None:
+    def _safe_fail_snapshot(snapshot_id: str | None, reason: str, *, run_id: str | None = None) -> None:
+        if snapshot_id is None or run_id is None:
             return
         try:
             from services.ext132_hazardous_material.store import fail_snapshot
-            fail_snapshot(snapshot_id, error_message=reason)
+            fail_snapshot(snapshot_id, run_id=run_id, error_message=reason)
         except Exception:
             pass
 

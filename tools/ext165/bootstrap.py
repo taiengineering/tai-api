@@ -208,7 +208,7 @@ def cmd_bootstrap(yyyy: str | None = None) -> int:
 
         # PATCH-002-03: only COMPLETED is eligible for promotion
         if result.status != SyncStatus.COMPLETED:
-            fail_snapshot(snapshot_id, error_message=result.error_code or "COLLECT_FAILED")
+            fail_snapshot(snapshot_id, run_id=run_id, error_message=result.error_code or "COLLECT_FAILED")
             print("FAIL: collection failed — snapshot marked FAILED")
             return 1
 
@@ -231,7 +231,7 @@ def cmd_bootstrap(yyyy: str | None = None) -> int:
     except Exception as exc:
         if snapshot_id:
             try:
-                fail_snapshot(snapshot_id, error_message=type(exc).__name__)
+                fail_snapshot(snapshot_id, run_id=run_id, error_message=type(exc).__name__)
             except Exception:
                 pass
         raise
@@ -307,7 +307,7 @@ def cmd_resume() -> int:
 
         # PATCH-002-03: only COMPLETED is eligible for promotion
         if result.status != SyncStatus.COMPLETED:
-            fail_snapshot(snapshot_id, error_message=result.error_code or "COLLECT_FAILED")
+            fail_snapshot(snapshot_id, run_id=run_id, error_message=result.error_code or "COLLECT_FAILED")
             print("FAIL: collection failed/aborted — snapshot marked FAILED, restart bootstrap")
             return 1
 
@@ -329,7 +329,7 @@ def cmd_resume() -> int:
 
     except Exception as exc:
         try:
-            fail_snapshot(snapshot_id, error_message=type(exc).__name__)
+            fail_snapshot(snapshot_id, run_id=run_id, error_message=type(exc).__name__)
         except Exception:
             pass
         raise

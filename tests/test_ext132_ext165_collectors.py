@@ -91,7 +91,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import ANY, MagicMock, call, patch
 from uuid import uuid4
 
 import pytest
@@ -403,7 +403,7 @@ def test_b19_ext132_adapter_run_failed_collect():
 
     assert result.status == RunStatus.FAILED
     assert result.error_code == "HTTP_ERROR"
-    fail_snapshot_mock.assert_called_once_with("snap-1", error_message="HTTP_ERROR")
+    fail_snapshot_mock.assert_called_once_with("snap-1", run_id=ANY, error_message="HTTP_ERROR")
 
 
 def test_b20_ext132_adapter_run_partial():
@@ -1973,31 +1973,36 @@ def test_h07_ext165_adapter_budget_exhausted_preserves_snapshot():
     fail_mock.assert_not_called()
 
 
-def test_h08_fail_snapshot_staging_guard_present():
-    """PATCH-003: fail_snapshot must include .eq('status', STAGING) guard so COMPLETED rows are not overwritten."""
+def test_h08_fail_snapshot_calls_rpc_with_run_id():
+    """REPAIR-A: fail_snapshot must call fn_ext132_fail_snapshot RPC with p_run_id for ownership fencing."""
     from services.ext132_hazardous_material.store import fail_snapshot
 
     mock_sb = MagicMock()
-    mock_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    mock_sb.rpc.return_value.execute.return_value = MagicMock()
 
-    fail_snapshot("snap-id", error_message="test error", sb=mock_sb)
+    fail_snapshot("snap-id", run_id="run-abc", error_message="test error", sb=mock_sb)
 
-    # Second .eq() must be the STAGING guard
-    second_eq = mock_sb.table.return_value.update.return_value.eq.return_value.eq
-    second_eq.assert_called_once_with("status", "STAGING")
+    mock_sb.rpc.assert_called_once_with("fn_ext132_fail_snapshot", {
+        "p_snapshot_id": "snap-id",
+        "p_run_id": "run-abc",
+        "p_error_message": "test error",
+    })
 
 
-def test_h09_ext165_fail_snapshot_staging_guard_present():
-    """PATCH-003: ext165 fail_snapshot also includes .eq('status', STAGING) guard."""
+def test_h09_ext165_fail_snapshot_calls_rpc_with_run_id():
+    """REPAIR-A: ext165 fail_snapshot must call fn_ext165_fail_snapshot RPC with p_run_id."""
     from services.ext165_chemical_accident.store import fail_snapshot
 
     mock_sb = MagicMock()
-    mock_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    mock_sb.rpc.return_value.execute.return_value = MagicMock()
 
-    fail_snapshot("snap-165", error_message="oops", sb=mock_sb)
+    fail_snapshot("snap-165", run_id="run-xyz", error_message="oops", sb=mock_sb)
 
-    second_eq = mock_sb.table.return_value.update.return_value.eq.return_value.eq
-    second_eq.assert_called_once_with("status", "STAGING")
+    mock_sb.rpc.assert_called_once_with("fn_ext165_fail_snapshot", {
+        "p_snapshot_id": "snap-165",
+        "p_run_id": "run-xyz",
+        "p_error_message": "oops",
+    })
 
 
 def test_h10_ext132_adapter_incomplete_collection_fails_snapshot():
@@ -2033,7 +2038,7 @@ def test_h10_ext132_adapter_incomplete_collection_fails_snapshot():
 
     assert result.status == RunStatus.FAILED
     assert result.error_code == "INCOMPLETE_COLLECTION"
-    fail_mock.assert_called_once_with("snap-h10", error_message="INCOMPLETE_COLLECTION")
+    fail_mock.assert_called_once_with("snap-h10", run_id=ANY, error_message="INCOMPLETE_COLLECTION")
 
 
 def test_h11_ext132_save_page_checkpoint_snapshot_not_staging_raises_fenced():
@@ -2051,7 +2056,7 @@ def test_h11_ext132_save_page_checkpoint_snapshot_not_staging_raises_fenced():
 
 
 def test_h12_sql_ext132_checkpoint_api_total_validation():
-    """PATCH-003-02: fn_ext132_complete_snapshot validates checkpoint_api_total vs actual count."""
+    """REPAIR-B: fn_ext132_complete_snapshot blocks promotion when checkpoint_api_total IS NULL (fail-closed)."""
     import pathlib
     drafts = list(pathlib.Path("supabase/migrations").glob("*ext132*"))
     assert drafts
@@ -2060,11 +2065,13 @@ def test_h12_sql_ext132_checkpoint_api_total_validation():
     assert fn_start >= 0
     fn_body = content[fn_start:]
     assert "v_checkpoint_api" in fn_body, "Expected v_checkpoint_api variable in fn_ext132_complete_snapshot"
-    assert "v_checkpoint_api is not null" in fn_body.lower(), "Expected checkpoint_api_total null check"
+    # REPAIR-B: NULL → block (fail-closed); previously only non-null was checked
+    assert "v_checkpoint_api is null" in fn_body.lower(), \
+        "Expected fail-closed NULL guard: if v_checkpoint_api is null then return false"
 
 
 def test_h13_sql_ext165_checkpoint_api_total_validation():
-    """PATCH-003-02: fn_ext165_complete_snapshot validates checkpoint_api_total vs actual count."""
+    """REPAIR-B: fn_ext165_complete_snapshot blocks promotion when checkpoint_api_total IS NULL (fail-closed)."""
     import pathlib
     drafts = list(pathlib.Path("supabase/migrations").glob("*ext165*"))
     assert drafts
@@ -2073,7 +2080,8 @@ def test_h13_sql_ext165_checkpoint_api_total_validation():
     assert fn_start >= 0
     fn_body = content[fn_start:]
     assert "v_checkpoint_api" in fn_body, "Expected v_checkpoint_api variable in fn_ext165_complete_snapshot"
-    assert "v_checkpoint_api is not null" in fn_body.lower(), "Expected checkpoint_api_total null check"
+    assert "v_checkpoint_api is null" in fn_body.lower(), \
+        "Expected fail-closed NULL guard: if v_checkpoint_api is null then return false"
 
 
 def test_h14_ext132_adapter_fenced_preserves_snapshot():
@@ -2122,3 +2130,164 @@ def test_h15_ext132_content_hash_consistent_memory_vs_db():
     hash_db = compute_content_hash_from_db("snap-id", sb=mock_sb)
 
     assert hash_memory == hash_db, "In-memory and DB-derived content hashes must match for identical data"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# I-group: REVIEW-REPAIR-001 REPAIR-A/B/D tests
+# SQL_INTEGRATION=UNVERIFIED (no test DB available; REPAIR-D acknowledged)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_i01_ext132_safe_fail_snapshot_passes_run_id():
+    """REPAIR-A: _safe_fail_snapshot must forward run_id to fail_snapshot RPC."""
+    from services.public_data_sync.adapters.ext132_hazardous_material import Ext132HazardousMaterialAdapter
+    from services.ext132_hazardous_material.sync import SyncResult, SyncStatus
+
+    fake_sync = SyncResult(
+        status=SyncStatus.FAILED,
+        fetched=0,
+        items=[],
+        error_code="HTTP_ERROR",
+        error_message="timeout",
+    )
+
+    ctx = _ctx("EXT132_HAZARDOUS_MATERIAL")
+    fail_mock = MagicMock()
+    with (
+        patch("services.ext132_hazardous_material.store.create_staging_snapshot", return_value="snap-i01"),
+        patch("services.ext132_hazardous_material.sync.collect_all", return_value=fake_sync),
+        patch("services.ext132_hazardous_material.store.fail_snapshot", fail_mock),
+    ):
+        Ext132HazardousMaterialAdapter().run(ctx)
+
+    fail_mock.assert_called_once_with("snap-i01", run_id=ctx.run_id, error_message="HTTP_ERROR")
+
+
+def test_i02_ext165_safe_fail_snapshot_passes_run_id():
+    """REPAIR-A: ext165 _safe_fail_snapshot must forward run_id to fail_snapshot RPC."""
+    from services.public_data_sync.adapters.ext165_chemical_accident import Ext165ChemicalAccidentAdapter
+    from services.ext165_chemical_accident.sync import SyncResult, SyncStatus
+
+    fake_sync = SyncResult(
+        status=SyncStatus.FAILED,
+        fetched=0,
+        items=[],
+        error_code="HTTP_ERROR",
+        error_message="timeout",
+    )
+
+    ctx = _ctx("EXT165_CHEMICAL_ACCIDENT")
+    fail_mock = MagicMock()
+    with (
+        patch("services.ext165_chemical_accident.store.create_staging_snapshot", return_value="snap-i02"),
+        patch("services.ext165_chemical_accident.sync.collect_all", return_value=fake_sync),
+        patch("services.ext165_chemical_accident.store.fail_snapshot", fail_mock),
+    ):
+        Ext165ChemicalAccidentAdapter().run(ctx)
+
+    fail_mock.assert_called_once_with("snap-i02", run_id=ctx.run_id, error_message="HTTP_ERROR")
+
+
+def test_i03_safe_fail_snapshot_skips_when_run_id_none():
+    """REPAIR-A: _safe_fail_snapshot(run_id=None) must not call fail_snapshot — prevents orphan REST write."""
+    from services.public_data_sync.adapters.ext132_hazardous_material import Ext132HazardousMaterialAdapter
+
+    fail_mock = MagicMock()
+    with patch("services.ext132_hazardous_material.store.fail_snapshot", fail_mock):
+        Ext132HazardousMaterialAdapter._safe_fail_snapshot("snap-id", "reason", run_id=None)
+
+    fail_mock.assert_not_called()
+
+
+def test_i04_ext132_sync_callback_error_is_fatal():
+    """REPAIR-B: unknown callback exception → CALLBACK_ERROR (not silently swallowed)."""
+    from services.ext132_hazardous_material.sync import SyncStatus, collect_all
+    from services.ext132_hazardous_material.parse import Ext132Item, PageResult
+
+    def bad_callback(page_no, page_items, total_collected, total_count_from_api):
+        raise RuntimeError("unexpected db failure")
+
+    fake_page = PageResult(total_count=10, page_no=1, num_of_rows=10, items=[Ext132Item("A")])
+    with patch("services.ext132_hazardous_material.client.fetch_page", return_value=b""):
+        with patch("services.ext132_hazardous_material.sync.parse_page", return_value=fake_page):
+            result = collect_all(request_budget=5, on_page_complete=bad_callback)
+
+    assert result.status == SyncStatus.FAILED
+    assert result.error_code == "CALLBACK_ERROR"
+
+
+def test_i05_ext165_sync_callback_error_is_fatal():
+    """REPAIR-B: ext165 unknown callback exception → CALLBACK_ERROR."""
+    from services.ext165_chemical_accident.sync import SyncStatus, collect_all
+    from services.ext165_chemical_accident.parse import Ext165Item, PageResult
+
+    def bad_callback(page_no, page_items, total_collected, total_count_from_api):
+        raise ValueError("bad value")
+
+    fake_page = PageResult(total_count=10, page_no=1, num_of_rows=10, items=[Ext165Item("E1")])
+    with patch("services.ext165_chemical_accident.client.fetch_page", return_value=b""):
+        with patch("services.ext165_chemical_accident.sync.parse_page", return_value=fake_page):
+            result = collect_all(request_budget=5, on_page_complete=bad_callback)
+
+    assert result.status == SyncStatus.FAILED
+    assert result.error_code == "CALLBACK_ERROR"
+
+
+def test_i06_ext132_sync_mid_collection_total_count_change():
+    """REPAIR-B: totalCount changing between pages mid-collection → ABORTED_TOTAL_CHANGED."""
+    from services.ext132_hazardous_material.sync import SyncStatus, collect_all
+    from services.ext132_hazardous_material.parse import Ext132Item, PageResult
+
+    page1 = PageResult(total_count=100, page_no=1, num_of_rows=10, items=[Ext132Item("A")])
+    page2 = PageResult(total_count=99, page_no=2, num_of_rows=10, items=[Ext132Item("B")])  # changed!
+    pages = [page1, page2]
+    parse_call = [0]
+
+    def fake_parse(raw):
+        idx = parse_call[0]
+        parse_call[0] += 1
+        return pages[idx] if idx < len(pages) else PageResult(total_count=99, page_no=3, num_of_rows=10, items=[])
+
+    with patch("services.ext132_hazardous_material.client.fetch_page", return_value=b""):
+        with patch("services.ext132_hazardous_material.sync.parse_page", side_effect=fake_parse):
+            result = collect_all(request_budget=10)
+
+    assert result.status == SyncStatus.ABORTED_TOTAL_CHANGED
+    assert result.error_code == "TOTAL_COUNT_CHANGED"
+
+
+def test_i07_ext165_sync_mid_collection_total_count_change():
+    """REPAIR-B: ext165 totalCount changing mid-collection → ABORTED_TOTAL_CHANGED."""
+    from services.ext165_chemical_accident.sync import SyncStatus, collect_all
+    from services.ext165_chemical_accident.parse import Ext165Item, PageResult
+
+    page1 = PageResult(total_count=50, page_no=1, num_of_rows=10, items=[Ext165Item("E1")])
+    page2 = PageResult(total_count=51, page_no=2, num_of_rows=10, items=[Ext165Item("E2")])  # changed!
+    pages = [page1, page2]
+    parse_call = [0]
+
+    def fake_parse(raw):
+        idx = parse_call[0]
+        parse_call[0] += 1
+        return pages[idx] if idx < len(pages) else PageResult(total_count=51, page_no=3, num_of_rows=10, items=[])
+
+    with patch("services.ext165_chemical_accident.client.fetch_page", return_value=b""):
+        with patch("services.ext165_chemical_accident.sync.parse_page", side_effect=fake_parse):
+            result = collect_all(request_budget=10)
+
+    assert result.status == SyncStatus.ABORTED_TOTAL_CHANGED
+    assert result.error_code == "TOTAL_COUNT_CHANGED"
+
+
+def test_i08_sql_ext132_fail_snapshot_rpc_defined():
+    """REPAIR-A: fn_ext132_fail_snapshot RPC must be defined in SQL draft with ownership fencing."""
+    import pathlib
+    drafts = list(pathlib.Path("supabase/migrations").glob("*ext132*"))
+    assert drafts
+    content = drafts[0].read_text()
+    assert "fn_ext132_fail_snapshot" in content, "Expected fn_ext132_fail_snapshot RPC in migration draft"
+    fn_start = content.find("create or replace function fn_ext132_fail_snapshot")
+    assert fn_start >= 0
+    fn_body = content[fn_start:fn_start + 2000]
+    assert "for update" in fn_body.lower(), "Expected FOR UPDATE lock in fn_ext132_fail_snapshot"
+    assert "p_run_id" in fn_body, "Expected p_run_id ownership parameter"
+    assert "p_error_message" in fn_body, "Expected p_error_message parameter"

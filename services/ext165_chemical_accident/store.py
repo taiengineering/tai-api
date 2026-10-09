@@ -218,17 +218,18 @@ def promote_snapshot(
     return len(updated) == 1
 
 
-def fail_snapshot(snapshot_id: str, *, error_message: str, sb: Any = None) -> None:
-    """STAGING → FAILED 마킹. 이전 COMPLETED 스냅샷은 보존된다.
+def fail_snapshot(snapshot_id: str, *, run_id: str, error_message: str, sb: Any = None) -> None:
+    """REPAIR-A: fn_ext165_fail_snapshot RPC — Run 소유권 검증 + STAGING guard 원자적 실행.
 
-    PATCH-003: STAGING 상태인 경우에만 갱신 — COMPLETED 스냅샷을 덮어쓰지 않는다.
+    RPC 내부 lock 순서: runtime FOR UPDATE → snapshot FOR UPDATE.
+    소유권 불일치 또는 STAGING 아닌 경우 False 반환(예외 없음).
     """
     client = sb or _sb()
-    client.table(TABLE_SNAPSHOTS).update({
-        "status": SNAPSHOT_FAILED,
-        "error_message": error_message[:500],
-        "completed_at": _now_iso(),
-    }).eq("id", snapshot_id).eq("status", SNAPSHOT_STAGING).execute()
+    client.rpc("fn_ext165_fail_snapshot", {
+        "p_snapshot_id": snapshot_id,
+        "p_run_id": run_id,
+        "p_error_message": error_message,
+    }).execute()
 
 
 def compute_content_hash(items: list[Ext165Item]) -> str:

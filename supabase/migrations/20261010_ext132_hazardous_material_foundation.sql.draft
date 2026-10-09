@@ -226,9 +226,13 @@ begin
         return false;
     end if;
 
-    -- PATCH-003-02: checkpoint_api_total 교차 검증 (수집 불완전 방지)
-    -- checkpoint_api_total이 설정된 경우 DB 실제 count와 일치해야 승격 허용
-    if v_checkpoint_api is not null and v_actual_count <> v_checkpoint_api then
+    -- REPAIR-B: checkpoint_api_total NULL → 수집 증거 없음 → 승격 차단 (fail-closed)
+    if v_checkpoint_api is null then
+        return false;
+    end if;
+
+    -- PATCH-003-02: checkpoint_api_total 교차 검증 — DB count와 일치해야 승격 허용
+    if v_actual_count <> v_checkpoint_api then
         return false;
     end if;
 
@@ -270,7 +274,67 @@ end;
 $$;
 
 comment on function fn_ext132_complete_snapshot is
-    'GAP-D/R3-03/PATCH-04/PATCH-002-02/04/PATCH-003-01/02: EXT-132 스냅샷 원자적 완결. runtime FOR UPDATE → snapshot FOR UPDATE + STAGING 검증 → checkpoint_api_total 검증 → is_current 해제(STEP1) → COMPLETED 승격(STEP2). PROMOTE_FAILED 예외로 롤백 보장.';
+    'GAP-D/R3-03/PATCH-04/PATCH-002-02/04/PATCH-003-01/02/REPAIR-B: EXT-132 스냅샷 원자적 완결. runtime FOR UPDATE → snapshot FOR UPDATE + STAGING 검증 → checkpoint_api_total NULL 차단(REPAIR-B) → count 검증 → is_current 해제(STEP1) → COMPLETED 승격(STEP2). PROMOTE_FAILED 예외로 롤백 보장.';
+
+-- ============================================================
+-- REPAIR-A: fn_ext132_fail_snapshot — Run 소유권 검증 + STAGING guard 원자적 실패 마킹
+-- lock 순서: runtime FOR UPDATE → snapshot FOR UPDATE (deadlock 방지)
+-- ============================================================
+create or replace function fn_ext132_fail_snapshot(
+    p_snapshot_id   uuid,
+    p_run_id        uuid,
+    p_error_message text
+) returns boolean
+language plpgsql
+security invoker
+as $$
+declare
+    v_source_id     text;
+    v_current_run   uuid;
+    v_snap_status   text;
+begin
+    -- source_id 조회 (잠금 전)
+    select source_id into v_source_id
+    from ext132_hazardous_material_snapshots
+    where id = p_snapshot_id;
+
+    if not found then
+        return false;
+    end if;
+
+    -- lock 순서 1: runtime FOR UPDATE FIRST (deadlock 방지)
+    select current_run_id into v_current_run
+    from public_data_source_runtime
+    where source_id = v_source_id
+    for update;
+
+    if v_current_run is null or v_current_run::text != p_run_id::text then
+        return false;  -- 소유권 없음
+    end if;
+
+    -- lock 순서 2: snapshot FOR UPDATE SECOND
+    select status into v_snap_status
+    from ext132_hazardous_material_snapshots
+    where id = p_snapshot_id
+    for update;
+
+    if v_snap_status != 'STAGING' then
+        return false;  -- STAGING 아닌 스냅샷 덮어쓰기 차단
+    end if;
+
+    update ext132_hazardous_material_snapshots
+    set
+        status        = 'FAILED',
+        error_message = left(p_error_message, 500),
+        completed_at  = now()
+    where id = p_snapshot_id;
+
+    return true;
+end;
+$$;
+
+comment on function fn_ext132_fail_snapshot is
+    'REPAIR-A: EXT-132 스냅샷 실패 마킹. runtime FOR UPDATE → snapshot FOR UPDATE 순서. 소유권 불일치·STAGING 아닌 경우 false 반환(예외 없음).';
 
 -- ============================================================
 -- R3-01: public_data_source_runtime seed 행 (is_enabled=false)
