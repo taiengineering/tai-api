@@ -66,7 +66,13 @@ def _pg_available() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(not _pg_available(), reason="PostgreSQL unavailable")
+# Skip only when env var IS set but DB is genuinely unreachable.
+# When TAM_008C_PG_DSN is absent the module-scoped fixture fires pytest.fail()
+# (FAIL, not SKIP) so the missing-env case surfaces as a hard failure.
+pytestmark = pytest.mark.skipif(
+    "TAM_008C_PG_DSN" in os.environ and not _pg_available(),
+    reason="PostgreSQL unavailable (TAM_008C_PG_DSN is set but DB unreachable)",
+)
 
 
 # ── User helper ───────────────────────────────────────────────────────────────
@@ -508,17 +514,19 @@ def test_r14_existing_http_write_gate_unchanged():
 
     Code isolation: adapter must not import or modify routers/tam_routes.py.
 
-    HTTP regression (TAM-008C-007-C2, 2026-10-09): W1-W5 write endpoints
-    verified 403 via local worktree test on feat/tam-008b-route-foundation
-    (router prefix="/v1/tam") — 8/8 PASS:
-      W1 POST /v1/tam/routes                                          → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
-      W2 POST /v1/tam/routes/{id}/versions                           → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
-      W3 POST /v1/tam/routes/{id}/versions/{vid}/steps               → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
+    HTTP regression (TAM-008C-007-C3, 2026-10-09):
+    worktree feat/tam-008b-route-foundation (SHA f32a9aab), prefix="/v1/tam".
+    get_current_user overridden; list_routes/get_route patched in router namespace.
+    Command: cd /tmp/tam_c3_http && python3 -m pytest test_c3_http_regression.py -v -s
+    Result: 8/8 PASS.
+      W1 POST /v1/tam/routes                                            → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
+      W2 POST /v1/tam/routes/{id}/versions                             → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
+      W3 POST /v1/tam/routes/{id}/versions/{vid}/steps                 → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
       W4 POST /v1/tam/routes/{id}/versions/{vid}/steps/{sid}/assignees → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
-      W5 POST /v1/tam/routes/{id}/versions/{vid}/publish              → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
-      R1 GET  /v1/tam/routes                                          → non-403 (read allowed)
-      R2 GET  /v1/tam/routes/{id}                                     → non-403 (read allowed)
-      A1 adapter assess_tam_route_authorization_candidate             → not in app routes
+      W5 POST /v1/tam/routes/{id}/versions/{vid}/publish               → 403 ROUTE_MANAGER_PERMISSION_REQUIRED
+      R1 GET  /v1/tam/routes                                           → 200 {status:success, data:[{route_id:...}]}
+      R2 GET  /v1/tam/routes/{id}                                      → 200 {status:success, data:{route_id:...}}
+      A1 adapter assess_tam_route_authorization_candidate              → not in app routes
     """
     import services.tam.route_authz_adapter as mod
     import inspect
