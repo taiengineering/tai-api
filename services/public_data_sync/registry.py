@@ -192,6 +192,38 @@ _SOURCES: list[SourceSpec] = [
         consumer_tags=("calendar",),
         auto_refresh_candidate=True,
     ),
+    # 13. EXT132_HAZARDOUS_MATERIAL (소방청 위험물안전관리)
+    SourceSpec(
+        source_id="EXT132_HAZARDOUS_MATERIAL",
+        display_name="소방청 위험물안전관리",
+        provider="NFA",
+        dataset_id="ext132_hazardous_material",
+        sync_mode=SourceMode.FULL_SNAPSHOT,
+        source_kind=SourceKind.API,
+        adapter_key="ext132_hazardous_material",
+        credential_pool="DATA_GO_KR",
+        rate_limit_group="DATA_GO_KR_NFA",
+        refresh_policy="DAILY",
+        consumer_tags=("safety", "hazmat"),
+        auto_refresh_candidate=False,
+        notes="WO-001B-R1 신규; 페이지 크기/최대값 UNVERIFIED; auto_refresh=False until sample call verified",
+    ),
+    # 14. EXT165_CHEMICAL_ACCIDENT (화학물질안전원 화학사고)
+    SourceSpec(
+        source_id="EXT165_CHEMICAL_ACCIDENT",
+        display_name="화학물질안전원 화학사고",
+        provider="NICS",
+        dataset_id="ext165_chemical_accident",
+        sync_mode=SourceMode.FULL_SNAPSHOT,
+        source_kind=SourceKind.API,
+        adapter_key="ext165_chemical_accident",
+        credential_pool="DATA_GO_KR",
+        rate_limit_group="DATA_GO_KR_NICS",
+        refresh_policy="DAILY",
+        consumer_tags=("safety", "chem"),
+        auto_refresh_candidate=False,
+        notes="WO-001B-R1 신규; yyyy 연도필터 지원; 페이지 크기/최대값 UNVERIFIED; auto_refresh=False until verified",
+    ),
 ]
 
 _REGISTRY: dict[str, SourceSpec] = {s.source_id: s for s in _SOURCES}

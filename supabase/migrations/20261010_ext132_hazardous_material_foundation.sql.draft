@@ -1,0 +1,255 @@
+-- DRAFT — NOT APPLIED TO PRODUCTION
+-- EXT-132 소방청 위험물안전관리 스냅샷 기반 스토리지 (WO-001B-R3 + PATCH-001)
+-- GAP-B: source_id + checkpoint 필드
+-- GAP-D/R3-03: fn_ext132_complete_snapshot — run 소유권 검증 + 원자적 승격
+-- PATCH-02: fn_ext132_save_page_checkpoint — 원자적 페이지 저장 + 체크포인트
+-- PATCH-04: is_current 열 — 단일 현행판 포인터, fn_ext132_complete_snapshot 원자적 전환
+-- R3-01: public_data_source_runtime seed 행 (is_enabled=false)
+-- Apply only after: sample API call verified, Owner approval obtained
+
+-- ============================================================
+-- 스냅샷 헤더 테이블
+-- ============================================================
+create table if not exists ext132_hazardous_material_snapshots (
+    id                      uuid        primary key default gen_random_uuid(),
+    run_id                  text        not null,
+    source_id               text        not null default 'EXT132_HAZARDOUS_MATERIAL',
+    status                  text        not null default 'STAGING'
+                                        check (status in ('STAGING', 'COMPLETED', 'FAILED')),
+    total_fetched           int,
+    content_hash            text,
+    error_message           text,
+    -- GAP-B: 체크포인트 필드
+    last_page_no            int         not null default 0,
+    checkpoint_total_count  int,
+    checkpoint_api_total    int,
+    -- PATCH-04: 단일 현행판 포인터 (fn_ext132_complete_snapshot이 원자적으로 전환)
+    is_current              boolean     not null default false,
+    created_at              timestamptz not null default now(),
+    completed_at            timestamptz
+);
+
+comment on table ext132_hazardous_material_snapshots is
+    'EXT-132 소방청 위험물안전관리 수집 스냅샷. STAGING→COMPLETED 원자적 프로모션.';
+
+-- GAP-D: source_id 당 STAGING 스냅샷 하나만 허용 (partial unique index)
+create unique index if not exists uidx_ext132_snapshots_one_staging
+    on ext132_hazardous_material_snapshots (source_id)
+    where status = 'STAGING';
+
+-- status 인덱스 (COMPLETED 최신 조회용)
+create index if not exists idx_ext132_snapshots_status_completed_at
+    on ext132_hazardous_material_snapshots (status, completed_at desc);
+
+-- PATCH-04: source_id 당 is_current=true 스냅샷 최대 1개 강제 (DB 수준 불변식)
+create unique index if not exists uidx_ext132_snapshots_one_current
+    on ext132_hazardous_material_snapshots (source_id)
+    where is_current = true;
+
+-- ============================================================
+-- 스냅샷 아이템 테이블
+-- ============================================================
+create table if not exists ext132_hazardous_material_snapshot_items (
+    id              bigserial   primary key,
+    snapshot_id     uuid        not null references ext132_hazardous_material_snapshots(id) on delete cascade,
+    chemicalno      text        not null,   -- 원본 source key (XML 필드명 UNVERIFIED)
+    raw             jsonb       not null default '{}',
+    created_at      timestamptz not null default now(),
+
+    unique (snapshot_id, chemicalno)
+);
+
+comment on table ext132_hazardous_material_snapshot_items is
+    'EXT-132 스냅샷별 위험물 레코드. chemicalno는 UNVERIFIED — 실 API 응답 확인 후 확정.';
+
+create index if not exists idx_ext132_items_snapshot_id
+    on ext132_hazardous_material_snapshot_items (snapshot_id);
+
+-- ============================================================
+-- PATCH-02: 원자적 페이지 저장 + 체크포인트 RPC
+-- ============================================================
+create or replace function fn_ext132_save_page_checkpoint(
+    p_snapshot_id   uuid,
+    p_items         jsonb,      -- array of {chemicalno: text, raw: object}
+    p_page_no       int,
+    p_api_total     int,        -- nullable
+    p_run_id        uuid        -- PATCH-03: 쓰기 전 소유권 + Lease 검증용 (fn_ext132_complete_snapshot과 동일 패턴)
+) returns int
+language plpgsql
+security invoker
+as $$
+declare
+    v_item          jsonb;
+    v_actual_count  int;
+    v_source_id     text;
+    v_current_run   uuid;
+    v_run_status    text;
+    v_lease_until   timestamptz;
+begin
+    -- PATCH-03-A: 스냅샷의 source_id 조회 (잠금 테이블 조회용)
+    select source_id into v_source_id
+    from ext132_hazardous_material_snapshots
+    where id = p_snapshot_id;
+
+    if not found then
+        raise exception 'RUN_FENCED: snapshot % not found', p_snapshot_id;
+    end if;
+
+    -- PATCH-03-B: Source 잠금 소유권 검증 (fn_ext132_complete_snapshot과 동일 패턴)
+    select current_run_id into v_current_run
+    from public_data_source_runtime
+    where source_id = v_source_id;
+
+    if v_current_run is null or v_current_run::text != p_run_id::text then
+        raise exception 'RUN_FENCED: run_id=% is not current owner of source=%', p_run_id, v_source_id;
+    end if;
+
+    -- PATCH-03-C: Run 상태 + Lease 유효성 검증
+    select status, lease_until into v_run_status, v_lease_until
+    from public_data_sync_runs
+    where id = p_run_id;
+
+    if not found or v_run_status != 'RUNNING' or v_lease_until <= now() then
+        raise exception 'RUN_FENCED: run_id=% is not RUNNING or lease expired', p_run_id;
+    end if;
+
+    -- 소유권 확인 완료 — 페이지 저장 + 체크포인트 갱신 (이하 단일 트랜잭션)
+
+    -- 1. upsert items (snapshot_id,chemicalno on_conflict)
+    for v_item in select * from jsonb_array_elements(p_items)
+    loop
+        insert into ext132_hazardous_material_snapshot_items
+            (snapshot_id, chemicalno, raw, created_at)
+        values
+            (p_snapshot_id, v_item->>'chemicalno', coalesce(v_item->'raw', '{}'), now())
+        on conflict (snapshot_id, chemicalno) do update
+            set raw = excluded.raw;
+    end loop;
+
+    -- 2. actual DB unique item count (idempotent — re-run safe)
+    select count(*) into v_actual_count
+    from ext132_hazardous_material_snapshot_items
+    where snapshot_id = p_snapshot_id;
+
+    -- 3. checkpoint UPDATE
+    update ext132_hazardous_material_snapshots
+    set
+        last_page_no           = p_page_no,
+        checkpoint_total_count = v_actual_count,
+        checkpoint_api_total   = coalesce(p_api_total, checkpoint_api_total)
+    where id = p_snapshot_id;
+
+    return v_actual_count;
+end;
+$$;
+
+comment on function fn_ext132_save_page_checkpoint is
+    'PATCH-02/03: EXT-132 페이지 저장 + 체크포인트 갱신 단일 트랜잭션. 쓰기 전 소유권+Lease 검증. RUN_FENCED 예외로 차단.';
+
+-- ============================================================
+-- GAP-D/R3-03: 원자적 스냅샷 완결 RPC (run 소유권 검증 포함)
+-- ============================================================
+create or replace function fn_ext132_complete_snapshot(
+    p_snapshot_id   uuid,
+    p_source_id     text,
+    p_total_items   int,
+    p_content_hash  text,
+    p_run_id        uuid    -- R3-03: 실행 소유권 검증용
+) returns boolean
+language plpgsql
+security invoker
+as $$
+declare
+    v_actual_count  int;
+    v_updated       int;
+    v_current_run   uuid;
+    v_run_status    text;
+    v_lease_until   timestamptz;
+begin
+    -- R3-03-1: 현재 Source의 current_run_id 확인 (기존 공용 잠금 fence)
+    select current_run_id into v_current_run
+    from public_data_source_runtime
+    where source_id = p_source_id;
+
+    if v_current_run is null or v_current_run::text != p_run_id::text then
+        return false;  -- 소유권 없음 또는 다른 Run이 선점
+    end if;
+
+    -- R3-03-2: Run이 RUNNING 상태이고 lease가 유효한지 확인
+    select status, lease_until into v_run_status, v_lease_until
+    from public_data_sync_runs
+    where id = p_run_id;
+
+    if not found or v_run_status != 'RUNNING' or v_lease_until <= now() then
+        return false;  -- Run이 없거나 만료됨
+    end if;
+
+    -- 1. 실제 아이템 수 검증
+    select count(*) into v_actual_count
+    from ext132_hazardous_material_snapshot_items
+    where snapshot_id = p_snapshot_id;
+
+    if v_actual_count <> p_total_items then
+        return false;
+    end if;
+
+    -- 2. STAGING → COMPLETED 원자적 전환
+    -- run_id 조건 제거: 소유권은 steps 1-2에서 public_data_source_runtime으로 이미 검증됨.
+    -- Resume 시 새 run_id가 snapshot.run_id(원래 run)와 달라도 승격 가능.
+    update ext132_hazardous_material_snapshots
+    set
+        status        = 'COMPLETED',
+        total_fetched = p_total_items,
+        content_hash  = p_content_hash,
+        completed_at  = now(),
+        is_current    = true     -- PATCH-04: 새 현행판으로 지정
+    where id        = p_snapshot_id
+      and source_id = p_source_id
+      and status    = 'STAGING';
+
+    get diagnostics v_updated = row_count;
+
+    if v_updated = 1 then
+        -- PATCH-04: 이전 현행판 is_current 해제 (단일 현행판 불변식 유지)
+        update ext132_hazardous_material_snapshots
+        set is_current = false
+        where source_id  = p_source_id
+          and status     = 'COMPLETED'
+          and is_current = true
+          and id        != p_snapshot_id;
+    end if;
+
+    return v_updated = 1;
+end;
+$$;
+
+comment on function fn_ext132_complete_snapshot is
+    'GAP-D/R3-03/PATCH-04: EXT-132 스냅샷 원자적 완결. Run 소유권 + 아이템 수 검증 + STAGING→COMPLETED + is_current 전환 단일 트랜잭션.';
+
+-- ============================================================
+-- R3-01: public_data_source_runtime seed 행 (is_enabled=false)
+-- MANUAL 실행에서 fn_public_data_claim_run이 이 행을 조회한다.
+-- ============================================================
+insert into public_data_source_runtime (source_id, is_enabled)
+values ('EXT132_HAZARDOUS_MATERIAL', false)
+on conflict (source_id) do nothing;
+
+-- ============================================================
+-- RLS: 서비스롤 전용 (공개 접근 차단)
+-- ============================================================
+alter table ext132_hazardous_material_snapshots enable row level security;
+alter table ext132_hazardous_material_snapshot_items enable row level security;
+
+create policy "service_role_all_ext132_snapshots"
+    on ext132_hazardous_material_snapshots
+    for all
+    to service_role
+    using (true)
+    with check (true);
+
+create policy "service_role_all_ext132_items"
+    on ext132_hazardous_material_snapshot_items
+    for all
+    to service_role
+    using (true)
+    with check (true);

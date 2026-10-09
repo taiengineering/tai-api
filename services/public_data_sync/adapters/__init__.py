@@ -77,5 +77,15 @@ def register_builtin_adapters() -> None:
     if csi.adapter_key not in adapter_registry.registered_keys():
         adapter_registry.register(csi)
 
+    from services.public_data_sync.adapters.ext132_hazardous_material import Ext132HazardousMaterialAdapter
+    ext132 = Ext132HazardousMaterialAdapter()
+    if ext132.adapter_key not in adapter_registry.registered_keys():
+        adapter_registry.register(ext132)
+
+    from services.public_data_sync.adapters.ext165_chemical_accident import Ext165ChemicalAccidentAdapter
+    ext165 = Ext165ChemicalAccidentAdapter()
+    if ext165.adapter_key not in adapter_registry.registered_keys():
+        adapter_registry.register(ext165)
+
 
 __all__ = ["SourceAdapter", "AdapterRegistry", "adapter_registry", "register_builtin_adapters"]
