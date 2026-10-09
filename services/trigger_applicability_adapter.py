@@ -20,6 +20,15 @@ ISSUE-002: part_id None 시 evaluate_draft_for_facility 반환 None.
   Trigger 기반 후보는 source_part_id 가 있으면 사용,
   없으면 source_article_id 폴백.
   글로벌 아이디 연속성 유지.
+
+DEV-IN-007: boolean scope 계약 의미 정정 (우선 3개 건설작업 필드 한정).
+  기존 _evaluate_scope_check_extended 는 non-null 이면 무조건 POSSIBLE_CANDIDATE 였음
+  (true/false 를 같은 수준으로 취급). boolean scope 는 소비자 3-state 계약이므로:
+    true  -> MATCH_CANDIDATE    (존재 명시 확인 → scope 충족)
+    false -> NOT_MATCHED        (부재 명시 확인 → scope 불충족)
+    null  -> POSSIBLE_CANDIDATE (미확인 → 판단 유보; null 을 false 로 취급하지 않음)
+  numeric / business / 비대상 scope 는 기존 동작 유지.
+  facility_applicability_eval.evaluate_scope_check 는 수정하지 않음.
 """
 from __future__ import annotations
 
@@ -52,6 +61,14 @@ TRIGGER_FIELD_MAP_EXTENSION: Dict[str, Tuple[Optional[str], str]] = {
     "has_electrical_work":    ("has_electrical_work",    "DIRECT"),
     "has_hot_work":           ("has_hot_work",           "DIRECT"),
     "equipment_type_code":    (None,                     "EQUIPMENT_JOIN"),
+}
+
+# DEV-IN-007: boolean 3-state 의미를 적용할 scope 필드 (우선 3개 건설작업 한정).
+# 안전성 검증 후 다른 boolean scope 로 확장 여부를 별도 결정.
+_BOOLEAN_SCOPE_FIELDS: set = {
+    "has_excavation_work",
+    "has_welding_work",
+    "has_demolition_work",
 }
 
 # Trigger Code → numeric/scope slots 변환 규칙
@@ -88,15 +105,8 @@ _TRIGGER_TO_SCOPE_SLOTS: Dict[str, List[Dict[str, Any]]] = {
 
 
 def _build_augmented_facility(facility: Dict[str, Any]) -> Dict[str, Any]:
-    """ISSUE-001 우회: TRIGGER_FIELD_MAP_EXTENSION 필드를 facility dict에 주입.
-
-    evaluate_numeric_check / evaluate_scope_check는 facility.get(col)로
-    데이터를 찾으므로, has_* 콜럼을 직접 놓아주면 FIELD_MAP 확장 없이 동작."""
+    """ISSUE-001 우회: TRIGGER_FIELD_MAP_EXTENSION 필드를 facility dict에 주입."""
     aug = dict(facility)
-    # FIELD_MAP에 없는 binding_field 직접 매핑 된다.
-    # evaluate_scope_check는 fmap[0](fac_col)로 facility.get() 함.
-    # TRIGGER_FIELD_MAP_EXTENSION에서 fac_col = binding_field 동일로 설정했으니
-    # facility에 has_* 콜럼이 있으면 그대로 동작.
     return aug
 
 
@@ -114,11 +124,27 @@ def _evaluate_scope_check_extended(
     facility: Dict[str, Any],
     binding_field: str,
 ):
-    """TRIGGER_FIELD_MAP_EXTENSION 지원 스코프 평가."""
+    """TRIGGER_FIELD_MAP_EXTENSION 지원 스코프 평가.
+
+    DEV-IN-007: boolean scope 3-state 의미 (우선 _BOOLEAN_SCOPE_FIELDS 한정).
+      true -> MATCH_CANDIDATE / false -> NOT_MATCHED / null -> POSSIBLE_CANDIDATE.
+    그 외 scope 는 기존 동작(non-null -> POSSIBLE, null -> MISSING_DATA) 유지.
+    """
     fac_col, quality = _get_field_map_value(binding_field)
     if fac_col is None:
         return ("SCOPE_CHECK", binding_field, None, None, None, None, "MISSING_DATA", "NO_FACILITY_COLUMN")
     fac_val = facility.get(fac_col)
+
+    # DEV-IN-007: boolean 3-state 계약 (대상 필드 한정)
+    if binding_field in _BOOLEAN_SCOPE_FIELDS:
+        if fac_val is True:
+            return ("SCOPE_CHECK", binding_field, fac_col, None, None, fac_val, "MATCH_CANDIDATE", "BOOLEAN_TRUE")
+        if fac_val is False:
+            return ("SCOPE_CHECK", binding_field, fac_col, None, None, fac_val, "NOT_MATCHED", "BOOLEAN_FALSE")
+        # null / missing → 미확인 → 판단 유보 (null 을 false 로 취급하지 않음)
+        return ("SCOPE_CHECK", binding_field, fac_col, None, None, None, "POSSIBLE_CANDIDATE", "BOOLEAN_NULL")
+
+    # 기존 동작 유지 (비-boolean scope)
     if fac_val is None:
         return ("SCOPE_CHECK", binding_field, fac_col, None, None, None, "MISSING_DATA", "FACILITY_VALUE_NULL")
     return ("SCOPE_CHECK", binding_field, fac_col, None, None, fac_val, "POSSIBLE_CANDIDATE", "SCOPE_FIELD_EXISTS")
@@ -147,24 +173,12 @@ def evaluate_candidate(
     facility: Dict[str, Any],
     trigger_codes: List[str],
 ) -> Dict[str, Any]:
-    """semantic_clause 후보 1건 → facility_applicability 상태 판단.
-
-    TASK-003 + TASK-004 코어.
-    evaluate_draft_for_facility 대신, 어댑터가 직접 check 함수를 호출.
-    (evaluate_draft_for_facility는 part_id=None 시 None 반환 → ISSUE-002 회피)
-
-    Returns:
-      {
-        semantic_clause_id, applicability_status,
-        trigger_code, confidence, match_details
-      }
-    """
+    """semantic_clause 후보 1건 → facility_applicability 상태 판단."""
     trigger_code = candidate.get("trigger_code") or ""
     confidence = candidate.get("confidence") or "MEDIUM"
     clause_id = candidate.get("clause_id") or ""
     source_article_id = candidate.get("source_article_id") or ""
 
-    # BUSINESS:REGISTERED → 조건 판단 없음 → 직접 MATCH_CANDIDATE
     if trigger_code == "BUSINESS:REGISTERED":
         return {
             "semantic_clause_id": clause_id,
@@ -175,7 +189,6 @@ def evaluate_candidate(
             "match_details": {"checks": 0, "reason": "BUSINESS_ALWAYS_MATCH"},
         }
 
-    # slots 생성
     numeric_slots: List[Dict[str, Any]] = []
     scope_slots: List[Dict[str, Any]] = []
 
@@ -185,7 +198,6 @@ def evaluate_candidate(
         for ss in _TRIGGER_TO_SCOPE_SLOTS.get(tc, []):
             scope_slots.append(ss)
 
-    # slots 없으면 조건 정보 부족 → POSSIBLE_CANDIDATE
     if not numeric_slots and not scope_slots:
         return {
             "semantic_clause_id": clause_id,
@@ -229,8 +241,5 @@ def evaluate_candidates_batch(
     facility: Dict[str, Any],
     trigger_codes: List[str],
 ) -> List[Dict[str, Any]]:
-    """TASK-003+004: 의무후보 배치 평가.
-
-    Returns: applicability_status별 평가 결과 리스트.
-    """
+    """TASK-003+004: 의무후보 배치 평가."""
     return [evaluate_candidate(c, facility, trigger_codes) for c in candidates]
