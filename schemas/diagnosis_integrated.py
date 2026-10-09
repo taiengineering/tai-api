@@ -1,3 +1,4 @@
+import math
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
@@ -118,6 +119,24 @@ class DiagnosisRunBody(BaseModel):
     # Neither field mutates factory_work_facts or factory_materials (transient only).
     work_rows: Optional[List[WorkRowInput]] = Field(None, description="Wave A1: Paid 일시적 작업 rows. work_source validate_payload + projector 경유. DB 저장 없음.")
     material_rows: Optional[List[MaterialRowInput]] = Field(None, description="Wave A1: Paid 일시적 자재 rows. material_master_key → catalog 경유. classification_codes 금지. DB 저장 없음.")
+
+    @field_validator("form_data", mode="before")
+    @classmethod
+    def _validate_form_data_numerics(cls, v):
+        """Block negative / non-finite numbers in form_data.
+        0 is valid (present, zero value). None/absent fields are not checked.
+        """
+        if not isinstance(v, dict):
+            return v
+        for key, val in v.items():
+            if isinstance(val, bool):
+                continue
+            if isinstance(val, (int, float)):
+                if not math.isfinite(val):
+                    raise ValueError(f"form_data[{key!r}] must be a finite number")
+                if val < 0:
+                    raise ValueError(f"form_data[{key!r}] must be non-negative (got {val})")
+        return v
 
     @field_validator("appendix3_item_no", mode="before")
     @classmethod
