@@ -1031,17 +1031,27 @@ def ensure_user(authorization: Optional[str] = Header(None)):
     if res.data:
         return {"status": "success", "created": False, "data": res.data[0]}
     email = getattr(auth_user, "email", None)
-    if email:
-        by_email = supabase.table("users").select("*").eq("email", email).limit(1).execute()
-        if by_email.data:
-            row = by_email.data[0]
-            if not row.get("auth_id"):
-                try:
-                    supabase.table("users").update({"auth_id": auth_id, "updated_at": _now_iso()}).eq("id", row["id"]).execute()
-                    row["auth_id"] = auth_id
-                except Exception:
-                    pass
-            return {"status": "success", "created": False, "data": row}
+    if not email or not isinstance(email, str) or not email.strip():
+        # Social email must be present; never create account from unverified/missing profile.
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "SOCIAL_EMAIL_REQUIRED", "message": "소셜 계정의 이메일 정보가 필요합니다."},
+        )
+    by_email = supabase.table("users").select("*").eq("email", email).limit(1).execute()
+    if by_email.data:
+        row = by_email.data[0]
+        # Security invariant: a shared email is NOT authorization to take ownership
+        # of a pre-existing public.users row. Includes legacy rows with NULL auth_id.
+        # Only a separate verified account-linking flow may change auth_id.
+        if str(row.get("auth_id") or "") != auth_id:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "SOCIAL_EMAIL_ACCOUNT_CONFLICT",
+                    "message": "이미 등록된 이메일입니다. 기존 로그인 방법으로 접속한 뒤 계정 연결을 진행해 주세요.",
+                },
+            )
+        return {"status": "success", "created": False, "data": row}
     meta = getattr(auth_user, "user_metadata", None) or {}
     app_meta = getattr(auth_user, "app_metadata", None) or {}
     provider = app_meta.get("provider")
