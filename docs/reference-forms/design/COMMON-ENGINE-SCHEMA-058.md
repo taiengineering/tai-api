@@ -11,7 +11,7 @@ supersedes: TAI-DESIGN-COMMON-ENGINE-V0.2
 change_reason: WO-REF01-059-B2-L01 Landscape 엔진 구현 반영 — document.page.orientation 계약, A4 치수/콘텐츠 너비, DOCX 치수 전달 계약, repeat_table.min_row_height_mm, fail-closed 규칙 추가, 하위 호환성 명시
 ---
 
-# TAI 서식 공통 렌더러 스키마 설계서 v0.2
+# TAI 서식 공통 렌더러 스키마 설계서 v0.3
 
 ## 0. 목적
 
