@@ -1032,7 +1032,7 @@ def ensure_user(authorization: Optional[str] = Header(None)):
         return {"status": "success", "created": False, "data": res.data[0]}
     email = getattr(auth_user, "email", None)
     if not email or not isinstance(email, str) or not email.strip():
-        # Social email must be present; never create account from unverified/missing profile.
+        # Social email must be present; a missing email cannot create an account.
         raise HTTPException(
             status_code=422,
             detail={"code": "SOCIAL_EMAIL_REQUIRED", "message": "소셜 계정의 이메일 정보가 필요합니다."},
