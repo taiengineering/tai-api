@@ -92,3 +92,11 @@ class PageFencedError(PublicDataSyncError):
     Signals that heartbeat returned False or ownership was stolen.
     sync.collect_all catches this and returns SyncStatus.FAILED(FENCED) — never swallows.
     """
+
+
+class PageSaveError(PublicDataSyncError):
+    """PATCH-002-03: Non-fencing page save failure (DB write error, not ownership loss).
+
+    sync.collect_all catches this and returns SyncStatus.FAILED(SAVE_ERROR).
+    Unlike PageFencedError, the STAGING checkpoint may be valid for resume.
+    """

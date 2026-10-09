@@ -63,9 +63,12 @@ class Ext165ChemicalAccidentAdapter(SourceAdapter):
         if is_resume:
             snapshot_id = resume_snapshot_id
             initial_db_count: int = int(ctx.metadata.get("checkpoint_total_count", 0))
+            # PATCH-002-06: restore original year scope from resume metadata
+            yyyy = yyyy or ctx.metadata.get("collect_scope")
         else:
             try:
-                snapshot_id = create_staging_snapshot(ctx.run_id, source_id=SOURCE_ID)
+                # PATCH-002-06: store year scope so resume can restore it
+                snapshot_id = create_staging_snapshot(ctx.run_id, source_id=SOURCE_ID, collect_scope=yyyy)
             except Exception as exc:
                 return self._fail(ctx, "STAGING_CREATE_ERROR", type(exc).__name__)
             initial_db_count = 0
@@ -74,17 +77,18 @@ class Ext165ChemicalAccidentAdapter(SourceAdapter):
         total_in_db: list[int] = [initial_db_count]
 
         def _on_page_complete(page_no: int, page_items: Any, total_collected: int, total_count_from_api: int | None) -> None:
-            """PATCH-02/03: atomic page save + checkpoint via RPC with pre-write fencing.
-            PageFencedError re-raised so sync.collect_all returns FENCED immediately.
+            """PATCH-02/03/PATCH-002-03: atomic page save + checkpoint via RPC.
+            PageFencedError: ownership lost → re-raise → FENCED.
+            PageSaveError: DB write failure → re-raise → SAVE_ERROR (stops collection).
             """
-            from services.public_data_sync.errors import PageFencedError
+            from services.public_data_sync.errors import PageFencedError, PageSaveError
             try:
                 actual = save_page_checkpoint(snapshot_id, page_items, page_no, total_count_from_api, run_id=ctx.run_id)
                 total_in_db[0] = actual
             except PageFencedError:
-                raise  # PATCH-03: stop collection immediately
-            except Exception:
-                pass  # non-fencing save failure: non-fatal
+                raise
+            except Exception as exc:
+                raise PageSaveError(f"page {page_no} save failed: {type(exc).__name__}") from exc
 
         try:
             sync = collect_all(
@@ -98,8 +102,9 @@ class Ext165ChemicalAccidentAdapter(SourceAdapter):
             self._safe_fail_snapshot(snapshot_id, type(exc).__name__)
             return self._fail(ctx, "COLLECT_EXCEPTION", type(exc).__name__)
 
-        if sync.status in (SyncStatus.FAILED, SyncStatus.ABORTED_TOTAL_CHANGED):
-            self._safe_fail_snapshot(snapshot_id, sync.error_code or "COLLECT_FAILED")
+        # PATCH-002-03: only COMPLETED is eligible for promotion
+        if sync.status != SyncStatus.COMPLETED:
+            self._safe_fail_snapshot(snapshot_id, sync.error_code or "INCOMPLETE")
             return RunResult(
                 run_id=ctx.run_id,
                 source_id=ctx.source_id,
@@ -134,11 +139,10 @@ class Ext165ChemicalAccidentAdapter(SourceAdapter):
         if not promoted:
             return self._fail(ctx, "PROMOTE_FENCED", "atomic snapshot promotion rejected")
 
-        run_status = RunStatus.SUCCESS if sync.status == SyncStatus.COMPLETED else RunStatus.PARTIAL
         return RunResult(
             run_id=ctx.run_id,
             source_id=ctx.source_id,
-            status=run_status,
+            status=RunStatus.SUCCESS,
             started_at=ctx.started_at,
             finished_at=datetime.now(timezone.utc),
             fetched=total_in_db[0],

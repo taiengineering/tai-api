@@ -388,6 +388,7 @@ def test_b19_ext132_adapter_run_failed_collect():
 
 
 def test_b20_ext132_adapter_run_partial():
+    """PATCH-002-03: PARTIAL from collect → RunResult FAILED + fail_snapshot called, atomic NOT called."""
     from services.ext132_hazardous_material.sync import SyncResult, SyncStatus
     from services.ext132_hazardous_material.parse import Ext132Item
     from services.public_data_sync.adapters.ext132_hazardous_material import Ext132HazardousMaterialAdapter
@@ -406,15 +407,20 @@ def test_b20_ext132_adapter_run_partial():
             on_page_complete(1, fake_items, 1, None)
         return fake_sync
 
+    fail_snapshot_mock = MagicMock()
+    atomic_mock = MagicMock()
     with (
         patch("services.ext132_hazardous_material.store.create_staging_snapshot", return_value="snap-1"),
         patch("services.ext132_hazardous_material.store.save_page_checkpoint", return_value=1),
         patch("services.ext132_hazardous_material.sync.collect_all", side_effect=fake_collect),
-        patch("services.ext132_hazardous_material.store.atomic_complete_snapshot", return_value=True),
+        patch("services.ext132_hazardous_material.store.fail_snapshot", fail_snapshot_mock),
+        patch("services.ext132_hazardous_material.store.atomic_complete_snapshot", atomic_mock),
     ):
         result = Ext132HazardousMaterialAdapter().run(_ctx("EXT132_HAZARDOUS_MATERIAL"))
 
-    assert result.status == RunStatus.PARTIAL
+    assert result.status == RunStatus.FAILED
+    fail_snapshot_mock.assert_called_once_with("snap-1", error_message="BUDGET_EXHAUSTED")
+    atomic_mock.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1566,3 +1572,233 @@ def test_f15_patch04_migration_drafts_contain_is_current_unique_index():
         assert idx_name in content, f"Expected '{idx_name}' in {drafts[0].name}"
         assert "where is_current = true" in content, \
             f"Expected partial index condition 'where is_current = true' in {drafts[0].name}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G01-G13 — PATCH-002: HTTP contract, resultCode, PARTIAL block, PageSaveError,
+#            SQL promotion order, content hash, collect_scope
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_g01_ext132_client_http_200_returns_bytes(monkeypatch):
+    """PATCH-002-01: kr_get() returns (status_code, text) tuple; client unpacks to bytes."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-key")
+    xml_text = "<?xml version='1.0'?><response/>"
+    with patch("services.kr_public_api.kr_get", return_value=(200, xml_text)):
+        from services.ext132_hazardous_material.client import fetch_page
+        result = fetch_page(1)
+    assert result == xml_text.encode("utf-8")
+
+
+def test_g02_ext132_client_http_401_raises_environment_error(monkeypatch):
+    """PATCH-002-01: HTTP 401 from tuple contract → EnvironmentError (auth failure)."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-key")
+    with patch("services.kr_public_api.kr_get", return_value=(401, "")):
+        from services.ext132_hazardous_material.client import fetch_page
+        with pytest.raises(EnvironmentError, match="401"):
+            fetch_page(1)
+
+
+def test_g03_ext132_client_http_500_raises_ioerror(monkeypatch):
+    """PATCH-002-01: HTTP 5xx from tuple contract → IOError."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-key")
+    with patch("services.kr_public_api.kr_get", return_value=(500, "")):
+        from services.ext132_hazardous_material.client import fetch_page
+        with pytest.raises(IOError):
+            fetch_page(1)
+
+
+def test_g04_ext165_client_http_200_returns_bytes(monkeypatch):
+    """PATCH-002-01: ext165 kr_get() tuple unpacked to bytes."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-key")
+    xml_text = "<?xml version='1.0'?><response/>"
+    with patch("services.kr_public_api.kr_get", return_value=(200, xml_text)):
+        from services.ext165_chemical_accident.client import fetch_page
+        result = fetch_page(1)
+    assert result == xml_text.encode("utf-8")
+
+
+def _xml_page_error(result_code: str) -> bytes:
+    """XML page with a non-'00' resultCode for PATCH-002-05 tests."""
+    return (
+        f"<?xml version='1.0' encoding='UTF-8'?>"
+        f"<response><header><resultCode>{result_code}</resultCode>"
+        f"<resultMsg>ERROR</resultMsg></header>"
+        f"<body><pageNo>1</pageNo><numOfRows>10</numOfRows><items></items></body></response>"
+    ).encode()
+
+
+def test_g05_ext132_sync_result_code_nonzero_returns_failed():
+    """PATCH-002-05: resultCode '99' → SyncStatus.FAILED with error_code=API_ERROR_CODE."""
+    from services.ext132_hazardous_material.sync import SyncStatus, collect_all
+
+    with patch("services.ext132_hazardous_material.client.fetch_page", return_value=_xml_page_error("99")):
+        result = collect_all(page_delay_seconds=0)
+
+    assert result.status == SyncStatus.FAILED
+    assert result.error_code == "API_ERROR_CODE"
+    assert "resultCode=99" in (result.error_message or "")
+
+
+def test_g06_ext165_sync_result_code_nonzero_returns_failed():
+    """PATCH-002-05: ext165 resultCode '01' → SyncStatus.FAILED with error_code=API_ERROR_CODE."""
+    from services.ext165_chemical_accident.sync import SyncStatus, collect_all
+
+    with patch("services.ext165_chemical_accident.client.fetch_page", return_value=_xml_page_error("01")):
+        result = collect_all(page_delay_seconds=0)
+
+    assert result.status == SyncStatus.FAILED
+    assert result.error_code == "API_ERROR_CODE"
+    assert "resultCode=01" in (result.error_message or "")
+
+
+def test_g07_ext132_adapter_partial_safety_cap_returns_failed():
+    """PATCH-002-03: SAFETY_CAP PARTIAL → FAILED + fail_snapshot + atomic NOT called."""
+    from services.ext132_hazardous_material.sync import SyncResult, SyncStatus
+    from services.public_data_sync.adapters.ext132_hazardous_material import Ext132HazardousMaterialAdapter
+
+    fake_sync = SyncResult(
+        status=SyncStatus.PARTIAL,
+        fetched=3,
+        items=[],
+        error_code="SAFETY_CAP",
+    )
+
+    fail_mock = MagicMock()
+    atomic_mock = MagicMock()
+    with (
+        patch("services.ext132_hazardous_material.store.create_staging_snapshot", return_value="snap-cap"),
+        patch("services.ext132_hazardous_material.sync.collect_all", return_value=fake_sync),
+        patch("services.ext132_hazardous_material.store.fail_snapshot", fail_mock),
+        patch("services.ext132_hazardous_material.store.atomic_complete_snapshot", atomic_mock),
+    ):
+        result = Ext132HazardousMaterialAdapter().run(_ctx("EXT132_HAZARDOUS_MATERIAL"))
+
+    assert result.status == RunStatus.FAILED
+    fail_mock.assert_called_once_with("snap-cap", error_message="SAFETY_CAP")
+    atomic_mock.assert_not_called()
+
+
+def test_g08_ext165_adapter_partial_returns_failed():
+    """PATCH-002-03: ext165 PARTIAL → FAILED + fail_snapshot + atomic NOT called."""
+    from services.ext165_chemical_accident.sync import SyncResult, SyncStatus
+    from services.public_data_sync.adapters.ext165_chemical_accident import Ext165ChemicalAccidentAdapter
+
+    fake_sync = SyncResult(
+        status=SyncStatus.PARTIAL,
+        fetched=5,
+        items=[],
+        error_code="BUDGET_EXHAUSTED",
+    )
+
+    fail_mock = MagicMock()
+    atomic_mock = MagicMock()
+    with (
+        patch("services.ext165_chemical_accident.store.create_staging_snapshot", return_value="snap-165-p"),
+        patch("services.ext165_chemical_accident.sync.collect_all", return_value=fake_sync),
+        patch("services.ext165_chemical_accident.store.fail_snapshot", fail_mock),
+        patch("services.ext165_chemical_accident.store.atomic_complete_snapshot", atomic_mock),
+    ):
+        result = Ext165ChemicalAccidentAdapter().run(_ctx("EXT165_CHEMICAL_ACCIDENT"))
+
+    assert result.status == RunStatus.FAILED
+    fail_mock.assert_called_once_with("snap-165-p", error_message="BUDGET_EXHAUSTED")
+    atomic_mock.assert_not_called()
+
+
+def test_g09_ext132_sync_page_save_error_returns_failed():
+    """PATCH-002-03: PageSaveError from on_page_complete → SyncStatus.FAILED(SAVE_ERROR)."""
+    from services.ext132_hazardous_material.sync import SyncStatus, collect_all
+    from services.public_data_sync.errors import PageSaveError
+
+    page1 = _xml_page([{"chemicalno": f"A{i}"} for i in range(3)], total_count=3)
+
+    def _save_error_callback(page_no, page_items, total_collected, total_count_from_api):
+        raise PageSaveError("DB write failed for page 1")
+
+    with patch("services.ext132_hazardous_material.client.fetch_page", return_value=page1):
+        result = collect_all(on_page_complete=_save_error_callback, page_delay_seconds=0)
+
+    assert result.status == SyncStatus.FAILED
+    assert result.error_code == "SAVE_ERROR"
+    assert "DB write failed" in (result.error_message or "")
+
+
+def test_g10_ext165_sync_page_save_error_returns_failed():
+    """PATCH-002-03: ext165 PageSaveError → SyncStatus.FAILED(SAVE_ERROR)."""
+    from services.ext165_chemical_accident.sync import SyncStatus, collect_all
+    from services.public_data_sync.errors import PageSaveError
+
+    page1 = _xml_page([{"dataNo": f"D{i}"} for i in range(2)], total_count=2)
+
+    def _save_error_callback(page_no, page_items, total_collected, total_count_from_api):
+        raise PageSaveError("RPC timeout on page 1")
+
+    with patch("services.ext165_chemical_accident.client.fetch_page", return_value=page1):
+        result = collect_all(on_page_complete=_save_error_callback, page_delay_seconds=0)
+
+    assert result.status == SyncStatus.FAILED
+    assert result.error_code == "SAVE_ERROR"
+
+
+def test_g11_sql_promotion_order_clear_before_set():
+    """PATCH-002-02: migration drafts must clear old is_current=false BEFORE setting new is_current=true."""
+    import pathlib
+
+    for pattern, fn_name in [
+        ("*ext132*", "fn_ext132_complete_snapshot"),
+        ("*ext165*", "fn_ext165_complete_snapshot"),
+    ]:
+        drafts = list(pathlib.Path("supabase/migrations").glob(pattern))
+        assert drafts, f"No migration draft for {pattern}"
+        content = drafts[0].read_text()
+        fn_start = content.find(f"create or replace function {fn_name}")
+        assert fn_start >= 0, f"Function {fn_name} not found in {drafts[0].name}"
+        fn_body = content[fn_start:]
+        # Find position of the clear step (set is_current = false) and the set step
+        pos_clear = fn_body.find("set is_current = false")
+        pos_set = fn_body.find("is_current    = true") if "is_current    = true" in fn_body \
+            else fn_body.find("is_current    = (v_collect_scope is null)")
+        assert pos_clear >= 0, f"Expected 'set is_current = false' in {fn_name} body"
+        assert pos_set >= 0, f"Expected is_current set step in {fn_name} body"
+        assert pos_clear < pos_set, (
+            f"{fn_name}: is_current=false must appear BEFORE is_current=true/scope-set "
+            f"(clear={pos_clear}, set={pos_set})"
+        )
+
+
+def test_g12_content_hash_includes_raw_content():
+    """PATCH-002-07: same ID, different raw content → different hash (hash covers raw, not just ID)."""
+    from services.ext132_hazardous_material.parse import Ext132Item
+    from services.ext132_hazardous_material.store import compute_content_hash
+
+    item_v1 = Ext132Item("A001", raw={"quantity": 100, "location": "warehouse-A"})
+    item_v2 = Ext132Item("A001", raw={"quantity": 200, "location": "warehouse-B"})
+
+    hash_v1 = compute_content_hash([item_v1])
+    hash_v2 = compute_content_hash([item_v2])
+
+    assert hash_v1 != hash_v2, "Same ID, different raw content must produce different hashes"
+
+
+def test_g13_ext165_sql_collect_scope_and_scoped_promotion():
+    """PATCH-002-06: ext165 migration draft has collect_scope column + scoped promotion logic."""
+    import pathlib
+
+    drafts = list(pathlib.Path("supabase/migrations").glob("*ext165*"))
+    assert drafts, "No EXT-165 migration draft found"
+    content = drafts[0].read_text()
+
+    # collect_scope column must exist in table DDL
+    assert "collect_scope" in content, "Expected 'collect_scope' column in ext165 migration draft"
+
+    # fn_ext165_complete_snapshot must declare and use v_collect_scope
+    fn_start = content.find("create or replace function fn_ext165_complete_snapshot")
+    assert fn_start >= 0
+    fn_body = content[fn_start:]
+    assert "v_collect_scope" in fn_body, "Expected 'v_collect_scope' variable in fn_ext165_complete_snapshot"
+
+    # Scoped promotion logic: is_current = (v_collect_scope is null)
+    assert "v_collect_scope is null" in fn_body, (
+        "Expected 'v_collect_scope is null' logic so year-scoped snapshots "
+        "are not promoted as global is_current"
+    )

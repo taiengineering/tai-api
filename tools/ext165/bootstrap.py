@@ -176,19 +176,21 @@ def cmd_bootstrap(yyyy: str | None = None) -> int:
     total_in_db = [0]
     succeeded = False
     try:
-        snapshot_id = create_staging_snapshot(run_id, source_id=SOURCE_ID)
+        # PATCH-002-06: store yyyy as collect_scope to prevent year-scoped snapshots
+        # from replacing the global is_current snapshot
+        snapshot_id = create_staging_snapshot(run_id, source_id=SOURCE_ID, collect_scope=yyyy)
         print(f"  snapshot_id={snapshot_id}")
 
         def _on_page(page_no, page_items, total_collected, total_count_from_api):
-            from services.public_data_sync.errors import PageFencedError
+            from services.public_data_sync.errors import PageFencedError, PageSaveError
             # PATCH-02/03: atomic save + pre-write fencing via RPC
             try:
                 actual = save_page_checkpoint(snapshot_id, page_items, page_no, total_count_from_api, run_id=run_id)
                 total_in_db[0] = actual
             except PageFencedError:
                 raise  # RPC-level fencing — stop collection
-            except Exception:
-                pass  # non-fencing save failure: non-fatal
+            except Exception as exc:
+                raise PageSaveError(f"page {page_no} save failed: {type(exc).__name__}") from exc
             # PATCH-03: belt-and-suspenders post-save heartbeat check
             alive = store.heartbeat(run_id)
             if not alive:
@@ -197,7 +199,8 @@ def cmd_bootstrap(yyyy: str | None = None) -> int:
         result = collect_all(yyyy=yyyy, on_page_complete=_on_page)
         print(f"  status={result.status.value} fetched={result.fetched} pages={result.pages_fetched}")
 
-        if result.status in (SyncStatus.FAILED, SyncStatus.ABORTED_TOTAL_CHANGED):
+        # PATCH-002-03: only COMPLETED is eligible for promotion
+        if result.status != SyncStatus.COMPLETED:
             fail_snapshot(snapshot_id, error_message=result.error_code or "COLLECT_FAILED")
             print("FAIL: collection failed — snapshot marked FAILED")
             return 1
@@ -251,6 +254,8 @@ def cmd_resume() -> int:
     resume_from_page = int(staging.get("last_page_no") or 1)
     expected_total = staging.get("checkpoint_api_total")
     initial_db_count = int(staging.get("checkpoint_total_count") or 0)
+    # PATCH-002-06: restore original year filter from collect_scope stored in staging snapshot
+    collect_scope = staging.get("collect_scope")
     run_id = str(uuid.uuid4())
 
     print(f"RESUME: snapshot_id={snapshot_id} from_page={resume_from_page} db_items={initial_db_count}")
@@ -263,28 +268,30 @@ def cmd_resume() -> int:
     succeeded = False
     try:
         def _on_page(page_no, page_items, total_collected, total_count_from_api):
-            from services.public_data_sync.errors import PageFencedError
+            from services.public_data_sync.errors import PageFencedError, PageSaveError
             # PATCH-02/03: atomic save + pre-write fencing via RPC
             try:
                 actual = save_page_checkpoint(snapshot_id, page_items, page_no, total_count_from_api, run_id=run_id)
                 total_in_db[0] = actual
             except PageFencedError:
                 raise  # RPC-level fencing — stop collection
-            except Exception:
-                pass  # non-fencing save failure: non-fatal
+            except Exception as exc:
+                raise PageSaveError(f"page {page_no} save failed: {type(exc).__name__}") from exc
             # PATCH-03: belt-and-suspenders post-save heartbeat check
             alive = store.heartbeat(run_id)
             if not alive:
                 raise PageFencedError("heartbeat returned False — lease may have expired")
 
         result = collect_all(
+            yyyy=collect_scope,
             start_page_no=resume_from_page,
             on_page_complete=_on_page,
             expected_total_count=expected_total,
         )
         print(f"  status={result.status.value} fetched={result.fetched} pages={result.pages_fetched}")
 
-        if result.status in (SyncStatus.FAILED, SyncStatus.ABORTED_TOTAL_CHANGED):
+        # PATCH-002-03: only COMPLETED is eligible for promotion
+        if result.status != SyncStatus.COMPLETED:
             fail_snapshot(snapshot_id, error_message=result.error_code or "COLLECT_FAILED")
             print("FAIL: collection failed/aborted — snapshot marked FAILED, restart bootstrap")
             return 1

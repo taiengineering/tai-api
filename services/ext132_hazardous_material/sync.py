@@ -17,7 +17,7 @@ from services.ext132_hazardous_material.contract import (
 )
 from services.ext132_hazardous_material.parse import Ext132Item, Ext132ParseError, parse_page
 from services.public_data_sync.budget import RequestBudget, RequestBudgetExceeded
-from services.public_data_sync.errors import PageFencedError
+from services.public_data_sync.errors import PageFencedError, PageSaveError
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +128,22 @@ def collect_all(
                 error_message=str(exc)[:200],
             )
 
+        # PATCH-002-05: reject API error response codes — not treated as empty results
+        if page.result_code is not None and page.result_code != "00":
+            logger.error(
+                "ext132 API error response page_no=%d result_code=%s result_msg=%s",
+                page_no, page.result_code, page.result_msg,
+            )
+            return SyncResult(
+                status=SyncStatus.FAILED,
+                fetched=len(items),
+                items=items,
+                pages_fetched=pages_fetched,
+                budget_used=budget.used,
+                error_code="API_ERROR_CODE",
+                error_message=f"resultCode={page.result_code}",
+            )
+
         # GAP-B: totalCount change detection during resume
         if first_page and expected_total_count is not None and page.total_count is not None:
             if page.total_count != expected_total_count:
@@ -170,8 +186,20 @@ def collect_all(
                     error_code="FENCED",
                     error_message=str(exc)[:200],
                 )
+            except PageSaveError as exc:
+                # PATCH-002-03: page save failure stops collection
+                logger.warning("ext132 page save error page_no=%d: %s", page_no, exc)
+                return SyncResult(
+                    status=SyncStatus.FAILED,
+                    fetched=len(items),
+                    items=items,
+                    pages_fetched=pages_fetched,
+                    budget_used=budget.used,
+                    error_code="SAVE_ERROR",
+                    error_message=str(exc)[:200],
+                )
             except Exception:
-                pass  # checkpoint failure is non-fatal
+                pass  # other non-critical callback errors remain non-fatal
 
         if not page.items:
             break

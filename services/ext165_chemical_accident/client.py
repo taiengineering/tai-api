@@ -29,6 +29,8 @@ def fetch_page(
 
     yyyy: optional year filter (e.g. "2024"). None = all years.
     num_of_rows: UNVERIFIED maximum — callers should pass conservatively.
+
+    PATCH-002-01: kr_get() returns (status_code, text) tuple — not a Response object.
     """
     from services.kr_public_api import kr_get
 
@@ -44,6 +46,11 @@ def fetch_page(
     if yyyy is not None:
         params["yyyy"] = yyyy
 
-    resp = kr_get(BASE_URL, params=params, timeout=timeout)
-    resp.raise_for_status()
-    return resp.content
+    status_code, text = kr_get(BASE_URL, params=params, timeout=timeout)
+    if status_code == 401:
+        raise EnvironmentError("API authentication failed (HTTP 401) — check DATA_GO_KR_SERVICE_KEY")
+    if status_code == 429:
+        raise IOError("API rate limit exceeded (HTTP 429)")
+    if status_code >= 400:
+        raise IOError(f"API HTTP error {status_code}")
+    return text.encode("utf-8")

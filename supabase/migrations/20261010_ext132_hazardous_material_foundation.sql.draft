@@ -1,9 +1,11 @@
 -- DRAFT — NOT APPLIED TO PRODUCTION
--- EXT-132 소방청 위험물안전관리 스냅샷 기반 스토리지 (WO-001B-R3 + PATCH-001)
+-- EXT-132 소방청 위험물안전관리 스냅샷 기반 스토리지 (WO-001B-R3 + PATCH-001 + PATCH-002)
 -- GAP-B: source_id + checkpoint 필드
 -- GAP-D/R3-03: fn_ext132_complete_snapshot — run 소유권 검증 + 원자적 승격
 -- PATCH-02: fn_ext132_save_page_checkpoint — 원자적 페이지 저장 + 체크포인트
 -- PATCH-04: is_current 열 — 단일 현행판 포인터, fn_ext132_complete_snapshot 원자적 전환
+-- PATCH-002-02: fn_ext132_complete_snapshot — is_current 해제 순서 수정 (기존 현행판 해제 FIRST)
+-- PATCH-002-04: FOR UPDATE 잠금 — 쓰기 단계 동시 접근 차단
 -- R3-01: public_data_source_runtime seed 행 (is_enabled=false)
 -- Apply only after: sample API call verified, Owner approval obtained
 
@@ -66,14 +68,14 @@ create index if not exists idx_ext132_items_snapshot_id
     on ext132_hazardous_material_snapshot_items (snapshot_id);
 
 -- ============================================================
--- PATCH-02: 원자적 페이지 저장 + 체크포인트 RPC
+-- PATCH-02/PATCH-002-04: 원자적 페이지 저장 + 체크포인트 RPC
 -- ============================================================
 create or replace function fn_ext132_save_page_checkpoint(
     p_snapshot_id   uuid,
     p_items         jsonb,      -- array of {chemicalno: text, raw: object}
     p_page_no       int,
     p_api_total     int,        -- nullable
-    p_run_id        uuid        -- PATCH-03: 쓰기 전 소유권 + Lease 검증용 (fn_ext132_complete_snapshot과 동일 패턴)
+    p_run_id        uuid        -- PATCH-03: 쓰기 전 소유권 + Lease 검증용
 ) returns int
 language plpgsql
 security invoker
@@ -86,7 +88,7 @@ declare
     v_run_status    text;
     v_lease_until   timestamptz;
 begin
-    -- PATCH-03-A: 스냅샷의 source_id 조회 (잠금 테이블 조회용)
+    -- PATCH-03-A: 스냅샷의 source_id 조회
     select source_id into v_source_id
     from ext132_hazardous_material_snapshots
     where id = p_snapshot_id;
@@ -95,16 +97,17 @@ begin
         raise exception 'RUN_FENCED: snapshot % not found', p_snapshot_id;
     end if;
 
-    -- PATCH-03-B: Source 잠금 소유권 검증 (fn_ext132_complete_snapshot과 동일 패턴)
+    -- PATCH-002-04: FOR UPDATE — 검증과 저장 사이 소유권 변경 차단
     select current_run_id into v_current_run
     from public_data_source_runtime
-    where source_id = v_source_id;
+    where source_id = v_source_id
+    for update;
 
     if v_current_run is null or v_current_run::text != p_run_id::text then
         raise exception 'RUN_FENCED: run_id=% is not current owner of source=%', p_run_id, v_source_id;
     end if;
 
-    -- PATCH-03-C: Run 상태 + Lease 유효성 검증
+    -- Run 상태 + Lease 유효성 검증
     select status, lease_until into v_run_status, v_lease_until
     from public_data_sync_runs
     where id = p_run_id;
@@ -144,10 +147,12 @@ end;
 $$;
 
 comment on function fn_ext132_save_page_checkpoint is
-    'PATCH-02/03: EXT-132 페이지 저장 + 체크포인트 갱신 단일 트랜잭션. 쓰기 전 소유권+Lease 검증. RUN_FENCED 예외로 차단.';
+    'PATCH-02/03/PATCH-002-04: EXT-132 페이지 저장 + 체크포인트 갱신 단일 트랜잭션. FOR UPDATE 잠금 + 소유권+Lease 검증. RUN_FENCED 예외로 차단.';
 
 -- ============================================================
--- GAP-D/R3-03: 원자적 스냅샷 완결 RPC (run 소유권 검증 포함)
+-- GAP-D/R3-03/PATCH-002-02: 원자적 스냅샷 완결 RPC
+-- PATCH-002-02: is_current 해제 순서 수정 — 기존 현행판 해제 FIRST, 신규 승격 SECOND
+--               (기존 순서는 unique index 위반 발생)
 -- ============================================================
 create or replace function fn_ext132_complete_snapshot(
     p_snapshot_id   uuid,
@@ -166,10 +171,11 @@ declare
     v_run_status    text;
     v_lease_until   timestamptz;
 begin
-    -- R3-03-1: 현재 Source의 current_run_id 확인 (기존 공용 잠금 fence)
+    -- PATCH-002-04: FOR UPDATE — 승격 과정 전체에서 동시 접근 차단
     select current_run_id into v_current_run
     from public_data_source_runtime
-    where source_id = p_source_id;
+    where source_id = p_source_id
+    for update;
 
     if v_current_run is null or v_current_run::text != p_run_id::text then
         return false;  -- 소유권 없음 또는 다른 Run이 선점
@@ -193,8 +199,17 @@ begin
         return false;
     end if;
 
-    -- 2. STAGING → COMPLETED 원자적 전환
-    -- run_id 조건 제거: 소유권은 steps 1-2에서 public_data_source_runtime으로 이미 검증됨.
+    -- PATCH-002-02 STEP 1: 기존 현행판 is_current 해제 FIRST
+    -- (unique index (source_id) WHERE is_current=true 위반 방지)
+    update ext132_hazardous_material_snapshots
+    set is_current = false
+    where source_id  = p_source_id
+      and status     = 'COMPLETED'
+      and is_current = true
+      and id        != p_snapshot_id;
+
+    -- PATCH-002-02 STEP 2: STAGING → COMPLETED + 신규 현행판 지정
+    -- run_id 조건 제거: 소유권은 위 public_data_source_runtime 검증으로 확인됨.
     -- Resume 시 새 run_id가 snapshot.run_id(원래 run)와 달라도 승격 가능.
     update ext132_hazardous_material_snapshots
     set
@@ -202,29 +217,19 @@ begin
         total_fetched = p_total_items,
         content_hash  = p_content_hash,
         completed_at  = now(),
-        is_current    = true     -- PATCH-04: 새 현행판으로 지정
+        is_current    = true
     where id        = p_snapshot_id
       and source_id = p_source_id
       and status    = 'STAGING';
 
     get diagnostics v_updated = row_count;
 
-    if v_updated = 1 then
-        -- PATCH-04: 이전 현행판 is_current 해제 (단일 현행판 불변식 유지)
-        update ext132_hazardous_material_snapshots
-        set is_current = false
-        where source_id  = p_source_id
-          and status     = 'COMPLETED'
-          and is_current = true
-          and id        != p_snapshot_id;
-    end if;
-
     return v_updated = 1;
 end;
 $$;
 
 comment on function fn_ext132_complete_snapshot is
-    'GAP-D/R3-03/PATCH-04: EXT-132 스냅샷 원자적 완결. Run 소유권 + 아이템 수 검증 + STAGING→COMPLETED + is_current 전환 단일 트랜잭션.';
+    'GAP-D/R3-03/PATCH-04/PATCH-002-02/04: EXT-132 스냅샷 원자적 완결. FOR UPDATE 잠금 + Run 소유권 + 아이템 수 검증 + 기존현행판해제(FIRST) + STAGING→COMPLETED+is_current 설정(SECOND) 단일 트랜잭션.';
 
 -- ============================================================
 -- R3-01: public_data_source_runtime seed 행 (is_enabled=false)

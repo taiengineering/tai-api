@@ -33,16 +33,29 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def create_staging_snapshot(run_id: str, *, source_id: str = SOURCE_ID, sb: Any = None) -> str:
-    """STAGING 스냅샷 행 생성. snapshot_id 반환."""
+def create_staging_snapshot(
+    run_id: str,
+    *,
+    source_id: str = SOURCE_ID,
+    collect_scope: str | None = None,
+    sb: Any = None,
+) -> str:
+    """STAGING 스냅샷 행 생성. snapshot_id 반환.
+
+    PATCH-002-06: collect_scope stores the year filter (e.g. "2024") so year-scoped
+    snapshots are never promoted as global is_current.
+    """
     client = sb or _sb()
-    res = client.table(TABLE_SNAPSHOTS).insert({
+    row_data: dict[str, Any] = {
         "run_id": run_id,
         "source_id": source_id,
         "status": SNAPSHOT_STAGING,
         "last_page_no": 0,
         "created_at": _now_iso(),
-    }).execute()
+    }
+    if collect_scope is not None:
+        row_data["collect_scope"] = collect_scope
+    res = client.table(TABLE_SNAPSHOTS).insert(row_data).execute()
     row = (res.data or [{}])[0]
     return str(row["id"])
 
@@ -74,11 +87,12 @@ def find_resumable_staging(source_id: str = SOURCE_ID, *, sb: Any = None) -> dic
     """해당 소스의 기존 STAGING 스냅샷 반환. 없으면 None.
 
     GAP-B: resume 진입 전 미완료 스냅샷 식별용.
+    PATCH-002-06: includes collect_scope so resume can restore the original year filter.
     """
     client = sb or _sb()
     res = (
         client.table(TABLE_SNAPSHOTS)
-        .select("id,run_id,last_page_no,checkpoint_total_count,checkpoint_api_total,created_at")
+        .select("id,run_id,last_page_no,checkpoint_total_count,checkpoint_api_total,collect_scope,created_at")
         .eq("source_id", source_id)
         .eq("status", SNAPSHOT_STAGING)
         .order("created_at", desc=True)
@@ -215,23 +229,45 @@ def fail_snapshot(snapshot_id: str, *, error_message: str, sb: Any = None) -> No
 
 
 def compute_content_hash(items: list[Ext165Item]) -> str:
-    """수집된 전체 항목의 결정적 해시 (순서 독립적)."""
-    keys = sorted(item.datano for item in items)
-    payload = json.dumps(keys, ensure_ascii=False)
+    """수집된 전체 항목의 결정적 해시 (순서 독립적).
+
+    PATCH-002-07: includes raw content so content changes (not just ID changes) are detected.
+    """
+    entries = sorted(
+        (item.datano, json.dumps(item.raw, sort_keys=True, ensure_ascii=False))
+        for item in items
+    )
+    payload = json.dumps(entries, ensure_ascii=False)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
 def compute_content_hash_from_db(snapshot_id: str, *, sb: Any = None) -> str:
-    """R3-02: Resume 시 DB에서 전체 항목을 조회하여 해시 계산."""
+    """R3-02/PATCH-002-07: Resume 시 DB에서 전체 항목을 페이지 순회하여 해시 계산.
+
+    PATCH-002-07: includes raw content + paginates to handle >1000 rows.
+    """
     client = sb or _sb()
-    res = (
-        client.table(TABLE_ITEMS)
-        .select("datano")
-        .eq("snapshot_id", snapshot_id)
-        .execute()
+    all_rows: list = []
+    page_size = 1000
+    offset = 0
+    while True:
+        res = (
+            client.table(TABLE_ITEMS)
+            .select("datano,raw")
+            .eq("snapshot_id", snapshot_id)
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        batch = res.data or []
+        all_rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    entries = sorted(
+        (row["datano"], json.dumps(row.get("raw") or {}, sort_keys=True, ensure_ascii=False))
+        for row in all_rows
     )
-    keys = sorted(row["datano"] for row in (res.data or []))
-    payload = json.dumps(keys, ensure_ascii=False)
+    payload = json.dumps(entries, ensure_ascii=False)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 

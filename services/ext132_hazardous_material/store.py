@@ -225,27 +225,45 @@ def fail_snapshot(snapshot_id: str, *, error_message: str, sb: Any = None) -> No
 
 
 def compute_content_hash(items: list[Ext132Item]) -> str:
-    """수집된 전체 항목의 결정적 해시 (순서 독립적)."""
-    keys = sorted(item.chemicalno for item in items)
-    payload = json.dumps(keys, ensure_ascii=False)
+    """수집된 전체 항목의 결정적 해시 (순서 독립적).
+
+    PATCH-002-07: includes raw content so content changes (not just ID changes) are detected.
+    """
+    entries = sorted(
+        (item.chemicalno, json.dumps(item.raw, sort_keys=True, ensure_ascii=False))
+        for item in items
+    )
+    payload = json.dumps(entries, ensure_ascii=False)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
 def compute_content_hash_from_db(snapshot_id: str, *, sb: Any = None) -> str:
-    """R3-02: Resume 시 DB에서 전체 항목을 조회하여 해시 계산.
+    """R3-02/PATCH-002-07: Resume 시 DB에서 전체 항목을 페이지 순회하여 해시 계산.
 
-    Resume 완료 후 sync.items는 재개된 페이지 항목만 포함하므로
-    이전 세션에서 저장된 항목까지 포함해 해시를 계산하려면 DB를 직접 조회한다.
+    PATCH-002-07: includes raw content + paginates to handle >1000 rows.
     """
     client = sb or _sb()
-    res = (
-        client.table(TABLE_ITEMS)
-        .select("chemicalno")
-        .eq("snapshot_id", snapshot_id)
-        .execute()
+    all_rows: list = []
+    page_size = 1000
+    offset = 0
+    while True:
+        res = (
+            client.table(TABLE_ITEMS)
+            .select("chemicalno,raw")
+            .eq("snapshot_id", snapshot_id)
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        batch = res.data or []
+        all_rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    entries = sorted(
+        (row["chemicalno"], json.dumps(row.get("raw") or {}, sort_keys=True, ensure_ascii=False))
+        for row in all_rows
     )
-    keys = sorted(row["chemicalno"] for row in (res.data or []))
-    payload = json.dumps(keys, ensure_ascii=False)
+    payload = json.dumps(entries, ensure_ascii=False)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 

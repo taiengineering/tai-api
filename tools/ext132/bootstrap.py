@@ -180,15 +180,15 @@ def cmd_bootstrap() -> int:
         print(f"  snapshot_id={snapshot_id}")
 
         def _on_page(page_no, page_items, total_collected, total_count_from_api):
-            from services.public_data_sync.errors import PageFencedError
+            from services.public_data_sync.errors import PageFencedError, PageSaveError
             # PATCH-02/03: atomic save + pre-write fencing via RPC
             try:
                 actual = save_page_checkpoint(snapshot_id, page_items, page_no, total_count_from_api, run_id=run_id)
                 total_in_db[0] = actual
             except PageFencedError:
                 raise  # RPC-level fencing — stop collection
-            except Exception:
-                pass  # non-fencing save failure: non-fatal
+            except Exception as exc:
+                raise PageSaveError(f"page {page_no} save failed: {type(exc).__name__}") from exc
             # PATCH-03: belt-and-suspenders post-save heartbeat check
             alive = store.heartbeat(run_id)
             if not alive:
@@ -197,7 +197,8 @@ def cmd_bootstrap() -> int:
         result = collect_all(on_page_complete=_on_page)
         print(f"  status={result.status.value} fetched={result.fetched} pages={result.pages_fetched}")
 
-        if result.status in (SyncStatus.FAILED, SyncStatus.ABORTED_TOTAL_CHANGED):
+        # PATCH-002-03: only COMPLETED is eligible for promotion
+        if result.status != SyncStatus.COMPLETED:
             fail_snapshot(snapshot_id, error_message=result.error_code or "COLLECT_FAILED")
             print("FAIL: collection failed — snapshot marked FAILED")
             return 1
@@ -263,15 +264,15 @@ def cmd_resume() -> int:
     succeeded = False
     try:
         def _on_page(page_no, page_items, total_collected, total_count_from_api):
-            from services.public_data_sync.errors import PageFencedError
+            from services.public_data_sync.errors import PageFencedError, PageSaveError
             # PATCH-02/03: atomic save + pre-write fencing via RPC
             try:
                 actual = save_page_checkpoint(snapshot_id, page_items, page_no, total_count_from_api, run_id=run_id)
                 total_in_db[0] = actual
             except PageFencedError:
                 raise  # RPC-level fencing — stop collection
-            except Exception:
-                pass  # non-fencing save failure: non-fatal
+            except Exception as exc:
+                raise PageSaveError(f"page {page_no} save failed: {type(exc).__name__}") from exc
             # PATCH-03: belt-and-suspenders post-save heartbeat check
             alive = store.heartbeat(run_id)
             if not alive:
@@ -284,7 +285,8 @@ def cmd_resume() -> int:
         )
         print(f"  status={result.status.value} fetched={result.fetched} pages={result.pages_fetched}")
 
-        if result.status in (SyncStatus.FAILED, SyncStatus.ABORTED_TOTAL_CHANGED):
+        # PATCH-002-03: only COMPLETED is eligible for promotion
+        if result.status != SyncStatus.COMPLETED:
             fail_snapshot(snapshot_id, error_message=result.error_code or "COLLECT_FAILED")
             print("FAIL: collection failed/aborted — snapshot marked FAILED, restart bootstrap")
             return 1
