@@ -19,6 +19,12 @@ R1 concurrency hardening:
   after the route lock (route → version consistent ordering prevents deadlock).
   Triggers 3 & 4 acquire FOR UPDATE on the version row within the same transaction,
   providing an additional guard for direct-SQL access paths.
+
+R3 factory scope gate (fail-closed):
+  create_route, get_route, list_routes block access to factory-scoped routes
+  unless user.factory_id matches the route's factory_id exactly.
+  role_data_scope (Supabase client) is incompatible with this psycopg2 layer;
+  fail-closed until OD-01 owner decision.  Company-wide routes are unaffected.
 """
 from __future__ import annotations
 
@@ -130,6 +136,16 @@ def create_route(
                 raise TamError(422, "FACTORY_NOT_FOUND",
                                f"factory {factory_id} not found or not accessible")
 
+        # R3: fail-closed factory scope gate
+        if factory_id is not None:
+            user_factory = user.get("factory_id")
+            if user_factory is None or str(user_factory) != str(factory_id):
+                raise TamError(
+                    422, "FACTORY_SCOPE_NOT_FINALIZED",
+                    "factory-scoped route creation requires factory scope authorization "
+                    "(contract pending OD-01 owner decision)",
+                )
+
         cur.execute(
             """
             INSERT INTO tam_approval_routes
@@ -176,6 +192,17 @@ def get_route(
         row = cur.fetchone()
         if not row or str(row["company_id"]) != actor_company:
             raise TamError(404, "ROUTE_NOT_FOUND", "route not found")
+
+        # R3: fail-closed factory scope gate
+        if row["factory_id"] is not None:
+            user_factory = user.get("factory_id")
+            if user_factory is None or str(user_factory) != str(row["factory_id"]):
+                raise TamError(
+                    422, "FACTORY_SCOPE_NOT_FINALIZED",
+                    "access to factory-scoped routes requires factory scope authorization "
+                    "(contract pending OD-01 owner decision)",
+                )
+
         return dict(row)
     except TamError:
         raise
@@ -197,11 +224,31 @@ def list_routes(
     if actor_company != str(company_id):
         raise TamError(403, "CROSS_COMPANY_FORBIDDEN",
                        "company_id must match authenticated user company")
+
+    user_factory = user.get("factory_id")
+
+    # R3: factory scope gate on explicit factory_id filter
+    if factory_id is not None:
+        if user_factory is None or str(user_factory) != str(factory_id):
+            raise TamError(
+                422, "FACTORY_SCOPE_NOT_FINALIZED",
+                "access to factory-scoped routes requires factory scope authorization "
+                "(contract pending OD-01 owner decision)",
+            )
+
     conn = _connect(dsn)
     try:
         cur = _cur(conn)
         sql = "SELECT * FROM tam_approval_routes WHERE company_id = %s"
         params: list = [company_id]
+
+        # R3: restrict results to user's factory scope
+        if user_factory is not None:
+            sql += " AND (factory_id IS NULL OR factory_id = %s)"
+            params.append(user_factory)
+        else:
+            sql += " AND factory_id IS NULL"
+
         if factory_id is not None:
             sql += " AND factory_id = %s"
             params.append(factory_id)

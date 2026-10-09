@@ -318,11 +318,20 @@ def test_b03_factory_default_duplicate_rejected(pg):
 
 @_SKIP_DB
 def test_b03_different_factory_allowed(pg):
-    from services.tam.routes_svc import create_route
+    """R3 gate: USER_A (factory_id=FAC1) can create FAC1 route but not FAC2.
+    DB-level uniqueness proof: routes for different factories coexist (via _make_route)."""
+    from services.tam.routes_svc import create_route, TamError
     r1 = create_route(USER_A, company_id=CO_A, factory_id=FAC1,
                       route_scope="FACTORY_DEFAULT", display_name="Fac1", dsn=_DSN)
-    r2 = create_route(USER_A, company_id=CO_A, factory_id=FAC2,
-                      route_scope="FACTORY_DEFAULT", display_name="Fac2", dsn=_DSN)
+    assert r1["factory_id"] == FAC1
+    with pytest.raises(TamError) as exc:
+        create_route(USER_A, company_id=CO_A, factory_id=FAC2,
+                     route_scope="FACTORY_DEFAULT", display_name="Fac2", dsn=_DSN)
+    assert exc.value.http_status == 422
+    assert exc.value.code == "FACTORY_SCOPE_NOT_FINALIZED"
+    # DB-level uniqueness still holds: different factories can have separate routes
+    r2 = _make_route(pg, company_id=CO_A, factory_id=FAC2,
+                     route_scope="FACTORY_DEFAULT", display_name="Fac2")
     assert r1["route_id"] != r2["route_id"]
 
 
@@ -1492,5 +1501,214 @@ def test_r11_factory_scoped_assignee_blocked(pg):
 
     with pytest.raises(TamError) as exc:
         create_assignee(USER_A, step_id=step["step_id"], user_id=U2, dsn=_DSN)
+    assert exc.value.http_status == 422
+    assert exc.value.code == "FACTORY_SCOPE_NOT_FINALIZED"
+
+
+# ═══════════════════════════════════════════════════════════════
+# F01-F06 — R3 factory scope gate + publish-then-reject proof
+# ═══════════════════════════════════════════════════════════════
+
+@_SKIP_DB
+def test_f01_publish_commit_blocks_concurrent_step_insert(pg):
+    """F01: After publish_version commits, a concurrent blocked step INSERT is rejected.
+    Thread A locks route+version, publishes (COMMIT).
+    Thread B step INSERT blocks on trigger's FOR UPDATE on version; resumes after A
+    commits; trigger reads PUBLISHED → raises exception (psycopg2.Error).
+    Final DB state: step count unchanged, version PUBLISHED, pointer correct."""
+    from services.tam.routes_svc import create_route, create_version, create_step, create_assignee
+    route = create_route(USER_A, company_id=CO_A, route_scope="DOCUMENT_TYPE",
+                         scope_key="F01", display_name="F01-Route", dsn=_DSN)
+    ver   = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+    step  = create_step(USER_A, version_id=ver["version_id"],
+                        step_order=1, step_name="S1", step_type="SEQUENTIAL", dsn=_DSN)
+    rid = route["route_id"]
+    vid = ver["version_id"]
+    gate_held = threading.Event()
+    b_result: list = []
+
+    def _publisher():
+        conn_a = psycopg2.connect(_DSN)
+        conn_a.autocommit = False
+        cur_a = conn_a.cursor()
+        cur_a.execute("SELECT route_id FROM tam_approval_routes"
+                      " WHERE route_id = %s FOR UPDATE", (rid,))
+        cur_a.execute("SELECT version_id FROM tam_approval_route_versions"
+                      " WHERE version_id = %s FOR UPDATE", (vid,))
+        gate_held.set()
+        time.sleep(0.35)
+        cur_a.execute(
+            "UPDATE tam_approval_route_versions"
+            " SET version_status='PUBLISHED', published_at=NOW(), published_by=%s"
+            " WHERE version_id=%s", (U1, vid))
+        cur_a.execute(
+            "UPDATE tam_approval_routes SET current_version_id=%s WHERE route_id=%s",
+            (vid, rid))
+        conn_a.commit()
+        conn_a.close()
+
+    def _step_inserter():
+        gate_held.wait()
+        conn_b = psycopg2.connect(_DSN)
+        conn_b.autocommit = False
+        cur_b = conn_b.cursor()
+        try:
+            cur_b.execute(
+                "INSERT INTO tam_approval_route_steps"
+                " (version_id, step_order, step_name, step_type)"
+                " VALUES (%s, 2, 'F01-Concurrent', 'SEQUENTIAL')", (vid,))
+            conn_b.commit()
+            b_result.append("ok")
+        except psycopg2.Error as e:
+            b_result.append(e)
+            conn_b.rollback()
+        finally:
+            conn_b.close()
+
+    t_a = threading.Thread(target=_publisher)
+    t_b = threading.Thread(target=_step_inserter)
+    t_a.start(); t_b.start()
+    t_a.join(timeout=10); t_b.join(timeout=10)
+    assert not t_a.is_alive() and not t_b.is_alive(), "F01: thread deadlock"
+    assert len(b_result) == 1 and isinstance(b_result[0], psycopg2.Error), (
+        f"F01: expected INSERT rejection, got {b_result!r}")
+    err = str(b_result[0]).lower()
+    assert "forbidden" in err or "non-draft" in err or "published" in err, (
+        f"F01: wrong rejection reason: {err!r}")
+    cur = _dict_cur(pg)
+    cur.execute("SELECT step_id FROM tam_approval_route_steps WHERE version_id = %s", (vid,))
+    assert [str(r["step_id"]) for r in cur.fetchall()] == [step["step_id"]]
+    cur.execute("SELECT version_status FROM tam_approval_route_versions WHERE version_id = %s", (vid,))
+    assert cur.fetchone()["version_status"] == "PUBLISHED"
+    cur.execute("SELECT current_version_id FROM tam_approval_routes WHERE route_id = %s", (rid,))
+    assert str(cur.fetchone()["current_version_id"]) == vid
+
+
+@_SKIP_DB
+def test_f02_publish_commit_blocks_concurrent_assignee_insert(pg):
+    """F02: After publish_version commits, a concurrent blocked assignee INSERT is rejected.
+    Same pattern as F01 but for tam_approval_step_assignees table (trigger 4)."""
+    from services.tam.routes_svc import create_route, create_version, create_step
+    route = create_route(USER_A, company_id=CO_A, route_scope="DOCUMENT_TYPE",
+                         scope_key="F02", display_name="F02-Route", dsn=_DSN)
+    ver  = create_version(USER_A, route_id=route["route_id"], dsn=_DSN)
+    step = create_step(USER_A, version_id=ver["version_id"],
+                       step_order=1, step_name="S1", step_type="SEQUENTIAL", dsn=_DSN)
+    rid = route["route_id"]
+    vid = ver["version_id"]
+    sid = step["step_id"]
+    gate_held = threading.Event()
+    b_result: list = []
+
+    def _publisher():
+        conn_a = psycopg2.connect(_DSN)
+        conn_a.autocommit = False
+        cur_a = conn_a.cursor()
+        cur_a.execute("SELECT route_id FROM tam_approval_routes"
+                      " WHERE route_id = %s FOR UPDATE", (rid,))
+        cur_a.execute("SELECT version_id FROM tam_approval_route_versions"
+                      " WHERE version_id = %s FOR UPDATE", (vid,))
+        gate_held.set()
+        time.sleep(0.35)
+        cur_a.execute(
+            "UPDATE tam_approval_route_versions"
+            " SET version_status='PUBLISHED', published_at=NOW(), published_by=%s"
+            " WHERE version_id=%s", (U1, vid))
+        cur_a.execute(
+            "UPDATE tam_approval_routes SET current_version_id=%s WHERE route_id=%s",
+            (vid, rid))
+        conn_a.commit()
+        conn_a.close()
+
+    def _assignee_inserter():
+        gate_held.wait()
+        conn_b = psycopg2.connect(_DSN)
+        conn_b.autocommit = False
+        cur_b = conn_b.cursor()
+        try:
+            cur_b.execute(
+                "INSERT INTO tam_approval_step_assignees (step_id, user_id)"
+                " VALUES (%s, %s)", (sid, U2))
+            conn_b.commit()
+            b_result.append("ok")
+        except psycopg2.Error as e:
+            b_result.append(e)
+            conn_b.rollback()
+        finally:
+            conn_b.close()
+
+    t_a = threading.Thread(target=_publisher)
+    t_b = threading.Thread(target=_assignee_inserter)
+    t_a.start(); t_b.start()
+    t_a.join(timeout=10); t_b.join(timeout=10)
+    assert not t_a.is_alive() and not t_b.is_alive(), "F02: thread deadlock"
+    assert len(b_result) == 1 and isinstance(b_result[0], psycopg2.Error), (
+        f"F02: expected assignee INSERT rejection, got {b_result!r}")
+    err = str(b_result[0]).lower()
+    assert "forbidden" in err or "non-draft" in err or "published" in err, (
+        f"F02: wrong rejection reason: {err!r}")
+    cur = _dict_cur(pg)
+    cur.execute("SELECT count(*) AS cnt FROM tam_approval_step_assignees WHERE step_id = %s", (sid,))
+    assert cur.fetchone()["cnt"] == 0
+    cur.execute("SELECT version_status FROM tam_approval_route_versions WHERE version_id = %s", (vid,))
+    assert cur.fetchone()["version_status"] == "PUBLISHED"
+
+
+@_SKIP_DB
+def test_f03_cross_factory_route_get_rejected(pg):
+    """F03: USER_A (factory_id=FAC1) cannot get_route on a FAC2-scoped route.
+    Route created directly (bypass service gate), then get_route raises FACTORY_SCOPE_NOT_FINALIZED."""
+    from services.tam.routes_svc import get_route, TamError
+    route = _make_route(pg, company_id=CO_A, factory_id=FAC2,
+                        route_scope="FACTORY_DEFAULT", display_name="F03-Route")
+    with pytest.raises(TamError) as exc:
+        get_route(USER_A, route_id=route["route_id"], dsn=_DSN)
+    assert exc.value.http_status == 422
+    assert exc.value.code == "FACTORY_SCOPE_NOT_FINALIZED"
+
+
+@_SKIP_DB
+def test_f04_unauthorized_factory_route_create_rejected(pg):
+    """F04: USER_A (factory_id=FAC1) cannot create a route scoped to FAC2.
+    create_route raises FACTORY_SCOPE_NOT_FINALIZED before any DB write."""
+    from services.tam.routes_svc import create_route, TamError
+    with pytest.raises(TamError) as exc:
+        create_route(USER_A, company_id=CO_A, factory_id=FAC2,
+                     route_scope="FACTORY_DEFAULT", display_name="F04-Route", dsn=_DSN)
+    assert exc.value.http_status == 422
+    assert exc.value.code == "FACTORY_SCOPE_NOT_FINALIZED"
+    cur = _dict_cur(pg)
+    cur.execute("SELECT count(*) AS cnt FROM tam_approval_routes WHERE display_name = 'F04-Route'")
+    assert cur.fetchone()["cnt"] == 0, "F04: route must not be written on rejection"
+
+
+@_SKIP_DB
+def test_f05_company_default_route_accessible(pg):
+    """F05: Company-wide routes (factory_id IS NULL) are accessible regardless of user factory.
+    USER_A (factory_id=FAC1) can create, read, and list COMPANY_DEFAULT routes.
+    list_routes for USER_A excludes factory-scoped routes."""
+    from services.tam.routes_svc import create_route, get_route, list_routes
+    route = create_route(USER_A, company_id=CO_A, route_scope="COMPANY_DEFAULT",
+                         display_name="F05-CompanyRoute", dsn=_DSN)
+    assert route["factory_id"] is None
+    fetched = get_route(USER_A, route_id=route["route_id"], dsn=_DSN)
+    assert fetched["route_id"] == route["route_id"]
+    routes = list_routes(USER_A, company_id=CO_A, dsn=_DSN)
+    assert any(r["route_id"] == route["route_id"] for r in routes)
+
+
+@_SKIP_DB
+def test_f06_factory_route_list_not_exposed(pg):
+    """F06: list_routes for USER_A (factory_id=FAC1) excludes FAC2 routes.
+    Explicit FAC2 factory_id filter raises FACTORY_SCOPE_NOT_FINALIZED."""
+    from services.tam.routes_svc import list_routes, TamError
+    _make_route(pg, company_id=CO_A, factory_id=FAC2,
+                route_scope="FACTORY_DEFAULT", display_name="F06-Fac2Route")
+    routes = list_routes(USER_A, company_id=CO_A, dsn=_DSN)
+    fac2_ids = [str(r["factory_id"]) for r in routes if r["factory_id"] is not None
+                and str(r["factory_id"]) == FAC2]
+    assert fac2_ids == [], f"F06: FAC2 route exposed in list: {fac2_ids}"
+    with pytest.raises(TamError) as exc:
+        list_routes(USER_A, company_id=CO_A, factory_id=FAC2, dsn=_DSN)
     assert exc.value.http_status == 422
     assert exc.value.code == "FACTORY_SCOPE_NOT_FINALIZED"
