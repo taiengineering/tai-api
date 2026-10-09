@@ -409,11 +409,16 @@ def test_industrial_leg_explicit_return_additive_company_id_from_factory(monkeyp
             assert name == "factories"
             return _FacQ(self)
 
+    class _Resolution:
+        commercial_version_id = "cv-test"
+
     sb = _FacSB()
     monkeypatch.setattr(LE, "get_supabase", lambda: sb)
     monkeypatch.setattr(LE, "get_current_user", lambda authorization=None: {"id": "u"})
     monkeypatch.setattr(LE, "_ensure_factory_own", lambda *a, **k: None)
-    monkeypatch.setattr(LE, "evaluate_saas_tier_gate", _fit_gate)
+    monkeypatch.setattr(LE, "require_active_company_saas", lambda *a, **k: None)
+    monkeypatch.setattr(LE, "_assert_leg_compliance_core_http", lambda *a, **k: _Resolution())
+    monkeypatch.setattr(LE, "_assert_leg_site_scope_http", lambda *a, **k: None)
     monkeypatch.setattr(LE.leg_runtime_client, "is_enabled", lambda: True)
     monkeypatch.setattr(LE, "run_safe_industrial_leg", lambda *a, **k: {
         "full_result": full,

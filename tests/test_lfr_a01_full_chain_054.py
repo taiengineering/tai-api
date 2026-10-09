@@ -12,6 +12,9 @@ SOURCE CHANGE = 0 / DB WRITE = 0 / DEPLOY = 0
 """
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from clients.leg_runtime_client import build_facility
 from schemas.diagnosis_integrated import DiagnosisRunBody
 from schemas.legal_engine import (
@@ -79,10 +82,10 @@ def test_ind_height_35_in_facility():
     assert fac.get("work_height_m") == 3.5
 
 
-def test_ind_height_negative_in_facility():
-    """I5: INDUSTRIAL work_height_m=-1.0 → facility includes -1.0 (LEG evaluates, not API)."""
-    fac = _industrial_facility(-1.0)
-    assert fac.get("work_height_m") == -1.0
+def test_ind_height_negative_rejected_by_schema():
+    """I5: INDUSTRIAL work_height_m=-1.0 → ValidationError (FF-06 _non_negative_finite rejects)."""
+    with pytest.raises(ValidationError):
+        SafeIndustrialConsumerInput(work_height_m=-1.0)
 
 
 def test_ind_height_absent():
