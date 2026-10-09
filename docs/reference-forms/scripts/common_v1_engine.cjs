@@ -95,11 +95,17 @@ const REQUIRED_ATTRS  = {
     repeat_table:  ['type','columns','default_row_count'],
 };
 
+function posCheck(val, label) {
+    if (typeof val !== 'number' || val <= 0)
+        throw new Error(`${label} must be a positive number, got ${JSON.stringify(val)}`);
+}
+
 function validate(fields) {
     const doc = fields.document;
     if (!doc) throw new Error("Missing 'document' key");
-    for (const a of ['title','doc_id','creator']) {
+    for (const a of ['title', 'doc_id', 'creator']) {
         if (!doc[a]) throw new Error(`document.${a} is required`);
+        if (typeof doc[a] !== 'string') throw new Error(`document.${a} must be a string`);
     }
     const sections = fields.sections;
     if (!Array.isArray(sections)) throw new Error("'sections' must be an array");
@@ -112,15 +118,33 @@ function validate(fields) {
             if (!(a in s))
                 throw new Error(`sections[${i}] (${t}): missing required attr '${a}'`);
         }
-        if (t === 'approval' && (!Array.isArray(s.fields) || s.fields.length < 1))
-            throw new Error(`sections[${i}] approval: fields must have >= 1 entry`);
+
+        if (t === 'approval') {
+            if (!Array.isArray(s.fields) || s.fields.length < 1)
+                throw new Error(`sections[${i}] approval: fields must have >= 1 entry`);
+            posCheck(s.total_width_mm, `sections[${i}] approval.total_width_mm`);
+            s.fields.forEach((f, fi) => {
+                if (!f.id)    throw new Error(`sections[${i}] approval fields[${fi}]: missing required attr 'id'`);
+                if (!f.label) throw new Error(`sections[${i}] approval fields[${fi}]: missing required attr 'label'`);
+            });
+        }
         if (t === 'labeled_grid') {
             s.rows.forEach((row, ri) => {
                 if (row.length !== 2)
                     throw new Error(`sections[${i}] labeled_grid rows[${ri}]: must have exactly 2 cells`);
             });
+            if ('row_height_mm' in s) posCheck(s.row_height_mm, `sections[${i}] labeled_grid.row_height_mm`);
+        }
+        if (t === 'freeform_area') {
+            posCheck(s.min_height_mm, `sections[${i}] freeform_area.min_height_mm`);
         }
         if (t === 'repeat_table') {
+            if (!s.columns.length)
+                throw new Error(`sections[${i}] repeat_table: columns must not be empty`);
+            s.columns.forEach((col, ci) => {
+                posCheck(col.width_mm, `sections[${i}] repeat_table columns[${ci}].width_mm`);
+                if (!col.id) throw new Error(`sections[${i}] repeat_table columns[${ci}]: missing required attr 'id'`);
+            });
             const total = s.columns.reduce((acc, c) => acc + (c.width_mm || 0), 0);
             if (Math.abs(total - 170) > 0.5)
                 throw new Error(`sections[${i}] repeat_table: column widths sum to ${total}mm, expected 170mm`);

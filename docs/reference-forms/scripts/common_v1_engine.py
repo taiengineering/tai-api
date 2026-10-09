@@ -127,13 +127,19 @@ _REQUIRED = {
     'repeat_table':  ['type','columns','default_row_count'],
 }
 
+def _pos(val, label):
+    if not isinstance(val, (int, float)) or val <= 0:
+        raise ValueError(f"{label} must be a positive number, got {val!r}")
+
 def validate(fields):
     doc = fields.get('document')
     if not doc:
         raise ValueError("Missing 'document' key")
-    for attr in ('title','doc_id','creator'):
+    for attr in ('title', 'doc_id', 'creator'):
         if not doc.get(attr):
             raise ValueError(f"document.{attr} is required")
+        if not isinstance(doc[attr], str):
+            raise ValueError(f"document.{attr} must be a string")
 
     sections = fields.get('sections')
     if sections is None:
@@ -148,17 +154,39 @@ def validate(fields):
         for attr in _REQUIRED[t]:
             if attr not in s:
                 raise ValueError(f"sections[{i}] ({t}): missing required attr {attr!r}")
+
         if t == 'approval':
             if not isinstance(s['fields'], list) or len(s['fields']) < 1:
                 raise ValueError(f"sections[{i}] approval: fields must have >= 1 entry")
+            _pos(s.get('total_width_mm', 0), f"sections[{i}] approval.total_width_mm")
+            for fi, f in enumerate(s['fields']):
+                if not f.get('id'):
+                    raise ValueError(f"sections[{i}] approval fields[{fi}]: missing required attr 'id'")
+                if not f.get('label'):
+                    raise ValueError(f"sections[{i}] approval fields[{fi}]: missing required attr 'label'")
+
         if t == 'labeled_grid':
             for ri, row in enumerate(s['rows']):
                 if len(row) != 2:
                     raise ValueError(f"sections[{i}] labeled_grid rows[{ri}]: must have exactly 2 cells, got {len(row)}")
+            rh = s.get('row_height_mm')
+            if rh is not None:
+                _pos(rh, f"sections[{i}] labeled_grid.row_height_mm")
+
+        if t == 'freeform_area':
+            _pos(s['min_height_mm'], f"sections[{i}] freeform_area.min_height_mm")
+
         if t == 'repeat_table':
+            if not s['columns']:
+                raise ValueError(f"sections[{i}] repeat_table: columns must not be empty")
+            for ci, col in enumerate(s['columns']):
+                _pos(col.get('width_mm', 0), f"sections[{i}] repeat_table columns[{ci}].width_mm")
+                if not col.get('id'):
+                    raise ValueError(f"sections[{i}] repeat_table columns[{ci}]: missing required attr 'id'")
             total_mm = sum(c.get('width_mm', 0) for c in s['columns'])
             if abs(total_mm - 170) > 0.5:
                 raise ValueError(f"sections[{i}] repeat_table: column widths sum to {total_mm}mm, expected 170mm")
+
     return True
 
 # ─── Section builders ─────────────────────────────────────────────
@@ -308,18 +336,21 @@ def assemble(fields, ex_rows=None):
 
 # ─── Document generator ───────────────────────────────────────────
 
-def generate(fields_path, out_path, ex_rows=None):
-    with open(fields_path, encoding='utf-8') as f:
-        fields = json.load(f)
+def generate_from_dict(fields, out_path, ex_rows=None):
     validate(fields)
     meta = fields['document']
     doc = SimpleDocTemplate(
         str(out_path), pagesize=A4,
         leftMargin=MARGIN, rightMargin=MARGIN,
         topMargin=MARGIN, bottomMargin=MARGIN,
-        title=meta['title'], author=meta.get('creator','TAI'),
-        subject=meta.get('subject',''),
+        title=meta['title'], author=meta.get('creator', 'TAI'),
+        subject=meta.get('subject', ''),
     )
     doc.build(assemble(fields, ex_rows), canvasmaker=NumberedCanvas)
-    kb = os.path.getsize(out_path)/1024
+    kb = os.path.getsize(out_path) / 1024
     print(f"  PDF → {out_path}  ({kb:.0f} KB)")
+
+def generate(fields_path, out_path, ex_rows=None):
+    with open(fields_path, encoding='utf-8') as f:
+        fields = json.load(f)
+    generate_from_dict(fields, out_path, ex_rows)
