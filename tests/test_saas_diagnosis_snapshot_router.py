@@ -218,3 +218,29 @@ def test_r08_company_role_matching_company(monkeypatch):
     body = resp.json()
     assert body["status"] == "success"
     assert body["data"]["diagnosis_id"] == _DIAG_ID
+
+
+# ── R09 — review_required stripped from customer-facing response ──────────────
+
+def test_r09_review_required_not_in_response(monkeypatch):
+    """review_required must NOT appear in full_result of customer response.
+    Internal storage (DB) is unchanged; only HTTP response is filtered.
+    """
+    row_with_rr = dict(_VALID_ROW)
+    row_with_rr["full_result"] = {
+        **_VALID_FULL_RESULT,
+        "review_required": [{"atom_id": "A1", "reason": "UNKNOWN"}],
+    }
+    seed = {
+        "anonymous_diagnosis_results": [row_with_rr],
+        "role_data_scope": [{"role_code": "001", "scope_type": "ALL"}],
+    }
+    fake = FakeSB(seed)
+    client = _make_client(fake, monkeypatch, _USER_OWN)
+    resp = client.get(f"/legal-engine/diagnose/snapshot/{_DIAG_ID}")
+    assert resp.status_code == 200
+    body = resp.json()
+    full = body["data"]["full_result"]
+    assert "review_required" not in full, "review_required must be stripped from customer response"
+    # Confirmed obligations still present
+    assert "obligations_raw" in full
