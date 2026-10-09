@@ -22,7 +22,7 @@ B16  adapter: preflight 환경변수 없음 → PreflightError
 B17  adapter: preflight 환경변수 있음 → pass
 B18  adapter: run success → RunResult SUCCESS
 B19  adapter: run FAILED collect → RunResult FAILED + snapshot FAILED
-B20  adapter: run PARTIAL collect → RunResult PARTIAL
+B20  adapter: run PARTIAL collect → RunResult FAILED, snapshot preserved (no fail_snapshot)
 B21  registry: EXT132_HAZARDOUS_MATERIAL 등록됨
 B22  registry: adapter_key=ext132_hazardous_material
 B23  registry: auto_refresh_candidate=False
@@ -66,6 +66,25 @@ D10  regression: 기존 CSI adapter 등록 영향 없음
 D11  regression: 기존 HOLIDAY adapter 등록 영향 없음
 D12  migration draft: ext132 파일 존재
 D13  migration draft: ext165 파일 존재
+
+=====================================================================
+PATCH-003 P0 blockers
+=====================================================================
+H01  SQL ext132 save_page_checkpoint has SNAPSHOT_NOT_STAGING guard
+H02  SQL complete_snapshot has PROMOTE_FAILED raise exception (both sources)
+H03  ext132 sync premature empty page → PARTIAL(PREMATURE_EMPTY_PAGE)
+H04  ext165 sync premature empty page → PARTIAL(PREMATURE_EMPTY_PAGE)
+H05  initial_items_count=100 + empty page + total=100 → COMPLETED
+H06  ext132 adapter BUDGET_EXHAUSTED → FAILED, no fail_snapshot, snapshot_preserved=True
+H07  ext165 adapter BUDGET_EXHAUSTED → FAILED, no fail_snapshot, snapshot_preserved=True
+H08  ext132 fail_snapshot STAGING guard present in call chain
+H09  ext165 fail_snapshot STAGING guard present in call chain
+H10  ext132 adapter INCOMPLETE_COLLECTION → FAILED + fail_snapshot
+H11  save_page_checkpoint SNAPSHOT_NOT_STAGING → PageFencedError
+H12  SQL ext132 checkpoint_api_total validation
+H13  SQL ext165 checkpoint_api_total validation
+H14  ext132 adapter FENCED → FAILED, no fail_snapshot, snapshot_preserved=True
+H15  content hash consistent: in-memory vs DB-derived
 """
 from __future__ import annotations
 
@@ -388,7 +407,7 @@ def test_b19_ext132_adapter_run_failed_collect():
 
 
 def test_b20_ext132_adapter_run_partial():
-    """PATCH-002-03: PARTIAL from collect → RunResult FAILED + fail_snapshot called, atomic NOT called."""
+    """PATCH-003: PARTIAL from collect → RunResult FAILED, fail_snapshot NOT called (snapshot preserved for resume)."""
     from services.ext132_hazardous_material.sync import SyncResult, SyncStatus
     from services.ext132_hazardous_material.parse import Ext132Item
     from services.public_data_sync.adapters.ext132_hazardous_material import Ext132HazardousMaterialAdapter
@@ -419,7 +438,9 @@ def test_b20_ext132_adapter_run_partial():
         result = Ext132HazardousMaterialAdapter().run(_ctx("EXT132_HAZARDOUS_MATERIAL"))
 
     assert result.status == RunStatus.FAILED
-    fail_snapshot_mock.assert_called_once_with("snap-1", error_message="BUDGET_EXHAUSTED")
+    assert result.error_code == "BUDGET_EXHAUSTED"
+    assert (result.details or {}).get("snapshot_preserved") is True
+    fail_snapshot_mock.assert_not_called()
     atomic_mock.assert_not_called()
 
 
@@ -1652,7 +1673,7 @@ def test_g06_ext165_sync_result_code_nonzero_returns_failed():
 
 
 def test_g07_ext132_adapter_partial_safety_cap_returns_failed():
-    """PATCH-002-03: SAFETY_CAP PARTIAL → FAILED + fail_snapshot + atomic NOT called."""
+    """PATCH-003: SAFETY_CAP PARTIAL → FAILED, fail_snapshot NOT called (snapshot preserved for resume)."""
     from services.ext132_hazardous_material.sync import SyncResult, SyncStatus
     from services.public_data_sync.adapters.ext132_hazardous_material import Ext132HazardousMaterialAdapter
 
@@ -1674,12 +1695,14 @@ def test_g07_ext132_adapter_partial_safety_cap_returns_failed():
         result = Ext132HazardousMaterialAdapter().run(_ctx("EXT132_HAZARDOUS_MATERIAL"))
 
     assert result.status == RunStatus.FAILED
-    fail_mock.assert_called_once_with("snap-cap", error_message="SAFETY_CAP")
+    assert result.error_code == "SAFETY_CAP"
+    assert (result.details or {}).get("snapshot_preserved") is True
+    fail_mock.assert_not_called()
     atomic_mock.assert_not_called()
 
 
 def test_g08_ext165_adapter_partial_returns_failed():
-    """PATCH-002-03: ext165 PARTIAL → FAILED + fail_snapshot + atomic NOT called."""
+    """PATCH-003: ext165 PARTIAL → FAILED, fail_snapshot NOT called (snapshot preserved for resume)."""
     from services.ext165_chemical_accident.sync import SyncResult, SyncStatus
     from services.public_data_sync.adapters.ext165_chemical_accident import Ext165ChemicalAccidentAdapter
 
@@ -1701,7 +1724,9 @@ def test_g08_ext165_adapter_partial_returns_failed():
         result = Ext165ChemicalAccidentAdapter().run(_ctx("EXT165_CHEMICAL_ACCIDENT"))
 
     assert result.status == RunStatus.FAILED
-    fail_mock.assert_called_once_with("snap-165-p", error_message="BUDGET_EXHAUSTED")
+    assert result.error_code == "BUDGET_EXHAUSTED"
+    assert (result.details or {}).get("snapshot_preserved") is True
+    fail_mock.assert_not_called()
     atomic_mock.assert_not_called()
 
 
@@ -1802,3 +1827,298 @@ def test_g13_ext165_sql_collect_scope_and_scoped_promotion():
         "Expected 'v_collect_scope is null' logic so year-scoped snapshots "
         "are not promoted as global is_current"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H01-H15 — PATCH-003 P0 blockers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_h01_sql_ext132_save_page_checkpoint_has_staging_guard():
+    """PATCH-003-04: fn_ext132_save_page_checkpoint must raise SNAPSHOT_NOT_STAGING when snapshot not STAGING."""
+    import pathlib
+    drafts = list(pathlib.Path("supabase/migrations").glob("*ext132*"))
+    assert drafts, "No ext132 migration draft found"
+    content = drafts[0].read_text()
+    fn_start = content.find("create or replace function fn_ext132_save_page_checkpoint")
+    assert fn_start >= 0, "fn_ext132_save_page_checkpoint not found"
+    fn_body = content[fn_start:]
+    assert "SNAPSHOT_NOT_STAGING" in fn_body, "Expected SNAPSHOT_NOT_STAGING raise in fn_ext132_save_page_checkpoint"
+    assert "for update" in fn_body.lower(), "Expected snapshot FOR UPDATE lock in fn_ext132_save_page_checkpoint"
+
+
+def test_h02_sql_complete_snapshot_has_promote_failed_raise():
+    """PATCH-003: fn_*_complete_snapshot must RAISE EXCEPTION 'PROMOTE_FAILED' to rollback on promotion failure."""
+    import pathlib
+    for pattern, fn_name in [
+        ("*ext132*", "fn_ext132_complete_snapshot"),
+        ("*ext165*", "fn_ext165_complete_snapshot"),
+    ]:
+        drafts = list(pathlib.Path("supabase/migrations").glob(pattern))
+        assert drafts, f"No migration draft for {pattern}"
+        content = drafts[0].read_text()
+        fn_start = content.find(f"create or replace function {fn_name}")
+        assert fn_start >= 0, f"{fn_name} not found in migration draft"
+        fn_body = content[fn_start:]
+        assert "PROMOTE_FAILED" in fn_body, f"Expected PROMOTE_FAILED raise exception in {fn_name}"
+        assert "raise exception" in fn_body.lower(), f"Expected 'raise exception' in {fn_name}"
+
+
+def test_h03_ext132_sync_premature_empty_page():
+    """PATCH-003-02: ext132 empty page when total_count not yet reached → PARTIAL(PREMATURE_EMPTY_PAGE)."""
+    from services.ext132_hazardous_material.sync import SyncStatus, collect_all
+
+    page1 = _xml_page([{"chemicalno": f"A{i}"} for i in range(3)], total_count=10)
+    page2 = _xml_page([], total_count=10, page_no=2)
+    pages = [page1, page2]
+    idx = {"n": 0}
+
+    def _fetch(page_no, **kw):
+        val = pages[min(idx["n"], len(pages) - 1)]
+        idx["n"] += 1
+        return val
+
+    with patch("services.ext132_hazardous_material.client.fetch_page", side_effect=_fetch):
+        result = collect_all(page_delay_seconds=0)
+
+    assert result.status == SyncStatus.PARTIAL
+    assert result.error_code == "PREMATURE_EMPTY_PAGE"
+    assert result.fetched == 3
+
+
+def test_h04_ext165_sync_premature_empty_page():
+    """PATCH-003-02: ext165 empty page when total_count not yet reached → PARTIAL(PREMATURE_EMPTY_PAGE)."""
+    from services.ext165_chemical_accident.sync import SyncStatus, collect_all
+
+    page1 = _xml_page([{"dataNo": f"D{i}"} for i in range(3)], total_count=10)
+    page2 = _xml_page([], total_count=10, page_no=2)
+    pages = [page1, page2]
+    idx = {"n": 0}
+
+    def _fetch(page_no, **kw):
+        val = pages[min(idx["n"], len(pages) - 1)]
+        idx["n"] += 1
+        return val
+
+    with patch("services.ext165_chemical_accident.client.fetch_page", side_effect=_fetch):
+        result = collect_all(page_delay_seconds=0)
+
+    assert result.status == SyncStatus.PARTIAL
+    assert result.error_code == "PREMATURE_EMPTY_PAGE"
+    assert result.fetched == 3
+
+
+def test_h05_ext132_initial_items_count_prevents_premature_empty_page():
+    """PATCH-003-02: initial_items_count=100 meets total=100 even on empty page → COMPLETED, not PREMATURE_EMPTY_PAGE."""
+    from services.ext132_hazardous_material.sync import SyncStatus, collect_all
+
+    # Empty first page, but initial_items_count already meets total_count
+    page1 = _xml_page([], total_count=100, page_no=1)
+
+    with patch("services.ext132_hazardous_material.client.fetch_page", return_value=page1):
+        result = collect_all(page_delay_seconds=0, initial_items_count=100)
+
+    assert result.status == SyncStatus.COMPLETED
+    assert result.error_code is None
+
+
+def test_h06_ext132_adapter_budget_exhausted_preserves_snapshot():
+    """PATCH-003: ext132 adapter BUDGET_EXHAUSTED → FAILED, fail_snapshot NOT called, snapshot_preserved=True."""
+    from services.ext132_hazardous_material.sync import SyncResult, SyncStatus
+    from services.public_data_sync.adapters.ext132_hazardous_material import Ext132HazardousMaterialAdapter
+
+    fake_sync = SyncResult(
+        status=SyncStatus.PARTIAL,
+        fetched=10,
+        items=[],
+        error_code="BUDGET_EXHAUSTED",
+    )
+
+    fail_mock = MagicMock()
+    with (
+        patch("services.ext132_hazardous_material.store.create_staging_snapshot", return_value="snap-h06"),
+        patch("services.ext132_hazardous_material.sync.collect_all", return_value=fake_sync),
+        patch("services.ext132_hazardous_material.store.fail_snapshot", fail_mock),
+    ):
+        result = Ext132HazardousMaterialAdapter().run(_ctx("EXT132_HAZARDOUS_MATERIAL"))
+
+    assert result.status == RunStatus.FAILED
+    assert result.error_code == "BUDGET_EXHAUSTED"
+    assert (result.details or {}).get("snapshot_preserved") is True
+    fail_mock.assert_not_called()
+
+
+def test_h07_ext165_adapter_budget_exhausted_preserves_snapshot():
+    """PATCH-003: ext165 adapter BUDGET_EXHAUSTED → FAILED, fail_snapshot NOT called, snapshot_preserved=True."""
+    from services.ext165_chemical_accident.sync import SyncResult, SyncStatus
+    from services.public_data_sync.adapters.ext165_chemical_accident import Ext165ChemicalAccidentAdapter
+
+    fake_sync = SyncResult(
+        status=SyncStatus.PARTIAL,
+        fetched=10,
+        items=[],
+        error_code="BUDGET_EXHAUSTED",
+    )
+
+    fail_mock = MagicMock()
+    with (
+        patch("services.ext165_chemical_accident.store.create_staging_snapshot", return_value="snap-h07"),
+        patch("services.ext165_chemical_accident.sync.collect_all", return_value=fake_sync),
+        patch("services.ext165_chemical_accident.store.fail_snapshot", fail_mock),
+    ):
+        result = Ext165ChemicalAccidentAdapter().run(_ctx("EXT165_CHEMICAL_ACCIDENT"))
+
+    assert result.status == RunStatus.FAILED
+    assert result.error_code == "BUDGET_EXHAUSTED"
+    assert (result.details or {}).get("snapshot_preserved") is True
+    fail_mock.assert_not_called()
+
+
+def test_h08_fail_snapshot_staging_guard_present():
+    """PATCH-003: fail_snapshot must include .eq('status', STAGING) guard so COMPLETED rows are not overwritten."""
+    from services.ext132_hazardous_material.store import fail_snapshot
+
+    mock_sb = MagicMock()
+    mock_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+
+    fail_snapshot("snap-id", error_message="test error", sb=mock_sb)
+
+    # Second .eq() must be the STAGING guard
+    second_eq = mock_sb.table.return_value.update.return_value.eq.return_value.eq
+    second_eq.assert_called_once_with("status", "STAGING")
+
+
+def test_h09_ext165_fail_snapshot_staging_guard_present():
+    """PATCH-003: ext165 fail_snapshot also includes .eq('status', STAGING) guard."""
+    from services.ext165_chemical_accident.store import fail_snapshot
+
+    mock_sb = MagicMock()
+    mock_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+
+    fail_snapshot("snap-165", error_message="oops", sb=mock_sb)
+
+    second_eq = mock_sb.table.return_value.update.return_value.eq.return_value.eq
+    second_eq.assert_called_once_with("status", "STAGING")
+
+
+def test_h10_ext132_adapter_incomplete_collection_fails_snapshot():
+    """PATCH-003: total_in_db < api_total → INCOMPLETE_COLLECTION + fail_snapshot."""
+    from services.ext132_hazardous_material.sync import SyncResult, SyncStatus
+    from services.ext132_hazardous_material.parse import Ext132Item
+    from services.public_data_sync.adapters.ext132_hazardous_material import Ext132HazardousMaterialAdapter
+
+    fake_items = [Ext132Item("A001"), Ext132Item("A002")]
+    fake_sync = SyncResult(
+        status=SyncStatus.COMPLETED,
+        fetched=2,
+        items=fake_items,
+        pages_fetched=1,
+        budget_used=1,
+    )
+
+    def fake_collect(**kw):
+        on_page_complete = kw.get("on_page_complete")
+        if on_page_complete:
+            on_page_complete(1, fake_items, 2, 100)  # api_total=100, but only 2 saved
+        return fake_sync
+
+    fail_mock = MagicMock()
+    with (
+        patch("services.ext132_hazardous_material.store.create_staging_snapshot", return_value="snap-h10"),
+        patch("services.ext132_hazardous_material.store.save_page_checkpoint", return_value=2),
+        patch("services.ext132_hazardous_material.sync.collect_all", side_effect=fake_collect),
+        patch("services.ext132_hazardous_material.store.fail_snapshot", fail_mock),
+        patch("services.ext132_hazardous_material.store.atomic_complete_snapshot"),
+    ):
+        result = Ext132HazardousMaterialAdapter().run(_ctx("EXT132_HAZARDOUS_MATERIAL"))
+
+    assert result.status == RunStatus.FAILED
+    assert result.error_code == "INCOMPLETE_COLLECTION"
+    fail_mock.assert_called_once_with("snap-h10", error_message="INCOMPLETE_COLLECTION")
+
+
+def test_h11_ext132_save_page_checkpoint_snapshot_not_staging_raises_fenced():
+    """PATCH-003: save_page_checkpoint receiving SNAPSHOT_NOT_STAGING → PageFencedError."""
+    from services.ext132_hazardous_material.store import save_page_checkpoint
+    from services.public_data_sync.errors import PageFencedError
+
+    mock_sb = MagicMock()
+    mock_sb.rpc.return_value.execute.side_effect = Exception(
+        "SNAPSHOT_NOT_STAGING: snapshot abc has status=COMPLETED, expected STAGING"
+    )
+
+    with pytest.raises(PageFencedError):
+        save_page_checkpoint("snap-id", [], 1, None, run_id="run-id", sb=mock_sb)
+
+
+def test_h12_sql_ext132_checkpoint_api_total_validation():
+    """PATCH-003-02: fn_ext132_complete_snapshot validates checkpoint_api_total vs actual count."""
+    import pathlib
+    drafts = list(pathlib.Path("supabase/migrations").glob("*ext132*"))
+    assert drafts
+    content = drafts[0].read_text()
+    fn_start = content.find("create or replace function fn_ext132_complete_snapshot")
+    assert fn_start >= 0
+    fn_body = content[fn_start:]
+    assert "v_checkpoint_api" in fn_body, "Expected v_checkpoint_api variable in fn_ext132_complete_snapshot"
+    assert "v_checkpoint_api is not null" in fn_body.lower(), "Expected checkpoint_api_total null check"
+
+
+def test_h13_sql_ext165_checkpoint_api_total_validation():
+    """PATCH-003-02: fn_ext165_complete_snapshot validates checkpoint_api_total vs actual count."""
+    import pathlib
+    drafts = list(pathlib.Path("supabase/migrations").glob("*ext165*"))
+    assert drafts
+    content = drafts[0].read_text()
+    fn_start = content.find("create or replace function fn_ext165_complete_snapshot")
+    assert fn_start >= 0
+    fn_body = content[fn_start:]
+    assert "v_checkpoint_api" in fn_body, "Expected v_checkpoint_api variable in fn_ext165_complete_snapshot"
+    assert "v_checkpoint_api is not null" in fn_body.lower(), "Expected checkpoint_api_total null check"
+
+
+def test_h14_ext132_adapter_fenced_preserves_snapshot():
+    """PATCH-003: FENCED result → RunStatus.FAILED, fail_snapshot NOT called (snapshot preserved)."""
+    from services.ext132_hazardous_material.sync import SyncResult, SyncStatus
+    from services.public_data_sync.adapters.ext132_hazardous_material import Ext132HazardousMaterialAdapter
+
+    fake_sync = SyncResult(
+        status=SyncStatus.FAILED,
+        fetched=5,
+        items=[],
+        error_code="FENCED",
+        error_message="run_id not current owner",
+    )
+
+    fail_mock = MagicMock()
+    with (
+        patch("services.ext132_hazardous_material.store.create_staging_snapshot", return_value="snap-h14"),
+        patch("services.ext132_hazardous_material.sync.collect_all", return_value=fake_sync),
+        patch("services.ext132_hazardous_material.store.fail_snapshot", fail_mock),
+    ):
+        result = Ext132HazardousMaterialAdapter().run(_ctx("EXT132_HAZARDOUS_MATERIAL"))
+
+    assert result.status == RunStatus.FAILED
+    assert result.error_code == "FENCED"
+    assert (result.details or {}).get("snapshot_preserved") is True
+    fail_mock.assert_not_called()
+
+
+def test_h15_ext132_content_hash_consistent_memory_vs_db():
+    """PATCH-003: compute_content_hash and compute_content_hash_from_db produce identical results for same data."""
+    from services.ext132_hazardous_material.parse import Ext132Item
+    from services.ext132_hazardous_material.store import compute_content_hash, compute_content_hash_from_db
+
+    items = [
+        Ext132Item("A001", raw={"qty": 10, "loc": "WH-A"}),
+        Ext132Item("A002", raw={"qty": 20, "loc": "WH-B"}),
+    ]
+
+    hash_memory = compute_content_hash(items)
+
+    db_rows = [{"chemicalno": item.chemicalno, "raw": item.raw} for item in items]
+    mock_sb = MagicMock()
+    mock_sb.table.return_value.select.return_value.eq.return_value.range.return_value.execute.return_value.data = db_rows
+
+    hash_db = compute_content_hash_from_db("snap-id", sb=mock_sb)
+
+    assert hash_memory == hash_db, "In-memory and DB-derived content hashes must match for identical data"

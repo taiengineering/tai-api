@@ -75,6 +75,7 @@ class Ext165ChemicalAccidentAdapter(SourceAdapter):
 
         # R3-02: track items actually saved to DB
         total_in_db: list[int] = [initial_db_count]
+        last_api_total: list[int | None] = [None]  # PATCH-003: API totalCount for completeness check
 
         def _on_page_complete(page_no: int, page_items: Any, total_collected: int, total_count_from_api: int | None) -> None:
             """PATCH-02/03/PATCH-002-03: atomic page save + checkpoint via RPC.
@@ -85,6 +86,8 @@ class Ext165ChemicalAccidentAdapter(SourceAdapter):
             try:
                 actual = save_page_checkpoint(snapshot_id, page_items, page_no, total_count_from_api, run_id=ctx.run_id)
                 total_in_db[0] = actual
+                if total_count_from_api is not None:
+                    last_api_total[0] = total_count_from_api
             except PageFencedError:
                 raise
             except Exception as exc:
@@ -97,10 +100,31 @@ class Ext165ChemicalAccidentAdapter(SourceAdapter):
                 start_page_no=resume_from_page,
                 on_page_complete=_on_page_complete,
                 expected_total_count=expected_total,
+                initial_items_count=initial_db_count,
             )
         except Exception as exc:
             self._safe_fail_snapshot(snapshot_id, type(exc).__name__)
             return self._fail(ctx, "COLLECT_EXCEPTION", type(exc).__name__)
+
+        # PATCH-003: PARTIAL/FENCED → preserve STAGING snapshot for resume (no fail_snapshot)
+        if sync.status == SyncStatus.PARTIAL or (
+            sync.status == SyncStatus.FAILED and sync.error_code == "FENCED"
+        ):
+            return RunResult(
+                run_id=ctx.run_id,
+                source_id=ctx.source_id,
+                status=RunStatus.FAILED,
+                started_at=ctx.started_at,
+                finished_at=datetime.now(timezone.utc),
+                fetched=sync.fetched,
+                error_code=sync.error_code,
+                error_message=sync.error_message,
+                details={
+                    "budget_used": sync.budget_used,
+                    "pages": sync.pages_fetched,
+                    "snapshot_preserved": True,
+                },
+            )
 
         # PATCH-002-03: only COMPLETED is eligible for promotion
         if sync.status != SyncStatus.COMPLETED:
@@ -122,6 +146,11 @@ class Ext165ChemicalAccidentAdapter(SourceAdapter):
             content_hash = compute_content_hash_from_db(snapshot_id)
         else:
             content_hash = compute_content_hash(sync.items)
+
+        # PATCH-003: completeness guard — DB count must meet API-reported total
+        if last_api_total[0] is not None and total_in_db[0] < last_api_total[0]:
+            self._safe_fail_snapshot(snapshot_id, "INCOMPLETE_COLLECTION")
+            return self._fail(ctx, "INCOMPLETE_COLLECTION", f"db={total_in_db[0]} api_total={last_api_total[0]}")
 
         # GAP-D/R3-03: atomic promotion — RPC verifies run ownership + item count
         try:

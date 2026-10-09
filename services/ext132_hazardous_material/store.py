@@ -146,7 +146,7 @@ def save_page_checkpoint(
         return int(data) if data is not None else 0
     except Exception as exc:
         err_str = str(exc)
-        if "RUN_FENCED" in err_str:
+        if "RUN_FENCED" in err_str or "SNAPSHOT_NOT_STAGING" in err_str:
             raise PageFencedError(f"save_page_checkpoint fenced: {err_str}") from exc
         raise RuntimeError(f"fn_ext132_save_page_checkpoint RPC failed: {type(exc).__name__}") from exc
 
@@ -215,13 +215,16 @@ def promote_snapshot(
 
 
 def fail_snapshot(snapshot_id: str, *, error_message: str, sb: Any = None) -> None:
-    """STAGING → FAILED 마킹. 이전 COMPLETED 스냅샷은 보존된다."""
+    """STAGING → FAILED 마킹. 이전 COMPLETED 스냅샷은 보존된다.
+
+    PATCH-003: STAGING 상태인 경우에만 갱신 — COMPLETED 스냅샷을 덮어쓰지 않는다.
+    """
     client = sb or _sb()
     client.table(TABLE_SNAPSHOTS).update({
         "status": SNAPSHOT_FAILED,
         "error_message": error_message[:500],
         "completed_at": _now_iso(),
-    }).eq("id", snapshot_id).execute()
+    }).eq("id", snapshot_id).eq("status", SNAPSHOT_STAGING).execute()
 
 
 def compute_content_hash(items: list[Ext132Item]) -> str:

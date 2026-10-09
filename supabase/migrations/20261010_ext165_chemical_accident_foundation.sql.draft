@@ -94,8 +94,9 @@ declare
     v_current_run   uuid;
     v_run_status    text;
     v_lease_until   timestamptz;
+    v_snap_status   text;
 begin
-    -- PATCH-03-A: 스냅샷의 source_id 조회
+    -- PATCH-03-A: 스냅샷의 source_id 조회 (잠금 전 source_id 확보)
     select source_id into v_source_id
     from ext165_chemical_accident_snapshots
     where id = p_snapshot_id;
@@ -104,7 +105,7 @@ begin
         raise exception 'RUN_FENCED: snapshot % not found', p_snapshot_id;
     end if;
 
-    -- PATCH-002-04: FOR UPDATE — 검증과 저장 사이 소유권 변경 차단
+    -- PATCH-002-04/PATCH-003: runtime FOR UPDATE FIRST — deadlock 방지
     select current_run_id into v_current_run
     from public_data_source_runtime
     where source_id = v_source_id
@@ -123,7 +124,18 @@ begin
         raise exception 'RUN_FENCED: run_id=% is not RUNNING or lease expired', p_run_id;
     end if;
 
-    -- 소유권 확인 완료 — 페이지 저장 + 체크포인트 갱신 (이하 단일 트랜잭션)
+    -- PATCH-003-04: snapshot FOR UPDATE 잠금 + STAGING 상태 검증 (COMPLETED/FAILED 쓰기 차단)
+    select status into v_snap_status
+    from ext165_chemical_accident_snapshots
+    where id = p_snapshot_id
+    for update;
+
+    if v_snap_status != 'STAGING' then
+        raise exception 'SNAPSHOT_NOT_STAGING: snapshot % has status=%, expected STAGING',
+            p_snapshot_id, v_snap_status;
+    end if;
+
+    -- 소유권 + 상태 확인 완료 — 페이지 저장 + 체크포인트 갱신 (이하 단일 트랜잭션)
 
     -- 1. upsert items (snapshot_id,datano on_conflict)
     for v_item in select * from jsonb_array_elements(p_items)
@@ -154,7 +166,7 @@ end;
 $$;
 
 comment on function fn_ext165_save_page_checkpoint is
-    'PATCH-02/03/PATCH-002-04: EXT-165 페이지 저장 + 체크포인트 갱신 단일 트랜잭션. FOR UPDATE 잠금 + 소유권+Lease 검증. RUN_FENCED 예외로 차단.';
+    'PATCH-02/03/PATCH-002-04/PATCH-003-04: EXT-165 페이지 저장 + 체크포인트. runtime FOR UPDATE → run 검증 → snapshot FOR UPDATE + STAGING 검증. RUN_FENCED/SNAPSHOT_NOT_STAGING 예외로 차단.';
 
 -- ============================================================
 -- GAP-D/R3-03/PATCH-002-02/04/06: 원자적 스냅샷 완결 RPC
@@ -175,14 +187,17 @@ language plpgsql
 security invoker
 as $$
 declare
-    v_actual_count  int;
-    v_updated       int;
-    v_current_run   uuid;
-    v_run_status    text;
-    v_lease_until   timestamptz;
-    v_collect_scope text;
+    v_actual_count      int;
+    v_updated           int;
+    v_current_run       uuid;
+    v_run_status        text;
+    v_lease_until       timestamptz;
+    v_collect_scope     text;
+    v_snap_status       text;
+    v_snap_source_id    text;
+    v_checkpoint_api    int;
 begin
-    -- PATCH-002-04: FOR UPDATE — 승격 과정 전체에서 동시 접근 차단
+    -- PATCH-002-04/PATCH-003: runtime FOR UPDATE FIRST — deadlock 방지
     select current_run_id into v_current_run
     from public_data_source_runtime
     where source_id = p_source_id
@@ -201,6 +216,19 @@ begin
         return false;  -- Run이 없거나 만료됨
     end if;
 
+    -- PATCH-003-01: snapshot FOR UPDATE 잠금 — DML 전 상태 고정 + 원자성 보장
+    -- STAGING + source_id 검증: 실패 시 어떤 DML도 실행되지 않으므로 안전하게 return false
+    -- collect_scope도 여기서 조회하여 별도 SELECT 제거 (PATCH-002-06)
+    select status, source_id, checkpoint_api_total, collect_scope
+    into v_snap_status, v_snap_source_id, v_checkpoint_api, v_collect_scope
+    from ext165_chemical_accident_snapshots
+    where id = p_snapshot_id
+    for update;
+
+    if not found or v_snap_status != 'STAGING' or v_snap_source_id != p_source_id then
+        return false;
+    end if;
+
     -- 1. 실제 아이템 수 검증
     select count(*) into v_actual_count
     from ext165_chemical_accident_snapshot_items
@@ -210,15 +238,16 @@ begin
         return false;
     end if;
 
-    -- PATCH-002-06: 스냅샷의 collect_scope 조회 (NULL=전체수집, NOT NULL=연도별)
-    select collect_scope into v_collect_scope
-    from ext165_chemical_accident_snapshots
-    where id = p_snapshot_id;
+    -- PATCH-003-02: checkpoint_api_total 교차 검증 (수집 불완전 방지)
+    -- checkpoint_api_total이 설정된 경우 DB 실제 count와 일치해야 승격 허용
+    if v_checkpoint_api is not null and v_actual_count <> v_checkpoint_api then
+        return false;
+    end if;
 
-    -- PATCH-002-02 STEP 1: 기존 현행판 is_current 해제 FIRST
-    -- (unique index (source_id) WHERE is_current=true 위반 방지)
-    -- 연도별 스냅샷(v_collect_scope IS NOT NULL)은 is_current를 설정하지 않으므로
-    -- 기존 현행판 해제는 전체수집(v_collect_scope IS NULL)일 때만 수행.
+    -- STEP 1: 기존 현행판 is_current 해제 FIRST (unique index 충돌 방지)
+    -- 연도별 스냅샷(v_collect_scope IS NOT NULL)은 is_current=false이므로 해제 불필요.
+    -- FOR UPDATE 잠금 후 이 DML이 실행됨.
+    -- STEP 2가 실패하면 RAISE EXCEPTION으로 전체 트랜잭션 롤백 → is_current 해제도 롤백됨.
     if v_collect_scope is null then
         update ext165_chemical_accident_snapshots
         set is_current = false
@@ -228,7 +257,7 @@ begin
           and id        != p_snapshot_id;
     end if;
 
-    -- PATCH-002-02 STEP 2: STAGING → COMPLETED + 현행판 지정
+    -- STEP 2: STAGING → COMPLETED + 현행판 지정
     -- PATCH-002-06: is_current = (v_collect_scope IS NULL)
     --   전체수집(NULL) = 현행판(true), 연도별(NOT NULL) = 부분 스냅샷(false)
     -- run_id 조건 제거: 소유권은 위 public_data_source_runtime 검증으로 확인됨.
@@ -246,12 +275,19 @@ begin
 
     get diagnostics v_updated = row_count;
 
-    return v_updated = 1;
+    if v_updated != 1 then
+        -- FOR UPDATE 잠금 후에도 0행이면 내부 버그 — RAISE로 전체 트랜잭션 롤백
+        -- STEP 1의 is_current=false 해제도 롤백되어 기존 현행판이 보존됨
+        raise exception 'PROMOTE_FAILED: snapshot % promotion returned % rows (expected 1)',
+            p_snapshot_id, v_updated;
+    end if;
+
+    return true;
 end;
 $$;
 
 comment on function fn_ext165_complete_snapshot is
-    'GAP-D/R3-03/PATCH-04/PATCH-002-02/04/06: EXT-165 스냅샷 원자적 완결. FOR UPDATE 잠금 + Run 소유권 + 아이템 수 검증 + 기존현행판해제(FIRST) + STAGING→COMPLETED+is_current=(collect_scope IS NULL)(SECOND) 단일 트랜잭션.';
+    'GAP-D/R3-03/PATCH-04/PATCH-002-02/04/06/PATCH-003-01/02: EXT-165 스냅샷 원자적 완결. runtime FOR UPDATE → snapshot FOR UPDATE + STAGING 검증 → checkpoint_api_total 검증 → is_current 해제(STEP1) → COMPLETED 승격(STEP2). PROMOTE_FAILED 예외로 롤백 보장.';
 
 -- ============================================================
 -- R3-01: public_data_source_runtime seed 행 (is_enabled=false)

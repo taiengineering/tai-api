@@ -63,6 +63,8 @@ def collect_all(
     start_page_no: int = 1,
     on_page_complete: Callable[[int, list[Ext132Item], int, int | None], None] | None = None,
     expected_total_count: int | None = None,
+    # PATCH-003-02: resume 시 DB에 이미 저장된 항목 수 (빈 페이지 조기 종료 검증용)
+    initial_items_count: int = 0,
 ) -> SyncResult:
     """전체 EXT-132 데이터 수집.
 
@@ -72,6 +74,7 @@ def collect_all(
            on_page_complete(page_no, page_items, total_collected, total_count_from_api):
              R3-02: page_items는 이 페이지 항목만. 콜백이 DB 저장 후 체크포인트를 갱신해야 한다.
            expected_total_count: Resume 시 API totalCount 변경 감지용.
+    initial_items_count: Resume 시 기존 DB 항목 수. 빈 페이지 조기 종료 감지에 사용.
     Returns SyncResult — 예외를 raise하지 않는다.
     페이지 크기(num_of_rows) 최대값 UNVERIFIED: 보수적 기본값 사용.
     """
@@ -202,9 +205,23 @@ def collect_all(
                 pass  # other non-critical callback errors remain non-fatal
 
         if not page.items:
+            # PATCH-003-02: 조기 빈 페이지 감지 — totalCount 미달 시 PARTIAL 반환 (수집 불완전)
+            if page.total_count is not None and (initial_items_count + len(items)) < page.total_count:
+                logger.warning(
+                    "ext132 premature empty page page_no=%d in_session=%d total_db=%d api_total=%d",
+                    page_no, len(items), initial_items_count + len(items), page.total_count,
+                )
+                return SyncResult(
+                    status=SyncStatus.PARTIAL,
+                    fetched=len(items),
+                    items=items,
+                    pages_fetched=pages_fetched,
+                    budget_used=budget.used,
+                    error_code="PREMATURE_EMPTY_PAGE",
+                )
             break
 
-        if page.total_count is not None and len(items) >= page.total_count:
+        if page.total_count is not None and (initial_items_count + len(items)) >= page.total_count:
             break
 
         if dry_run:

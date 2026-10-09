@@ -197,6 +197,13 @@ def cmd_bootstrap() -> int:
         result = collect_all(on_page_complete=_on_page)
         print(f"  status={result.status.value} fetched={result.fetched} pages={result.pages_fetched}")
 
+        # PATCH-003: PARTIAL/FENCED → preserve STAGING snapshot for resume (no fail_snapshot)
+        if result.status == SyncStatus.PARTIAL or (
+            result.status == SyncStatus.FAILED and result.error_code == "FENCED"
+        ):
+            print(f"PARTIAL: collection incomplete ({result.error_code}) — snapshot preserved for resume")
+            return 1
+
         # PATCH-002-03: only COMPLETED is eligible for promotion
         if result.status != SyncStatus.COMPLETED:
             fail_snapshot(snapshot_id, error_message=result.error_code or "COLLECT_FAILED")
@@ -282,8 +289,16 @@ def cmd_resume() -> int:
             start_page_no=resume_from_page,
             on_page_complete=_on_page,
             expected_total_count=expected_total,
+            initial_items_count=initial_db_count,
         )
         print(f"  status={result.status.value} fetched={result.fetched} pages={result.pages_fetched}")
+
+        # PATCH-003: PARTIAL/FENCED → preserve STAGING snapshot for resume (no fail_snapshot)
+        if result.status == SyncStatus.PARTIAL or (
+            result.status == SyncStatus.FAILED and result.error_code == "FENCED"
+        ):
+            print(f"PARTIAL: collection incomplete ({result.error_code}) — snapshot preserved for resume")
+            return 1
 
         # PATCH-002-03: only COMPLETED is eligible for promotion
         if result.status != SyncStatus.COMPLETED:
