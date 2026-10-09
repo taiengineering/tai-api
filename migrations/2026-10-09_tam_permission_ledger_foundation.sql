@@ -18,12 +18,56 @@
 --   Requires: Owner approval + GPT independent verification
 --   Apply method: supabase db push --linked  (NOT apply_migration MCP)
 --
--- Factory FK note (Option A — pending CHECK-A1~A5):
---   This migration uses a BEFORE INSERT TRIGGER for factory-company scope validation.
---   Option A (FOREIGN KEY (company_id, factory_id) REFERENCES factories(company_id, id))
---   requires a separate migration to add UNIQUE(company_id, id) to the factories table.
---   Apply the Option A migration ONLY after CHECK-A1~A5 verification in production.
+-- Factory FK note (Option A):
+--   tam_permission_grants uses a composite FK for factory-company scope validation:
+--     FOREIGN KEY (company_id, factory_id) REFERENCES factories(company_id, id)
+--   This requires 2026-10-09_tam_factories_option_a_composite_unique.sql to be applied first.
+--   Apply that migration (PRODUCTION APPLY = 0, pending CHECK-A1~A5) before this one.
 -- ─────────────────────────────────────────────────────────────────────────────
+
+-- ════════════════════════════════════════════════════════════════════
+-- PRE-FLIGHT: tam_approval_audit_events 기존 스키마 정합성 검사
+-- 기존 테이블이 있을 경우 TAM-006 계약 필수 컬럼 6개 존재 여부 확인.
+-- 누락 시 RAISE EXCEPTION — Fail-closed.
+-- ════════════════════════════════════════════════════════════════════
+
+DO $$
+DECLARE
+    tbl_exists  boolean;
+    missing_cols text[];
+BEGIN
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name   = 'tam_approval_audit_events'
+    ) INTO tbl_exists;
+
+    IF tbl_exists THEN
+        SELECT array_agg(rc ORDER BY rc) INTO missing_cols
+        FROM unnest(ARRAY[
+            'audit_id',
+            'company_id',
+            'event_type',
+            'actor_user_id',
+            'event_data',
+            'occurred_at'
+        ]) AS rc
+        WHERE rc NOT IN (
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name   = 'tam_approval_audit_events'
+        );
+
+        IF array_length(missing_cols, 1) > 0 THEN
+            RAISE EXCEPTION
+                'tam_approval_audit_events: existing schema incompatible with TAM-006 contract — missing columns: %',
+                missing_cols;
+        END IF;
+    END IF;
+END;
+$$;
+
 
 -- ════════════════════════════════════════════════════════════════════
 -- TABLE 1: tam_approval_audit_events
@@ -72,6 +116,11 @@ CREATE TRIGGER tam_audit_immutability_trg
 -- ════════════════════════════════════════════════════════════════════
 -- TABLE 2: tam_permission_grants
 -- 권한 부여 원장 — Append-only
+-- Factory-company 범위: 복합 FK (Option A)
+--   tam_grants_factory_scope: FOREIGN KEY (company_id, factory_id)
+--       REFERENCES factories(company_id, id)
+--   Prerequisite: UNIQUE(company_id, id) on factories
+--       → 2026-10-09_tam_factories_option_a_composite_unique.sql
 -- ════════════════════════════════════════════════════════════════════
 
 CREATE TABLE tam_permission_grants (
@@ -99,7 +148,15 @@ CREATE TABLE tam_permission_grants (
 
     CONSTRAINT tam_grants_valid_period CHECK (
         valid_until IS NULL OR valid_until > valid_from
-    )
+    ),
+
+    -- Option A: factory-company 복합 참조 무결성
+    -- factory_id IS NULL이면 FK 검사 스킵 (company-wide grant)
+    -- factory_id IS NOT NULL이면 (company_id, factory_id) ∈ factories(company_id, id) 보장
+    -- Prerequisite: uq_factories_company_id on factories
+    CONSTRAINT tam_grants_factory_scope
+        FOREIGN KEY (company_id, factory_id)
+        REFERENCES factories(company_id, id)
 );
 
 -- Indexes
@@ -110,30 +167,6 @@ CREATE INDEX ix_tam_grants_subject
 CREATE INDEX ix_tam_grants_factory
     ON tam_permission_grants (company_id, factory_id)
     WHERE factory_id IS NOT NULL;
-
--- Factory-company scope validation trigger
--- (Option B light — will be replaced by Option A composite FK after CHECK-A1~A5)
-CREATE OR REPLACE FUNCTION tam_grants_validate_factory_company_fn()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
-BEGIN
-    IF NEW.factory_id IS NOT NULL THEN
-        IF NOT EXISTS (
-            SELECT 1 FROM factories
-            WHERE id = NEW.factory_id
-              AND company_id = NEW.company_id
-        ) THEN
-            RAISE EXCEPTION
-                'tam_permission_grants: factory_id % does not belong to company_id %',
-                NEW.factory_id, NEW.company_id;
-        END IF;
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER trg_tam_grants_validate_factory
-    BEFORE INSERT ON tam_permission_grants
-    FOR EACH ROW EXECUTE FUNCTION tam_grants_validate_factory_company_fn();
 
 -- Append-only trigger
 CREATE OR REPLACE FUNCTION tam_grants_immutability_fn()

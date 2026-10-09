@@ -91,16 +91,16 @@ def pg():
             status_code TEXT NOT NULL DEFAULT 'ACTIVE'
         );
 
-        -- Option A: UNIQUE(company_id, id) enabled in isolated test DB
-        -- This satisfies CHECK-A2/A3 for test environment
+        -- Option A: UNIQUE CONSTRAINT(company_id, id) on factories
+        -- Required as FK reference target for tam_grants_factory_scope.
+        -- Satisfies CHECK-A2/A3 for isolated test environment.
         CREATE TABLE factories (
             id          UUID PRIMARY KEY,
             company_id  UUID NOT NULL REFERENCES companies(id),
             status_code TEXT NOT NULL DEFAULT 'ACTIVE',
-            deleted_at  TIMESTAMPTZ NULL
+            deleted_at  TIMESTAMPTZ NULL,
+            CONSTRAINT uq_factories_company_id UNIQUE (company_id, id)
         );
-        CREATE UNIQUE INDEX uq_factories_company_id
-            ON factories (company_id, id);
 
         CREATE TABLE users (
             id          UUID PRIMARY KEY,
@@ -366,9 +366,9 @@ def test_d10b_audit_delete_rejected(pg):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def test_d11_cross_company_factory_rejected(pg):
-    """CO_A Grant with FAC_B (belongs to CO_B) → trigger rejects."""
+    """CO_A Grant with FAC_B (belongs to CO_B) → composite FK rejects."""
     cur = pg.cursor()
-    with pytest.raises(psycopg2.errors.RaiseException):
+    with pytest.raises(psycopg2.errors.ForeignKeyViolation):
         cur.execute("""
             INSERT INTO tam_permission_grants
                 (company_id, factory_id, subject_user_id, permission_code, granted_by)
@@ -538,19 +538,123 @@ def test_d16_no_name_collision_with_tam_008b(pg):
     conflict_tables = {row[0] for row in cur.fetchall()}
     assert len(conflict_tables) == 0, f"Unexpected TAM-008B tables: {conflict_tables}"
 
-    # TAM-008C functions must exist
+    # TAM-008C append-only functions must exist
     cur.execute("""
         SELECT routine_name FROM information_schema.routines
         WHERE routine_schema = 'public'
           AND routine_name IN (
-              'tam_grants_validate_factory_company_fn',
               'tam_grants_immutability_fn',
               'tam_revocations_immutability_fn',
               'tam_audit_immutability_fn'
           )
     """)
     found_fns = {row[0] for row in cur.fetchall()}
-    assert "tam_grants_validate_factory_company_fn" in found_fns
     assert "tam_grants_immutability_fn" in found_fns
     assert "tam_revocations_immutability_fn" in found_fns
     assert "tam_audit_immutability_fn" in found_fns
+
+    # Option A: tam_grants_validate_factory_company_fn is REMOVED (replaced by FK)
+    cur.execute("""
+        SELECT routine_name FROM information_schema.routines
+        WHERE routine_schema = 'public'
+          AND routine_name = 'tam_grants_validate_factory_company_fn'
+    """)
+    assert cur.fetchone() is None, "Option B trigger function must not exist in Option A schema"
+
+    # Option A composite FK must exist on tam_permission_grants
+    cur.execute("""
+        SELECT constraint_name FROM information_schema.table_constraints
+        WHERE table_schema = 'public'
+          AND table_name = 'tam_permission_grants'
+          AND constraint_type = 'FOREIGN KEY'
+          AND constraint_name = 'tam_grants_factory_scope'
+    """)
+    assert cur.fetchone() is not None, "tam_grants_factory_scope FK must exist"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# D17 — Factory company_id 변경 시 기존 Grant 참조 무결성 유지
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_d17_factory_company_change_blocked(pg):
+    """Grant exists for (CO_A, FAC1) → UPDATE factories.company_id to CO_B rejected.
+
+    Verifies that the composite FK tam_grants_factory_scope protects against
+    factory re-assignment after a grant has been issued — a key improvement
+    over the Option B BEFORE INSERT trigger which only guards INSERT.
+    """
+    _grant(pg, company_id=CO_A, factory_id=FAC1)
+    cur = pg.cursor()
+    with pytest.raises(psycopg2.errors.ForeignKeyViolation):
+        cur.execute(
+            "UPDATE factories SET company_id = %s WHERE id = %s",
+            (CO_B, FAC1),
+        )
+    pg.rollback()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# D18 — 참조 중인 Factory 삭제 거부
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_d18_referenced_factory_delete_blocked(pg):
+    """Grant references FAC1 → DELETE FROM factories rejected."""
+    _grant(pg, company_id=CO_A, factory_id=FAC1)
+    cur = pg.cursor()
+    with pytest.raises(psycopg2.errors.ForeignKeyViolation):
+        cur.execute("DELETE FROM factories WHERE id = %s", (FAC1,))
+    pg.rollback()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# D19 — 기존 감사 원장 스키마 충돌 감지
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_d19_audit_schema_conflict_detected():
+    """Migration pre-flight raises when tam_approval_audit_events has wrong schema.
+
+    Uses a separate connection with a rolled-back transaction so the module-scoped
+    pg fixture's correct schema is preserved after this test completes.
+    """
+    conn = psycopg2.connect(_DSN)
+    conn.autocommit = False
+    cur = conn.cursor()
+    try:
+        # Replace correct-schema table with an incompatible one (within transaction)
+        cur.execute("DROP TABLE IF EXISTS tam_approval_audit_events CASCADE;")
+        cur.execute("""
+            CREATE TABLE tam_approval_audit_events (
+                bad_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                wrong_col   TEXT
+            );
+        """)
+        # Run the migration pre-flight validation DO block
+        with pytest.raises(psycopg2.errors.RaiseException) as exc_info:
+            cur.execute("""
+                DO $$
+                DECLARE missing_cols text[];
+                BEGIN
+                    SELECT array_agg(rc ORDER BY rc) INTO missing_cols
+                    FROM unnest(ARRAY[
+                        'audit_id','company_id','event_type',
+                        'actor_user_id','event_data','occurred_at'
+                    ]) AS rc
+                    WHERE rc NOT IN (
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name   = 'tam_approval_audit_events'
+                    );
+                    IF array_length(missing_cols, 1) > 0 THEN
+                        RAISE EXCEPTION
+                            'tam_approval_audit_events: existing schema incompatible with TAM-006 contract — missing columns: %',
+                            missing_cols;
+                    END IF;
+                END;
+                $$;
+            """)
+        assert "TAM-006 contract" in str(exc_info.value)
+    finally:
+        # Rollback restores the correct-schema table (PostgreSQL DDL is transactional)
+        conn.rollback()
+        conn.close()
