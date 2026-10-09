@@ -35,6 +35,57 @@ def normalise(text):
     """Strip whitespace, punctuation for fuzzy label comparison."""
     return re.sub(r"[\s\(\)·/··\-\.·]", "", text).lower()
 
+# ── Border collision guard ────────────────────────────────────────────────────
+
+def detect_border_collisions(pdf_path, tolerance=1.0):
+    """
+    Detect text words whose bounding box is intersected by a horizontal line drawn
+    by the engine (table row borders).  A collision occurs when a horizontal line
+    at y is strictly inside word bbox [y0+tol, y1-tol] — meaning a border line
+    cuts through visible text, not merely touches its edge.
+
+    Returns list of dicts: {text, word_y0, word_y1, line_y, overlap}.
+
+    Root cause: basic_info rows with ROW_H_INFO=7mm have insufficient height for
+    labels whose full text + "____..." exceeds the cell's available width (223.9pt),
+    causing ReportLab to wrap to a second line that bleeds past the bottom border.
+    """
+    doc = pymupdf.open(str(pdf_path))
+    page = doc[0]
+
+    h_lines = []
+    for path in page.get_drawings():
+        for item in path.get("items", []):
+            if item[0] == "l":
+                p1, p2 = item[1], item[2]
+                if abs(p1.y - p2.y) < 1.0:
+                    x0 = min(p1.x, p2.x); x1 = max(p1.x, p2.x)
+                    ly = (p1.y + p2.y) / 2
+                    if x1 - x0 > 10:
+                        h_lines.append((x0, ly, x1))
+
+    words = page.get_text("words")
+    collisions = []
+    for wrd in words:
+        wx0, wy0, wx1, wy1 = wrd[0], wrd[1], wrd[2], wrd[3]
+        text = wrd[4]
+        if not text.strip():
+            continue
+        for lx0, ly, lx1 in h_lines:
+            if lx0 >= wx1 or lx1 <= wx0:
+                continue
+            if wy0 + tolerance < ly < wy1 - tolerance:
+                collisions.append({
+                    "text":    text,
+                    "word_y0": round(wy0, 1),
+                    "word_y1": round(wy1, 1),
+                    "line_y":  round(ly, 1),
+                    "overlap": round(min(wy1 - ly, ly - wy0), 1),
+                })
+    doc.close()
+    return collisions
+
+
 # ── Section A: PDF QA ────────────────────────────────────────────────────────
 
 def qa_pdf(cid, code, spec):
@@ -140,6 +191,9 @@ def qa_pdf(cid, code, spec):
 
     doc.close()
 
+    # border collision check (added WO-REF01-060-B8-WAVE2-VISUAL-REPAIR-005)
+    border_collisions = detect_border_collisions(pdf_path)
+
     result.update({
         "pages": pages,
         "orientation": f"{w:.0f}x{h:.0f}",
@@ -150,6 +204,7 @@ def qa_pdf(cid, code, spec):
         "hangul_extractable": hangul_found,
         "tiny_texts_count": len(tiny_texts),
         "oob_texts_count": len(oob_texts),
+        "border_collisions": len(border_collisions),
         "png": str(png_path.relative_to(BASE.parent.parent.parent)),
     })
     if missing_labels:
@@ -158,6 +213,11 @@ def qa_pdf(cid, code, spec):
         result["issues"].append(f"Tiny text spans ({len(tiny_texts)}): {tiny_texts[:3]}")
     if oob_texts:
         result["issues"].append(f"Out-of-bounds text ({len(oob_texts)}): {oob_texts[:2]}")
+    if border_collisions:
+        result["issues"].append(
+            f"Border collisions ({len(border_collisions)}): "
+            + str([c["text"] for c in border_collisions[:3]])
+        )
     result["status"] = "HOLD" if result["issues"] else "PASS"
     return result
 

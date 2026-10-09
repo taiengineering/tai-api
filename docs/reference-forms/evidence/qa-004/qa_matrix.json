@@ -14,6 +14,7 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 0,
       "png": "docs/reference-forms/evidence/qa-004/A_C026_pdf_page1.png",
       "status": "PASS"
     },
@@ -53,6 +54,7 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 0,
       "png": "docs/reference-forms/evidence/qa-004/A_C027_pdf_page1.png",
       "status": "PASS"
     },
@@ -92,6 +94,7 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 0,
       "png": "docs/reference-forms/evidence/qa-004/A_C028_pdf_page1.png",
       "status": "PASS"
     },
@@ -131,6 +134,7 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 0,
       "png": "docs/reference-forms/evidence/qa-004/A_C029_pdf_page1.png",
       "status": "PASS"
     },
@@ -160,7 +164,9 @@
     "A_PDF": {
       "id": "C031",
       "section": "A_PDF",
-      "issues": [],
+      "issues": [
+        "Border collisions (8): ['사용', '교육자료(명칭·버전):', '____________________________']"
+      ],
       "pages": 1,
       "orientation": "595x842",
       "title_found": true,
@@ -170,8 +176,9 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 8,
       "png": "docs/reference-forms/evidence/qa-004/A_C031_pdf_page1.png",
-      "status": "PASS"
+      "status": "HOLD"
     },
     "B_DOCX_BLANK": {
       "id": "C031",
@@ -209,6 +216,7 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 0,
       "png": "docs/reference-forms/evidence/qa-004/A_C033_pdf_page1.png",
       "status": "PASS"
     },
@@ -248,6 +256,7 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 0,
       "png": "docs/reference-forms/evidence/qa-004/A_C037_pdf_page1.png",
       "status": "PASS"
     },
@@ -287,6 +296,7 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 0,
       "png": "docs/reference-forms/evidence/qa-004/A_C039_pdf_page1.png",
       "status": "PASS"
     },
@@ -326,6 +336,7 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 0,
       "png": "docs/reference-forms/evidence/qa-004/A_C040_pdf_page1.png",
       "status": "PASS"
     },
@@ -365,6 +376,7 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 0,
       "png": "docs/reference-forms/evidence/qa-004/A_C041_pdf_page1.png",
       "status": "PASS"
     },
@@ -404,6 +416,7 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 0,
       "png": "docs/reference-forms/evidence/qa-004/A_C042_pdf_page1.png",
       "status": "PASS"
     },
@@ -433,7 +446,9 @@
     "A_PDF": {
       "id": "C043",
       "section": "A_PDF",
-      "issues": [],
+      "issues": [
+        "Border collisions (4): ['훈련', '참여자/명단', '참조:']"
+      ],
       "pages": 1,
       "orientation": "595x842",
       "title_found": true,
@@ -443,8 +458,9 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 4,
       "png": "docs/reference-forms/evidence/qa-004/A_C043_pdf_page1.png",
-      "status": "PASS"
+      "status": "HOLD"
     },
     "B_DOCX_BLANK": {
       "id": "C043",
@@ -472,7 +488,9 @@
     "A_PDF": {
       "id": "C044",
       "section": "A_PDF",
-      "issues": [],
+      "issues": [
+        "Border collisions (7): ['화학물질/제품명:', '____________________________', '작업대상']"
+      ],
       "pages": 1,
       "orientation": "595x842",
       "title_found": true,
@@ -482,8 +500,9 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 7,
       "png": "docs/reference-forms/evidence/qa-004/A_C044_pdf_page1.png",
-      "status": "PASS"
+      "status": "HOLD"
     },
     "B_DOCX_BLANK": {
       "id": "C044",
@@ -521,6 +540,7 @@
       "hangul_extractable": true,
       "tiny_texts_count": 0,
       "oob_texts_count": 0,
+      "border_collisions": 0,
       "png": "docs/reference-forms/evidence/qa-004/A_GOV-01_pdf_page1.png",
       "status": "PASS"
     },

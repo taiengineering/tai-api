@@ -4871,3 +4871,93 @@ def test_C1309_11_gov01_confirmer_and_sign():
     col_ids = [c['id'] for c in table['columns']]
     assert 'F06_SIGN' in col_ids, "GOV-01 S04 missing F06_SIGN"
     assert len(col_ids) == 6, f"GOV-01 S04 expected 6 columns, got {len(col_ids)}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# C1310 — Border collision guard (WO-REF01-060-B8-WAVE2-VISUAL-REPAIR-005)
+# Negative fixtures: guard MUST detect collisions in C031/C043/C044 originals.
+# Positive fixtures: guard MUST find no collisions in clean forms.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _load_border_guard():
+    """Import detect_border_collisions from qa_004.py."""
+    import importlib.util as _iu
+    _spec = _iu.spec_from_file_location("qa_004", BASE / "qa_004.py")
+    _mod = _iu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    return _mod.detect_border_collisions
+
+
+def test_C1310_01_c031_orig_has_border_collisions():
+    """qa_004 border guard: C031 original PDF must have ≥1 collision (label wraps through row border)."""
+    guard = _load_border_guard()
+    colls = guard(OUTPUT / "TAI-FORM-C031-blank.pdf")
+    assert len(colls) > 0, (
+        "C031 original expected border collisions (F06/F07 labels overflow 7mm rows) "
+        f"but guard returned 0 collisions"
+    )
+
+
+def test_C1310_02_c043_orig_has_border_collisions():
+    """qa_004 border guard: C043 original PDF must have ≥1 collision (F05 label wraps)."""
+    guard = _load_border_guard()
+    colls = guard(OUTPUT / "TAI-FORM-C043-blank.pdf")
+    assert len(colls) > 0, (
+        "C043 original expected border collisions (F05 '훈련 참여자/명단 참조' wraps) "
+        f"but guard returned 0 collisions"
+    )
+
+
+def test_C1310_03_c044_orig_has_border_collisions():
+    """qa_004 border guard: C044 original PDF must have ≥1 collision (F01/F04 labels wrap)."""
+    guard = _load_border_guard()
+    colls = guard(OUTPUT / "TAI-FORM-C044-blank.pdf")
+    assert len(colls) > 0, (
+        "C044 original expected border collisions (F01/F04 long labels wrap) "
+        f"but guard returned 0 collisions"
+    )
+
+
+def test_C1310_04_c026_orig_no_collision():
+    """qa_004 border guard: C026 original must have 0 collisions (all short labels)."""
+    guard = _load_border_guard()
+    colls = guard(OUTPUT / "TAI-FORM-C026-blank.pdf")
+    assert len(colls) == 0, (
+        f"C026 original unexpectedly has {len(colls)} border collision(s): "
+        + str([c['text'] for c in colls[:3]])
+    )
+
+
+def test_C1310_05_c027_orig_no_collision():
+    """qa_004 border guard: C027 original must have 0 collisions."""
+    guard = _load_border_guard()
+    colls = guard(OUTPUT / "TAI-FORM-C027-blank.pdf")
+    assert len(colls) == 0, (
+        f"C027 original unexpectedly has {len(colls)} border collision(s)"
+    )
+
+
+def test_C1310_06_guard_collision_text_field_identifies_wrapping_label():
+    """Collision entries for C031 must reference the long labels (F06 or F07 text fragments)."""
+    guard = _load_border_guard()
+    colls = guard(OUTPUT / "TAI-FORM-C031-blank.pdf")
+    coll_texts = " ".join(c["text"] for c in colls)
+    assert any(frag in coll_texts for frag in ["사용", "교육자료", "출석", "증빙"]), (
+        f"C031 collisions don't reference expected label words: {coll_texts[:100]}"
+    )
+
+
+def test_C1310_07_non_defect_b8_forms_no_collision():
+    """All 11 non-defect B8 forms must have 0 border collisions."""
+    guard = _load_border_guard()
+    CLEAN_B8 = [
+        "C026","C027","C028","C029","C033","C037",
+        "C039","C040","C041","C042","GOV-01",
+    ]
+    failures = []
+    for code in CLEAN_B8:
+        pdf = OUTPUT / f"TAI-FORM-{code}-blank.pdf"
+        colls = guard(pdf)
+        if colls:
+            failures.append(f"{code}:{len(colls)}")
+    assert not failures, f"Unexpected border collisions in: {failures}"
