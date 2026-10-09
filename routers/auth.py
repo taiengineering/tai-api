@@ -45,6 +45,7 @@ WORKER_EMAIL_DOMAIN = os.getenv("WORKER_EMAIL_DOMAIN", "worker.taieng.co.kr")
 
 # users_sector_check 가 허용하는 값 중 기본값.
 DEFAULT_SECTOR = "INDUSTRIAL"
+_NAVER_PROVIDER_ID = "custom:naver-oauth2"
 
 # send-otp 응답에 인증번호를 실을지 여부. 기본은 비노출이다.
 # 노출하면 누구나 남의 번호로 OTP 를 받아볼 수 있어 전화번호 인증이 무력해진다.
@@ -1031,12 +1032,43 @@ def ensure_user(authorization: Optional[str] = Header(None)):
     if res.data:
         return {"status": "success", "created": False, "data": res.data[0]}
     email = getattr(auth_user, "email", None)
+    meta = getattr(auth_user, "user_metadata", None) or {}
+    app_meta = getattr(auth_user, "app_metadata", None) or {}
+    # Check Naver provider from server-controlled app_metadata only (never user_metadata).
+    _app_providers = app_meta.get("providers")
+    is_naver = (
+        app_meta.get("provider") == _NAVER_PROVIDER_ID
+        or (isinstance(_app_providers, list) and _NAVER_PROVIDER_ID in _app_providers)
+    )
     if not email or not isinstance(email, str) or not email.strip():
-        # Social email must be present; a missing email cannot create an account.
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "SOCIAL_EMAIL_REQUIRED", "message": "소셜 계정의 이메일 정보가 필요합니다."},
-        )
+        if not is_naver:
+            # All non-Naver providers must supply email.
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "SOCIAL_EMAIL_REQUIRED", "message": "소셜 계정의 이메일 정보가 필요합니다."},
+            )
+        # Naver email-optional path: create account keyed on auth_id, email stays NULL.
+        # naver_contact_email from user_metadata is user-editable; never use for ownership.
+        name = meta.get("name") or meta.get("full_name") or "사용자"
+        user_code = "USR-" + now_kst().strftime("%Y%m%d") + "-" + "".join(random.choices(string.digits, k=4))
+        naver_row = {
+            "auth_id": auth_id, "email": None, "name": name, "username": user_code,
+            "role_code": "002", "user_code": user_code, "status_code": "ACTIVE",
+            "sector": DEFAULT_SECTOR, "is_active": True, "social_provider": _NAVER_PROVIDER_ID,
+            "identity_verified": False,
+            "allow_push": True, "allow_sms": True, "allow_email": False, "allow_kakao": False,
+            "created_at": _now_iso(), "updated_at": _now_iso(),
+        }
+        try:
+            ins = supabase.table("users").insert(naver_row).execute()
+            if not ins.data:
+                raise HTTPException(status_code=500, detail="사용자 생성 실패")
+            log.info(f"[ensure-user] Naver 이메일 없는 유저 생성 auth_id={auth_id}")
+            return {"status": "success", "created": True, "data": ins.data[0]}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"사용자 생성 실패: {str(e)}")
     by_email = supabase.table("users").select("*").eq("email", email).limit(1).execute()
     if by_email.data:
         row = by_email.data[0]
@@ -1052,8 +1084,6 @@ def ensure_user(authorization: Optional[str] = Header(None)):
                 },
             )
         return {"status": "success", "created": False, "data": row}
-    meta = getattr(auth_user, "user_metadata", None) or {}
-    app_meta = getattr(auth_user, "app_metadata", None) or {}
     provider = app_meta.get("provider")
     name = meta.get("name") or meta.get("full_name") or (email.split("@")[0] if email else "사용자")
     user_code = "USR-" + now_kst().strftime("%Y%m%d") + "-" + "".join(random.choices(string.digits, k=4))
