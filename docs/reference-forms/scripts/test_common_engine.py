@@ -4082,6 +4082,7 @@ def test_C1306_04_build_first_write_failure(tmp_path, monkeypatch):
     """PDF _write_exclusive raises → form in failures; no output written."""
     bb = _load_bb()
     monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset({'c013'}))
+    monkeypatch.setattr(bb, 'APPROVED_IDS', bb.APPROVED_IDS - frozenset({'c013'}))
     monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
 
     def _fake_pdf(entry, out_path):
@@ -4110,6 +4111,7 @@ def test_C1306_05_build_second_write_rollback(tmp_path, monkeypatch):
     import shutil as _shutil
     bb = _load_bb()
     monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset({'c013'}))
+    monkeypatch.setattr(bb, 'APPROVED_IDS', bb.APPROVED_IDS - frozenset({'c013'}))
     monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
 
     def _fake_pdf(entry, out_path):
@@ -4144,6 +4146,7 @@ def test_C1306_06_build_collision_blocked(tmp_path, monkeypatch):
     """Pre-existing output PDF → BLOCKED_COLLISION in results; form in failures."""
     bb = _load_bb()
     monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset({'c013'}))
+    monkeypatch.setattr(bb, 'APPROVED_IDS', bb.APPROVED_IDS - frozenset({'c013'}))
     monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
 
     pdf_name = bb.REGISTRY['c013']['pdf_name']
@@ -4358,6 +4361,7 @@ def test_C1307_03_run_build_docx_midwrite_rollback(tmp_path, monkeypatch):
     import shutil as _shutil
     bb = _load_bb()
     monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset({'c013'}))
+    monkeypatch.setattr(bb, 'APPROVED_IDS', bb.APPROVED_IDS - frozenset({'c013'}))
     monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
 
     pdf_name  = bb.REGISTRY['c013']['pdf_name']
@@ -4406,6 +4410,7 @@ def test_C1307_04_run_build_pdf_rollback_failure(tmp_path, monkeypatch):
     import shutil as _shutil
     bb = _load_bb()
     monkeypatch.setattr(bb, 'BUILD_APPROVED_IDS', frozenset({'c013'}))
+    monkeypatch.setattr(bb, 'APPROVED_IDS', bb.APPROVED_IDS - frozenset({'c013'}))
     monkeypatch.setattr(bb, 'OUTPUT', tmp_path)
 
     def _fake_pdf(entry, out_path):
@@ -4530,3 +4535,129 @@ def test_C1307_08_verify_only_frozen_missing_baseline(tmp_path, monkeypatch):
     assert row.get('status') == 'FAILED'
     assert ('MISSING_BASELINE' in row.get('frozen_pdf', '')
             or 'MISSING_BASELINE' in row.get('frozen_docx', ''))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# C13-08: B8-WAVE2 사양 구조 검증 (WO-REF01-060-B8-WAVE2-BATCH-001)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_B8_IDS = [
+    'c026','c027','c028','c029',
+    'c031','c033','c037',
+    'c039','c040','c041','c042','c043','c044',
+    'gov-01',
+]
+
+_B7_IDS = ['c007', 'c008', 'c009', 'c011', 'c013']
+
+
+def test_C1308_01_b7_now_in_approved_ids():
+    """B7 5건(c007/c008/c009/c011/c013)이 APPROVED_IDS에 포함돼야 한다."""
+    bb = _load_bb()
+    for cid in _B7_IDS:
+        assert cid in bb.APPROVED_IDS, f"{cid} not in APPROVED_IDS after B7 freeze"
+
+
+def test_C1308_02_build_approved_empty_after_b7_freeze():
+    """B7 freeze 후 BUILD_APPROVED_IDS는 비어 있어야 한다."""
+    bb = _load_bb()
+    assert bb.BUILD_APPROVED_IDS == frozenset(), \
+        f"BUILD_APPROVED_IDS should be empty, got {bb.BUILD_APPROVED_IDS}"
+
+
+def test_C1308_03_frozen_sha_includes_b7():
+    """FROZEN_SHA에 B7 10개 항목이 모두 포함돼야 한다."""
+    bb = _load_bb()
+    for cid in _B7_IDS:
+        assert f"{cid}_pdf"  in bb.FROZEN_SHA, f"FROZEN_SHA missing {cid}_pdf"
+        assert f"{cid}_docx" in bb.FROZEN_SHA, f"FROZEN_SHA missing {cid}_docx"
+
+
+def test_C1308_04_b8_registry_registered():
+    """B8 14건이 REGISTRY에 등록돼야 한다."""
+    bb = _load_bb()
+    for cid in _B8_IDS:
+        assert cid in bb.REGISTRY, f"{cid} not in REGISTRY"
+
+
+def test_C1308_05_b8_json_schema_version():
+    """B8 14건 모두 schema_version=common-v1."""
+    for cid in _B8_IDS:
+        fname = cid + '_v1.json'
+        data = json.loads((BASE / fname).read_text(encoding='utf-8'))
+        assert data['_meta']['schema_version'] == 'common-v1', \
+            f"{cid} schema_version 오류"
+
+
+def test_C1308_06_b8_design_gate_status():
+    """B8 14건 모두 design_gate_status=GPT_REVIEW_REQUIRED."""
+    for cid in _B8_IDS:
+        fname = cid + '_v1.json'
+        data = json.loads((BASE / fname).read_text(encoding='utf-8'))
+        status = data['_meta'].get('design_gate_status', '')
+        assert status == 'GPT_REVIEW_REQUIRED', \
+            f"{cid} design_gate_status 오류: {status!r}"
+
+
+def test_C1308_07_b8_authoring_class():
+    """B8 14건 모두 authoring_class=TAI_ORIGINAL_DRAFT."""
+    for cid in _B8_IDS:
+        fname = cid + '_v1.json'
+        data = json.loads((BASE / fname).read_text(encoding='utf-8'))
+        cls = data['_meta'].get('authoring_class', '')
+        assert cls == 'TAI_ORIGINAL_DRAFT', \
+            f"{cid} authoring_class 오류: {cls!r}"
+
+
+def test_C1308_08_b8_build_blocked():
+    """B8 14건은 BUILD_APPROVED_IDS 미포함 → run_build BLOCKED."""
+    bb = _load_bb()
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        from unittest.mock import patch as _patch
+        with _patch.object(bb, 'OUTPUT', Path(td)):
+            for cid in _B8_IDS:
+                results, failures = bb.run_build([cid])
+                assert cid in failures, f"{cid} should be BLOCKED"
+                statuses = [r.get('status', '') for r in results if r.get('id') == cid]
+                assert any('BLOCKED' in s for s in statuses), \
+                    f"{cid} no BLOCKED status in results"
+
+
+def test_C1308_09_b8_sections_non_empty():
+    """B8 14건 모두 sections가 1개 이상이어야 한다."""
+    for cid in _B8_IDS:
+        fname = cid + '_v1.json'
+        data = json.loads((BASE / fname).read_text(encoding='utf-8'))
+        secs = data.get('sections', [])
+        assert len(secs) >= 1, f"{cid} sections 없음"
+
+
+def test_C1308_10_b8_repeat_table_column_ids_unique():
+    """B8 14건 모두 repeat_table 열 ID가 섹션 내 고유해야 한다."""
+    for cid in _B8_IDS:
+        fname = cid + '_v1.json'
+        data = json.loads((BASE / fname).read_text(encoding='utf-8'))
+        for s in data.get('sections', []):
+            if s.get('type') == 'repeat_table':
+                ids = [c['id'] for c in s.get('columns', [])]
+                assert len(ids) == len(set(ids)), \
+                    f"{cid} {s.get('id','?')} 중복 column id: {ids}"
+
+
+def test_C1308_11_b8_not_in_approved_ids():
+    """B8 14건은 APPROVED_IDS에 포함되지 않아야 한다(빌드 차단 별도)."""
+    bb = _load_bb()
+    for cid in _B8_IDS:
+        assert cid not in bb.APPROVED_IDS, \
+            f"{cid} should NOT be in APPROVED_IDS (B8 not yet built)"
+
+
+def test_C1308_12_b8_dry_run_schema_valid():
+    """B8 14건 --dry-run 스키마 검증 모두 PASS."""
+    bb = _load_bb()
+    results, failures = bb.run_dry_run(_B8_IDS)
+    assert not failures, f"B8 dry-run failures: {failures}"
+    for row in results:
+        assert row.get('schema') == 'SCHEMA_VALID', \
+            f"{row.get('id')} dry-run schema: {row.get('schema')}"

@@ -1,0 +1,61 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-WAVE2-BATCH-001",
+    "form_type": "REGISTER",
+    "source_id": "REF-C037",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "의견수렴/개선",
+    "work_trigger": "종사자 제안 접수/처리",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. 종사자 위험개선 건의 접수·처리 이력 관리용. GPT 검토 전 빌드 차단."
+  },
+  "document": {
+    "title": "종사자 위험개선 건의·조치대장",
+    "doc_id": "TAI-FORM-C037-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 관리 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "관리 부서" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 건의·조치 이력 반복 등록표.",
+      "default_row_count": 8,
+      "min_row_height_mm": 12,
+      "columns": [
+        { "id": "F01_DATE",    "label": "접수일",           "width_mm": 18 },
+        { "id": "F02_WHO",     "label": "건의자",           "width_mm": 20 },
+        { "id": "F03_CONTENT", "label": "위험요인/건의내용","width_mm": 42 },
+        { "id": "F04_REVIEW",  "label": "검토 결과",        "width_mm": 28 },
+        { "id": "F05_REPLY",   "label": "회신 내용",        "width_mm": 28 },
+        { "id": "F06_STATUS",  "label": "실행 상태(입력)",  "width_mm": 18 },
+        { "id": "F07_CONFIRM", "label": "확인일",           "width_mm": 16 }
+      ]
+    }
+  ]
+}

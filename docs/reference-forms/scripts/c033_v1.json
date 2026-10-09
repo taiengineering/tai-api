@@ -1,0 +1,70 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-WAVE2-BATCH-001",
+    "form_type": "CHECKLIST",
+    "source_id": "REF-C033",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "도급업체 이행점검",
+    "work_trigger": "업체 이행상태 점검",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. 점검기준은 사용자 직접 기재(법정 의무사항 추정 금지). 결과란 텍스트 입력. GPT 검토 전 빌드 차단."
+  },
+  "document": {
+    "title": "도급업체 안전관리 이행점검표",
+    "doc_id": "TAI-FORM-C033-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 점검 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "도급업체명" },
+        { "id": "F02", "label": "공사·작업명" },
+        { "id": "F03", "label": "점검일" },
+        { "id": "F04", "label": "점검자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 이행점검 항목 반복 입력표. 점검기준은 사용자 직접 기재.",
+      "default_row_count": 10,
+      "min_row_height_mm": 10,
+      "columns": [
+        { "id": "F01_ITEM",    "label": "점검항목",          "width_mm": 52 },
+        { "id": "F02_STD",     "label": "점검기준(입력)",    "width_mm": 26 },
+        { "id": "F03_RESULT",  "label": "결과(입력)",        "width_mm": 20 },
+        { "id": "F04_DEFECT",  "label": "미이행 내용",       "width_mm": 36 },
+        { "id": "F05_OWNER",   "label": "시정책임/기한",     "width_mm": 22 },
+        { "id": "F06_RECHECK", "label": "재확인일",          "width_mm": 14 }
+      ]
+    },
+    {
+      "type": "text_flow",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 결과 입력 기준 안내.",
+      "paragraphs": [
+        { "id": "N01", "text": "【입력 안내】 결과란에 이행 / 미이행 / 해당없음 등 사업장 기준에 따라 직접 기재하십시오. 점검항목은 도급·용역·위탁 계약 및 사업장 안전관리 기준에 근거하여 작성하십시오.", "align": "left" }
+      ]
+    }
+  ]
+}

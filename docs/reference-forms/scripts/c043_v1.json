@@ -1,0 +1,73 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-WAVE2-BATCH-001",
+    "form_type": "RECORD",
+    "source_id": "REF-C043",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "MIXED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "화학 비상훈련",
+    "work_trigger": "누출훈련 실시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). source_evidence=MIXED(참조 존재 미확인). 화학물질 누출 비상대응 훈련기록 실무 기반. 문서 작성만으로 법정 훈련 의무 이행 주장 금지. GPT 검토 전 빌드 차단."
+  },
+  "document": {
+    "title": "화학물질 누출 비상대응 훈련기록",
+    "doc_id": "TAI-FORM-C043-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 훈련 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "훈련명" },
+        { "id": "F02", "label": "훈련 일시" },
+        { "id": "F03", "label": "장소" },
+        { "id": "F04", "label": "담당자" }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 훈련 시나리오 개요 기재.",
+      "label": "훈련 시나리오 개요",
+      "min_height_mm": 32
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 대응단계별 실시 내용 기재.",
+      "label": "대응단계별 실시 내용",
+      "min_height_mm": 48
+    },
+    {
+      "type": "repeat_table",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 문제점·개선책 기록표.",
+      "default_row_count": 4,
+      "min_row_height_mm": 14,
+      "columns": [
+        { "id": "F01_PROBLEM", "label": "문제점",   "width_mm": 72 },
+        { "id": "F02_ACTION",  "label": "개선책",   "width_mm": 72 },
+        { "id": "F03_OWNER",   "label": "담당자",   "width_mm": 26 }
+      ]
+    }
+  ]
+}

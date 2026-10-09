@@ -1,0 +1,70 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-WAVE2-BATCH-001",
+    "form_type": "EVALUATION",
+    "source_id": "REF-C028",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "위험성평가(OPS)",
+    "work_trigger": "OPS 평가 시행",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. 핵심요인 분석법(OPS) 명칭은 TAI_PRACTICAL_PROPOSAL 수준 — 법정 평가방법 주장 금지. GPT 검토 전 빌드 차단."
+  },
+  "document": {
+    "title": "핵심요인 분석법(OPS) 위험성평가표",
+    "doc_id": "TAI-FORM-C028-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 평가 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "공정/작업명" },
+        { "id": "F03", "label": "평가일" },
+        { "id": "F04", "label": "평가자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 핵심요인 분석 항목 반복 입력표.",
+      "default_row_count": 8,
+      "min_row_height_mm": 12,
+      "columns": [
+        { "id": "F01_UNIT",    "label": "작업단위",     "width_mm": 32 },
+        { "id": "F02_ACCTYPE", "label": "사고유형",     "width_mm": 24 },
+        { "id": "F03_HAZARD",  "label": "위험요인",     "width_mm": 35 },
+        { "id": "F04_CURRENT", "label": "기존 조치사항","width_mm": 33 },
+        { "id": "F05_ACTION",  "label": "추가 대책",    "width_mm": 30 },
+        { "id": "F06_OWNER",   "label": "책임자/기한",  "width_mm": 16 }
+      ]
+    },
+    {
+      "type": "text_flow",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. OPS 평가 안내.",
+      "paragraphs": [
+        { "id": "N01", "text": "【입력 안내】 이 서식은 핵심요인 분석법(OPS) 방식의 위험성평가 기록을 위한 TAI 실무 초안입니다. 법정 평가방법 준수 여부는 별도 확인이 필요합니다.", "align": "left" }
+      ]
+    }
+  ]
+}

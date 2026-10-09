@@ -1,0 +1,71 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-WAVE2-BATCH-001",
+    "form_type": "EVALUATION",
+    "source_id": "REF-C029",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "위험성평가(빈도강도)",
+    "work_trigger": "빈도·강도 평가 시행",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. 빈도·강도 값 및 위험수준은 사용자 직접 기재 — 자동계산 미지원. GPT 검토 전 빌드 차단."
+  },
+  "document": {
+    "title": "빈도·강도법 위험성평가표",
+    "doc_id": "TAI-FORM-C029-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 평가 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "공정/작업명" },
+        { "id": "F03", "label": "평가일" },
+        { "id": "F04", "label": "평가자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 빈도·강도법 위험성평가 항목 반복 입력표. 빈도·강도·위험수준 모두 사용자 직접 기재(자동계산 미지원).",
+      "default_row_count": 8,
+      "min_row_height_mm": 12,
+      "columns": [
+        { "id": "F01_TARGET",  "label": "평가대상",       "width_mm": 30 },
+        { "id": "F02_HAZARD",  "label": "위험요인",       "width_mm": 30 },
+        { "id": "F03_FREQ",    "label": "빈도(입력)",     "width_mm": 16 },
+        { "id": "F04_SEVER",   "label": "강도(입력)",     "width_mm": 16 },
+        { "id": "F05_LEVEL",   "label": "위험수준(입력)", "width_mm": 18 },
+        { "id": "F06_ACTION",  "label": "개선 대책",      "width_mm": 36 },
+        { "id": "F07_REEVAL",  "label": "재평가일",       "width_mm": 24 }
+      ]
+    },
+    {
+      "type": "text_flow",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 빈도·강도 기재 안내.",
+      "paragraphs": [
+        { "id": "N01", "text": "【입력 안내】 빈도·강도 값과 위험수준은 사업장 자체 기준에 따라 직접 기재하십시오. 이 서식은 특정 등급 체계를 강제하지 않으며, 자동 위험등급 산출을 제공하지 않습니다.", "align": "left" }
+      ]
+    }
+  ]
+}

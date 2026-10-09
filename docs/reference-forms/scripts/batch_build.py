@@ -60,22 +60,41 @@ REGISTRY = {
     "c014": _reg("c014"),
     "c015": _reg("c015"),
     "c016": _reg("c016"),
-    # New batch targets:
+    # B7 batch targets (APPROVED, FROZEN — WO-REF01-059-B7-BATCH-BUILD-005):
     "c007": _reg("c007"),
     "c008": _reg("c008"),
     "c009": _reg("c009"),
     "c011": _reg("c011"),
     "c013": _reg("c013"),
+    # B8 wave-2 targets (GPT_REVIEW_REQUIRED — WO-REF01-060-B8-WAVE2-BATCH-001):
+    "c026": _reg("c026"),
+    "c027": _reg("c027"),
+    "c028": _reg("c028"),
+    "c029": _reg("c029"),
+    "c031": _reg("c031"),
+    "c033": _reg("c033"),
+    "c037": _reg("c037"),
+    "c039": _reg("c039"),
+    "c040": _reg("c040"),
+    "c041": _reg("c041"),
+    "c042": _reg("c042"),
+    "c043": _reg("c043"),
+    "c044": _reg("c044"),
+    "gov-01": _reg("gov-01"),
 }
 
 # Outputs that are regression-frozen. --build is permanently blocked.
-APPROVED_IDS = frozenset({"c001", "c003", "c004", "c005", "c014", "c015", "c016"})
+APPROVED_IDS = frozenset({
+    "c001", "c003", "c004", "c005", "c014", "c015", "c016",  # B6 and earlier
+    "c007", "c008", "c009", "c011", "c013",                  # B7-BATCH-BUILD-005
+})
 
 # Explicit GPT-approved IDs for --build. Must be added here after GPT approval.
-BUILD_APPROVED_IDS = frozenset({"c007", "c008", "c009", "c011", "c013"})  # WO-REF01-059-B7-BATCH-BUILD-005
+BUILD_APPROVED_IDS = frozenset()  # empty — B8 forms await GPT design review
 
 # SHA256 of regression-frozen output files (full hex). Used by --verify-only.
 FROZEN_SHA = {
+    # B6 and earlier (7건)
     "c001_pdf":  "27002fc4bc21e6160e697f50c180d8bbf7369b55c27177803f50816afc960599",
     "c001_docx": "64955972e13c83602fb19ff00ee4369d4807041bcc0d5e21fd407f886928786d",
     "c003_pdf":  "5916f14da3d396fb1a2acce731d55a8dc6aafc3ee2ec9c87bb7c89285b0f35ec",
@@ -90,6 +109,17 @@ FROZEN_SHA = {
     "c015_docx": "ec558785f4cec658af9a80134e78dd84a2ad7af88396fe38aa9cb5e9fa9739b9",
     "c016_pdf":  "a12fe50aba41a3bc78d72c176a37ca47099539cb9f229d4e622f0213567f32bd",
     "c016_docx": "bad68d52f6370c8be347a64524ef3de270ec0fad6b87889a3fe125f72cfcbfe5",
+    # B7-BATCH-BUILD-005 (5건)
+    "c007_pdf":  "2774fdc33f793fe25d3580ff089991f9b96ea2ae9efbb401dce31dd2281c82ad",
+    "c007_docx": "73374430fe7624b7eb97b5e6251de02367a726c755574bba315c9dd4233a2ed3",
+    "c008_pdf":  "11c4cf4b7612fd9d776de10b29a744a5055a33ffe40137986267b13fa904fe72",
+    "c008_docx": "ff6ac9747c6a72f6ca3943778a014953d345bcbf2018e9bcfc5225ae96992cb6",
+    "c009_pdf":  "2397559dccc6677dd1bbc646707934bfb34857d8cee8bc6f47651cd371cf5c90",
+    "c009_docx": "4c4c34c56b93cfff84d25958789c3218a568284d0c47c6ec960f666eb11c0121",
+    "c011_pdf":  "791bec736a92d76ef5b5565f04d0f0585158b231e2a98a7cf58718d14143ac46",
+    "c011_docx": "1ca2b8ed58ad42de2aa5ce3894e7a84fd10feb128634e779964fee38957b4d1c",
+    "c013_pdf":  "58fe149a510cc942679de0cd10253767b088d1e0d6a8423c344a11d0fdac190e",
+    "c013_docx": "a7435672d3cbe8e3f12273579ed41251b8d310e415159d90094e9735928bbd7b",
 }
 
 
