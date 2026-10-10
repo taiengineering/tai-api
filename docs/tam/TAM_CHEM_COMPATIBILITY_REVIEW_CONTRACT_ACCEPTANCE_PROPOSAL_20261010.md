@@ -1,11 +1,11 @@
 # TAM CHEM COMPATIBILITY REVIEW — Contract Acceptance Proposal
 # WP-07I C-DEP-02 / C-DEP-03
 
-**Status: TAM OWNER ACCEPTANCE PENDING / DESIGN-ONLY / NO MERGE**
-**Document type: DRAFT CONTRACT PROPOSAL — NOT ACCEPTED, NOT IMPLEMENTED, NOT ACTIVE**
+**Status: TAM OWNER DECISION RECEIVED — DESIGN CONTRACT ACCEPTED (13 ITEMS) / C-DEP-02-H MODIFIED/DEFERRED — LIVE WIRE SPEC NOT ACCEPTED / A1 IMPLEMENTATION NOT AUTHORIZED / NO MERGE**
+**Document type: DRAFT CONTRACT PROPOSAL — DESIGN CONTRACT ACCEPTED BY OWNER; NOT IMPLEMENTED, NOT ACTIVE; PR UNMERGED**
 **Date: 2026-10-10**
 **Repo: taiengineering/tai-api**
-**Authority: TAM Owner acceptance and GPT independent verification required before any implementation WO issuance.**
+**Authority: TAM Owner has accepted the design contract (13 items, 2026-10-10 KST). C-DEP-02-H live wire spec deferred for A1 mock only. GPT independent verification of this receipt is required. A1 implementation and PR merge require separate authorization.**
 
 ---
 
@@ -71,7 +71,7 @@ Source links (fixed SHA at source anchor):
 
 ## 2. C-DEP-03 — TAM Consumer Registration Proposal
 
-**Status: PROPOSED / TAM OWNER ACCEPTANCE PENDING**
+**Status: DESIGN CONTRACT ACCEPTED BY TAM OWNER — C-DEP-03-A THROUGH C-DEP-03-F ACCEPTED / DESIGN ONLY / A1 MOCK-ONLY / NOT IMPLEMENTED**
 
 This section proposes the TAM consumer registration binding for Chemical's `COMPATIBILITY_REVIEW` business object type. All items are proposals for TAM Owner decision; none are accepted or implemented.
 
@@ -117,7 +117,7 @@ This format is `PROPOSED / OWNER_UNDECIDED`. TAM Owner must accept key format, g
 
 ## 3. C-DEP-02 — TAM GET Response Contract Proposal
 
-**Status: PROPOSED / TAM OWNER ACCEPTANCE PENDING**
+**Status: CONDITIONAL DESIGN ACCEPTANCE — C-DEP-02-A THROUGH C-DEP-02-G ACCEPTED / C-DEP-02-H MODIFIED/DEFERRED — LIVE WIRE SPEC NOT ACCEPTED; A1 MOCK ONLY**
 
 ### 3.1 Endpoint
 
@@ -244,7 +244,7 @@ This section records which C-DEPs are prerequisites for which activation gates. 
 
 | Gate | C-DEP Requirements | Current Blocker State |
 |------|-------------------|----------------------|
-| A1 Implementation WO issuance | C-DEP-02 TAM GET contract accepted + C-DEP-03 business_object_type accepted + Owner authorization + GPT design WO | NOT YET — C-DEP-02/03 PENDING |
+| A1 Implementation WO issuance | C-DEP-02 TAM GET contract accepted + C-DEP-03 business_object_type accepted + Owner authorization + GPT design WO | NOT YET — C-DEP-02/03 design contract accepted; A1 implementation WO not yet issued |
 | A2 (TAM execution activation) | C-DEP-01: `tam_approval_requests` AND `tam_approval_decisions` tables deployed; C-DEP-04: `GET /tam/requests/{id}` endpoint live deployment; C-DEP-13: `tam_approval_decisions` NOT DEPLOYED (blocks `approved_by` provenance verification in Production); TAM execution tables/routes deployed in production | BLOCKED — TAM execution tables NOT DEPLOYED |
 | C (C-option / use reservation) | C-DEP-05 atomically serialized use reservation BEFORE WMS Posting; requires A2 complete | NOT DESIGNED — separate BLOCKED Gate |
 | B (other WP-07I work) | Separate WO | NOT STARTED |
@@ -264,24 +264,24 @@ This section records which C-DEPs are prerequisites for which activation gates. 
 
 ## 5. Acceptance Decision Table
 
-All items are `PROPOSED / TAM OWNER ACCEPTANCE PENDING`. This table must be updated to reflect TAM Owner's explicit decision for each item. No item may be marked `ACCEPTED`, `IMPLEMENTED`, `ACTIVE`, or `CLOSED FINAL` without TAM Owner's documented explicit acceptance.
+Items C-DEP-03-A through C-DEP-02-G have been accepted by TAM Owner as design contract (2026-10-10 KST, Option 1). C-DEP-02-H is MODIFIED/DEFERRED for A1 mock-only scope. C-DEP-09 remains open. No item may be marked `IMPLEMENTED`, `ACTIVE`, or `CLOSED FINAL` without further authorization. Acceptance applies to design contract scope only; no production deployment, merge, or implementation authorization.
 
 | ID | Topic | Proposed Value / Contract | Status |
 |----|-------|--------------------------|--------|
-| C-DEP-03-A | `business_object_type = 'COMPATIBILITY_REVIEW'` TAM acceptance | Register as valid business object type in TAM consumer contract | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-03-B | `route_type_hint = PROCESS_TYPE` | Use PROCESS_TYPE hint to prevent `AMBIGUOUS_ROUTE` (HTTP 422) when both route types match; fail-closed on no-route | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-03-C | `scope_key = 'WMS_COMPATIBILITY_REVIEW'` | Scope key string value and route record creation | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-03-D | `idempotency_key = 'CHEM:COMPATIBILITY_REVIEW:{review_id}'` | Server-generated key format; same review → same key; 409 on payload mismatch | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-03-E | `factory_id` NON-NULL binding | CHEM must not send NULL factory_id; TAM nullable field requires explicit contract | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-03-F | `evidence_ref` NON-NULL binding | CHEM must not send NULL/empty evidence_ref; TAM nullable field requires explicit contract | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-02-A | Canonical physical URL | `GET /v1/tam/requests/{tam_request_id}` — NOT yet implemented; TAM Owner must accept path and confirm implementation scope | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-02-B | 15-field response contract | All fields, sources, nullable semantics, and CHEM binding as specified in §3.2 | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-02-C | `approved_by = actor_user_id` of completing transition | Not `recorded_by`; not independently derived by Chemical | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-02-D | `approved_at = completed_at` (exact alias) | Chemical MUST NOT use `decided_at` as `approved_at` | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-02-E | Response dispatch contract (GAP-R1) | Transport failure → UNAVAILABLE; authenticated structured 404 TAM_REQUEST_NOT_FOUND → CHEM 403; unknown/unverifiable non-200 → UNVERIFIED; 200 → binding then provenance | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-02-F | Six-field binding verification (GAP-R2) | Confirmed value mismatch on valid fields → 409 BINDING_MISMATCH; missing/malformed → 503 UNVERIFIED; auth before binding; no cross-tenant disclosure | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-02-G | APPROVED provenance and effectiveness ordering (GAP-R3) | status!=APPROVED → NOT_APPROVED; APPROVED+provenance-fail → UNVERIFIED; APPROVED+valid+effective=false → NOT_EFFECTIVE; APPROVED+valid+effective=true → eligible | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-02-H | TAM structured error format specification (GAP-R4) | TAM Owner must specify: transport protocol, auth mechanism, error envelope schema, error code enumeration, 404 body format | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
+| C-DEP-03-A | `business_object_type = 'COMPATIBILITY_REVIEW'` TAM acceptance | Register as valid business object type in TAM consumer contract | ACCEPTED BY TAM OWNER — DESIGN CONTRACT / A1 MOCK-ONLY |
+| C-DEP-03-B | `route_type_hint = PROCESS_TYPE` | Use PROCESS_TYPE hint to prevent `AMBIGUOUS_ROUTE` (HTTP 422) when both route types match; fail-closed on no-route | ACCEPTED BY TAM OWNER — DESIGN CONTRACT / A1 MOCK-ONLY |
+| C-DEP-03-C | `scope_key = 'WMS_COMPATIBILITY_REVIEW'` | Scope key string value and route record creation | ACCEPTED BY TAM OWNER — DESIGN CONTRACT / A1 MOCK-ONLY |
+| C-DEP-03-D | `idempotency_key = 'CHEM:COMPATIBILITY_REVIEW:{review_id}'` | Server-generated key format; same review → same key; 409 on payload mismatch | ACCEPTED BY TAM OWNER — DESIGN CONTRACT / A1 MOCK-ONLY |
+| C-DEP-03-E | `factory_id` NON-NULL binding | CHEM must not send NULL factory_id; TAM nullable field requires explicit contract | ACCEPTED BY TAM OWNER — DESIGN CONTRACT / A1 MOCK-ONLY |
+| C-DEP-03-F | `evidence_ref` NON-NULL binding | CHEM must not send NULL/empty evidence_ref; TAM nullable field requires explicit contract | ACCEPTED BY TAM OWNER — DESIGN CONTRACT / A1 MOCK-ONLY |
+| C-DEP-02-A | Canonical physical URL | `GET /v1/tam/requests/{tam_request_id}` — NOT yet implemented; TAM Owner must accept path and confirm implementation scope | ACCEPTED BY TAM OWNER — DESIGN CONTRACT / A1 MOCK-ONLY |
+| C-DEP-02-B | 15-field response contract | All fields, sources, nullable semantics, and CHEM binding as specified in §3.2 | ACCEPTED BY TAM OWNER — DESIGN CONTRACT / A1 MOCK-ONLY |
+| C-DEP-02-C | `approved_by = actor_user_id` of completing transition | Not `recorded_by`; not independently derived by Chemical | ACCEPTED BY TAM OWNER — DESIGN CONTRACT / A1 MOCK-ONLY |
+| C-DEP-02-D | `approved_at = completed_at` (exact alias) | Chemical MUST NOT use `decided_at` as `approved_at` | ACCEPTED BY TAM OWNER — DESIGN CONTRACT / A1 MOCK-ONLY |
+| C-DEP-02-E | Response dispatch contract (GAP-R1) | Transport failure → UNAVAILABLE; authenticated structured 404 TAM_REQUEST_NOT_FOUND → CHEM 403; unknown/unverifiable non-200 → UNVERIFIED; 200 → binding then provenance | ACCEPTED BY TAM OWNER — DESIGN CONTRACT / A1 MOCK-ONLY |
+| C-DEP-02-F | Six-field binding verification (GAP-R2) | Confirmed value mismatch on valid fields → 409 BINDING_MISMATCH; missing/malformed → 503 UNVERIFIED; auth before binding; no cross-tenant disclosure | ACCEPTED BY TAM OWNER — DESIGN CONTRACT / A1 MOCK-ONLY |
+| C-DEP-02-G | APPROVED provenance and effectiveness ordering (GAP-R3) | status!=APPROVED → NOT_APPROVED; APPROVED+provenance-fail → UNVERIFIED; APPROVED+valid+effective=false → NOT_EFFECTIVE; APPROVED+valid+effective=true → eligible | ACCEPTED BY TAM OWNER — DESIGN CONTRACT / A1 MOCK-ONLY |
+| C-DEP-02-H | TAM structured error format specification (GAP-R4) | TAM Owner must specify: transport protocol, auth mechanism, error envelope schema, error code enumeration, 404 body format | MODIFIED / DEFERRED — LIVE WIRE SPEC NOT ACCEPTED; A1 MOCK ONLY |
 | C-DEP-09 | Operator TTL source and authority | Owner-confirmed TTL config SoT, clock authority, expiry algorithm | OPEN / OWNER ACCEPTANCE PENDING (separate from C-DEP-02/03) |
 
 ---
@@ -364,33 +364,98 @@ Fixed SHA source: https://github.com/taiengineering/tai-chemical/blob/afa58f0388
 | RFC-R2-04 | §4 A2 row, §7.3 §11 | C-DEP-01 = `tam_approval_requests` + `tam_approval_decisions` tables; C-DEP-04 = `GET /tam/requests/{id}` endpoint live deployment (not "decision execution"); C-DEP-13 preserved |
 | RFC-R2-05 | §6 AC-03a, AC-03b | AC-03 split into pre-send client guard (AC-03a) and post-TAM-response binding mismatch check (AC-03b); timing of each check made explicit |
 
+### 7.6 Owner Decision Receipt Change Log
+
+| ID | Section(s) changed | Change summary |
+|----|--------------------|---------------|
+| RFC-R3-OD | Header status, §2 status, §3 status, §4 A1 gate note, §5 acceptance table, §8 (new Owner Receipt), §9 Result Block | Owner Option 1 Decision Receipt recorded (2026-10-10 KST): 13 items ACCEPTED (design contract, A1 mock-only), C-DEP-02-H MODIFIED/DEFERRED; pre-edit HEAD `c1e939f69762204e7d736274caba41914e1efcfc` / blob `8f22ad07b790f3f774370a911fc96d06e68f6fb3` anchored; GPT independent verification required |
+
 ---
 
-## 8. Result Block
+## 8. Owner Option 1 Decision Receipt — 2026-10-10 KST
+
+**Receipt type:** TAM Owner design contract acceptance — documentation record
+**Decision date:** 2026-10-10 KST
+**Decision source:** Owner-provided conversation: selected '1' in Claude Code (Option 1 from GPT Owner Decision Packet)
+**Scope:** Design contract acceptance ONLY — not implementation authorization, not PR merge, not production deployment
+
+### 8.1 Owner Verbatim Acceptance Text
+
+> TAM Owner 자격으로 PR #587의 C-DEP-03-A~F 및 C-DEP-02-A~G 총 13개 계약 항목을 이 결정서의 값과 제약에 따라 ACCEPT합니다. C-DEP-02-H는 A1 mock-only 범위에서 MODIFY/DEFER하며, 실 HTTP 호출·승인발급·TAM 연동 활성화 전 별도 계약 확정과 독립검증을 요구합니다. 이는 계약 설계 수용에 한정되며 PR 병합·A1 구현·DB 변경·배포·A2/C 활성화는 승인하지 않습니다.
+
+### 8.2 Design Document Accepted
+
+- **PR:** `https://github.com/taiengineering/tai-api/pull/587` (OPEN / DRAFT / UNMERGED at time of decision)
+- **PR HEAD at time of Owner decision (R2):** `c1e939f69762204e7d736274caba41914e1efcfc`
+- **Document blob at time of Owner decision (R2):** `8f22ad07b790f3f774370a911fc96d06e68f6fb3`
+- **Document:** `docs/tam/TAM_CHEM_COMPATIBILITY_REVIEW_CONTRACT_ACCEPTANCE_PROPOSAL_20261010.md`
+
+### 8.3 14-Row Decision Mapping
+
+| Row | Owner Decision | Accepted design value / constraint |
+|-----|---------------|-------------------------------------|
+| C-DEP-03-A | ACCEPT | `consumer_type=CHEMICAL`, `business_object_type=COMPATIBILITY_REVIEW`; contract only |
+| C-DEP-03-B | ACCEPT | `route_type_hint=PROCESS_TYPE`; absent competing hint → `AMBIGUOUS_ROUTE` where appropriate |
+| C-DEP-03-C | ACCEPT | `scope_key=WMS_COMPATIBILITY_REVIEW`; no route record creation |
+| C-DEP-03-D | ACCEPT | Server-generated `CHEM:COMPATIBILITY_REVIEW:{review_id}`; payload conflict 409 |
+| C-DEP-03-E | ACCEPT | Server-resolved `factory_id`, non-null in CHEM binding |
+| C-DEP-03-F | ACCEPT | Server-stored, non-empty `evidence_ref=review.evaluation_ref` |
+| C-DEP-02-A | ACCEPT | Design target `GET /v1/tam/requests/{tam_request_id}` only; not implemented |
+| C-DEP-02-B | ACCEPT | 15 semantic response fields; outer JSON success envelope H-deferred |
+| C-DEP-02-C | ACCEPT | `approved_by` from completing `tam_approval_decisions.actor_user_id` |
+| C-DEP-02-D | ACCEPT | `approved_at = tam_approval_requests.completed_at`, not `decided_at` |
+| C-DEP-02-E | ACCEPT | Error-classification semantics only: trusted tenant 404 vs unregistered route 404; wire/envelope trust H-deferred |
+| C-DEP-02-F | ACCEPT | Six-field binding verification; valid mismatch 409; malformed 503; before CHEM approval INSERT |
+| C-DEP-02-G | ACCEPT | Non-APPROVED 422; malformed provenance 503; valid APPROVED but `effective=false` → 422 |
+| C-DEP-02-H | MODIFY / DEFER — A1 MOCK ONLY | NOT ACCEPTED FOR LIVE TRANSPORT. Caller credentials, auth, exact JSON wire envelope, authenticated 404, TLS/retries/timeout and authorization rules require separate design, Owner decision and GPT verification before real HTTP/activation |
+
+### 8.4 Scope Limits
+
+- This acceptance covers **design contract only** as described in this document at R2 HEAD `c1e939f69762204e7d736274caba41914e1efcfc`
+- **PR #587 must remain DRAFT/UNMERGED** until separate Owner merge authorization
+- **A1 implementation is NOT AUTHORIZED** — requires separate GPT WO + Owner authorization after GPT independent receipt verification
+- **C-DEP-02-H live wire spec is NOT ACCEPTED** — no real TAM HTTP call, no approval issuance, no transport implementation until full H spec is accepted
+- **A2/C/D remain BLOCKED**; B not started
+- **CODE_CHANGE = 0, SQL_MIGRATION = 0, DB_WRITE = 0, DEPLOY = 0, TAM_ACTIVATION = 0, PROVIDER_ACTIVATION = 0, MERGE = 0**
+- C-DEP-09 remains OPEN / OWNER ACCEPTANCE PENDING (separate from this 14-row decision)
+
+### 8.5 Required Next Steps
+
+1. **GPT independent verification** of this receipt document and commit (GPT_POST_RECEIPT_VERIFY = REQUIRED)
+2. Separate Owner authorization to merge PR #587 (if desired)
+3. Separate GPT WO + Owner authorization for A1 dormant/mock-only implementation (after receipt verified)
+4. Full C-DEP-02-H spec + acceptance + GPT verification before any live TAM transport implementation or A2 activation
+
+---
+
+## 9. Result Block
 
 ```text
-CHEM WP-07I TAM C-DEP-02/03 CONTRACT RFC RESULT
+CHEM WP-07I TAM C-DEP-02/03 OWNER DECISION RECEIPT RESULT
 CHEM_MAIN_SHA              = afa58f0388d391881f6f6c3252a549f8390dde9c
 TAM_MAIN_SHA_SOURCE_ANCHOR = c9c5f2689ef3df030781ba9985750ce9b800f5e4
 TAM_MAIN_SHA_PR_BASE       = 393d4c239ae531b10b44961143bab9125c1fc84d
 TAM_PR                     = https://github.com/taiengineering/tai-api/pull/587  (OPEN / DRAFT / UNMERGED)
 TAM_PR_BASE_SHA            = 393d4c239ae531b10b44961143bab9125c1fc84d
 TAM_PR_R1_HEAD_SHA         = a92ef8da97587d286aa8bfd6aec0ea41197ba920
-TAM_PR_R2_HEAD_SHA         = captured separately in executor receipt
+TAM_PR_R2_HEAD_SHA         = c1e939f69762204e7d736274caba41914e1efcfc  (PRE-EDIT HEAD)
+TAM_PR_R2_DOC_BLOB         = 8f22ad07b790f3f774370a911fc96d06e68f6fb3  (PRE-EDIT BLOB)
 FILE_CHANGED               = docs/tam/TAM_CHEM_COMPATIBILITY_REVIEW_CONTRACT_ACCEPTANCE_PROPOSAL_20261010.md
-PRE_DOC_BLOB_SHA           = 7c00c3fe63f6096b33ae6859640953ebc5e193d7
-POST_DOC_BLOB_SHA          = captured separately in executor receipt
-C_DEP_02                   = CONTRACT_PROPOSED / TAM_OWNER_ACCEPTANCE_PENDING
-C_DEP_03                   = CONTRACT_PROPOSED / TAM_OWNER_ACCEPTANCE_PENDING
-CANONICAL_URL              = PROPOSED / OWNER_UNDECIDED
-ROUTE_HINT                 = PROPOSED / OWNER_UNDECIDED
-IDEMPOTENCY                = PROPOSED / OWNER_UNDECIDED
+OWNER_DECISION             = Option 1 — 2026-10-10 KST (Owner-provided conversation transcript)
+C_DEP_03_A_TO_F            = 6 ACCEPTED (DESIGN CONTRACT / A1 MOCK-ONLY)
+C_DEP_02_A_TO_G            = 7 ACCEPTED (DESIGN CONTRACT / A1 MOCK-ONLY)
+C_DEP_02_H                 = MODIFY / DEFER (LIVE WIRE BLOCKED)
+C_DEP_09                   = OPEN / OWNER ACCEPTANCE PENDING
+POST_HEAD                  = recorded separately in executor evidence receipt
+POST_DOC_BLOB              = recorded separately in executor evidence receipt
 CODE_CHANGE                = 0
 MIGRATION                  = 0
 DB_WRITE                   = 0
 DEPLOY                     = 0
 MERGE                      = 0
-GPT_INDEPENDENT_VERIFY     = REQUIRED
-OWNER_APPROVAL             = NOT_GRANTED
+TAM_ACTIVATION             = 0
+PROVIDER_ACTIVATION        = 0
 A1_IMPLEMENTATION          = NOT AUTHORIZED
+GPT_INDEPENDENT_VERIFY     = REQUIRED
+GPT_POST_RECEIPT_VERIFY    = REQUIRED
 ```
