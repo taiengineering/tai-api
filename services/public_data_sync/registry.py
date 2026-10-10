@@ -224,6 +224,22 @@ _SOURCES: list[SourceSpec] = [
         auto_refresh_candidate=False,
         notes="WO-001B-R1 신규; yyyy 연도필터 지원; 페이지 크기/최대값 UNVERIFIED; auto_refresh=False until verified",
     ),
+    # 15. EXT037_CHEMICAL_SAFETY (화학안전원 화학물질안전정보)
+    SourceSpec(
+        source_id="EXT037_CHEMICAL_SAFETY",
+        display_name="화학안전원 화학물질안전정보",
+        provider="NICS",
+        dataset_id="ext037_chemical_safety",
+        sync_mode=SourceMode.FULL_SNAPSHOT,
+        source_kind=SourceKind.API,
+        adapter_key="ext037_chemical_safety",
+        credential_pool="DATA_GO_KR",
+        rate_limit_group="DATA_GO_KR_NICS",
+        refresh_policy="DAILY",
+        consumer_tags=("safety", "chem"),
+        auto_refresh_candidate=False,
+        notes="TAI-WO-P0-05-EXT037 신규; G1 probe 확인(XML/dataNo/resultCode=00/7189건); auto_refresh=False until bootstrap verified",
+    ),
 ]
 
 _REGISTRY: dict[str, SourceSpec] = {s.source_id: s for s in _SOURCES}

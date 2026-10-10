@@ -87,5 +87,10 @@ def register_builtin_adapters() -> None:
     if ext165.adapter_key not in adapter_registry.registered_keys():
         adapter_registry.register(ext165)
 
+    from services.public_data_sync.adapters.ext037_chemical_safety import Ext037ChemicalSafetyAdapter
+    ext037 = Ext037ChemicalSafetyAdapter()
+    if ext037.adapter_key not in adapter_registry.registered_keys():
+        adapter_registry.register(ext037)
+
 
 __all__ = ["SourceAdapter", "AdapterRegistry", "adapter_registry", "register_builtin_adapters"]
