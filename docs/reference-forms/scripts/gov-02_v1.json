@@ -1,0 +1,101 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B9-REGISTER-BUILD-001",
+    "form_type": "REGISTER",
+    "source_id": "GOV-02",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "안전보건 운영체계",
+    "work_trigger": "위원회 의결 후 이행 추적",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). INDEPENDENT_CANDIDATE(ref_form_research_items). GOV-01 위원회 회의록과 연계된 의결사항 이행 추적 대장. 이행 상태는 사용자 직접 기재. GPT 설계·렌더 검증 전 빌드 차단.",
+    "design_gate_ref": "WO-REF01-060-B9-REGISTER-BUILD-001"
+  },
+  "document": {
+    "title": "산업안전보건위원회 의결사항 이행관리대장",
+    "doc_id": "TAI-FORM-GOV-02-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "landscape"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 관리 기본정보.",
+      "fields": [
+        {
+          "id": "F01",
+          "label": "사업장명"
+        },
+        {
+          "id": "F02",
+          "label": "관리 부서"
+        }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 의결사항 이행 현황 반복 등록표. 이행상태·완료증빙은 사용자 직접 기재.",
+      "default_row_count": 8,
+      "min_row_height_mm": 12,
+      "columns": [
+        {
+          "id": "F01_MTG",
+          "label": "회차/회의일",
+          "width_mm": 28
+        },
+        {
+          "id": "F02_AGENDA",
+          "label": "안건번호",
+          "width_mm": 16
+        },
+        {
+          "id": "F03_RESOL",
+          "label": "의결사항",
+          "width_mm": 60
+        },
+        {
+          "id": "F04_ACTION",
+          "label": "조치 내용",
+          "width_mm": 53
+        },
+        {
+          "id": "F05_OWNER",
+          "label": "담당자",
+          "width_mm": 22
+        },
+        {
+          "id": "F06_DUE",
+          "label": "기한",
+          "width_mm": 20
+        },
+        {
+          "id": "F07_STATUS",
+          "label": "진행상태(입력)",
+          "width_mm": 26
+        },
+        {
+          "id": "F08_EVIDENCE",
+          "label": "완료증빙",
+          "width_mm": 32
+        }
+      ]
+    }
+  ]
+}

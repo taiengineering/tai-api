@@ -81,6 +81,12 @@ REGISTRY = {
     "c043": _reg("c043"),
     "c044": _reg("c044"),
     "gov-01": _reg("gov-01"),
+    # B9 batch targets (GPT_REVIEW_REQUIRED — WO-REF01-060-B9-REGISTER-BUILD-001):
+    "gov-02": _reg("gov-02"),
+    "gov-03": _reg("gov-03"),
+    "doc-01": _reg("doc-01"),
+    "doc-02": _reg("doc-02"),
+    "chw-01": _reg("chw-01"),
 }
 
 # Outputs that are regression-frozen. --build is permanently blocked.
