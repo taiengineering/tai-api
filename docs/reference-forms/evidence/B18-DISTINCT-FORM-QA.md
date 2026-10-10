@@ -45,6 +45,9 @@ DB proposed_fields = [] (빈 배열). 모든 항목 TAI 독자 설계.
 
 DB proposed_fields 7개(EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED)와 TAI 세부 설계(TAI_PRACTICAL_PROPOSAL)를 구분한다.
 CORRECTION-003: 기존 "사전 위험확인" 1개 섹션을 S03/S04/S05(3개), "격리·방호" 1개 섹션을 S06/S07(2개)로 분리. 각 항목이 PDF/DOCX에 독립 label로 표시되도록 가시화. 섹션 수: 6 → 9. 섹션 ID 재번호: S05 approval→S08, S06 labeled_grid→S09.
+CORRECTION-004: S04·S05·S07 출처 표기 정정. DB 직접 제안 필드(7개)와 TAI 세부화 항목을 구분.
+
+**DB 조사 직접 제안 필드 7개 (EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED)**
 
 | DB 조사 제안 필드 | 출처 | JSON 구현 위치 | 세부 입력항목 | 세부 출처 |
 |--------------|------|-------------|------------|---------|
@@ -52,14 +55,19 @@ CORRECTION-003: 기존 "사전 위험확인" 1개 섹션을 S03/S04/S05(3개), "
 | 위험작업유형 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S02 labeled_grid | 위험작업 유형 | TAI_PRACTICAL_PROPOSAL |
 | 장소/시간 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S01 basic_info | 작업장소, 작업 예정일시, 허가 요청기간 | TAI_PRACTICAL_PROPOSAL |
 | 사전 위험확인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S03 freeform_area | 사전 위험확인 결과(label) | TAI_PRACTICAL_PROPOSAL |
-| 주요 위험요인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S04 freeform_area | 주요 위험요인(label) | TAI_PRACTICAL_PROPOSAL |
-| 추가 조치 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S05 freeform_area | 추가 조치(label) | TAI_PRACTICAL_PROPOSAL |
 | 격리·방호 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S06 freeform_area | 격리·방호 실시 내역(label) | TAI_PRACTICAL_PROPOSAL |
-| 미완료 조치 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S07 freeform_area | 미완료 조치 및 특이사항(label) | TAI_PRACTICAL_PROPOSAL |
 | 승인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S08 approval | 신청자, 검토자, 허가자 | TAI_PRACTICAL_PROPOSAL |
 | 종료확인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S09 labeled_grid | 실제 작업 종료일시, 종료 확인자, 종료 시 조치·현장 상태, 종료 확인 서명 | TAI_PRACTICAL_PROPOSAL |
 
-조사 제안 외 TAI 독자 추가 항목:
+**TAI 세부화 항목 (TAI_PRACTICAL_PROPOSAL) — DB 제안 필드를 TAI가 세분화한 입력란**
+
+| 섹션 | 입력항목 | 상위 DB 제안 필드 | 출처 |
+|------|---------|----------------|------|
+| S04 freeform_area | 주요 위험요인 | 사전 위험확인 세부화 | TAI_PRACTICAL_PROPOSAL |
+| S05 freeform_area | 추가 조치 | 사전 위험확인 세부화 | TAI_PRACTICAL_PROPOSAL |
+| S07 freeform_area | 미완료 조치 및 특이사항 | 격리·방호 세부화 | TAI_PRACTICAL_PROPOSAL |
+
+**TAI 독자 추가 항목 (REF-C012 구조 참조)**
 
 | 섹션 | 입력항목 | 출처 |
 |------|---------|------|

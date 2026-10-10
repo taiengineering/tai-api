@@ -69,14 +69,14 @@
     {
       "type": "freeform_area",
       "id": "S04",
-      "source_note": "EXISTING_RESEARCH_PROPOSAL/FIELDS_UNVERIFIED → TAI_PRACTICAL_PROPOSAL. 주요 위험요인.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. DB 제안 '사전 위험확인' 세부화. 주요 위험요인.",
       "label": "주요 위험요인",
       "min_height_mm": 14
     },
     {
       "type": "freeform_area",
       "id": "S05",
-      "source_note": "EXISTING_RESEARCH_PROPOSAL/FIELDS_UNVERIFIED → TAI_PRACTICAL_PROPOSAL. 추가 조치.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. DB 제안 '사전 위험확인' 세부화. 추가 조치.",
       "label": "추가 조치",
       "min_height_mm": 10
     },
