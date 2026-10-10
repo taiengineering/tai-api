@@ -51,11 +51,44 @@ def parse_page(content: bytes) -> PageResult:
     result_code = _text(root, ".//resultCode")
     result_msg = _text(root, ".//resultMsg")
 
+    # REPAIR-A: resultCode MUST be present — fail-closed
+    if result_code is None:
+        raise Ext037ParseError("resultCode missing from response")
+
+    # REPAIR-A: non-"00" → early return (body may be absent — API error response)
+    if result_code != "00":
+        return PageResult(
+            total_count=None,
+            page_no=0,
+            num_of_rows=0,
+            items=[],
+            result_code=result_code,
+            result_msg=result_msg,
+        )
+
+    # REPAIR-A: resultCode == "00" — validate all required pagination fields
     total_count_raw = _text(root, ".//totalCount")
-    total_count = int(total_count_raw) if total_count_raw and total_count_raw.isdigit() else None
+    if total_count_raw is None or not total_count_raw.isdigit():
+        raise Ext037ParseError(
+            f"totalCount missing or invalid for resultCode='00' (got {total_count_raw!r})"
+        )
+    total_count = int(total_count_raw)
+    if total_count < 0:
+        raise Ext037ParseError(f"totalCount must be >= 0 (got {total_count})")
 
     page_no_raw = _text(root, ".//pageNo")
+    if page_no_raw is None or not page_no_raw.isdigit() or int(page_no_raw) < 1:
+        raise Ext037ParseError(
+            f"pageNo missing or invalid for resultCode='00' (got {page_no_raw!r})"
+        )
+    page_no = int(page_no_raw)
+
     num_of_rows_raw = _text(root, ".//numOfRows")
+    if num_of_rows_raw is None or not num_of_rows_raw.isdigit() or int(num_of_rows_raw) < 1:
+        raise Ext037ParseError(
+            f"numOfRows missing or invalid for resultCode='00' (got {num_of_rows_raw!r})"
+        )
+    num_of_rows = int(num_of_rows_raw)
 
     items: list[Ext037Item] = []
     for item_el in root.findall(".//item"):
@@ -63,12 +96,15 @@ def parse_page(content: bytes) -> PageResult:
             child.tag: child.text for child in item_el if child.text is not None
         }
         datano = raw.get("dataNo") or raw.get("datano") or ""
+        # REPAIR-A: dataNo must be non-blank — fail-closed
+        if not datano:
+            raise Ext037ParseError("item found with blank/missing dataNo")
         items.append(Ext037Item(datano=datano, raw=raw))
 
     return PageResult(
         total_count=total_count,
-        page_no=int(page_no_raw) if page_no_raw and page_no_raw.isdigit() else 0,
-        num_of_rows=int(num_of_rows_raw) if num_of_rows_raw and num_of_rows_raw.isdigit() else 0,
+        page_no=page_no,
+        num_of_rows=num_of_rows,
         items=items,
         result_code=result_code,
         result_msg=result_msg,

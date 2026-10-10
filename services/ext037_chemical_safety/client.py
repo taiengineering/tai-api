@@ -11,6 +11,10 @@ from services.ext037_chemical_safety.contract import (
 )
 
 
+class RateLimitError(IOError):
+    """HTTP 429 또는 API 일일·초당 호출 제한 초과."""
+
+
 def _service_key() -> str:
     key = os.getenv("DATA_GO_KR_SERVICE_KEY", "")
     if not key:
@@ -44,7 +48,7 @@ def fetch_page(
     if status_code == 401:
         raise EnvironmentError("API authentication failed (HTTP 401) — check DATA_GO_KR_SERVICE_KEY")
     if status_code == 429:
-        raise IOError("API rate limit exceeded (HTTP 429)")
+        raise RateLimitError("API rate limit exceeded (HTTP 429)")
     if status_code >= 400:
         raise IOError(f"API HTTP error {status_code}")
     return text.encode("utf-8")

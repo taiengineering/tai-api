@@ -76,7 +76,7 @@ def collect_all(
         request_budget = 10
     budget = _make_budget(request_budget)
 
-    from services.ext037_chemical_safety.client import fetch_page
+    from services.ext037_chemical_safety.client import fetch_page, RateLimitError as _RateLimitError
     items: list[Ext037Item] = []
     pages_fetched = 0
 
@@ -100,6 +100,18 @@ def collect_all(
 
         try:
             raw = fetch_page(page_no, num_of_rows=num_of_rows, timeout=timeout_seconds)
+        except _RateLimitError:
+            # REPAIR-B: HTTP 429 → PARTIAL/RATE_LIMITED — preserve STAGING for resume
+            logger.warning("ext037 rate limited page_no=%d", page_no)
+            return SyncResult(
+                status=SyncStatus.PARTIAL,
+                fetched=len(items),
+                items=items,
+                pages_fetched=pages_fetched,
+                budget_used=budget.used,
+                error_code="RATE_LIMITED",
+                error_message="HTTP 429 rate limit",
+            )
         except Exception as exc:
             logger.error("ext037 fetch_page failed page_no=%d %s", page_no, type(exc).__name__)
             return SyncResult(
@@ -124,6 +136,22 @@ def collect_all(
                 budget_used=budget.used,
                 error_code="PARSE_ERROR",
                 error_message=str(exc)[:200],
+            )
+
+        # REPAIR-B: API codes 22 (per-second limit) / 23 (daily limit) → PARTIAL/RATE_LIMITED
+        if page.result_code in ("22", "23"):
+            logger.warning(
+                "ext037 API rate limit code page_no=%d result_code=%s",
+                page_no, page.result_code,
+            )
+            return SyncResult(
+                status=SyncStatus.PARTIAL,
+                fetched=len(items),
+                items=items,
+                pages_fetched=pages_fetched,
+                budget_used=budget.used,
+                error_code="RATE_LIMITED",
+                error_message=f"API rate limit: resultCode={page.result_code}",
             )
 
         if page.result_code is not None and page.result_code != "00":

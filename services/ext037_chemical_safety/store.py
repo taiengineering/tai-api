@@ -190,6 +190,7 @@ def compute_content_hash_from_db(snapshot_id: str, *, sb: Any = None) -> str:
             client.table(TABLE_ITEMS)
             .select("datano,raw")
             .eq("snapshot_id", snapshot_id)
+            .order("datano")  # REPAIR-C: stable sort for deterministic pagination + hash
             .range(offset, offset + page_size - 1)
             .execute()
         )

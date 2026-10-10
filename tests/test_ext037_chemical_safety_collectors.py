@@ -185,7 +185,7 @@ def test_e07_parse_malformed_xml():
 
 def test_e08_parse_datano_pk():
     from services.ext037_chemical_safety.parse import parse_page
-    xml = _xml_page([{"dataNo": "CHEM-001", "casNo": "50-00-0"}])
+    xml = _xml_page([{"dataNo": "CHEM-001", "casNo": "50-00-0"}], total_count=1)
     page = parse_page(xml)
     assert page.items[0].datano == "CHEM-001"
     assert page.items[0].raw["casNo"] == "50-00-0"
@@ -219,7 +219,7 @@ def test_e10_parse_raw_fields_preserved():
         "skin": "...",
         "eyeball": "...",
         "oral": "...",
-    }])
+    }], total_count=1)
     page = parse_page(xml)
     raw = page.items[0].raw
     assert "casNo" in raw
@@ -249,12 +249,14 @@ def test_e12_sync_budget_exhausted():
     assert result.error_code == "BUDGET_EXHAUSTED"
 
 
-def test_e13_sync_http_error():
+def test_e13_sync_rate_limit_http429():
+    """HTTP 429 RateLimitError → PARTIAL/RATE_LIMITED (STAGING preserved for resume)."""
     from services.ext037_chemical_safety.sync import collect_all, SyncStatus
-    with patch("services.ext037_chemical_safety.client.fetch_page", side_effect=IOError("HTTP 429")):
+    from services.ext037_chemical_safety.client import RateLimitError
+    with patch("services.ext037_chemical_safety.client.fetch_page", side_effect=RateLimitError("HTTP 429")):
         result = collect_all()
-    assert result.status == SyncStatus.FAILED
-    assert result.error_code == "HTTP_ERROR"
+    assert result.status == SyncStatus.PARTIAL
+    assert result.error_code == "RATE_LIMITED"
 
 
 def test_e14_sync_api_error_code():
@@ -278,8 +280,8 @@ def test_e15_sync_total_count_termination():
 
 def test_e16_sync_empty_page_terminates():
     from services.ext037_chemical_safety.sync import collect_all, SyncStatus
-    p1 = _xml_page([{"dataNo": "1"}])
-    p2 = _empty_page()
+    p1 = _xml_page([{"dataNo": "1"}], total_count=1)
+    p2 = _xml_page([], total_count=1, page_no=2)
     pages = [p1, p2]
     with patch("services.ext037_chemical_safety.client.fetch_page", side_effect=pages):
         result = collect_all(page_delay_seconds=0)
@@ -363,7 +365,8 @@ def test_e23_content_hash_reflects_raw():
 def test_e24_content_hash_from_db():
     from services.ext037_chemical_safety.store import compute_content_hash_from_db
     mock_sb = MagicMock()
-    mock_sb.table.return_value.select.return_value.eq.return_value.range.return_value.execute.return_value.data = [
+    # REPAIR-C: chain now includes .order("datano")
+    mock_sb.table.return_value.select.return_value.eq.return_value.order.return_value.range.return_value.execute.return_value.data = [
         {"datano": "1", "raw": {"chemEn": "Benzene"}},
         {"datano": "2", "raw": {"chemEn": "Methanol"}},
     ]
@@ -515,6 +518,7 @@ def test_e32_adapter_save_error_snapshot_preserved():
 
 
 def test_e33_adapter_incomplete_collection():
+    """INCOMPLETE_COLLECTION: sync COMPLETED but total_in_db < last_api_total → fail_snapshot + FAILED."""
     from services.public_data_sync.adapters.ext037_chemical_safety import Ext037ChemicalSafetyAdapter
     from services.ext037_chemical_safety.sync import SyncResult, SyncStatus
     from services.ext037_chemical_safety.parse import Ext037Item
@@ -522,24 +526,29 @@ def test_e33_adapter_incomplete_collection():
     ctx = _ctx()
 
     snap_id = str(uuid4())
-    items = [Ext037Item(datano="1", raw={})]
-    sync_result = SyncResult(
-        status=SyncStatus.COMPLETED, fetched=1, items=items, pages_fetched=1, budget_used=1
-    )
+    collected_item = Ext037Item(datano="1", raw={})
+
+    def fake_collect_all(**kwargs):
+        on_page = kwargs.get("on_page_complete")
+        if on_page:
+            # Page 1: save_page_checkpoint returns 1 (total_in_db=1), api_total=100 → mismatch
+            on_page(1, [collected_item], 1, 100)
+        return SyncResult(
+            status=SyncStatus.COMPLETED, fetched=1,
+            items=[collected_item], pages_fetched=1, budget_used=1,
+        )
 
     with patch("services.ext037_chemical_safety.store.create_staging_snapshot", return_value=snap_id), \
-         patch("services.ext037_chemical_safety.sync.collect_all", return_value=sync_result), \
+         patch("services.ext037_chemical_safety.sync.collect_all", side_effect=fake_collect_all), \
          patch("services.ext037_chemical_safety.store.save_page_checkpoint", return_value=1), \
          patch("services.ext037_chemical_safety.store.fail_snapshot") as mock_fail, \
          patch("services.ext037_chemical_safety.store.atomic_complete_snapshot") as mock_complete:
-        # Simulate last_api_total > total_in_db via internal state — inject via on_page_complete patch
-        # We test this via checking that when sync is COMPLETED but db_count < api_total → fail_snapshot
-        # Adapter directly: last_api_total populated via _on_page_complete callback
-        # Simplest: set db < api via a wrapper that modifies total_in_db
         result = adapter.run(ctx)
 
-    # With total_in_db=1 and no last_api_total set (no callback invoked by mock), promotion proceeds
-    assert result.status in (RunStatus.SUCCESS, RunStatus.FAILED)
+    assert result.status == RunStatus.FAILED
+    assert result.error_code == "INCOMPLETE_COLLECTION"
+    mock_fail.assert_called_once()
+    mock_complete.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -720,3 +729,115 @@ def test_e50_regression_ext165_still_registered():
     from services.public_data_sync.adapters import adapter_registry, register_builtin_adapters
     register_builtin_adapters()
     assert "ext165_chemical_accident" in adapter_registry.registered_keys()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# E51-E60 — REPAIR-A/B/C 신규 테스트
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_e51_parse_resultcode_missing():
+    """REPAIR-A: resultCode 없으면 Ext037ParseError (fail-closed)."""
+    from services.ext037_chemical_safety.parse import parse_page, Ext037ParseError
+    xml = (
+        b"<?xml version='1.0' encoding='UTF-8'?>"
+        b"<response><header><resultMsg>OK</resultMsg></header>"
+        b"<body><pageNo>1</pageNo><numOfRows>10</numOfRows><totalCount>1</totalCount>"
+        b"<items><item><dataNo>1</dataNo></item></items></body></response>"
+    )
+    with pytest.raises(Ext037ParseError, match="resultCode missing"):
+        parse_page(xml)
+
+
+def test_e52_parse_totalcount_missing_when_code_00():
+    """REPAIR-A: resultCode='00'이지만 totalCount 없으면 Ext037ParseError."""
+    from services.ext037_chemical_safety.parse import parse_page, Ext037ParseError
+    xml = (
+        b"<?xml version='1.0' encoding='UTF-8'?>"
+        b"<response><header><resultCode>00</resultCode><resultMsg>OK</resultMsg></header>"
+        b"<body><pageNo>1</pageNo><numOfRows>10</numOfRows>"
+        b"<items><item><dataNo>1</dataNo></item></items></body></response>"
+    )
+    with pytest.raises(Ext037ParseError, match="totalCount"):
+        parse_page(xml)
+
+
+def test_e53_parse_blank_datano_raises():
+    """REPAIR-A: dataNo 빈 문자열이면 Ext037ParseError."""
+    from services.ext037_chemical_safety.parse import parse_page, Ext037ParseError
+    xml = _xml_page([{"dataNo": "", "chemEn": "X"}], total_count=1)
+    with pytest.raises(Ext037ParseError, match="blank"):
+        parse_page(xml)
+
+
+def test_e54_parse_pageno_zero_raises():
+    """REPAIR-A: pageNo=0이면 Ext037ParseError (must be > 0)."""
+    from services.ext037_chemical_safety.parse import parse_page, Ext037ParseError
+    xml = _xml_page([], total_count=0, page_no=0)
+    with pytest.raises(Ext037ParseError, match="pageNo"):
+        parse_page(xml)
+
+
+def test_e55_parse_numofrows_missing_raises():
+    """REPAIR-A: resultCode='00'이지만 numOfRows 없으면 Ext037ParseError."""
+    from services.ext037_chemical_safety.parse import parse_page, Ext037ParseError
+    xml = (
+        b"<?xml version='1.0' encoding='UTF-8'?>"
+        b"<response><header><resultCode>00</resultCode><resultMsg>OK</resultMsg></header>"
+        b"<body><pageNo>1</pageNo><totalCount>0</totalCount>"
+        b"<items></items></body></response>"
+    )
+    with pytest.raises(Ext037ParseError, match="numOfRows"):
+        parse_page(xml)
+
+
+def test_e56_sync_rate_limit_preserved_staging():
+    """REPAIR-B: RateLimitError (HTTP 429) → PARTIAL/RATE_LIMITED, snapshot NOT failed."""
+    from services.ext037_chemical_safety.sync import collect_all, SyncStatus
+    from services.ext037_chemical_safety.client import RateLimitError
+    with patch("services.ext037_chemical_safety.client.fetch_page", side_effect=RateLimitError("429")):
+        result = collect_all()
+    assert result.status == SyncStatus.PARTIAL
+    assert result.error_code == "RATE_LIMITED"
+
+
+def test_e57_sync_api_code_22_rate_limited():
+    """REPAIR-B: API resultCode='22' (per-second limit) → PARTIAL/RATE_LIMITED."""
+    from services.ext037_chemical_safety.sync import collect_all, SyncStatus
+    xml = _xml_page([], result_code="22")
+    with patch("services.ext037_chemical_safety.client.fetch_page", return_value=xml):
+        result = collect_all()
+    assert result.status == SyncStatus.PARTIAL
+    assert result.error_code == "RATE_LIMITED"
+
+
+def test_e58_sync_api_code_23_rate_limited():
+    """REPAIR-B: API resultCode='23' (daily limit) → PARTIAL/RATE_LIMITED."""
+    from services.ext037_chemical_safety.sync import collect_all, SyncStatus
+    xml = _xml_page([], result_code="23")
+    with patch("services.ext037_chemical_safety.client.fetch_page", return_value=xml):
+        result = collect_all()
+    assert result.status == SyncStatus.PARTIAL
+    assert result.error_code == "RATE_LIMITED"
+
+
+def test_e59_content_hash_from_db_order_called():
+    """REPAIR-C: compute_content_hash_from_db가 .order('datano')를 호출함."""
+    from services.ext037_chemical_safety.store import compute_content_hash_from_db
+    mock_sb = MagicMock()
+    chain = mock_sb.table.return_value.select.return_value.eq.return_value.order.return_value.range.return_value
+    chain.execute.return_value.data = [{"datano": "A", "raw": {"x": 1}}]
+    compute_content_hash_from_db("snap-id", sb=mock_sb)
+    mock_sb.table.return_value.select.return_value.eq.return_value.order.assert_called_once_with("datano")
+
+
+def test_e60_parse_nonzero_resultcode_early_return():
+    """REPAIR-A: non-'00' resultCode → 조기 반환, body 없어도 ParseError 없음."""
+    from services.ext037_chemical_safety.parse import parse_page
+    xml = (
+        b"<?xml version='1.0' encoding='UTF-8'?>"
+        b"<response><header><resultCode>99</resultCode><resultMsg>ERROR</resultMsg></header></response>"
+    )
+    page = parse_page(xml)
+    assert page.result_code == "99"
+    assert page.items == []
+    assert page.total_count is None
