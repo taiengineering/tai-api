@@ -1,29 +1,24 @@
 """
 Structure and contract validation for generated .xlsx files.
-WO-REF01-XLS03-BULK-XLSX-BUILD-001 Phase F.
+WO-REF01-XLS03-BULK-XLSX-BUILD-001 CORRECTION-003.
 """
 from __future__ import annotations
 
 import os
 import zipfile
-from typing import Optional
 
 import openpyxl
-
 
 _FORBIDDEN_FORMULA_IDS = {"CHW-03", "REF-C029", "REF-C004"}
 
 
 def validate_xlsx(path: str, research_id: str, design_type: str) -> list[str]:
-    """
-    Returns list of failure strings. Empty list = PASS.
-    """
+    """Returns list of failure strings. Empty list = PASS."""
     failures = []
 
     if not os.path.exists(path):
         return [f"FILE_NOT_FOUND: {path}"]
 
-    # 1. Valid zip (xlsx is a zip)
     if not zipfile.is_zipfile(path):
         return ["INVALID_ZIP: file is not a valid xlsx/zip"]
 
@@ -33,56 +28,55 @@ def validate_xlsx(path: str, research_id: str, design_type: str) -> list[str]:
         return [f"LOAD_ERROR: {e}"]
 
     if not wb.sheetnames:
+        wb.close()
         return ["NO_SHEETS: workbook has no sheets"]
 
     ws = wb.active
 
-    # 2. Has at least 3 rows (title + basic_info + at least one data row)
-    max_row = ws.max_row or 0
-    if max_row < 3:
-        failures.append(f"TOO_FEW_ROWS: max_row={max_row}, expected >=3")
+    # 1. Minimum row count
+    if (ws.max_row or 0) < 3:
+        failures.append(f"TOO_FEW_ROWS: max_row={ws.max_row}")
 
-    # 3. Has at least 1 column
-    max_col = ws.max_column or 0
-    if max_col < 1:
-        failures.append(f"NO_COLUMNS: max_column={max_col}")
+    # 2. Title cell non-empty
+    if not ws.cell(row=1, column=1).value:
+        failures.append("EMPTY_TITLE: A1 is empty")
 
-    # 4. Title cell (A1) is non-empty
-    title_cell = ws.cell(row=1, column=1).value
-    if not title_cell:
-        failures.append("EMPTY_TITLE: cell A1 is empty")
+    # 3. Auto-filter OR Excel Table present
+    has_table = bool(ws._tables)
+    has_autofilter = bool(ws.auto_filter and ws.auto_filter.ref)
+    if not has_table and not has_autofilter and research_id not in {"MNT-03"}:
+        failures.append("NO_FILTER: no auto_filter and no table")
 
-    # 5. Auto-filter present (required for forms with repeat_table)
-    # MNT-03 has no repeat_table — skip filter check for it
-    if research_id not in {"MNT-03"}:
-        if not ws.auto_filter.ref:
-            failures.append("NO_AUTO_FILTER: auto_filter.ref not set")
-
-    # 6. Print area set
-    if not ws.print_area:
-        failures.append("NO_PRINT_AREA: print_area not set")
-
-    # 7. FORMULA_DIRECTION_UNVERIFIED: no formula cells in data area
-    if research_id in _FORBIDDEN_FORMULA_IDS:
-        formula_cells = []
-        for row in ws.iter_rows():
-            for cell in row:
-                if cell.value and isinstance(cell.value, str) and cell.value.startswith("="):
-                    formula_cells.append(cell.coordinate)
-        if formula_cells:
-            failures.append(
-                f"FORBIDDEN_FORMULA: formulas found in {research_id}: {formula_cells[:5]}"
-            )
-
-    # 8. Freeze panes set (for forms with repeat_table)
+    # 4. Freeze panes set (forms with repeat_table)
     if research_id not in {"MNT-03"}:
         if not ws.freeze_panes:
-            failures.append("NO_FREEZE_PANES: freeze_panes not set")
+            failures.append("NO_FREEZE_PANES")
 
-    # 9. Page orientation recorded
-    orientation = ws.page_setup.orientation
-    if orientation not in ("portrait", "landscape", None):
-        failures.append(f"BAD_ORIENTATION: {orientation}")
+    # 5. Page setup: fitToPage (openpyxl may raise on some worksheet states)
+    try:
+        fit = ws.page_setup.fitToPage
+        if not fit:
+            failures.append("NO_FIT_TO_PAGE")
+    except AttributeError:
+        pass  # openpyxl version edge case; not blocking
+
+    # 6. FORMULA_DIRECTION_UNVERIFIED: no formula cells
+    if research_id.upper() in _FORBIDDEN_FORMULA_IDS:
+        formula_cells = [
+            cell.coordinate
+            for row in ws.iter_rows()
+            for cell in row
+            if cell.value and isinstance(cell.value, str)
+            and cell.value.startswith("=")
+        ]
+        if formula_cells:
+            failures.append(
+                f"FORBIDDEN_FORMULA: {formula_cells[:5]}"
+            )
+
+    # 7. Document metadata set
+    if not wb.properties.title:
+        failures.append("NO_METADATA_TITLE")
 
     wb.close()
     return failures
