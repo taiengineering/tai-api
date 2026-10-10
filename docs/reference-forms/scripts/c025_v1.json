@@ -18,7 +18,7 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "B18 신설. REF-C012(안전작업 허가서) 구조·엔진 참조. 사전위험확인·격리방호·종료확인 독립 구현. REF-C012 수정 없음.",
+    "design_gate_notes": "B18 신설. REF-C012(안전작업 허가서) 구조·엔진 참조. 사전위험확인·격리방호·종료확인 독립 구현. REF-C012 수정 없음. CORRECTION-003: S03~S07 세부 입력란 가시화.",
     "design_gate_ref": "WO-REF01-060-B18-DISTINCT-FORM-BUILD-001",
     "shared_template_ref": "REF-C012",
     "shared_template_note": "REF-C012 기본 작업정보·허가 구조 참조. 이 서식은 위험작업 특화(사전확인·격리방호·종료확인) 포함."
@@ -62,21 +62,42 @@
     {
       "type": "freeform_area",
       "id": "S03",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 사전 위험확인 결과·주요 위험요인·추가 조치. 격리방호와 독립.",
-      "label": "사전 위험확인",
-      "min_height_mm": 20
+      "source_note": "EXISTING_RESEARCH_PROPOSAL/FIELDS_UNVERIFIED → TAI_PRACTICAL_PROPOSAL. 사전 위험확인 결과. 격리방호와 독립.",
+      "label": "사전 위험확인 결과",
+      "min_height_mm": 14
     },
     {
       "type": "freeform_area",
       "id": "S04",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 격리·방호 실시 내역·미완료 조치. 사전위험확인과 독립.",
-      "label": "격리·방호 조치",
-      "min_height_mm": 20
+      "source_note": "EXISTING_RESEARCH_PROPOSAL/FIELDS_UNVERIFIED → TAI_PRACTICAL_PROPOSAL. 주요 위험요인.",
+      "label": "주요 위험요인",
+      "min_height_mm": 14
+    },
+    {
+      "type": "freeform_area",
+      "id": "S05",
+      "source_note": "EXISTING_RESEARCH_PROPOSAL/FIELDS_UNVERIFIED → TAI_PRACTICAL_PROPOSAL. 추가 조치.",
+      "label": "추가 조치",
+      "min_height_mm": 10
+    },
+    {
+      "type": "freeform_area",
+      "id": "S06",
+      "source_note": "EXISTING_RESEARCH_PROPOSAL/FIELDS_UNVERIFIED → TAI_PRACTICAL_PROPOSAL. 격리·방호 실시 내역. 사전위험확인과 독립.",
+      "label": "격리·방호 실시 내역",
+      "min_height_mm": 14
+    },
+    {
+      "type": "freeform_area",
+      "id": "S07",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 미완료 조치 및 특이사항.",
+      "label": "미완료 조치 및 특이사항",
+      "min_height_mm": 10
     },
     {
       "type": "approval",
-      "id": "S05",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업허가 결재란. 신청·검토·허가 역할 구분.",
+      "id": "S08",
+      "source_note": "EXISTING_RESEARCH_PROPOSAL/FIELDS_UNVERIFIED → TAI_PRACTICAL_PROPOSAL. 작업허가 결재란. 신청·검토·허가 역할 구분.",
       "total_width_mm": 170,
       "fields": [
         { "id": "A01", "label": "신청자" },
@@ -86,8 +107,8 @@
     },
     {
       "type": "labeled_grid",
-      "id": "S06",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 종료확인. 허가 단계와 독립된 업무 시점.",
+      "id": "S09",
+      "source_note": "EXISTING_RESEARCH_PROPOSAL/FIELDS_UNVERIFIED → TAI_PRACTICAL_PROPOSAL. 작업 종료확인. 허가 단계와 독립된 업무 시점.",
       "section_label": "작업 종료확인",
       "row_height_mm": 9,
       "rows": [

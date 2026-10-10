@@ -2,6 +2,8 @@
 wo: WO-REF01-060-B18-DISTINCT-FORM-BUILD-001
 date: 2026-10-11
 status: GATE_A_E_PASS_B18
+correction: WO-REF01-060-B18-REF-C025-FIELD-CORRECTION-003
+correction_date: 2026-10-11
 publication: NOT_FOR_PUBLICATION
 ---
 
@@ -42,16 +44,20 @@ DB proposed_fields = [] (빈 배열). 모든 항목 TAI 독자 설계.
 ### REF-C025 필드 출처
 
 DB proposed_fields 7개(EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED)와 TAI 세부 설계(TAI_PRACTICAL_PROPOSAL)를 구분한다.
+CORRECTION-003: 기존 "사전 위험확인" 1개 섹션을 S03/S04/S05(3개), "격리·방호" 1개 섹션을 S06/S07(2개)로 분리. 각 항목이 PDF/DOCX에 독립 label로 표시되도록 가시화. 섹션 수: 6 → 9. 섹션 ID 재번호: S05 approval→S08, S06 labeled_grid→S09.
 
 | DB 조사 제안 필드 | 출처 | JSON 구현 위치 | 세부 입력항목 | 세부 출처 |
 |--------------|------|-------------|------------|---------|
 | 작업식별 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S01 basic_info | 작업번호, 작업명 | TAI_PRACTICAL_PROPOSAL |
 | 위험작업유형 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S02 labeled_grid | 위험작업 유형 | TAI_PRACTICAL_PROPOSAL |
 | 장소/시간 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S01 basic_info | 작업장소, 작업 예정일시, 허가 요청기간 | TAI_PRACTICAL_PROPOSAL |
-| 사전 위험확인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S03 freeform_area | 사전 위험확인(label) | TAI_PRACTICAL_PROPOSAL |
-| 격리·방호 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S04 freeform_area | 격리·방호 조치(label) | TAI_PRACTICAL_PROPOSAL |
-| 승인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S05 approval | 신청자, 검토자, 허가자 | TAI_PRACTICAL_PROPOSAL |
-| 종료확인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S06 labeled_grid | 실제 작업 종료일시, 종료 확인자, 종료 시 조치·현장 상태, 종료 확인 서명 | TAI_PRACTICAL_PROPOSAL |
+| 사전 위험확인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S03 freeform_area | 사전 위험확인 결과(label) | TAI_PRACTICAL_PROPOSAL |
+| 주요 위험요인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S04 freeform_area | 주요 위험요인(label) | TAI_PRACTICAL_PROPOSAL |
+| 추가 조치 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S05 freeform_area | 추가 조치(label) | TAI_PRACTICAL_PROPOSAL |
+| 격리·방호 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S06 freeform_area | 격리·방호 실시 내역(label) | TAI_PRACTICAL_PROPOSAL |
+| 미완료 조치 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S07 freeform_area | 미완료 조치 및 특이사항(label) | TAI_PRACTICAL_PROPOSAL |
+| 승인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S08 approval | 신청자, 검토자, 허가자 | TAI_PRACTICAL_PROPOSAL |
+| 종료확인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S09 labeled_grid | 실제 작업 종료일시, 종료 확인자, 종료 시 조치·현장 상태, 종료 확인 서명 | TAI_PRACTICAL_PROPOSAL |
 
 조사 제안 외 TAI 독자 추가 항목:
 
@@ -88,9 +94,9 @@ common_v1_engine.py 수정: 없음
 | scripts/pra-22-04_v1.json | 64dbc7be6bf87a756c8a4818b004677bd4e82bb313462eae97b9dcb2802f6d30 |
 | output/TAI-FORM-PRA-22-04-blank.pdf | 44f38c688b59a5ed9e23dad8382976bb51030a8b55a836a4e96e93760ed44fda |
 | output/TAI-FORM-PRA-22-04-blank.docx | c2f7797962a69bb25b2742b0992cfced736dd1f76f647120dd3f70d04bda9af4 |
-| scripts/c025_v1.json | 34772c200dc399304eeaf5cb33d5e7b41af55be978992607c716b0ca5bf6badf |
-| output/TAI-FORM-C025-blank.pdf | c25cc1b018c46f3c111720b2d1ae586247e505ba9ba3189fe4c0b8992e0f8188 |
-| output/TAI-FORM-C025-blank.docx | 99030afac58427105bebdedae92d1cdf1400648cad6b432bc14a49e21f07646c |
+| scripts/c025_v1.json | dea4c5cc5801a140a14dfbbe733deef48df5ddae8f5b020632cf064f3d08f828 (CORRECTION-003) |
+| output/TAI-FORM-C025-blank.pdf | 18bbdad00658f267af15b1d9255457bfdf24d192aa1fe11bcdbf9fbdb5842846 (CORRECTION-003) |
+| output/TAI-FORM-C025-blank.docx | b90dba810675555cba370ee618a18b17f2bae5febf1bfea56ce13f1d5668c1d6 (CORRECTION-003) |
 
 ---
 
