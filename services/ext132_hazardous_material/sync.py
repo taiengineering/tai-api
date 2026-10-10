@@ -21,6 +21,9 @@ from services.public_data_sync.errors import PageFencedError, PageSaveError
 
 logger = logging.getLogger(__name__)
 
+# PATCH-C: EXT-132 정상 resultCode — "0"(JSON 실측) + "00"(XML 문서 기준)
+_EXT132_OK_CODES: frozenset[str] = frozenset({"0", "00"})
+
 
 class SyncStatus(str, Enum):
     COMPLETED = "COMPLETED"
@@ -132,8 +135,8 @@ def collect_all(
                 error_message=str(exc)[:200],
             )
 
-        # PATCH-002-05: reject API error response codes — not treated as empty results
-        if page.result_code is not None and page.result_code != "00":
+        # PATCH-002-05 / PATCH-C: EXT-132 정상 코드 = "0" 또는 "00"
+        if page.result_code is not None and page.result_code not in _EXT132_OK_CODES:
             logger.error(
                 "ext132 API error response page_no=%d result_code=%s result_msg=%s",
                 page_no, page.result_code, page.result_msg,

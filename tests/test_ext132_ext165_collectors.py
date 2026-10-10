@@ -2393,3 +2393,267 @@ def test_j10_sql_ext165_fail_snapshot_run_not_found_returns_false():
     post_runs = body[runs_pos:runs_pos + 500]
     assert "not found" in post_runs, \
         "Expected 'if not found then return false' after public_data_sync_runs query"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P01-P14 — EXT-132 JSON 응답 계약 (TAI-WO-EXT-P0-001B-EXT132-CONTRACT-PATCH-001)
+# 실측 2026-10-10 / SHA256: 558471a6359db00a424c1b0f91d63a50562e78fdfa64b797d0a666b3763d0e83
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 실측 JSON 원문 Fixture — response body만 (serviceKey 없음)
+_EXT132_JSON_REAL_FIXTURE: bytes = (
+    '{"header":{"resultCode":"0","resultMsg":"NORMAR_SERVICE"},'
+    '"body":{"items":['
+    '{"casno":"56539-66-3","chemicalname":"3-메톡시-3-메틸-1-부탄올","chemaicalno":"1","hazardmaterialclass":"제4류 인화성액체 제3석유류 수용성액체","unno":""},'
+    '{"casno":"109-86-4","chemicalname":"2-메톡시 에탄올","chemaicalno":"2","hazardmaterialclass":"제4류 인화성액체 제2석유류 수용성액체","unno":"1188"},'
+    '{"casno":"34846-90-7","chemicalname":"메톡시아크릴산메틸에스테르","chemaicalno":"3","hazardmaterialclass":"제4류 인화성액체 제2석유류 비수용성액체","unno":"1993"},'
+    '{"casno":"26555-40-8","chemicalname":"메톡시카보닐술페닐클로라이드","chemaicalno":"4","hazardmaterialclass":"제4류 인화성액체 제2석유류(수용성여부 자료없음)","unno":"2920"},'
+    '{"casno":"4206-67-1","chemicalname":"요오드메틸트리메틸실란","chemaicalno":"5","hazardmaterialclass":"제4류 인화성액체 제2석유류 비수용성액체","unno":"2924"},'
+    '{"casno":"107-82-4","chemicalname":"이소아밀브로마이드","chemaicalno":"6","hazardmaterialclass":"제4류 인화성액체 제2석유류 비수용성액체","unno":"2341"},'
+    '{"casno":"621-29-4","chemicalname":"3-메틸페닐 이소시아네이트","chemaicalno":"7","hazardmaterialclass":"제4류 인화성액체 제2석유류 비수용성액체","unno":"2206"},'
+    '{"casno":"109-59-1","chemicalname":"2-이소프로폭시에탄올","chemaicalno":"8","hazardmaterialclass":"제4류 인화성액체 제2석유류 비수용성액체","unno":"1993"},'
+    '{"casno":"108-64-5","chemicalname":"이소길초산에틸","chemaicalno":"9","hazardmaterialclass":"제4류 인화성액체 제2석유류 비수용성액체","unno":"3272"},'
+    '{"casno":"54306-00-2","chemicalname":"2-헥센알디에틸아세탈","chemaicalno":"10","hazardmaterialclass":"제4류 인화성액체 제2석유류 비수용성액체","unno":"1993"}'
+    '],"numOfRows":10,"pageNo":1,"totalCount":7277}}'
+).encode("utf-8")
+
+
+def test_p01_json_fixture_sha256_matches_probe_evidence():
+    """P01: 내장 Fixture SHA256 = 실측 probe SHA256 558471a6..."""
+    import hashlib
+    digest = hashlib.sha256(_EXT132_JSON_REAL_FIXTURE).hexdigest()
+    assert digest == "558471a6359db00a424c1b0f91d63a50562e78fdfa64b797d0a666b3763d0e83"
+
+
+def test_p02_json_parse_10_items():
+    """P02: 실측 JSON Fixture → items 10건 파싱."""
+    from services.ext132_hazardous_material.parse import parse_page
+    page = parse_page(_EXT132_JSON_REAL_FIXTURE)
+    assert len(page.items) == 10
+
+
+def test_p03_json_total_count_7277():
+    """P03: 실측 JSON totalCount == 7277."""
+    from services.ext132_hazardous_material.parse import parse_page
+    page = parse_page(_EXT132_JSON_REAL_FIXTURE)
+    assert page.total_count == 7277
+
+
+def test_p04_json_result_code_zero():
+    """P04: 실측 JSON resultCode == "0"."""
+    from services.ext132_hazardous_material.parse import parse_page
+    page = parse_page(_EXT132_JSON_REAL_FIXTURE)
+    assert page.result_code == "0"
+    assert page.result_msg == "NORMAR_SERVICE"
+
+
+def test_p05_json_pk_chemaicalno_mapped():
+    """P05: chemaicalno(원본 오타 필드) → chemicalno(내부 PK) 매핑."""
+    from services.ext132_hazardous_material.parse import parse_page
+    page = parse_page(_EXT132_JSON_REAL_FIXTURE)
+    assert page.items[0].chemicalno == "1"
+    assert page.items[9].chemicalno == "10"
+
+
+def test_p06_json_pk_all_nonempty():
+    """P06: 10건 전체 PK 비어있지 않음."""
+    from services.ext132_hazardous_material.parse import parse_page
+    page = parse_page(_EXT132_JSON_REAL_FIXTURE)
+    assert all(item.chemicalno for item in page.items)
+    assert sum(1 for item in page.items if item.chemicalno) == 10
+
+
+def test_p07_json_raw_fields_preserved():
+    """P07: raw dict에 원본 필드명 chemaicalno 보존 (chemicalno 아님)."""
+    from services.ext132_hazardous_material.parse import parse_page
+    page = parse_page(_EXT132_JSON_REAL_FIXTURE)
+    first_raw = page.items[0].raw
+    assert "chemaicalno" in first_raw, "원본 필드명 chemaicalno가 raw에 보존돼야 한다"
+    assert first_raw["chemaicalno"] == "1"
+    assert first_raw.get("casno") == "56539-66-3"
+
+
+def test_p08_json_malformed_raises():
+    """P08: 잘못된 JSON → Ext132ParseError."""
+    from services.ext132_hazardous_material.parse import Ext132ParseError, parse_page
+    with pytest.raises(Ext132ParseError, match="JSON parse error"):
+        parse_page(b"{not valid json<<<")
+
+
+def test_p09_json_missing_body_raises():
+    """P09: header 있으나 body 없음 → Ext132ParseError."""
+    from services.ext132_hazardous_material.parse import Ext132ParseError, parse_page
+    import json
+    bad = json.dumps({"header": {"resultCode": "0"}, "noBody": {}}).encode()
+    with pytest.raises(Ext132ParseError, match="body"):
+        parse_page(bad)
+
+
+def test_p10_json_items_not_list_raises():
+    """P10: body.items가 list가 아닌 경우 → Ext132ParseError."""
+    from services.ext132_hazardous_material.parse import Ext132ParseError, parse_page
+    import json
+    bad = json.dumps({
+        "header": {"resultCode": "0"},
+        "body": {"items": {"single": "object"}, "pageNo": 1, "numOfRows": 1, "totalCount": 1},
+    }).encode()
+    with pytest.raises(Ext132ParseError, match="body.items"):
+        parse_page(bad)
+
+
+def test_p11_json_pk_missing_fail_closed():
+    """P11: JSON Item에 PK(chemaicalno/chemicalno) 없으면 Ext132ParseError (Fail-closed)."""
+    from services.ext132_hazardous_material.parse import Ext132ParseError, parse_page
+    import json
+    bad = json.dumps({
+        "header": {"resultCode": "0"},
+        "body": {
+            "items": [{"casno": "12345-67-8", "chemicalname": "test"}],
+            "pageNo": 1, "numOfRows": 1, "totalCount": 1,
+        },
+    }).encode()
+    with pytest.raises(Ext132ParseError, match="PK"):
+        parse_page(bad)
+
+
+def test_p12_json_conflicting_pk_raises():
+    """P12: chemaicalno와 chemicalno 동시 존재 & 값 다름 → Ext132ParseError."""
+    from services.ext132_hazardous_material.parse import Ext132ParseError, parse_page
+    import json
+    bad = json.dumps({
+        "header": {"resultCode": "0"},
+        "body": {
+            "items": [{"chemaicalno": "A", "chemicalno": "B", "casno": "111"}],
+            "pageNo": 1, "numOfRows": 1, "totalCount": 1,
+        },
+    }).encode()
+    with pytest.raises(Ext132ParseError, match="conflicting PK"):
+        parse_page(bad)
+
+
+def test_p13_sync_result_code_zero_not_rejected():
+    """P13: resultCode="0" → sync가 API_ERROR_CODE로 실패하지 않음.
+
+    totalCount=7277 이므로 budget=1 소진 후 PARTIAL(BUDGET_EXHAUSTED)로 종료.
+    중요: FAILED(API_ERROR_CODE)가 아닌 것이 이 테스트의 목적.
+    """
+    from services.ext132_hazardous_material.sync import SyncStatus, collect_all
+
+    with patch("services.ext132_hazardous_material.client.fetch_page",
+               return_value=_EXT132_JSON_REAL_FIXTURE):
+        result = collect_all(request_budget=1, page_delay_seconds=0)
+
+    assert result.error_code != "API_ERROR_CODE", (
+        f"resultCode='0' should be accepted but got error_code={result.error_code}"
+    )
+    assert result.status == SyncStatus.PARTIAL
+    assert result.error_code == "BUDGET_EXHAUSTED"
+    assert result.fetched == 10
+
+
+def test_p14_sync_api_error_code_rejected():
+    """P14: JSON resultCode="1" → FAILED(API_ERROR_CODE)."""
+    from services.ext132_hazardous_material.sync import SyncStatus, collect_all
+    import json
+
+    error_response = json.dumps({
+        "header": {"resultCode": "1", "resultMsg": "SERVICE_ERROR"},
+        "body": {"items": [], "pageNo": 1, "numOfRows": 10, "totalCount": 0},
+    }).encode()
+
+    with patch("services.ext132_hazardous_material.client.fetch_page",
+               return_value=error_response):
+        result = collect_all(page_delay_seconds=0)
+
+    assert result.status == SyncStatus.FAILED
+    assert result.error_code == "API_ERROR_CODE"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P15-P21 — GPT CONDITIONAL 보완: 정상 응답 필수 필드 Fail-closed
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_p15_json_missing_result_code_raises():
+    """P15: resultCode 없음 → Ext132ParseError (무조건)."""
+    from services.ext132_hazardous_material.parse import Ext132ParseError, parse_page
+    import json
+    bad = json.dumps({
+        "header": {"resultMsg": "NORMAR_SERVICE"},
+        "body": {"items": [], "pageNo": 1, "numOfRows": 10, "totalCount": 0},
+    }).encode()
+    with pytest.raises(Ext132ParseError, match="resultCode"):
+        parse_page(bad)
+
+
+def test_p16_json_normal_missing_items_raises():
+    """P16: 정상 응답(resultCode="0")에서 body.items 없으면 Ext132ParseError."""
+    from services.ext132_hazardous_material.parse import Ext132ParseError, parse_page
+    import json
+    bad = json.dumps({
+        "header": {"resultCode": "0"},
+        "body": {"pageNo": 1, "numOfRows": 10, "totalCount": 1},
+    }).encode()
+    with pytest.raises(Ext132ParseError, match="body.items"):
+        parse_page(bad)
+
+
+def test_p17_json_normal_missing_total_count_raises():
+    """P17: 정상 응답에서 body.totalCount 없으면 Ext132ParseError."""
+    from services.ext132_hazardous_material.parse import Ext132ParseError, parse_page
+    import json
+    bad = json.dumps({
+        "header": {"resultCode": "0"},
+        "body": {"items": [], "pageNo": 1, "numOfRows": 10},
+    }).encode()
+    with pytest.raises(Ext132ParseError, match="totalCount"):
+        parse_page(bad)
+
+
+def test_p18_json_normal_negative_total_count_raises():
+    """P18: 정상 응답에서 totalCount < 0 → Ext132ParseError."""
+    from services.ext132_hazardous_material.parse import Ext132ParseError, parse_page
+    import json
+    bad = json.dumps({
+        "header": {"resultCode": "0"},
+        "body": {"items": [], "pageNo": 1, "numOfRows": 10, "totalCount": -1},
+    }).encode()
+    with pytest.raises(Ext132ParseError, match="non-negative"):
+        parse_page(bad)
+
+
+def test_p19_json_normal_zero_page_no_raises():
+    """P19: 정상 응답에서 pageNo=0 → Ext132ParseError."""
+    from services.ext132_hazardous_material.parse import Ext132ParseError, parse_page
+    import json
+    bad = json.dumps({
+        "header": {"resultCode": "0"},
+        "body": {"items": [], "pageNo": 0, "numOfRows": 10, "totalCount": 0},
+    }).encode()
+    with pytest.raises(Ext132ParseError, match="pageNo"):
+        parse_page(bad)
+
+
+def test_p20_json_normal_missing_num_of_rows_raises():
+    """P20: 정상 응답에서 body.numOfRows 없으면 Ext132ParseError."""
+    from services.ext132_hazardous_material.parse import Ext132ParseError, parse_page
+    import json
+    bad = json.dumps({
+        "header": {"resultCode": "0"},
+        "body": {"items": [], "pageNo": 1, "totalCount": 0},
+    }).encode()
+    with pytest.raises(Ext132ParseError, match="numOfRows"):
+        parse_page(bad)
+
+
+def test_p21_json_error_response_missing_fields_passes_through():
+    """P21: 오류 응답(resultCode="99")은 body 필드 누락해도 ParseError 없음. sync.py가 처리."""
+    from services.ext132_hazardous_material.parse import parse_page
+    import json
+    resp = json.dumps({
+        "header": {"resultCode": "99", "resultMsg": "API_ERROR"},
+        "body": {},
+    }).encode()
+    page = parse_page(resp)
+    assert page.result_code == "99"
+    assert page.items == []
+    assert page.total_count is None
