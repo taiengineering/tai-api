@@ -4815,8 +4815,8 @@ def test_C1309_07_c031_has_material_and_attendance_fields():
     labels = [f['label'] for f in s01['fields']]
     assert any('교육자료' in lbl for lbl in labels), \
         f"C031 S01 no '교육자료' field: {labels}"
-    assert any('출석 증빙' in lbl for lbl in labels), \
-        f"C031 S01 no '출석 증빙' field: {labels}"
+    assert any('출석증빙' in lbl for lbl in labels), \
+        f"C031 S01 no '출석증빙' field: {labels}"
 
 
 def test_C1309_08_c037_landscape_split_columns():
@@ -4836,8 +4836,8 @@ def test_C1309_09_c043_participant_and_recheck():
     data = json.loads((BASE / 'c043_v1.json').read_text(encoding='utf-8'))
     s01 = next(s for s in data['sections'] if s['id'] == 'S01')
     s01_labels = [f['label'] for f in s01['fields']]
-    assert any('참여자' in lbl for lbl in s01_labels), \
-        f"C043 S01 no '참여자' field: {s01_labels}"
+    assert any('참여' in lbl for lbl in s01_labels), \
+        f"C043 S01 no '참여' field: {s01_labels}"
     table = next(s for s in data['sections'] if s['id'] == 'S04')
     col_ids = [c['id'] for c in table['columns']]
     assert 'F04_RECHECK_DATE' in col_ids, "C043 S04 missing F04_RECHECK_DATE"
@@ -4850,8 +4850,8 @@ def test_C1309_10_c044_work_target_and_followup():
     data = json.loads((BASE / 'c044_v1.json').read_text(encoding='utf-8'))
     s01 = next(s for s in data['sections'] if s['id'] == 'S01')
     labels = [f['label'] for f in s01['fields']]
-    assert any('작업대상' in lbl for lbl in labels), \
-        f"C044 S01 no '작업대상' field: {labels}"
+    assert any('적용 작업' in lbl for lbl in labels), \
+        f"C044 S01 no '적용 작업' field: {labels}"
     s04 = next((s for s in data['sections'] if s['id'] == 'S04'), None)
     assert s04 is not None, "C044 missing S04 section"
     assert s04['type'] == 'freeform_area', \
@@ -4874,9 +4874,9 @@ def test_C1309_11_gov01_confirmer_and_sign():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# C1310 — Border collision guard (WO-REF01-060-B8-WAVE2-VISUAL-REPAIR-005)
-# Negative fixtures: guard MUST detect collisions in C031/C043/C044 originals.
-# Positive fixtures: guard MUST find no collisions in clean forms.
+# C1310 — Border collision guard (WO-REF01-060-B8-WAVE2-VISUAL-REPAIR-005 / 005B / Phase2)
+# Negative: independent defect fixtures generated from old long labels (not canonical PDFs).
+# Positive: clean canonical C026/C027 + ALL 14 B8 forms after Phase2 replacement.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _load_border_guard():
@@ -4888,67 +4888,110 @@ def _load_border_guard():
     return _mod.detect_border_collisions
 
 
-def test_C1310_01_c031_orig_has_border_collisions():
-    """qa_004 border guard: C031 original PDF must have ≥1 collision (label wraps through row border)."""
+# Old long labels that caused text overflow → border collisions (Phase 2 regression sentinel)
+_OLD_LABELS = {
+    "c031": {"S01": {"F06": "사용 교육자료(명칭·버전)", "F07": "출석 증빙 종류·보관 위치"}},
+    "c043": {"S01": {"F05": "훈련 참여자/명단 참조"}},
+    "c044": {"S01": {"F01": "화학물질/제품명",         "F04": "작업대상 또는 적용 작업"}},
+}
+
+
+def _make_defect_pdf(cid):
+    """Generate a tmp PDF with old long labels (known to cause border collisions).
+    Returns (pdf_path, tmpdir). Caller must clean up tmpdir."""
+    import copy as _copy, tempfile as _tempfile, shutil as _shutil
+    spec = _copy.deepcopy(json.loads((BASE / f"{cid}_v1.json").read_text(encoding="utf-8")))
+    for sec in spec["sections"]:
+        sid = sec.get("id")
+        if sid in _OLD_LABELS.get(cid, {}):
+            for fld in sec.get("fields", []):
+                if fld["id"] in _OLD_LABELS[cid][sid]:
+                    fld["label"] = _OLD_LABELS[cid][sid][fld["id"]]
+    td  = Path(_tempfile.mkdtemp(prefix="c1310_defect_"))
+    pdf = td / f"{cid}_defect.pdf"
+    import common_v1_engine as _eng
+    _eng.register_fonts()
+    _eng.generate_from_dict(spec, str(pdf))
+    return pdf, td
+
+
+def test_C1310_01_c031_defect_fixture_has_border_collisions():
+    """Negative fixture: PDF generated from C031 with old long labels must have ≥1 collision."""
     guard = _load_border_guard()
-    colls = guard(OUTPUT / "TAI-FORM-C031-blank.pdf")
-    assert len(colls) > 0, (
-        "C031 original expected border collisions (F06/F07 labels overflow 7mm rows) "
-        f"but guard returned 0 collisions"
-    )
+    pdf, td = _make_defect_pdf("c031")
+    try:
+        colls = guard(pdf)
+        assert len(colls) > 0, (
+            "C031 defect fixture expected border collisions (F06/F07 overflow 7mm rows) "
+            f"but guard returned 0"
+        )
+    finally:
+        import shutil as _sh; _sh.rmtree(td, ignore_errors=True)
 
 
-def test_C1310_02_c043_orig_has_border_collisions():
-    """qa_004 border guard: C043 original PDF must have ≥1 collision (F05 label wraps)."""
+def test_C1310_02_c043_defect_fixture_has_border_collisions():
+    """Negative fixture: PDF generated from C043 with old long F05 label must have ≥1 collision."""
     guard = _load_border_guard()
-    colls = guard(OUTPUT / "TAI-FORM-C043-blank.pdf")
-    assert len(colls) > 0, (
-        "C043 original expected border collisions (F05 '훈련 참여자/명단 참조' wraps) "
-        f"but guard returned 0 collisions"
-    )
+    pdf, td = _make_defect_pdf("c043")
+    try:
+        colls = guard(pdf)
+        assert len(colls) > 0, (
+            "C043 defect fixture expected border collisions ('훈련 참여자/명단 참조' wraps) "
+            f"but guard returned 0"
+        )
+    finally:
+        import shutil as _sh; _sh.rmtree(td, ignore_errors=True)
 
 
-def test_C1310_03_c044_orig_has_border_collisions():
-    """qa_004 border guard: C044 original PDF must have ≥1 collision (F01/F04 labels wrap)."""
+def test_C1310_03_c044_defect_fixture_has_border_collisions():
+    """Negative fixture: PDF generated from C044 with old long labels must have ≥1 collision."""
     guard = _load_border_guard()
-    colls = guard(OUTPUT / "TAI-FORM-C044-blank.pdf")
-    assert len(colls) > 0, (
-        "C044 original expected border collisions (F01/F04 long labels wrap) "
-        f"but guard returned 0 collisions"
-    )
+    pdf, td = _make_defect_pdf("c044")
+    try:
+        colls = guard(pdf)
+        assert len(colls) > 0, (
+            "C044 defect fixture expected border collisions (F01/F04 long labels wrap) "
+            f"but guard returned 0"
+        )
+    finally:
+        import shutil as _sh; _sh.rmtree(td, ignore_errors=True)
 
 
 def test_C1310_04_c026_orig_no_collision():
-    """qa_004 border guard: C026 original must have 0 collisions (all short labels)."""
+    """qa_004 border guard: C026 canonical must have 0 collisions."""
     guard = _load_border_guard()
     colls = guard(OUTPUT / "TAI-FORM-C026-blank.pdf")
     assert len(colls) == 0, (
-        f"C026 original unexpectedly has {len(colls)} border collision(s): "
+        f"C026 unexpectedly has {len(colls)} border collision(s): "
         + str([c['text'] for c in colls[:3]])
     )
 
 
 def test_C1310_05_c027_orig_no_collision():
-    """qa_004 border guard: C027 original must have 0 collisions."""
+    """qa_004 border guard: C027 canonical must have 0 collisions."""
     guard = _load_border_guard()
     colls = guard(OUTPUT / "TAI-FORM-C027-blank.pdf")
     assert len(colls) == 0, (
-        f"C027 original unexpectedly has {len(colls)} border collision(s)"
+        f"C027 unexpectedly has {len(colls)} border collision(s)"
     )
 
 
-def test_C1310_06_guard_collision_text_field_identifies_wrapping_label():
-    """Collision entries for C031 must reference the long labels (F06 or F07 text fragments)."""
+def test_C1310_06_defect_collision_text_identifies_old_labels():
+    """Collision entries from C031 defect fixture must reference the old long label words."""
     guard = _load_border_guard()
-    colls = guard(OUTPUT / "TAI-FORM-C031-blank.pdf")
-    coll_texts = " ".join(c["text"] for c in colls)
-    assert any(frag in coll_texts for frag in ["사용", "교육자료", "출석", "증빙"]), (
-        f"C031 collisions don't reference expected label words: {coll_texts[:100]}"
-    )
+    pdf, td = _make_defect_pdf("c031")
+    try:
+        colls = guard(pdf)
+        coll_texts = " ".join(c["text"] for c in colls)
+        assert any(frag in coll_texts for frag in ["사용", "교육자료", "출석", "증빙"]), (
+            f"Defect fixture collisions don't reference expected old-label words: {coll_texts[:100]}"
+        )
+    finally:
+        import shutil as _sh; _sh.rmtree(td, ignore_errors=True)
 
 
 def test_C1310_07_non_defect_b8_forms_no_collision():
-    """All 11 non-defect B8 forms must have 0 border collisions."""
+    """All 11 non-target B8 forms must have 0 border collisions."""
     guard = _load_border_guard()
     CLEAN_B8 = [
         "C026","C027","C028","C029","C033","C037",
@@ -4961,3 +5004,33 @@ def test_C1310_07_non_defect_b8_forms_no_collision():
         if colls:
             failures.append(f"{code}:{len(colls)}")
     assert not failures, f"Unexpected border collisions in: {failures}"
+
+
+def test_C1310_11_c031_canonical_no_collision():
+    """Phase2 positive: new canonical C031 PDF must have 0 border collisions."""
+    guard = _load_border_guard()
+    colls = guard(OUTPUT / "TAI-FORM-C031-blank.pdf")
+    assert len(colls) == 0, (
+        f"New canonical C031 has {len(colls)} collision(s): "
+        + str([c['text'] for c in colls[:3]])
+    )
+
+
+def test_C1310_12_c043_canonical_no_collision():
+    """Phase2 positive: new canonical C043 PDF must have 0 border collisions."""
+    guard = _load_border_guard()
+    colls = guard(OUTPUT / "TAI-FORM-C043-blank.pdf")
+    assert len(colls) == 0, (
+        f"New canonical C043 has {len(colls)} collision(s): "
+        + str([c['text'] for c in colls[:3]])
+    )
+
+
+def test_C1310_13_c044_canonical_no_collision():
+    """Phase2 positive: new canonical C044 PDF must have 0 border collisions."""
+    guard = _load_border_guard()
+    colls = guard(OUTPUT / "TAI-FORM-C044-blank.pdf")
+    assert len(colls) == 0, (
+        f"New canonical C044 has {len(colls)} collision(s): "
+        + str([c['text'] for c in colls[:3]])
+    )

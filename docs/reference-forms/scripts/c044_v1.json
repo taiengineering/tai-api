@@ -18,7 +18,7 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
-    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). source_evidence=MIXED(참조 존재 미확인). MSDS 교육·주지 실무 기반. 문서 작성만으로 법정 교육 의무 이행 주장 금지. FIX-002: 작업대상·후속조치 추가. GPT 검토 전 빌드 차단.",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). source_evidence=MIXED(참조 존재 미확인). MSDS 교육·주지 실무 기반. 문서 작성만으로 법정 교육 의무 이행 주장 금지. FIX-002: 작업대상·후속조치 추가. 내부 POC 후보 검토 통과, 법률·권리·외부공개 검토는 별도 대기.",
     "design_gate_ref": "WO-REF01-060-B8-WAVE2-BUILD-003"
   },
   "document": {
@@ -40,7 +40,7 @@
       "fields": [
         {
           "id": "F01",
-          "label": "화학물질/제품명"
+          "label": "물질명/제품명"
         },
         {
           "id": "F02",
@@ -52,7 +52,7 @@
         },
         {
           "id": "F04",
-          "label": "작업대상 또는 적용 작업"
+          "label": "대상·적용 작업"
         }
       ]
     },

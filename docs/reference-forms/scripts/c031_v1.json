@@ -18,7 +18,7 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
-    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. 문서 작성만으로 법정 교육 의무가 이행됐다고 표시하지 않음. 출석 증빙은 별도. FIX-002: 교육자료·출석증빙 필드 추가. GPT 검토 전 빌드 차단.",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. 문서 작성만으로 법정 교육 의무가 이행됐다고 표시하지 않음. 출석 증빙은 별도. FIX-002: 교육자료·출석증빙 필드 추가. 내부 POC 후보 검토 통과, 법률·권리·외부공개 검토는 별도 대기.",
     "design_gate_ref": "WO-REF01-060-B8-WAVE2-BUILD-003"
   },
   "document": {
@@ -60,11 +60,11 @@
         },
         {
           "id": "F06",
-          "label": "사용 교육자료(명칭·버전)"
+          "label": "교육자료·버전"
         },
         {
           "id": "F07",
-          "label": "출석 증빙 종류·보관 위치"
+          "label": "출석증빙·보관"
         }
       ]
     },
@@ -106,6 +106,17 @@
           "id": "F05_SIGN",
           "label": "서명(확인)",
           "width_mm": 60
+        }
+      ]
+    },
+    {
+      "id": "S04",
+      "type": "text_flow",
+      "paragraphs": [
+        {
+          "id": "P01",
+          "text": "【작성 안내】 출석증빙·보관란에는 출석 증빙의 종류(예: 참석자 서명부)와 실제 보관 위치를 함께 기재하십시오.",
+          "align": "left"
         }
       ]
     }
