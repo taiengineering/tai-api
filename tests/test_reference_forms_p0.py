@@ -1,7 +1,8 @@
 """
 WO-REF05-REF09-INTEGRATION-P0-REPAIR-007 — Reference Forms contract tests
+WO-REF05-REF09-INTEGRATION-FINAL-P0-008 — P0-1 storage ref + P0-2 approval binding
 
-10 test cases:
+10 original test cases:
   T1  Published + CLEARED → 200 with correct shape
   T2  Unpublished / uncleared source → 404
   T3  View absent (DB schema not applied) → 503
@@ -12,6 +13,11 @@ WO-REF05-REF09-INTEGRATION-P0-REPAIR-007 — Reference Forms contract tests
   T8  Cross-form file_id in download → 403 / 404
   T9  Unpublished (view row gone) → all 3 endpoints 404
   T10 Storage path / approval ID not in public detail response
+
+P0-008 additions:
+  T11 Storage ref parsing — correct path extracted; wrong bucket → 500; traversal → 500
+  T12 Approval binding — file not in approved_file_hashes → 404; SHA mismatch → 404;
+      no current approval record → 404; approval query error → 503
 
 Mock strategy: replace the 3 supabase helpers with controlled fakes.
 Integration path: set REFERENCE_FORM_TEST_DB_URL to run against isolated Postgres
@@ -59,10 +65,12 @@ _VIEW_ROW = {
 
 _SOURCE_ROW = {"source_name": "한국산업안전보건공단(KOSHA)", "rights_status": "CLEARED"}
 _CONTENT_ROW = {"body_html": "<h2>작성 방법</h2><p>...</p>"}
+
+# P0-1: file_ref and preview_ref use storage:// prefix (PR #594 contract)
 _FILE_ROW = {
     "id": _FILE_ID,
     "form_id": _FORM_ID,
-    "file_ref": "forms/safety-training.pdf",
+    "file_ref": "storage://reference-forms/forms/safety-training.pdf",
     "sha256": _SHA256,
     "is_active": True,
     "qa_status": "QA_PASS",
@@ -72,30 +80,31 @@ _FILE_ROW = {
 _PREVIEW_ROW = {
     "id": _PREVIEW_ID,
     "form_id": _FORM_ID,
-    "preview_ref": "previews/safety-training-p1.jpg",
+    "preview_ref": "storage://reference-forms-preview/previews/safety-training-p1.jpg",
     "source_file_sha256": _SHA256,
     "is_published": True,
     "qa_status": "QA_PASS",
 }
+
+# P0-2: current APPROVED approval record with approved_file_hashes
+_APPROVAL_ROW = {
+    "form_id": _FORM_ID,
+    "approved_file_hashes": [
+        {"file_id": _FILE_ID, "sha256": _SHA256}
+    ],
+}
+
 _PDF_BYTES = b"%PDF-1.4 fake"
 _REVIEW_REQUIRED_SOURCE = {"source_name": "고용노동부", "rights_status": "REVIEW_REQUIRED"}
 
 
 def _make_sb(*, view_rows=None, source_rows=None, content_rows=None, file_rows=None,
-             preview_rows=None, related_rows=None, storage_url="https://signed.example/file",
-             storage_error=False, view_error=False, source_error=False):
+             preview_rows=None, related_rows=None, approval_rows=None,
+             storage_url="https://signed.example/file",
+             storage_error=False, view_error=False, source_error=False,
+             approval_error=False):
     """Build a controlled mock Supabase client."""
     sb = MagicMock()
-
-    def _chain_result(rows, error=False):
-        m = MagicMock()
-        if error:
-            m.execute.side_effect = Exception("DB error")
-        else:
-            result = MagicMock()
-            result.data = rows
-            m.execute.return_value = result
-        return m
 
     def _table_side_effect(name):
         t = MagicMock()
@@ -134,6 +143,13 @@ def _make_sb(*, view_rows=None, source_rows=None, content_rows=None, file_rows=N
             res = MagicMock()
             res.data = related_rows if related_rows is not None else []
             t.execute.return_value = res
+        elif name == "reference_form_approvals":
+            if approval_error:
+                t.execute.side_effect = Exception("approval error")
+            else:
+                res = MagicMock()
+                res.data = approval_rows if approval_rows is not None else [_APPROVAL_ROW]
+                t.execute.return_value = res
         else:
             t.execute.return_value = MagicMock(data=[])
         return t
@@ -384,3 +400,117 @@ def test_t10_no_internal_fields_in_response():
     for forbidden in ("file_ref", "storage_path", "preview_ref", "approval_id",
                       "approved_content_hash", "approved_file_hashes", "is_current"):
         assert forbidden not in raw, f"forbidden field '{forbidden}' found in response"
+
+
+# ---------------------------------------------------------------------------
+# T11: P0-1 — Storage ref parsing
+# ---------------------------------------------------------------------------
+
+def test_t11_storage_ref_correct_path_extracted():
+    """Valid storage:// ref → signed URL called with bucket-relative path."""
+    sb = _make_sb(view_rows=[_VIEW_ROW])
+    app = _app(sb, user_override=_AUTHED_USER)
+
+    with patch("routers.reference_forms.httpx.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.content = _PDF_BYTES
+        mock_resp.headers = {"content-type": "application/pdf"}
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        res = _client(app).get(f"/reference-forms/{_SLUG}/files/{_FILE_ID}/download")
+
+    assert res.status_code == 200
+    # Verify create_signed_url received the relative path (not storage:// form)
+    bucket_mock = sb.storage.from_.return_value
+    call_args = bucket_mock.create_signed_url.call_args
+    assert call_args is not None
+    path_arg = call_args[0][0] if call_args[0] else call_args[1].get("path", "")
+    assert path_arg == "forms/safety-training.pdf"
+    assert not path_arg.startswith("storage://")
+
+
+def test_t11_missing_storage_prefix_download_500():
+    """file_ref without storage:// prefix → 500 (DB data contract violation)."""
+    bad_file = {**_FILE_ROW, "file_ref": "forms/safety-training.pdf"}
+    sb = _make_sb(view_rows=[_VIEW_ROW], file_rows=[bad_file])
+    app = _app(sb, user_override=_AUTHED_USER)
+    res = _client(app).get(f"/reference-forms/{_SLUG}/files/{_FILE_ID}/download")
+    assert res.status_code == 500
+
+
+def test_t11_wrong_bucket_download_500():
+    """file_ref pointing to unexpected bucket → 500."""
+    bad_file = {**_FILE_ROW, "file_ref": "storage://wrong-bucket/forms/safety-training.pdf"}
+    sb = _make_sb(view_rows=[_VIEW_ROW], file_rows=[bad_file])
+    app = _app(sb, user_override=_AUTHED_USER)
+    res = _client(app).get(f"/reference-forms/{_SLUG}/files/{_FILE_ID}/download")
+    assert res.status_code == 500
+
+
+def test_t11_traversal_in_storage_ref_download_500():
+    """file_ref with .. traversal → 500."""
+    bad_file = {**_FILE_ROW, "file_ref": "storage://reference-forms/../secrets/key.pem"}
+    sb = _make_sb(view_rows=[_VIEW_ROW], file_rows=[bad_file])
+    app = _app(sb, user_override=_AUTHED_USER)
+    res = _client(app).get(f"/reference-forms/{_SLUG}/files/{_FILE_ID}/download")
+    assert res.status_code == 500
+
+
+def test_t11_wrong_bucket_preview_500():
+    """preview_ref pointing to wrong bucket → 500."""
+    bad_pa = {**_PREVIEW_ROW, "preview_ref": "storage://reference-forms/wrong/file.jpg"}
+    sb = _make_sb(view_rows=[_VIEW_ROW], preview_rows=[bad_pa])
+    c = _client(_app(sb))
+    res = c.get(f"/reference-forms/{_SLUG}/preview/{_FILE_ID}")
+    assert res.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# T12: P0-2 — Approval binding (TOCTOU guard)
+# ---------------------------------------------------------------------------
+
+def test_t12_file_not_in_approved_hashes_download_404():
+    """File not in approved_file_hashes → 404 even if view + file row pass."""
+    no_hash_approval = {**_APPROVAL_ROW, "approved_file_hashes": []}
+    sb = _make_sb(view_rows=[_VIEW_ROW], approval_rows=[no_hash_approval])
+    app = _app(sb, user_override=_AUTHED_USER)
+    res = _client(app).get(f"/reference-forms/{_SLUG}/files/{_FILE_ID}/download")
+    assert res.status_code == 404
+
+
+def test_t12_sha_mismatch_in_approved_hashes_download_404():
+    """SHA in approved_file_hashes changed post-approval → 404."""
+    stale_hash_approval = {
+        **_APPROVAL_ROW,
+        "approved_file_hashes": [{"file_id": _FILE_ID, "sha256": "changed-sha256"}],
+    }
+    sb = _make_sb(view_rows=[_VIEW_ROW], approval_rows=[stale_hash_approval])
+    app = _app(sb, user_override=_AUTHED_USER)
+    res = _client(app).get(f"/reference-forms/{_SLUG}/files/{_FILE_ID}/download")
+    assert res.status_code == 404
+
+
+def test_t12_no_current_approval_record_download_404():
+    """No current APPROVED approval record → 404."""
+    sb = _make_sb(view_rows=[_VIEW_ROW], approval_rows=[])
+    app = _app(sb, user_override=_AUTHED_USER)
+    res = _client(app).get(f"/reference-forms/{_SLUG}/files/{_FILE_ID}/download")
+    assert res.status_code == 404
+
+
+def test_t12_approval_query_error_503():
+    """Approval query failure → 503."""
+    sb = _make_sb(view_rows=[_VIEW_ROW], approval_error=True)
+    app = _app(sb, user_override=_AUTHED_USER)
+    res = _client(app).get(f"/reference-forms/{_SLUG}/files/{_FILE_ID}/download")
+    assert res.status_code == 503
+
+
+def test_t12_approval_binding_preview_404():
+    """Approval revoked between view load and preview serve → 404 on preview."""
+    no_hash_approval = {**_APPROVAL_ROW, "approved_file_hashes": []}
+    sb = _make_sb(view_rows=[_VIEW_ROW], approval_rows=[no_hash_approval])
+    c = _client(_app(sb))
+    res = c.get(f"/reference-forms/{_SLUG}/preview/{_FILE_ID}")
+    assert res.status_code == 404

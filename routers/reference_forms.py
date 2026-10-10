@@ -1,6 +1,7 @@
 """
 Reference Form public API — WO-REF05-REF09-CMS-FILE-INTEGRATION-006
 P0 repair: WO-REF05-REF09-INTEGRATION-P0-REPAIR-007
+Final P0:  WO-REF05-REF09-INTEGRATION-FINAL-P0-008
 
 GET /reference-forms/{slug}                         — public detail (PUBLISHED + CLEARED)
 GET /reference-forms/{slug}/preview/{file_id}       — anonymous preview (no-store)
@@ -9,9 +10,10 @@ GET /reference-forms/{slug}/files/{file_id}/download — member download (auth, 
 DB contract: PR #594 (20261011120000/1/2 migrations)
 - View field: canonical_slug  (not slug)
 - File PK:    reference_form_files.id  (not file_id)
-- File path:  reference_form_files.file_ref
-- Preview:    reference_form_preview_artifacts.preview_ref
+- File path:  reference_form_files.file_ref          (storage://bucket/path format)
+- Preview:    reference_form_preview_artifacts.preview_ref  (storage://bucket/path format)
 - Preview SHA: reference_form_preview_artifacts.source_file_sha256
+- Approval:   reference_form_approvals.approved_file_hashes  [{file_id, sha256}]
 
 Security gates enforced at every request (not only at publish time):
   1. PUBLISHED + content_hash = approved_content_hash  (view WHERE clause)
@@ -20,6 +22,8 @@ Security gates enforced at every request (not only at publish time):
   4. File is QA_PASS + approved_at IS NOT NULL          (_find_qa_file + file row)
   5. SHA256 matches approval record                     (qa_pass_files cross-check)
   6. Preview: is_published=true, QA_PASS, SHA match     (preview artifact checks)
+  7. file_id + SHA256 in current approved_file_hashes   (_verify_approval_binding — TOCTOU guard)
+  8. Storage ref stripped and bucket validated           (_parse_storage_ref)
 Storage paths and approval IDs are never returned to callers.
 """
 from __future__ import annotations
@@ -44,16 +48,52 @@ _PREVIEW = "reference_form_preview_artifacts"
 _CONTENT = "reference_form_content"
 _SOURCES = "reference_form_sources"
 _RELATIONS = "reference_form_relations"
+_APPROVALS = "reference_form_approvals"
 
 _MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # matches reference-forms bucket file_size_limit
 
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._\-]")
+_ALLOWED_BUCKETS = frozenset({"reference-forms", "reference-forms-preview"})
 
 
-def _safe_filename(file_ref: str) -> str:
-    raw = file_ref.rsplit("/", 1)[-1] if file_ref else "download"
+def _safe_filename(relative_path: str) -> str:
+    raw = relative_path.rsplit("/", 1)[-1] if relative_path else "download"
     cleaned = _SAFE_FILENAME_RE.sub("_", raw)
     return cleaned or "download"
+
+
+def _parse_storage_ref(raw_ref: str, expected_bucket: str) -> str:
+    """
+    Parse storage://bucket/path → return bucket-relative path for create_signed_url.
+    Validates bucket is in the allowed set and matches expected_bucket.
+    Blocks path traversal (any '..' segment). Raises 500 on invalid ref
+    (violation of the internal DB data contract, not a caller error).
+    """
+    prefix = "storage://"
+    if not raw_ref or not raw_ref.startswith(prefix):
+        log.error("Storage ref missing storage:// prefix: %r", raw_ref)
+        raise HTTPException(status_code=500, detail="STORAGE_REF_INVALID")
+
+    rest = raw_ref[len(prefix):]
+    slash_idx = rest.find("/")
+    if slash_idx < 1:
+        log.error("Storage ref missing bucket or path: %r", raw_ref)
+        raise HTTPException(status_code=500, detail="STORAGE_REF_INVALID")
+
+    bucket = rest[:slash_idx]
+    path = rest[slash_idx + 1:]
+
+    if bucket not in _ALLOWED_BUCKETS:
+        log.error("Storage ref unknown bucket=%r in ref=%r", bucket, raw_ref)
+        raise HTTPException(status_code=500, detail="STORAGE_REF_INVALID")
+    if bucket != expected_bucket:
+        log.error("Storage ref bucket mismatch: expected=%r got=%r", expected_bucket, bucket)
+        raise HTTPException(status_code=500, detail="STORAGE_REF_INVALID")
+    if not path or ".." in path.split("/"):
+        log.error("Storage ref path invalid or traversal attempt: %r", path)
+        raise HTTPException(status_code=500, detail="STORAGE_REF_INVALID")
+
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +210,39 @@ def _find_qa_file(view_row: dict, file_id: str) -> dict:
     return match
 
 
+def _verify_approval_binding(sb, form_id: str, file_id: str, sha256: str) -> None:
+    """
+    Per-request TOCTOU guard: file_id + sha256 must be present in the current
+    APPROVED approval's approved_file_hashes JSONB.  This is a fresh DB read
+    separate from the view load so approval revocations take effect immediately
+    even if the view was queried moments earlier.
+    """
+    try:
+        res = (
+            sb.table(_APPROVALS)
+            .select("approved_file_hashes")
+            .eq("form_id", form_id)
+            .eq("is_current", True)
+            .eq("approval_status", "APPROVED")
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log.error("Approval query failed form_id=%s: %s", form_id, exc)
+        raise HTTPException(status_code=503, detail="APPROVAL_CHECK_UNAVAILABLE")
+    if not res.data:
+        raise HTTPException(status_code=404, detail="FILE_NOT_APPROVED")
+    approved_hashes = res.data[0].get("approved_file_hashes") or []
+    match = next(
+        (h for h in approved_hashes if str(h.get("file_id")) == file_id),
+        None,
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="FILE_NOT_APPROVED")
+    if match.get("sha256") != sha256:
+        raise HTTPException(status_code=404, detail="FILE_NOT_APPROVED")
+
+
 # ---------------------------------------------------------------------------
 # GET /reference-forms/{slug}
 # ---------------------------------------------------------------------------
@@ -212,7 +285,8 @@ def get_reference_form(slug: str, sb: Client = Depends(get_supabase)):
 def get_reference_form_preview(slug: str, file_id: str, sb: Client = Depends(get_supabase)):
     """
     Anonymous preview.
-    Gates: form PUBLISHED+CLEARED, file QA_PASS, preview is_published+QA_PASS+SHA match.
+    Gates: form PUBLISHED+CLEARED, file QA_PASS, preview is_published+QA_PASS+SHA match,
+    file_id+SHA in current approved_file_hashes, storage ref parsed and validated.
     Proxied from reference-forms-preview bucket; no-store.
     """
     view_row = _load_view_row(sb, slug)
@@ -274,24 +348,28 @@ def get_reference_form_preview(slug: str, file_id: str, sb: Client = Depends(get
     if pa.get("source_file_sha256") != approved_sha256:
         raise HTTPException(status_code=404, detail="PREVIEW_NOT_FOUND")
 
-    preview_ref: str = pa["preview_ref"]
+    # P0-2: per-request approval binding (TOCTOU guard)
+    _verify_approval_binding(sb, form_id, file_id, approved_sha256)
+
+    # P0-1: parse and validate storage ref → bucket-relative path for SDK
+    preview_path = _parse_storage_ref(pa["preview_ref"], "reference-forms-preview")
 
     try:
         signed = sb.storage.from_("reference-forms-preview").create_signed_url(
-            preview_ref, expires_in=60
+            preview_path, expires_in=60
         )
         signed_url = signed.get("signedURL") or signed.get("signedUrl") or ""
         if not signed_url:
             raise ValueError("empty signed URL")
     except Exception as exc:
-        log.error("Preview signed URL failed ref=%s: %s", preview_ref, exc)
+        log.error("Preview signed URL failed path=%s: %s", preview_path, exc)
         raise HTTPException(status_code=503, detail="PREVIEW_UNAVAILABLE")
 
     try:
         r = httpx.get(signed_url, follow_redirects=True, timeout=30)
         r.raise_for_status()
     except Exception as exc:
-        log.error("Preview fetch failed ref=%s: %s", preview_ref, exc)
+        log.error("Preview fetch failed path=%s: %s", preview_path, exc)
         raise HTTPException(status_code=502, detail="PREVIEW_FETCH_FAILED")
 
     content_type = r.headers.get("content-type", "application/pdf")
@@ -315,7 +393,8 @@ def download_reference_form_file(
 ):
     """
     Member-only download.
-    Gates: form PUBLISHED+CLEARED, file QA_PASS+approved_at+SHA match.
+    Gates: form PUBLISHED+CLEARED, file QA_PASS+approved_at+SHA match,
+    file_id+SHA in current approved_file_hashes, storage ref parsed and validated.
     20 MB limit; server proxy from reference-forms bucket; no-store.
     Storage path (file_ref) never returned to caller.
     """
@@ -352,12 +431,16 @@ def download_reference_form_file(
     if file_row.get("sha256") != approved_sha256:
         raise HTTPException(status_code=404, detail="HASH_MISMATCH")
 
-    file_ref: str = file_row["file_ref"]
-    filename = _safe_filename(file_ref)
+    # P0-2: per-request approval binding (TOCTOU guard)
+    _verify_approval_binding(sb, form_id, file_id, approved_sha256)
+
+    # P0-1: parse and validate storage ref → bucket-relative path for SDK
+    file_path = _parse_storage_ref(file_row["file_ref"], "reference-forms")
+    filename = _safe_filename(file_path)
 
     try:
         signed = sb.storage.from_("reference-forms").create_signed_url(
-            file_ref, expires_in=30
+            file_path, expires_in=30
         )
         signed_url = signed.get("signedURL") or signed.get("signedUrl") or ""
         if not signed_url:
