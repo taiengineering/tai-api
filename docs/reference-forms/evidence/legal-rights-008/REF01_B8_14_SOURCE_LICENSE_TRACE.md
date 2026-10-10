@@ -55,18 +55,29 @@ base_head: 9864b9ac2039086747b68d0ff31507ac40806a27
 **공통 특성:**
 - 연구 레지스터(report 13): CHEM_FIRE / MIXED — 공식 법령 참조 존재하나 원본 서식 파일 미확인
 - `authoring_class=TAI_ORIGINAL_DRAFT` — 자기 기술
-- KOSHA MSDS 검색 시스템(report 10 S2): **"KOSHA MSDS는 제조·수입·공급자 제공 원본이 아닌 참고용이며, 상업적 외부 이용은 저작권 침해 가능"** — 명시적 상업 재사용 경고
+
+**WO-008A 정정 — KOSHA MSDS 경고 적용 범위 구분:**
+
+WO-008에서 KOSHA MSDS 시스템 상업 재사용 경고(report 10 S2)를 C039-C044 전체에 적용한 것은 과잉 일반화임. 실제 적용 범위는 아래 3가지로 구분해야 함:
+
+| 구분 | 대상 | 적용 서식 | 설명 |
+|------|------|---------|------|
+| CASE A | KOSHA MSDS 원본 콘텐츠 직접 재사용 | C040 (MSDS 이력) — UNVERIFIED | KOSHA MSDS 시스템이 제공하는 원본 MSDS 데이터 자체를 복사·재배포하는 경우. 명시적 상업 재사용 경고(report 10 S2) 적용. |
+| CASE B | KOSHA MSDS 참조 기반 파생 서식 | C040, C044 — UNVERIFIED | MSDS 관리 실무를 반영하되 KOSHA 제공 MSDS 데이터 자체를 복사하지 않는 경우. 경고 적용 여부 불확실. |
+| CASE C | TAI 독자 설계 관리 서식 | C039, C041, C042, C043 — UNVERIFIED | 법령 참조 구조를 갖추되 KOSHA MSDS 시스템과 직접 관련 없는 관리 서식. KOSHA MSDS 경고 직접 적용 근거 없음. 그러나 TAI 독자성 증거도 미확인. |
+
+**주의**: CASE 구분은 현재 서식 JSON 명세 기반 잠정 분류. 원본 3자 파일 미검사로 정확한 유사도·파생관계 미확인.
 
 **개별 출처 관련 추가 기록:**
 
-| 서식 | 참조 출처 | MIXED 분류 근거 추정 | 원본 검사 여부 | 권리 위험 |
-|------|---------|-------------------|-------------|---------|
-| C039 | 산업안전보건법 제110조 / 화학물질관리법 (취급목록 관리) | 법령상 의무 존재 + TAI 서식 | SOURCE_FILE_NOT_INSPECTED | UNVERIFIED |
-| C040 | 산업안전보건법 제114조 (MSDS 보관) | 법령상 의무 존재 + MSDS 이력 실무 | SOURCE_FILE_NOT_INSPECTED | UNVERIFIED — KOSHA MSDS 내용 자체는 재사용 경고 있음 |
-| C041 | 산업안전보건법 제115조 (GHS 경고표지) | GHS 기준 참조 + 점검 실무 | SOURCE_FILE_NOT_INSPECTED | UNVERIFIED — GHS 원문 도식 별도 라이선스 확인 필요 |
-| C042 | 화학물질관리법 보관시설 기준 | 법령 보관기준 참조 + 점검 실무 | SOURCE_FILE_NOT_INSPECTED | UNVERIFIED |
-| C043 | 화학물질관리법 제41조 (사고대비물질 비상대응) 추정 | 법령상 훈련 의무 + 실무 기록 | SOURCE_FILE_NOT_INSPECTED | UNVERIFIED |
-| C044 | 산업안전보건법 제114조 (MSDS 교육·주지) | 교육 의무 + 확인기록 실무 | SOURCE_FILE_NOT_INSPECTED | UNVERIFIED |
+| 서식 | 참조 출처 | MIXED 분류 근거 추정 | 원본 검사 여부 | KOSHA MSDS 경고 적용 | 권리 위험 |
+|------|---------|-------------------|-------------|-------------------|---------|
+| C039 | 산업안전보건법 제110조 / 화학물질관리법 (취급목록 관리) | 법령상 의무 존재 + TAI 서식 | SOURCE_FILE_NOT_INSPECTED | CASE C — 직접 적용 근거 없음 | UNVERIFIED |
+| C040 | 산업안전보건법 제114조 (MSDS 보관) | 법령상 의무 존재 + MSDS 이력 실무 | SOURCE_FILE_NOT_INSPECTED | CASE A/B — MSDS 데이터 직접 복사 여부 미확인 | UNVERIFIED |
+| C041 | 산업안전보건법 제115조 (GHS 경고표지) | GHS 기준 참조 + 점검 실무 | SOURCE_FILE_NOT_INSPECTED | CASE C — GHS 원문 도식 별도 라이선스 확인 필요 | UNVERIFIED |
+| C042 | 화학물질관리법 보관시설 기준 | 법령 보관기준 참조 + 점검 실무 | SOURCE_FILE_NOT_INSPECTED | CASE C — 직접 적용 근거 없음 | UNVERIFIED |
+| C043 | 화학물질관리법 제41조 (사고대비물질 비상대응) 추정 | 법령상 훈련 의무 + 실무 기록 | SOURCE_FILE_NOT_INSPECTED | CASE C — 직접 적용 근거 없음 | UNVERIFIED |
+| C044 | 산업안전보건법 제114조 (MSDS 교육·주지) | 교육 의무 + 확인기록 실무 | SOURCE_FILE_NOT_INSPECTED | CASE B — MSDS 교육 기록 서식; 데이터 복사 여부 미확인 | UNVERIFIED |
 
 ---
 

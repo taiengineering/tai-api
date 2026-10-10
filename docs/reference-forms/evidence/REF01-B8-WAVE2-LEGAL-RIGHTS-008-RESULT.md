@@ -34,14 +34,23 @@ WO-REF01-060-B8-WAVE2-LEGAL-RIGHTS-EVIDENCE-008 증거 수집 결과.
 
 전체 저장소 검색 결과: **NOT FOUND** (node_modules 제외).
 
+### governance DB 실제 접근 결과 (WO-008A 정정)
+
+45cm-prj-db (`iapzwbysfzootqnldtan`) `governance` 스키마 RPC 호출 실시:  
+`governance.get_active_items_for_scope('LEG', NULL)` — **호출 성공**  
+반환값 = AI 거버넌스 규칙 16건 (AI-001~AI-016); **산업안전보건법 조문 데이터 없음**  
+이 DB는 45CM 개발 거버넌스 전용 — 산업 법령 SoT 아님.
+
 ### LEG 런타임 경로
 
 `clients/leg_runtime_client.py` 확인:  
 접근 방식 = `POST {LEG_RUNTIME_URL}/evaluate` (HTTP REST).  
-이 조사 컨텍스트에서 `LEG_RUNTIME_URL` 미설정 → 접근 불가.
+이 조사 컨텍스트에서 `LEG_RUNTIME_URL` 미설정 → 법령 조회 불가.
 
 ```
-LEGAL_RPC_ROUTE    = LEGAL_SOT_UNAVAILABLE
+GOVERNANCE_RPC_ACCESSIBLE  = YES
+GOVERNANCE_RPC_LAW_CONTENT = NONE
+LEGAL_RPC_ROUTE            = LEGAL_RPC_CONTRACT_UNRESOLVED
 ```
 
 ### 연구 문서 내 법령 인용 (2차 증거만)
@@ -155,11 +164,12 @@ COMMERCIAL_REDISTRIBUTION_AUTHORIZED = NO
 ```
 WO                             = WO-REF01-060-B8-WAVE2-LEGAL-RIGHTS-EVIDENCE-008
 BASE_HEAD                      = 9864b9ac2039086747b68d0ff31507ac40806a27
-NEW_HEAD                       = 9864b9ac (코드·서식 변경 없음; 증거 파일 4개 추가 예정)
-REMOTE_HEAD                    = 9864b9ac (확인)
+NEW_HEAD                       = 84e8461a (WO-008 커밋; WO-008A 정정 파일 포함)
+REMOTE_HEAD                    = 9864b9ac (WO-008 커밋 push 전 기준; WO-008A 결과 별도 확인 필요)
 PR_564                         = OPEN / DRAFT / UNMERGED
 FORMS                          = 14/14
-LEGAL_RPC_ROUTE                = LEGAL_SOT_UNAVAILABLE
+LEGAL_RPC_ROUTE                = LEGAL_RPC_CONTRACT_UNRESOLVED
+GOVERNANCE_RPC_ACCESSIBLE      = YES (산업안전 법령 데이터 없음)
 LEGAL_RPC_RESULTS              = EVIDENCED=0 / REVIEW_REQUIRED=13 / CONDITIONAL=1
 SOURCE_TRACE                   = EVIDENCED=0 / UNVERIFIED=14
 RIGHTS_TRACE                   = SPECIFIC_PERMISSION=0 / UNVERIFIED=14

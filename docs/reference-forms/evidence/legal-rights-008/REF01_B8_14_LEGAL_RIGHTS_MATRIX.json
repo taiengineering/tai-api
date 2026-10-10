@@ -10,10 +10,12 @@
     "legal_duty_class": "REVIEW_REQUIRED",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
         "provision_ref": "산업안전보건법 제36조 (위험성 평가) — report 02/source S4 snippet only",
         "effective_date": "UNVERIFIED_CURRENT_VERSION",
-        "applicability": "위험성평가 실시 의무 존재, 3단계 판단법은 다수 방법 중 하나. 특정 서식이 법정 필수 별지임을 확인 불가. LEGAL_SOT_UNAVAILABLE."
+        "applicability": "위험성평가 실시 의무 존재, 3단계 판단법은 다수 방법 중 하나. 특정 서식이 법정 필수 별지임을 확인 불가. LEGAL_RPC_CONTRACT_UNRESOLVED."
       }
     ],
     "mandatory_fields_evidence": [],
@@ -43,10 +45,12 @@
     "legal_duty_class": "REVIEW_REQUIRED",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
         "provision_ref": "산업안전보건법 제36조 — 체크리스트형은 인정 방법 중 하나(report 02 S4 snippet)",
         "effective_date": "UNVERIFIED_CURRENT_VERSION",
-        "applicability": "방법별 서식 법정 여부 미확인. LEGAL_SOT_UNAVAILABLE."
+        "applicability": "방법별 서식 법정 여부 미확인. LEGAL_RPC_CONTRACT_UNRESOLVED."
       }
     ],
     "mandatory_fields_evidence": [],
@@ -73,10 +77,12 @@
     "legal_duty_class": "REVIEW_REQUIRED",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
         "provision_ref": "산업안전보건법 제36조 — OPS/핵심요인분석법 법정 인정 여부 미확인",
         "effective_date": "UNVERIFIED_CURRENT_VERSION",
-        "applicability": "OPS 방법이 법정 인정 방법인지 LEGAL_SOT_UNAVAILABLE로 확인 불가."
+        "applicability": "OPS 방법이 법정 인정 방법인지 LEGAL_RPC_CONTRACT_UNRESOLVED로 확인 불가."
       }
     ],
     "mandatory_fields_evidence": [],
@@ -103,10 +109,12 @@
     "legal_duty_class": "REVIEW_REQUIRED",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
         "provision_ref": "산업안전보건법 제36조 — 빈도강도법; KOSHA 24종 내 유사명 REF-C006 존재(report 03, 붙임2)",
         "effective_date": "UNVERIFIED_CURRENT_VERSION",
-        "applicability": "KOSHA 공식 서식 목록에 '위험성평가표(빈도강도법)' 존재. TAI C029와 원본 비교 미실시. LEGAL_SOT_UNAVAILABLE."
+        "applicability": "KOSHA 공식 서식 목록에 '위험성평가표(빈도강도법)' 존재. TAI C029와 원본 비교 미실시. LEGAL_RPC_CONTRACT_UNRESOLVED."
       }
     ],
     "mandatory_fields_evidence": [],
@@ -134,10 +142,12 @@
     "legal_duty_class": "REVIEW_REQUIRED",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
         "provision_ref": "산업안전보건법 제29조 등 (안전보건교육) — 교육 실시 의무 존재; 교육일지 서식은 KOSHA 24종 내 REF-C024(붙임5 ZIP)와 별도 후보",
         "effective_date": "UNVERIFIED_CURRENT_VERSION",
-        "applicability": "교육 실시 의무 ACTIVITY_DUTY_NOT_FORM_MANDATE 추정; 이 서식이 법정 별지인지 미확인. LEGAL_SOT_UNAVAILABLE."
+        "applicability": "교육 실시 의무 ACTIVITY_DUTY_NOT_FORM_MANDATE 추정; 이 서식이 법정 별지인지 미확인. LEGAL_RPC_CONTRACT_UNRESOLVED."
       }
     ],
     "mandatory_fields_evidence": [],
@@ -165,10 +175,12 @@
     "legal_duty_class": "REVIEW_REQUIRED",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
         "provision_ref": "산업안전보건법 도급 관련 규정 (제63조 등) — 도급 시 안전관리 의무 존재; 이행점검표 법정 서식 여부 미확인",
         "effective_date": "UNVERIFIED_CURRENT_VERSION",
-        "applicability": "KOSHA 24종 내 유사명 REF-C011(도급·용역·위탁 업체 안전보건 수준 평가) 존재. 미비교. LEGAL_SOT_UNAVAILABLE."
+        "applicability": "KOSHA 24종 내 유사명 REF-C011(도급·용역·위탁 업체 안전보건 수준 평가) 존재. 미비교. LEGAL_RPC_CONTRACT_UNRESOLVED."
       }
     ],
     "mandatory_fields_evidence": [],
@@ -196,10 +208,12 @@
     "legal_duty_class": "REVIEW_REQUIRED",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
         "provision_ref": "산업안전보건법 근로자 참여 관련 규정 — 위험개선 건의·처리 절차 의무 여부 미확인",
         "effective_date": "UNVERIFIED_CURRENT_VERSION",
-        "applicability": "KOSHA 관리체계 안내서(report 15 S4)에서 근로자 의견수렴 업무단계 기술. 서식 자체 법정 여부 미확인. LEGAL_SOT_UNAVAILABLE."
+        "applicability": "KOSHA 관리체계 안내서(report 15 S4)에서 근로자 의견수렴 업무단계 기술. 서식 자체 법정 여부 미확인. LEGAL_RPC_CONTRACT_UNRESOLVED."
       }
     ],
     "mandatory_fields_evidence": [],
@@ -227,10 +241,12 @@
     "legal_duty_class": "REVIEW_REQUIRED",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
         "provision_ref": "화학물질관리법, 산업안전보건법 제110조 등 (MSDS 제공·취급목록 관리) — 의무 존재 추정; 이 서식 법정 여부 미확인",
         "effective_date": "UNVERIFIED_CURRENT_VERSION",
-        "applicability": "화학물질 취급목록 관리 의무는 업종·물질·수량 조건부. ACTIVITY_DUTY_CONFIRMED_CONDITIONAL 가능성 있으나 LEGAL_SOT_UNAVAILABLE."
+        "applicability": "화학물질 취급목록 관리 의무는 업종·물질·수량 조건부. ACTIVITY_DUTY_CONFIRMED_CONDITIONAL 가능성 있으나 LEGAL_RPC_CONTRACT_UNRESOLVED."
       }
     ],
     "mandatory_fields_evidence": [],
@@ -259,10 +275,12 @@
     "legal_duty_class": "REVIEW_REQUIRED",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
         "provision_ref": "산업안전보건법 제114조 (MSDS 보관·제공) — 수령·개정이력 관리 서식 법정 여부 미확인",
         "effective_date": "UNVERIFIED_CURRENT_VERSION",
-        "applicability": "MSDS 보관 의무 존재. 이력 대장 특정 서식 법정 여부 LEGAL_SOT_UNAVAILABLE."
+        "applicability": "MSDS 보관 의무 존재. 이력 대장 특정 서식 법정 여부 LEGAL_RPC_CONTRACT_UNRESOLVED."
       }
     ],
     "mandatory_fields_evidence": [],
@@ -290,10 +308,12 @@
     "legal_duty_class": "REVIEW_REQUIRED",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
         "provision_ref": "산업안전보건법 제115조 (경고표시) — GHS 경고표지 부착 의무; 점검표 서식 법정 여부 미확인",
         "effective_date": "UNVERIFIED_CURRENT_VERSION",
-        "applicability": "경고표지 부착 의무 존재. 점검표 특정 서식 법정 여부 LEGAL_SOT_UNAVAILABLE."
+        "applicability": "경고표지 부착 의무 존재. 점검표 특정 서식 법정 여부 LEGAL_RPC_CONTRACT_UNRESOLVED."
       }
     ],
     "mandatory_fields_evidence": [],
@@ -321,10 +341,12 @@
     "legal_duty_class": "REVIEW_REQUIRED",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
         "provision_ref": "화학물질관리법 보관시설 기준 조항 — 점검표 서식 법정 여부 미확인",
         "effective_date": "UNVERIFIED_CURRENT_VERSION",
-        "applicability": "화학물질 저장기준 의무 존재. 점검표 특정 서식 법정 여부 LEGAL_SOT_UNAVAILABLE."
+        "applicability": "화학물질 저장기준 의무 존재. 점검표 특정 서식 법정 여부 LEGAL_RPC_CONTRACT_UNRESOLVED."
       }
     ],
     "mandatory_fields_evidence": [],
@@ -352,10 +374,12 @@
     "legal_duty_class": "REVIEW_REQUIRED",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
         "provision_ref": "화학물질관리법 제41조 등 (사고대비물질 비상대응) — 훈련기록 서식 법정 여부 미확인",
         "effective_date": "UNVERIFIED_CURRENT_VERSION",
-        "applicability": "비상대응 훈련 의무 존재 가능성. 조건(물질 종류·수량) 및 서식 법정 여부 LEGAL_SOT_UNAVAILABLE."
+        "applicability": "비상대응 훈련 의무 존재 가능성. 조건(물질 종류·수량) 및 서식 법정 여부 LEGAL_RPC_CONTRACT_UNRESOLVED."
       }
     ],
     "mandatory_fields_evidence": [],
@@ -383,10 +407,12 @@
     "legal_duty_class": "REVIEW_REQUIRED",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
         "provision_ref": "산업안전보건법 제114조 (MSDS 교육·주지 의무) — 확인기록 서식 법정 여부 미확인",
         "effective_date": "UNVERIFIED_CURRENT_VERSION",
-        "applicability": "MSDS 교육·주지 의무 존재. 확인 기록 특정 서식 법정 여부 LEGAL_SOT_UNAVAILABLE."
+        "applicability": "MSDS 교육·주지 의무 존재. 확인 기록 특정 서식 법정 여부 LEGAL_RPC_CONTRACT_UNRESOLVED."
       }
     ],
     "mandatory_fields_evidence": [],
@@ -411,13 +437,21 @@
     "source_evidence_class_current": "OFFICIAL_PROCESS_AND_TAI_HYPOTHESIS",
     "observed_original_attachment": "UNVERIFIED",
     "similarity_review": "UNVERIFIED",
-    "legal_duty_class": "REVIEW_REQUIRED",
+    "legal_duty_class": "ACTIVITY_DUTY_CONFIRMED_CONDITIONAL",
+    "legal_duty_class_basis": "2차 연구 문서 증거 (OBJ-REF-01-GOVERNANCE-WORKFLOW-15.md S1/S2) — governance RPC 확인 아님",
+    "activity_duty_status": "SECONDARY_EVIDENCE_ONLY — 법 제24조 기록 의무 언급 (report 15 S1)",
+    "applicability_status": "UNVERIFIED — 시행령 별표9 적용 사업장 조건 미확인",
+    "prescribed_form_status": "NOT_APPLICABLE — 법 제24조는 특정 양식 지정 없음; TAI 열 구조는 법정 별지 아님",
+    "field_mandatory_status": "UNVERIFIED — 법정 필수 기재 항목 목록 미확인",
+    "legal_review_status": "PENDING",
     "legal_rpc_evidence": [
       {
-        "rpc": "LEGAL_SOT_UNAVAILABLE",
-        "provision_ref": "산업안전보건법 제24조 (산업안전보건위원회 회의록 작성·보존) — 시행 2026-08-01; 시행령 별표9 적용 사업장 한정",
-        "effective_date": "2026-08-01 (report 15 S1 인용, 검증 필요)",
-        "applicability": "법 제24조 기록 의무 존재(적용 사업장). ACTIVITY_DUTY_CONFIRMED_CONDITIONAL(적용 사업장 조건부). 이 서식 열구조는 TAI 제안 — 법정 별지 아님. LEGAL_SOT_UNAVAILABLE로 최종 판정 미확정."
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "반환값 = AI 거버넌스 규칙(AI-001~AI-016); 산업안전보건법 조문 데이터 없음",
+        "provision_ref": "산업안전보건법 제24조 (회의록 작성·보존) — report 15 S1 인용, 2차 증거",
+        "effective_date": "2026-08-01 (report 15 S1 인용, 현행 유효성 미독립검증)",
+        "applicability": "법 제24조 기록 의무 — 적용 사업장(시행령 별표9) 조건부. ACTIVITY_DUTY_CONFIRMED_CONDITIONAL은 2차 증거 기반 잠정 분류. governance RPC가 산업안전 법령을 제공하지 않아 공식 확인 불가."
       }
     ],
     "mandatory_fields_evidence": [

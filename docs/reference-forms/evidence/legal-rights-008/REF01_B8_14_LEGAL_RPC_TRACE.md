@@ -9,13 +9,25 @@ base_head: 9864b9ac2039086747b68d0ff31507ac40806a27
 
 ## 1. RPC 경로 탐색 결과
 
-### 탐색 방법
+### 1.1 governance DB 실제 접근 결과 (WO-008A 정정)
 
-1. `GOVERNANCE_SOURCE_OF_TRUTH.md` 파일 전체 저장소 검색 → **NOT FOUND** (node_modules 제외)
+45cm-prj-db (`iapzwbysfzootqnldtan`) `governance` 스키마에 대한 RPC 호출 실시:
+
+- `governance.get_active_items_for_scope('LEG', NULL)` — **호출 성공**
+- 반환값: AI 거버넌스 규칙 16건 (AI-001 계획반복감지, AI-004 허위완료감지 등)
+- **산업안전보건법·화학물질관리법 조문 데이터 없음** — 이 DB는 45CM 개발 거버넌스 규칙 저장소이며 산업 법령 SoT가 아님
+- `external_standards`: SARIF, FINDING-V1, OTEL, OCSF (기술 표준; 한국 산업안전 법령 없음)
+- `external_sources`: ESLint, Playwright, Ruff 등 (개발 도구; 법령 출처 없음)
+
+### 1.2 GOVERNANCE_SOURCE_OF_TRUTH.md 탐색
+
+1. `GOVERNANCE_SOURCE_OF_TRUTH.md` 파일 전체 저장소(tai-api) 검색 → **NOT FOUND** (node_modules 제외)
 2. `clients/leg_runtime_client.py` 분석 — LEG 런타임 접근 방식 확인
 3. `GOVERNANCE_SOURCE_OF_TRUTH.md` 대체 경로 탐색 (`docs/`, `supabase/`, repo root) → **NOT FOUND**
+4. taiengineering org GitHub code search: `GOVERNANCE_SOURCE_OF_TRUTH` — **0 results**
+5. tai-leg 저장소 접근 시도 → **404 (저장소 없음)**
 
-### 확인된 LEG 런타임 접근 방식
+### 1.3 LEG 런타임 접근 방식
 
 파일: `clients/leg_runtime_client.py`
 
@@ -26,16 +38,20 @@ POST {LEG_RUNTIME_URL}/rtm/evaluate
 
 - 접근 경로: HTTP REST API (Supabase 직접 RPC 아님)
 - 환경변수 `LEG_RUNTIME_URL`: 이 조사 컨텍스트에서 미설정
-- `45cm-prj-db` `governance` 스키마는 LEG 런타임 서비스 내부에서 참조되며, 외부에서 직접 SELECT 불가
+- 산업안전 법령 SoT는 LEG 런타임 서비스 내부에 있으며 이 컨텍스트에서 접근 불가
 
 ### 판정
 
 ```
-GOVERNANCE_SOURCE_OF_TRUTH_FILE = NOT_FOUND
-LEG_RUNTIME_URL                 = NOT_SET (research context)
-LEGAL_SOT_ACCESSIBLE            = NO
-LEGAL_RPC_ROUTE                 = LEGAL_SOT_UNAVAILABLE
+GOVERNANCE_RPC_ACCESSIBLE           = YES (호출 성공)
+GOVERNANCE_RPC_CONTENT              = AI 거버넌스 규칙 전용 (산업안전 법령 없음)
+GOVERNANCE_SOURCE_OF_TRUTH_FILE     = NOT_FOUND (org 전체 검색)
+LEG_RUNTIME_URL                     = NOT_SET (research context)
+LEGAL_SOT_ACCESSIBLE                = NO
+LEGAL_RPC_ROUTE                     = LEGAL_RPC_CONTRACT_UNRESOLVED
 ```
+
+**WO-008 오류 정정**: WO-008에서 `LEGAL_SOT_UNAVAILABLE`로 기재한 것은 governance RPC 자체가 접근 불가했다는 오해를 줄 수 있음. 실제로는 governance DB는 접근 가능하나 **산업안전 법령 계약을 제공하지 않음**. LEG 런타임 URL이 미설정된 별도 서비스가 법령 SoT를 보유함.
 
 ---
 
@@ -84,14 +100,17 @@ LEGAL_RPC_ROUTE                 = LEGAL_SOT_UNAVAILABLE
 
 ## 4. 한계 및 다음 단계
 
-1. **GOVERNANCE_SOURCE_OF_TRUTH.md 미존재**: WO-008 §3 요건인 "실제 허용 RPC 서명" 확인 불가. 법령 SoT 접근 = `LEGAL_SOT_UNAVAILABLE`.
-2. **LEG 런타임 미접근**: 이 연구 컨텍스트에서 `LEG_RUNTIME_URL` 환경변수 미설정. GPT가 별도 법령 검증 필요.
-3. **연구 문서 법령 인용 한계**: URL만 기록, 실제 조문 텍스트·조건·시행일 독립 검증 미실시.
-4. **법 제24조 GOV-01만 CONFIRMED_CONDITIONAL**: 나머지 13종은 REVIEW_REQUIRED. 과잉 일반화 금지.
+1. **GOVERNANCE_SOURCE_OF_TRUTH.md 미존재**: org 전체 검색 결과 0건. WO-008 §3 요건인 "실제 허용 RPC 서명" 확인 불가.
+2. **governance DB ≠ 법령 SoT**: governance RPC 호출 성공했으나 반환값은 AI 거버넌스 규칙(AI-001~AI-016). 산업안전보건법 조문 없음.
+3. **LEG 런타임 미접근**: 이 연구 컨텍스트에서 `LEG_RUNTIME_URL` 환경변수 미설정. GPT가 별도 법령 검증 필요.
+4. **연구 문서 법령 인용 한계**: URL만 기록, 실제 조문 텍스트·조건·시행일 독립 검증 미실시.
+5. **법 제24조 GOV-01만 CONFIRMED_CONDITIONAL**: 나머지 13종은 REVIEW_REQUIRED. 과잉 일반화 금지.
 
 ```
-LEGAL_RPC_ROUTE       = LEGAL_SOT_UNAVAILABLE
-EVIDENCED_COUNT       = 0 (RPC 결과 없음)
-REVIEW_REQUIRED_COUNT = 13
-CONDITIONAL_COUNT     = 1 (GOV-01, 연구 문서 2차 증거)
+LEGAL_RPC_ROUTE              = LEGAL_RPC_CONTRACT_UNRESOLVED
+GOVERNANCE_RPC_ACCESSIBLE    = YES
+GOVERNANCE_RPC_LAW_CONTENT   = NONE (AI 거버넌스 규칙만 보유)
+EVIDENCED_COUNT              = 0 (법령 RPC 결과 없음)
+REVIEW_REQUIRED_COUNT        = 13
+CONDITIONAL_COUNT            = 1 (GOV-01, 연구 문서 2차 증거)
 ```
