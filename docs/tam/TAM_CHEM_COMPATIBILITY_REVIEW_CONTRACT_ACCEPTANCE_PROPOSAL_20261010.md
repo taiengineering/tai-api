@@ -95,7 +95,7 @@ This section proposes the TAM consumer registration binding for Chemical's `COMP
 TAM-006 §4 defines a priority-ordered route lookup with two distinct failure modes:
 
 - **`AMBIGUOUS_ROUTE` (HTTP 422):** When both PROCESS_TYPE and DOCUMENT_TYPE routes exist for a `(company_id, consumer_type)` pair and `route_type_hint` is absent or insufficient to resolve the ambiguity, TAM returns HTTP 422 `AMBIGUOUS_ROUTE` (fail-closed). This is the failure the proposed `route_type_hint=PROCESS_TYPE` is designed to prevent.
-- **`NO_APPROVAL_ROUTE_FOUND` (HTTP 422):** When no eligible route record exists at all for the consumer, TAM returns HTTP 422 `NO_APPROVAL_ROUTE_FOUND` (fail-closed). This is a separate failure from ambiguity.
+- **`NO_APPROVAL_ROUTE_FOUND` (HTTP 422):** When no eligible route record exists at any level — instance, PROCESS_TYPE, DOCUMENT_TYPE, FACTORY_DEFAULT, or COMPANY_DEFAULT — TAM returns HTTP 422 `NO_APPROVAL_ROUTE_FOUND` (fail-closed). Factory/company default routes, if present and eligible, are consulted before this failure fires.
 
 The proposal to use `PROCESS_TYPE` with `scope_key=WMS_COMPATIBILITY_REVIEW` is GPT's recommendation based on the semantic nature of a compatibility review as a process. This is NOT finalized:
 
@@ -128,7 +128,7 @@ This format is `PROPOSED / OWNER_UNDECIDED`. TAM Owner must accept key format, g
 | Implementation status | NOT IMPLEMENTED AND NOT DEPLOYED — request lifecycle GET does not exist in `tam_routes.py`; `main.py` does not register the TAM router (TAM Module Definition §6: all HTTP endpoints "미등록") | Requires new implementation; absence is a known BLOCKER for A2 activation | NOT DEPLOYED |
 | Authentication | TAM server-side consumer authorization required | Company/factory-scoped tenant authorization; cross-tenant information must not be exposed | PROPOSED — TAM Owner must confirm authorization model |
 
-**Note:** A plain HTTP 404 from an unregistered or unavailable route is NOT equivalent to a legitimate `TAM_REQUEST_NOT_FOUND` tenant-scoped response. Chemical MUST distinguish these cases (see §3.3 error contracts). The existence of other routes under `/v1/tam` prefix does NOT prove the request lifecycle endpoint exists or is reachable.
+**Note:** A plain HTTP 404 from an unregistered or unavailable route is NOT equivalent to a legitimate `TAM_REQUEST_NOT_FOUND` tenant-scoped response. Chemical MUST distinguish these cases (see §3.3). The existence of other routes under `/v1/tam` prefix does NOT prove the request lifecycle endpoint exists or is reachable.
 
 ### 3.2 Response Fields (15 Fields)
 
@@ -152,47 +152,87 @@ This format is `PROPOSED / OWNER_UNDECIDED`. TAM Owner must accept key format, g
 
 **Multi-decision serialization**: For `SEQUENTIAL`, `PARALLEL_ANY`, or `PARALLEL_ALL` approval types, TAM selects and reports the final serialized completing transition decision. Chemical MUST NOT independently query `ORDER BY decided_at DESC LIMIT 1` to derive `approved_by`. The full decision history is preserved in the TAM ledger.
 
-### 3.3 Error Contracts (4 Proposed GAPs — TAM Owner acceptance required)
+### 3.3 Response Handling Contracts (GAP-R1 through GAP-R4 — TAM Owner acceptance required)
 
-**GAP-R1 — Tenant-scoped 404 vs. routing 404:**
+Chemical processes each TAM GET response through a deterministic sequential dispatch. Steps are applied in order; the first matching condition terminates processing. All proposed error codes are OWNER UNDECIDED until TAM Owner accepts.
 
-| Case | Proposed TAM response | Proposed CHEM treatment | Acceptance |
-|------|-----------------------|------------------------|------------|
-| Tenant-scoped genuine not-found (valid auth, request does not exist or belongs to other tenant) | Structured `404 TAM_REQUEST_NOT_FOUND` (same response for both cases; no cross-tenant disclosure) | Map to Chemical `403 OVERRIDE_TAM_REQUEST_NOT_FOUND` after confirming structured response | **PROPOSED / TAM OWNER UNDECIDED** |
-| Unregistered route / infrastructure 404 / empty body / malformed JSON | NOT a legitimate TAM_REQUEST_NOT_FOUND | `503 OVERRIDE_TAM_UNAVAILABLE` (fail-closed) | PROPOSED |
+**GAP-R1 — Dispatch: transport, structured error envelope, and 200 branch (RFC-R2-01)**
 
-**GAP-R2 — Ordered response classification:**
+**Step A — Transport / routing failure (evaluated before HTTP body is parsed):**
 
-Chemical MUST apply the following ordered classification to every TAM response. A response cannot simultaneously satisfy two levels; the first applicable level determines the outcome:
+If any of the following occurs, Chemical treats the response as `503 OVERRIDE_TAM_UNAVAILABLE` (fail-closed). This is NOT tenant not-found:
+- TCP/TLS connection failure, timeout
+- HTTP 5xx from any layer
+- Unregistered route / infrastructure HTTP 404 with no TAM error envelope (empty body, non-JSON, HTML page)
 
-| Priority | Condition | Proposed CHEM treatment | Notes |
-|----------|-----------|------------------------|-------|
-| 1 | Transport failure: timeout, 5xx, unregistered endpoint | `503 OVERRIDE_TAM_UNAVAILABLE` (fail-closed) | NOT tenant not-found; see GAP-R4 |
-| 2 | TAM reachable but response is malformed: schema mismatch, missing required fields, or APPROVED provenance failures (see GAP-R3) | `503 OVERRIDE_TAM_UNVERIFIED` (fail-closed) | Provenance failures: null completed_at, missing completion_decision_id, mismatched approved_at, missing approved_by |
-| 3 | Fully validated response, `status != APPROVED` | `422 OVERRIDE_TAM_NOT_APPROVED` | — |
-| 4 | Fully validated response, `status == APPROVED`, all provenance checks pass (GAP-R3), `effective == false` | `422 OVERRIDE_TAM_NOT_EFFECTIVE` | NOT UNVERIFIED — effective=false on a fully valid APPROVED response is a distinct outcome |
-| 5 | Fully validated response, `status == APPROVED`, all provenance checks pass (GAP-R3), `effective == true`, valid binding | Eligible for issuance checks | NOT unconditional final approval — BLOCK or REVIEW_REQUIRED must not be silently converted |
+**Step B — TAM structured error envelope check (HTTP non-200 with parsed JSON body):**
+
+TAM Owner must formally specify the authenticated structured error envelope format and exact error codes. Until accepted, the following is PROPOSED:
+
+| Non-200 HTTP response | Proposed CHEM treatment |
+|----------------------|------------------------|
+| HTTP 404 with recognized TAM envelope `TAM_REQUEST_NOT_FOUND` (authenticated, tenant-scoped) | `403 OVERRIDE_TAM_REQUEST_NOT_FOUND` — no cross-tenant disclosure |
+| HTTP 4xx (including 401, 403) or other non-200 **without** a recognized TAM error envelope | `503 OVERRIDE_TAM_UNVERIFIED` (fail-closed) — never classify as tenant not-found or verified approval without an authenticated envelope |
+| Any non-200 with unrecognized/unknown TAM error code | `503 OVERRIDE_TAM_UNVERIFIED` (fail-closed) |
+
+Status: **PROPOSED / TAM OWNER UNDECIDED** — TAM Owner must define the authenticated structured error envelope and designate which HTTP status + error code combinations are trusted.
+
+**Step C — HTTP 200 branch:**
+
+Proceed to GAP-R2 (binding verification), then GAP-R3 (APPROVED provenance and effectiveness).
+
+**GAP-R2 — Six-field binding verification on HTTP 200 response (RFC-R2-02)**
+
+After HTTP 200 is received, Chemical applies the following ordered verification. Caller authentication and tenant scope are confirmed first:
+
+1. **Authenticate caller and resolve Chemical server-side tenant scope** — unauthorized callers are denied before any binding fields are examined; no tenant information is disclosed to unauthorized callers.
+2. **Schema / type validation** — verify all 15 response fields are present with correct types. Any missing required field or type error → `503 OVERRIDE_TAM_UNVERIFIED` (malformed; not a binding mismatch).
+3. **Six-field binding match** — compare all 6 binding fields from the TAM response against server-stored Chemical review values:
+
+| Binding field | TAM response value | Must match (server-stored) |
+|---------------|--------------------|---------------------------|
+| `company_id` | TAM response `company_id` | Authenticated Chemical tenant company |
+| `factory_id` | TAM response `factory_id` | `review.factory_id` (server-stored, NON-NULL) |
+| `consumer_type` | TAM response `consumer_type` | `CHEMICAL` (exactly) |
+| `business_object_type` | TAM response `business_object_type` | `COMPATIBILITY_REVIEW` (exactly) |
+| `business_object_id` | TAM response `business_object_id` | `review.review_id` (server-stored UUID) |
+| `evidence_ref` | TAM response `evidence_ref` | `review.evaluation_ref` (server-stored, NON-NULL) |
+
+- **Confirmed value mismatch on a syntactically valid, typed field** → `409 OVERRIDE_BINDING_MISMATCH`; no approval INSERT proceeds (per CHEM A1 §3.3, §6.4)
+- **Missing / NULL / ill-typed field** → `503 OVERRIDE_TAM_UNVERIFIED` (malformed — not a binding mismatch)
+
+4. Only after all 6 binding fields match, proceed to GAP-R3.
 
 Status: **PROPOSED / TAM OWNER UNDECIDED**.
 
-**GAP-R3 — APPROVED provenance completeness (subset of Priority 2 above):**
+**GAP-R3 — APPROVED provenance completeness and effectiveness ordering**
 
-For a TAM response with `status == APPROVED`, all of the following MUST be present and internally consistent before `effective` is examined. If any check fails, the response is classified as Priority 2 → `503 OVERRIDE_TAM_UNVERIFIED` (fail-closed):
+After binding verification passes, Chemical applies the following ordered classification to the `status` and provenance fields:
 
+| Priority | Condition | Proposed CHEM treatment |
+|----------|-----------|------------------------|
+| 1 | `status != APPROVED` | `422 OVERRIDE_TAM_NOT_APPROVED` |
+| 2 | `status == APPROVED`, any provenance check fails (see criteria below) | `503 OVERRIDE_TAM_UNVERIFIED` (fail-closed) |
+| 3 | `status == APPROVED`, all provenance valid, `effective == false` | `422 OVERRIDE_TAM_NOT_EFFECTIVE` — distinct from UNVERIFIED |
+| 4 | `status == APPROVED`, all provenance valid, `effective == true`, binding verified | Eligible for issuance checks — `BLOCK` or `REVIEW_REQUIRED` must NOT be silently converted to OK |
+
+APPROVED provenance criteria — all must hold; any single failure → Priority 2:
 1. `completed_at` is NON-NULL
 2. `approved_at == completed_at` (exact equality)
 3. `completion_decision_id` is NON-NULL
 4. `approved_by` is NON-NULL
 
-Only after all 4 provenance checks pass does the `effective` field determine whether the outcome is Priority 4 (`422 NOT_EFFECTIVE`) or Priority 5 (eligible). This ordering ensures `effective=false` on a provenance-valid APPROVED response is never silently collapsed into an UNVERIFIED error.
-
 Status: **PROPOSED / TAM OWNER UNDECIDED**.
 
-**GAP-R4 — Transport and schema availability:**
+**GAP-R4 — TAM Owner structured error and transport specification**
 
-- Timeout or 5xx → `503 OVERRIDE_TAM_UNAVAILABLE` (see GAP-R2 Priority 1)
-- HTTP 200 with unexpected schema, type mismatch, or authorization contradiction → `503 OVERRIDE_TAM_UNVERIFIED` (see GAP-R2 Priority 2)
-- TAM Owner must formally specify: transport protocol, authentication mechanism, structured error envelope format, and whether 404 body is a distinguished JSON structure or plain HTTP 404.
+TAM Owner must formally specify the following before the GAP-R1 Step B dispatch table can be treated as authoritative:
+- Transport protocol and authentication mechanism
+- Authenticated structured error envelope format (schema, required fields, error code enumeration)
+- Which HTTP status codes carry a trusted TAM error envelope vs. infrastructure errors
+- Whether HTTP 404 body is a distinguished JSON structure or plain HTTP 404
+
+Until this specification is accepted, the dispatch in GAP-R1 Step B remains PROPOSED.
 
 Status: **PROPOSED / TAM OWNER UNDECIDED**.
 
@@ -205,7 +245,7 @@ This section records which C-DEPs are prerequisites for which activation gates. 
 | Gate | C-DEP Requirements | Current Blocker State |
 |------|-------------------|----------------------|
 | A1 Implementation WO issuance | C-DEP-02 TAM GET contract accepted + C-DEP-03 business_object_type accepted + Owner authorization + GPT design WO | NOT YET — C-DEP-02/03 PENDING |
-| A2 (TAM execution activation) | C-DEP-01 TAM request creation; C-DEP-04 TAM decision execution; C-DEP-13 `tam_approval_decisions` NOT DEPLOYED (blocks `approved_by` provenance verification in Production); TAM execution tables/routes deployed in production | BLOCKED — TAM execution tables NOT DEPLOYED |
+| A2 (TAM execution activation) | C-DEP-01: `tam_approval_requests` AND `tam_approval_decisions` tables deployed; C-DEP-04: `GET /tam/requests/{id}` endpoint live deployment; C-DEP-13: `tam_approval_decisions` NOT DEPLOYED (blocks `approved_by` provenance verification in Production); TAM execution tables/routes deployed in production | BLOCKED — TAM execution tables NOT DEPLOYED |
 | C (C-option / use reservation) | C-DEP-05 atomically serialized use reservation BEFORE WMS Posting; requires A2 complete | NOT DESIGNED — separate BLOCKED Gate |
 | B (other WP-07I work) | Separate WO | NOT STARTED |
 | D | Separate WO | BLOCKED |
@@ -238,35 +278,37 @@ All items are `PROPOSED / TAM OWNER ACCEPTANCE PENDING`. This table must be upda
 | C-DEP-02-B | 15-field response contract | All fields, sources, nullable semantics, and CHEM binding as specified in §3.2 | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
 | C-DEP-02-C | `approved_by = actor_user_id` of completing transition | Not `recorded_by`; not independently derived by Chemical | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
 | C-DEP-02-D | `approved_at = completed_at` (exact alias) | Chemical MUST NOT use `decided_at` as `approved_at` | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-02-E | Tenant-scoped 404 contract (GAP-R1) | Structured `404 TAM_REQUEST_NOT_FOUND`; unregistered route → 503 UNAVAILABLE fail-closed | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-02-F | Ordered response classification (GAP-R2) | 5-level priority: transport→UNAVAILABLE; malformed/provenance-fail→UNVERIFIED; not-APPROVED→NOT_APPROVED; APPROVED+effective=false→NOT_EFFECTIVE; APPROVED+effective=true→eligible | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-02-G | APPROVED provenance completeness (GAP-R3) | completed_at/approved_at/completion_decision_id/approved_by all NON-NULL and internally consistent required before effective is checked; any failure → UNVERIFIED 503 | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
-| C-DEP-02-H | Transport and schema availability contract (GAP-R4) | Timeout/5xx → UNAVAILABLE; schema mismatch → UNVERIFIED; TAM Owner specifies structured error format | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
+| C-DEP-02-E | Response dispatch contract (GAP-R1) | Transport failure → UNAVAILABLE; authenticated structured 404 TAM_REQUEST_NOT_FOUND → CHEM 403; unknown/unverifiable non-200 → UNVERIFIED; 200 → binding then provenance | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
+| C-DEP-02-F | Six-field binding verification (GAP-R2) | Confirmed value mismatch on valid fields → 409 BINDING_MISMATCH; missing/malformed → 503 UNVERIFIED; auth before binding; no cross-tenant disclosure | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
+| C-DEP-02-G | APPROVED provenance and effectiveness ordering (GAP-R3) | status!=APPROVED → NOT_APPROVED; APPROVED+provenance-fail → UNVERIFIED; APPROVED+valid+effective=false → NOT_EFFECTIVE; APPROVED+valid+effective=true → eligible | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
+| C-DEP-02-H | TAM structured error format specification (GAP-R4) | TAM Owner must specify: transport protocol, auth mechanism, error envelope schema, error code enumeration, 404 body format | PROPOSED / TAM OWNER ACCEPTANCE PENDING |
 | C-DEP-09 | Operator TTL source and authority | Owner-confirmed TTL config SoT, clock authority, expiry algorithm | OPEN / OWNER ACCEPTANCE PENDING (separate from C-DEP-02/03) |
 
 ---
 
 ## 6. Verification Fixtures — Test Specifications (Design Only)
 
-These fixtures are **test specifications** derived from the GPT dossier. They have NOT been executed. No fixture result may be marked PASS until the fixture is actually run against a deployed and authorized system.
+These fixtures are **test specifications** derived from the GPT dossier and R2 repairs. They have NOT been executed. No fixture result may be marked PASS until the fixture is actually run against a deployed and authorized system.
 
 | ID | Test Name | Precondition | Action | Expected Result | Execution Status |
 |----|-----------|-------------|--------|-----------------|-----------------|
 | AC-01 | Idempotency — same review, same payload | TAM deployed; `review_id` exists | Submit TAM request with `CHEM:COMPATIBILITY_REVIEW:{review_id}` twice, same scope | Same TAM request returned both times; no duplicate created | NOT EXECUTED |
 | AC-02 | Idempotency conflict — same key, different scope | TAM deployed | Submit with same idempotency_key, different `business_object_id` or `factory_id` | TAM returns 409 conflict; Chemical treats as error | NOT EXECUTED |
-| AC-03 | Binding mismatch rejection | TAM deployed | Submit request where any of: company_id, factory_id, evidence_ref, business_object_id, consumer_type, business_object_type does not match review server state | Chemical rejects issuance before TAM submission; or TAM 422/409 causes Chemical fail-closed | NOT EXECUTED |
-| AC-04 | Unregistered route 404 handling | TAM route NOT registered | Call `GET /v1/tam/requests/{id}` when route not registered | HTTP 404 (infrastructure); Chemical maps to `503 OVERRIDE_TAM_UNAVAILABLE`, NOT `TAM_REQUEST_NOT_FOUND` | NOT EXECUTED |
-| AC-05 | Tenant-scoped structured 404 | TAM deployed; request_id from different tenant | Call `GET /v1/tam/requests/{id}` with cross-tenant ID | TAM returns structured `404 TAM_REQUEST_NOT_FOUND`; no other tenant fields disclosed; Chemical maps to `403 OVERRIDE_TAM_REQUEST_NOT_FOUND` | NOT EXECUTED |
-| AC-06 | APPROVED with missing provenance fields | TAM deployed | TAM response: `status=APPROVED`, `completed_at=NULL` OR `approved_at != completed_at` OR missing `completion_decision_id` OR missing `approved_by` | GAP-R3 provenance check fails → Chemical maps to `503 OVERRIDE_TAM_UNVERIFIED` (Priority 2 fail-closed); effective field is NOT examined | NOT EXECUTED |
-| AC-07 | APPROVED, provenance valid, effective=false | TAM deployed; approval effectiveness revoked | TAM response: `status=APPROVED`, all GAP-R3 provenance fields present and consistent, `effective=false` | GAP-R3 passes → `effective=false` → Chemical maps to `422 OVERRIDE_TAM_NOT_EFFECTIVE` (Priority 4); NOT treated as UNVERIFIED | NOT EXECUTED |
+| AC-03a | Pre-send client field guard | Any state | Client-supplied binding field values (company_id, factory_id, etc.) provided in request payload | Chemical ignores/rejects client-supplied binding values; all binding fields resolved server-side from authenticated review before TAM submission; no TAM call made with untrusted client fields | NOT EXECUTED |
+| AC-03b | Post-TAM-response binding mismatch | TAM deployed; TAM returns syntactically valid 200 with binding value mismatch | Chemical calls `GET /v1/tam/requests/{id}`; TAM returns HTTP 200 with valid schema but one or more binding values differ from server-stored review values | GAP-R2 binding check fails after TAM response received, before Chemical approval INSERT; `409 OVERRIDE_BINDING_MISMATCH`; zero Chemical approval rows inserted | NOT EXECUTED |
+| AC-04 | Unregistered route / infrastructure 404 | TAM route NOT registered | Call `GET /v1/tam/requests/{id}` when route not registered; response is plain HTTP 404 or empty body | GAP-R1 Step A: HTTP 404 without TAM envelope → `503 OVERRIDE_TAM_UNAVAILABLE`; NOT classified as `TAM_REQUEST_NOT_FOUND` | NOT EXECUTED |
+| AC-05 | Tenant-scoped structured 404 | TAM deployed; request_id from different tenant | Call `GET /v1/tam/requests/{id}` with cross-tenant ID | GAP-R1 Step B: TAM returns structured `404 TAM_REQUEST_NOT_FOUND` with authenticated envelope; Chemical maps to `403 OVERRIDE_TAM_REQUEST_NOT_FOUND`; no other tenant fields disclosed | NOT EXECUTED |
+| AC-06 | APPROVED with missing provenance fields | TAM deployed | TAM response: HTTP 200, `status=APPROVED`, `completed_at=NULL` OR `approved_at != completed_at` OR missing `completion_decision_id` OR missing `approved_by` | GAP-R2 binding passes → GAP-R3 Priority 2: provenance check fails → `503 OVERRIDE_TAM_UNVERIFIED` (fail-closed); effective field is NOT examined | NOT EXECUTED |
+| AC-07 | APPROVED, provenance valid, effective=false | TAM deployed; approval effectiveness revoked | TAM response: HTTP 200, `status=APPROVED`, all GAP-R3 provenance fields present and consistent, `effective=false` | GAP-R2 binding passes → GAP-R3 Priority 3: all provenance valid, `effective=false` → `422 OVERRIDE_TAM_NOT_EFFECTIVE`; NOT treated as UNVERIFIED | NOT EXECUTED |
 | AC-08 | Multi-decision serialization | TAM deployed; PARALLEL_ALL approval type | Completing transition decision is last serialized APPROVED decision | Chemical reads `approved_by` from TAM response; does NOT independently query `ORDER BY decided_at DESC LIMIT 1` | NOT EXECUTED |
 | AC-09 | Route ambiguity — hint absent, both route types match | TAM deployed; PROCESS_TYPE and DOCUMENT_TYPE routes both exist for this consumer | Submit without `route_type_hint` | TAM returns HTTP 422 `AMBIGUOUS_ROUTE` (fail-closed); Chemical does not proceed | NOT EXECUTED |
 | AC-10 | A1 mock isolation — no production mutation | A1 mock environment | Full A1 compatibility review flow with mock TAM | TAM NOT DEPLOYED → issuance not possible; zero production DB mutations; zero Provider activations | NOT EXECUTED |
-| AC-11 | No eligible route exists | TAM deployed; no route record for this consumer | Submit request when no PROCESS_TYPE or DOCUMENT_TYPE route record exists for this (company_id, consumer_type) | TAM returns HTTP 422 `NO_APPROVAL_ROUTE_FOUND` (fail-closed); distinct from AMBIGUOUS_ROUTE (AC-09) | NOT EXECUTED |
+| AC-11 | No eligible route exists — all route levels absent | TAM deployed; no instance_route, PROCESS_TYPE, DOCUMENT_TYPE, FACTORY_DEFAULT, or COMPANY_DEFAULT route record exists for this `(company_id, consumer_type)` combination; all route levels explicitly absent | Submit TAM request for COMPATIBILITY_REVIEW | TAM returns HTTP 422 `NO_APPROVAL_ROUTE_FOUND` (fail-closed); distinct from `AMBIGUOUS_ROUTE` (AC-09) which requires two competing routes to exist | NOT EXECUTED |
+| AC-12 | Factory-default fallback route resolves — no specific routes, factory default present | TAM deployed; PROCESS_TYPE + DOCUMENT_TYPE routes absent for this consumer; but FACTORY_DEFAULT route eligible for `company_id` | Submit TAM request without `route_type_hint` | TAM resolves via FACTORY_DEFAULT route; `NO_APPROVAL_ROUTE_FOUND` is NOT returned; request proceeds normally | NOT EXECUTED |
 
 ---
 
-## 7. Source Evidence and Cross-Reference
+## 7. Source Evidence, Cross-Reference, and Change Log
 
 ### 7.1 TAM-006 Sections Used
 
@@ -276,7 +318,7 @@ These fixtures are **test specifications** derived from the GPT dossier. They ha
 | TAM-006 §3.7 | `tam_approval_decisions`: `actor_user_id`, `decided_at`, `on_behalf_of_user_id` | C-DEP-02 `approved_by`, `on_behalf_of_user_id` source |
 | TAM-006 §3.8 | `tam_approval_delegations` — delegation schema; `on_behalf_of_user_id` delegation source | C-DEP-02 `on_behalf_of_user_id` delegation context |
 | TAM-006 §3.10 | `tam_approval_effectiveness_revocations` + `effective_approval_valid()` function | C-DEP-02 `effective` field and computation — TAM owns this |
-| TAM-006 §4 | Route resolution priority; `route_type_hint` requirement for PROCESS+DOCUMENT conflict → `AMBIGUOUS_ROUTE` (HTTP 422); `NO_APPROVAL_ROUTE_FOUND` (HTTP 422) when no route exists | C-DEP-03 route_type_hint proposal; AC-09/AC-11 fixture basis |
+| TAM-006 §4 | Route resolution priority: instance → PROCESS_TYPE → DOCUMENT_TYPE → FACTORY_DEFAULT → COMPANY_DEFAULT; `route_type_hint` requirement for PROCESS+DOCUMENT conflict → `AMBIGUOUS_ROUTE` (HTTP 422); `NO_APPROVAL_ROUTE_FOUND` (HTTP 422) when no eligible route at any level | C-DEP-03 route_type_hint proposal; AC-09/AC-11/AC-12 fixture basis |
 | TAM-006 §9 | API contract: `GET /tam/requests/{id}` in Request Lifecycle group | C-DEP-02 endpoint design target |
 
 Fixed SHA source: https://github.com/taiengineering/tai-api/blob/c9c5f2689ef3df030781ba9985750ce9b800f5e4/docs/TAI_WO_TAM_006_DESIGN_CONSOLIDATION.md
@@ -295,11 +337,13 @@ Fixed SHA source: https://github.com/taiengineering/tai-api/blob/c9c5f2689ef3df0
 | Section | Content | Relevance |
 |---------|---------|-----------|
 | §3 | TAM consumer registration fields, review_id as business_object_id | C-DEP-03 §2.1 |
+| §3.3 | Server-side verification of all 6 binding fields before approval INSERT | GAP-R2 binding verification basis |
+| §3.4 | Concurrent review / TAM request policy (R1-09) | Gate separation |
 | §4 | Override approval issuance, `evaluation_ref`, factory_id scope | C-DEP-02/03 nullable binding |
 | §5 | Revocation idempotency (R1-10) | Gate separation |
-| §3.4 | Concurrent review / TAM request policy (R1-09) | Gate separation |
+| §6.4 | API error code table: `409 OVERRIDE_BINDING_MISMATCH` for confirmed binding mismatch | GAP-R2 binding mismatch error code source |
 | §7.4 | TAM contract acceptance blockers (R1-13) | C-DEP register |
-| §11 | Open blockers register; C-DEP-13 = `tam_approval_decisions NOT DEPLOYED` (blocks `approved_by` provenance verification) | C-DEP-09/10/11/12/13, BLOCKER-003/004 |
+| §11 | Open blockers register; C-DEP-01 = `tam_approval_requests` + `tam_approval_decisions` tables deployment; C-DEP-04 = `GET /tam/requests/{id}` endpoint live deployment; C-DEP-13 = `tam_approval_decisions` NOT DEPLOYED (blocks `approved_by` provenance verification) | C-DEP-01/04/13 exact gate definitions; C-DEP-09/10/11/12, BLOCKER-003/004 |
 
 Fixed SHA source: https://github.com/taiengineering/tai-chemical/blob/afa58f0388d391881f6f6c3252a549f8390dde9c/docs/foundation/CHEM_MGMT_OBJ07_WP07I_A1_REVIEW_OVERRIDE_DESIGN_V1.md
 
@@ -308,11 +352,17 @@ Fixed SHA source: https://github.com/taiengineering/tai-chemical/blob/afa58f0388
 - `git diff --name-only main...HEAD` on this branch: **1 file** (`docs/tam/TAM_CHEM_COMPATIBILITY_REVIEW_CONTRACT_ACCEPTANCE_PROPOSAL_20261010.md`)
 - Branch fork anchor (source investigation basis): `c9c5f2689ef3df030781ba9985750ce9b800f5e4`
 - PR base / current TAM main: `393d4c239ae531b10b44961143bab9125c1fc84d` (non-impacting drift; see §1)
-- CODE_CHANGE = 0
-- SQL_MIGRATION = 0
-- DB_WRITE = 0
-- DEPLOY = 0
-- MERGE = 0
+- CODE_CHANGE = 0 | SQL_MIGRATION = 0 | DB_WRITE = 0 | DEPLOY = 0 | MERGE = 0
+
+### 7.5 R2 Change Log
+
+| ID | Section(s) changed | Change summary |
+|----|--------------------|---------------|
+| RFC-R2-01 | §3.3 GAP-R1, §5 C-DEP-02-E | Replaced flat 5-level table with sequential Step A/B/C dispatch; structured 404 envelope handled in Step B (before 200 validation); unknown/unverifiable non-200 → UNVERIFIED fail-closed |
+| RFC-R2-02 | §3.3 GAP-R2, §5 C-DEP-02-F, §6 AC-03b | Added six-field binding verification step on HTTP 200 response; confirmed mismatch on valid fields → 409 BINDING_MISMATCH; missing/malformed → 503 UNVERIFIED; auth before binding |
+| RFC-R2-03 | §2.2, §6 AC-11, AC-12 | AC-11 precondition updated to assert all route levels absent (instance/process/document/factory-default/company-default); AC-12 added for factory-default positive resolution case |
+| RFC-R2-04 | §4 A2 row, §7.3 §11 | C-DEP-01 = `tam_approval_requests` + `tam_approval_decisions` tables; C-DEP-04 = `GET /tam/requests/{id}` endpoint live deployment (not "decision execution"); C-DEP-13 preserved |
+| RFC-R2-05 | §6 AC-03a, AC-03b | AC-03 split into pre-send client guard (AC-03a) and post-TAM-response binding mismatch check (AC-03b); timing of each check made explicit |
 
 ---
 
@@ -325,10 +375,10 @@ TAM_MAIN_SHA_SOURCE_ANCHOR = c9c5f2689ef3df030781ba9985750ce9b800f5e4
 TAM_MAIN_SHA_PR_BASE       = 393d4c239ae531b10b44961143bab9125c1fc84d
 TAM_PR                     = https://github.com/taiengineering/tai-api/pull/587  (OPEN / DRAFT / UNMERGED)
 TAM_PR_BASE_SHA            = 393d4c239ae531b10b44961143bab9125c1fc84d
-TAM_PR_PRE_HEAD_SHA        = 343a2e820ef09b2a2b1dc4e7cd2a049c899ce50c
-TAM_PR_POST_HEAD_SHA       = captured separately in executor receipt
+TAM_PR_R1_HEAD_SHA         = a92ef8da97587d286aa8bfd6aec0ea41197ba920
+TAM_PR_R2_HEAD_SHA         = captured separately in executor receipt
 FILE_CHANGED               = docs/tam/TAM_CHEM_COMPATIBILITY_REVIEW_CONTRACT_ACCEPTANCE_PROPOSAL_20261010.md
-PRE_DOC_BLOB_SHA           = 9c5e5b00032b0782ed0569ec2db19a229ccae3b2
+PRE_DOC_BLOB_SHA           = 7c00c3fe63f6096b33ae6859640953ebc5e193d7
 POST_DOC_BLOB_SHA          = captured separately in executor receipt
 C_DEP_02                   = CONTRACT_PROPOSED / TAM_OWNER_ACCEPTANCE_PENDING
 C_DEP_03                   = CONTRACT_PROPOSED / TAM_OWNER_ACCEPTANCE_PENDING
@@ -342,4 +392,5 @@ DEPLOY                     = 0
 MERGE                      = 0
 GPT_INDEPENDENT_VERIFY     = REQUIRED
 OWNER_APPROVAL             = NOT_GRANTED
+A1_IMPLEMENTATION          = NOT AUTHORIZED
 ```
