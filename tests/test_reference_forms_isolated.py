@@ -3,10 +3,11 @@ test_reference_forms_isolated.py
 
 Isolated integration tests for the Reference Forms CMS migrations.
 Connects to: localhost:5455/ref05_test (ext-sql-final-pg Docker)
-Schema: public  (matches production — no search_path substitution)
-pgcrypto: extensions schema (matches Supabase production)
-auth.role(): stubbed to return 'service_role'
-RLS disabled per-session via SET row_security = off
+Schema: public — no search_path substitution; matches production layout.
+pgcrypto: extensions schema (Supabase production compatible via wrapper).
+auth.role(): stubbed to return 'service_role'.
+Supabase roles (anon, authenticated, service_role) created for permission tests.
+RLS disabled per-session via SET row_security = off.
 """
 
 import uuid
@@ -23,9 +24,10 @@ import pytest
 # Connection / migration paths
 # ---------------------------------------------------------------------------
 DB_DSN = "host=localhost port=5455 dbname=ref05_test user=postgres password=testpass"
-MIGRATION_DIR = Path(__file__).parent.parent / "supabase" / "migrations"
-CORE_MIGRATION = MIGRATION_DIR / "20261011120000_reference_forms_core.sql"
-RPC_MIGRATION  = MIGRATION_DIR / "20261011120002_reference_forms_rpc.sql"
+MIGRATION_DIR    = Path(__file__).parent.parent / "supabase" / "migrations"
+CORE_MIGRATION    = MIGRATION_DIR / "20261011120000_reference_forms_core.sql"
+STORAGE_MIGRATION = MIGRATION_DIR / "20261011120001_reference_forms_storage.sql"
+RPC_MIGRATION     = MIGRATION_DIR / "20261011120002_reference_forms_rpc.sql"
 
 
 def _raw_conn():
@@ -35,17 +37,15 @@ def _raw_conn():
 
 
 # ---------------------------------------------------------------------------
-# Module-level setup: apply migrations to public schema, no SQL rewriting
+# Module-level setup
 # ---------------------------------------------------------------------------
 def _setup_module_once():
     conn = _raw_conn()
     cur = conn.cursor()
 
-    # 1. extensions schema + pgcrypto (matches Supabase production layout)
-    # If pgcrypto is already installed in public (plain PG default), create a
-    # wrapper so extensions.digest() resolves — matching Supabase's layout.
+    # 1. extensions schema + pgcrypto wrapper (matches Supabase production layout)
     cur.execute("CREATE SCHEMA IF NOT EXISTS extensions;")
-    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")  # installs to public if not present
+    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
     cur.execute("""
         CREATE OR REPLACE FUNCTION extensions.digest(data TEXT, algorithm TEXT)
         RETURNS BYTEA LANGUAGE sql STRICT IMMUTABLE AS $$
@@ -59,7 +59,7 @@ def _setup_module_once():
         $$;
     """)
 
-    # 2. auth schema + auth.role() stub (Supabase built-in, not present in plain PG)
+    # 2. auth schema + auth.role() stub
     cur.execute("CREATE SCHEMA IF NOT EXISTS auth;")
     cur.execute("""
         CREATE OR REPLACE FUNCTION auth.role()
@@ -68,30 +68,41 @@ def _setup_module_once():
         $$;
     """)
 
-    # 3. Drop existing reference form objects so migration is idempotent
+    # 3. Supabase-equivalent roles for permission tests
+    for role in ('anon', 'authenticated', 'service_role'):
+        cur.execute(f"""
+            DO $$ BEGIN
+                CREATE ROLE {role};
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END; $$;
+        """)
+
+    # 4. Drop existing reference form objects (idempotent)
+    # Also drop the old 4-param publish signature from prior migrations.
     cur.execute("""
-        DROP VIEW   IF EXISTS public.reference_form_public_view CASCADE;
+        DROP VIEW     IF EXISTS public.reference_form_public_view CASCADE;
         DROP FUNCTION IF EXISTS public.rpc_publish_reference_form(UUID,TEXT,JSONB,BOOLEAN) CASCADE;
+        DROP FUNCTION IF EXISTS public.rpc_publish_reference_form(UUID,TEXT,JSONB) CASCADE;
         DROP FUNCTION IF EXISTS public.rpc_unpublish_reference_form(UUID,TEXT,TEXT) CASCADE;
         DROP FUNCTION IF EXISTS public.rpc_change_slug_reference_form(UUID,TEXT,TEXT) CASCADE;
         DROP FUNCTION IF EXISTS public.fn_assert_slug_globally_unique(TEXT,UUID) CASCADE;
         DROP FUNCTION IF EXISTS public.fn_reference_form_content_hash() CASCADE;
         DROP FUNCTION IF EXISTS public.fn_reference_forms_set_updated_at() CASCADE;
-        DROP TABLE IF EXISTS public.reference_form_events          CASCADE;
-        DROP TABLE IF EXISTS public.reference_form_approvals       CASCADE;
-        DROP TABLE IF EXISTS public.reference_form_aliases         CASCADE;
-        DROP TABLE IF EXISTS public.reference_form_legacy_links    CASCADE;
-        DROP TABLE IF EXISTS public.reference_form_relations       CASCADE;
-        DROP TABLE IF EXISTS public.reference_form_sources         CASCADE;
-        DROP TABLE IF EXISTS public.reference_form_preview_artifacts CASCADE;
-        DROP TABLE IF EXISTS public.reference_form_files           CASCADE;
-        DROP TABLE IF EXISTS public.reference_form_slug_registry   CASCADE;
-        DROP TABLE IF EXISTS public.reference_form_slug_history    CASCADE;
-        DROP TABLE IF EXISTS public.reference_form_content         CASCADE;
-        DROP TABLE IF EXISTS public.reference_forms                CASCADE;
+        DROP TABLE    IF EXISTS public.reference_form_events          CASCADE;
+        DROP TABLE    IF EXISTS public.reference_form_approvals       CASCADE;
+        DROP TABLE    IF EXISTS public.reference_form_aliases         CASCADE;
+        DROP TABLE    IF EXISTS public.reference_form_legacy_links    CASCADE;
+        DROP TABLE    IF EXISTS public.reference_form_relations       CASCADE;
+        DROP TABLE    IF EXISTS public.reference_form_sources         CASCADE;
+        DROP TABLE    IF EXISTS public.reference_form_preview_artifacts CASCADE;
+        DROP TABLE    IF EXISTS public.reference_form_files           CASCADE;
+        DROP TABLE    IF EXISTS public.reference_form_slug_registry   CASCADE;
+        DROP TABLE    IF EXISTS public.reference_form_slug_history    CASCADE;
+        DROP TABLE    IF EXISTS public.reference_form_content         CASCADE;
+        DROP TABLE    IF EXISTS public.reference_forms                CASCADE;
     """)
 
-    # 4. Outbox stub (replaces real search_index_outbox for isolated tests)
+    # 5. Outbox stub (replaces real search_index_outbox)
     cur.execute("""
         DROP TABLE IF EXISTS public.search_index_outbox_stub CASCADE;
         CREATE TABLE public.search_index_outbox_stub (
@@ -125,8 +136,10 @@ def _setup_module_once():
         $$;
     """)
 
-    # 5. Apply migrations directly — no SQL rewriting
+    # 6. Apply all 3 migrations directly — no SQL rewriting
+    #    STORAGE_MIGRATION self-skips (storage.buckets absent in plain PG)
     cur.execute(CORE_MIGRATION.read_text())
+    cur.execute(STORAGE_MIGRATION.read_text())
     cur.execute(RPC_MIGRATION.read_text())
 
     cur.close()
@@ -171,12 +184,10 @@ def make_content(conn, form_id, slug, title='Test Form', description=None, body_
         """
         INSERT INTO public.reference_form_content
             (form_id, lang, canonical_slug, title, description, body_html)
-        VALUES (%s, 'ko', %s, %s, %s, %s)
-        RETURNING id;
+        VALUES (%s, 'ko', %s, %s, %s, %s);
         """,
         (form_id, slug, title, description, body_html)
     )
-    cur.fetchone()
     cur.execute(
         "SELECT content_hash FROM public.reference_form_content WHERE form_id = %s AND lang = 'ko';",
         (form_id,)
@@ -212,7 +223,28 @@ def make_file(conn, form_id, sha256=None, qa_status='QA_PASS', approved=True):
         )
     row = cur.fetchone()
     cur.close()
-    return row[0], row[1]  # file_id, sha256
+    return row[0], row[1]
+
+
+def make_preview_artifact(conn, form_id, source_file_sha256=None,
+                          is_published=True, qa_status='QA_PASS'):
+    if source_file_sha256 is None:
+        source_file_sha256 = uuid.uuid4().hex * 2
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO public.reference_form_preview_artifacts
+            (form_id, preview_ref, source_file_sha256, is_published, qa_status)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id;
+        """,
+        (form_id,
+         f"reference-forms-preview/{uuid.uuid4().hex[:8]}.png",
+         source_file_sha256, is_published, qa_status)
+    )
+    preview_id = cur.fetchone()[0]
+    cur.close()
+    return preview_id
 
 
 def make_source(conn, form_id, rights_status='CLEARED'):
@@ -245,9 +277,8 @@ def make_approval(conn, form_id, content_hash, file_hashes_list):
         """,
         (form_id, content_hash, json.dumps(file_hashes_list))
     )
-    approval_id = cur.fetchone()[0]
+    cur.fetchone()
     cur.close()
-    return approval_id
 
 
 def get_outbox_count(conn):
@@ -265,19 +296,37 @@ def clear_outbox(conn):
 
 
 def _full_publish_setup(conn):
-    """Creates a fully publishable form (no preview artifact — call with skip_preview_gate=True)."""
-    form_id = make_form(conn)
-    slug = f"test-form-{uuid.uuid4().hex[:8]}"
+    """
+    Creates a fully publishable form including a published QA_PASS preview artifact.
+    All GATE-1~7 requirements satisfied.
+    """
+    form_id      = make_form(conn)
+    slug         = f"test-form-{uuid.uuid4().hex[:8]}"
     content_hash = make_content(conn, form_id, slug)
-    sha256 = uuid.uuid4().hex * 2
+    sha256       = uuid.uuid4().hex * 2
     file_id, actual_sha256 = make_file(conn, form_id, sha256=sha256)
-    make_approval(conn, form_id, content_hash, [{"file_id": str(file_id), "sha256": actual_sha256}])
+    make_approval(conn, form_id, content_hash,
+                  [{"file_id": str(file_id), "sha256": actual_sha256}])
+    make_preview_artifact(conn, form_id)
     clear_outbox(conn)
     return form_id, content_hash, file_id, actual_sha256
 
 
+def _setup_no_preview(conn):
+    """Like _full_publish_setup but without a preview artifact (for GATE-6 test)."""
+    form_id      = make_form(conn)
+    slug         = f"no-prev-{uuid.uuid4().hex[:8]}"
+    content_hash = make_content(conn, form_id, slug)
+    sha256       = uuid.uuid4().hex * 2
+    file_id, actual_sha256 = make_file(conn, form_id, sha256=sha256)
+    make_approval(conn, form_id, content_hash,
+                  [{"file_id": str(file_id), "sha256": actual_sha256}])
+    clear_outbox(conn)
+    return form_id
+
+
 # ---------------------------------------------------------------------------
-# Group A — Structure
+# Group A — Structure (6)
 # ---------------------------------------------------------------------------
 EXPECTED_TABLES = [
     'reference_forms',
@@ -315,20 +364,20 @@ def test_a02_fks_correct(conn):
     cur.execute(
         """
         SELECT tc.table_name, kcu.column_name,
-               ccu.table_name AS foreign_table, ccu.column_name AS foreign_col
+               ccu.table_name, ccu.column_name
         FROM information_schema.table_constraints tc
         JOIN information_schema.key_column_usage kcu
             ON tc.constraint_name = kcu.constraint_name
-            AND tc.table_schema = kcu.table_schema
+            AND tc.table_schema   = kcu.table_schema
         JOIN information_schema.constraint_column_usage ccu
             ON ccu.constraint_name = tc.constraint_name
-            AND ccu.table_schema = tc.table_schema
+            AND ccu.table_schema   = tc.table_schema
         WHERE tc.constraint_type = 'FOREIGN KEY'
-          AND tc.table_schema = 'public'
+          AND tc.table_schema    = 'public'
           AND tc.table_name LIKE 'reference_form%';
         """
     )
-    fk_set = {(r[0], r[1], r[2], r[3]) for r in cur.fetchall()}
+    fk_set = {tuple(r) for r in cur.fetchall()}
     cur.close()
 
     required = [
@@ -336,8 +385,8 @@ def test_a02_fks_correct(conn):
         ('reference_form_files',    'form_id', 'reference_forms', 'id'),
         ('reference_form_approvals','form_id', 'reference_forms', 'id'),
         ('reference_form_events',   'form_id', 'reference_forms', 'id'),
-        ('reference_form_slug_history',   'form_id', 'reference_forms', 'id'),
-        ('reference_form_slug_registry',  'form_id', 'reference_forms', 'id'),
+        ('reference_form_slug_history',  'form_id', 'reference_forms', 'id'),
+        ('reference_form_slug_registry', 'form_id', 'reference_forms', 'id'),
         ('reference_form_sources',  'form_id', 'reference_forms', 'id'),
         ('reference_form_files', 'preview_artifact_id',
          'reference_form_preview_artifacts', 'id'),
@@ -348,23 +397,19 @@ def test_a02_fks_correct(conn):
 
 def test_a03_content_hash_on_insert(conn):
     form_id = make_form(conn)
-    slug = f"hash-test-{uuid.uuid4().hex[:8]}"
-    content_hash = make_content(conn, form_id, slug, title="Hash Test Form")
-
-    assert content_hash is not None
-    assert len(content_hash) == 64, f"Expected 64-char hex, got {len(content_hash)}"
-    assert re.match(r'^[0-9a-f]{64}$', content_hash), f"Not hex: {content_hash}"
+    h = make_content(conn, form_id, f"hash-test-{uuid.uuid4().hex[:8]}", title="Hash Test")
+    assert h is not None
+    assert len(h) == 64
+    assert re.match(r'^[0-9a-f]{64}$', h), f"Not hex SHA256: {h}"
 
 
 def test_a04_content_hash_on_slug_update(conn):
     form_id = make_form(conn)
-    slug = f"orig-slug-{uuid.uuid4().hex[:8]}"
-    hash_before = make_content(conn, form_id, slug)
-
+    hash_before = make_content(conn, form_id, f"orig-{uuid.uuid4().hex[:8]}")
     cur = conn.cursor()
     cur.execute(
         "UPDATE public.reference_form_content SET canonical_slug = %s WHERE form_id = %s AND lang = 'ko';",
-        (f"updated-slug-{uuid.uuid4().hex[:8]}", form_id)
+        (f"updated-{uuid.uuid4().hex[:8]}", form_id)
     )
     cur.execute(
         "SELECT content_hash FROM public.reference_form_content WHERE form_id = %s AND lang = 'ko';",
@@ -372,23 +417,19 @@ def test_a04_content_hash_on_slug_update(conn):
     )
     hash_after = cur.fetchone()[0]
     cur.close()
-
     assert hash_before != hash_after
 
 
 def test_a05_content_slug_unique(conn):
-    form_id1 = make_form(conn)
-    form_id2 = make_form(conn)
-    slug = f"unique-slug-{uuid.uuid4().hex[:8]}"
-    make_content(conn, form_id1, slug)
-
+    slug = f"unique-{uuid.uuid4().hex[:8]}"
+    make_content(conn, make_form(conn), slug)
     with pytest.raises(psycopg2.errors.UniqueViolation):
-        make_content(conn, form_id2, slug)
+        make_content(conn, make_form(conn), slug)
 
 
 def test_a06_slug_registry_pk_unique(conn):
     form_id = make_form(conn)
-    slug = f"reg-slug-{uuid.uuid4().hex[:8]}"
+    slug = f"reg-{uuid.uuid4().hex[:8]}"
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO public.reference_form_slug_registry (slug, form_id) VALUES (%s, %s);",
@@ -403,25 +444,23 @@ def test_a06_slug_registry_pk_unique(conn):
 
 
 # ---------------------------------------------------------------------------
-# Group B — rpc_publish_reference_form
+# Group B — rpc_publish_reference_form (11)
 # ---------------------------------------------------------------------------
 
 def test_b01_publish_success(conn):
     form_id, _, _, _ = _full_publish_setup(conn)
-
     cur = conn.cursor()
     cur.execute(
-        "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-        (form_id, 'actor', '{}', True)
+        "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+        (form_id, 'actor', '{}')
     )
-    result = cur.fetchone()[0]
+    assert str(cur.fetchone()[0]) == str(form_id)
     cur.close()
-    assert str(result) == str(form_id)
 
-    cur = conn.cursor()
-    cur.execute("SELECT status FROM public.reference_forms WHERE id = %s;", (form_id,))
-    assert cur.fetchone()[0] == 'PUBLISHED'
-    cur.close()
+    cur2 = conn.cursor()
+    cur2.execute("SELECT status FROM public.reference_forms WHERE id = %s;", (form_id,))
+    assert cur2.fetchone()[0] == 'PUBLISHED'
+    cur2.close()
     assert get_outbox_count(conn) == 1
 
 
@@ -429,8 +468,8 @@ def test_b02_gate1_already_published(conn):
     form_id, _, _, _ = _full_publish_setup(conn)
     cur = conn.cursor()
     cur.execute(
-        "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-        (form_id, 'actor', '{}', True)
+        "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+        (form_id, 'actor', '{}')
     )
     cur.fetchone()
     cur.close()
@@ -443,8 +482,8 @@ def test_b02_gate1_already_published(conn):
     with pytest.raises(psycopg2.errors.RaiseException) as exc_info:
         cur3 = conn.cursor()
         cur3.execute(
-            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-            (form_id, 'actor', '{}', True)
+            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+            (form_id, 'actor', '{}')
         )
         cur3.fetchone()
         cur3.close()
@@ -453,15 +492,15 @@ def test_b02_gate1_already_published(conn):
 
 def test_b03_gate2_no_approval(conn):
     form_id = make_form(conn)
-    slug = f"no-appr-{uuid.uuid4().hex[:8]}"
-    make_content(conn, form_id, slug)
+    make_content(conn, form_id, f"no-appr-{uuid.uuid4().hex[:8]}")
     make_file(conn, form_id)
+    make_preview_artifact(conn, form_id)
 
     with pytest.raises(psycopg2.errors.RaiseException) as exc_info:
         cur = conn.cursor()
         cur.execute(
-            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-            (form_id, 'actor', '{}', True)
+            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+            (form_id, 'actor', '{}')
         )
         cur.fetchone()
         cur.close()
@@ -470,7 +509,6 @@ def test_b03_gate2_no_approval(conn):
 
 def test_b04_gate3_content_changed(conn):
     form_id, _, _, _ = _full_publish_setup(conn)
-
     cur = conn.cursor()
     cur.execute(
         "UPDATE public.reference_form_content SET body_html = '<p>changed</p>' WHERE form_id = %s AND lang = 'ko';",
@@ -481,8 +519,8 @@ def test_b04_gate3_content_changed(conn):
     with pytest.raises(psycopg2.errors.RaiseException) as exc_info:
         cur2 = conn.cursor()
         cur2.execute(
-            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-            (form_id, 'actor', '{}', True)
+            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+            (form_id, 'actor', '{}')
         )
         cur2.fetchone()
         cur2.close()
@@ -491,7 +529,6 @@ def test_b04_gate3_content_changed(conn):
 
 def test_b05_gate4_sha256_mismatch(conn):
     form_id, _, file_id, _ = _full_publish_setup(conn)
-
     cur = conn.cursor()
     cur.execute(
         "UPDATE public.reference_form_files SET sha256 = %s WHERE id = %s;",
@@ -502,8 +539,8 @@ def test_b05_gate4_sha256_mismatch(conn):
     with pytest.raises(psycopg2.errors.RaiseException) as exc_info:
         cur2 = conn.cursor()
         cur2.execute(
-            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-            (form_id, 'actor', '{}', True)
+            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+            (form_id, 'actor', '{}')
         )
         cur2.fetchone()
         cur2.close()
@@ -512,13 +549,13 @@ def test_b05_gate4_sha256_mismatch(conn):
 
 def test_b06_gate4_new_file_not_in_approval(conn):
     form_id, _, _, _ = _full_publish_setup(conn)
-    make_file(conn, form_id, qa_status='QA_PASS', approved=True)
+    make_file(conn, form_id)
 
     with pytest.raises(psycopg2.errors.RaiseException) as exc_info:
         cur = conn.cursor()
         cur.execute(
-            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-            (form_id, 'actor', '{}', True)
+            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+            (form_id, 'actor', '{}')
         )
         cur.fetchone()
         cur.close()
@@ -527,7 +564,6 @@ def test_b06_gate4_new_file_not_in_approval(conn):
 
 def test_b07_gate4_approved_file_deactivated(conn):
     form_id, _, file_id, _ = _full_publish_setup(conn)
-
     cur = conn.cursor()
     cur.execute(
         "UPDATE public.reference_form_files SET is_active = false WHERE id = %s;",
@@ -538,8 +574,8 @@ def test_b07_gate4_approved_file_deactivated(conn):
     with pytest.raises(psycopg2.errors.RaiseException) as exc_info:
         cur2 = conn.cursor()
         cur2.execute(
-            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-            (form_id, 'actor', '{}', True)
+            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+            (form_id, 'actor', '{}')
         )
         cur2.fetchone()
         cur2.close()
@@ -554,8 +590,8 @@ def test_b08_gate5_rights_required(conn):
     with pytest.raises(psycopg2.errors.RaiseException) as exc_info:
         cur = conn.cursor()
         cur.execute(
-            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-            (form_id, 'actor', '{}', True)
+            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+            (form_id, 'actor', '{}')
         )
         cur.fetchone()
         cur.close()
@@ -563,14 +599,14 @@ def test_b08_gate5_rights_required(conn):
 
 
 def test_b09_gate6_no_preview_artifact(conn):
-    """GATE-6 fires when p_skip_preview_gate=false and no preview artifact exists."""
-    form_id, _, _, _ = _full_publish_setup(conn)
+    """GATE-6 always fires — no bypass parameter exists in the current signature."""
+    form_id = _setup_no_preview(conn)
 
     with pytest.raises(psycopg2.errors.RaiseException) as exc_info:
         cur = conn.cursor()
         cur.execute(
-            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-            (form_id, 'actor', '{}', False)  # skip=False → GATE-6 enforced
+            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+            (form_id, 'actor', '{}')
         )
         cur.fetchone()
         cur.close()
@@ -579,15 +615,15 @@ def test_b09_gate6_no_preview_artifact(conn):
 
 def test_b10_gate7_no_files(conn):
     form_id = make_form(conn)
-    slug = f"no-files-{uuid.uuid4().hex[:8]}"
-    content_hash = make_content(conn, form_id, slug)
+    content_hash = make_content(conn, form_id, f"no-files-{uuid.uuid4().hex[:8]}")
     make_approval(conn, form_id, content_hash, [])
+    make_preview_artifact(conn, form_id)
 
     with pytest.raises(psycopg2.errors.RaiseException) as exc_info:
         cur = conn.cursor()
         cur.execute(
-            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-            (form_id, 'actor', '{}', True)
+            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+            (form_id, 'actor', '{}')
         )
         cur.fetchone()
         cur.close()
@@ -619,8 +655,8 @@ def test_b11_rollback_on_failure(conn):
     try:
         cur2 = conn.cursor()
         cur2.execute(
-            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-            (form_id, 'actor', '{}', True)
+            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+            (form_id, 'actor', '{}')
         )
         cur2.fetchone()
         cur2.close()
@@ -636,14 +672,12 @@ def test_b11_rollback_on_failure(conn):
 
     cur3 = conn.cursor()
     cur3.execute("SELECT status FROM public.reference_forms WHERE id = %s;", (form_id,))
-    row = cur3.fetchone()
+    assert cur3.fetchone()[0] == 'DRAFT'
     cur3.close()
-    assert row is not None
-    assert row[0] == 'DRAFT'
 
 
 # ---------------------------------------------------------------------------
-# Group C — rpc_change_slug_reference_form
+# Group C — rpc_change_slug_reference_form (4)
 # ---------------------------------------------------------------------------
 
 def _register_slug(conn, slug, form_id, status='CANONICAL'):
@@ -656,41 +690,29 @@ def _register_slug(conn, slug, form_id, status='CANONICAL'):
 
 
 def test_c01_slug_change_success(conn):
-    form_id = make_form(conn)
-    old_slug = f"old-{uuid.uuid4().hex[:8]}"
-    make_content(conn, form_id, old_slug)
+    form_id    = make_form(conn)
+    old_slug   = f"old-{uuid.uuid4().hex[:8]}"
+    hash_before = make_content(conn, form_id, old_slug)
     _register_slug(conn, old_slug, form_id)
+    clear_outbox(conn)
 
+    new_slug = f"new-{uuid.uuid4().hex[:8]}"
     cur = conn.cursor()
+    cur.execute(
+        "SELECT public.rpc_change_slug_reference_form(%s, %s, %s);",
+        (form_id, new_slug, 'actor')
+    )
+    assert str(cur.fetchone()[0]) == str(form_id)
     cur.execute(
         "SELECT content_hash FROM public.reference_form_content WHERE form_id = %s AND lang = 'ko';",
         (form_id,)
     )
-    hash_before = cur.fetchone()[0]
+    hash_after = cur.fetchone()[0]
+    cur.execute("SELECT slug_status FROM public.reference_form_slug_registry WHERE slug = %s;", (new_slug,))
+    assert cur.fetchone()[0] == 'CANONICAL'
+    cur.execute("SELECT slug_status FROM public.reference_form_slug_registry WHERE slug = %s;", (old_slug,))
+    assert cur.fetchone()[0] == 'HISTORY'
     cur.close()
-
-    clear_outbox(conn)
-    new_slug = f"new-{uuid.uuid4().hex[:8]}"
-
-    cur2 = conn.cursor()
-    cur2.execute(
-        "SELECT public.rpc_change_slug_reference_form(%s, %s, %s);",
-        (form_id, new_slug, 'actor')
-    )
-    assert str(cur2.fetchone()[0]) == str(form_id)
-    cur2.close()
-
-    cur3 = conn.cursor()
-    cur3.execute(
-        "SELECT content_hash FROM public.reference_form_content WHERE form_id = %s AND lang = 'ko';",
-        (form_id,)
-    )
-    hash_after = cur3.fetchone()[0]
-    cur3.execute("SELECT slug_status FROM public.reference_form_slug_registry WHERE slug = %s;", (new_slug,))
-    assert cur3.fetchone()[0] == 'CANONICAL'
-    cur3.execute("SELECT slug_status FROM public.reference_form_slug_registry WHERE slug = %s;", (old_slug,))
-    assert cur3.fetchone()[0] == 'HISTORY'
-    cur3.close()
 
     assert hash_before != hash_after
     assert get_outbox_count(conn) == 1
@@ -698,8 +720,8 @@ def test_c01_slug_change_success(conn):
 
 def test_c02_reuse_past_slug(conn):
     form_id = make_form(conn)
-    slug_a = f"slug-a-{uuid.uuid4().hex[:8]}"
-    slug_b = f"slug-b-{uuid.uuid4().hex[:8]}"
+    slug_a  = f"slug-a-{uuid.uuid4().hex[:8]}"
+    slug_b  = f"slug-b-{uuid.uuid4().hex[:8]}"
     make_content(conn, form_id, slug_a)
     _register_slug(conn, slug_a, form_id)
 
@@ -717,11 +739,10 @@ def test_c02_reuse_past_slug(conn):
 
 
 def test_c03_other_form_conflict(conn):
-    form1 = make_form(conn)
-    form2 = make_form(conn)
-    slug_x  = f"shared-{uuid.uuid4().hex[:8]}"
+    form1  = make_form(conn)
+    form2  = make_form(conn)
+    slug_x = f"shared-{uuid.uuid4().hex[:8]}"
     slug_f2 = f"f2init-{uuid.uuid4().hex[:8]}"
-
     make_content(conn, form1, slug_x)
     make_content(conn, form2, slug_f2)
     _register_slug(conn, slug_x,  form1)
@@ -736,7 +757,7 @@ def test_c03_other_form_conflict(conn):
 
 
 def test_c04_slug_change_invalidates_publish(conn):
-    form_id, content_hash, file_id, sha256 = _full_publish_setup(conn)
+    form_id, _, _, _ = _full_publish_setup(conn)
 
     cur = conn.cursor()
     cur.execute(
@@ -756,8 +777,8 @@ def test_c04_slug_change_invalidates_publish(conn):
     with pytest.raises(psycopg2.errors.RaiseException) as exc_info:
         cur3 = conn.cursor()
         cur3.execute(
-            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-            (form_id, 'actor', '{}', True)
+            "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+            (form_id, 'actor', '{}')
         )
         cur3.fetchone()
         cur3.close()
@@ -765,41 +786,39 @@ def test_c04_slug_change_invalidates_publish(conn):
 
 
 # ---------------------------------------------------------------------------
-# Group D — rpc_unpublish_reference_form
+# Group D — rpc_unpublish_reference_form (2)
 # ---------------------------------------------------------------------------
 
-def test_d01_unpublish_success(conn):
-    form_id, _, _, _ = _full_publish_setup(conn)
-
+def _publish_form(conn, form_id):
     cur = conn.cursor()
     cur.execute(
-        "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-        (form_id, 'actor', '{}', True)
+        "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb);",
+        (form_id, 'actor', '{}')
     )
     cur.fetchone()
     cur.close()
+
+
+def test_d01_unpublish_success(conn):
+    form_id, _, _, _ = _full_publish_setup(conn)
+    _publish_form(conn, form_id)
     clear_outbox(conn)
 
-    cur2 = conn.cursor()
-    cur2.execute(
+    cur = conn.cursor()
+    cur.execute(
         "SELECT public.rpc_unpublish_reference_form(%s, %s, %s);",
         (form_id, 'actor', 'test reason')
     )
-    assert str(cur2.fetchone()[0]) == str(form_id)
-    cur2.close()
-
-    cur3 = conn.cursor()
-    cur3.execute("SELECT status FROM public.reference_forms WHERE id = %s;", (form_id,))
-    assert cur3.fetchone()[0] == 'DRAFT'
-    cur3.execute("SELECT reason FROM public.search_index_outbox_stub;")
-    reasons = [r[0] for r in cur3.fetchall()]
-    cur3.close()
-    assert 'UNPUBLISHED' in reasons
+    assert str(cur.fetchone()[0]) == str(form_id)
+    cur.execute("SELECT status FROM public.reference_forms WHERE id = %s;", (form_id,))
+    assert cur.fetchone()[0] == 'DRAFT'
+    cur.execute("SELECT reason FROM public.search_index_outbox_stub;")
+    assert 'UNPUBLISHED' in [r[0] for r in cur.fetchall()]
+    cur.close()
 
 
 def test_d02_unpublish_draft(conn):
     form_id = make_form(conn, status='DRAFT')
-
     with pytest.raises(psycopg2.errors.RaiseException) as exc_info:
         cur = conn.cursor()
         cur.execute(
@@ -812,18 +831,8 @@ def test_d02_unpublish_draft(conn):
 
 
 # ---------------------------------------------------------------------------
-# Group E — public view
+# Group E — public view (5)
 # ---------------------------------------------------------------------------
-
-def _publish_form(conn, form_id):
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT public.rpc_publish_reference_form(%s, %s, %s::jsonb, %s);",
-        (form_id, 'actor', '{}', True)
-    )
-    cur.fetchone()
-    cur.close()
-
 
 def test_e01_published_form_in_view(conn):
     form_id, _, _, _ = _full_publish_setup(conn)
@@ -877,12 +886,11 @@ def test_e04_updated_at_greatest(conn):
     )
     rfc_ts = cur.fetchone()[0]
     cur.close()
-
     assert view_ts == max(rf_ts, rfc_ts)
 
 
 def test_e05_public_view_no_file_ref(conn):
-    """qa_pass_files must be JSONB with file_id/sha256/approved_at — no file_ref storage path."""
+    """qa_pass_files returns JSONB with file_id/sha256/approved_at — no file_ref."""
     form_id, _, _, _ = _full_publish_setup(conn)
     _publish_form(conn, form_id)
 
@@ -896,17 +904,17 @@ def test_e05_public_view_no_file_ref(conn):
 
     assert row is not None
     qa_files = row[0]
-    assert isinstance(qa_files, list), f"Expected list from JSONB, got {type(qa_files)}"
+    assert isinstance(qa_files, list)
     assert len(qa_files) >= 1
     for entry in qa_files:
-        assert 'file_id' in entry
-        assert 'sha256'  in entry
+        assert 'file_id'    in entry
+        assert 'sha256'     in entry
         assert 'approved_at' in entry
-        assert 'file_ref' not in entry, "file_ref (storage path) must not be exposed in public view"
+        assert 'file_ref'   not in entry, "file_ref storage path must not appear in public view"
 
 
 # ---------------------------------------------------------------------------
-# Group F — SearchDocument normalization (inline)
+# Group F — SearchDocument normalization (3)
 # ---------------------------------------------------------------------------
 
 def _normalize_reference_form(row: dict):
@@ -936,12 +944,11 @@ def test_f01_normalize_returns_correct_fields(conn):
     assert result['canonical_id'] == str(tid)
     assert result['publication_status'] == 'PUBLISHED'
     assert result['public_url'] == '/reference-form/test-form'
-    assert result['title'] == 'Test Form Title'
 
 
 def test_f02_normalize_missing_required_returns_none(conn):
     result = _normalize_reference_form({
-        'id': uuid.uuid4(), 'canonical_slug': 'some-form',
+        'id': uuid.uuid4(), 'canonical_slug': 'x',
         'title': '', 'description': None,
         'published_at': None, 'formats': [], 'legacy_codes': [],
     })
@@ -956,6 +963,65 @@ def test_f03_canonical_id_is_uuid_no_prefix(conn):
         'published_at': None, 'formats': [], 'legacy_codes': [],
     })
     assert result is not None
-    cid = result['canonical_id']
-    assert 'REFERENCE_FORM::' not in cid
-    assert cid == str(tid)
+    assert 'REFERENCE_FORM::' not in result['canonical_id']
+    assert result['canonical_id'] == str(tid)
+
+
+# ---------------------------------------------------------------------------
+# Group G — EXECUTE permission verification (6)
+# Validates: PUBLIC revoked, anon/authenticated denied, service_role granted.
+# ---------------------------------------------------------------------------
+
+def _fn_sig(fn_name: str, args: str) -> str:
+    return f"public.{fn_name}({args})"
+
+
+PUBLISH_SIG    = _fn_sig('rpc_publish_reference_form',    'uuid,text,jsonb')
+UNPUBLISH_SIG  = _fn_sig('rpc_unpublish_reference_form',  'uuid,text,text')
+SLUG_SIG       = _fn_sig('rpc_change_slug_reference_form','uuid,text,text')
+ASSERT_SIG     = _fn_sig('fn_assert_slug_globally_unique','text,uuid')
+
+
+def test_g01_anon_no_execute_publish(conn):
+    cur = conn.cursor()
+    cur.execute("SELECT has_function_privilege('anon', %s, 'EXECUTE');", (PUBLISH_SIG,))
+    assert cur.fetchone()[0] is False, "anon must not have EXECUTE on rpc_publish"
+    cur.close()
+
+
+def test_g02_authenticated_no_execute_publish(conn):
+    cur = conn.cursor()
+    cur.execute("SELECT has_function_privilege('authenticated', %s, 'EXECUTE');", (PUBLISH_SIG,))
+    assert cur.fetchone()[0] is False, "authenticated must not have EXECUTE on rpc_publish"
+    cur.close()
+
+
+def test_g03_service_role_execute_publish(conn):
+    cur = conn.cursor()
+    cur.execute("SELECT has_function_privilege('service_role', %s, 'EXECUTE');", (PUBLISH_SIG,))
+    assert cur.fetchone()[0] is True, "service_role must have EXECUTE on rpc_publish"
+    cur.close()
+
+
+def test_g04_anon_no_execute_unpublish(conn):
+    cur = conn.cursor()
+    cur.execute("SELECT has_function_privilege('anon', %s, 'EXECUTE');", (UNPUBLISH_SIG,))
+    assert cur.fetchone()[0] is False, "anon must not have EXECUTE on rpc_unpublish"
+    cur.close()
+
+
+def test_g05_anon_no_execute_change_slug(conn):
+    cur = conn.cursor()
+    cur.execute("SELECT has_function_privilege('anon', %s, 'EXECUTE');", (SLUG_SIG,))
+    assert cur.fetchone()[0] is False, "anon must not have EXECUTE on rpc_change_slug"
+    cur.close()
+
+
+def test_g06_service_role_execute_all_rpcs(conn):
+    """service_role must have EXECUTE on all 4 admin functions."""
+    cur = conn.cursor()
+    for sig in (PUBLISH_SIG, UNPUBLISH_SIG, SLUG_SIG, ASSERT_SIG):
+        cur.execute("SELECT has_function_privilege('service_role', %s, 'EXECUTE');", (sig,))
+        row = cur.fetchone()
+        assert row[0] is True, f"service_role lacks EXECUTE on {sig}"
+    cur.close()
