@@ -1,0 +1,63 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B10-BULK-BUILD-001",
+    "form_type": "REGISTER",
+    "source_id": "GOV-09",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "안전보건 운영체계",
+    "work_trigger": "안전보건 점검·감사 후 시정조치(CAPA) 등록",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. CAPA 등록·추적·효과확인 대장. 진행상태(입력)는 사용자 직접 기재.",
+    "design_gate_ref": "WO-REF01-060-B10-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "안전보건 시정조치(CAPA) 관리대장",
+    "doc_id": "TAI-FORM-GOV-09-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "landscape"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 관리 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "관리부서" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. CAPA 등록·이행·효과확인 반복 기록표. 진행상태는 사용자 직접 기재.",
+      "default_row_count": 8,
+      "min_row_height_mm": 12,
+      "columns": [
+        { "id": "F01_REG",    "label": "번호/등록일",      "width_mm": 28 },
+        { "id": "F02_CAUSE",  "label": "발생경위/원인",    "width_mm": 46 },
+        { "id": "F03_ACTION", "label": "시정조치 내용",    "width_mm": 46 },
+        { "id": "F04_OWNER",  "label": "담당자",           "width_mm": 22 },
+        { "id": "F05_DUE",    "label": "목표일",           "width_mm": 22 },
+        { "id": "F06_STATUS", "label": "진행상태(입력)",   "width_mm": 24 },
+        { "id": "F07_DONE",   "label": "완료일",           "width_mm": 22 },
+        { "id": "F08_EFFECT", "label": "효과확인",         "width_mm": 47 }
+      ]
+    }
+  ]
+}
