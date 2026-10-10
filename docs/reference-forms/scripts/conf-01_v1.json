@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
+    "wo": "WO-B12-FIELD-COMPLETION-003",
     "form_type": "FORM",
     "source_id": "CONF-01",
     "schema_version": "common-v1",
@@ -18,8 +18,8 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 밀폐공간 출입 허가 조건·출입자·감시인·승인 서식.",
-    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
+    "design_gate_notes": "TAI 독자 초안. 밀폐공간 출입 허가 조건·공기측정·환기감시인·출입자·승인 서식.",
+    "design_gate_ref": "WO-B12-FIELD-COMPLETION-003"
   },
   "document": {
     "title": "밀폐공간 출입·작업허가서",
@@ -38,35 +38,43 @@
       "fields": [
         { "id": "F01", "label": "사업장명" },
         { "id": "F02", "label": "작업일" },
-        { "id": "F03", "label": "밀폐공간 위치" },
-        { "id": "F04", "label": "작업 내용" },
-        { "id": "F05", "label": "신청자" }
+        { "id": "F03", "label": "작업 시간" },
+        { "id": "F04", "label": "밀폐공간 위치" },
+        { "id": "F05", "label": "작업 내용" },
+        { "id": "F06", "label": "신청자" }
       ]
     },
     {
       "type": "freeform_area",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 출입 허가 조건 (공기 측정, 환기, 감시인 배치).",
-      "label": "출입 허가 조건",
-      "min_height_mm": 35
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 공기 측정 결과 참조.",
+      "label": "공기 측정 결과 참조",
+      "min_height_mm": 25
     },
     {
       "type": "freeform_area",
       "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 환기·감시인 배치.",
+      "label": "환기·감시인 배치",
+      "min_height_mm": 25
+    },
+    {
+      "type": "freeform_area",
+      "id": "S04",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 출입자 명단.",
       "label": "출입자 명단",
       "min_height_mm": 30
     },
     {
       "type": "freeform_area",
-      "id": "S04",
+      "id": "S05",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 비상 연락 및 구조 계획.",
       "label": "비상 연락 및 구조 계획",
       "min_height_mm": 25
     },
     {
       "type": "approval",
-      "id": "S05",
+      "id": "S06",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 허가 확인란.",
       "total_width_mm": 170,
       "fields": [

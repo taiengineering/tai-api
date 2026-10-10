@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
+    "wo": "WO-B12-FIELD-COMPLETION-003",
     "form_type": "RECORD",
     "source_id": "P-23",
     "schema_version": "common-v1",
@@ -18,8 +18,8 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 현장 안전관리자 업무현황·미결사항·주의사항 인수인계 기록 서식.",
-    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
+    "design_gate_notes": "TAI 독자 초안. 현장 안전관리자 위험현황·법정일정·비상연락체계 인수인계 기록 서식.",
+    "design_gate_ref": "WO-B12-FIELD-COMPLETION-003"
   },
   "document": {
     "title": "현장 안전관리자 업무 인수인계서",
@@ -45,22 +45,22 @@
     {
       "type": "freeform_area",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 현황 및 진행 업무.",
-      "label": "현황 및 진행 업무",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 진행 중 위험·위험작업 현황.",
+      "label": "진행 중 위험·위험작업 현황",
       "min_height_mm": 45
     },
     {
       "type": "freeform_area",
       "id": "S03",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 미결사항 및 주의사항.",
-      "label": "미결사항 및 주의사항",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 법정 검사·교육 일정 및 미조치 사항.",
+      "label": "법정 검사·교육 일정 및 미조치 사항",
       "min_height_mm": 40
     },
     {
       "type": "freeform_area",
       "id": "S04",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 참고자료 및 특이사항.",
-      "label": "참고자료 및 특이사항",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 비상 연락체계 및 핵심 문서 목록.",
+      "label": "비상 연락체계 및 핵심 문서 목록",
       "min_height_mm": 30
     },
     {

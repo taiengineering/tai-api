@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
+    "wo": "WO-B12-FIELD-COMPLETION-003",
     "form_type": "FORM",
     "source_id": "P-18",
     "schema_version": "common-v1",
@@ -18,8 +18,8 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 협력업체 일일 작업구역·동시작업현황·위험정보·조정결과 공유 서식.",
-    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
+    "design_gate_notes": "TAI 독자 초안. 협력업체명·작업구역·동시작업현황·위험정보·조정결과 공유 서식.",
+    "design_gate_ref": "WO-B12-FIELD-COMPLETION-003"
   },
   "document": {
     "title": "협력업체 일일 작업·위험정보 공유표",
@@ -44,14 +44,15 @@
     {
       "type": "repeat_table",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업구역·동시작업현황·위험정보·조정결과 반복 기록표.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 협력업체별 작업구역·동시작업현황·위험정보·조정결과 반복 기록표.",
       "default_row_count": 12,
       "min_row_height_mm": 9,
       "columns": [
-        { "id": "F01_AREA",      "label": "작업구역/내용",      "width_mm": 44 },
-        { "id": "F02_CONCURRENT","label": "동시작업 현황",      "width_mm": 42 },
-        { "id": "F03_HAZARD",    "label": "위험정보(입력)",     "width_mm": 50 },
-        { "id": "F04_ADJUST",    "label": "조정 결과(입력)",    "width_mm": 34 }
+        { "id": "F01_COMPANY",   "label": "협력업체명",         "width_mm": 36 },
+        { "id": "F02_AREA",      "label": "작업구역/내용",      "width_mm": 36 },
+        { "id": "F03_CONCURRENT","label": "동시작업 현황",      "width_mm": 34 },
+        { "id": "F04_HAZARD",    "label": "위험정보(입력)",     "width_mm": 36 },
+        { "id": "F05_ADJUST",    "label": "조정 결과(입력)",    "width_mm": 28 }
       ]
     },
     {
