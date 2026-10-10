@@ -168,6 +168,10 @@ REGISTRY = {
     "c071":   _reg("c071"),   "c073":   _reg("c073"),
     # EVALUATION (1)
     "c065":   _reg("c065"),
+    # B18 batch targets (GPT_REVIEW_REQUIRED — WO-REF01-060-B18-DISTINCT-FORM-BUILD-001):
+    # FORM (2) — SHARED_TEMPLATE_DISTINCT
+    "pra-22-04": _reg("pra-22-04"),
+    "c025":      _reg("c025"),
     # B15 batch targets (GPT_REVIEW_REQUIRED — WO-REF01-060-B15-BULK-BUILD-001):
     # REGISTER (2)
     "pra-22-02": _reg("pra-22-02"),
@@ -225,6 +229,8 @@ BUILD_APPROVED_IDS = frozenset({          # WO-REF01-060-B8-WAVE2-BUILD-003
     "p-22",
     "c056", "c069", "c070", "c071", "c073",
     "c065",
+    # B18 — WO-REF01-060-B18-DISTINCT-FORM-BUILD-001 (GPT_REVIEW_REQUIRED):
+    "pra-22-04", "c025",
     # B15 — WO-REF01-060-B15-BULK-BUILD-001 (GPT_REVIEW_REQUIRED):
     "pra-22-02", "c023",
     "pra-22-06",

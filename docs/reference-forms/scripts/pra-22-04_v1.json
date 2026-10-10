@@ -1,0 +1,101 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B18-DISTINCT-FORM-BUILD-001",
+    "form_type": "FORM",
+    "source_id": "PRA-22-04",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "화학물질 관리",
+    "work_trigger": "화학물질 파손·누출품 발견 후 재고조정 승인 요청",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "B18 신설. CHW-04(격리·처리 REGISTER)와 공통 엔진 공유. 재고조정 승인 구조 독립 구현. CHW-04 수정 없음.",
+    "design_gate_ref": "WO-REF01-060-B18-DISTINCT-FORM-BUILD-001",
+    "shared_template_ref": "CHW-04",
+    "shared_template_note": "격리·처리 기록은 CHW-04 참조. 이 서식은 재고조정 승인 단계 전용."
+  },
+  "document": {
+    "title": "화학물질 파손·누출품 격리 및 재고조정 승인서",
+    "doc_id": "TAI-FORM-PRA-22-04-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 재고조정 승인 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "신청일" },
+        { "id": "F03", "label": "신청자" },
+        { "id": "F04", "label": "참조 격리기록번호(CHW-04)" },
+        { "id": "F05", "label": "재고조정 대상 물질명" },
+        { "id": "F06", "label": "용기·로트 식별" }
+      ]
+    },
+    {
+      "type": "labeled_grid",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 파손·누출 및 격리 정보.",
+      "section_label": "파손·누출 및 격리 정보",
+      "row_height_mm": 9,
+      "rows": [
+        [ { "label": "발생일시" },          { "label": "파손·누출 내용" } ],
+        [ { "label": "격리장소" },          { "label": "임시 위험통제 조치" } ]
+      ]
+    },
+    {
+      "type": "labeled_grid",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 재고조정 내역.",
+      "section_label": "재고조정 내역",
+      "row_height_mm": 9,
+      "rows": [
+        [ { "label": "재고조정 사유" },     { "label": "수량 단위" } ],
+        [ { "label": "조정 전 수량" },      { "label": "조정 후 수량" } ],
+        [ { "label": "조정 대상 수량" },    { "label": "조정 요청 내용" } ]
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 재고조정 검토 의견. CHW-04 처리방법과 독립.",
+      "label": "재고조정 검토 의견",
+      "min_height_mm": 20
+    },
+    {
+      "type": "labeled_grid",
+      "id": "S05",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 승인 정보 기재란.",
+      "section_label": "승인 정보",
+      "row_height_mm": 9,
+      "rows": [
+        [ { "label": "승인 여부" },         { "label": "승인 일시" } ]
+      ]
+    },
+    {
+      "type": "approval",
+      "id": "S06",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 재고조정 승인 결재란. 단순 확인란 대체 금지.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "신청자" },
+        { "id": "A02", "label": "검토자" },
+        { "id": "A03", "label": "승인자" }
+      ]
+    }
+  ]
+}
