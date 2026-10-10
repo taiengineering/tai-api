@@ -117,6 +117,23 @@ REGISTRY = {
     "p-02":   _reg("p-02"),
     "p-03":   _reg("p-03"),
     "p-04":   _reg("p-04"),
+    # B11 batch targets (GPT_REVIEW_REQUIRED — WO-REF01-060-B11-BULK-BUILD-001):
+    # PLAN (3)
+    "rp-01": _reg("rp-01"), "rp-08": _reg("rp-08"), "p-20": _reg("p-20"),
+    # REGISTER (2)
+    "rp-07": _reg("rp-07"), "rp-11": _reg("rp-11"),
+    # CHECKLIST (7)
+    "p-11":  _reg("p-11"),  "p-12":  _reg("p-12"),  "p-16":  _reg("p-16"),
+    "p-19":  _reg("p-19"),  "p-21":  _reg("p-21"),
+    "rp-03": _reg("rp-03"), "rp-22": _reg("rp-22"),
+    # FORM (6)
+    "p-08":   _reg("p-08"),  "p-10":   _reg("p-10"),  "p-14":  _reg("p-14"),
+    "gov-08": _reg("gov-08"),"gov-12": _reg("gov-12"),"rp-02": _reg("rp-02"),
+    # RECORD (5)
+    "p-24":   _reg("p-24"),  "conf-02": _reg("conf-02"), "conf-03": _reg("conf-03"),
+    "env-04": _reg("env-04"),"rp-04":  _reg("rp-04"),
+    # REPORT (2)
+    "p-15": _reg("p-15"), "p-25": _reg("p-25"),
 }
 
 # Outputs that are regression-frozen. --build is permanently blocked.
@@ -139,6 +156,13 @@ BUILD_APPROVED_IDS = frozenset({          # WO-REF01-060-B8-WAVE2-BUILD-003
     "citygas-01", "conf-04", "p-13",
     "equip-01", "equip-02", "equip-03", "equip-04", "equip-05", "p-01",
     "gov-04", "gov-06", "p-02", "p-03", "p-04",
+    # B11 — WO-REF01-060-B11-BULK-BUILD-001 (GPT DRY-RUN PASS 25/25):
+    "rp-01", "rp-08", "p-20",
+    "rp-07", "rp-11",
+    "p-11", "p-12", "p-16", "p-19", "p-21", "rp-03", "rp-22",
+    "p-08", "p-10", "p-14", "gov-08", "gov-12", "rp-02",
+    "p-24", "conf-02", "conf-03", "env-04", "rp-04",
+    "p-15", "p-25",
 })
 
 # SHA256 of regression-frozen output files (full hex). Used by --verify-only.
