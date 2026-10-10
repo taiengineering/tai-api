@@ -461,12 +461,19 @@ def main():
     build_receipt = BASE.parent / "evidence" / "REF01-B8-WAVE2-BUILD-003-RESULT.md"
     receipt_text  = build_receipt.read_text(encoding="utf-8")
 
-    # Extract expected B8 SHA from receipt
+    # Extract expected B8 SHA from BUILD-003 receipt (baseline for 11 unchanged forms)
     sha_from_receipt = {}
     for line in receipt_text.splitlines():
         m = re.match(r"(c\d+|gov-01)_(pdf|docx):\s*([0-9a-f]{64})", line.strip())
         if m:
             sha_from_receipt[f"{m.group(1)}_{m.group(2)}"] = m.group(3)
+
+    # Override C031/C043/C044 with Phase 2 approved replacement SHAs (WO-006)
+    phase2_manifest = BASE.parent / "evidence" / "visual-repair-005" / "phase2_sha_manifest.json"
+    p2 = json.loads(phase2_manifest.read_text(encoding="utf-8"))
+    for cid in ("c031", "c043", "c044"):
+        sha_from_receipt[f"{cid}_pdf"]  = p2["replacements"][cid]["pdf_new"]
+        sha_from_receipt[f"{cid}_docx"] = p2["replacements"][cid]["docx_new"]
 
     sha_ok    = []
     sha_fail  = []
