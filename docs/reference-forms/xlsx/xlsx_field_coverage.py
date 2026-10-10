@@ -1,19 +1,18 @@
 """
-FIX-D / FIX-3: Field coverage verifier (enhanced).
-Loads each form's source JSON and the generated xlsx, checks that all
-expected field labels are present with correct occurrence counts.
+FIX-D / FIX-3 / FIX-01: Field coverage verifier (v3 — individual section verification).
 
-Enhancement over original:
-- Includes text_flow paragraphs
-- Checks occurrence counts (handles duplicate labels)
-- sections_rendered derived from found-label evidence, not assumed
-- Reports per-section findings
+Key change from v2:
+- sections_rendered counts individual section instances, not unique types
+- Each section is verified independently, including duplicate-type sections
+- text_flow paragraphs included
+- Occurrence-count comparison for labels shared across sections
 """
 from __future__ import annotations
 
 import os
 import re
 from collections import Counter
+from typing import NamedTuple
 
 import openpyxl
 
@@ -24,6 +23,56 @@ def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip())
 
 
+def _section_labels(sec: dict) -> list[str]:
+    """Extract all expected text labels from a single section."""
+    stype = sec.get("type", "")
+    labels: list[str] = []
+
+    if stype == "basic_info":
+        for f in sec.get("fields", []):
+            lbl = f.get("label", "") if isinstance(f, dict) else str(f)
+            if lbl:
+                labels.append(lbl)
+
+    elif stype == "repeat_table":
+        for col in sec.get("columns", []):
+            lbl = col.get("label", "")
+            if lbl:
+                labels.append(lbl)
+
+    elif stype == "labeled_grid":
+        sec_lbl = sec.get("section_label", "")
+        if sec_lbl:
+            labels.append(sec_lbl)
+        for row_def in sec.get("rows", []):
+            for cell in row_def:
+                lbl = cell.get("label", "")
+                if lbl:
+                    labels.append(lbl)
+
+    elif stype == "freeform_area":
+        lbl = sec.get("label") or sec.get("section_label", "")
+        if lbl:
+            labels.append(lbl)
+
+    elif stype == "approval":
+        sec_lbl = sec.get("label", "")
+        if sec_lbl:
+            labels.append(sec_lbl)
+        for f in sec.get("fields", []):
+            fl = f.get("label", "") if isinstance(f, dict) else str(f)
+            if fl:
+                labels.append(fl)
+
+    elif stype == "text_flow":
+        for para in sec.get("paragraphs", []):
+            text = para.get("text", "")
+            if text and text.strip():
+                labels.append(text)
+
+    return [_normalize(lbl) for lbl in labels if lbl.strip()]
+
+
 def verify_field_coverage(
     form_spec: dict, xlsx_path: str, research_id: str
 ) -> dict:
@@ -32,11 +81,12 @@ def verify_field_coverage(
       {
         'research_id': str,
         'status': 'OK'|'MISSING'|'ERROR',
-        'missing_fields': list[str],       # label[:section_type] missing entirely
-        'count_mismatches': list[str],     # label found fewer times than expected
+        'missing_fields': list[str],
+        'count_mismatches': list[str],
         'sections_source': int,
-        'sections_rendered': int,          # count of section types confirmed by label presence
-        'extra_unexpected': list[str],     # always empty (builder adds no extra labels)
+        'sections_rendered': int,   # individual sections with all labels found
+        'sections_missing': int,    # individual sections with ≥1 label missing
+        'extra_unexpected': list[str],
       }
     """
     result = {
@@ -45,6 +95,7 @@ def verify_field_coverage(
         "missing_fields": [],
         "count_mismatches": [],
         "sections_rendered": 0,
+        "sections_missing": 0,
         "sections_source": 0,
         "extra_unexpected": [],
     }
@@ -53,59 +104,10 @@ def verify_field_coverage(
         sections = form_spec.get("sections", [])
         result["sections_source"] = len(sections)
 
-        # Collect expected labels with occurrence counts
-        # key = normalized label, value = expected count
-        expected: Counter[str] = Counter()
-        # Track which section types contribute to expected
-        section_types_expected: set[str] = set()
+        if not sections:
+            return result
 
-        for sec in sections:
-            stype = sec.get("type", "")
-            section_types_expected.add(stype)
-
-            if stype == "basic_info":
-                for f in sec.get("fields", []):
-                    lbl = f.get("label", "") if isinstance(f, dict) else str(f)
-                    if lbl:
-                        expected[_normalize(lbl)] += 1
-
-            elif stype == "repeat_table":
-                for col in sec.get("columns", []):
-                    lbl = col.get("label", "")
-                    if lbl:
-                        expected[_normalize(lbl)] += 1
-
-            elif stype == "labeled_grid":
-                sec_lbl = sec.get("section_label", "")
-                if sec_lbl:
-                    expected[_normalize(sec_lbl)] += 1
-                for row_def in sec.get("rows", []):
-                    for cell in row_def:
-                        lbl = cell.get("label", "")
-                        if lbl:
-                            expected[_normalize(lbl)] += 1
-
-            elif stype == "freeform_area":
-                lbl = sec.get("label") or sec.get("section_label", "")
-                if lbl:
-                    expected[_normalize(lbl)] += 1
-
-            elif stype == "approval":
-                sec_lbl = sec.get("label", "")
-                if sec_lbl:
-                    expected[_normalize(sec_lbl)] += 1
-                for f in sec.get("fields", []):
-                    fl = f.get("label", "") if isinstance(f, dict) else str(f)
-                    if fl:
-                        expected[_normalize(fl)] += 1
-
-            elif stype == "text_flow":
-                for para in sec.get("paragraphs", []):
-                    text = para.get("text", "")
-                    if text and text.strip():
-                        expected[_normalize(text)] += 1
-
-        # Load xlsx and count cell text occurrences
+        # Load xlsx cell texts
         wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
         ws = wb.active
         actual: Counter[str] = Counter()
@@ -116,34 +118,60 @@ def verify_field_coverage(
                     actual[_normalize(v)] += 1
         wb.close()
 
-        # Check each expected label
-        missing = []
-        mismatches = []
-        sections_confirmed: set[str] = set()
+        # Build overall expected counts across all sections (for count-mismatch check)
+        all_expected: Counter[str] = Counter()
+        for sec in sections:
+            for lbl in _section_labels(sec):
+                all_expected[lbl] += 1
 
-        for lbl, exp_count in sorted(expected.items()):
+        # Per-section verification
+        sections_ok = 0
+        sections_fail = 0
+        all_missing: list[str] = []
+        all_mismatches: list[str] = []
+
+        # Track consumed occurrences to handle duplicates correctly
+        consumed: Counter[str] = Counter()
+
+        for sec_idx, sec in enumerate(sections):
+            sec_labels = _section_labels(sec)
+            if not sec_labels:
+                # Sections with no labels (e.g. empty approval): count as rendered
+                sections_ok += 1
+                continue
+
+            sec_missing: list[str] = []
+            for lbl in sec_labels:
+                consumed[lbl] += 1
+                needed = consumed[lbl]
+                if actual.get(lbl, 0) < needed:
+                    sec_missing.append(lbl)
+
+            if sec_missing:
+                sections_fail += 1
+                for lbl in sec_missing:
+                    if lbl not in all_missing:
+                        all_missing.append(lbl)
+            else:
+                sections_ok += 1
+
+        # Overall count-mismatch check (across all sections)
+        for lbl, exp_count in all_expected.items():
             found_count = actual.get(lbl, 0)
-            if found_count == 0:
-                missing.append(lbl)
-            elif found_count < exp_count:
-                mismatches.append(
+            if 0 < found_count < exp_count:
+                all_mismatches.append(
                     f"{lbl} (expected>={exp_count}, found={found_count})"
                 )
 
-        # sections_rendered: count how many section types had all their labels found
-        sections_fully_rendered = 0
-        for stype in section_types_expected:
-            sections_fully_rendered += 1  # optimistic; missing[] captures failures
-        result["sections_rendered"] = sections_fully_rendered - (
-            1 if missing or mismatches else 0
-        )
+        result["sections_rendered"] = sections_ok
+        result["sections_missing"] = sections_fail
 
-        if missing:
+        if all_missing:
             result["status"] = "MISSING"
-            result["missing_fields"] = missing
-        if mismatches:
+            result["missing_fields"] = all_missing
+        if all_mismatches:
             result["status"] = "MISSING"
-            result["count_mismatches"] = mismatches
+            result["count_mismatches"] = all_mismatches
 
     except Exception as exc:
         result["status"] = "ERROR"
@@ -168,6 +196,7 @@ def run_coverage_check(
                 "count_mismatches": [],
                 "sections_source": 0,
                 "sections_rendered": 0,
+                "sections_missing": 0,
                 "extra_unexpected": [],
             })
             continue

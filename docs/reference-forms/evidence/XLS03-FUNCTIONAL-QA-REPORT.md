@@ -1,16 +1,16 @@
 ---
-wo: WO-REF01-XLS03-FINAL-FUNCTIONAL-CLOSURE-004
+wo: WO-REF01-XLS03-CLOSURE-EVIDENCE-FIX-005
 date: 2026-10-11
 status: BUILD_COMPLETE
-correction_of: WO-REF01-XLS03-FUNCTIONAL-QA-REPAIR-003
-supersedes: WO-REF01-XLS03-FUNCTIONAL-QA-REPAIR-003
+correction_of: WO-REF01-XLS03-FINAL-FUNCTIONAL-CLOSURE-004
+supersedes: WO-REF01-XLS03-FINAL-FUNCTIONAL-CLOSURE-004
 publication: NOT_FOR_PUBLICATION
 ---
 
 # XLS03 기능 QA 최종 교정 보고서
 
-WO-REF01-XLS03-FINAL-FUNCTIONAL-CLOSURE-004 FIX-1~5 완결 증거.
-Baseline: `8bc792ee0d1cb61159d99d9b27e909e1be3f335a`
+WO-REF01-XLS03-CLOSURE-EVIDENCE-FIX-005 FIX-01~03 완결 증거.
+Baseline: `2876765c04839bc4f502e8b71ee0eb9efa690492`
 
 ---
 
@@ -21,7 +21,10 @@ Baseline: `8bc792ee0d1cb61159d99d9b27e909e1be3f335a`
 | 빌드 대상 | 118 |
 | 빌드 성공 | 118 / 0 ERROR |
 | 유효성 검사 PASS | 118 / 118 |
-| 필드 커버리지 PASS (강화) | 118 / 118 |
+| 필드 커버리지 PASS (강화, FIX-01) | 118 / 118 |
+| 섹션별 개별 검증 (FIX-01) | 118/118 (sections_rendered=sections_source) |
+| CALC_AGG 계약 교정 (FIX-02) | 13종 / 112열 / NOT_APPLICABLE_TEXT 68열 수정 |
+| GUI QA (FIX-03) | UNVERIFIED (환경 없음 — 문서화 완료) |
 | pytest | **188 passed / 0 failed** |
 | 기존 PDF/DOCX 변경 | 0건 (PDF 147 + DOCX 145) |
 
@@ -153,23 +156,25 @@ Excel Table 자동 확장 동작 계약:
 
 ---
 
-## 9. FIX-3 — 필드커버리지 전수 검증 강화 (WO-004 신규)
+## 9. FIX-3 / FIX-01 — 필드커버리지 전수 검증 강화 (WO-004 + WO-005)
 
-기존 방식: 레이블 문자열 존재 여부만 확인
-강화 방식: 발생 횟수 검증, text_flow 문단 포함, sections_rendered 실측
+WO-004: text_flow 포함, 중복 레이블 횟수 검증
+WO-005 FIX-01: sections_rendered 유형 수 → 개별 섹션 인스턴스 수로 교정
 
 | 강화 항목 | 변경 내용 |
 |---------|---------|
 | text_flow 문단 | 검증 대상에 추가 |
 | 중복 레이블 구별 | 발생 횟수 비교 (expected >= source count) |
-| sections_rendered | 소스 수 그대로 → 누락 여부 기반 조정 |
+| sections_rendered (FIX-01) | 고유 유형 수 → 개별 섹션 인스턴스별 검증 |
 | count_mismatches | 별도 항목으로 기록 |
+| sections_missing | 레이블 누락 섹션 수 별도 기록 |
 
-결과: 118/118 OK (missing=0, count_mismatches=0)
+결과: 118/118 OK — sections_rendered=sections_source 118/118 확인
+(ENV-04, GOV-01, H2-02, MNT-03, P-25, REF-C008, REF-C043, REF-C044, REF-C047, RP-04 회귀검증 PASS)
 
 ---
 
-## 10. FIX-4 — CALC_AGG 전량 수동입력 계약 (WO-004 신규)
+## 10. FIX-4 / FIX-02 — CALC_AGG 전량 수동입력 계약 (WO-004 + WO-005)
 
 13종 CALC_AGG 서식 전량 `ALL_MANUAL` 상태 확정.
 
@@ -189,18 +194,29 @@ Excel Table 자동 확장 동작 계약:
 | REF-C071 | 건강진단 일정·실시 관리대장 | 수검 대상 인원 변경 가능 |
 | RP-01 | 설비 예방보전 일정·실적표 | 점검결과 분류 후 담당자 판단 |
 
+WO-005 FIX-02 교정:
+- `불출처/수령자`, `수급업체`, `CAS번호`, `CAS No`, `분자식` 등 문자 열 → `numeric=NO / NOT_APPLICABLE_TEXT`로 수정
+- formula_status 3단계 구분: `REMOVED_VERIFIED` (테스트 검증 완료) / `REMOVAL_NOT_VERIFIED` (수치열이나 미테스트) / `NEVER_GENERATED` (FORBIDDEN 서식) / `NOT_APPLICABLE_TEXT` (문자열)
+
+| formula_status | 건수 | 의미 |
+|---------------|------|------|
+| NOT_APPLICABLE_TEXT | 68 | 문자/날짜 열 — 수식 대상 아님 |
+| NEVER_GENERATED | 33 | FORBIDDEN 서식 (CHW-03/REF-C004/REF-C029) |
+| REMOVED_VERIFIED | 7 | 수치열, FIX-C 테스트로 제거 확인 |
+| REMOVAL_NOT_VERIFIED | 4 | 수치열이나 명시적 테스트 없음 |
+
 상세 근거: `XLS03-CALC-AGG-MANUAL-CONTRACT.csv` (112행)
 
 신규 수식 추가 조건: 근거·입력·출력·경계값이 확인된 것만, 별도 계약 필요.
 
 ---
 
-## 11. pytest 188/188 PASS (WO-004 재실행)
+## 11. pytest 188/188 PASS (WO-005 재실행)
 
 ```
 pytest test_xlsx_builder.py
   188 passed / 0 failed
-  실행 로그: XLS03-PYTEST-LOG-004.txt
+  실행 로그: XLS03-PYTEST-LOG-005.txt
 ```
 
 테스트 분류 (수정됨 — 구 보고서 표 합계 오류 187 → 188 정정):
@@ -246,11 +262,13 @@ scripts/*.json → 변경 없음
 
 | 파일 | 내용 |
 |------|------|
-| XLS03-FUNCTIONAL-QA-RESULT.csv | 118종 빌드·유효성·커버리지·SHA256 |
-| XLS03-118-FIELD-COVERAGE.csv | 118종 섹션·필드 커버리지 (강화) |
+| XLS03-FUNCTIONAL-QA-RESULT.csv | 118종 빌드·유효성·커버리지·SHA256 (sections_rendered 포함) |
+| XLS03-118-FIELD-COVERAGE.csv | 118종 섹션별 개별 커버리지 (FIX-01 교정) |
 | XLS03-FORMULA-CONTRACT-RESULT.csv | 711열 수식 계약 |
-| XLS03-CALC-AGG-MANUAL-CONTRACT.csv | CALC_AGG 13종 ALL_MANUAL 근거 |
-| XLS03-PYTEST-LOG-004.txt | pytest 원문 실행 로그 |
+| XLS03-CALC-AGG-MANUAL-CONTRACT.csv | CALC_AGG 13종 formula_status 4단계 (FIX-02 교정) |
+| XLS03-PYTEST-LOG-004.txt | WO-004 pytest 원문 로그 |
+| XLS03-PYTEST-LOG-005.txt | WO-005 pytest 원문 로그 |
+| XLS03-GUI-QA-005.md | GUI QA UNVERIFIED 증거 문서 (FIX-03) |
 
 ---
 

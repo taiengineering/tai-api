@@ -1,113 +1,113 @@
-research_id,source_title,design_type,forbidden_formula,col_label,numeric_column,auto_formula_removed,formula_was,final_status,manual_reason
-CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,출고일,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,불출량·불출처는 단순 기록; 집계는 담당자가 월말 별도 집계
-CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,화학물질명,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,불출량·불출처는 단순 기록; 집계는 담당자가 월말 별도 집계
-CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,CAS번호,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,불출량·불출처는 단순 기록; 집계는 담당자가 월말 별도 집계
-CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,불출량,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,불출량·불출처는 단순 기록; 집계는 담당자가 월말 별도 집계
-CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,단위,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,불출량·불출처는 단순 기록; 집계는 담당자가 월말 별도 집계
-CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,불출처/수령자,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,불출량·불출처는 단순 기록; 집계는 담당자가 월말 별도 집계
-CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,용도,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,불출량·불출처는 단순 기록; 집계는 담당자가 월말 별도 집계
-CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,취급자,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,불출량·불출처는 단순 기록; 집계는 담당자가 월말 별도 집계
-CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,비고,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,불출량·불출처는 단순 기록; 집계는 담당자가 월말 별도 집계
-CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,화학물질명,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 장부재고 계산 방향 미검증
-CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,로트번호,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 장부재고 계산 방향 미검증
-CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,CAS번호,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 장부재고 계산 방향 미검증
-CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,보관구역,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 장부재고 계산 방향 미검증
-CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,단위,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 장부재고 계산 방향 미검증
-CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,장부재고,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 장부재고 계산 방향 미검증
-CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,실사재고,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 장부재고 계산 방향 미검증
-CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,차이수량,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 장부재고 계산 방향 미검증
-CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,차이원인,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 장부재고 계산 방향 미검증
-CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,처리방법,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 장부재고 계산 방향 미검증
-CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,확인자,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 장부재고 계산 방향 미검증
-GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,번호/등록일,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,CAPA 완료율은 진행상태 판단 후 담당자 입력
-GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,발생경위/원인,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,CAPA 완료율은 진행상태 판단 후 담당자 입력
-GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,시정조치 내용,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,CAPA 완료율은 진행상태 판단 후 담당자 입력
-GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,담당자,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,CAPA 완료율은 진행상태 판단 후 담당자 입력
-GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,목표일,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,CAPA 완료율은 진행상태 판단 후 담당자 입력
-GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,진행상태(입력),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,CAPA 완료율은 진행상태 판단 후 담당자 입력
-GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,완료일,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,CAPA 완료율은 진행상태 판단 후 담당자 입력
-GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,효과확인,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,CAPA 완료율은 진행상태 판단 후 담당자 입력
-GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,번호,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,계획 대비 실적 달성률은 판단 기준 미확정
-GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,활동명,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,계획 대비 실적 달성률은 판단 기준 미확정
-GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,주기,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,계획 대비 실적 달성률은 판단 기준 미확정
-GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,담당,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,계획 대비 실적 달성률은 판단 기준 미확정
-GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,기준/목표(입력),YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,계획 대비 실적 달성률은 판단 기준 미확정
-GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,계획일,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,계획 대비 실적 달성률은 판단 기준 미확정
-GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,실행일(입력),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,계획 대비 실적 달성률은 판단 기준 미확정
-GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,실적(입력),YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,계획 대비 실적 달성률은 판단 기준 미확정
-GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,차이/개선(입력),YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,계획 대비 실적 달성률은 판단 기준 미확정
-P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,번호,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,집행금액·누계금액은 법정 집계 기준 별도 확인 필요
-P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,예산구분/항목,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,집행금액·누계금액은 법정 집계 기준 별도 확인 필요
-P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,집행일,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,집행금액·누계금액은 법정 집계 기준 별도 확인 필요
-P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,집행금액,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,집행금액·누계금액은 법정 집계 기준 별도 확인 필요
-P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,누계금액,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,집행금액·누계금액은 법정 집계 기준 별도 확인 필요
-P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,증빙번호(입력),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,집행금액·누계금액은 법정 집계 기준 별도 확인 필요
-P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,비고,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,집행금액·누계금액은 법정 집계 기준 별도 확인 필요
-P-26,월간 안전보건 지표·경영보고서,CALC_AGG,False,번호,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,월별 지표 차이 산출은 계획값 기준 가변; 자동화 위험
-P-26,월간 안전보건 지표·경영보고서,CALC_AGG,False,지표 항목,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,월별 지표 차이 산출은 계획값 기준 가변; 자동화 위험
-P-26,월간 안전보건 지표·경영보고서,CALC_AGG,False,계획값,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,월별 지표 차이 산출은 계획값 기준 가변; 자동화 위험
-P-26,월간 안전보건 지표·경영보고서,CALC_AGG,False,실적값(입력),YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,월별 지표 차이 산출은 계획값 기준 가변; 자동화 위험
-P-26,월간 안전보건 지표·경영보고서,CALC_AGG,False,차이(입력),YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,월별 지표 차이 산출은 계획값 기준 가변; 자동화 위험
-P-26,월간 안전보건 지표·경영보고서,CALC_AGG,False,비고,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,월별 지표 차이 산출은 계획값 기준 가변; 자동화 위험
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,화학물질,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,CAS No,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,분자식,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,하한,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,상한,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,노출기준,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,독성치,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,인화점(℃),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,발화점(℃),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,"증기압(20℃, mmHg)",NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,부식성유무,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,이상반응유무,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,일일사용량,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,저장량,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,비고,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 노출기준 집계 방향 미검증
-REF-C007,안전보건예산 편성 서식,CALC_AGG,False,구분,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,예산 집계는 연도·구분별 복합 계산; 기준 미확정
-REF-C007,안전보건예산 편성 서식,CALC_AGG,False,2021,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,예산 집계는 연도·구분별 복합 계산; 기준 미확정
-REF-C007,안전보건예산 편성 서식,CALC_AGG,False,2022,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,예산 집계는 연도·구분별 복합 계산; 기준 미확정
-REF-C011,도급·용역·위탁 업체 안전보건 수준 평가,CALC_AGG,False,평가항목,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,점수 합산은 평가항목별 가중치 미검증
-REF-C011,도급·용역·위탁 업체 안전보건 수준 평가,CALC_AGG,False,배점,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,점수 합산은 평가항목별 가중치 미검증
-REF-C011,도급·용역·위탁 업체 안전보건 수준 평가,CALC_AGG,False,점수,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,점수 합산은 평가항목별 가중치 미검증
-REF-C011,도급·용역·위탁 업체 안전보건 수준 평가,CALC_AGG,False,비고,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,점수 합산은 평가항목별 가중치 미검증
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,NO,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,안전보건,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,공정안전,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,수급업체,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,교육과정,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,1월,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,2월,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,3월,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,4월,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,5월,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,6월,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,7월,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,8월,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,9월,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,10월,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,11월,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,12월,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,대상인원(명),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,교육방법(내·외부),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,비고,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,교육 실시율은 대상 인원 기준 가변
-REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,평가대상,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 빈도×강도 위험수준 계산식 미검증
-REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,위험요인,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 빈도×강도 위험수준 계산식 미검증
-REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,빈도/가능성(입력),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 빈도×강도 위험수준 계산식 미검증
-REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,강도/중대성(입력),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 빈도×강도 위험수준 계산식 미검증
-REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,위험수준(입력),YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 빈도×강도 위험수준 계산식 미검증
-REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,개선 대책,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 빈도×강도 위험수준 계산식 미검증
-REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,재평가일,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED: 빈도×강도 위험수준 계산식 미검증
-REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,번호,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,수검완료율은 대상 인원 변경 가능; 기준 미확정
-REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,진단 유형,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,수검완료율은 대상 인원 변경 가능; 기준 미확정
-REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,대상 인원(입력),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,수검완료율은 대상 인원 변경 가능; 기준 미확정
-REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,예약일(입력),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,수검완료율은 대상 인원 변경 가능; 기준 미확정
-REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,실시일(입력),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,수검완료율은 대상 인원 변경 가능; 기준 미확정
-REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,미수검자(입력),YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,수검완료율은 대상 인원 변경 가능; 기준 미확정
-REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,담당자(입력),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,수검완료율은 대상 인원 변경 가능; 기준 미확정
-RP-01,설비 예방보전 일정·실적표,CALC_AGG,False,설비명/번호,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,예방보전 완료율은 점검결과 분류 후 담당자 판단
-RP-01,설비 예방보전 일정·실적표,CALC_AGG,False,점검주기,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,예방보전 완료율은 점검결과 분류 후 담당자 판단
-RP-01,설비 예방보전 일정·실적표,CALC_AGG,False,계획일,YES,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,예방보전 완료율은 점검결과 분류 후 담당자 판단
-RP-01,설비 예방보전 일정·실적표,CALC_AGG,False,실시일,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,예방보전 완료율은 점검결과 분류 후 담당자 판단
-RP-01,설비 예방보전 일정·실적표,CALC_AGG,False,점검결과(입력),NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,예방보전 완료율은 점검결과 분류 후 담당자 판단
-RP-01,설비 예방보전 일정·실적표,CALC_AGG,False,이상내용 및 조치,NO,YES,"SUM (auto-generated, semantically unverified)",ALL_MANUAL,예방보전 완료율은 점검결과 분류 후 담당자 판단
+research_id,source_title,design_type,forbidden_formula,col_label,numeric_column,formula_status,final_status,manual_reason
+CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,출고일,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,불출량 집계 기준 미확정 (월말 별도 집계)
+CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,화학물질명,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,불출량 집계 기준 미확정 (월말 별도 집계)
+CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,CAS번호,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,불출량 집계 기준 미확정 (월말 별도 집계)
+CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,불출량,YES,REMOVED_VERIFIED,ALL_MANUAL,불출량 집계 기준 미확정 (월말 별도 집계)
+CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,단위,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,불출량 집계 기준 미확정 (월말 별도 집계)
+CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,불출처/수령자,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,불출량 집계 기준 미확정 (월말 별도 집계)
+CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,용도,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,불출량 집계 기준 미확정 (월말 별도 집계)
+CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,취급자,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,불출량 집계 기준 미확정 (월말 별도 집계)
+CHW-02,화학물질 출고·사용 불출대장,CALC_AGG,False,비고,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,불출량 집계 기준 미확정 (월말 별도 집계)
+CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,화학물질명,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 재고 계산 방향 미검증
+CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,로트번호,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 재고 계산 방향 미검증
+CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,CAS번호,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 재고 계산 방향 미검증
+CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,보관구역,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 재고 계산 방향 미검증
+CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,단위,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 재고 계산 방향 미검증
+CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,장부재고,YES,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 재고 계산 방향 미검증
+CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,실사재고,YES,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 재고 계산 방향 미검증
+CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,차이수량,YES,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 재고 계산 방향 미검증
+CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,차이원인,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 재고 계산 방향 미검증
+CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,처리방법,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 재고 계산 방향 미검증
+CHW-03,화학물질 재고실사·차이처리표,CALC_AGG,True,확인자,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 재고 계산 방향 미검증
+GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,번호/등록일,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,CAPA 완료율 판단 기준 미확정
+GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,발생경위/원인,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,CAPA 완료율 판단 기준 미확정
+GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,시정조치 내용,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,CAPA 완료율 판단 기준 미확정
+GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,담당자,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,CAPA 완료율 판단 기준 미확정
+GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,목표일,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,CAPA 완료율 판단 기준 미확정
+GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,진행상태(입력),NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,CAPA 완료율 판단 기준 미확정
+GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,완료일,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,CAPA 완료율 판단 기준 미확정
+GOV-09,안전보건 시정조치(CAPA) 관리대장,CALC_AGG,False,효과확인,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,CAPA 완료율 판단 기준 미확정
+GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,번호,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,계획 대비 실적 달성률 기준 미확정
+GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,활동명,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,계획 대비 실적 달성률 기준 미확정
+GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,주기,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,계획 대비 실적 달성률 기준 미확정
+GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,담당,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,계획 대비 실적 달성률 기준 미확정
+GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,기준/목표(입력),NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,계획 대비 실적 달성률 기준 미확정
+GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,계획일,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,계획 대비 실적 달성률 기준 미확정
+GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,실행일(입력),NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,계획 대비 실적 달성률 기준 미확정
+GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,실적(입력),NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,계획 대비 실적 달성률 기준 미확정
+GOV-10,안전보건 연간 활동계획·실적 대비표,CALC_AGG,False,차이/개선(입력),NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,계획 대비 실적 달성률 기준 미확정
+P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,번호,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,산안비 법정 집계 기준 별도 확인 필요
+P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,예산구분/항목,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,산안비 법정 집계 기준 별도 확인 필요
+P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,집행일,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,산안비 법정 집계 기준 별도 확인 필요
+P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,집행금액,YES,REMOVED_VERIFIED,ALL_MANUAL,산안비 법정 집계 기준 별도 확인 필요
+P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,누계금액,YES,REMOVED_VERIFIED,ALL_MANUAL,산안비 법정 집계 기준 별도 확인 필요
+P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,증빙번호(입력),NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,산안비 법정 집계 기준 별도 확인 필요
+P-20,산업안전보건관리비 사용계획·집행내역,CALC_AGG,False,비고,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,산안비 법정 집계 기준 별도 확인 필요
+P-26,월간 안전보건 지표·경영보고서,CALC_AGG,False,번호,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,월별 지표 차이 계획값 기준 가변
+P-26,월간 안전보건 지표·경영보고서,CALC_AGG,False,지표 항목,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,월별 지표 차이 계획값 기준 가변
+P-26,월간 안전보건 지표·경영보고서,CALC_AGG,False,계획값,YES,REMOVED_VERIFIED,ALL_MANUAL,월별 지표 차이 계획값 기준 가변
+P-26,월간 안전보건 지표·경영보고서,CALC_AGG,False,실적값(입력),YES,REMOVED_VERIFIED,ALL_MANUAL,월별 지표 차이 계획값 기준 가변
+P-26,월간 안전보건 지표·경영보고서,CALC_AGG,False,차이(입력),YES,REMOVED_VERIFIED,ALL_MANUAL,월별 지표 차이 계획값 기준 가변
+P-26,월간 안전보건 지표·경영보고서,CALC_AGG,False,비고,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,월별 지표 차이 계획값 기준 가변
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,화학물질,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,CAS No,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,분자식,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,하한,YES,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,상한,YES,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,노출기준,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,독성치,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,인화점(℃),NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,발화점(℃),NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,"증기압(20℃, mmHg)",NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,부식성유무,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,이상반응유무,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,일일사용량,YES,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,저장량,YES,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C004,유해·위험물질 목록 작성 서식,CALC_AGG,True,비고,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 노출기준 집계 방향 미검증
+REF-C007,안전보건예산 편성 서식,CALC_AGG,False,구분,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,연도·구분별 복합 예산 집계; 기준 미확정
+REF-C007,안전보건예산 편성 서식,CALC_AGG,False,2021,YES,REMOVAL_NOT_VERIFIED,ALL_MANUAL,연도·구분별 복합 예산 집계; 기준 미확정
+REF-C007,안전보건예산 편성 서식,CALC_AGG,False,2022,YES,REMOVAL_NOT_VERIFIED,ALL_MANUAL,연도·구분별 복합 예산 집계; 기준 미확정
+REF-C011,도급·용역·위탁 업체 안전보건 수준 평가,CALC_AGG,False,평가항목,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,평가항목별 가중치 미검증
+REF-C011,도급·용역·위탁 업체 안전보건 수준 평가,CALC_AGG,False,배점,YES,REMOVAL_NOT_VERIFIED,ALL_MANUAL,평가항목별 가중치 미검증
+REF-C011,도급·용역·위탁 업체 안전보건 수준 평가,CALC_AGG,False,점수,YES,REMOVAL_NOT_VERIFIED,ALL_MANUAL,평가항목별 가중치 미검증
+REF-C011,도급·용역·위탁 업체 안전보건 수준 평가,CALC_AGG,False,비고,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,평가항목별 가중치 미검증
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,NO,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,안전보건,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,공정안전,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,수급업체,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,교육과정,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,1월,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,2월,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,3월,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,4월,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,5월,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,6월,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,7월,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,8월,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,9월,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,10월,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,11월,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,12월,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,대상인원(명),YES,REMOVED_VERIFIED,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,교육방법(내·외부),NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C016,연간 안전보건교육 수립 서식,CALC_AGG,False,비고,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,교육 실시율 대상 인원 가변
+REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,평가대상,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 빈도×강도 위험수준 계산식 미검증
+REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,위험요인,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 빈도×강도 위험수준 계산식 미검증
+REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,빈도/가능성(입력),YES,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 빈도×강도 위험수준 계산식 미검증
+REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,강도/중대성(입력),YES,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 빈도×강도 위험수준 계산식 미검증
+REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,위험수준(입력),YES,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 빈도×강도 위험수준 계산식 미검증
+REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,개선 대책,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 빈도×강도 위험수준 계산식 미검증
+REF-C029,빈도·강도법 위험성평가표,CALC_AGG,True,재평가일,NO,NEVER_GENERATED,ALL_MANUAL,FORMULA_DIRECTION_UNVERIFIED — 빈도×강도 위험수준 계산식 미검증
+REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,번호,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,수검완료율 대상 인원 변경 가능
+REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,진단 유형,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,수검완료율 대상 인원 변경 가능
+REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,대상 인원(입력),NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,수검완료율 대상 인원 변경 가능
+REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,예약일(입력),NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,수검완료율 대상 인원 변경 가능
+REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,실시일(입력),NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,수검완료율 대상 인원 변경 가능
+REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,미수검자(입력),NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,수검완료율 대상 인원 변경 가능
+REF-C071,건강진단 일정·실시 관리대장,CALC_AGG,False,담당자(입력),NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,수검완료율 대상 인원 변경 가능
+RP-01,설비 예방보전 일정·실적표,CALC_AGG,False,설비명/번호,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,점검결과 분류 후 담당자 판단
+RP-01,설비 예방보전 일정·실적표,CALC_AGG,False,점검주기,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,점검결과 분류 후 담당자 판단
+RP-01,설비 예방보전 일정·실적표,CALC_AGG,False,계획일,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,점검결과 분류 후 담당자 판단
+RP-01,설비 예방보전 일정·실적표,CALC_AGG,False,실시일,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,점검결과 분류 후 담당자 판단
+RP-01,설비 예방보전 일정·실적표,CALC_AGG,False,점검결과(입력),NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,점검결과 분류 후 담당자 판단
+RP-01,설비 예방보전 일정·실적표,CALC_AGG,False,이상내용 및 조치,NO,NOT_APPLICABLE_TEXT,ALL_MANUAL,점검결과 분류 후 담당자 판단
