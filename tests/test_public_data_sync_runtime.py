@@ -107,7 +107,7 @@ def test_p01_wp1a_regression():
     """Key WP-1A contracts still hold after runner.py update."""
     from services.public_data_sync.registry import SourceRegistry
     reg = SourceRegistry()
-    assert len(reg.list_all()) == 12
+    assert len(reg.list_all()) == 14
     assert "LEGAL_TEXT_SYNC" not in {s.source_id for s in reg.list_all()}
     assert "KSIC_SYNC" not in {s.source_id for s in reg.list_all()}
     assert reg.get("CSI_ACCIDENT").sync_mode.value == "FILE_SNAPSHOT"

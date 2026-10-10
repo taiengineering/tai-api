@@ -38,6 +38,8 @@ _EXPECTED_SOURCE_IDS = {
     "KCSC",
     "INDUSTRIAL_ACCIDENT_PRECEDENT",
     "HOLIDAY",
+    "EXT132_HAZARDOUS_MATERIAL",
+    "EXT165_CHEMICAL_ACCIDENT",
 }
 
 
@@ -253,14 +255,14 @@ def test_t07_credential_pool_rate_limit_group_independent():
 
 
 # ---------------------------------------------------------------------------
-# T08 — Registry contains exactly the 12 approved source IDs
+# T08 — Registry contains exactly the approved source IDs
 # ---------------------------------------------------------------------------
 
 def test_t08_registry_exact_12_source_ids():
     reg = SourceRegistry()
     actual = {s.source_id for s in reg.list_all()}
     assert actual == _EXPECTED_SOURCE_IDS
-    assert len(reg.list_all()) == 12
+    assert len(reg.list_all()) == 14
 
 
 # ---------------------------------------------------------------------------

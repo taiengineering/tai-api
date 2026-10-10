@@ -84,3 +84,19 @@ class RuntimeHeartbeatError(PublicDataSyncError):
         self.run_id = run_id
         self.source_id = source_id
         self.reason = reason
+
+
+class PageFencedError(PublicDataSyncError):
+    """PATCH-03: Raised from on_page_complete callback when run ownership is lost.
+
+    Signals that heartbeat returned False or ownership was stolen.
+    sync.collect_all catches this and returns SyncStatus.FAILED(FENCED) — never swallows.
+    """
+
+
+class PageSaveError(PublicDataSyncError):
+    """PATCH-002-03: Non-fencing page save failure (DB write error, not ownership loss).
+
+    sync.collect_all catches this and returns SyncStatus.FAILED(SAVE_ERROR).
+    Unlike PageFencedError, the STAGING checkpoint may be valid for resume.
+    """
