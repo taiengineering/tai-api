@@ -37,27 +37,30 @@ GPT WO-008 검토 결과 조건부 PASS. 다음 3가지 항목 정정 지시:
 
 | 조회 | 결과 |
 |------|------|
-| `governance.get_active_items_for_scope('LEG', NULL)` | AI 거버넌스 규칙 16건 반환 (AI-001~AI-016) |
-| 반환 규칙 예시 | AI-001 계획반복감지, AI-004 허위완료감지, AI-009 scope_creep_detection 등 |
-| 산업안전보건법 조문 | 없음 |
-| 화학물질관리법 조문 | 없음 |
+| `governance.get_active_items_for_scope('LEG', NULL)` | **332건 반환** (WO-008A에서 16건으로 기술한 것은 오류 — WO-008B 정정) |
+| 산업안전·화학물질·MSDS 관련 용어 검색 | 0건 |
+| 법령 조문·시행일·적용조건 확인 | 미완료 |
 | `governance.external_standards` | SARIF, FINDING-V1, OTEL, OCSF (기술 표준; 한국 법령 없음) |
 | `governance.external_sources` | ESLint, Playwright, Ruff 등 (개발 도구) |
-| `GOVERNANCE_SOURCE_OF_TRUTH.md` | NOT_FOUND (taiengineering org 전체 검색 0건) |
+| `GOVERNANCE_SOURCE_OF_TRUTH.md` | NOT_FOUND (파일명 기준 검색; SoT 부재 증거 아님) |
 | tai-leg 저장소 | 404 (존재하지 않음) |
 
 ### 결론
 
 ```
-GOVERNANCE_RPC_ACCESSIBLE        = YES
-GOVERNANCE_RPC_CONTAINS_SAFETY_LAW = NO
-LEGAL_RPC_CONTRACT_STATUS        = UNRESOLVED
-LEGAL_RPC_ROUTE                  = LEGAL_RPC_CONTRACT_UNRESOLVED
+GOVERNANCE_RPC_ACCESSIBLE              = YES
+GOVERNANCE_RPC_ITEM_COUNT              = 332건 (WO-008A에서 16건으로 기술한 것은 오류)
+GOVERNANCE_RPC_INDUSTRIAL_SAFETY_TERMS = 0건
+GOVERNANCE_SCHEMA_LAW_PRESENCE         = UNVERIFIED (전체 법령 유무 미확정)
+LEGAL_RPC_CONTRACT_STATUS              = UNRESOLVED
+LEGAL_RPC_ROUTE                        = LEGAL_RPC_CONTRACT_UNRESOLVED
 ```
 
 이 판정은 WO-008의 `LEGAL_SOT_UNAVAILABLE`를 대체한다. 차이:  
 - `LEGAL_SOT_UNAVAILABLE`: governance 접근 자체 불가로 해석될 수 있음  
-- `LEGAL_RPC_CONTRACT_UNRESOLVED`: governance 접근은 성공했으나 법령 계약이 이 DB에 없음 — LEG 런타임이 별도 서비스로 관리함
+- `LEGAL_RPC_CONTRACT_UNRESOLVED`: governance 접근은 성공했으나 승인된 법령 조회 RPC 계약이 식별되지 않음
+
+**주의 (WO-008B 정정)**: WO-008A에서 "governance DB는 산업 법령 SoT가 아님"으로 단정한 것은 과잉 해석. 해당 RPC에서 산업안전 용어가 없었다는 사실만 확인됨. governance 스키마 전체 법령 유무는 미확정.
 
 ---
 

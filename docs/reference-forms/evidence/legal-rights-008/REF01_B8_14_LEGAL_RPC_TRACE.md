@@ -9,15 +9,21 @@ base_head: 9864b9ac2039086747b68d0ff31507ac40806a27
 
 ## 1. RPC 경로 탐색 결과
 
-### 1.1 governance DB 실제 접근 결과 (WO-008A 정정)
+### 1.1 governance DB 실제 접근 결과 (WO-008A 정정 / WO-008B 재정정)
 
 45cm-prj-db (`iapzwbysfzootqnldtan`) `governance` 스키마에 대한 RPC 호출 실시:
 
 - `governance.get_active_items_for_scope('LEG', NULL)` — **호출 성공**
-- 반환값: AI 거버넌스 규칙 16건 (AI-001 계획반복감지, AI-004 허위완료감지 등)
-- **산업안전보건법·화학물질관리법 조문 데이터 없음** — 이 DB는 45CM 개발 거버넌스 규칙 저장소이며 산업 법령 SoT가 아님
+- **반환 결과: 332건** (WO-008A에서 16건으로 기술한 것은 오류 — WO-008B에서 정정)
+- 산업안전·화학물질·MSDS 관련 용어 검색 결과: **0건**
+- 법령 조문·시행일·적용조건 조회 계약: **미확정**
 - `external_standards`: SARIF, FINDING-V1, OTEL, OCSF (기술 표준; 한국 산업안전 법령 없음)
 - `external_sources`: ESLint, Playwright, Ruff 등 (개발 도구; 법령 출처 없음)
+
+**WO-008B 정정 사항**: WO-008A에서 "governance DB는 산업 법령 SoT가 아님"으로 단정한 것은 과잉 해석이었음. 정확한 기술:
+- 해당 RPC 호출에서 산업안전·화학물질 관련 용어가 발견되지 않았음
+- governance 스키마 전체에 법령 데이터가 없다는 것은 미확정 — 조회 계약(RPC 서명)이 식별되지 않았을 뿐
+- `GOVERNANCE_SOURCE_OF_TRUTH.md` 미발견은 파일명 기준 검색 실패이며, 법령 SoT 부재의 증거가 아님
 
 ### 1.2 GOVERNANCE_SOURCE_OF_TRUTH.md 탐색
 
@@ -43,15 +49,20 @@ POST {LEG_RUNTIME_URL}/rtm/evaluate
 ### 판정
 
 ```
-GOVERNANCE_RPC_ACCESSIBLE           = YES (호출 성공)
-GOVERNANCE_RPC_CONTENT              = AI 거버넌스 규칙 전용 (산업안전 법령 없음)
-GOVERNANCE_SOURCE_OF_TRUTH_FILE     = NOT_FOUND (org 전체 검색)
-LEG_RUNTIME_URL                     = NOT_SET (research context)
-LEGAL_SOT_ACCESSIBLE                = NO
-LEGAL_RPC_ROUTE                     = LEGAL_RPC_CONTRACT_UNRESOLVED
+GOVERNANCE_RPC_ACCESSIBLE               = YES (호출 성공)
+GOVERNANCE_RPC_ITEM_COUNT               = 332건
+GOVERNANCE_RPC_INDUSTRIAL_SAFETY_TERMS  = 0건 (검색 결과)
+GOVERNANCE_RPC_LAW_CONTRACT             = UNRESOLVED (법령 조회 RPC 계약 미확정)
+GOVERNANCE_SCHEMA_LAW_PRESENCE          = UNVERIFIED (전체 법령 유무 미확정)
+GOVERNANCE_SOURCE_OF_TRUTH_FILE         = NOT_FOUND (파일명 기준 검색; SoT 부재 증거 아님)
+LEG_RUNTIME_URL                         = NOT_SET (research context)
+LEGAL_RPC_ROUTE                         = LEGAL_RPC_CONTRACT_UNRESOLVED
 ```
 
-**WO-008 오류 정정**: WO-008에서 `LEGAL_SOT_UNAVAILABLE`로 기재한 것은 governance RPC 자체가 접근 불가했다는 오해를 줄 수 있음. 실제로는 governance DB는 접근 가능하나 **산업안전 법령 계약을 제공하지 않음**. LEG 런타임 URL이 미설정된 별도 서비스가 법령 SoT를 보유함.
+**WO-008 → WO-008A → WO-008B 정정 이력**:
+- WO-008: `LEGAL_SOT_UNAVAILABLE` — governance RPC 자체 접근 불가로 오해 유발 → 정정
+- WO-008A: governance DB "AI-001~AI-016 16건" + "산업 법령 SoT 아님" 단정 → 정정
+- WO-008B: 332건 반환 사실 반영; governance 전체 법령 유무 미확정으로 수정; `LEGAL_RPC_CONTRACT_UNRESOLVED` 유지
 
 ---
 
@@ -100,11 +111,11 @@ LEGAL_RPC_ROUTE                     = LEGAL_RPC_CONTRACT_UNRESOLVED
 
 ## 4. 한계 및 다음 단계
 
-1. **GOVERNANCE_SOURCE_OF_TRUTH.md 미존재**: org 전체 검색 결과 0건. WO-008 §3 요건인 "실제 허용 RPC 서명" 확인 불가.
-2. **governance DB ≠ 법령 SoT**: governance RPC 호출 성공했으나 반환값은 AI 거버넌스 규칙(AI-001~AI-016). 산업안전보건법 조문 없음.
+1. **GOVERNANCE_SOURCE_OF_TRUTH.md 미발견**: org 전체 파일명 검색 결과 0건. 그러나 이는 파일명 기준 검색 실패이며 법령 SoT 자체의 부재를 의미하지 않음.
+2. **governance RPC 법령 조회 계약 미확정**: RPC 호출 성공, 332건 반환, 산업안전 용어 0건. governance 스키마 전체 법령 유무는 미확정. 승인된 법령 조회 RPC 서명 식별 필요.
 3. **LEG 런타임 미접근**: 이 연구 컨텍스트에서 `LEG_RUNTIME_URL` 환경변수 미설정. GPT가 별도 법령 검증 필요.
 4. **연구 문서 법령 인용 한계**: URL만 기록, 실제 조문 텍스트·조건·시행일 독립 검증 미실시.
-5. **법 제24조 GOV-01만 CONFIRMED_CONDITIONAL**: 나머지 13종은 REVIEW_REQUIRED. 과잉 일반화 금지.
+5. **법 제24조 GOV-01만 CONFIRMED_CONDITIONAL**: 나머지 13종은 REVIEW_REQUIRED. 2차 증거 기반 잠정 분류. 과잉 일반화 금지.
 
 ```
 LEGAL_RPC_ROUTE              = LEGAL_RPC_CONTRACT_UNRESOLVED

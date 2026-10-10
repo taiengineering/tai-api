@@ -164,8 +164,8 @@ COMMERCIAL_REDISTRIBUTION_AUTHORIZED = NO
 ```
 WO                             = WO-REF01-060-B8-WAVE2-LEGAL-RIGHTS-EVIDENCE-008
 BASE_HEAD                      = 9864b9ac2039086747b68d0ff31507ac40806a27
-NEW_HEAD                       = 84e8461a (WO-008 커밋; WO-008A 정정 파일 포함)
-REMOTE_HEAD                    = 9864b9ac (WO-008 커밋 push 전 기준; WO-008A 결과 별도 확인 필요)
+NEW_HEAD                       = 84e8461af7e51139d1e165f484991434945f4d92 (WO-008 커밋)
+REMOTE_HEAD                    = 6440d28700b01c9ce541dff459d159bac342a97f (WO-008A 이후 최신)
 PR_564                         = OPEN / DRAFT / UNMERGED
 FORMS                          = 14/14
 LEGAL_RPC_ROUTE                = LEGAL_RPC_CONTRACT_UNRESOLVED
