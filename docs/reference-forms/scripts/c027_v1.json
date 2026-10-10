@@ -1,0 +1,111 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-WAVE2-BATCH-001",
+    "form_type": "CHECKLIST",
+    "source_id": "REF-C027",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "위험성평가(체크리스트)",
+    "work_trigger": "체크리스트 평가 시행",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. 결과란은 일반 텍스트 입력(클릭형 체크박스 미지원). 점검기준이 법정 요구사항임을 주장하지 않음. GPT 검토 전 빌드 차단.",
+    "design_gate_ref": "WO-REF01-060-B8-WAVE2-BUILD-003"
+  },
+  "document": {
+    "title": "체크리스트형 위험성평가표",
+    "doc_id": "TAI-FORM-C027-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 점검 기본정보.",
+      "fields": [
+        {
+          "id": "F01",
+          "label": "사업장명"
+        },
+        {
+          "id": "F02",
+          "label": "작업단위/공정"
+        },
+        {
+          "id": "F03",
+          "label": "평가일"
+        },
+        {
+          "id": "F04",
+          "label": "평가자"
+        }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 체크리스트 항목 반복 입력표. 결과란은 텍스트 직접 입력(적합/부적합/해당없음 등).",
+      "default_row_count": 10,
+      "min_row_height_mm": 10,
+      "columns": [
+        {
+          "id": "F01_NO",
+          "label": "번호",
+          "width_mm": 10
+        },
+        {
+          "id": "F02_ITEM",
+          "label": "점검항목",
+          "width_mm": 55
+        },
+        {
+          "id": "F03_RESULT",
+          "label": "결과(입력)",
+          "width_mm": 22
+        },
+        {
+          "id": "F04_DEFECT",
+          "label": "부적합 내용",
+          "width_mm": 38
+        },
+        {
+          "id": "F05_ACTION",
+          "label": "개선 대책",
+          "width_mm": 28
+        },
+        {
+          "id": "F06_DATE",
+          "label": "확인일",
+          "width_mm": 17
+        }
+      ]
+    },
+    {
+      "type": "text_flow",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 결과 입력 기준 안내.",
+      "paragraphs": [
+        {
+          "id": "N01",
+          "text": "【입력 안내】 결과란에 적합 / 부적합 / 해당없음 중 해당 내용을 직접 기재하십시오. 이 서식은 특정 법령의 점검기준을 의미하지 않으며, 사업장 자체 기준에 따라 점검항목을 작성하십시오.",
+          "align": "left"
+        }
+      ]
+    }
+  ]
+}

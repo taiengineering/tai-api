@@ -1,0 +1,31 @@
+---
+wo: WO-REF01-060-B16-FIELD-COMPLETENESS-001
+date: 2026-10-10
+status: SUPERSEDED_FIELD_INCOMPLETE
+publication: NOT_FOR_PUBLICATION
+---
+
+# B16 교정 전 출력물 격리 MANIFEST
+
+교정 전 18개 파일(PDF 9 + DOCX 9). 교정 사유: FIELD_COMPLETENESS_HOLD.
+
+| 파일명 | research_id | 교정 전 SHA256 (64자리) | 교정 사유 | 상태 |
+|--------|-------------|------------------------|----------|------|
+| PRE-CHW-03-blank.pdf | CHW-03 | 885e0e7ecac55cc9ba9a672125de07d59917d7f92ab125745d1a375d2a552f3a | 보관구역·로트번호·승인란 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-CHW-03-blank.docx | CHW-03 | 398df4a43130f61882ef3a8da58ba60c48bba5ce1735bf1a8029a2892a165786 | 보관구역·로트번호·승인란 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-EQUIP-01-blank.pdf | EQUIP-01 | 9900f6aa528ea9788ee321f1e7ab72d35761acc46d9bda78ec65b3731b6cd5d3 | 지게차 특화 입력항목 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-EQUIP-01-blank.docx | EQUIP-01 | 1526093bb75efb3a4771b307e919b773965e197e0dc0205367039bd9fb8aae08 | 지게차 특화 입력항목 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-EQUIP-02-blank.pdf | EQUIP-02 | 031178e02b65db1f842490cb5bc0cbe6437349a0dbb9c66072aad574d5ae220f | 적재물·중량·하역 방법 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-EQUIP-02-blank.docx | EQUIP-02 | a3ffdf4c3a080d3924b7f79fe94be289934ab760c60e47eae707323089e1db48 | 적재물·중량·하역 방법 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-EQUIP-03-blank.pdf | EQUIP-03 | 2cacded75d15c1141846066c7e4d3c31413e8132d0e6a1816165c85fa3433985 | 장비 기종·이동경로·추락방지 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-EQUIP-03-blank.docx | EQUIP-03 | 50b50ae1f225f90111a16953ae21382f4d09351671ad6b4452e2055646e5db81 | 장비 기종·이동경로·추락방지 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-EQUIP-04-blank.pdf | EQUIP-04 | 56fc788c319b4a2f3cd70e1d2ec650d9994ed7306a9473271ed8b28dc2b8f2bc | 인양물·작업반경·지반 조건 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-EQUIP-04-blank.docx | EQUIP-04 | ee11bcc8816a5dc34797faf6e37ddfa4750ddb40fe42b133b8b60062fd5eec51 | 인양물·작업반경·지반 조건 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-EQUIP-05-blank.pdf | EQUIP-05 | 5f810e7c70c740be30c4feaac06cc87959aa260f024c8da6c218a094e2331d5e | 작업구역·지반 조건·접근통제 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-EQUIP-05-blank.docx | EQUIP-05 | b7082f993fda33009f6b9db5d4f046bc73d5fd5874a0d212abb8e29beb488d0c | 작업구역·지반 조건·접근통제 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-P-01-blank.pdf | P-01 | 6d3bd85c525b95b3fd08d0b6aa0509c513eeeb6d685e361b9d449b1d0f9bfef1 | 공종·인터페이스 위험·승인란 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-P-01-blank.docx | P-01 | 8b41d0be9a4cbc72ff096d4ddedbbe74f2d75274e1c8671792d5093dd35b56ff | 공종·인터페이스 위험·승인란 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-ENV-04-blank.pdf | ENV-04 | 402b855e36c7e72432fbbd7989c192be08bd7042a38c5916b79996c74b313bc2 | 설비 중지시간 기재란 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-ENV-04-blank.docx | ENV-04 | 90176011cd3572009d0ebc06aad373693fc29fa3331699ba31cddd7d5d0c15f0 | 설비 중지시간 기재란 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-P-10-blank.pdf | P-10 | 9fb3b49b483700b5fedaeac1cdb39f56a5d1fe698e6f734e23cac57fc07f690e | 사진증거 참조란 누락 | SUPERSEDED_FIELD_INCOMPLETE |
+| PRE-P-10-blank.docx | P-10 | d29adb9514056af72addfbec57895af98a2f60b51e985ed642b72b9db843d9b3 | 사진증거 참조란 누락 | SUPERSEDED_FIELD_INCOMPLETE |

@@ -1,0 +1,84 @@
+{
+  "_meta": {
+    "wo": "WO-058 Phase B-R1",
+    "form_type": "FORM",
+    "source_id": "REF-C012",
+    "schema_version": "common-v1",
+    "legal_review_status": "PENDING",
+    "source_fields_status": "FIELDS_UNVERIFIED",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "rights_status": "RIGHTS_UNVERIFIED"
+  },
+  "document": {
+    "title": "안전작업 허가서",
+    "doc_id": "TAI-FORM-C012-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1"
+  },
+  "sections": [
+    {
+      "type": "approval",
+      "total_width_mm": 90,
+      "min_header_height_mm": 7,
+      "min_sign_height_mm": 15,
+      "note": "OF-04(성명/서명)=신청인 데이터 기재란(아래 labeled_grid). AP01(신청)=결재 서명란. 동일 인물, 중복 아님.",
+      "fields": [
+        {
+          "id": "AP01",
+          "label": "신청",
+          "source": "NATIVE_HWP_BODYTEXT_LABEL",
+          "maps_observed": "OF-04",
+          "requiredness": "UNVERIFIED"
+        },
+        {
+          "id": "AP02",
+          "label": "허가",
+          "source": "NATIVE_HWP_BODYTEXT_LABEL",
+          "maps_observed": "OF-11",
+          "requiredness": "UNVERIFIED"
+        }
+      ]
+    },
+    {
+      "type": "labeled_grid",
+      "section_label": "작업 기본 정보",
+      "row_height_mm": 7,
+      "rows": [
+        [
+          {"id": "F01", "label": "작업종류",        "source": "NATIVE_HWP_BODYTEXT_LABEL", "requiredness": "UNVERIFIED"},
+          {"id": "F02", "label": "신청부서(업체명)", "source": "NATIVE_HWP_BODYTEXT_LABEL", "requiredness": "UNVERIFIED"}
+        ],
+        [
+          {"id": "F03", "label": "직책",            "source": "NATIVE_HWP_BODYTEXT_LABEL", "requiredness": "UNVERIFIED"},
+          {"id": "F04", "label": "성명(서명)",       "source": "NATIVE_HWP_BODYTEXT_LABEL", "requiredness": "UNVERIFIED"}
+        ],
+        [
+          {"id": "F05", "label": "허가요청기간",     "source": "NATIVE_HWP_BODYTEXT_LABEL", "requiredness": "UNVERIFIED"},
+          {"id": "F06", "label": "작업장소",         "source": "NATIVE_HWP_BODYTEXT_LABEL", "requiredness": "UNVERIFIED"}
+        ],
+        [
+          {"id": "F07", "label": "장비투입",         "source": "NATIVE_HWP_BODYTEXT_LABEL", "requiredness": "UNVERIFIED"},
+          {"id": "F08", "label": "작업인원",         "source": "NATIVE_HWP_BODYTEXT_LABEL", "requiredness": "UNVERIFIED"}
+        ]
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "F09",
+      "label": "작업내용",
+      "source": "NATIVE_HWP_BODYTEXT_LABEL",
+      "min_height_mm": 20,
+      "requiredness": "UNVERIFIED"
+    },
+    {
+      "type": "freeform_area",
+      "id": "F10",
+      "label": "안전조치 사항",
+      "source": "NATIVE_HWP_BODYTEXT_LABEL",
+      "min_height_mm": 30,
+      "requiredness": "UNVERIFIED"
+    }
+  ]
+}

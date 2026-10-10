@@ -1,0 +1,51 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-059-B5-B1",
+    "form_type": "REGISTER",
+    "source_id": "REF-C005",
+    "schema_version": "common-v1",
+    "legal_review_status": "PENDING",
+    "source_text_status": "NATIVE_PARAGRAPH_VERIFIED (WO-047 HWP-05 Para 976-1025)",
+    "source_visual_layout_status": "PDF_CROSSCHECK_VERIFIED (Page 92, WO-047)",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_checksum": "e94d8d8a271c148973111ff0c74b4d67ba2f9884aff59e87301e261b5794aefe",
+    "source_access": "OWNER_UPLOADED_HWP_TEXT_PARSED_PARTIAL",
+    "source_section": "HWP-05 Para 976-1025",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "page_orientation_note": "A4 landscape = TAI 설계 선택 (원본 PDF는 portrait 렌더링). 원본 HWP 방향 미검증.",
+    "naming_note": "blank = 기존 출력 명명 규칙 유지; 내부에는 원본 예시 본문 포함",
+    "variant_note": "TAI_EDITABLE_VARIANT: 원본 예시 데이터의 단위작업장소 셀 병합(P1구역 2행)은 예시 표현. TAI 양식은 독립 행 사용."
+  },
+  "document": {
+    "title": "작업별 위험관리 대장 작성 서식",
+    "doc_id": "TAI-FORM-C005-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "landscape"
+    }
+  },
+  "sections": [
+    {
+      "type": "repeat_table",
+      "id": "S01",
+      "source_note": "HWP-05 Para 976-1025 원본 표 (WO-047 verified). 9 leaf columns. landscape = TAI 설계 선택.",
+      "default_row_count": 6,
+      "min_row_height_mm": 14,
+      "columns": [
+        { "id": "F01_LOCATION",    "label": "단위작업장소",              "width_mm": 25 },
+        { "id": "F02_WORK",        "label": "작업내용",                  "width_mm": 40 },
+        { "id": "F03_RISK_CODE",   "label": "위험코드",                  "width_mm": 18 },
+        { "id": "F04_MACHINE",     "label": "관련기계·기구·설비(관리번호)", "width_mm": 44 },
+        { "id": "F05_CHEMICAL",    "label": "화학물질명(CAS No)",         "width_mm": 30 },
+        { "id": "F06_ACCIDENT",    "label": "발생가능재해형태",           "width_mm": 36 },
+        { "id": "F07_CONTRACTOR",  "label": "관련협력업체",              "width_mm": 20 },
+        { "id": "F08_RISK_LEVEL",  "label": "위험성",                    "width_mm": 14 },
+        { "id": "F09_REMARK",      "label": "비고",                      "width_mm": 30 }
+      ]
+    }
+  ]
+}

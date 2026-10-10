@@ -1,0 +1,77 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
+    "form_type": "REPORT",
+    "source_id": "P-26",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "안전보건 운영체계",
+    "work_trigger": "월간 안전보건 지표 집계 및 경영진 보고 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 월간 안전보건 지표·계획값·실적값·차이·비고 경영보고 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
+  },
+  "document": {
+    "title": "월간 안전보건 지표·경영보고서",
+    "doc_id": "TAI-FORM-P-26-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "보고 월" },
+        { "id": "F03", "label": "작성자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 지표항목별 계획·실적·차이 반복 기록표.",
+      "default_row_count": 12,
+      "min_row_height_mm": 9,
+      "columns": [
+        { "id": "F01_NO",      "label": "번호",            "width_mm": 10 },
+        { "id": "F02_KPI",     "label": "지표 항목",       "width_mm": 66 },
+        { "id": "F03_PLAN",    "label": "계획값",          "width_mm": 22 },
+        { "id": "F04_ACTUAL",  "label": "실적값(입력)",    "width_mm": 22 },
+        { "id": "F05_GAP",     "label": "차이(입력)",      "width_mm": 22 },
+        { "id": "F06_NOTE",    "label": "비고",            "width_mm": 28 }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 종합 의견 및 특이사항.",
+      "label": "종합 의견 및 특이사항",
+      "min_height_mm": 28
+    },
+    {
+      "type": "approval",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "작성자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}

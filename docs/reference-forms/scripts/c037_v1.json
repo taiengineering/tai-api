@@ -1,0 +1,101 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-WAVE2-SPEC-FIX-002",
+    "form_type": "REGISTER",
+    "source_id": "REF-C037",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "의견수렴/개선",
+    "work_trigger": "종사자 제안 접수/처리",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. FIX-002: 위험요인과 건의내용 분리, 가독성 확보를 위해 landscape 적용. GPT 검토 전 빌드 차단.",
+    "design_gate_ref": "WO-REF01-060-B8-WAVE2-BUILD-003"
+  },
+  "document": {
+    "title": "종사자 위험개선 건의·조치대장",
+    "doc_id": "TAI-FORM-C037-v0.2",
+    "version": "0.2-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "landscape"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 관리 기본정보.",
+      "fields": [
+        {
+          "id": "F01",
+          "label": "사업장명"
+        },
+        {
+          "id": "F02",
+          "label": "관리 부서"
+        }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 건의·조치 이력 반복 등록표. FIX-002: 위험요인/건의내용 분리 → 8열, landscape(257mm).",
+      "default_row_count": 8,
+      "min_row_height_mm": 12,
+      "columns": [
+        {
+          "id": "F01_DATE",
+          "label": "접수일",
+          "width_mm": 20
+        },
+        {
+          "id": "F02_WHO",
+          "label": "건의자",
+          "width_mm": 22
+        },
+        {
+          "id": "F03_HAZARD",
+          "label": "위험요인",
+          "width_mm": 40
+        },
+        {
+          "id": "F04_SUGGEST",
+          "label": "건의 내용",
+          "width_mm": 40
+        },
+        {
+          "id": "F05_REVIEW",
+          "label": "검토 결과",
+          "width_mm": 44
+        },
+        {
+          "id": "F06_REPLY",
+          "label": "회신 내용",
+          "width_mm": 44
+        },
+        {
+          "id": "F07_STATUS",
+          "label": "실행 상태(입력)",
+          "width_mm": 26
+        },
+        {
+          "id": "F08_CONFIRM",
+          "label": "확인일",
+          "width_mm": 21
+        }
+      ]
+    }
+  ]
+}

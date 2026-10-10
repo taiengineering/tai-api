@@ -1,0 +1,63 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B10-BULK-BUILD-001",
+    "form_type": "REGISTER",
+    "source_id": "P-09",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "장비 관리",
+    "work_trigger": "장비·운전원 자격 및 검사 만료일 관리",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 장비 자격·검사 만료 추적 관리표. 갱신상태(입력)는 사용자 직접 기재.",
+    "design_gate_ref": "WO-REF01-060-B10-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "장비·운전원 자격·검사 만료관리표",
+    "doc_id": "TAI-FORM-P-09-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "landscape"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 관리 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "관리부서" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 장비·운전원 자격 및 검사 만료 현황 반복 등록표.",
+      "default_row_count": 10,
+      "min_row_height_mm": 10,
+      "columns": [
+        { "id": "F01_EQUIP",   "label": "장비명/번호",     "width_mm": 34 },
+        { "id": "F02_TYPE",    "label": "장비종류",        "width_mm": 26 },
+        { "id": "F03_DRIVER",  "label": "운전원",          "width_mm": 22 },
+        { "id": "F04_LICTYPE", "label": "자격종류",        "width_mm": 28 },
+        { "id": "F05_LICEXP",  "label": "자격만료일",      "width_mm": 26 },
+        { "id": "F06_INSTYPE", "label": "검사종류",        "width_mm": 28 },
+        { "id": "F07_INSEXP",  "label": "검사만료일",      "width_mm": 26 },
+        { "id": "F08_STATUS",  "label": "갱신상태(입력)",  "width_mm": 67 }
+      ]
+    }
+  ]
+}

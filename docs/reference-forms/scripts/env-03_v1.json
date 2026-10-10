@@ -1,0 +1,73 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B10-BULK-BUILD-001",
+    "form_type": "CHECKLIST",
+    "source_id": "ENV-03",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "환경 관리",
+    "work_trigger": "폐기물 보관장소 일상점검 실시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 폐기물 보관장소 일상점검 항목 기록표.",
+    "design_gate_ref": "WO-REF01-060-B10-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "폐기물 보관장소 일상점검표",
+    "doc_id": "TAI-FORM-ENV-03-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 점검 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "점검일" },
+        { "id": "F03", "label": "보관장소" },
+        { "id": "F04", "label": "점검자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 폐기물 보관장소 점검 항목별 결과 반복 기록표.",
+      "default_row_count": 12,
+      "min_row_height_mm": 8,
+      "columns": [
+        { "id": "F01_NO",     "label": "번호",            "width_mm": 10 },
+        { "id": "F02_ITEM",   "label": "점검항목",         "width_mm": 90 },
+        { "id": "F03_RESULT", "label": "점검결과(입력)",   "width_mm": 30 },
+        { "id": "F04_REMARK", "label": "이상내용",         "width_mm": 40 }
+      ]
+    },
+    {
+      "type": "text_flow",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 점검결과 기재 안내.",
+      "paragraphs": [
+        {
+          "id": "N01",
+          "text": "【입력 안내】 점검결과란에는 양호·불량·해당없음 등 사업장 기준에 따라 기재하십시오.",
+          "align": "left"
+        }
+      ]
+    }
+  ]
+}

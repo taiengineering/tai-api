@@ -1,0 +1,70 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B15-BULK-BUILD-001",
+    "form_type": "CHECKLIST",
+    "source_id": "PRA-22-09",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "현장 안전점검",
+    "work_trigger": "현장 안전점검 후 사진·증빙 인계 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 안전점검 사진·증빙 인계목록 서식. B14_TAI_NEW_PROPOSAL.",
+    "design_gate_ref": "WO-REF01-060-B15-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "현장 안전점검 사진·증빙 인계목록",
+    "doc_id": "TAI-FORM-PRA-22-09-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "현장명" },
+        { "id": "F02", "label": "점검일" },
+        { "id": "F03", "label": "인계자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 사진·증빙 인계 목록 반복 기록표.",
+      "default_row_count": 10,
+      "min_row_height_mm": 8,
+      "columns": [
+        { "id": "F01_NO",      "label": "번호",           "width_mm": 10 },
+        { "id": "F02_PHOTONO", "label": "사진번호",        "width_mm": 26 },
+        { "id": "F03_LOC",     "label": "촬영 위치·구역",  "width_mm": 36 },
+        { "id": "F04_CONTENT", "label": "점검 내용",       "width_mm": 46 },
+        { "id": "F05_ACTION",  "label": "조치 필요 여부",  "width_mm": 28 },
+        { "id": "F06_CONFIRM", "label": "인계 확인",       "width_mm": 24 }
+      ]
+    },
+    {
+      "type": "approval",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 인계·인수 서명란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "인계자" },
+        { "id": "A02", "label": "인수자" }
+      ]
+    }
+  ]
+}

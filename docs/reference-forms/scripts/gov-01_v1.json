@@ -1,0 +1,113 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-WAVE2-SPEC-FIX-002",
+    "form_type": "RECORD",
+    "source_id": "GOV-01",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "OFFICIAL_PROCESS_AND_TAI_HYPOTHESIS",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "안전보건 운영체계",
+    "work_trigger": "회의·점검·개선조치",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). source_evidence=OFFICIAL_PROCESS_AND_TAI_HYPOTHESIS — 산업안전보건법 산업안전보건위원회 회의록 실무 기반이나 원본 미확인. 문서 작성만으로 법정 회의 의무 이행 주장 금지. FIX-002: 회의록 확인자·서명확인란 추가. 전자서명이나 법정 의결 적법성을 보장하지 않음. GPT 검토 전 빌드 차단.",
+    "design_gate_ref": "WO-REF01-060-B8-WAVE2-BUILD-003"
+  },
+  "document": {
+    "title": "산업안전보건위원회 회의록",
+    "doc_id": "TAI-FORM-GOV-01-v0.2",
+    "version": "0.2-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 회의 기본정보. FIX-002: 회의록 확인자 추가.",
+      "fields": [
+        {
+          "id": "F01",
+          "label": "회의 일시"
+        },
+        {
+          "id": "F02",
+          "label": "장소"
+        },
+        {
+          "id": "F03",
+          "label": "사회자"
+        },
+        {
+          "id": "F04",
+          "label": "회의록 확인자"
+        }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 참석자 및 구성 현황 기재.",
+      "label": "참석자 및 구성",
+      "min_height_mm": 24
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 안건 및 논의사항 기재.",
+      "label": "안건 및 논의·의결사항",
+      "min_height_mm": 80
+    },
+    {
+      "type": "repeat_table",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 의결사항 이행 확인 기록표. FIX-002: 서명/확인란 추가. 실제 전자서명 기능 없음 — 빈 기재란 제공.",
+      "default_row_count": 5,
+      "min_row_height_mm": 12,
+      "columns": [
+        {
+          "id": "F01_NO",
+          "label": "안건번호",
+          "width_mm": 16
+        },
+        {
+          "id": "F02_RESOL",
+          "label": "의결사항",
+          "width_mm": 58
+        },
+        {
+          "id": "F03_OWNER",
+          "label": "이행담당자",
+          "width_mm": 24
+        },
+        {
+          "id": "F04_DUE",
+          "label": "기한",
+          "width_mm": 22
+        },
+        {
+          "id": "F05_CONFIRM",
+          "label": "이행확인일",
+          "width_mm": 28
+        },
+        {
+          "id": "F06_SIGN",
+          "label": "서명/확인",
+          "width_mm": 22
+        }
+      ]
+    }
+  ]
+}

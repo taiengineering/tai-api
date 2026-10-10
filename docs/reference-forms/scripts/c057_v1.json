@@ -1,0 +1,70 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B13-BULK-BUILD-001",
+    "form_type": "CHECKLIST",
+    "source_id": "REF-C057",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "고압가스 설비점검",
+    "work_trigger": "고압가스 설비 정기 점검 실시 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 고압가스 저장시설·용기·점검일·이상항목·조치·담당 관리 서식.",
+    "design_gate_ref": "WO-REF01-060-B13-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "고압가스 설비 점검관리대장",
+    "doc_id": "TAI-FORM-C057-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "점검일" },
+        { "id": "F03", "label": "시설명" },
+        { "id": "F04", "label": "담당자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 저장시설·용기별 점검항목·이상항목·조치 반복 기록표.",
+      "default_row_count": 15,
+      "min_row_height_mm": 8,
+      "columns": [
+        { "id": "F01_NO",      "label": "번호",              "width_mm": 10 },
+        { "id": "F02_FACL",    "label": "저장시설·용기명",   "width_mm": 40 },
+        { "id": "F03_ITEM",    "label": "점검 항목",         "width_mm": 50 },
+        { "id": "F04_ISSUE",   "label": "이상 항목(입력)",   "width_mm": 34 },
+        { "id": "F05_ACTION",  "label": "조치 내용(입력)",   "width_mm": 36 }
+      ]
+    },
+    {
+      "type": "approval",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "점검자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}

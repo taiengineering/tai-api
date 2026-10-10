@@ -1,0 +1,71 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B13-BULK-BUILD-001",
+    "form_type": "CHECKLIST",
+    "source_id": "REF-C038",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "의무이행점검",
+    "work_trigger": "안전보건 관계법령 의무이행 정기 점검 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 안전보건 관계법령 기준일·점검범위·법령근거·증빙·점검결과·개선 기록 서식.",
+    "design_gate_ref": "WO-REF01-060-B13-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "안전보건 관계법령 의무이행 점검표",
+    "doc_id": "TAI-FORM-C038-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "기준일" },
+        { "id": "F03", "label": "점검 범위" },
+        { "id": "F04", "label": "담당자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 법령 의무별 근거·점검결과·증빙·개선사항 반복 기록표.",
+      "default_row_count": 15,
+      "min_row_height_mm": 8,
+      "columns": [
+        { "id": "F01_NO",     "label": "번호",              "width_mm": 10 },
+        { "id": "F02_ITEM",   "label": "점검 항목",         "width_mm": 50 },
+        { "id": "F03_LAW",    "label": "법령 근거(입력)",   "width_mm": 36 },
+        { "id": "F04_RESULT", "label": "점검 결과(입력)",   "width_mm": 26 },
+        { "id": "F05_EVID",   "label": "증빙(입력)",        "width_mm": 24 },
+        { "id": "F06_IMPV",   "label": "개선 사항(입력)",   "width_mm": 24 }
+      ]
+    },
+    {
+      "type": "approval",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "작성자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}

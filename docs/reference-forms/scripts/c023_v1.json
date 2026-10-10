@@ -1,0 +1,62 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B15-BULK-BUILD-001",
+    "form_type": "REGISTER",
+    "source_id": "REF-C023",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "안전보호구 관리",
+    "work_trigger": "안전보호구 지급·반납 시 기록",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 안전보호구 지급 및 반납 이력 대장. 기존 서식 없음. B14_TAI_NEW_PROPOSAL.",
+    "design_gate_ref": "WO-REF01-060-B15-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "안전보호구 지급대장",
+    "doc_id": "TAI-FORM-C023-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "landscape" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "관리부서" },
+        { "id": "F03", "label": "담당자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 안전보호구 지급 이력 반복 기록표.",
+      "default_row_count": 15,
+      "min_row_height_mm": 8,
+      "columns": [
+        { "id": "F01_NO",       "label": "번호",        "width_mm": 12 },
+        { "id": "F02_ITEM",     "label": "품목명·규격",  "width_mm": 44 },
+        { "id": "F03_DATE",     "label": "지급일",       "width_mm": 26 },
+        { "id": "F04_QTY",      "label": "지급수량",     "width_mm": 24 },
+        { "id": "F05_RCVNAME",  "label": "수령자명",     "width_mm": 36 },
+        { "id": "F06_DEPT",     "label": "소속",         "width_mm": 36 },
+        { "id": "F07_RETDATE",  "label": "반납일",       "width_mm": 26 },
+        { "id": "F08_REMARK",   "label": "비고",         "width_mm": 53 }
+      ]
+    }
+  ]
+}

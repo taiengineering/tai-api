@@ -1,0 +1,38 @@
+{
+  "C031": {
+    "pages": 1,
+    "border_collisions": 0,
+    "roundtrip_markers": 23,
+    "roundtrip_status": "PASS",
+    "guidance_pdf": "PRESENT",
+    "guidance_docx": "PRESENT",
+    "docx_libreoffice": "UNVERIFIED_LIBREOFFICE_NOT_INSTALLED",
+    "sha_pdf_new": "dcd52a9f204cbc06cc419d47987c84125b76b99df33fe060b976da7715905b2d",
+    "sha_docx_new": "bd2c2d35f764373726aae5eb641057f1ee44f667ce04b80617c294283694bbed",
+    "status": "PASS"
+  },
+  "C043": {
+    "pages": 1,
+    "border_collisions": 0,
+    "roundtrip_markers": 22,
+    "roundtrip_status": "PASS",
+    "guidance_pdf": "N/A",
+    "guidance_docx": "N/A",
+    "docx_libreoffice": "UNVERIFIED_LIBREOFFICE_NOT_INSTALLED",
+    "sha_pdf_new": "13334054dc1b1c9a0058ac7836a1110d35486f88cee7fe8970121a046350d9e4",
+    "sha_docx_new": "b0e9f95f3e29ec9b8b4c988067e4d2b0f1bf0e7638a3fa093989482bb6381778",
+    "status": "PASS"
+  },
+  "C044": {
+    "pages": 1,
+    "border_collisions": 0,
+    "roundtrip_markers": 21,
+    "roundtrip_status": "PASS",
+    "guidance_pdf": "N/A",
+    "guidance_docx": "N/A",
+    "docx_libreoffice": "UNVERIFIED_LIBREOFFICE_NOT_INSTALLED",
+    "sha_pdf_new": "6b4f51a5d40da64fa0031861f8e920b0b0c9812725e040cc04d4817b0bf16eeb",
+    "sha_docx_new": "c1e3da22c8ef6ec138d8a21977ae4b4ef21ac4ad664dba67f289a4cb376fe48f",
+    "status": "PASS"
+  }
+}

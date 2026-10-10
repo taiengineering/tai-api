@@ -1,0 +1,542 @@
+[
+  {
+    "form_id": "C026",
+    "source_id": "REF-C026",
+    "canonical_spec_sha": "2dcb337cf5efa271bc5156122f4828743dd85de4d7a6b4c44d7dfd815d1f92c5",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "TAI_PROPOSED",
+    "observed_original_attachment": "UNVERIFIED",
+    "similarity_review": "UNVERIFIED",
+    "legal_duty_class": "REVIEW_REQUIRED",
+    "activity_duty_status": "REVIEW_REQUIRED",
+    "applicability_status": "UNVERIFIED",
+    "prescribed_form_status": "UNVERIFIED",
+    "field_mandatory_status": "UNVERIFIED",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "산업안전보건법 제36조 (위험성 평가) — report 02/source S4 snippet only",
+        "effective_date": "UNVERIFIED_CURRENT_VERSION",
+        "applicability": "위험성평가 실시 의무 존재, 3단계 판단법은 다수 방법 중 하나. 특정 서식이 법정 필수 별지임을 확인 불가. LEGAL_RPC_CONTRACT_UNRESOLVED."
+      }
+    ],
+    "mandatory_fields_evidence": [],
+    "rights_holder_or_license": "UNKNOWN — source_match=NOT_VERIFIED; no original 3rd-party file inspected",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-CONSOLIDATED-RESEARCH-REGISTER-13.md#REF-C026",
+      "docs/reference-forms/OBJ-REF-01-OFFICIAL-SOURCE-DISCOVERY-02.md#S4",
+      "docs/reference-forms/evidence/final-gate-007/governance_matrix.json#C026"
+    ],
+    "open_questions": [
+      "법 제36조 위험성평가 시행규칙 별표 확인 — 방법별 서식 법정 여부",
+      "KOSHA 붙임2 서식 모음 내 위험성평가표(빈도강도법, REF-C006)와 이 서식의 유사도 원본 비교",
+      "TAI 독자 설계 증거 (독립적 창작성) 확인 필요"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  },
+  {
+    "form_id": "C027",
+    "source_id": "REF-C027",
+    "canonical_spec_sha": "039156a8e5296a97df33d96f3396daf0c1d7e91390c2c6a88f94576c8692a58f",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "TAI_PROPOSED",
+    "observed_original_attachment": "UNVERIFIED",
+    "similarity_review": "UNVERIFIED",
+    "legal_duty_class": "REVIEW_REQUIRED",
+    "activity_duty_status": "REVIEW_REQUIRED",
+    "applicability_status": "UNVERIFIED",
+    "prescribed_form_status": "UNVERIFIED",
+    "field_mandatory_status": "UNVERIFIED",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "산업안전보건법 제36조 — 체크리스트형은 인정 방법 중 하나(report 02 S4 snippet)",
+        "effective_date": "UNVERIFIED_CURRENT_VERSION",
+        "applicability": "방법별 서식 법정 여부 미확인. LEGAL_RPC_CONTRACT_UNRESOLVED."
+      }
+    ],
+    "mandatory_fields_evidence": [],
+    "rights_holder_or_license": "UNKNOWN — source_match=NOT_VERIFIED; no original 3rd-party file inspected",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-CONSOLIDATED-RESEARCH-REGISTER-13.md#REF-C027"
+    ],
+    "open_questions": [
+      "체크리스트형 위험성평가표 법정 별지 여부 LEG 확인 필요",
+      "TAI 독자 체크리스트 항목 설계 증거"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  },
+  {
+    "form_id": "C028",
+    "source_id": "REF-C028",
+    "canonical_spec_sha": "6f6e604988e32a213d6d74528f25405c4113e08b045e11ee13ddac71f4ac42e4",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "TAI_PROPOSED",
+    "observed_original_attachment": "UNVERIFIED",
+    "similarity_review": "UNVERIFIED",
+    "legal_duty_class": "REVIEW_REQUIRED",
+    "activity_duty_status": "REVIEW_REQUIRED",
+    "applicability_status": "UNVERIFIED",
+    "prescribed_form_status": "UNVERIFIED",
+    "field_mandatory_status": "UNVERIFIED",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "산업안전보건법 제36조 — OPS/핵심요인분석법 법정 인정 여부 미확인",
+        "effective_date": "UNVERIFIED_CURRENT_VERSION",
+        "applicability": "OPS 방법이 법정 인정 방법인지 LEGAL_RPC_CONTRACT_UNRESOLVED로 확인 불가."
+      }
+    ],
+    "mandatory_fields_evidence": [],
+    "rights_holder_or_license": "UNKNOWN — source_match=NOT_VERIFIED; no original 3rd-party file inspected. OPS 명칭 기원 미확인.",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-CONSOLIDATED-RESEARCH-REGISTER-13.md#REF-C028"
+    ],
+    "open_questions": [
+      "핵심요인 분석법(OPS) 명칭 출처 — 고유 TAI 제안인지 제3자 방법론 차용인지 확인",
+      "법 제36조 하위 고시에서 OPS 방법 인정 여부"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  },
+  {
+    "form_id": "C029",
+    "source_id": "REF-C029",
+    "canonical_spec_sha": "78d98e840728fad23b8b01473151fc31f1136f5f0f674c74a6c82445bcdf2392",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "TAI_PROPOSED",
+    "observed_original_attachment": "UNVERIFIED",
+    "similarity_review": "UNVERIFIED",
+    "legal_duty_class": "REVIEW_REQUIRED",
+    "activity_duty_status": "REVIEW_REQUIRED",
+    "applicability_status": "UNVERIFIED",
+    "prescribed_form_status": "UNVERIFIED",
+    "field_mandatory_status": "UNVERIFIED",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "산업안전보건법 제36조 — 빈도강도법; KOSHA 24종 내 유사명 REF-C006 존재(report 03, 붙임2)",
+        "effective_date": "UNVERIFIED_CURRENT_VERSION",
+        "applicability": "KOSHA 공식 서식 목록에 '위험성평가표(빈도강도법)' 존재. TAI C029와 원본 비교 미실시. LEGAL_RPC_CONTRACT_UNRESOLVED."
+      }
+    ],
+    "mandatory_fields_evidence": [],
+    "rights_holder_or_license": "UNKNOWN — KOSHA 24종 내 유사명 존재(REF-C006); 원본 파일 미검사로 유사도·권리 관계 미확인",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-CONSOLIDATED-RESEARCH-REGISTER-13.md#REF-C029",
+      "docs/reference-forms/OBJ-REF-01-KOSHA-24-FORMS-SOURCE-03.md#항목06"
+    ],
+    "open_questions": [
+      "KOSHA 붙임2 '위험성평가표(빈도강도법)'(REF-C006) 원본 HWP 검사 후 TAI C029와 필드·레이아웃 비교 필수",
+      "KOSHA 서식이 TAI 서식의 원형인 경우 KOSHA 공개 사용 허가 범위 확인"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  },
+  {
+    "form_id": "C031",
+    "source_id": "REF-C031",
+    "canonical_spec_sha": "ea9c00d54af988e8f8616b81ab6101e1b3aabb12c6e56b21e7da9768fedc5ea2",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "TAI_PROPOSED",
+    "observed_original_attachment": "UNVERIFIED",
+    "similarity_review": "UNVERIFIED",
+    "legal_duty_class": "REVIEW_REQUIRED",
+    "activity_duty_status": "REVIEW_REQUIRED",
+    "applicability_status": "UNVERIFIED",
+    "prescribed_form_status": "UNVERIFIED",
+    "field_mandatory_status": "UNVERIFIED",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "산업안전보건법 제29조 등 (안전보건교육) — 교육 실시 의무 존재; 교육일지 서식은 KOSHA 24종 내 REF-C024(붙임5 ZIP)와 별도 후보",
+        "effective_date": "UNVERIFIED_CURRENT_VERSION",
+        "applicability": "교육 실시 의무 ACTIVITY_DUTY_NOT_FORM_MANDATE 추정; 이 서식이 법정 별지인지 미확인. LEGAL_RPC_CONTRACT_UNRESOLVED."
+      }
+    ],
+    "mandatory_fields_evidence": [],
+    "rights_holder_or_license": "UNKNOWN — KOSHA 공식 '안전보건교육일지'(REF-C024, 붙임5 ZIP) 원본 미검사; 이 TAI 서식과 관계 미확인",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-CONSOLIDATED-RESEARCH-REGISTER-13.md#REF-C031",
+      "docs/reference-forms/OBJ-REF-01-KOSHA-24-FORMS-SOURCE-03.md#항목24"
+    ],
+    "open_questions": [
+      "KOSHA 붙임5 '안전보건교육일지 서식(엑셀·한글)' ZIP 내용 검사 및 TAI C031 비교",
+      "법 제29조 시행규칙 교육기록 보존 의무 및 서식 요건 LEG 확인"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  },
+  {
+    "form_id": "C033",
+    "source_id": "REF-C033",
+    "canonical_spec_sha": "cb95eb99a73658577f61b1e4094b9884cdba3de90028cfcac5c88345ae0e6ae3",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "TAI_PROPOSED",
+    "observed_original_attachment": "UNVERIFIED",
+    "similarity_review": "UNVERIFIED",
+    "legal_duty_class": "REVIEW_REQUIRED",
+    "activity_duty_status": "REVIEW_REQUIRED",
+    "applicability_status": "UNVERIFIED",
+    "prescribed_form_status": "UNVERIFIED",
+    "field_mandatory_status": "UNVERIFIED",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "산업안전보건법 도급 관련 규정 (제63조 등) — 도급 시 안전관리 의무 존재; 이행점검표 법정 서식 여부 미확인",
+        "effective_date": "UNVERIFIED_CURRENT_VERSION",
+        "applicability": "KOSHA 24종 내 유사명 REF-C011(도급·용역·위탁 업체 안전보건 수준 평가) 존재. 미비교. LEGAL_RPC_CONTRACT_UNRESOLVED."
+      }
+    ],
+    "mandatory_fields_evidence": [],
+    "rights_holder_or_license": "UNKNOWN — KOSHA 24종 유사명(REF-C011) 원본 미검사; TAI 서식과 관계 미확인",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-CONSOLIDATED-RESEARCH-REGISTER-13.md#REF-C033",
+      "docs/reference-forms/OBJ-REF-01-KOSHA-24-FORMS-SOURCE-03.md#항목11"
+    ],
+    "open_questions": [
+      "KOSHA 붙임2 REF-C011 원본 HWP와 TAI C033 비교 필요",
+      "법 제63조 수급인에 대한 조치 관련 서식 법정 여부 LEG 확인"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  },
+  {
+    "form_id": "C037",
+    "source_id": "REF-C037",
+    "canonical_spec_sha": "f08895d5c3d351453e8cad2aa2a7ba229a9bd2a50248bb06abaf2f35b2c1c6a8",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "TAI_PROPOSED",
+    "observed_original_attachment": "UNVERIFIED",
+    "similarity_review": "UNVERIFIED",
+    "legal_duty_class": "REVIEW_REQUIRED",
+    "activity_duty_status": "REVIEW_REQUIRED",
+    "applicability_status": "UNVERIFIED",
+    "prescribed_form_status": "UNVERIFIED",
+    "field_mandatory_status": "UNVERIFIED",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "산업안전보건법 근로자 참여 관련 규정 — 위험개선 건의·처리 절차 의무 여부 미확인",
+        "effective_date": "UNVERIFIED_CURRENT_VERSION",
+        "applicability": "KOSHA 관리체계 안내서(report 15 S4)에서 근로자 의견수렴 업무단계 기술. 서식 자체 법정 여부 미확인. LEGAL_RPC_CONTRACT_UNRESOLVED."
+      }
+    ],
+    "mandatory_fields_evidence": [],
+    "rights_holder_or_license": "UNKNOWN — source_match=NOT_VERIFIED; KOSHA 24종에 직접 대응 항목 없음",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-CONSOLIDATED-RESEARCH-REGISTER-13.md#REF-C037",
+      "docs/reference-forms/OBJ-REF-01-GOVERNANCE-WORKFLOW-15.md"
+    ],
+    "open_questions": [
+      "근로자 위험개선 건의 관련 산업안전보건법 구체 조항 및 서식 요건 LEG 확인",
+      "TAI 독자 창작성 — KOSHA/MOEL 발간 유사 서식과의 비교 필요"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  },
+  {
+    "form_id": "C039",
+    "source_id": "REF-C039",
+    "canonical_spec_sha": "6fff46bf9470034eedd6ab89095647302dd01be78d33e3f5aea7deb5c514dfba",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "MIXED",
+    "observed_original_attachment": "SOURCE_FILE_NOT_INSPECTED",
+    "similarity_review": "REVIEW_REQUIRED",
+    "legal_duty_class": "REVIEW_REQUIRED",
+    "activity_duty_status": "REVIEW_REQUIRED",
+    "applicability_status": "UNVERIFIED",
+    "prescribed_form_status": "UNVERIFIED",
+    "field_mandatory_status": "UNVERIFIED",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "화학물질관리법, 산업안전보건법 제110조 등 (MSDS 제공·취급목록 관리) — 의무 존재 추정; 이 서식 법정 여부 미확인",
+        "effective_date": "UNVERIFIED_CURRENT_VERSION",
+        "applicability": "화학물질 취급목록 관리 의무는 업종·물질·수량 조건부. ACTIVITY_DUTY_CONFIRMED_CONDITIONAL 가능성 있으나 LEGAL_RPC_CONTRACT_UNRESOLVED."
+      }
+    ],
+    "mandatory_fields_evidence": [],
+    "rights_holder_or_license": "UNKNOWN — MIXED class: 관련 법령 참조 존재하나 원본 서식 파일 미검사. KOSHA MSDS 검색 시스템은 상업적 재사용 명시 경고(report 10 S2).",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-CHEM-FIRE-OFFICIAL-EVIDENCE-10.md#CHEM-01",
+      "docs/reference-forms/OBJ-REF-01-CONSOLIDATED-RESEARCH-REGISTER-13.md#REF-C039"
+    ],
+    "open_questions": [
+      "화학물질관리법·산업안전보건법 취급목록 관리 관련 조항별 조건 및 서식 요건 LEG 확인",
+      "CAS번호 등 화학물질 식별자 필드 원출처 저작권 문제",
+      "MIXED 표시 근거가 된 참조 자료 식별 및 원본 비교"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  },
+  {
+    "form_id": "C040",
+    "source_id": "REF-C040",
+    "canonical_spec_sha": "fb063656e59f3a24403485a9a7ef1cf090f5bed972d6d2ab5c678c52a5394190",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "MIXED",
+    "observed_original_attachment": "SOURCE_FILE_NOT_INSPECTED",
+    "similarity_review": "REVIEW_REQUIRED",
+    "legal_duty_class": "REVIEW_REQUIRED",
+    "activity_duty_status": "REVIEW_REQUIRED",
+    "applicability_status": "UNVERIFIED",
+    "prescribed_form_status": "UNVERIFIED",
+    "field_mandatory_status": "UNVERIFIED",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "산업안전보건법 제114조 (MSDS 보관·제공) — 수령·개정이력 관리 서식 법정 여부 미확인",
+        "effective_date": "UNVERIFIED_CURRENT_VERSION",
+        "applicability": "MSDS 보관 의무 존재. 이력 대장 특정 서식 법정 여부 LEGAL_RPC_CONTRACT_UNRESOLVED."
+      }
+    ],
+    "mandatory_fields_evidence": [],
+    "rights_holder_or_license": "UNKNOWN — source_match=NOT_VERIFIED; MIXED class 근거 미확인",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-CHEM-FIRE-OFFICIAL-EVIDENCE-10.md#CHEM-02",
+      "docs/reference-forms/OBJ-REF-01-CONSOLIDATED-RESEARCH-REGISTER-13.md#REF-C040"
+    ],
+    "open_questions": [
+      "MSDS 수령·이력 보관 의무 조항별 서식 요건 LEG 확인",
+      "TAI 독자 설계 vs. KOSHA/업계 통용 이력대장 비교"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  },
+  {
+    "form_id": "C041",
+    "source_id": "REF-C041",
+    "canonical_spec_sha": "ac566c9b647abe085c6dd8441b90609bacb379a4ebd4e0a25da591a2aa8bf5b2",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "MIXED",
+    "observed_original_attachment": "SOURCE_FILE_NOT_INSPECTED",
+    "similarity_review": "REVIEW_REQUIRED",
+    "legal_duty_class": "REVIEW_REQUIRED",
+    "activity_duty_status": "REVIEW_REQUIRED",
+    "applicability_status": "UNVERIFIED",
+    "prescribed_form_status": "UNVERIFIED",
+    "field_mandatory_status": "UNVERIFIED",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "산업안전보건법 제115조 (경고표시) — GHS 경고표지 부착 의무; 점검표 서식 법정 여부 미확인",
+        "effective_date": "UNVERIFIED_CURRENT_VERSION",
+        "applicability": "경고표지 부착 의무 존재. 점검표 특정 서식 법정 여부 LEGAL_RPC_CONTRACT_UNRESOLVED."
+      }
+    ],
+    "mandatory_fields_evidence": [],
+    "rights_holder_or_license": "UNKNOWN — GHS 관련 안내 텍스트는 가이던스 수준; 서식 자체 원본 미검사",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-CHEM-FIRE-OFFICIAL-EVIDENCE-10.md#CHEM-03",
+      "docs/reference-forms/OBJ-REF-01-CONSOLIDATED-RESEARCH-REGISTER-13.md#REF-C041"
+    ],
+    "open_questions": [
+      "GHS 경고표지 점검 관련 법 제115조 세부 서식 요건 LEG 확인",
+      "MIXED 표시 근거 — 공식 GHS 예시 서식과의 비교"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  },
+  {
+    "form_id": "C042",
+    "source_id": "REF-C042",
+    "canonical_spec_sha": "7ce77bf9244fb157f6afadfa490d3bf7adf7716612ff135e005c819ada8fbd84",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "MIXED",
+    "observed_original_attachment": "SOURCE_FILE_NOT_INSPECTED",
+    "similarity_review": "REVIEW_REQUIRED",
+    "legal_duty_class": "REVIEW_REQUIRED",
+    "activity_duty_status": "REVIEW_REQUIRED",
+    "applicability_status": "UNVERIFIED",
+    "prescribed_form_status": "UNVERIFIED",
+    "field_mandatory_status": "UNVERIFIED",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "화학물질관리법 보관시설 기준 조항 — 점검표 서식 법정 여부 미확인",
+        "effective_date": "UNVERIFIED_CURRENT_VERSION",
+        "applicability": "화학물질 저장기준 의무 존재. 점검표 특정 서식 법정 여부 LEGAL_RPC_CONTRACT_UNRESOLVED."
+      }
+    ],
+    "mandatory_fields_evidence": [],
+    "rights_holder_or_license": "UNKNOWN — 화학물질관리법 안내 텍스트는 가이던스 수준; 서식 원본 미검사",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-CHEM-FIRE-OFFICIAL-EVIDENCE-10.md#CHEM-04",
+      "docs/reference-forms/OBJ-REF-01-CONSOLIDATED-RESEARCH-REGISTER-13.md#REF-C042"
+    ],
+    "open_questions": [
+      "화학물질관리법 보관시설 점검 관련 서식 요건 LEG 확인",
+      "MIXED 표시 근거 식별 및 원본 비교"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  },
+  {
+    "form_id": "C043",
+    "source_id": "REF-C043",
+    "canonical_spec_sha": "454ed11fb6f4d70be189490883d0051416703fa7fc125e29af5654f74f6d415a",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "MIXED",
+    "observed_original_attachment": "SOURCE_FILE_NOT_INSPECTED",
+    "similarity_review": "REVIEW_REQUIRED",
+    "legal_duty_class": "REVIEW_REQUIRED",
+    "activity_duty_status": "REVIEW_REQUIRED",
+    "applicability_status": "UNVERIFIED",
+    "prescribed_form_status": "UNVERIFIED",
+    "field_mandatory_status": "UNVERIFIED",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "화학물질관리법 제41조 등 (사고대비물질 비상대응) — 훈련기록 서식 법정 여부 미확인",
+        "effective_date": "UNVERIFIED_CURRENT_VERSION",
+        "applicability": "비상대응 훈련 의무 존재 가능성. 조건(물질 종류·수량) 및 서식 법정 여부 LEGAL_RPC_CONTRACT_UNRESOLVED."
+      }
+    ],
+    "mandatory_fields_evidence": [],
+    "rights_holder_or_license": "UNKNOWN — source_match=NOT_VERIFIED; MIXED class 근거 미확인",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-CHEM-FIRE-OFFICIAL-EVIDENCE-10.md#CHEM-05",
+      "docs/reference-forms/OBJ-REF-01-CONSOLIDATED-RESEARCH-REGISTER-13.md#REF-C043"
+    ],
+    "open_questions": [
+      "화학물질 누출 비상대응 훈련 법정 의무 조건 및 서식 요건 LEG 확인",
+      "MIXED 표시 근거 — 공식 훈련기록 서식 원본 비교 필요"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  },
+  {
+    "form_id": "C044",
+    "source_id": "REF-C044",
+    "canonical_spec_sha": "9c7dacfa9ad4622e3a016c1675f442c457ab7c9d6c7f61cd05af54a07ba90fe5",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "MIXED",
+    "observed_original_attachment": "SOURCE_FILE_NOT_INSPECTED",
+    "similarity_review": "REVIEW_REQUIRED",
+    "legal_duty_class": "REVIEW_REQUIRED",
+    "activity_duty_status": "REVIEW_REQUIRED",
+    "applicability_status": "UNVERIFIED",
+    "prescribed_form_status": "UNVERIFIED",
+    "field_mandatory_status": "UNVERIFIED",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "산업안전보건법 제114조 (MSDS 교육·주지 의무) — 확인기록 서식 법정 여부 미확인",
+        "effective_date": "UNVERIFIED_CURRENT_VERSION",
+        "applicability": "MSDS 교육·주지 의무 존재. 확인 기록 특정 서식 법정 여부 LEGAL_RPC_CONTRACT_UNRESOLVED."
+      }
+    ],
+    "mandatory_fields_evidence": [],
+    "rights_holder_or_license": "UNKNOWN — source_match=NOT_VERIFIED; MIXED class 근거 미확인",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-CHEM-FIRE-OFFICIAL-EVIDENCE-10.md#CHEM-06",
+      "docs/reference-forms/OBJ-REF-01-CONSOLIDATED-RESEARCH-REGISTER-13.md#REF-C044"
+    ],
+    "open_questions": [
+      "법 제114조 MSDS 교육·주지 확인 기록 요건 LEG 확인",
+      "MIXED 표시 근거 — KOSHA MSDS 관련 서식 원본 비교"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  },
+  {
+    "form_id": "GOV-01",
+    "source_id": "GOV-01",
+    "canonical_spec_sha": "68462624c0a3528d315982db843fb7e4b66fcd9d8d98b902bb3929f32b06a023",
+    "origin_class_current": "TAI_ORIGINAL_DRAFT",
+    "source_evidence_class_current": "OFFICIAL_PROCESS_AND_TAI_HYPOTHESIS",
+    "observed_original_attachment": "UNVERIFIED",
+    "similarity_review": "UNVERIFIED",
+    "legal_duty_class": "ACTIVITY_DUTY_CONFIRMED_CONDITIONAL",
+    "legal_duty_class_basis": "2차 연구 문서 증거 (OBJ-REF-01-GOVERNANCE-WORKFLOW-15.md S1/S2) — governance RPC 확인 아님",
+    "activity_duty_status": "SECONDARY_EVIDENCE_ONLY — 법 제24조 기록 의무 언급 (report 15 S1)",
+    "applicability_status": "UNVERIFIED — 시행령 별표9 적용 사업장 조건 미확인",
+    "prescribed_form_status": "NOT_APPLICABLE — 법 제24조는 특정 양식 지정 없음; TAI 열 구조는 법정 별지 아님",
+    "field_mandatory_status": "UNVERIFIED — 법정 필수 기재 항목 목록 미확인",
+    "legal_review_status": "PENDING",
+    "legal_rpc_evidence": [
+      {
+        "rpc": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+        "rpc_accessed": "governance.get_active_items_for_scope('LEG', NULL) — 호출 성공",
+        "rpc_content": "governance.get_active_items_for_scope('LEG', NULL) 반환 = 332건. 산업안전·화학물질·MSDS 관련 용어 검색 결과 0건. 법령 조문·시행일·적용조건 조회 계약 미확정. governance 스키마 전체 법령 유무는 미확정 — LEGAL_RPC_CONTRACT_UNRESOLVED.",
+        "provision_ref": "산업안전보건법 제24조 (회의록 작성·보존) — report 15 S1 인용, 2차 증거",
+        "effective_date": "2026-08-01 (report 15 S1 인용, 현행 유효성 미독립검증)",
+        "applicability": "법 제24조 기록 의무 — 적용 사업장(시행령 별표9) 조건부. ACTIVITY_DUTY_CONFIRMED_CONDITIONAL은 2차 증거 기반 잠정 분류. governance RPC가 산업안전 법령을 제공하지 않아 공식 확인 불가."
+      }
+    ],
+    "mandatory_fields_evidence": [
+      {
+        "source": "OBJ-REF-01-GOVERNANCE-WORKFLOW-15.md S1/S2",
+        "evidence_note": "법 제24조 회의록 작성·보존 의무 언급. 법정 필수 필드 목록 불명. TAI 제안 필드(회의일시/장소/참석/안건/논의/의결/서명)는 실무 기반."
+      }
+    ],
+    "rights_holder_or_license": "UNKNOWN — 공식 법적 절차(법 제24조) 기반이나 TAI 독자 열 구조. 법정 별지 아님. 정부 공개 절차 기반 서식이므로 저작권 귀속 불명확.",
+    "commercial_redistribution": "UNVERIFIED",
+    "evidence_links": [
+      "docs/reference-forms/OBJ-REF-01-GOVERNANCE-WORKFLOW-15.md#GOV-01",
+      "docs/reference-forms/evidence/final-gate-007/governance_matrix.json#GOV-01"
+    ],
+    "open_questions": [
+      "법 제24조 시행령 별표9 적용 사업장 범위(업종·규모) LEG 확인",
+      "회의록 법정 필수 기재 항목 LEG 확인 — TAI 열 구조가 최소 요건 충족 여부",
+      "법정 절차 기반 서식의 저작권 귀속 (정부/TAI) 법리 검토 필요"
+    ],
+    "gpt_review_required": true,
+    "publication_authorized": false
+  }
+]
