@@ -1,6 +1,7 @@
 """
 WO-REF05-REF09-INTEGRATION-P0-REPAIR-007 — Reference Forms contract tests
 WO-REF05-REF09-INTEGRATION-FINAL-P0-008 — P0-1 storage ref + P0-2 approval binding
+WO-REF05-REF09-FINAL-GATE-CLOSE-010 — related form rights filter + sanitizer edge cases
 
 10 original test cases:
   T1  Published + CLEARED → 200 with correct shape
@@ -18,6 +19,11 @@ P0-008 additions:
   T11 Storage ref parsing — correct path extracted; wrong bucket → 500; traversal → 500
   T12 Approval binding — file not in approved_file_hashes → 404; SHA mismatch → 404;
       no current approval record → 404; approval query error → 503
+
+Gate-010 additions:
+  T13 Related form rights filter — REVIEW_REQUIRED source excluded; no source excluded;
+      mix of CLEARED + REVIEW_REQUIRED → only CLEARED returned; sources query fail → []
+  (HTML sanitizer edge cases are in tests/test_html_sanitize.mjs — Node.js test)
 
 Mock strategy: replace the 3 supabase helpers with controlled fakes.
 Integration path: set REFERENCE_FORM_TEST_DB_URL to run against isolated Postgres
@@ -514,3 +520,112 @@ def test_t12_approval_binding_preview_404():
     c = _client(_app(sb))
     res = c.get(f"/reference-forms/{_SLUG}/preview/{_FILE_ID}")
     assert res.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# T13: Gate-010 — Related form rights filter (_load_related_forms)
+# Tests call the function directly to avoid mock ambiguity between
+# _check_sources_cleared (.eq) and the batch sources query (.in_).
+# ---------------------------------------------------------------------------
+
+_RELATED_ID_A = "ff000000-0000-0000-0000-000000000010"
+_RELATED_ID_B = "ff000000-0000-0000-0000-000000000011"
+
+
+def _make_related_sb(*, view_rows, sources_data, sources_error=False):
+    """Minimal mock for _load_related_forms unit tests."""
+    sb = MagicMock()
+
+    def _table_side_effect(name):
+        t = MagicMock()
+        t.select = MagicMock(return_value=t)
+        t.eq = MagicMock(return_value=t)
+        t.in_ = MagicMock(return_value=t)
+        t.limit = MagicMock(return_value=t)
+
+        if name == "reference_form_relations":
+            res = MagicMock()
+            res.data = [
+                {"related_form_id": _RELATED_ID_A},
+                {"related_form_id": _RELATED_ID_B},
+            ]
+            t.execute.return_value = res
+        elif name == "reference_form_public_view":
+            res = MagicMock()
+            res.data = view_rows
+            t.execute.return_value = res
+        elif name == "reference_form_sources":
+            if sources_error:
+                t.execute.side_effect = Exception("sources error")
+            else:
+                res = MagicMock()
+                res.data = sources_data
+                t.execute.return_value = res
+        return t
+
+    sb.table.side_effect = _table_side_effect
+    return sb
+
+
+def test_t13_related_cleared_source_included():
+    """Related form with CLEARED source → appears in result."""
+    from routers.reference_forms import _load_related_forms
+    sb = _make_related_sb(
+        view_rows=[{"id": _RELATED_ID_A, "canonical_slug": "form-a", "title": "Form A"}],
+        sources_data=[{"form_id": _RELATED_ID_A, "rights_status": "CLEARED"}],
+    )
+    result = _load_related_forms(sb, _FORM_ID)
+    assert len(result) == 1
+    assert result[0]["slug"] == "form-a"
+
+
+def test_t13_related_review_required_source_excluded():
+    """Related form with REVIEW_REQUIRED source → excluded."""
+    from routers.reference_forms import _load_related_forms
+    sb = _make_related_sb(
+        view_rows=[{"id": _RELATED_ID_A, "canonical_slug": "form-a", "title": "Form A"}],
+        sources_data=[{"form_id": _RELATED_ID_A, "rights_status": "REVIEW_REQUIRED"}],
+    )
+    result = _load_related_forms(sb, _FORM_ID)
+    assert result == []
+
+
+def test_t13_related_no_active_source_excluded():
+    """Related form with no active source → excluded (empty sources_data)."""
+    from routers.reference_forms import _load_related_forms
+    sb = _make_related_sb(
+        view_rows=[{"id": _RELATED_ID_A, "canonical_slug": "form-a", "title": "Form A"}],
+        sources_data=[],
+    )
+    result = _load_related_forms(sb, _FORM_ID)
+    assert result == []
+
+
+def test_t13_related_mixed_cleared_and_blocked():
+    """One CLEARED form, one REVIEW_REQUIRED form → only CLEARED returned."""
+    from routers.reference_forms import _load_related_forms
+    sb = _make_related_sb(
+        view_rows=[
+            {"id": _RELATED_ID_A, "canonical_slug": "form-cleared", "title": "Cleared"},
+            {"id": _RELATED_ID_B, "canonical_slug": "form-blocked", "title": "Blocked"},
+        ],
+        sources_data=[
+            {"form_id": _RELATED_ID_A, "rights_status": "CLEARED"},
+            {"form_id": _RELATED_ID_B, "rights_status": "REVIEW_REQUIRED"},
+        ],
+    )
+    result = _load_related_forms(sb, _FORM_ID)
+    assert len(result) == 1
+    assert result[0]["slug"] == "form-cleared"
+
+
+def test_t13_related_sources_query_error_fail_closed():
+    """Sources query failure for related forms → fail-closed, return []."""
+    from routers.reference_forms import _load_related_forms
+    sb = _make_related_sb(
+        view_rows=[{"id": _RELATED_ID_A, "canonical_slug": "form-a", "title": "Form A"}],
+        sources_data=[],
+        sources_error=True,
+    )
+    result = _load_related_forms(sb, _FORM_ID)
+    assert result == []

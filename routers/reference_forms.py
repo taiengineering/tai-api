@@ -169,7 +169,10 @@ def _load_body_html(sb, form_id: str) -> str:
 def _load_related_forms(sb, form_id: str) -> list:
     """
     Load published related forms via reference_form_relations.
-    Checks the view so only PUBLISHED + CLEARED forms appear.
+    Gates (per form, batch query):
+      1. View: PUBLISHED + content hash approved + is_current APPROVED approval
+      2. All active sources CLEARED (batch query, no N+1)
+    Fails closed on any error — returns [] rather than raising.
     """
     try:
         rel_res = (
@@ -186,15 +189,42 @@ def _load_related_forms(sb, form_id: str) -> list:
     try:
         view_res = (
             sb.table(_VIEW)
-            .select("canonical_slug,title")
+            .select("id,canonical_slug,title")
             .in_("id", related_ids)
             .execute()
         )
     except Exception:
         return []
+    view_rows = view_res.data or []
+    if not view_rows:
+        return []
+
+    # Batch-check sources for all related forms — avoids N+1.
+    # A related form is only included if it has ≥1 active source and ALL are CLEARED.
+    view_ids = [str(r["id"]) for r in view_rows]
+    try:
+        src_res = (
+            sb.table(_SOURCES)
+            .select("form_id,rights_status")
+            .in_("form_id", view_ids)
+            .eq("is_active", True)
+            .execute()
+        )
+        sources_data = src_res.data or []
+    except Exception:
+        # Fail-closed: exclude all related forms if sources cannot be verified.
+        return []
+
+    statuses: dict = {}
+    for s in sources_data:
+        fid = str(s["form_id"])
+        statuses.setdefault(fid, []).append(s.get("rights_status", ""))
+
     return [
         {"slug": r["canonical_slug"], "title": r["title"]}
-        for r in (view_res.data or [])
+        for r in view_rows
+        if statuses.get(str(r["id"]))                                    # ≥1 active source
+        and all(st == "CLEARED" for st in statuses[str(r["id"])])        # all CLEARED
     ]
 
 
