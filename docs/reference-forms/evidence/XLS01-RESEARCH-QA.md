@@ -2,6 +2,8 @@
 wo: WO-REF01-XLS01-SCOPE-AUDIT-001
 date: 2026-10-11
 status: EVIDENCE_COLLECTED
+correction: WO-REF01-XLS01-EVIDENCE-REPAIR-002
+correction_date: 2026-10-11
 publication: NOT_FOR_PUBLICATION
 ---
 
@@ -134,12 +136,12 @@ WO-REF01-XLS01-SCOPE-AUDIT-001 조사 완결성 및 근거 검증.
 
 | 구분 | 건수 |
 |------|------|
-| NON_FORM (NON_FORM_REFERENCE + OFFICIAL + LEGAL) | 24 |
+| NON_FORM (NON_FORM_REFERENCE + OFFICIAL + LEGAL) | 25 |
 | REUSE_EXISTING (대표 서식 재사용) | 25 |
-| SINGLE_EVENT / DOC_PDF_ONLY 예비 | 약 45 |
-| CHECKLIST / DAILY_LOG 예비 | 약 25 |
-| Excel 후보 예비 (A~E 그룹) | 약 55 |
-| CONDITIONAL (판정 보류) | 13 |
+| SINGLE_EVENT 유형 (CSV accumulation_type=SINGLE_EVENT) | 40 |
+| CHECKLIST + DAILY_LOG 유형 (CHECKLIST 29 + DAILY 8) | 37 |
+| Excel 후보 (A~E 유니크) | 47 |
+| CONDITIONAL (판정 보류, 그룹 G) | 13 |
 | B15 미등록 (조사 포함) | 8 |
 | NEEDS_REVIEW | 1 |
 | LEGACY_OUTPUT_ONLY | 2 |

@@ -2,6 +2,8 @@
 wo: WO-REF01-XLS01-SCOPE-AUDIT-001
 date: 2026-10-11
 status: EVIDENCE_COLLECTED
+correction: WO-REF01-XLS01-EVIDENCE-REPAIR-002
+correction_date: 2026-10-11
 publication: NOT_FOR_PUBLICATION
 ---
 
@@ -13,11 +15,11 @@ WO-REF01-XLS01-SCOPE-AUDIT-001 조사 결과.
 
 ---
 
-## 제외 대상 (Excel 제작 불필요 확정)
+## 제외 후보 (GPT 판정 대기)
 
-다음 그룹은 구조적으로 Excel 대상이 아니다. GPT 판정 불필요.
+다음 그룹은 구조적으로 Excel 대상이 아닐 가능성이 높다. GPT 최종 판정 대기.
 
-### 1. NON_FORM_REFERENCE (10건)
+### 1. NON_FORM_REFERENCE (13건)
 
 흐름도·참고문서·도면. 빈칸 서식 아님.
 
@@ -117,7 +119,7 @@ GOV-04, P-01, P-02, P-03, P-18, RP-09
 | research_id | 제목 | 계산 내용 | 계산 근거 확인 |
 |-------------|------|---------|------------|
 | CHW-02 | 화학물질 출고·사용 불출대장 | 불출량 누계·집계 | 출고량 단순합 |
-| CHW-03 | 화학물질 재고실사·차이처리표 | 차이수량=장부재고-실사재고 | 컬럼 명시 |
+| CHW-03 | 화학물질 재고실사·차이처리표 | 차이수량=장부재고-실사재고 | FORMULA_DIRECTION_UNVERIFIED |
 | GOV-09 | 안전보건 시정조치(CAPA) 관리대장 | 진행상태별 건수·완료율 | 상태컬럼 명시 |
 | GOV-10 | 안전보건 연간 활동계획·실적 대비표 | 실적-계획 차이 | 컬럼 명시(차이/개선) |
 | P-20 | 산업안전보건관리비 사용계획·집행내역 | 누계금액=SUM(집행금액) | 컬럼 명시 |
@@ -191,7 +193,7 @@ GOV-04, P-01, P-02, P-03, P-18, RP-09
 
 | 대표 서식 | 재사용 서식 (Excel 판정 연동) |
 |---------|--------------------------|
-| CHW-01 | CHW-05, PRA-22-01, RP-18 |
+| CHW-01 | PRA-22-01, RP-18 |
 | CHW-02 | PRA-22-03, RP-19 |
 | CHW-03 | PRA-22-05, RP-20 |
 | CHW-04 | RP-21 |
@@ -207,6 +209,7 @@ GOV-04, P-01, P-02, P-03, P-18, RP-09
 | REF-C016 | REF-C030 |
 | REF-C029 | REF-C006 |
 | REF-C031 | REF-C024 |
+| REF-C040 | CHW-05 |
 | RP-01 | MNT-01 |
 | RP-02 | MNT-02 |
 | RP-03 | MNT-05 |
