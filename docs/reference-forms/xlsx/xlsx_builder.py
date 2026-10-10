@@ -207,15 +207,16 @@ def build_xlsx(
     if freeze_row:
         ws.freeze_panes = ws.cell(row=freeze_row, column=1)
 
-    # ── Print settings (FIX-B: large area, no hard cutoff) ───────────────────
+    # ── Print settings (FIX-2: print area = actual content range) ────────────
     ws.page_setup.orientation = (
         "landscape" if orientation == "landscape" else "portrait"
     )
     ws.page_setup.fitToPage = True
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
-    # Large print area avoids cutting off user-added rows
-    ws.print_area = f"A1:{get_column_letter(n_cols)}{row + 200}"
+    # Print area covers actual written rows; user-added rows beyond the
+    # pre-allocated table range require manual print-area extension in Excel.
+    ws.print_area = f"A1:{get_column_letter(n_cols)}{row - 1}"
 
     # ── Column widths ─────────────────────────────────────────────────────────
     if repeat_table_first:
