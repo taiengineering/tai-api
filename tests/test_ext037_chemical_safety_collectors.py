@@ -841,3 +841,53 @@ def test_e60_parse_nonzero_resultcode_early_return():
     assert page.result_code == "99"
     assert page.items == []
     assert page.total_count is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# E61-E64 — REPAIR-A FINAL PATCH: body/items 구조 검증 + 공백 dataNo 차단
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_e61_parse_body_missing_raises():
+    """REPAIR-A FINAL: resultCode='00'이지만 body 없으면 Ext037ParseError."""
+    from services.ext037_chemical_safety.parse import parse_page, Ext037ParseError
+    xml = (
+        b"<?xml version='1.0' encoding='UTF-8'?>"
+        b"<response><header><resultCode>00</resultCode><resultMsg>OK</resultMsg></header></response>"
+    )
+    with pytest.raises(Ext037ParseError, match="body"):
+        parse_page(xml)
+
+
+def test_e62_parse_items_element_missing_raises():
+    """REPAIR-A FINAL: body 있지만 items 없으면 Ext037ParseError."""
+    from services.ext037_chemical_safety.parse import parse_page, Ext037ParseError
+    xml = (
+        b"<?xml version='1.0' encoding='UTF-8'?>"
+        b"<response><header><resultCode>00</resultCode><resultMsg>OK</resultMsg></header>"
+        b"<body><pageNo>1</pageNo><numOfRows>10</numOfRows><totalCount>0</totalCount></body></response>"
+    )
+    with pytest.raises(Ext037ParseError, match="items"):
+        parse_page(xml)
+
+
+def test_e63_parse_whitespace_only_datano_raises():
+    """REPAIR-A FINAL: dataNo가 공백 문자만이면 Ext037ParseError."""
+    from services.ext037_chemical_safety.parse import parse_page, Ext037ParseError
+    xml = _xml_page([{"dataNo": "   ", "chemEn": "X"}], total_count=1)
+    with pytest.raises(Ext037ParseError, match="blank"):
+        parse_page(xml)
+
+
+def test_e64_parse_totalcount_zero_empty_items_ok():
+    """REPAIR-A FINAL: totalCount=0 + 빈 items 요소 → 정상 빈 페이지 (ParseError 없음)."""
+    from services.ext037_chemical_safety.parse import parse_page
+    xml = (
+        b"<?xml version='1.0' encoding='UTF-8'?>"
+        b"<response><header><resultCode>00</resultCode><resultMsg>OK</resultMsg></header>"
+        b"<body><pageNo>1</pageNo><numOfRows>10</numOfRows><totalCount>0</totalCount>"
+        b"<items></items></body></response>"
+    )
+    page = parse_page(xml)
+    assert page.result_code == "00"
+    assert page.total_count == 0
+    assert page.items == []

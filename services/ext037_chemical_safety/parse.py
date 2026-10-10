@@ -66,6 +66,11 @@ def parse_page(content: bytes) -> PageResult:
             result_msg=result_msg,
         )
 
+    # REPAIR-A FINAL: body element must exist for resultCode="00"
+    body_el = root.find("body")
+    if body_el is None:
+        raise Ext037ParseError("body element missing for resultCode='00'")
+
     # REPAIR-A: resultCode == "00" — validate all required pagination fields
     total_count_raw = _text(root, ".//totalCount")
     if total_count_raw is None or not total_count_raw.isdigit():
@@ -90,16 +95,21 @@ def parse_page(content: bytes) -> PageResult:
         )
     num_of_rows = int(num_of_rows_raw)
 
+    # REPAIR-A FINAL: body/items element must exist for resultCode="00"
+    items_el = body_el.find("items")
+    if items_el is None:
+        raise Ext037ParseError("body/items element missing for resultCode='00'")
+
     items: list[Ext037Item] = []
-    for item_el in root.findall(".//item"):
+    for item_el in items_el.findall("item"):  # REPAIR-A FINAL: strict body/items/item path
         raw: dict[str, Any] = {
             child.tag: child.text for child in item_el if child.text is not None
         }
-        datano = raw.get("dataNo") or raw.get("datano") or ""
-        # REPAIR-A: dataNo must be non-blank — fail-closed
-        if not datano:
+        datano_raw = raw.get("dataNo") or raw.get("datano") or ""
+        # REPAIR-A FINAL: strip whitespace for blank check; preserve original value
+        if not datano_raw.strip():
             raise Ext037ParseError("item found with blank/missing dataNo")
-        items.append(Ext037Item(datano=datano, raw=raw))
+        items.append(Ext037Item(datano=datano_raw, raw=raw))
 
     return PageResult(
         total_count=total_count,
