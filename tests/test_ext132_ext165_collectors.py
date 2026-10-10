@@ -2657,3 +2657,209 @@ def test_p21_json_error_response_missing_fields_passes_through():
     assert page.result_code == "99"
     assert page.items == []
     assert page.total_count is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Q-group: TRACK-A — RateLimitError + API 22/23 + heartbeat SAVE_ERROR fixes
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q01_sync_http_429_returns_partial_rate_limited():
+    """TRACK-A: HTTP 429 → RateLimitError → SyncStatus.PARTIAL / RATE_LIMITED (STAGING 보존)."""
+    from services.ext132_hazardous_material.sync import collect_all, SyncStatus
+    from services.ext132_hazardous_material.client import RateLimitError
+
+    with patch("services.ext132_hazardous_material.client.fetch_page", side_effect=RateLimitError("429")):
+        result = collect_all()
+
+    assert result.status == SyncStatus.PARTIAL
+    assert result.error_code == "RATE_LIMITED"
+
+
+def test_q02_sync_api_code_22_returns_partial_rate_limited():
+    """TRACK-A: API resultCode "22" → PARTIAL/RATE_LIMITED (STAGING 보존)."""
+    import json
+    from services.ext132_hazardous_material.sync import collect_all, SyncStatus
+
+    body = json.dumps({
+        "header": {"resultCode": "22", "resultMsg": "RATE_LIMIT"},
+        "body": {},
+    }).encode()
+    with patch("services.ext132_hazardous_material.client.fetch_page", return_value=body):
+        result = collect_all()
+
+    assert result.status == SyncStatus.PARTIAL
+    assert result.error_code == "RATE_LIMITED"
+
+
+def test_q03_sync_api_code_23_returns_partial_rate_limited():
+    """TRACK-A: API resultCode "23" → PARTIAL/RATE_LIMITED (STAGING 보존)."""
+    import json
+    from services.ext132_hazardous_material.sync import collect_all, SyncStatus
+
+    body = json.dumps({
+        "header": {"resultCode": "23", "resultMsg": "RATE_LIMIT"},
+        "body": {},
+    }).encode()
+    with patch("services.ext132_hazardous_material.client.fetch_page", return_value=body):
+        result = collect_all()
+
+    assert result.status == SyncStatus.PARTIAL
+    assert result.error_code == "RATE_LIMITED"
+
+
+def test_q04_bootstrap_heartbeat_ioerror_save_error_preserves_staging():
+    """TRACK-A: cmd_bootstrap — heartbeat IOError → SAVE_ERROR → STAGING preserved, fail_snapshot NOT called."""
+    from services.ext132_hazardous_material.sync import SyncResult, SyncStatus
+    from services.ext132_hazardous_material.parse import Ext132Item
+
+    bootstrap = _load_bootstrap("tools/ext132/bootstrap.py")
+
+    item = Ext132Item("HM-001", raw={"qty": 1})
+
+    def fake_collect_all(**kwargs):
+        on_page = kwargs.get("on_page_complete")
+        if on_page:
+            from services.public_data_sync.errors import PageFencedError, PageSaveError
+            try:
+                on_page(1, [item], 1, 10)
+            except PageSaveError:
+                return SyncResult(
+                    status=SyncStatus.FAILED,
+                    fetched=1,
+                    items=[item],
+                    pages_fetched=1,
+                    budget_used=1,
+                    error_code="SAVE_ERROR",
+                )
+            except PageFencedError:
+                return SyncResult(
+                    status=SyncStatus.FAILED,
+                    fetched=1,
+                    items=[item],
+                    pages_fetched=1,
+                    budget_used=1,
+                    error_code="FENCED",
+                )
+        return SyncResult(status=SyncStatus.COMPLETED, fetched=1, items=[item], pages_fetched=1, budget_used=1)
+
+    mock_store = MagicMock()
+    mock_claim = MagicMock()
+    mock_claim.claimed = True
+    mock_claim.lease_until = "2099-01-01T00:00:00Z"
+    mock_store.claim_run.return_value = mock_claim
+    mock_store.heartbeat.side_effect = IOError("network error")
+
+    fail_mock = MagicMock()
+
+    with (
+        patch("services.public_data_sync.runtime_store.PublicDataRuntimeStore", return_value=mock_store),
+        patch("services.public_data_sync.registry.registry.get", return_value=MagicMock()),
+        patch("services.ext132_hazardous_material.store.create_staging_snapshot", return_value="snap-q04"),
+        patch("services.ext132_hazardous_material.sync.collect_all", side_effect=fake_collect_all),
+        patch("services.ext132_hazardous_material.store.save_page_checkpoint", return_value=1),
+        patch("services.ext132_hazardous_material.store.fail_snapshot", fail_mock),
+    ):
+        rc = bootstrap.cmd_bootstrap()
+
+    assert rc == 1
+    fail_mock.assert_not_called()
+
+
+def test_q05_resume_heartbeat_ioerror_save_error_preserves_staging():
+    """TRACK-A: cmd_resume — heartbeat IOError → SAVE_ERROR → STAGING preserved, fail_snapshot NOT called."""
+    from services.ext132_hazardous_material.sync import SyncResult, SyncStatus
+    from services.ext132_hazardous_material.parse import Ext132Item
+
+    bootstrap = _load_bootstrap("tools/ext132/bootstrap.py")
+
+    item = Ext132Item("HM-001", raw={"qty": 1})
+
+    def fake_collect_all(**kwargs):
+        on_page = kwargs.get("on_page_complete")
+        if on_page:
+            from services.public_data_sync.errors import PageFencedError, PageSaveError
+            try:
+                on_page(2, [item], 1, 10)
+            except PageSaveError:
+                return SyncResult(
+                    status=SyncStatus.FAILED,
+                    fetched=1,
+                    items=[item],
+                    pages_fetched=1,
+                    budget_used=1,
+                    error_code="SAVE_ERROR",
+                )
+            except PageFencedError:
+                return SyncResult(
+                    status=SyncStatus.FAILED,
+                    fetched=1,
+                    items=[item],
+                    pages_fetched=1,
+                    budget_used=1,
+                    error_code="FENCED",
+                )
+        return SyncResult(status=SyncStatus.COMPLETED, fetched=1, items=[item], pages_fetched=1, budget_used=1)
+
+    staging_row = {
+        "id": "snap-q05",
+        "last_page_no": 2,
+        "checkpoint_api_total": 10,
+        "checkpoint_total_count": 5,
+    }
+
+    mock_store = MagicMock()
+    mock_claim = MagicMock()
+    mock_claim.claimed = True
+    mock_claim.lease_until = "2099-01-01T00:00:00Z"
+    mock_store.claim_run.return_value = mock_claim
+    mock_store.heartbeat.side_effect = IOError("network error")
+
+    fail_mock = MagicMock()
+
+    with (
+        patch("services.public_data_sync.runtime_store.PublicDataRuntimeStore", return_value=mock_store),
+        patch("services.public_data_sync.registry.registry.get", return_value=MagicMock()),
+        patch("services.ext132_hazardous_material.store.find_resumable_staging", return_value=staging_row),
+        patch("services.ext132_hazardous_material.sync.collect_all", side_effect=fake_collect_all),
+        patch("services.ext132_hazardous_material.store.save_page_checkpoint", return_value=6),
+        patch("services.ext132_hazardous_material.store.fail_snapshot", fail_mock),
+    ):
+        rc = bootstrap.cmd_resume()
+
+    assert rc == 1
+    fail_mock.assert_not_called()
+
+
+def test_q06_bootstrap_save_error_result_preserves_staging():
+    """TRACK-A: cmd_bootstrap — SAVE_ERROR result (from any source) → STAGING preserved, fail_snapshot NOT called."""
+    from services.ext132_hazardous_material.sync import SyncResult, SyncStatus
+
+    bootstrap = _load_bootstrap("tools/ext132/bootstrap.py")
+
+    fake_sync = SyncResult(
+        status=SyncStatus.FAILED,
+        fetched=0,
+        items=[],
+        error_code="SAVE_ERROR",
+        error_message="page 1 save failed: ConnectionError",
+    )
+
+    mock_store = MagicMock()
+    mock_claim = MagicMock()
+    mock_claim.claimed = True
+    mock_claim.lease_until = "2099-01-01T00:00:00Z"
+    mock_store.claim_run.return_value = mock_claim
+
+    fail_mock = MagicMock()
+
+    with (
+        patch("services.public_data_sync.runtime_store.PublicDataRuntimeStore", return_value=mock_store),
+        patch("services.public_data_sync.registry.registry.get", return_value=MagicMock()),
+        patch("services.ext132_hazardous_material.store.create_staging_snapshot", return_value="snap-q06"),
+        patch("services.ext132_hazardous_material.sync.collect_all", return_value=fake_sync),
+        patch("services.ext132_hazardous_material.store.fail_snapshot", fail_mock),
+    ):
+        rc = bootstrap.cmd_bootstrap()
+
+    assert rc == 1
+    fail_mock.assert_not_called()

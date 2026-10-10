@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 # PATCH-C: EXT-132 정상 resultCode — "0"(JSON 실측) + "00"(XML 문서 기준)
 _EXT132_OK_CODES: frozenset[str] = frozenset({"0", "00"})
+# TRACK-A: API 속도제한 코드 — PARTIAL/RATE_LIMITED (STAGING 보존)
+_EXT132_RATE_LIMIT_CODES: frozenset[str] = frozenset({"22", "23"})
 
 
 class SyncStatus(str, Enum):
@@ -85,7 +87,7 @@ def collect_all(
         request_budget = 10
     budget = _make_budget(request_budget)
 
-    from services.ext132_hazardous_material.client import fetch_page
+    from services.ext132_hazardous_material.client import fetch_page, RateLimitError
     items: list[Ext132Item] = []
     pages_fetched = 0
 
@@ -109,6 +111,16 @@ def collect_all(
 
         try:
             raw = fetch_page(page_no, num_of_rows=num_of_rows, timeout=timeout_seconds)
+        except RateLimitError:
+            logger.warning("ext132 rate limit page_no=%d — PARTIAL/RATE_LIMITED", page_no)
+            return SyncResult(
+                status=SyncStatus.PARTIAL,
+                fetched=len(items),
+                items=items,
+                pages_fetched=pages_fetched,
+                budget_used=budget.used,
+                error_code="RATE_LIMITED",
+            )
         except Exception as exc:
             logger.error("ext132 fetch_page failed page_no=%d %s", page_no, type(exc).__name__)
             return SyncResult(
@@ -137,6 +149,20 @@ def collect_all(
 
         # PATCH-002-05 / PATCH-C: EXT-132 정상 코드 = "0" 또는 "00"
         if page.result_code is not None and page.result_code not in _EXT132_OK_CODES:
+            if page.result_code in _EXT132_RATE_LIMIT_CODES:
+                logger.warning(
+                    "ext132 API rate limit code page_no=%d result_code=%s — PARTIAL/RATE_LIMITED",
+                    page_no, page.result_code,
+                )
+                return SyncResult(
+                    status=SyncStatus.PARTIAL,
+                    fetched=len(items),
+                    items=items,
+                    pages_fetched=pages_fetched,
+                    budget_used=budget.used,
+                    error_code="RATE_LIMITED",
+                    error_message=f"resultCode={page.result_code}",
+                )
             logger.error(
                 "ext132 API error response page_no=%d result_code=%s result_msg=%s",
                 page_no, page.result_code, page.result_msg,
