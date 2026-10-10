@@ -16,9 +16,9 @@ correction_date: 2026-10-10
 | 판정 | 건수 | 비고 |
 |------|------|------|
 | REUSE_EXISTING | 25 | |
-| REUSE_CONDITIONAL | 2 | B14-EVIDENCE-CORRECTION-002 정정 |
+| REUSE_CONDITIONAL | 0 | B17-REUSE-CONDITIONAL-RESOLUTION-001 전환 |
 | NEW_BUILD_REQUIRED | 7 | |
-| SHARED_TEMPLATE_DISTINCT | 1 | |
+| SHARED_TEMPLATE_DISTINCT | 3 | B17: PRA-22-04·REF-C025 추가 |
 | NON_FORM_REFERENCE | 5 | |
 | LEGAL_OR_RIGHTS_REVIEW | 2 | |
 | **합계** | **42** | |
@@ -61,14 +61,16 @@ correction_date: 2026-10-10
 
 ---
 
-## A2. REUSE_CONDITIONAL (2건) — B14-EVIDENCE-CORRECTION-002 정정
+## A2. ~~REUSE_CONDITIONAL (2건)~~ → SHARED_TEMPLATE_DISTINCT 전환 완료 (B17)
 
-기존 REUSE_EXISTING에서 변경. 동일 업무 목적이나 서식 구조 차이 또는 레거시 상태로 인해 대체 가능성 확인 필요.
+B14-EVIDENCE-CORRECTION-002에서 REUSE_CONDITIONAL로 설정. B17-REUSE-CONDITIONAL-RESOLUTION-001에서 SHARED_TEMPLATE_DISTINCT로 최종 전환.
 
-| research_id | source_title | 재사용 후보 | 판정 근거 | 전환 조건 |
-|-------------|-------------|-----------|---------|---------|
-| PRA-22-04 | 화학물질 파손·누출품 격리 및 재고조정 승인서 | CHW-04 | CHW-04는 격리·처리 기록(REGISTER); PRA-22-04는 재고조정 승인서(FORM). 승인 서명 구조 상이 | CHW-04 승인란으로 재고조정 승인 요건 충족 확인 시 REUSE_EXISTING 전환 / 불충분 시 NEW_BUILD_REQUIRED |
-| REF-C025 | 위험작업 허가서 | REF-C012 | REF-C012는 LEGACY_OUTPUT_ONLY — _v1.json 없음, common-v1 미전환. 동일 목적(작업허가서)이나 REF-C012 유지보수 불가 | REF-C012 활용 지속 확인 시 REUSE_EXISTING 유지 / REF-C012 미사용 확정 시 NEW_BUILD_REQUIRED 전환 |
+| research_id | source_title | 재사용 후보 | 전환 전 판정 | 최종 판정 | 전환 사유 |
+|-------------|-------------|-----------|------------|---------|---------|
+| PRA-22-04 | 화학물질 파손·누출품 격리 및 재고조정 승인서 | CHW-04 | REUSE_CONDITIONAL | **SHARED_TEMPLATE_DISTINCT** | CHW-04에 approval 섹션 없음. 재고조정 승인자·승인내용·결재란 모두 MISSING. |
+| REF-C025 | 위험작업 허가서 | REF-C012 | REUSE_CONDITIONAL | **SHARED_TEMPLATE_DISTINCT** | 위험작업유형구분·사전위험확인·격리방호·종료확인 MISSING. 단, REF-C012 생성기는 common_v1_engine 호출 확인(B14 메모의 미전환 기술 부정확). |
+
+이 섹션의 판정 이력은 삭제하지 않고 정정 기록으로 보존한다.
 
 ---
 
@@ -88,13 +90,15 @@ correction_date: 2026-10-10
 
 ---
 
-## C. SHARED_TEMPLATE_DISTINCT (1건)
+## C. SHARED_TEMPLATE_DISTINCT (3건)
 
-기존 템플릿과 연관되나 실무 트리거·기록 구조가 달라 별도 구성 필요. B15 제작 대상.
+기존 템플릿과 연관되나 실무 트리거·기록 구조가 달라 별도 구성 필요.
 
 | research_id | source_title | 유형 | 관련 기존 서식 | 차이점 |
 |-------------|-------------|------|--------------|--------|
-| PRA-22-10 | 안전관리 미종결과제 주간 인수인계표 | RECORD | GOV-09 | GOV-09는 CAPA 체계관리 목적; PRA-22-10은 주간 미종결과제 인수인계 트리거 상이 |
+| PRA-22-10 | 안전관리 미종결과제 주간 인수인계표 | RECORD | GOV-09 | GOV-09는 CAPA 체계관리 목적; PRA-22-10은 주간 미종결과제 인수인계 트리거 상이 — B15 제작 완료 |
+| PRA-22-04 | 화학물질 파손·누출품 격리 및 재고조정 승인서 | FORM | CHW-04 | CHW-04는 격리·처리 REGISTER; 재고조정 승인자·결재란 없음. 공통 엔진 재사용하되 별도 approval 구조 필요 — 미제작 |
+| REF-C025 | 위험작업 허가서 | FORM | REF-C012 | REF-C012 구조·엔진 공유 가능하나 위험작업유형구분·사전위험확인·격리방호·종료확인 입력란 추가 필요 — 미제작 |
 
 ---
 
