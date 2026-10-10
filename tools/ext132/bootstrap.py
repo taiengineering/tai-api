@@ -197,9 +197,10 @@ def cmd_bootstrap() -> int:
         result = collect_all(on_page_complete=_on_page)
         print(f"  status={result.status.value} fetched={result.fetched} pages={result.pages_fetched}")
 
-        # PATCH-003: PARTIAL/FENCED → preserve STAGING snapshot for resume (no fail_snapshot)
+        # PATCH-003: PARTIAL/FENCED/SAVE_ERROR → preserve STAGING snapshot for resume (no fail_snapshot)
+        # SAVE_ERROR = transient RPC failure; checkpoint is accurate, page can be re-fetched (idempotent).
         if result.status == SyncStatus.PARTIAL or (
-            result.status == SyncStatus.FAILED and result.error_code == "FENCED"
+            result.status == SyncStatus.FAILED and result.error_code in ("FENCED", "SAVE_ERROR")
         ):
             print(f"PARTIAL: collection incomplete ({result.error_code}) — snapshot preserved for resume")
             return 1
@@ -293,9 +294,10 @@ def cmd_resume() -> int:
         )
         print(f"  status={result.status.value} fetched={result.fetched} pages={result.pages_fetched}")
 
-        # PATCH-003: PARTIAL/FENCED → preserve STAGING snapshot for resume (no fail_snapshot)
+        # PATCH-003: PARTIAL/FENCED/SAVE_ERROR → preserve STAGING snapshot for resume (no fail_snapshot)
+        # SAVE_ERROR = transient RPC failure; checkpoint is accurate, page can be re-fetched (idempotent).
         if result.status == SyncStatus.PARTIAL or (
-            result.status == SyncStatus.FAILED and result.error_code == "FENCED"
+            result.status == SyncStatus.FAILED and result.error_code in ("FENCED", "SAVE_ERROR")
         ):
             print(f"PARTIAL: collection incomplete ({result.error_code}) — snapshot preserved for resume")
             return 1
