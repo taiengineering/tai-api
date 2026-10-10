@@ -1,0 +1,25 @@
+-- =============================================================================
+-- Migration: 20261011120001_reference_forms_storage.sql
+-- NOTE: Supabase Storage only. Not applied in isolated PostgreSQL tests.
+-- Apply separately in Supabase project after REF-08 QA authorization.
+-- =============================================================================
+
+-- -- INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+-- -- VALUES
+-- --   (
+-- --     'reference-form-files',
+-- --     'reference-form-files',
+-- --     false,
+-- --     52428800,  -- 50 MB
+-- --     ARRAY['application/pdf','application/msword',
+-- --           'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+-- --           'image/png','image/jpeg','image/webp']
+-- --   ),
+-- --   (
+-- --     'reference-form-previews',
+-- --     'reference-form-previews',
+-- --     false,
+-- --     10485760,  -- 10 MB
+-- --     ARRAY['image/png','image/jpeg','image/webp','application/pdf']
+-- --   )
+-- -- ON CONFLICT (id) DO NOTHING;
