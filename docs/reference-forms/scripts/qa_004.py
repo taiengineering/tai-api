@@ -578,4 +578,25 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    qa_matrix, sha_ok, sha_fail, frozen_ok, frozen_fail, py_sha, cjs_sha = main()
+
+    failures = []
+    if sha_fail:
+        failures.append(f"B8_SHA_FAIL={len(sha_fail)}")
+    if frozen_fail:
+        failures.append(f"FROZEN_SHA_FAIL={len(frozen_fail)}")
+    if py_sha != "be4899dad868d4336756ce61134546748ac2b0f5f4eb4dbbf7488e795d3f2aba":
+        failures.append("ENGINE_PY_SHA_MISMATCH")
+    if cjs_sha != "375250c74ef1e22786526c1fa2446d989bbed95e8e513e85deeccc3bfb727925":
+        failures.append("ENGINE_CJS_SHA_MISMATCH")
+    for row in qa_matrix:
+        for check in ("A_PDF", "B_DOCX_BLANK", "C_ROUNDTRIP"):
+            if row[check]["status"] == "HOLD":
+                failures.append(f"{row['form']}_{check}_HOLD")
+
+    if failures:
+        print(f"\nQA GATE FAIL: {', '.join(failures)}")
+        sys.exit(1)
+    else:
+        print("\nQA GATE PASS: all checks passed")
+        sys.exit(0)
