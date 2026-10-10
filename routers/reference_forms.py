@@ -29,6 +29,7 @@ import re
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
+from supabase import Client
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
@@ -174,13 +175,12 @@ def _find_qa_file(view_row: dict, file_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/{slug}")
-def get_reference_form(slug: str):
+def get_reference_form(slug: str, sb: Client = Depends(get_supabase)):
     """
     Public detail.
     Gates: PUBLISHED, content hash approved, all active sources CLEARED.
     Never exposes storage paths, approval IDs, or internal file_ref.
     """
-    sb = get_supabase()
     view_row = _load_view_row(sb, slug)
     form_id = str(view_row["id"])
 
@@ -209,13 +209,12 @@ def get_reference_form(slug: str):
 # ---------------------------------------------------------------------------
 
 @router.get("/{slug}/preview/{file_id}")
-def get_reference_form_preview(slug: str, file_id: str):
+def get_reference_form_preview(slug: str, file_id: str, sb: Client = Depends(get_supabase)):
     """
     Anonymous preview.
     Gates: form PUBLISHED+CLEARED, file QA_PASS, preview is_published+QA_PASS+SHA match.
     Proxied from reference-forms-preview bucket; no-store.
     """
-    sb = get_supabase()
     view_row = _load_view_row(sb, slug)
     form_id = str(view_row["id"])
     _check_sources_cleared(sb, form_id)
@@ -311,6 +310,7 @@ def get_reference_form_preview(slug: str, file_id: str):
 def download_reference_form_file(
     slug: str,
     file_id: str,
+    sb: Client = Depends(get_supabase),
     user: dict = Depends(get_current_user),
 ):
     """
@@ -319,7 +319,6 @@ def download_reference_form_file(
     20 MB limit; server proxy from reference-forms bucket; no-store.
     Storage path (file_ref) never returned to caller.
     """
-    sb = get_supabase()
     view_row = _load_view_row(sb, slug)
     form_id = str(view_row["id"])
     _check_sources_cleared(sb, form_id)
