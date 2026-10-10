@@ -153,6 +153,21 @@ REGISTRY = {
     "gov-11": _reg("gov-11"), "p-26": _reg("p-26"), "rp-16": _reg("rp-16"),
     # EVALUATION (1)
     "gov-05": _reg("gov-05"),
+    # B13 batch targets (GPT_REVIEW_REQUIRED — WO-REF01-060-B13-BULK-BUILD-001):
+    # CHECKLIST (9)
+    "h2-01":  _reg("h2-01"),  "haz-01": _reg("haz-01"), "lpg-01": _reg("lpg-01"),
+    "rp-15":  _reg("rp-15"),  "c038":   _reg("c038"),   "c046":   _reg("c046"),
+    "c052":   _reg("c052"),   "c057":   _reg("c057"),   "c058":   _reg("c058"),
+    # RECORD (4)
+    "h2-02":  _reg("h2-02"),  "mnt-03": _reg("mnt-03"), "c047":   _reg("c047"),
+    "c053":   _reg("c053"),
+    # PLAN (1)
+    "p-22":   _reg("p-22"),
+    # REGISTER (5)
+    "c056":   _reg("c056"),   "c069":   _reg("c069"),   "c070":   _reg("c070"),
+    "c071":   _reg("c071"),   "c073":   _reg("c073"),
+    # EVALUATION (1)
+    "c065":   _reg("c065"),
 }
 
 # Outputs that are regression-frozen. --build is permanently blocked.
@@ -189,6 +204,12 @@ BUILD_APPROVED_IDS = frozenset({          # WO-REF01-060-B8-WAVE2-BUILD-003
     "lab-03", "p-05", "p-17", "p-23", "rp-05", "rp-09", "rp-12", "rp-23",
     "gov-11", "p-26", "rp-16",
     "gov-05",
+    # B13 — WO-REF01-060-B13-BULK-BUILD-001 (GPT DRY-RUN PASS 20/20):
+    "h2-01", "haz-01", "lpg-01", "rp-15", "c038", "c046", "c052", "c057", "c058",
+    "h2-02", "mnt-03", "c047", "c053",
+    "p-22",
+    "c056", "c069", "c070", "c071", "c073",
+    "c065",
 })
 
 # SHA256 of regression-frozen output files (full hex). Used by --verify-only.
