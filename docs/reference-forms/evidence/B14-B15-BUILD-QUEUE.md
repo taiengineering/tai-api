@@ -1,16 +1,21 @@
 ---
 wo: WO-REF01-060-B14-INVENTORY-RECONCILIATION-001
 date: 2026-10-10
-status: COMPLETE
+status: EVIDENCE_CORRECTED
 base_head: 3834c2d45e3b1f147a3ae3b1fa2b21d2613a0ace
 b15_ready_count: 8
+correction_wo: WO-REF01-060-B14-EVIDENCE-CORRECTION-002
+correction_date: 2026-10-10
 ---
 
 # B15 제작 큐 — 8건
 
 B14 중복 판정 결과 NEW_BUILD_REQUIRED(7) + SHARED_TEMPLATE_DISTINCT(1) 확정.
 
-모든 항목은 기존 조사자료만으로 제작 가능하며, 법적 효력·공식 원본 복제 문제 없음.
+**B14-EVIDENCE-CORRECTION-002 정정 사항:**
+- 7건(PRA-22-02/06/08/09/10, REF-C022/C023)의 제안 필드는 B14 TAI 신규 초안(B14_TAI_NEW_PROPOSAL). 기존 DB proposed_fields=[] 확인됨.
+- REF-C067의 제안 필드는 Supabase proposed_fields 6개 존재, 단 FIELDS_UNVERIFIED.
+- 법적 효력·공식 원본 복제 문제 없음은 유지.
 
 ---
 
@@ -106,17 +111,22 @@ B14 중복 판정 결과 NEW_BUILD_REQUIRED(7) + SHARED_TEMPLATE_DISTINCT(1) 확
 
 ---
 
-## B15_READY 기준 확인
+## B15_READY 기준 확인 — 정정본
 
-| research_id | 조사자료 입력항목 | 목적 명확 | engine 제작 가능 | 기존 중복 없음 | 법적 문제 없음 | B15_READY |
-|-------------|----------------|----------|----------------|--------------|--------------|-----------|
-| PRA-22-02 | YES | YES | YES | YES | YES | YES |
-| PRA-22-06 | YES | YES | YES | YES | YES | YES |
-| PRA-22-08 | YES | YES | YES | YES | YES | YES |
-| PRA-22-09 | YES | YES | YES | YES | YES | YES |
-| REF-C022  | YES | YES | YES | YES | YES | YES |
-| REF-C023  | YES | YES | YES | YES | YES | YES |
-| REF-C067  | YES | YES | YES | YES | YES | YES |
-| PRA-22-10 | YES | YES | YES | YES | YES | YES |
+| research_id | SOURCE_PROPOSED_FIELDS_PRESENT | FIELD_DESIGN_ORIGIN | FIELD_DESIGN_STATUS | 목적 명확 | engine 제작 가능 | 기존 중복 없음 | 법적 문제 없음 | B15_BUILD_ELIGIBILITY |
+|-------------|-------------------------------|---------------------|---------------------|----------|----------------|--------------|--------------|----------------------|
+| PRA-22-02 | NO (proposed_fields=[]) | B14_TAI_NEW_PROPOSAL | REVIEW_REQUIRED | YES | YES | YES | YES | CONDITIONAL |
+| PRA-22-06 | NO (proposed_fields=[]) | B14_TAI_NEW_PROPOSAL | REVIEW_REQUIRED | YES | YES | YES | YES | CONDITIONAL |
+| PRA-22-08 | NO (proposed_fields=[]) | B14_TAI_NEW_PROPOSAL | REVIEW_REQUIRED | YES | YES | YES | YES | CONDITIONAL |
+| PRA-22-09 | NO (proposed_fields=[]) | B14_TAI_NEW_PROPOSAL | REVIEW_REQUIRED | YES | YES | YES | YES | CONDITIONAL |
+| REF-C022  | NO (proposed_fields=[]) | B14_TAI_NEW_PROPOSAL | REVIEW_REQUIRED | YES | YES | YES | YES | CONDITIONAL |
+| REF-C023  | NO (proposed_fields=[]) | B14_TAI_NEW_PROPOSAL | REVIEW_REQUIRED | YES | YES | YES | YES | CONDITIONAL |
+| REF-C067  | YES (6 fields, DB confirmed) | EXISTING_RESEARCH_PROPOSAL | FIELDS_UNVERIFIED | YES | YES | YES | YES | CONFIRMED |
+| PRA-22-10 | NO (proposed_fields=[]) | B14_TAI_NEW_PROPOSAL | REVIEW_REQUIRED | YES | YES | YES | YES | CONDITIONAL |
 
-B15_READY_COUNT = 8
+**판정 요약:**
+- B15_BUILD_ELIGIBILITY = CONFIRMED: 1건 (REF-C067) — DB에 기존 proposed_fields 존재
+- B15_BUILD_ELIGIBILITY = CONDITIONAL: 7건 — B14 TAI 신규 초안 필드, GPT 필드 검토 후 확정 필요
+- CONDITIONAL 서식의 필드 초안은 TAI_PRACTICAL_PROPOSAL로 제작 가능하나, 제작 시 `field_required_freeze: LEGAL_REVIEW_PENDING` 명시 필수
+
+B15_READY_COUNT = 8 (CONFIRMED=1, CONDITIONAL=7)

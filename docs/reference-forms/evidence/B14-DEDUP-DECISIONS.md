@@ -1,8 +1,10 @@
 ---
 wo: WO-REF01-060-B14-INVENTORY-RECONCILIATION-001
 date: 2026-10-10
-status: COMPLETE
+status: EVIDENCE_CORRECTED
 base_head: 3834c2d45e3b1f147a3ae3b1fa2b21d2613a0ace
+correction_wo: WO-REF01-060-B14-EVIDENCE-CORRECTION-002
+correction_date: 2026-10-10
 ---
 
 # B14 중복 판정 결과 — 42건 미제작 독립후보
@@ -11,18 +13,19 @@ base_head: 3834c2d45e3b1f147a3ae3b1fa2b21d2613a0ace
 
 ## 요약
 
-| 판정 | 건수 |
-|------|------|
-| REUSE_EXISTING | 27 |
-| NEW_BUILD_REQUIRED | 7 |
-| SHARED_TEMPLATE_DISTINCT | 1 |
-| NON_FORM_REFERENCE | 5 |
-| LEGAL_OR_RIGHTS_REVIEW | 2 |
-| **합계** | **42** |
+| 판정 | 건수 | 비고 |
+|------|------|------|
+| REUSE_EXISTING | 25 | |
+| REUSE_CONDITIONAL | 2 | B14-EVIDENCE-CORRECTION-002 정정 |
+| NEW_BUILD_REQUIRED | 7 | |
+| SHARED_TEMPLATE_DISTINCT | 1 | |
+| NON_FORM_REFERENCE | 5 | |
+| LEGAL_OR_RIGHTS_REVIEW | 2 | |
+| **합계** | **42** | |
 
 ---
 
-## A. REUSE_EXISTING (27건)
+## A. REUSE_EXISTING (25건)
 
 기존 서식으로 동일 업무 수행 가능. 신규 PDF/DOCX 제작 안 함.
 
@@ -35,14 +38,14 @@ base_head: 3834c2d45e3b1f147a3ae3b1fa2b21d2613a0ace
 | MNT-05 | 정비 중 에너지격리·복귀 확인표 | RP-03 | 에너지격리 확인표 동일 |
 | PRA-22-01 | 화학물질 입고예정·검수 대조표 | CHW-01 | 화학물질 입고 검수기록 동일 |
 | PRA-22-03 | 화학물질 출고검수·인계서 | CHW-02 | 화학물질 출고·불출 기록 동일 |
-| PRA-22-04 | 화학물질 파손·누출품 격리 및 재고조정 승인서 | CHW-04 | 이상품 격리·처리 기록 동일 |
+~~| PRA-22-04 | 화학물질 파손·누출품 격리 및 재고조정 승인서 | CHW-04 | 이상품 격리·처리 기록 동일 |~~ → **REUSE_CONDITIONAL** (섹션 A2 참조)
 | PRA-22-05 | 화학물질 재고실사 차이조사 및 조정대장 | CHW-03 | 재고실사·차이 조정 동일 |
 | PRA-22-07 | 시설 외주업체 점검·정비 완료확인서 | RP-10 | 외주업체 작업방문·완료확인 동일 |
 | REF-C006 | 위험성평가표(빈도강도법) | REF-C029 | 빈도·강도법 위험성평가표 동일 (PROVISIONAL 상태 유지) |
 | REF-C020 | 지게차 안전작업 계획서 | EQUIP-01 | 지게차 작업계획서 동일 |
 | REF-C021 | 지게차 정기점검표 | EQUIP-06 | 지게차 안전점검표 동일 |
 | REF-C024 | 안전보건교육일지 서식(엑셀, 한글) | REF-C031 | 안전보건교육 실시일지 동일 |
-| REF-C025 | 위험작업 허가서 | REF-C012 | 작업허가서 기능 동일 (REF-C012 LEGACY 출력물 커버) |
+~~| REF-C025 | 위험작업 허가서 | REF-C012 | 작업허가서 기능 동일 (REF-C012 LEGACY 출력물 커버) |~~ → **REUSE_CONDITIONAL** (섹션 A2 참조)
 | REF-C030 | 연간 안전보건교육 계획서 | REF-C016 | 연간 안전보건교육 계획서 동일 |
 | REF-C032 | 수급업체 안전보건 수준 평가표 | REF-C011 | 도급업체 안전보건 수준 평가 동일 |
 | REF-C035 | 사고조사 보고서 | REF-C013 | 사고조사 보고서 동일 |
@@ -55,6 +58,17 @@ base_head: 3834c2d45e3b1f147a3ae3b1fa2b21d2613a0ace
 | RP-19 | 화학물질 출고·불출 관리대장 | CHW-02 | 화학물질 출고·불출 관리 동일 |
 | RP-20 | 화학물질 재고 실사·차이 조정표 | CHW-03 | 화학물질 재고실사·차이 조정 동일 |
 | RP-21 | 화학물질 보관구역 이상·격리 관리대장 | CHW-04 | 화학물질 보관구역 이상·격리 관리 동일 |
+
+---
+
+## A2. REUSE_CONDITIONAL (2건) — B14-EVIDENCE-CORRECTION-002 정정
+
+기존 REUSE_EXISTING에서 변경. 동일 업무 목적이나 서식 구조 차이 또는 레거시 상태로 인해 대체 가능성 확인 필요.
+
+| research_id | source_title | 재사용 후보 | 판정 근거 | 전환 조건 |
+|-------------|-------------|-----------|---------|---------|
+| PRA-22-04 | 화학물질 파손·누출품 격리 및 재고조정 승인서 | CHW-04 | CHW-04는 격리·처리 기록(REGISTER); PRA-22-04는 재고조정 승인서(FORM). 승인 서명 구조 상이 | CHW-04 승인란으로 재고조정 승인 요건 충족 확인 시 REUSE_EXISTING 전환 / 불충분 시 NEW_BUILD_REQUIRED |
+| REF-C025 | 위험작업 허가서 | REF-C012 | REF-C012는 LEGACY_OUTPUT_ONLY — _v1.json 없음, common-v1 미전환. 동일 목적(작업허가서)이나 REF-C012 유지보수 불가 | REF-C012 활용 지속 확인 시 REUSE_EXISTING 유지 / REF-C012 미사용 확정 시 NEW_BUILD_REQUIRED 전환 |
 
 ---
 
