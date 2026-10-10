@@ -2291,3 +2291,105 @@ def test_i08_sql_ext132_fail_snapshot_rpc_defined():
     assert "for update" in fn_body.lower(), "Expected FOR UPDATE lock in fn_ext132_fail_snapshot"
     assert "p_run_id" in fn_body, "Expected p_run_id ownership parameter"
     assert "p_error_message" in fn_body, "Expected p_error_message parameter"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# J-group: REVIEW-REPAIR-002 — fail_snapshot Run RUNNING/Lease 검증 SQL 문자열 테스트
+# SQL_INTEGRATION=UNVERIFIED — 실제 PostgreSQL 동시성 미검증
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_fail_snapshot_fn_body(migration_glob: str, fn_name: str) -> str:
+    """SQL draft에서 fn_name 함수 본문 추출."""
+    import pathlib
+    drafts = list(pathlib.Path("supabase/migrations").glob(migration_glob))
+    assert drafts, f"No migration draft found matching {migration_glob}"
+    content = drafts[0].read_text()
+    fn_start = content.find(f"create or replace function {fn_name}")
+    assert fn_start >= 0, f"{fn_name} not found in migration draft"
+    # 함수 종료 $$ 이후 최대 3000자
+    return content[fn_start:fn_start + 3000]
+
+
+def test_j01_sql_ext132_fail_snapshot_run_exists_check():
+    """REPAIR-002: fn_ext132_fail_snapshot must query public_data_sync_runs for run existence."""
+    body = _get_fail_snapshot_fn_body("*ext132*", "fn_ext132_fail_snapshot")
+    assert "public_data_sync_runs" in body, \
+        "Expected query to public_data_sync_runs for run existence check"
+
+
+def test_j02_sql_ext132_fail_snapshot_running_status_check():
+    """REPAIR-002: fn_ext132_fail_snapshot must verify run status = RUNNING before marking FAILED."""
+    body = _get_fail_snapshot_fn_body("*ext132*", "fn_ext132_fail_snapshot")
+    assert "'RUNNING'" in body or "= 'RUNNING'" in body.replace(" ", ""), \
+        "Expected RUNNING status check in fn_ext132_fail_snapshot"
+
+
+def test_j03_sql_ext132_fail_snapshot_lease_check():
+    """REPAIR-002: fn_ext132_fail_snapshot must verify lease_until using clock_timestamp()."""
+    body = _get_fail_snapshot_fn_body("*ext132*", "fn_ext132_fail_snapshot")
+    assert "lease_until" in body, "Expected lease_until variable in fn_ext132_fail_snapshot"
+    assert "clock_timestamp()" in body, \
+        "Expected clock_timestamp() (not now()) for lease check — guards against lock-wait time"
+
+
+def test_j04_sql_ext165_fail_snapshot_run_exists_check():
+    """REPAIR-002: fn_ext165_fail_snapshot must query public_data_sync_runs for run existence."""
+    body = _get_fail_snapshot_fn_body("*ext165*", "fn_ext165_fail_snapshot")
+    assert "public_data_sync_runs" in body, \
+        "Expected query to public_data_sync_runs for run existence check"
+
+
+def test_j05_sql_ext165_fail_snapshot_running_status_check():
+    """REPAIR-002: fn_ext165_fail_snapshot must verify run status = RUNNING before marking FAILED."""
+    body = _get_fail_snapshot_fn_body("*ext165*", "fn_ext165_fail_snapshot")
+    assert "'RUNNING'" in body or "= 'RUNNING'" in body.replace(" ", ""), \
+        "Expected RUNNING status check in fn_ext165_fail_snapshot"
+
+
+def test_j06_sql_ext165_fail_snapshot_lease_check():
+    """REPAIR-002: fn_ext165_fail_snapshot must verify lease_until using clock_timestamp()."""
+    body = _get_fail_snapshot_fn_body("*ext165*", "fn_ext165_fail_snapshot")
+    assert "lease_until" in body, "Expected lease_until variable in fn_ext165_fail_snapshot"
+    assert "clock_timestamp()" in body, \
+        "Expected clock_timestamp() (not now()) for lease check"
+
+
+def test_j07_sql_ext132_fail_snapshot_lock_order_preserved():
+    """REPAIR-002: runtime FOR UPDATE must precede snapshot FOR UPDATE in fn_ext132_fail_snapshot."""
+    body = _get_fail_snapshot_fn_body("*ext132*", "fn_ext132_fail_snapshot")
+    runtime_pos = body.find("public_data_source_runtime")
+    snap_pos = body.find("ext132_hazardous_material_snapshots\n    where id = p_snapshot_id\n    for update")
+    assert runtime_pos >= 0, "Expected public_data_source_runtime lock"
+    assert snap_pos >= 0, "Expected snapshot FOR UPDATE lock"
+    assert runtime_pos < snap_pos, \
+        "runtime FOR UPDATE must come before snapshot FOR UPDATE (deadlock prevention)"
+
+
+def test_j08_sql_ext165_fail_snapshot_lock_order_preserved():
+    """REPAIR-002: runtime FOR UPDATE must precede snapshot FOR UPDATE in fn_ext165_fail_snapshot."""
+    body = _get_fail_snapshot_fn_body("*ext165*", "fn_ext165_fail_snapshot")
+    runtime_pos = body.find("public_data_source_runtime")
+    snap_pos = body.find("ext165_chemical_accident_snapshots\n    where id = p_snapshot_id\n    for update")
+    assert runtime_pos >= 0, "Expected public_data_source_runtime lock"
+    assert snap_pos >= 0, "Expected snapshot FOR UPDATE lock"
+    assert runtime_pos < snap_pos, \
+        "runtime FOR UPDATE must come before snapshot FOR UPDATE (deadlock prevention)"
+
+
+def test_j09_sql_ext132_fail_snapshot_run_not_found_returns_false():
+    """REPAIR-002: fn_ext132_fail_snapshot must return false when run row not found (not exception)."""
+    body = _get_fail_snapshot_fn_body("*ext132*", "fn_ext132_fail_snapshot")
+    # After querying public_data_sync_runs, must have 'not found' guard
+    runs_pos = body.find("public_data_sync_runs")
+    post_runs = body[runs_pos:runs_pos + 500]
+    assert "not found" in post_runs, \
+        "Expected 'if not found then return false' after public_data_sync_runs query"
+
+
+def test_j10_sql_ext165_fail_snapshot_run_not_found_returns_false():
+    """REPAIR-002: fn_ext165_fail_snapshot must return false when run row not found."""
+    body = _get_fail_snapshot_fn_body("*ext165*", "fn_ext165_fail_snapshot")
+    runs_pos = body.find("public_data_sync_runs")
+    post_runs = body[runs_pos:runs_pos + 500]
+    assert "not found" in post_runs, \
+        "Expected 'if not found then return false' after public_data_sync_runs query"

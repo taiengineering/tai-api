@@ -277,8 +277,8 @@ comment on function fn_ext132_complete_snapshot is
     'GAP-D/R3-03/PATCH-04/PATCH-002-02/04/PATCH-003-01/02/REPAIR-B: EXT-132 스냅샷 원자적 완결. runtime FOR UPDATE → snapshot FOR UPDATE + STAGING 검증 → checkpoint_api_total NULL 차단(REPAIR-B) → count 검증 → is_current 해제(STEP1) → COMPLETED 승격(STEP2). PROMOTE_FAILED 예외로 롤백 보장.';
 
 -- ============================================================
--- REPAIR-A: fn_ext132_fail_snapshot — Run 소유권 검증 + STAGING guard 원자적 실패 마킹
--- lock 순서: runtime FOR UPDATE → snapshot FOR UPDATE (deadlock 방지)
+-- REPAIR-A/002: fn_ext132_fail_snapshot — Run 소유권 + RUNNING/Lease 검증 + STAGING guard
+-- lock 순서: runtime FOR UPDATE → (Run 검증) → snapshot FOR UPDATE (deadlock 방지)
 -- ============================================================
 create or replace function fn_ext132_fail_snapshot(
     p_snapshot_id   uuid,
@@ -291,6 +291,8 @@ as $$
 declare
     v_source_id     text;
     v_current_run   uuid;
+    v_run_status    text;
+    v_lease_until   timestamptz;
     v_snap_status   text;
 begin
     -- source_id 조회 (잠금 전)
@@ -310,6 +312,24 @@ begin
 
     if v_current_run is null or v_current_run::text != p_run_id::text then
         return false;  -- 소유권 없음
+    end if;
+
+    -- REPAIR-002: Run 존재·RUNNING 상태·Lease 유효성 검증
+    -- clock_timestamp() 사용: 잠금 대기 중 경과 시간 반영 (now()는 트랜잭션 시작 시각)
+    select status, lease_until into v_run_status, v_lease_until
+    from public_data_sync_runs
+    where id = p_run_id;
+
+    if not found then
+        return false;  -- Run 행 없음
+    end if;
+
+    if v_run_status != 'RUNNING' then
+        return false;  -- Run이 RUNNING 상태 아님 (FAILED/COMPLETED 등)
+    end if;
+
+    if v_lease_until <= clock_timestamp() then
+        return false;  -- Lease 만료 (잠금 대기 중 경과 포함)
     end if;
 
     -- lock 순서 2: snapshot FOR UPDATE SECOND
@@ -334,7 +354,7 @@ end;
 $$;
 
 comment on function fn_ext132_fail_snapshot is
-    'REPAIR-A: EXT-132 스냅샷 실패 마킹. runtime FOR UPDATE → snapshot FOR UPDATE 순서. 소유권 불일치·STAGING 아닌 경우 false 반환(예외 없음).';
+    'REPAIR-A/002: EXT-132 스냅샷 실패 마킹. runtime FOR UPDATE → Run RUNNING/Lease 검증(REPAIR-002) → snapshot FOR UPDATE + STAGING 검증. 모든 조건 미충족 시 false 반환(예외 없음).';
 
 -- ============================================================
 -- R3-01: public_data_source_runtime seed 행 (is_enabled=false)
