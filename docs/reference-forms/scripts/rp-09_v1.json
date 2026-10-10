@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
     "form_type": "RECORD",
     "source_id": "RP-09",
     "schema_version": "common-v1",
@@ -12,17 +12,17 @@
     "publication_status": "INTERNAL_POC_ONLY",
     "source_evidence": "TAI_PROPOSED",
     "source_document_access": "NOT_CHECKED",
-    "workflow_family": "설비 윤활 관리",
-    "work_trigger": "설비 윤활유·오일 교체 기록 시",
+    "workflow_family": "시설 운영관리",
+    "work_trigger": "시설관리 일일 운영 현황 기록 시",
     "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 설비 윤활유·오일 교체 이력 기록 대장.",
-    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+    "design_gate_notes": "TAI 독자 초안. 시설관리 일일 설비/구역 상태·경보이력·조치사항 운영일지 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
   },
   "document": {
-    "title": "설비 윤활·오일 교체 기록부",
+    "title": "시설관리 일일 운영일지",
     "doc_id": "TAI-FORM-RP-09-v0.1",
     "version": "0.1-DRAFT",
     "subject": "산업안전보건 실무서식",
@@ -34,25 +34,25 @@
     {
       "type": "basic_info",
       "id": "S01",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 설비 기본정보.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
       "fields": [
         { "id": "F01", "label": "사업장명" },
-        { "id": "F02", "label": "설비명/번호" },
+        { "id": "F02", "label": "날짜" },
         { "id": "F03", "label": "담당자" }
       ]
     },
     {
       "type": "repeat_table",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 윤활·오일 교체 이력 반복 기록표.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 설비/구역별 상태·경보이력·조치사항 반복 기록표.",
       "default_row_count": 15,
       "min_row_height_mm": 8,
       "columns": [
-        { "id": "F01_DATE",  "label": "교체일",                "width_mm": 22 },
-        { "id": "F02_EQUIP", "label": "설비명/부위",           "width_mm": 50 },
-        { "id": "F03_TYPE",  "label": "오일 종류(입력)",       "width_mm": 30 },
-        { "id": "F04_QTY",   "label": "교체량(입력)",          "width_mm": 30 },
-        { "id": "F05_NEXT",  "label": "차기 교체예정일/담당자(입력)", "width_mm": 38 }
+        { "id": "F01_NO",      "label": "번호",              "width_mm": 10 },
+        { "id": "F02_EQUIP",   "label": "설비/구역",         "width_mm": 54 },
+        { "id": "F03_STATUS",  "label": "상태(입력)",        "width_mm": 32 },
+        { "id": "F04_ALARM",   "label": "경보 이력(입력)",   "width_mm": 34 },
+        { "id": "F05_ACTION",  "label": "조치 사항(입력)",   "width_mm": 40 }
       ]
     },
     {

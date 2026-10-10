@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
     "form_type": "FORM",
     "source_id": "P-07",
     "schema_version": "common-v1",
@@ -12,17 +12,17 @@
     "publication_status": "INTERNAL_POC_ONLY",
     "source_evidence": "TAI_PROPOSED",
     "source_document_access": "NOT_CHECKED",
-    "workflow_family": "유해·위험요인 관리",
-    "work_trigger": "근로자 유해·위험요인 신고 접수 시",
+    "workflow_family": "현장 작업관리",
+    "work_trigger": "동시 위험작업 간섭·충돌 조정 회의 실시 시",
     "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 근로자 유해·위험요인 신고 접수 및 처리 서식.",
-    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+    "design_gate_notes": "TAI 독자 초안. 위험작업 동시작업 간섭·협의결정·통제방법 조정 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
   },
   "document": {
-    "title": "유해·위험요인 신고서",
+    "title": "위험작업 동시작업 간섭조정표",
     "doc_id": "TAI-FORM-P-07-v0.1",
     "version": "0.1-DRAFT",
     "subject": "산업안전보건 실무서식",
@@ -34,42 +34,35 @@
     {
       "type": "basic_info",
       "id": "S01",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 신고 기본정보.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
       "fields": [
         { "id": "F01", "label": "사업장명" },
-        { "id": "F02", "label": "신고일" },
-        { "id": "F03", "label": "신고자" },
-        { "id": "F04", "label": "부서/공정" }
+        { "id": "F02", "label": "조정 일시" },
+        { "id": "F03", "label": "작업 구역" },
+        { "id": "F04", "label": "조정자" }
       ]
     },
     {
       "type": "repeat_table",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 유해·위험요인 신고 항목 반복 기록표.",
-      "default_row_count": 10,
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 동시작업 간섭·협의결정·통제방법 반복 기록표.",
+      "default_row_count": 12,
       "min_row_height_mm": 9,
       "columns": [
-        { "id": "F01_DEPT",     "label": "부서/공정",              "width_mm": 36 },
-        { "id": "F02_LOCATION", "label": "발생 장소",              "width_mm": 36 },
-        { "id": "F03_HAZARD",   "label": "유해·위험 내용(입력)",   "width_mm": 40 },
-        { "id": "F04_REPORTER", "label": "신고자",                 "width_mm": 36 },
-        { "id": "F05_DATE",     "label": "신고일",                 "width_mm": 22 }
+        { "id": "F01_TEAM",      "label": "팀/협력업체",           "width_mm": 34 },
+        { "id": "F02_WORK",      "label": "작업 내용",             "width_mm": 40 },
+        { "id": "F03_CONFLICT",  "label": "동시작업 위험(입력)",   "width_mm": 34 },
+        { "id": "F04_DECISION",  "label": "협의 결정(입력)",       "width_mm": 34 },
+        { "id": "F05_CONTROL",   "label": "통제 방법(입력)",       "width_mm": 28 }
       ]
     },
     {
-      "type": "freeform_area",
-      "id": "S03",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 처리 결과 자유기재.",
-      "label": "처리 결과",
-      "min_height_mm": 25
-    },
-    {
       "type": "approval",
-      "id": "S04",
+      "id": "S03",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
       "total_width_mm": 170,
       "fields": [
-        { "id": "A01", "label": "접수자" },
+        { "id": "A01", "label": "작성자" },
         { "id": "A02", "label": "확인자" }
       ]
     }

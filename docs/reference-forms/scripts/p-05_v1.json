@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
     "form_type": "RECORD",
     "source_id": "P-05",
     "schema_version": "common-v1",
@@ -12,17 +12,17 @@
     "publication_status": "INTERNAL_POC_ONLY",
     "source_evidence": "TAI_PROPOSED",
     "source_document_access": "NOT_CHECKED",
-    "workflow_family": "근로자 건강관리",
-    "work_trigger": "근로자 건강진단 결과 기록·관리 시",
+    "workflow_family": "현장 작업관리",
+    "work_trigger": "작업 종료 후 안전조치 확인 및 인계 시",
     "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 근로자 건강진단 결과 및 사후 관리 기록 대장.",
-    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+    "design_gate_notes": "TAI 독자 초안. 작업종료 안전조치 확인사항·잔류위험·인계 내용 기록 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
   },
   "document": {
-    "title": "근로자 건강진단 결과 기록부",
+    "title": "작업종료 안전조치·인계서",
     "doc_id": "TAI-FORM-P-05-v0.1",
     "version": "0.1-DRAFT",
     "subject": "산업안전보건 실무서식",
@@ -34,35 +34,43 @@
     {
       "type": "basic_info",
       "id": "S01",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 기본정보.",
       "fields": [
         { "id": "F01", "label": "사업장명" },
-        { "id": "F02", "label": "기준년도" },
-        { "id": "F03", "label": "담당자" }
+        { "id": "F02", "label": "작업 일시" },
+        { "id": "F03", "label": "작업 구역" },
+        { "id": "F04", "label": "작업자" }
       ]
     },
     {
-      "type": "repeat_table",
+      "type": "freeform_area",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 근로자별 건강진단 결과 반복 기록표.",
-      "default_row_count": 15,
-      "min_row_height_mm": 8,
-      "columns": [
-        { "id": "F01_NO",       "label": "번호",              "width_mm": 10 },
-        { "id": "F02_NAME",     "label": "성명",              "width_mm": 46 },
-        { "id": "F03_EXAMDATE", "label": "검진일",            "width_mm": 30 },
-        { "id": "F04_RESULT",   "label": "검진 결과(입력)",   "width_mm": 46 },
-        { "id": "F05_NOTE",     "label": "사후 관리사항(입력)", "width_mm": 38 }
-      ]
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업종료 확인사항.",
+      "label": "작업종료 확인사항",
+      "min_height_mm": 40
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 잔류위험 및 특이사항.",
+      "label": "잔류위험 및 특이사항",
+      "min_height_mm": 35
+    },
+    {
+      "type": "freeform_area",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 인계 사항.",
+      "label": "인계 사항",
+      "min_height_mm": 30
     },
     {
       "type": "approval",
-      "id": "S03",
+      "id": "S05",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
       "total_width_mm": 170,
       "fields": [
-        { "id": "A01", "label": "작성자" },
-        { "id": "A02", "label": "확인자" }
+        { "id": "A01", "label": "인계자" },
+        { "id": "A02", "label": "인수자" }
       ]
     }
   ]

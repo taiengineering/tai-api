@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
     "form_type": "RECORD",
     "source_id": "RP-12",
     "schema_version": "common-v1",
@@ -12,17 +12,17 @@
     "publication_status": "INTERNAL_POC_ONLY",
     "source_evidence": "TAI_PROPOSED",
     "source_document_access": "NOT_CHECKED",
-    "workflow_family": "설비 부품 관리",
-    "work_trigger": "설비 소모품·부품 교체 기록 시",
+    "workflow_family": "시설 운영관리",
+    "work_trigger": "시설 비상경보 발생 시 및 이후 대응·복구 이력 기록 시",
     "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 설비 소모품·부품 교체 이력 기록 대장.",
-    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+    "design_gate_notes": "TAI 독자 초안. 시설 비상경보 발생일시·초동대응·복구일시·원인/비고 이력 기록 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
   },
   "document": {
-    "title": "설비 부품 교체 기록부",
+    "title": "시설 비상경보 발생·대응이력부",
     "doc_id": "TAI-FORM-RP-12-v0.1",
     "version": "0.1-DRAFT",
     "subject": "산업안전보건 실무서식",
@@ -34,25 +34,26 @@
     {
       "type": "basic_info",
       "id": "S01",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 설비 기본정보.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
       "fields": [
         { "id": "F01", "label": "사업장명" },
-        { "id": "F02", "label": "설비명/번호" },
+        { "id": "F02", "label": "관리 기간" },
         { "id": "F03", "label": "담당자" }
       ]
     },
     {
       "type": "repeat_table",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 부품 교체 이력 반복 기록표.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 경보설비별 발생·대응·복구 반복 기록표.",
       "default_row_count": 15,
       "min_row_height_mm": 8,
       "columns": [
-        { "id": "F01_DATE",    "label": "교체일",           "width_mm": 24 },
-        { "id": "F02_EQUIP",   "label": "설비명/부품명",    "width_mm": 44 },
-        { "id": "F03_REASON",  "label": "교체 사유(입력)",  "width_mm": 40 },
-        { "id": "F04_CONTENT", "label": "교체 내용(입력)",  "width_mm": 40 },
-        { "id": "F05_WORKER",  "label": "작업자",           "width_mm": 22 }
+        { "id": "F01_NO",       "label": "번호",              "width_mm": 10 },
+        { "id": "F02_EQUIP",    "label": "경보 설비명",       "width_mm": 50 },
+        { "id": "F03_ALARMDT",  "label": "발생 일시",         "width_mm": 26 },
+        { "id": "F04_RESPONSE", "label": "초동 대응(입력)",   "width_mm": 34 },
+        { "id": "F05_RESTOREDT","label": "복구 일시(입력)",   "width_mm": 26 },
+        { "id": "F06_CAUSE",    "label": "원인/비고(입력)",   "width_mm": 24 }
       ]
     },
     {

@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
     "form_type": "FORM",
     "source_id": "P-18",
     "schema_version": "common-v1",
@@ -12,17 +12,17 @@
     "publication_status": "INTERNAL_POC_ONLY",
     "source_evidence": "TAI_PROPOSED",
     "source_document_access": "NOT_CHECKED",
-    "workflow_family": "순회점검 관리",
-    "work_trigger": "안전보건 순회점검 실시 후 결과 기록 시",
+    "workflow_family": "현장 작업관리",
+    "work_trigger": "협력업체 작업 시 일일 작업·위험정보 공유 회의 실시 시",
     "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 안전보건 순회점검 발견사항 및 개선조치 기록 서식.",
-    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+    "design_gate_notes": "TAI 독자 초안. 협력업체 일일 작업구역·동시작업현황·위험정보·조정결과 공유 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
   },
   "document": {
-    "title": "안전순회점검 결과 기록서",
+    "title": "협력업체 일일 작업·위험정보 공유표",
     "doc_id": "TAI-FORM-P-18-v0.1",
     "version": "0.1-DRAFT",
     "subject": "산업안전보건 실무서식",
@@ -37,22 +37,21 @@
       "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
       "fields": [
         { "id": "F01", "label": "사업장명" },
-        { "id": "F02", "label": "점검일" },
-        { "id": "F03", "label": "점검자" },
-        { "id": "F04", "label": "점검 구역" }
+        { "id": "F02", "label": "날짜" },
+        { "id": "F03", "label": "담당자" }
       ]
     },
     {
       "type": "repeat_table",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 순회점검 발견사항 및 조치 반복 기록표.",
-      "default_row_count": 10,
-      "min_row_height_mm": 10,
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업구역·동시작업현황·위험정보·조정결과 반복 기록표.",
+      "default_row_count": 12,
+      "min_row_height_mm": 9,
       "columns": [
-        { "id": "F01_AREA",    "label": "점검 장소/공정",   "width_mm": 46 },
-        { "id": "F02_FINDING", "label": "발견 사항(입력)",  "width_mm": 54 },
-        { "id": "F03_ACTION",  "label": "개선 조치(입력)",  "width_mm": 44 },
-        { "id": "F04_DONE",    "label": "완료일(입력)",     "width_mm": 26 }
+        { "id": "F01_AREA",      "label": "작업구역/내용",      "width_mm": 44 },
+        { "id": "F02_CONCURRENT","label": "동시작업 현황",      "width_mm": 42 },
+        { "id": "F03_HAZARD",    "label": "위험정보(입력)",     "width_mm": 50 },
+        { "id": "F04_ADJUST",    "label": "조정 결과(입력)",    "width_mm": 34 }
       ]
     },
     {
@@ -61,7 +60,7 @@
       "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
       "total_width_mm": 170,
       "fields": [
-        { "id": "A01", "label": "점검자" },
+        { "id": "A01", "label": "작성자" },
         { "id": "A02", "label": "확인자" }
       ]
     }

@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
     "form_type": "RECORD",
     "source_id": "P-17",
     "schema_version": "common-v1",
@@ -12,17 +12,17 @@
     "publication_status": "INTERNAL_POC_ONLY",
     "source_evidence": "TAI_PROPOSED",
     "source_document_access": "NOT_CHECKED",
-    "workflow_family": "산업재해 관리",
-    "work_trigger": "산업재해 발생 기록·사후 관리 시",
+    "workflow_family": "현장 작업관리",
+    "work_trigger": "외국인·신규 작업자 작업 배치 전 안전교육 이해 확인 시",
     "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 산업재해 발생 개요·원인·재발방지 기록 대장.",
-    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+    "design_gate_notes": "TAI 독자 초안. 외국인·신규작업자 핵심위험 이해확인·보완지도 기록 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
   },
   "document": {
-    "title": "산업재해 발생 기록부",
+    "title": "외국인·신규작업자 이해확인 기록",
     "doc_id": "TAI-FORM-P-17-v0.1",
     "version": "0.1-DRAFT",
     "subject": "산업안전보건 실무서식",
@@ -37,21 +37,22 @@
       "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
       "fields": [
         { "id": "F01", "label": "사업장명" },
-        { "id": "F02", "label": "기준년도" },
-        { "id": "F03", "label": "담당자" }
+        { "id": "F02", "label": "교육 일자" },
+        { "id": "F03", "label": "작업 구역/직종" },
+        { "id": "F04", "label": "교육 담당자" }
       ]
     },
     {
       "type": "repeat_table",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 재해 발생 이력 반복 기록표.",
-      "default_row_count": 10,
-      "min_row_height_mm": 10,
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 핵심위험 이해확인·보완지도 반복 기록표.",
+      "default_row_count": 15,
+      "min_row_height_mm": 8,
       "columns": [
-        { "id": "F01_NO",       "label": "번호",               "width_mm": 10 },
-        { "id": "F02_INCIDENT", "label": "재해 개요(입력)",    "width_mm": 80 },
-        { "id": "F03_CAUSE",    "label": "원인(입력)",         "width_mm": 40 },
-        { "id": "F04_ACTION",   "label": "재발방지 조치(입력)", "width_mm": 40 }
+        { "id": "F01_NO",      "label": "번호",                  "width_mm": 10 },
+        { "id": "F02_HAZARD",  "label": "핵심 위험 내용",        "width_mm": 70 },
+        { "id": "F03_CONFIRM", "label": "이해 확인(입력)",       "width_mm": 44 },
+        { "id": "F04_GUIDE",   "label": "보완 지도 내용(입력)",  "width_mm": 46 }
       ]
     },
     {

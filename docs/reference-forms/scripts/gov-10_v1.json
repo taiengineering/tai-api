@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
     "form_type": "PLAN",
     "source_id": "GOV-10",
     "schema_version": "common-v1",
@@ -13,13 +13,13 @@
     "source_evidence": "TAI_PROPOSED",
     "source_document_access": "NOT_CHECKED",
     "workflow_family": "안전보건 운영체계",
-    "work_trigger": "연간 안전보건 활동계획 수립 및 실적 기록 시",
+    "work_trigger": "연간 안전보건 활동 계획 수립 및 실적 대비 점검 시",
     "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 연간 안전활동 계획·실적·차이 비교 기록 서식.",
-    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+    "design_gate_notes": "TAI 독자 초안. 연간 안전보건 활동명·주기·담당·기준/목표·계획일·실행일·실적·차이/개선 관리 서식. 기준/목표 필드 보완.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
   },
   "document": {
     "title": "안전보건 연간 활동계획·실적 대비표",
@@ -37,36 +37,44 @@
       "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
       "fields": [
         { "id": "F01", "label": "사업장명" },
-        { "id": "F02", "label": "기준연도" },
-        { "id": "F03", "label": "담당자" }
+        { "id": "F02", "label": "계획 연도" },
+        { "id": "F03", "label": "작성자" }
       ]
     },
     {
       "type": "repeat_table",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 활동별 계획·실적·차이 반복 기록표.",
-      "default_row_count": 10,
-      "min_row_height_mm": 9,
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 활동별 기준/목표·계획·실적·차이 반복 기록표.",
+      "default_row_count": 15,
+      "min_row_height_mm": 8,
       "columns": [
-        { "id": "F01_NO",      "label": "번호",             "width_mm": 10 },
-        { "id": "F02_ACT",     "label": "활동명",           "width_mm": 48 },
-        { "id": "F03_CYCLE",   "label": "주기",             "width_mm": 18 },
-        { "id": "F04_OWNER",   "label": "담당",             "width_mm": 20 },
-        { "id": "F05_PLAN",    "label": "계획일",           "width_mm": 20 },
-        { "id": "F06_ACTUAL",  "label": "실행일",           "width_mm": 20 },
-        { "id": "F07_RESULT",  "label": "실적(입력)",       "width_mm": 20 },
-        { "id": "F08_GAP",     "label": "차이/개선(입력)",  "width_mm": 14 }
+        { "id": "F01_NO",       "label": "번호",              "width_mm": 10 },
+        { "id": "F02_ACT",      "label": "활동명",            "width_mm": 38 },
+        { "id": "F03_CYCLE",    "label": "주기",              "width_mm": 14 },
+        { "id": "F04_OWNER",    "label": "담당",              "width_mm": 16 },
+        { "id": "F05_TARGET",   "label": "기준/목표(입력)",   "width_mm": 22 },
+        { "id": "F06_PLANDATE", "label": "계획일",            "width_mm": 18 },
+        { "id": "F07_EXECDATE", "label": "실행일(입력)",      "width_mm": 18 },
+        { "id": "F08_RESULT",   "label": "실적(입력)",        "width_mm": 20 },
+        { "id": "F09_GAP",      "label": "차이/개선(입력)",   "width_mm": 14 }
       ]
     },
     {
-      "type": "approval",
+      "type": "freeform_area",
       "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 종합 평가 및 차년도 개선 방향.",
+      "label": "종합 평가 및 차년도 개선 방향",
+      "min_height_mm": 22
+    },
+    {
+      "type": "approval",
+      "id": "S04",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
       "total_width_mm": 170,
       "fields": [
         { "id": "A01", "label": "작성자" },
-        { "id": "A02", "label": "검토자" },
-        { "id": "A03", "label": "승인자" }
+        { "id": "A02", "label": "안전담당자" },
+        { "id": "A03", "label": "결재자" }
       ]
     }
   ]

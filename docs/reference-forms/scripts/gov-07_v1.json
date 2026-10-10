@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
     "form_type": "CHECKLIST",
     "source_id": "GOV-07",
     "schema_version": "common-v1",
@@ -12,17 +12,17 @@
     "publication_status": "INTERNAL_POC_ONLY",
     "source_evidence": "TAI_PROPOSED",
     "source_document_access": "NOT_CHECKED",
-    "workflow_family": "안전보건경영시스템",
-    "work_trigger": "안전보건경영 내부심사 실시 시",
+    "workflow_family": "안전보건 운영체계",
+    "work_trigger": "합동 안전보건점검 실시 및 시정조치 이행 확인 시",
     "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 안전보건경영시스템 내부심사 적합·부적합 확인 서식.",
-    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+    "design_gate_notes": "TAI 독자 초안. 합동안전보건점검 항목·결과·담당·완료기한·완료증빙 관리 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
   },
   "document": {
-    "title": "안전보건 내부심사 체크리스트",
+    "title": "합동안전보건점검 및 시정조치 기록",
     "doc_id": "TAI-FORM-GOV-07-v0.1",
     "version": "0.1-DRAFT",
     "subject": "산업안전보건 실무서식",
@@ -37,42 +37,35 @@
       "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
       "fields": [
         { "id": "F01", "label": "사업장명" },
-        { "id": "F02", "label": "심사일" },
-        { "id": "F03", "label": "심사 부서/대상" },
-        { "id": "F04", "label": "심사자" }
+        { "id": "F02", "label": "점검일" },
+        { "id": "F03", "label": "점검반 구성" },
+        { "id": "F04", "label": "점검 범위" }
       ]
     },
     {
       "type": "repeat_table",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 심사 항목별 적합 여부 반복 기록표.",
-      "default_row_count": 12,
-      "min_row_height_mm": 9,
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 점검항목별 결과·담당·완료기한·완료증빙 반복 기록표.",
+      "default_row_count": 15,
+      "min_row_height_mm": 8,
       "columns": [
-        { "id": "F01_NO",         "label": "번호",          "width_mm": 10 },
-        { "id": "F02_ITEM",       "label": "심사 항목",     "width_mm": 70 },
-        { "id": "F03_CRITERIA",   "label": "심사 기준",     "width_mm": 30 },
-        { "id": "F04_CONFORM",    "label": "적합(입력)",    "width_mm": 22 },
-        { "id": "F05_NONCONFORM", "label": "부적합(입력)",  "width_mm": 22 },
-        { "id": "F06_NOTE",       "label": "비고",          "width_mm": 16 }
-      ]
-    },
-    {
-      "type": "text_flow",
-      "id": "S03",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 주의문구.",
-      "paragraphs": [
-        { "id": "N01", "text": "※ 적합/부적합 해당 칸에 ○ 표시. 부적합 항목은 개선 조치 후 재확인.", "align": "left" }
+        { "id": "F01_NO",     "label": "번호",              "width_mm": 10 },
+        { "id": "F02_ITEM",   "label": "점검 항목",         "width_mm": 56 },
+        { "id": "F03_RESULT", "label": "점검 결과(입력)",   "width_mm": 30 },
+        { "id": "F04_OWNER",  "label": "담당",              "width_mm": 24 },
+        { "id": "F05_DUE",    "label": "완료 기한",         "width_mm": 26 },
+        { "id": "F06_EVID",   "label": "완료 증빙(입력)",   "width_mm": 24 }
       ]
     },
     {
       "type": "approval",
-      "id": "S04",
+      "id": "S03",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
       "total_width_mm": 170,
       "fields": [
-        { "id": "A01", "label": "심사자" },
-        { "id": "A02", "label": "확인자" }
+        { "id": "A01", "label": "작성자" },
+        { "id": "A02", "label": "점검반장" },
+        { "id": "A03", "label": "확인자" }
       ]
     }
   ]

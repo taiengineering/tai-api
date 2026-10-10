@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
     "form_type": "FORM",
     "source_id": "RP-06",
     "schema_version": "common-v1",
@@ -12,17 +12,17 @@
     "publication_status": "INTERNAL_POC_ONLY",
     "source_evidence": "TAI_PROPOSED",
     "source_document_access": "NOT_CHECKED",
-    "workflow_family": "정비작업 안전관리",
-    "work_trigger": "정비작업 허가 신청·발급 시",
+    "workflow_family": "설비·공정 변경관리",
+    "work_trigger": "공정 또는 설비 변경 전 EHS 영향 검토 시",
     "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 정비작업 허가 신청·내용·안전조치·승인 서식.",
-    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+    "design_gate_notes": "TAI 독자 초안. 공정 변경 전 변경내용·EHS 영향분석·위험저감대책 검토 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
   },
   "document": {
-    "title": "정비작업 허가서",
+    "title": "공정 변경 전 EHS 영향검토서",
     "doc_id": "TAI-FORM-RP-06-v0.1",
     "version": "0.1-DRAFT",
     "subject": "산업안전보건 실무서식",
@@ -34,45 +34,44 @@
     {
       "type": "basic_info",
       "id": "S01",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 기본정보.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 검토 기본정보.",
       "fields": [
         { "id": "F01", "label": "사업장명" },
-        { "id": "F02", "label": "신청일" },
-        { "id": "F03", "label": "설비명/번호" },
-        { "id": "F04", "label": "작업 내용" },
-        { "id": "F05", "label": "신청자" }
+        { "id": "F02", "label": "검토일" },
+        { "id": "F03", "label": "변경 공정/설비명" },
+        { "id": "F04", "label": "신청자" }
       ]
     },
     {
       "type": "freeform_area",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 범위 및 방법.",
-      "label": "작업 범위 및 방법",
-      "min_height_mm": 30
-    },
-    {
-      "type": "freeform_area",
-      "id": "S03",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 위험요인 및 안전조치.",
-      "label": "위험요인 및 안전조치",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 변경 내용 및 사유.",
+      "label": "변경 내용 및 사유",
       "min_height_mm": 35
     },
     {
       "type": "freeform_area",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. EHS 영향 분석 (안전·보건·환경).",
+      "label": "EHS 영향 분석 (안전·보건·환경)",
+      "min_height_mm": 45
+    },
+    {
+      "type": "freeform_area",
       "id": "S04",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 필요 자재·공구·보호구.",
-      "label": "필요 자재·공구·보호구",
-      "min_height_mm": 25
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 위험 저감 대책.",
+      "label": "위험 저감 대책",
+      "min_height_mm": 35
     },
     {
       "type": "approval",
       "id": "S05",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 허가 확인란.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
       "total_width_mm": 170,
       "fields": [
         { "id": "A01", "label": "신청자" },
         { "id": "A02", "label": "안전담당자" },
-        { "id": "A03", "label": "허가자" }
+        { "id": "A03", "label": "승인자" }
       ]
     }
   ]

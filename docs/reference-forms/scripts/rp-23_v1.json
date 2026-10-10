@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
     "form_type": "RECORD",
     "source_id": "RP-23",
     "schema_version": "common-v1",
@@ -12,17 +12,17 @@
     "publication_status": "INTERNAL_POC_ONLY",
     "source_evidence": "TAI_PROPOSED",
     "source_document_access": "NOT_CHECKED",
-    "workflow_family": "계측기 관리",
-    "work_trigger": "계측기 교정·검교정 이력 기록 시",
+    "workflow_family": "환경설비 운영관리",
+    "work_trigger": "화학폐기물 불출 및 외부 인계 시",
     "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 계측기 교정·검교정 이력 기록 대장.",
-    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+    "design_gate_notes": "TAI 독자 초안. 화학폐기물 품명·수량·처리대상·인계일시·인계확인 기록 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
   },
   "document": {
-    "title": "계측기 교정 기록부",
+    "title": "화학폐기물 불출·인계 확인기록",
     "doc_id": "TAI-FORM-RP-23-v0.1",
     "version": "0.1-DRAFT",
     "subject": "산업안전보건 실무서식",
@@ -38,22 +38,22 @@
       "fields": [
         { "id": "F01", "label": "사업장명" },
         { "id": "F02", "label": "담당자" },
-        { "id": "F03", "label": "관리 주기" }
+        { "id": "F03", "label": "관리 기간" }
       ]
     },
     {
       "type": "repeat_table",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 계측기별 교정 이력 반복 기록표.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 화학폐기물별 수량·처리대상·인계일시·확인 반복 기록표.",
       "default_row_count": 15,
       "min_row_height_mm": 8,
       "columns": [
-        { "id": "F01_NO",         "label": "번호",              "width_mm": 10 },
-        { "id": "F02_INSTRUMENT", "label": "계측기명/번호",     "width_mm": 54 },
-        { "id": "F03_DATE",       "label": "교정일",            "width_mm": 26 },
-        { "id": "F04_RESULT",     "label": "교정 결과(입력)",   "width_mm": 42 },
-        { "id": "F05_NEXT",       "label": "차기 교정예정일",   "width_mm": 22 },
-        { "id": "F06_NOTE",       "label": "비고",              "width_mm": 16 }
+        { "id": "F01_NO",        "label": "번호",              "width_mm": 10 },
+        { "id": "F02_WASTE",     "label": "폐기물품명",        "width_mm": 56 },
+        { "id": "F03_QTY",       "label": "수량/단위",         "width_mm": 24 },
+        { "id": "F04_DEST",      "label": "처리 대상(입력)",   "width_mm": 32 },
+        { "id": "F05_HANDDT",    "label": "인계 일시",         "width_mm": 26 },
+        { "id": "F06_CONFIRM",   "label": "인계 확인(입력)",   "width_mm": 22 }
       ]
     },
     {
