@@ -1,0 +1,79 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "form_type": "CHECKLIST",
+    "source_id": "GOV-07",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "안전보건경영시스템",
+    "work_trigger": "안전보건경영 내부심사 실시 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 안전보건경영시스템 내부심사 적합·부적합 확인 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "안전보건 내부심사 체크리스트",
+    "doc_id": "TAI-FORM-GOV-07-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "심사일" },
+        { "id": "F03", "label": "심사 부서/대상" },
+        { "id": "F04", "label": "심사자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 심사 항목별 적합 여부 반복 기록표.",
+      "default_row_count": 12,
+      "min_row_height_mm": 9,
+      "columns": [
+        { "id": "F01_NO",         "label": "번호",          "width_mm": 10 },
+        { "id": "F02_ITEM",       "label": "심사 항목",     "width_mm": 70 },
+        { "id": "F03_CRITERIA",   "label": "심사 기준",     "width_mm": 30 },
+        { "id": "F04_CONFORM",    "label": "적합(입력)",    "width_mm": 22 },
+        { "id": "F05_NONCONFORM", "label": "부적합(입력)",  "width_mm": 22 },
+        { "id": "F06_NOTE",       "label": "비고",          "width_mm": 16 }
+      ]
+    },
+    {
+      "type": "text_flow",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 주의문구.",
+      "paragraphs": [
+        { "id": "N01", "text": "※ 적합/부적합 해당 칸에 ○ 표시. 부적합 항목은 개선 조치 후 재확인.", "align": "left" }
+      ]
+    },
+    {
+      "type": "approval",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "심사자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}

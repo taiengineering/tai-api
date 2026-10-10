@@ -1,0 +1,70 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "form_type": "RECORD",
+    "source_id": "RP-23",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "계측기 관리",
+    "work_trigger": "계측기 교정·검교정 이력 기록 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 계측기 교정·검교정 이력 기록 대장.",
+    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "계측기 교정 기록부",
+    "doc_id": "TAI-FORM-RP-23-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "담당자" },
+        { "id": "F03", "label": "관리 주기" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 계측기별 교정 이력 반복 기록표.",
+      "default_row_count": 15,
+      "min_row_height_mm": 8,
+      "columns": [
+        { "id": "F01_NO",         "label": "번호",              "width_mm": 10 },
+        { "id": "F02_INSTRUMENT", "label": "계측기명/번호",     "width_mm": 54 },
+        { "id": "F03_DATE",       "label": "교정일",            "width_mm": 26 },
+        { "id": "F04_RESULT",     "label": "교정 결과(입력)",   "width_mm": 42 },
+        { "id": "F05_NEXT",       "label": "차기 교정예정일",   "width_mm": 22 },
+        { "id": "F06_NOTE",       "label": "비고",              "width_mm": 16 }
+      ]
+    },
+    {
+      "type": "approval",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "작성자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}

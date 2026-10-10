@@ -1,0 +1,77 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "form_type": "FORM",
+    "source_id": "RP-10",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "설비 이상 관리",
+    "work_trigger": "설비 이상 발생 후 보고·기록 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 설비 이상 발생 내용·원인·조치 기록 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "설비 이상 보고서",
+    "doc_id": "TAI-FORM-RP-10-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "보고일" },
+        { "id": "F03", "label": "설비명/번호" },
+        { "id": "F04", "label": "보고자" }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 이상 내용 자유기재.",
+      "label": "이상 내용",
+      "min_height_mm": 35
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 추정 원인 자유기재.",
+      "label": "추정 원인",
+      "min_height_mm": 30
+    },
+    {
+      "type": "freeform_area",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 조치 계획 자유기재.",
+      "label": "조치 계획",
+      "min_height_mm": 30
+    },
+    {
+      "type": "approval",
+      "id": "S05",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "보고자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}
