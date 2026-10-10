@@ -41,15 +41,26 @@ DB proposed_fields = [] (빈 배열). 모든 항목 TAI 독자 설계.
 
 ### REF-C025 필드 출처
 
+DB proposed_fields 7개(EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED)와 TAI 세부 설계(TAI_PRACTICAL_PROPOSAL)를 구분한다.
+
+| DB 조사 제안 필드 | 출처 | JSON 구현 위치 | 세부 입력항목 | 세부 출처 |
+|--------------|------|-------------|------------|---------|
+| 작업식별 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S01 basic_info | 작업번호, 작업명 | TAI_PRACTICAL_PROPOSAL |
+| 위험작업유형 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S02 labeled_grid | 위험작업 유형 | TAI_PRACTICAL_PROPOSAL |
+| 장소/시간 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S01 basic_info | 작업장소, 작업 예정일시, 허가 요청기간 | TAI_PRACTICAL_PROPOSAL |
+| 사전 위험확인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S03 freeform_area | 사전 위험확인(label) | TAI_PRACTICAL_PROPOSAL |
+| 격리·방호 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S04 freeform_area | 격리·방호 조치(label) | TAI_PRACTICAL_PROPOSAL |
+| 승인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S05 approval | 신청자, 검토자, 허가자 | TAI_PRACTICAL_PROPOSAL |
+| 종료확인 | EXISTING_RESEARCH_PROPOSAL / FIELDS_UNVERIFIED | S06 labeled_grid | 실제 작업 종료일시, 종료 확인자, 종료 시 조치·현장 상태, 종료 확인 서명 | TAI_PRACTICAL_PROPOSAL |
+
+조사 제안 외 TAI 독자 추가 항목:
+
 | 섹션 | 입력항목 | 출처 |
 |------|---------|------|
-| S01 basic_info | 사업장명, 작업번호, 작업명, 신청부서·업체 | REF-C012 구조 참조 + TAI_PRACTICAL_PROPOSAL |
-| S01 basic_info | 작업장소, 작업 예정일시, 허가 요청기간, 신청자 | REF-C012 구조 참조 + TAI_PRACTICAL_PROPOSAL |
-| S02 labeled_grid | 위험작업 유형, 작업 책임자, 작업 내용, 작업 참여 인원 | TAI_PRACTICAL_PROPOSAL |
-| S03 freeform | 사전 위험확인 결과·주요 위험요인·추가 조치 | TAI_PRACTICAL_PROPOSAL (B17 MISSING 항목 구현) |
-| S04 freeform | 격리·방호 실시 내역·미완료 조치 | TAI_PRACTICAL_PROPOSAL (B17 MISSING 항목 구현) |
-| S05 approval | 신청자, 검토자, 허가자 | REF-C012 신청/허가 구조 참조 + TAI_PRACTICAL_PROPOSAL |
-| S06 labeled_grid | 실제 작업 종료일시, 종료 확인자, 종료 시 조치·현장 상태, 종료 확인 서명 | TAI_PRACTICAL_PROPOSAL (B17 MISSING 항목 구현) |
+| S01 basic_info | 사업장명, 신청부서·업체, 신청자 | TAI_PRACTICAL_PROPOSAL (REF-C012 구조 참조) |
+| S02 labeled_grid | 작업 책임자, 작업 내용, 작업 참여 인원 | TAI_PRACTICAL_PROPOSAL |
+
+조사 제안 7개는 법정 필수항목 또는 공식 서식 검증 완료를 의미하지 않는다(FIELDS_UNVERIFIED 유지).
 
 ---
 
