@@ -101,6 +101,8 @@ BUILD_APPROVED_IDS = frozenset({          # WO-REF01-060-B8-WAVE2-BUILD-003
     "c031", "c033", "c037",
     "c039", "c040", "c041", "c042",
     "c043", "c044", "gov-01",
+    # B9 — WO-REF01-060-B9-REGISTER-BUILD-002 (GPT DESIGN PASS 5/5):
+    "gov-02", "gov-03", "doc-01", "doc-02", "chw-01",
 })
 
 # SHA256 of regression-frozen output files (full hex). Used by --verify-only.
