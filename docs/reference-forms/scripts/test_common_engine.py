@@ -328,23 +328,28 @@ def test_C04_c012_pdf_generation(tmp_path):
     assert out.stat().st_size > 5_000
 
 def test_C04_c012_docx_generation():
-    import shutil as _sh, tempfile as _tf
-    canonical = BASE.parent / 'output' / 'TAI-FORM-C012-blank.docx'
-    _bk = Path(_tf.mktemp(suffix='.docx'))
-    _sh.copy2(str(canonical), str(_bk))
-    try:
+    import shutil as _sh, tempfile as _tf, zipfile as _zf
+    with _tf.TemporaryDirectory(prefix='c012_docx_test_') as _td:
+        td = Path(_td)
+        sc = td / 'scripts'
+        sc.mkdir()
+        (td / 'output').mkdir()
+        _sh.copy2(str(BASE / 'gen_c012_docx.cjs'),    str(sc / 'gen_c012_docx.cjs'))
+        _sh.copy2(str(BASE / 'common_v1_engine.cjs'), str(sc / 'common_v1_engine.cjs'))
+        _sh.copy2(str(BASE / 'c012_fields.json'),     str(sc / 'c012_fields.json'))
+        (sc / 'node_modules').symlink_to(BASE / 'node_modules')
         result = subprocess.run(
-            ['node', str(BASE / 'gen_c012_docx.cjs'), 'blank'],
-            cwd=str(BASE), capture_output=True, text=True, timeout=30,
+            ['node', str(sc / 'gen_c012_docx.cjs'), 'blank'],
+            cwd=str(sc), capture_output=True, text=True, timeout=30,
         )
         if result.returncode != 0:
             pytest.fail(f"node gen_c012_docx.cjs failed (returncode={result.returncode}):\n{result.stderr[:500]}")
-        out = BASE.parent / 'output' / 'TAI-FORM-C012-blank.docx'
+        out = td / 'output' / 'TAI-FORM-C012-blank.docx'
         assert out.exists(), f"DOCX not found: {out}"
         assert out.stat().st_size > 3_000
-    finally:
-        _sh.copy2(str(_bk), str(canonical))
-        _bk.unlink(missing_ok=True)
+        assert _zf.is_zipfile(str(out)), "DOCX is not a valid ZIP"
+        with _zf.ZipFile(str(out)) as _z:
+            assert 'word/document.xml' in _z.namelist(), "DOCX missing word/document.xml"
 
 # ─── C02-03: C012 DOCX output structure (OOXML) ───────────────────
 
