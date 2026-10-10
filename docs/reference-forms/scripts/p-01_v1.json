@@ -1,6 +1,7 @@
 {
   "_meta": {
     "wo": "WO-REF01-060-B10-BULK-BUILD-001",
+    "correction_wo": "WO-REF01-060-B16-FIELD-COMPLETENESS-001",
     "form_type": "PLAN",
     "source_id": "P-01",
     "schema_version": "common-v1",
@@ -18,8 +19,8 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. D-1(전일) 익일 작업계획과 위험 조율 기록 서식.",
-    "design_gate_ref": "WO-REF01-060-B10-BULK-BUILD-001"
+    "design_gate_notes": "B16 교정: 공종·인터페이스 위험 열 추가, 작업 예정일·총괄 책임자 기본정보 추가, 승인·전달 확인란 신설.",
+    "design_gate_ref": "WO-REF01-060-B16-FIELD-COMPLETENESS-001"
   },
   "document": {
     "title": "D-1 내일 작업계획·위험조율표",
@@ -28,33 +29,36 @@
     "subject": "산업안전보건 실무서식",
     "creator": "TAI",
     "producer": "TAI Document Pipeline v1",
-    "page": {
-      "orientation": "portrait"
-    }
+    "page": { "orientation": "portrait" }
   },
   "sections": [
     {
       "type": "basic_info",
       "id": "S01",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 작성 기본정보.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 작성 기본정보. B16: 작업 예정일·총괄 책임자 추가.",
       "fields": [
         { "id": "F01", "label": "사업장명" },
         { "id": "F02", "label": "작성일" },
-        { "id": "F03", "label": "작성자" }
+        { "id": "F03", "label": "작업 예정일" },
+        { "id": "F04", "label": "총괄 책임자" },
+        { "id": "F05", "label": "작성자" }
       ]
     },
     {
       "type": "repeat_table",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 익일 작업계획 반복 기록표.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 익일 작업계획 반복 기록표. B16: 공종·인터페이스 위험 열 추가.",
       "default_row_count": 8,
-      "min_row_height_mm": 10,
+      "min_row_height_mm": 9,
       "columns": [
-        { "id": "F01_DEPT",   "label": "작업부서/업체",    "width_mm": 36 },
-        { "id": "F02_WORK",   "label": "작업명/위치",       "width_mm": 46 },
-        { "id": "F03_TIME",   "label": "작업시간",          "width_mm": 26 },
-        { "id": "F04_COUNT",  "label": "작업자 수",         "width_mm": 20 },
-        { "id": "F05_HAZARD", "label": "주요 위험요인",     "width_mm": 42 }
+        { "id": "F01_NO",    "label": "번호",            "width_mm": 10 },
+        { "id": "F02_TYPE",  "label": "공종",             "width_mm": 20 },
+        { "id": "F03_DEPT",  "label": "작업부서·업체",   "width_mm": 28 },
+        { "id": "F04_WORK",  "label": "작업명·위치",     "width_mm": 30 },
+        { "id": "F05_TIME",  "label": "작업시간",         "width_mm": 16 },
+        { "id": "F06_COUNT", "label": "작업자 수",        "width_mm": 14 },
+        { "id": "F07_HAZ",   "label": "주요 위험요인",   "width_mm": 24 },
+        { "id": "F08_IFACE", "label": "인터페이스 위험", "width_mm": 28 }
       ]
     },
     {
@@ -62,7 +66,17 @@
       "id": "S03",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 안전 조율 및 특이사항 자유기재.",
       "label": "안전 조율 및 특이사항",
-      "min_height_mm": 25
+      "min_height_mm": 20
+    },
+    {
+      "type": "approval",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 승인·전달 확인란. B16 신설.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "작성자" },
+        { "id": "A02", "label": "승인자" }
+      ]
     }
   ]
 }

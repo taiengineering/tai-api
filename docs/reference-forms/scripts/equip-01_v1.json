@@ -1,6 +1,7 @@
 {
   "_meta": {
     "wo": "WO-REF01-060-B10-BULK-BUILD-001",
+    "correction_wo": "WO-REF01-060-B16-FIELD-COMPLETENESS-001",
     "form_type": "PLAN",
     "source_id": "EQUIP-01",
     "schema_version": "common-v1",
@@ -18,8 +19,8 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 지게차 작업 전 위험요인·안전대책 계획 서식.",
-    "design_gate_ref": "WO-REF01-060-B10-BULK-BUILD-001"
+    "design_gate_notes": "B16 교정: 작업구역·운반물 기본정보 추가, 지게차 특화 사항(이동 동선·충돌전도 위험·통제조치·작업자 확인) 신설.",
+    "design_gate_ref": "WO-REF01-060-B16-FIELD-COMPLETENESS-001"
   },
   "document": {
     "title": "지게차 작업계획서",
@@ -28,36 +29,47 @@
     "subject": "산업안전보건 실무서식",
     "creator": "TAI",
     "producer": "TAI Document Pipeline v1",
-    "page": {
-      "orientation": "portrait"
-    }
+    "page": { "orientation": "portrait" }
   },
   "sections": [
     {
       "type": "basic_info",
       "id": "S01",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 기본정보.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 기본정보. B16: 작업구역·운반물 추가.",
       "fields": [
         { "id": "F01", "label": "사업장명" },
         { "id": "F02", "label": "작업일" },
         { "id": "F03", "label": "작업명" },
         { "id": "F04", "label": "작업위치" },
-        { "id": "F05", "label": "작업책임자" },
-        { "id": "F06", "label": "작업자 수" }
+        { "id": "F05", "label": "작업구역" },
+        { "id": "F06", "label": "운반물" },
+        { "id": "F07", "label": "작업책임자" },
+        { "id": "F08", "label": "작업자 수" }
+      ]
+    },
+    {
+      "type": "labeled_grid",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 지게차 특화 위험·통제 사항. B16 신설.",
+      "section_label": "지게차 작업 특화 사항",
+      "row_height_mm": 9,
+      "rows": [
+        [ { "label": "이동 동선" },       { "label": "충돌·전도 위험" } ],
+        [ { "label": "통제조치" },         { "label": "작업자 확인" } ]
       ]
     },
     {
       "type": "freeform_area",
-      "id": "S02",
+      "id": "S03",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 개요 자유기재.",
       "label": "작업 개요",
-      "min_height_mm": 25
+      "min_height_mm": 20
     },
     {
       "type": "repeat_table",
-      "id": "S03",
+      "id": "S04",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 위험요인 및 안전대책 반복 기록표.",
-      "default_row_count": 6,
+      "default_row_count": 5,
       "min_row_height_mm": 10,
       "columns": [
         { "id": "F01_NO",       "label": "번호",       "width_mm": 12 },
@@ -68,7 +80,7 @@
     },
     {
       "type": "approval",
-      "id": "S04",
+      "id": "S05",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 검토·승인란.",
       "total_width_mm": 170,
       "fields": [

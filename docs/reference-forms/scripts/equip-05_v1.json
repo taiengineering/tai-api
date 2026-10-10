@@ -1,6 +1,7 @@
 {
   "_meta": {
     "wo": "WO-REF01-060-B10-BULK-BUILD-001",
+    "correction_wo": "WO-REF01-060-B16-FIELD-COMPLETENESS-001",
     "form_type": "PLAN",
     "source_id": "EQUIP-05",
     "schema_version": "common-v1",
@@ -18,8 +19,8 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 굴착기 작업 전 위험요인·안전대책 계획 서식.",
-    "design_gate_ref": "WO-REF01-060-B10-BULK-BUILD-001"
+    "design_gate_notes": "B16 교정: 굴착기 특화 사항(작업구역·지반 조건·접근통제·매설물 조사·운행 계획) 신설.",
+    "design_gate_ref": "WO-REF01-060-B16-FIELD-COMPLETENESS-001"
   },
   "document": {
     "title": "굴착기 작업계획서",
@@ -28,9 +29,7 @@
     "subject": "산업안전보건 실무서식",
     "creator": "TAI",
     "producer": "TAI Document Pipeline v1",
-    "page": {
-      "orientation": "portrait"
-    }
+    "page": { "orientation": "portrait" }
   },
   "sections": [
     {
@@ -46,17 +45,29 @@
       ]
     },
     {
-      "type": "freeform_area",
+      "type": "labeled_grid",
       "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 굴착기 특화 위험·통제 사항. B16 신설.",
+      "section_label": "굴착기 작업 특화 사항",
+      "row_height_mm": 9,
+      "rows": [
+        [ { "label": "작업구역" },          { "label": "지반 조건" } ],
+        [ { "label": "접근통제 방법" },     { "label": "매설물 조사 여부" } ],
+        [ { "label": "운행 계획" },          { "label": "유도자 배치" } ]
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 개요 자유기재.",
       "label": "작업 개요",
-      "min_height_mm": 25
+      "min_height_mm": 20
     },
     {
       "type": "repeat_table",
-      "id": "S03",
+      "id": "S04",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 위험요인 및 안전대책 반복 기록표.",
-      "default_row_count": 6,
+      "default_row_count": 5,
       "min_row_height_mm": 10,
       "columns": [
         { "id": "F01_NO",      "label": "번호",       "width_mm": 12 },
@@ -67,7 +78,7 @@
     },
     {
       "type": "approval",
-      "id": "S04",
+      "id": "S05",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 검토·승인란.",
       "total_width_mm": 170,
       "fields": [

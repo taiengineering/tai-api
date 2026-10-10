@@ -1,6 +1,7 @@
 {
   "_meta": {
     "wo": "WO-REF01-060-B11-BULK-BUILD-001",
+    "correction_wo": "WO-REF01-060-B16-FIELD-COMPLETENESS-001",
     "form_type": "RECORD",
     "source_id": "ENV-04",
     "schema_version": "common-v1",
@@ -18,8 +19,8 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 정비원인·작업내용·작업시간·검증결과 기록 서식.",
-    "design_gate_ref": "WO-REF01-060-B11-BULK-BUILD-001"
+    "design_gate_notes": "B16 교정: 설비 중지 시간(중지 시작·종료) 기재란 추가. 기존 작업시간과 구분.",
+    "design_gate_ref": "WO-REF01-060-B16-FIELD-COMPLETENESS-001"
   },
   "document": {
     "title": "환경설비 정기보전·수리 기록부",
@@ -28,9 +29,7 @@
     "subject": "산업안전보건 실무서식",
     "creator": "TAI",
     "producer": "TAI Document Pipeline v1",
-    "page": {
-      "orientation": "portrait"
-    }
+    "page": { "orientation": "portrait" }
   },
   "sections": [
     {
@@ -45,15 +44,25 @@
       ]
     },
     {
-      "type": "freeform_area",
+      "type": "labeled_grid",
       "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 설비 중지 시간 기재란. B16 신설. 작업시간과 구분.",
+      "section_label": "설비 중지 시간",
+      "row_height_mm": 8,
+      "rows": [
+        [ { "label": "중지 시작" }, { "label": "중지 종료" } ]
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 정비 원인 및 내용.",
       "label": "정비 원인 및 내용",
-      "min_height_mm": 30
+      "min_height_mm": 25
     },
     {
       "type": "repeat_table",
-      "id": "S03",
+      "id": "S04",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 항목별 내역 반복 기록표.",
       "default_row_count": 6,
       "min_row_height_mm": 9,
@@ -67,14 +76,14 @@
     },
     {
       "type": "freeform_area",
-      "id": "S04",
+      "id": "S05",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 검증 결과.",
       "label": "검증 결과",
-      "min_height_mm": 25
+      "min_height_mm": 20
     },
     {
       "type": "approval",
-      "id": "S05",
+      "id": "S06",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
       "total_width_mm": 170,
       "fields": [

@@ -1,6 +1,7 @@
 {
   "_meta": {
     "wo": "WO-REF01-060-B11-BULK-BUILD-001",
+    "correction_wo": "WO-REF01-060-B16-FIELD-COMPLETENESS-001",
     "form_type": "FORM",
     "source_id": "P-10",
     "schema_version": "common-v1",
@@ -18,8 +19,8 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "TAI 독자 초안. 시설물명·설치위치·규격·수량·확인결과 기록 서식.",
-    "design_gate_ref": "WO-REF01-060-B11-BULK-BUILD-001"
+    "design_gate_notes": "B16 교정: 사진번호 열 추가(사진증거 참조란). 실제 이미지 업로드 아님.",
+    "design_gate_ref": "WO-REF01-060-B16-FIELD-COMPLETENESS-001"
   },
   "document": {
     "title": "안전시설물 설치확인서",
@@ -28,9 +29,7 @@
     "subject": "산업안전보건 실무서식",
     "creator": "TAI",
     "producer": "TAI Document Pipeline v1",
-    "page": {
-      "orientation": "portrait"
-    }
+    "page": { "orientation": "portrait" }
   },
   "sections": [
     {
@@ -47,15 +46,16 @@
     {
       "type": "repeat_table",
       "id": "S02",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 시설물별 설치 확인 반복 기록표.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 시설물별 설치 확인 반복 기록표. B16: 사진번호 열 추가.",
       "default_row_count": 10,
       "min_row_height_mm": 8,
       "columns": [
         { "id": "F01_NO",     "label": "번호",              "width_mm": 10 },
-        { "id": "F02_NAME",   "label": "시설물명/규격",     "width_mm": 70 },
-        { "id": "F03_LOC",    "label": "설치위치",          "width_mm": 40 },
+        { "id": "F02_NAME",   "label": "시설물명·규격",     "width_mm": 58 },
+        { "id": "F03_LOC",    "label": "설치위치",          "width_mm": 36 },
         { "id": "F04_QTY",    "label": "수량",              "width_mm": 14 },
-        { "id": "F05_RESULT", "label": "확인결과(입력)",    "width_mm": 36 }
+        { "id": "F05_RESULT", "label": "확인결과(입력)",    "width_mm": 30 },
+        { "id": "F06_PHOTO",  "label": "사진번호",          "width_mm": 22 }
       ]
     },
     {
