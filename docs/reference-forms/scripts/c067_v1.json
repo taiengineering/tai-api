@@ -1,0 +1,69 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B15-BULK-BUILD-001",
+    "form_type": "CHECKLIST",
+    "source_id": "REF-C067",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "EXISTING_RESEARCH_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "DB_PROPOSED_FIELDS_UNVERIFIED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "건설현장 안전점검",
+    "work_trigger": "건설현장 일일 안전점검 실시 후",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "기존 DB proposed_fields 6개 존재(FIELDS_UNVERIFIED). 건설현장 일일 체크리스트. P-03(순찰일지)과 기록 구조 상이.",
+    "design_gate_ref": "WO-REF01-060-B15-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "현장 일일 안전점검 기록표",
+    "doc_id": "TAI-FORM-C067-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "EXISTING_RESEARCH_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "현장명" },
+        { "id": "F02", "label": "점검일" },
+        { "id": "F03", "label": "점검자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "EXISTING_RESEARCH_PROPOSAL. 일일 안전점검 항목 반복 기록표.",
+      "default_row_count": 15,
+      "min_row_height_mm": 8,
+      "columns": [
+        { "id": "F01_NO",      "label": "번호",                          "width_mm": 10 },
+        { "id": "F02_ITEM",    "label": "점검 항목",                      "width_mm": 70 },
+        { "id": "F03_RESULT",  "label": "점검 결과(양호/불량/해당없음)",   "width_mm": 36 },
+        { "id": "F04_ACTION",  "label": "조치 내용",                      "width_mm": 36 },
+        { "id": "F05_CONFIRM", "label": "확인",                           "width_mm": 18 }
+      ]
+    },
+    {
+      "type": "approval",
+      "id": "S03",
+      "source_note": "EXISTING_RESEARCH_PROPOSAL. 점검자 서명란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "점검자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}
