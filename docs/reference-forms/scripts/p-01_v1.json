@@ -1,7 +1,7 @@
 {
   "_meta": {
     "wo": "WO-REF01-060-B10-BULK-BUILD-001",
-    "correction_wo": "WO-REF01-060-B16-FIELD-COMPLETENESS-001",
+    "correction_wo": "WO-REF01-060-B16-P01-TRANSFER-FIX-002",
     "form_type": "PLAN",
     "source_id": "P-01",
     "schema_version": "common-v1",
@@ -19,8 +19,8 @@
     "layout_variant": "TAI_EDITABLE_VARIANT",
     "source_layout_exact": false,
     "design_gate_status": "GPT_REVIEW_REQUIRED",
-    "design_gate_notes": "B16 교정: 공종·인터페이스 위험 열 추가, 작업 예정일·총괄 책임자 기본정보 추가, 승인·전달 확인란 신설.",
-    "design_gate_ref": "WO-REF01-060-B16-FIELD-COMPLETENESS-001"
+    "design_gate_notes": "B16-P01-FIX-002: 전달 확인 입력란(전달 대상·전달 일시·전달 확인자) 신설. 페이지 유지 위해 repeat_table 8→7행.",
+    "design_gate_ref": "WO-REF01-060-B16-P01-TRANSFER-FIX-002"
   },
   "document": {
     "title": "D-1 내일 작업계획·위험조율표",
@@ -48,7 +48,7 @@
       "type": "repeat_table",
       "id": "S02",
       "source_note": "TAI_PRACTICAL_PROPOSAL. 익일 작업계획 반복 기록표. B16: 공종·인터페이스 위험 열 추가.",
-      "default_row_count": 8,
+      "default_row_count": 7,
       "min_row_height_mm": 9,
       "columns": [
         { "id": "F01_NO",    "label": "번호",            "width_mm": 10 },
@@ -69,9 +69,20 @@
       "min_height_mm": 20
     },
     {
-      "type": "approval",
+      "type": "labeled_grid",
       "id": "S04",
-      "source_note": "TAI_PRACTICAL_PROPOSAL. 승인·전달 확인란. B16 신설.",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 전달 확인 입력란. B16-P01-FIX-002 신설.",
+      "section_label": "전달 확인",
+      "row_height_mm": 8,
+      "rows": [
+        [ { "label": "전달 대상(업체/담당자)" }, { "label": "전달 일시" } ],
+        [ { "label": "전달 확인자" },             { "label": "서명" } ]
+      ]
+    },
+    {
+      "type": "approval",
+      "id": "S05",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 승인란.",
       "total_width_mm": 170,
       "fields": [
         { "id": "A01", "label": "작성자" },

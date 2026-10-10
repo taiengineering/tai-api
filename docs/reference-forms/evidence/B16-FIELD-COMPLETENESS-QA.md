@@ -1,7 +1,8 @@
 ---
 wo: WO-REF01-060-B16-FIELD-COMPLETENESS-001
+correction_wo: WO-REF01-060-B16-P01-TRANSFER-FIX-002
 base_wo: WO-REF01-060-B11-BULK-BUILD-001
-date: 2026-10-10
+date: 2026-10-11
 status: FIELD_COMPLETENESS_CORRECTED
 publication: NOT_FOR_PUBLICATION
 ---
@@ -10,6 +11,7 @@ publication: NOT_FOR_PUBLICATION
 
 WO-REF01-060-B16-FIELD-COMPLETENESS-001 교정 결과 증거 문서.
 교정 대상: FIELD_COMPLETENESS_HOLD 9종. 교정 후 18 파일 재빌드.
+P-01 전달 확인란 추가 교정(WO-REF01-060-B16-P01-TRANSFER-FIX-002): 2파일 추가 재빌드.
 
 ## 1. 교정 대상 및 교정 내용 행렬
 
@@ -21,7 +23,7 @@ WO-REF01-060-B16-FIELD-COMPLETENESS-001 교정 결과 증거 문서.
 | EQUIP-03 | 장비 기종·이동경로·추락방지 누락 | S01 장비 기종 추가(7fields), S02 labeled_grid 신설(이동경로·바닥전도·추락방지·비상조치) |
 | EQUIP-04 | 인양물·작업반경·지반 조건 누락 | S01 인양물명·인양 중량(ton) 추가(8fields), S02 labeled_grid 신설(작업반경·지반·운용신호·통제조치) |
 | EQUIP-05 | 작업구역·지반 조건·접근통제 누락 | S02 labeled_grid 신설(작업구역·지반·접근통제·매설물·운행계획·유도자, 3rows) |
-| P-01 | 공종·인터페이스 위험·승인란 누락 | S01 작업 예정일·총괄 책임자 추가(5fields), S02 공종+인터페이스 위험 열 추가(8col/170mm), S04 승인란 신설 |
+| P-01 | 공종·인터페이스 위험·전달 확인란 누락 | S01 작업 예정일·총괄 책임자 추가(5fields), S02 공종+인터페이스 위험 열 추가(8col/170mm), S04 labeled_grid 전달 확인(전달 대상·전달 일시·전달 확인자·서명) 신설, S05 승인란 |
 | ENV-04 | 설비 중지시간 기재란 누락 | S02 labeled_grid 신설(중지 시작·중지 종료) |
 | P-10 | 사진증거 참조란 누락 | S02 사진번호 열 추가(6col/170mm) |
 
@@ -37,7 +39,7 @@ WO-REF01-060-B16-FIELD-COMPLETENESS-001 교정 결과 증거 문서.
 | EQUIP-03 | (FIELD_COMPLETENESS_HOLD 이전 버전) | aaedf3f0c913d702df054a60d2ffe125aa4e8f97e9f4b8a68ac402d83a42fda6 |
 | EQUIP-04 | (FIELD_COMPLETENESS_HOLD 이전 버전) | f5772fccaa44cf96ac0411e4cc4af4ba3dfd173ba09df200370b786939ba65ad |
 | EQUIP-05 | (FIELD_COMPLETENESS_HOLD 이전 버전) | 902cf0c49efd2ee0e98e00eb30ad4fe809b78c99a6a3c8a6aefa0532d8354a21 |
-| P-01 | (FIELD_COMPLETENESS_HOLD 이전 버전) | e47c2bac02bc625d8543093366655b40e6179be1502f6c99f3429d9a38de85fc |
+| P-01 | (FIELD_COMPLETENESS_HOLD 이전 버전) | bf6f1afb27917dc267970a5cd17b27a80710c1a8585aafa4b000ad6760199f9c |
 | ENV-04 | (FIELD_COMPLETENESS_HOLD 이전 버전) | 3fe5f8ba6c710a67668e9987f8f36e24e0940f3b2f8054247edaed3077f4eed7 |
 | P-10 | (FIELD_COMPLETENESS_HOLD 이전 버전) | 6f68350d9d2ea597197886d6b04be5f534e1817eaae9b1e579e0f9cf68707e57 |
 
@@ -51,7 +53,7 @@ WO-REF01-060-B16-FIELD-COMPLETENESS-001 교정 결과 증거 문서.
 | EQUIP-03 | 2cacded75d15c1141846066c7e4d3c31413e8132d0e6a1816165c85fa3433985 | 2dfbf92bdf1414e7e02edb34b926219afc254162b7b53f7ee02d9e55b3aa6877 |
 | EQUIP-04 | 56fc788c319b4a2f3cd70e1d2ec650d9994ed7306a9473271ed8b28dc2b8f2bc | 954231d7442a4d5a415afc745c89ee4d93935bc3a6f839dd5897961790f76bdc |
 | EQUIP-05 | 5f810e7c70c740be30c4feaac06cc87959aa260f024c8da6c218a094e2331d5e | 93936411caffea6f69220fc60d1e0115d08fc5d260980453c0c9cf77ddbc1450 |
-| P-01 | 6d3bd85c525b95b3fd08d0b6aa0509c513eeeb6d685e361b9d449b1d0f9bfef1 | 6a9c78833cad69e611563f052c50ec99e4c17165daf0f48cfadd2f41e51743e8 |
+| P-01 | 6d3bd85c525b95b3fd08d0b6aa0509c513eeeb6d685e361b9d449b1d0f9bfef1 | cb95dbdefdd0b896544badcaadfeb9a3b4a2c68d584480ebcc9e80f3163594d0 |
 | ENV-04 | 402b855e36c7e72432fbbd7989c192be08bd7042a38c5916b79996c74b313bc2 | 83b015496843864d217f4b72ddddb44742344947ce44123b69e7f30cbe741f9d |
 | P-10 | 9fb3b49b483700b5fedaeac1cdb39f56a5d1fe698e6f734e23cac57fc07f690e | 3ee2e3c8d149912d97642a7525b3ce75fcd49f501881573d6595803404663409 |
 
@@ -65,7 +67,7 @@ WO-REF01-060-B16-FIELD-COMPLETENESS-001 교정 결과 증거 문서.
 | EQUIP-03 | 50b50ae1f225f90111a16953ae21382f4d09351671ad6b4452e2055646e5db81 | 8d1cc7f4c33fb4680e1ae43cc3ba44c47d25e035004e5d57cf6d70f474b525b7 |
 | EQUIP-04 | ee11bcc8816a5dc34797faf6e37ddfa4750ddb40fe42b133b8b60062fd5eec51 | c377e50a336f2ee0f83ac28452c3a88226b91c8622a7eeceedbbc10c9a40ea8c |
 | EQUIP-05 | b7082f993fda33009f6b9db5d4f046bc73d5fd5874a0d212abb8e29beb488d0c | d8f72ee86c29c123ca06bf268f89c7456d8320fab015230e95496e68656ba8d7 |
-| P-01 | 8b41d0be9a4cbc72ff096d4ddedbbe74f2d75274e1c8671792d5093dd35b56ff | 582df94a551682fe78adf98e8540b7e881da5a098e189652fc7b91b492e94a5b |
+| P-01 | 8b41d0be9a4cbc72ff096d4ddedbbe74f2d75274e1c8671792d5093dd35b56ff | e0eb9700a7cc9cf41be02b749c6d349ff6c0ea903ecafce4e989e818ca5349bf |
 | ENV-04 | 90176011cd3572009d0ebc06aad373693fc29fa3331699ba31cddd7d5d0c15f0 | 837f96100ecce160693b2a409b904c83e87b2b7c94f59ba53be028de548d67b2 |
 | P-10 | d29adb9514056af72addfbec57895af98a2f60b51e985ed642b72b9db843d9b3 | 3015f6d00160d985a2514727d404f91e6a002b1ddafdf82b2529b44c39d9b4cc |
 
@@ -97,5 +99,8 @@ WO-REF01-060-B16-FIELD-COMPLETENESS-001 교정 결과 증거 문서.
 
 교정 전 출력물 18건(PDF 9 + DOCX 9) 격리 위치:
 `docs/reference-forms/evidence/b16-field-fix-20261010/`
+
+P-01 전달 확인란 추가 교정 전 출력물 2건(PDF 1 + DOCX 1) 격리 위치:
+`docs/reference-forms/evidence/b16-p01-fix-20261011/`
 
 ARCHIVE-MANIFEST.md에 교정 전 SHA256 전체 기록.
