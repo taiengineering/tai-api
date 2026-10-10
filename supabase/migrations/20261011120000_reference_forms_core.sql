@@ -228,7 +228,7 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     NEW.content_hash = encode(
-        public.digest(
+        extensions.digest(
             NEW.canonical_slug
             || E'\x1F'
             || NEW.title

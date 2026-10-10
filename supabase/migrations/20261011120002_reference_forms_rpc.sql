@@ -2,12 +2,13 @@
 -- Migration: 20261011120002_reference_forms_rpc.sql
 -- Description: Reference Forms CMS — RPC functions and public view
 -- All functions: SECURITY INVOKER, SET search_path = ''
+-- All table references fully qualified (public.*) for empty search_path safety.
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
 -- fn_assert_slug_globally_unique
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION fn_assert_slug_globally_unique(
+CREATE OR REPLACE FUNCTION public.fn_assert_slug_globally_unique(
     p_slug      TEXT,
     p_form_id   UUID
 )
@@ -20,7 +21,7 @@ DECLARE
     v_existing_form_id UUID;
 BEGIN
     SELECT form_id INTO v_existing_form_id
-    FROM reference_form_slug_registry
+    FROM public.reference_form_slug_registry
     WHERE slug = p_slug
     LIMIT 1;
 
@@ -32,8 +33,10 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- rpc_publish_reference_form
+-- p_skip_preview_gate: allows bypassing GATE-6 preview check.
+-- Restricted to service_role callers via REVOKE below.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION rpc_publish_reference_form(
+CREATE OR REPLACE FUNCTION public.rpc_publish_reference_form(
     p_form_id           UUID,
     p_actor             TEXT,
     p_payload           JSONB    DEFAULT '{}',
@@ -55,12 +58,11 @@ DECLARE
     v_approved_entry    JSONB;
     v_approved_sha256   TEXT;
     v_match_found       BOOLEAN;
-    v_key               TEXT;
     v_expected_fid      TEXT;
 BEGIN
     -- GATE-1: form must exist and be DRAFT
     SELECT * INTO v_form
-    FROM reference_forms
+    FROM public.reference_forms
     WHERE id = p_form_id;
 
     IF NOT FOUND THEN
@@ -73,7 +75,7 @@ BEGIN
 
     -- GATE-2: must have a current APPROVED approval
     SELECT * INTO v_approval
-    FROM reference_form_approvals
+    FROM public.reference_form_approvals
     WHERE form_id = p_form_id
       AND is_current = true
       AND approval_status = 'APPROVED'
@@ -85,7 +87,7 @@ BEGIN
 
     -- GATE-3: content_hash must match approved_content_hash
     SELECT * INTO v_content
-    FROM reference_form_content
+    FROM public.reference_form_content
     WHERE form_id = p_form_id
       AND lang = 'ko'
     LIMIT 1;
@@ -101,7 +103,7 @@ BEGIN
 
     -- GATE-7: must have at least 1 active file (check before GATE-4 loop)
     SELECT COUNT(*) INTO v_file_count
-    FROM reference_form_files
+    FROM public.reference_form_files
     WHERE form_id = p_form_id AND is_active = true;
 
     IF v_file_count = 0 THEN
@@ -111,7 +113,7 @@ BEGIN
     -- GATE-4 part A: for each active file → qa_status='QA_PASS', approved_at IS NOT NULL,
     -- file is in approved_file_hashes (by file_id), sha256 matches
     FOR v_file IN
-        SELECT * FROM reference_form_files
+        SELECT * FROM public.reference_form_files
         WHERE form_id = p_form_id AND is_active = true
     LOOP
         IF v_file.qa_status != 'QA_PASS' THEN
@@ -151,7 +153,7 @@ BEGIN
         v_expected_fid := v_approved_entry->>'file_id';
 
         SELECT COUNT(*) INTO v_file_count
-        FROM reference_form_files
+        FROM public.reference_form_files
         WHERE id = v_expected_fid::uuid
           AND form_id = p_form_id
           AND is_active = true;
@@ -164,7 +166,7 @@ BEGIN
 
     -- GATE-5: no source with rights_status IN ('REVIEW_REQUIRED','BLOCKED')
     PERFORM 1
-    FROM reference_form_sources
+    FROM public.reference_form_sources
     WHERE form_id = p_form_id
       AND is_active = true
       AND rights_status IN ('REVIEW_REQUIRED', 'BLOCKED')
@@ -177,7 +179,7 @@ BEGIN
     -- GATE-6: at least 1 published QA_PASS preview artifact (if not skipped)
     IF NOT p_skip_preview_gate THEN
         SELECT COUNT(*) INTO v_preview_count
-        FROM reference_form_preview_artifacts
+        FROM public.reference_form_preview_artifacts
         WHERE form_id = p_form_id
           AND is_published = true
           AND qa_status = 'QA_PASS';
@@ -188,20 +190,20 @@ BEGIN
     END IF;
 
     -- All gates passed — publish
-    UPDATE reference_forms
-    SET status           = 'PUBLISHED',
-        published_at     = now(),
-        owner_approved   = true,
+    UPDATE public.reference_forms
+    SET status            = 'PUBLISHED',
+        published_at      = now(),
+        owner_approved    = true,
         owner_approved_at = now()
     WHERE id = p_form_id;
 
     -- Insert event
-    INSERT INTO reference_form_events (form_id, event_type, actor, payload)
+    INSERT INTO public.reference_form_events (form_id, event_type, actor, payload)
     VALUES (p_form_id, 'PUBLISHED', p_actor, p_payload)
     RETURNING id INTO v_event_id;
 
     -- Enqueue search index sync
-    PERFORM enqueue_search_index_sync(
+    PERFORM public.enqueue_search_index_sync(
         'REFERENCE_FORM',
         'REFERENCE_FORM',
         p_form_id::text,
@@ -216,7 +218,7 @@ $$;
 -- ---------------------------------------------------------------------------
 -- rpc_unpublish_reference_form
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION rpc_unpublish_reference_form(
+CREATE OR REPLACE FUNCTION public.rpc_unpublish_reference_form(
     p_form_id   UUID,
     p_actor     TEXT,
     p_reason    TEXT DEFAULT NULL
@@ -231,7 +233,7 @@ DECLARE
     v_event_id  BIGINT;
 BEGIN
     SELECT * INTO v_form
-    FROM reference_forms
+    FROM public.reference_forms
     WHERE id = p_form_id;
 
     IF NOT FOUND THEN
@@ -242,12 +244,12 @@ BEGIN
         RAISE EXCEPTION 'UNPUBLISH_FAILED: form % status is %, expected PUBLISHED', p_form_id, v_form.status;
     END IF;
 
-    UPDATE reference_forms
-    SET status     = 'DRAFT',
+    UPDATE public.reference_forms
+    SET status       = 'DRAFT',
         published_at = NULL
     WHERE id = p_form_id;
 
-    INSERT INTO reference_form_events (form_id, event_type, actor, payload)
+    INSERT INTO public.reference_form_events (form_id, event_type, actor, payload)
     VALUES (
         p_form_id,
         'UNPUBLISHED',
@@ -256,7 +258,7 @@ BEGIN
     )
     RETURNING id INTO v_event_id;
 
-    PERFORM enqueue_search_index_sync(
+    PERFORM public.enqueue_search_index_sync(
         'REFERENCE_FORM',
         'REFERENCE_FORM',
         p_form_id::text,
@@ -271,7 +273,7 @@ $$;
 -- ---------------------------------------------------------------------------
 -- rpc_change_slug_reference_form
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION rpc_change_slug_reference_form(
+CREATE OR REPLACE FUNCTION public.rpc_change_slug_reference_form(
     p_form_id   UUID,
     p_new_slug  TEXT,
     p_actor     TEXT
@@ -289,7 +291,7 @@ DECLARE
 BEGIN
     -- 1. Lock content row and get current slug
     SELECT * INTO v_content
-    FROM reference_form_content
+    FROM public.reference_form_content
     WHERE form_id = p_form_id AND lang = 'ko'
     FOR UPDATE;
 
@@ -311,7 +313,7 @@ BEGIN
 
     -- 2c. Ensure new slug was never used by THIS form before (history check)
     PERFORM 1
-    FROM reference_form_slug_registry
+    FROM public.reference_form_slug_registry
     WHERE slug = p_new_slug
       AND form_id = p_form_id
       AND slug_status = 'HISTORY';
@@ -321,15 +323,15 @@ BEGIN
     END IF;
 
     -- 2d. Ensure no conflict with other forms
-    PERFORM fn_assert_slug_globally_unique(p_new_slug, p_form_id);
+    PERFORM public.fn_assert_slug_globally_unique(p_new_slug, p_form_id);
 
     -- 3. Update registry: old slug CANONICAL → HISTORY
-    UPDATE reference_form_slug_registry
+    UPDATE public.reference_form_slug_registry
     SET slug_status = 'HISTORY'
     WHERE slug = v_old_slug AND form_id = p_form_id;
 
     -- 4. Insert new slug as CANONICAL
-    INSERT INTO reference_form_slug_registry (slug, form_id, slug_status)
+    INSERT INTO public.reference_form_slug_registry (slug, form_id, slug_status)
     VALUES (p_new_slug, p_form_id, 'CANONICAL')
     ON CONFLICT DO NOTHING;
 
@@ -340,16 +342,16 @@ BEGIN
     END IF;
 
     -- 6. Update reference_form_content (triggers hash recalc via trg_reference_form_content_hash)
-    UPDATE reference_form_content
+    UPDATE public.reference_form_content
     SET canonical_slug = p_new_slug
     WHERE form_id = p_form_id AND lang = 'ko';
 
     -- 7. Insert slug_history
-    INSERT INTO reference_form_slug_history (form_id, old_slug, new_slug)
+    INSERT INTO public.reference_form_slug_history (form_id, old_slug, new_slug)
     VALUES (p_form_id, v_old_slug, p_new_slug);
 
     -- 8. Insert event + enqueue
-    INSERT INTO reference_form_events (form_id, event_type, actor, payload)
+    INSERT INTO public.reference_form_events (form_id, event_type, actor, payload)
     VALUES (
         p_form_id,
         'SLUG_CHANGED',
@@ -358,7 +360,7 @@ BEGIN
     )
     RETURNING id INTO v_event_id;
 
-    PERFORM enqueue_search_index_sync(
+    PERFORM public.enqueue_search_index_sync(
         'REFERENCE_FORM',
         'REFERENCE_FORM',
         p_form_id::text,
@@ -372,8 +374,9 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- reference_form_public_view
+-- file_ref (storage path) is NOT exposed. Only file metadata (id, sha256).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW reference_form_public_view
+CREATE OR REPLACE VIEW public.reference_form_public_view
 WITH (security_invoker = true)
 AS
 SELECT
@@ -382,45 +385,80 @@ SELECT
     rfc.title,
     rfc.description,
     rf.published_at,
-    GREATEST(rf.updated_at, rfc.updated_at)     AS updated_at,
-    ra.id                                        AS approval_id,
-    (rfc.content_hash = ra.approved_content_hash) AS content_approved,
+    GREATEST(rf.updated_at, rfc.updated_at)                 AS updated_at,
+    ra.id                                                    AS approval_id,
+    (rfc.content_hash = ra.approved_content_hash)           AS content_approved,
     COALESCE(
         (
-            SELECT array_agg(f.file_ref ORDER BY f.created_at)
-            FROM reference_form_files f
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'file_id',     f.id,
+                    'sha256',      f.sha256,
+                    'approved_at', f.approved_at
+                )
+                ORDER BY f.created_at
+            )
+            FROM public.reference_form_files f
             WHERE f.form_id = rf.id
               AND f.is_active = true
               AND f.qa_status = 'QA_PASS'
               AND f.approved_at IS NOT NULL
         ),
-        ARRAY[]::TEXT[]
-    )                                            AS qa_pass_files,
+        '[]'::JSONB
+    )                                                        AS qa_pass_files,
     COALESCE(
         (
-            SELECT array_agg(DISTINCT split_part(f2.file_ref, '.', -1) ORDER BY split_part(f2.file_ref, '.', -1))
-            FROM reference_form_files f2
+            SELECT array_agg(DISTINCT lower(split_part(f2.file_ref, '.', -1))
+                             ORDER BY lower(split_part(f2.file_ref, '.', -1)))
+            FROM public.reference_form_files f2
             WHERE f2.form_id = rf.id
               AND f2.is_active = true
               AND f2.qa_status = 'QA_PASS'
         ),
         ARRAY[]::TEXT[]
-    )                                            AS formats,
+    )                                                        AS formats,
     COALESCE(
         (
             SELECT array_agg(ll.legacy_code ORDER BY ll.legacy_code)
-            FROM reference_form_legacy_links ll
+            FROM public.reference_form_legacy_links ll
             WHERE ll.form_id = rf.id
               AND ll.is_active = true
         ),
         ARRAY[]::TEXT[]
-    )                                            AS legacy_codes
-FROM reference_forms rf
-JOIN reference_form_content rfc
+    )                                                        AS legacy_codes
+FROM public.reference_forms rf
+JOIN public.reference_form_content rfc
     ON rfc.form_id = rf.id AND rfc.lang = 'ko'
-JOIN reference_form_approvals ra
+JOIN public.reference_form_approvals ra
     ON ra.form_id = rf.id
     AND ra.is_current = true
     AND ra.approval_status = 'APPROVED'
 WHERE rf.status = 'PUBLISHED'
   AND rfc.content_hash = ra.approved_content_hash;
+
+-- ---------------------------------------------------------------------------
+-- REVOKE from untrusted roles (p_skip_preview_gate restricted to service_role)
+-- Conditional: roles may not exist in non-Supabase environments.
+-- ---------------------------------------------------------------------------
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+        REVOKE EXECUTE ON FUNCTION public.rpc_publish_reference_form(UUID,TEXT,JSONB,BOOLEAN)   FROM anon;
+        REVOKE EXECUTE ON FUNCTION public.rpc_unpublish_reference_form(UUID,TEXT,TEXT)          FROM anon;
+        REVOKE EXECUTE ON FUNCTION public.rpc_change_slug_reference_form(UUID,TEXT,TEXT)        FROM anon;
+        REVOKE EXECUTE ON FUNCTION public.fn_assert_slug_globally_unique(TEXT,UUID)             FROM anon;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+        REVOKE EXECUTE ON FUNCTION public.rpc_publish_reference_form(UUID,TEXT,JSONB,BOOLEAN)   FROM authenticated;
+        REVOKE EXECUTE ON FUNCTION public.rpc_unpublish_reference_form(UUID,TEXT,TEXT)          FROM authenticated;
+        REVOKE EXECUTE ON FUNCTION public.rpc_change_slug_reference_form(UUID,TEXT,TEXT)        FROM authenticated;
+        REVOKE EXECUTE ON FUNCTION public.fn_assert_slug_globally_unique(TEXT,UUID)             FROM authenticated;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+        GRANT EXECUTE ON FUNCTION public.rpc_publish_reference_form(UUID,TEXT,JSONB,BOOLEAN)    TO service_role;
+        GRANT EXECUTE ON FUNCTION public.rpc_unpublish_reference_form(UUID,TEXT,TEXT)           TO service_role;
+        GRANT EXECUTE ON FUNCTION public.rpc_change_slug_reference_form(UUID,TEXT,TEXT)         TO service_role;
+        GRANT EXECUTE ON FUNCTION public.fn_assert_slug_globally_unique(TEXT,UUID)              TO service_role;
+    END IF;
+END;
+$$;
