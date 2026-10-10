@@ -490,6 +490,7 @@ def run_diagnosis(
 
     sector = normalize_sector_db(body.sector)
     engine_sector = "MANUFACTURING" if sector == "INDUSTRIAL" else sector
+    leg_sector = sector  # LEG-facing canonical name; engine_sector keeps MANUFACTURING for source loaders
 
     _fd = getattr(body, "form_data", None) or {}
 
@@ -761,7 +762,7 @@ def run_diagnosis(
         #   legacy INDUSTRIAL canonical29 우회를 걷어내고, sector 3면 모두 build_unified_leg_input 로 조립한다.
         #   BUILDING/CONSTRUCTION 은 build_facility EXACT parity, INDUSTRIAL 은 WO-007 intended-delta 만 노출.
         step1_body = _build_unified_step1_body(
-            engine_sector=engine_sector,
+            engine_sector=leg_sector,
             inp=inp,
             workers=workers,
             body=body,
