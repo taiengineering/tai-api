@@ -1,14 +1,19 @@
 """REFERENCE_FORM adapter — WO-020.
 
-Source of truth: `reference_form_public_view`.
-Publication gate is enforced by the view:
-  status='PUBLISHED' AND content_hash = approved_content_hash AND approval_status='APPROVED'.
-No secondary filter is needed here.
+Source of truth: `reference_form_public_view` (PUBLISHED + approved_content_hash gate)
+                 + `reference_form_sources` (rights CLEARED gate, same as detail API)
+                 + `reference_form_content` (body_html for full-text search)
+
+Publication gate:  view WHERE clause — PUBLISHED + content_hash = approved_content_hash
+Rights gate:       all active sources must have rights_status = 'CLEARED';
+                   any REVIEW_REQUIRED/BLOCKED source → form excluded (fail-closed)
+Body:              reference_form_content.body_html injected as _body_html by the binding
 
 Canonical detail route: /reference-form/{canonical_slug}
 """
 from __future__ import annotations
 
+import re
 from typing import Callable, Iterable, Iterator, Optional
 
 from services.shared_search.adapters._common import (
@@ -18,6 +23,14 @@ from services.shared_search.adapters._common import (
 
 
 Fetcher = Callable[[], Iterable[dict]]
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return _TAG_RE.sub(" ", value)
 
 
 class ReferenceFormAdapter:
@@ -57,8 +70,10 @@ def _normalize(row: dict) -> Optional[dict]:
     if ts is MISSING_TIMESTAMP:
         return None
     description = row.get("description") or ""
-    # legacy_codes (list[str] | None) add acronym/code-style keywords.
+    # legacy_codes (list[str] | None) add acronym/code-style aliases.
     legacy_codes: list[str] = list(row.get("legacy_codes") or [])
+    # _body_html is injected by the production binding after rights check.
+    body_text = _strip_html(row.get("_body_html") or "").strip()
     return {
         "object_type": ReferenceFormAdapter.object_type,
         "canonical_id": str(form_id),
@@ -66,7 +81,7 @@ def _normalize(row: dict) -> Optional[dict]:
         "source_key": str(canonical_slug),
         "title": str(title),
         "summary": description or None,
-        "search_text": " ".join(as_str_list([title, description] + legacy_codes)),
+        "search_text": " ".join(as_str_list([title, description, body_text] + legacy_codes)),
         "aliases": legacy_codes,
         "keywords": [],
         "subjects": [],
