@@ -25,11 +25,12 @@ from services.shared_search.adapters.marketing_knowledge import MarketingKnowled
 from services.shared_search.adapters.precedent import PrecedentAdapter
 from services.shared_search.adapters.legal import LegalAdapter
 from services.shared_search.adapters.risk import RiskAdapter
+from services.shared_search.adapters.reference_form import ReferenceFormAdapter
 
 __all__ = [
     "DomainAdapter", "AdapterBlockedSubtype",
     "GuideAdapter", "SafetyMaterialAdapter", "CsiAccidentAdapter",
     "ChemAdapter", "ChemRegulationAdapter", "KnowledgeAdapter",
     "MarketingKnowledgeAdapter", "PrecedentAdapter",
-    "LegalAdapter", "RiskAdapter",
+    "LegalAdapter", "RiskAdapter", "ReferenceFormAdapter",
 ]

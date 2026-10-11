@@ -48,6 +48,7 @@ _PUBLIC_OBJECT_TYPES: list[str] = [
     "KNOWLEDGE",
     "PRECEDENT",
     "LEGAL",
+    "REFERENCE_FORM",
 ]
 
 _TYPE_MAP: dict[str, list[str]] = {
@@ -61,18 +62,20 @@ _TYPE_MAP: dict[str, list[str]] = {
     "precedent":        ["PRECEDENT"],
     "law":              ["LEGAL"],
     "legal":            ["LEGAL"],
+    "reference_form":   ["REFERENCE_FORM"],
 }
 
 # Section order for /sections endpoint (§12 fixed presentation order)
 _SECTION_TYPES: list[tuple[str, str]] = [
-    ("knowledge",      "KNOWLEDGE"),
-    ("guide",          "GUIDE"),
-    ("law",            "LEGAL"),
-    ("accident",       "CSI_ACCIDENT"),
-    ("material",       "SAFETY_MATERIAL"),
-    ("chem",           "CHEM"),
-    ("keco",           "CHEM_REGULATION"),
-    ("precedent",      "PRECEDENT"),
+    ("knowledge",        "KNOWLEDGE"),
+    ("guide",            "GUIDE"),
+    ("reference_form",   "REFERENCE_FORM"),
+    ("law",              "LEGAL"),
+    ("accident",         "CSI_ACCIDENT"),
+    ("material",         "SAFETY_MATERIAL"),
+    ("chem",             "CHEM"),
+    ("keco",             "CHEM_REGULATION"),
+    ("precedent",        "PRECEDENT"),
 ]
 
 
