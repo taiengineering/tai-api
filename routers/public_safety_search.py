@@ -1148,6 +1148,26 @@ def _reset_csi_sitemap_dep():
     _csi_sitemap_supabase = None
 
 
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/sitemap/reference-forms — WO-SEO-REF-FORM-SITEMAP-001
+# ---------------------------------------------------------------------------
+
+_ref_form_sitemap_supabase = None
+
+
+def _ref_form_sitemap_dep():
+    global _ref_form_sitemap_supabase
+    if _ref_form_sitemap_supabase is None:
+        from db.supabase_client import get_supabase
+        _ref_form_sitemap_supabase = get_supabase()
+    return _ref_form_sitemap_supabase
+
+
+def _reset_ref_form_sitemap_dep():
+    global _ref_form_sitemap_supabase
+    _ref_form_sitemap_supabase = None
+
+
 @router.get("/sitemap/csi-accidents")
 def public_csi_sitemap_accidents(
     after_id: str = "",
@@ -1180,3 +1200,87 @@ def public_csi_sitemap_accidents(
         if uuid_part:
             result.append({"id": uuid_part, "updated_at": r.get("updated_at")})
     return result
+
+
+@router.get("/sitemap/reference-forms")
+def public_reference_forms_sitemap(
+    after_id: str = "",
+    limit: int = Query(default=1000, le=2000),
+):
+    """Cursor-paginated [{id, slug, updated_at}] for sitemap generation.
+
+    Filter: PUBLISHED + approved_content_hash match (via reference_form_public_view)
+    + all active sources CLEARED (same gate as ReferenceFormAdapter).
+
+    Cursor: after_id (UUID exclusive lower bound, stable UUID sort).
+    has_more inferred by caller from len(response) == limit.
+    Response fields: id (UUID), slug (canonical_slug), updated_at. No other fields.
+
+    Guarantees: returns fewer than limit items ONLY when the source view is exhausted.
+    Rights filter is applied per-chunk; pagination continues until limit is reached or
+    source is exhausted. DB errors → 503 (distinct from legitimately empty results).
+    """
+    from services.shared_search.adapters.reference_form import cleared_form_ids_or_raise
+
+    client = _ref_form_sitemap_dep()
+    result: list[dict] = []
+    cursor = after_id
+    CHUNK = limit
+
+    while len(result) < limit:
+        query = (
+            client.table("reference_form_public_view")
+            .select("id,canonical_slug,updated_at")
+            .order("id")
+            .limit(CHUNK)
+        )
+        if cursor:
+            query = query.gt("id", cursor)
+        resp = query.execute()
+        batch = list(resp.data or [])
+        if not batch:
+            break   # source exhausted
+
+        ids = [str(r["id"]) for r in batch if r.get("id")]
+        try:
+            cleared = cleared_form_ids_or_raise(client, ids)
+        except RuntimeError:
+            raise HTTPException(status_code=503, detail="rights check temporarily unavailable")
+
+        for r in batch:
+            fid = str(r.get("id") or "")
+            if fid and fid in cleared:
+                result.append({
+                    "id": fid,
+                    "slug": r.get("canonical_slug"),
+                    "updated_at": r.get("updated_at"),
+                })
+                if len(result) >= limit:
+                    break
+
+        if len(batch) < CHUNK:
+            break   # source exhausted
+        cursor = batch[-1]["id"]
+
+    return result[:limit]
+
+
+@router.get("/sitemap/reference-forms/latest-updated-at")
+def public_reference_forms_sitemap_latest_updated_at():
+    """Returns the most recent updated_at from reference_form_public_view.
+
+    Used by the sitemap index handler to set a dynamic lastmod for
+    sitemap_reference_forms.xml. Returns {} when no forms are published.
+    """
+    client = _ref_form_sitemap_dep()
+    resp = (
+        client.table("reference_form_public_view")
+        .select("updated_at")
+        .order("updated_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = list(resp.data or [])
+    if rows and rows[0].get("updated_at"):
+        return {"updated_at": rows[0]["updated_at"]}
+    return {}

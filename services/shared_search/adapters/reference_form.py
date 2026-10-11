@@ -14,7 +14,7 @@ Canonical detail route: /reference-form/{canonical_slug}
 from __future__ import annotations
 
 import re
-from typing import Callable, Iterable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 
 from services.shared_search.adapters._common import (
     MISSING_TIMESTAMP, as_str_list,
@@ -25,6 +25,61 @@ from services.shared_search.adapters._common import (
 Fetcher = Callable[[], Iterable[dict]]
 
 _TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _query_form_sources(client: Any, form_ids: list[str]) -> list[dict] | None:
+    """Query reference_form_sources for rights_status rows.
+
+    Returns the rows list, or None on query error.
+    """
+    if not form_ids:
+        return []
+    try:
+        r = (client.table("reference_form_sources")
+                 .select("form_id,rights_status")
+                 .in_("form_id", form_ids)
+                 .eq("is_active", True)
+                 .execute())
+        return list(getattr(r, "data", None) or [])
+    except Exception:
+        return None
+
+
+def _build_cleared_frozenset(sources: list[dict]) -> frozenset:
+    by_form: dict[str, list[str]] = {}
+    for s in sources:
+        fid = s.get("form_id")
+        if fid:
+            by_form.setdefault(str(fid), []).append(s.get("rights_status", ""))
+    return frozenset(
+        fid for fid, statuses in by_form.items()
+        if statuses and all(st == "CLEARED" for st in statuses)
+    )
+
+
+def cleared_form_ids(client: Any, form_ids: list[str]) -> frozenset:
+    """Return subset of form_ids where ALL active sources have rights_status='CLEARED'.
+
+    Fail-closed: returns empty frozenset on any query error.
+    Same gate as the detail API's _check_sources_cleared().
+    """
+    sources = _query_form_sources(client, form_ids)
+    if sources is None:
+        return frozenset()
+    return _build_cleared_frozenset(sources)
+
+
+def cleared_form_ids_or_raise(client: Any, form_ids: list[str]) -> frozenset:
+    """Same as cleared_form_ids but raises RuntimeError on query error.
+
+    Used by sitemap endpoint to distinguish DB errors from legitimately empty results.
+    """
+    if not form_ids:
+        return frozenset()
+    sources = _query_form_sources(client, form_ids)
+    if sources is None:
+        raise RuntimeError("reference_form_sources rights check failed")
+    return _build_cleared_frozenset(sources)
 
 
 def _strip_html(value: Optional[str]) -> str:

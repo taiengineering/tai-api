@@ -42,6 +42,7 @@ from services.shared_search.adapters import (
     KnowledgeAdapter, LegalAdapter, MarketingKnowledgeAdapter,
     PrecedentAdapter, ReferenceFormAdapter, RiskAdapter, SafetyMaterialAdapter,
 )
+from services.shared_search.adapters.reference_form import cleared_form_ids as _rf_cleared_ids
 from services.shared_search.source_reader import (
     SupabaseClient, paginate_supabase,
 )
@@ -693,32 +694,6 @@ def _make_reference_form_adapter(client: SupabaseClient) -> ReferenceFormAdapter
         "published_at,updated_at,legacy_codes"
     )
 
-    def _cleared_form_ids(form_ids: list[str]) -> frozenset:
-        """Return the subset of form_ids where ALL active sources are CLEARED
-        and at least one active source exists. Same gate as the detail API's
-        _check_sources_cleared(). Fail-closed: returns empty set on query error."""
-        if not form_ids:
-            return frozenset()
-        try:
-            r = (client.table("reference_form_sources")
-                     .select("form_id,rights_status")
-                     .in_("form_id", form_ids)
-                     .eq("is_active", True)
-                     .execute())
-            sources = list(getattr(r, "data", None) or [])
-        except Exception:
-            return frozenset()   # fail-closed
-        by_form: dict[str, list[str]] = {}
-        for s in sources:
-            fid = s.get("form_id")
-            if fid:
-                by_form.setdefault(str(fid), []).append(s.get("rights_status", ""))
-        # ≥1 active source AND all CLEARED
-        return frozenset(
-            fid for fid, statuses in by_form.items()
-            if statuses and all(st == "CLEARED" for st in statuses)
-        )
-
     def _body_html_map(form_ids: list[str]) -> dict[str, str]:
         """Batch-fetch body_html from reference_form_content (lang=ko).
         Returns empty strings for missing rows; never raises."""
@@ -752,7 +727,7 @@ def _make_reference_form_adapter(client: SupabaseClient) -> ReferenceFormAdapter
             if not rows:
                 break
             ids = [str(row["id"]) for row in rows if row.get("id")]
-            cleared = _cleared_form_ids(ids)
+            cleared = _rf_cleared_ids(client, ids)
             body_map = _body_html_map(ids)
             for row in rows:
                 fid = str(row.get("id") or "")
@@ -772,7 +747,7 @@ def _make_reference_form_adapter(client: SupabaseClient) -> ReferenceFormAdapter
         )
         if row is None:
             return None
-        if form_id not in _cleared_form_ids([form_id]):
+        if form_id not in _rf_cleared_ids(client, [form_id]):
             return None   # rights not CLEARED
         body_map = _body_html_map([form_id])
         row["_body_html"] = body_map.get(form_id, "")
