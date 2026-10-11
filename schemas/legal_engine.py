@@ -4,7 +4,7 @@ from typing import Annotated, Any, Dict, List, Optional
 
 import math
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator, model_validator
 
 
 class DiagnoseStep1Body(BaseModel):
@@ -82,6 +82,13 @@ class SafeIndustrialConsumerInput(BaseModel):
     truck_loading_height_m: Optional[float] = None
     has_manual_heavy_handling: Optional[bool] = None
     manual_handling_weight_kg: Optional[float] = None
+
+    # WO-008: Explicit Appendix3 classification (SAAS_APP3_ENABLED DEFAULT OFF).
+    # appendix3_item_no / is_real_estate_management: source facts for LEG projection.
+    # expected_app3_revision: control field — not passed to LEG runtime source.
+    appendix3_item_no: Optional[Annotated[StrictInt, Field(ge=1, le=49)]] = None
+    is_real_estate_management: Optional[StrictBool] = None
+    expected_app3_revision: Optional[Annotated[StrictInt, Field(ge=1)]] = None
 
     @field_validator("work_height_m", "truck_loading_height_m", "manual_handling_weight_kg")
     @classmethod
@@ -182,6 +189,16 @@ class SafeConstructionConsumerInput(BaseModel):
     recontracts_received_construction_work: Optional[bool] = None
     # PATCH-C: strict int >= 0; bool/float/string coercion forbidden (matches LEG contract.py).
     same_site_contracted_construction_work_count: Optional[Annotated[StrictInt, Field(ge=0)]] = None
+    # WO-008: Explicit Appendix3 classification (SAAS_APP3_ENABLED DEFAULT OFF).
+    # is_relationship_contractor / is_civil_construction: CONSTRUCTION child predicates for item49.
+    # Do NOT repurpose leads_and_manages_construction_execution (Art.68 fact, separate).
+    # appendix3_item_no / is_real_estate_management: source facts.
+    # expected_app3_revision: control field, not LEG source.
+    appendix3_item_no: Optional[Annotated[StrictInt, Field(ge=1, le=49)]] = None
+    is_real_estate_management: Optional[StrictBool] = None
+    is_relationship_contractor: Optional[StrictBool] = None
+    is_civil_construction: Optional[StrictBool] = None
+    expected_app3_revision: Optional[Annotated[StrictInt, Field(ge=1)]] = None
 
     @field_validator("work_height_m", "truck_loading_height_m", "manual_handling_weight_kg")
     @classmethod
@@ -292,6 +309,11 @@ class SafeBuildingConsumerInput(BaseModel):
     has_wet_land: Optional[bool] = None
     has_water_seepage_risk: Optional[bool] = None
     has_landfill_or_similar_ground: Optional[bool] = None
+    # WO-008: Explicit Appendix3 classification (SAAS_APP3_ENABLED DEFAULT OFF).
+    # existing validated override path applies when flag ON.
+    appendix3_item_no: Optional[Annotated[StrictInt, Field(ge=1, le=49)]] = None
+    is_real_estate_management: Optional[StrictBool] = None
+    expected_app3_revision: Optional[Annotated[StrictInt, Field(ge=1)]] = None
 
     @field_validator("work_height_m", "truck_loading_height_m", "manual_handling_weight_kg")
     @classmethod

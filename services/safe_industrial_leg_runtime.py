@@ -22,12 +22,16 @@ from services.canonical.saas_leg_source_adapter import build_saas_leg_step1
 from services.leg_diagnosis_svc import run_leg_diagnosis
 
 # SAFE 화면에서 직접 확보 가능한 canonical override field 13 (기존6 + GATE-3 신규7).
+# WO-008: +2 (appendix3_item_no, is_real_estate_management) — source facts only.
+# expected_app3_revision은 control field이므로 포함하지 않는다.
 SAFE_UI_OVERRIDE_FIELDS = (
     "ksic_major", "worker_count", "electric_capacity",
     "has_high_pressure_gas", "has_chemical_substance", "has_boiler",
     "building_use_type", "has_safety_manager", "work_height_m",
     "has_truck_loading_unloading", "truck_loading_height_m",
     "has_manual_heavy_handling", "manual_handling_weight_kg",
+    # WO-008 source facts
+    "appendix3_item_no", "is_real_estate_management",
 )
 
 # USER_CONFIRM 10축 — Safe route에서 assembler 자동 source를 차단, consumer explicit만 허용.
@@ -47,8 +51,17 @@ _SAFE_EXPLICIT_CONFIRM_FIELDS = (
 )
 
 
-def run_safe_industrial_leg(supabase, factory_id: str, consumer_input) -> Dict[str, Any]:
-    """SAFE INDUSTRIAL 공식 LEG 진단. full_result 반환(저장/결제 없음)."""
+def run_safe_industrial_leg(
+    supabase,
+    factory_id: str,
+    consumer_input,
+    app3_projection: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """SAFE INDUSTRIAL 공식 LEG 진단. full_result 반환(저장/결제 없음).
+
+    app3_projection: WO-008 서버 생성 AP01-05 leaves (flag ON 시만 비None).
+                     consumer override 이후, build_saas_leg_step1 이전에 values에 주입.
+    """
     # A. asset canonical (FROZEN assembler, READ ONLY)
     contract = assemble_industrial_marketing_contract(supabase, factory_id)
     values: Dict[str, Any] = dict(contract["values"])           # 정확히 29
@@ -74,6 +87,12 @@ def run_safe_industrial_leg(supabase, factory_id: str, consumer_input) -> Dict[s
             values[f] = overrides[f]
             provenance[f] = {"mode": "CONSUMER_OVERRIDE", "source": "safe.diagnosis-step1"}
             unresolved.discard(f)     # 명시 입력으로 해소(None 은 여기 안 옴)
+
+    # B''. WO-008: server AP01-05 projection injection (flag ON only).
+    #     override 이후, build_saas_leg_step1 이전. 서버 생성 leaves — client 직접 공급 금지.
+    if app3_projection:
+        for leaf_key, leaf_val in app3_projection.items():
+            values[leaf_key] = leaf_val
 
     # C. WO-010 STEP-2C : canonical29 final-cut 제거. TARGET_FIELDS 는 assembler 의 source contract
     #    로 계속 import(unresolved_fields 반환용) — 계약 파일 delta 0. source_facts 는 상한 없이

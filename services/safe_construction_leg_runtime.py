@@ -193,10 +193,20 @@ HIGH_PRESSURE_COMMON_OVERRIDE_FIELDS = (
     "supplies_air_to_high_pressure_workroom_or_airlock",
     "has_caisson_work",
 )
+# WO-008: +4 source facts/children (appendix3_item_no, is_real_estate_management,
+#   is_relationship_contractor, is_civil_construction).
+# expected_app3_revision은 control field이므로 포함하지 않는다.
+_APP3_OVERRIDE_FIELDS = (
+    "appendix3_item_no",
+    "is_real_estate_management",
+    "is_relationship_contractor",
+    "is_civil_construction",
+)
 SAFE_CST_OVERRIDE_FIELDS = (
     tuple(RUNTIME_INPUT_FIELDS)
     + SEM003_DIVING_OVERRIDE_FIELDS
     + HIGH_PRESSURE_COMMON_OVERRIDE_FIELDS
+    + _APP3_OVERRIDE_FIELDS
 )
 
 
@@ -206,8 +216,12 @@ def run_safe_construction_leg(
     consumer_input,
     subcontract_legal_event_id: Optional[str] = None,
     subcontractor_id: Optional[str] = None,
+    app3_projection: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """SAFE CONSTRUCTION 공식 LEG 진단. full_result 반환(저장/결제/factory 생성 없음)."""
+    """SAFE CONSTRUCTION 공식 LEG 진단. full_result 반환(저장/결제/factory 생성 없음).
+
+    app3_projection: WO-008 서버 생성 AP01-05 leaves (flag ON 시만 비None).
+    """
     # A. asset canonical (assembler, READ ONLY) — site↔factory bridge 포함.
     contract = assemble_construction_marketing_contract(supabase, site_id)
     factory_id = contract.get("factory_id")
@@ -275,6 +289,12 @@ def run_safe_construction_leg(
                     values[field] = val
                     provenance[field] = prov
                     unresolved.discard(field)
+
+    # B-prime-prime-prime-prime. WO-008: server AP01-05 projection injection (flag ON only).
+    #   subcontract event facts 이후, build_saas_leg_step1 이전. 서버 생성 leaves 전용.
+    if app3_projection:
+        for leaf_key, leaf_val in app3_projection.items():
+            values[leaf_key] = leaf_val
 
     # C. WO-010 STEP-2C : canonical27 final-cut 제거. TARGET_FIELDS / RUNTIME_INPUT_FIELDS 는
     #    assembler 의 source contract 로 계속 import(unresolved_fields 반환용) — 계약 파일 delta 0.
