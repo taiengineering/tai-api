@@ -40,7 +40,7 @@ from typing import Any, Callable, Iterable, Iterator, Optional
 from services.shared_search.adapters import (
     ChemAdapter, ChemRegulationAdapter, CsiAccidentAdapter, GuideAdapter,
     KnowledgeAdapter, LegalAdapter, MarketingKnowledgeAdapter,
-    PrecedentAdapter, RiskAdapter, SafetyMaterialAdapter,
+    PrecedentAdapter, ReferenceFormAdapter, RiskAdapter, SafetyMaterialAdapter,
 )
 from services.shared_search.source_reader import (
     SupabaseClient, paginate_supabase,
@@ -687,6 +687,30 @@ def _make_legal_adapter(
     )
 
 
+def _make_reference_form_adapter(client: SupabaseClient) -> ReferenceFormAdapter:
+    _SELECT = (
+        "id,canonical_slug,title,description,"
+        "published_at,updated_at,legacy_codes"
+    )
+
+    def _iter_current() -> Iterator[dict]:
+        yield from paginate_supabase(
+            client,
+            table="reference_form_public_view",
+            select=_SELECT,
+            order_column="id",
+        )
+
+    def _by_id(form_id: str) -> Optional[dict]:
+        return _fetch_one(
+            client, table="reference_form_public_view",
+            select=_SELECT,
+            key_column="id", key_value=form_id,
+        )
+
+    return ReferenceFormAdapter(fetch_current=_iter_current, fetch_by_id=_by_id)
+
+
 def _make_risk_adapter(_client: SupabaseClient) -> RiskAdapter:
     # F2 §24: RISK yields zero until RISK-C02 opens the ACTIVE gate.
     # No fetcher wired here — the adapter's default empty iterator
@@ -894,6 +918,7 @@ def build_production_adapters(
         _make_legal_adapter(client, legal_client=legal_client),
         _make_risk_adapter(client),
         _make_chem_regulation_adapter(legal_client=legal_client),
+        _make_reference_form_adapter(client),
     ]
     if marketing_client is not None:
         adapters.append(_make_marketing_knowledge_adapter(marketing_client))
