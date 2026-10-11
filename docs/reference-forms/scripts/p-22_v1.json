@@ -1,0 +1,71 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B13-BULK-BUILD-001",
+    "form_type": "PLAN",
+    "source_id": "P-22",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "일정관리",
+    "work_trigger": "월초 또는 월말 안전관리 업무 일정 수립 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 월간 교육·점검·검사·회의·만료기한·완료여부 업무캘린더 서식.",
+    "design_gate_ref": "WO-REF01-060-B13-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "월간 안전관리 업무캘린더",
+    "doc_id": "TAI-FORM-P-22-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "연월" },
+        { "id": "F03", "label": "담당자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 업무유형별 예정일·만료기한·완료여부 반복 기록표.",
+      "default_row_count": 20,
+      "min_row_height_mm": 7,
+      "columns": [
+        { "id": "F01_NO",      "label": "번호",            "width_mm": 10 },
+        { "id": "F02_TYPE",    "label": "업무 유형",       "width_mm": 24 },
+        { "id": "F03_CONTENT", "label": "업무 내용",       "width_mm": 52 },
+        { "id": "F04_PLAN",    "label": "예정일(입력)",    "width_mm": 20 },
+        { "id": "F05_EXPIRY",  "label": "만료 기한(입력)", "width_mm": 22 },
+        { "id": "F06_DONE",    "label": "완료 여부(입력)", "width_mm": 22 },
+        { "id": "F07_NOTE",    "label": "비고(입력)",      "width_mm": 20 }
+      ]
+    },
+    {
+      "type": "approval",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "작성자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B11-BULK-BUILD-001",
+    "form_type": "REGISTER",
+    "source_id": "RP-07",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "작업환경 개선 관리",
+    "work_trigger": "월간 안전환경 개선과제 등록·진행관리 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 이슈·개선과제·담당·일정·완료증거 추적 대장.",
+    "design_gate_ref": "WO-REF01-060-B11-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "작업환경·안전 개선과제 월간관리표",
+    "doc_id": "TAI-FORM-RP-07-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "landscape"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "관리기간" },
+        { "id": "F03", "label": "담당자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 개선과제 반복 등록·추적 기록표.",
+      "default_row_count": 10,
+      "min_row_height_mm": 9,
+      "columns": [
+        { "id": "F01_NO",      "label": "번호",              "width_mm": 12 },
+        { "id": "F02_DATE",    "label": "등록일",            "width_mm": 22 },
+        { "id": "F03_ISSUE",   "label": "이슈/개선과제 내용","width_mm": 58 },
+        { "id": "F04_OWNER",   "label": "개선담당자",        "width_mm": 26 },
+        { "id": "F05_DUE",     "label": "완료예정일",        "width_mm": 26 },
+        { "id": "F06_STATUS",  "label": "진행상태(입력)",    "width_mm": 24 },
+        { "id": "F07_DONE",    "label": "완료일",            "width_mm": 22 },
+        { "id": "F08_EVID",    "label": "완료증거/비고",     "width_mm": 67 }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B11-BULK-BUILD-001",
+    "form_type": "REPORT",
+    "source_id": "P-15",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "사고 관리",
+    "work_trigger": "사고 발생 직후 최초 상황 보고 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 사고개요·현장조치·연락·현재상태 기록 서식.",
+    "design_gate_ref": "WO-REF01-060-B11-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "사고 최초 상황보고서",
+    "doc_id": "TAI-FORM-P-15-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 사고 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "보고일시" },
+        { "id": "F03", "label": "보고자" },
+        { "id": "F04", "label": "사고 발생일시" },
+        { "id": "F05", "label": "사고 발생 장소" },
+        { "id": "F06", "label": "인명·재산 피해" }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 사고 개요.",
+      "label": "사고 개요",
+      "min_height_mm": 40
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 현장 초기 조치 내용.",
+      "label": "현장 초기 조치 내용",
+      "min_height_mm": 35
+    },
+    {
+      "type": "freeform_area",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 연락·보고 조치.",
+      "label": "연락·보고 조치",
+      "min_height_mm": 25
+    },
+    {
+      "type": "freeform_area",
+      "id": "S05",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 현재 상태 및 추가 계획.",
+      "label": "현재 상태 및 추가 계획",
+      "min_height_mm": 25
+    },
+    {
+      "type": "approval",
+      "id": "S06",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "보고자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B10-BULK-BUILD-001",
+    "form_type": "REGISTER",
+    "source_id": "CHW-02",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "화학물질 관리",
+    "work_trigger": "화학물질 출고·사용 불출 시 기록",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 화학물질 출고·불출 이력 관리 대장. 불출량·불출처·용도 추적.",
+    "design_gate_ref": "WO-REF01-060-B10-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "화학물질 출고·사용 불출대장",
+    "doc_id": "TAI-FORM-CHW-02-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "landscape"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 출고 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "관리부서" },
+        { "id": "F03", "label": "담당자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 화학물질 출고·불출 이력 반복 기록표.",
+      "default_row_count": 10,
+      "min_row_height_mm": 10,
+      "columns": [
+        { "id": "F01_DATE",     "label": "출고일",        "width_mm": 22 },
+        { "id": "F02_CHEM",     "label": "화학물질명",     "width_mm": 38 },
+        { "id": "F03_CAS",      "label": "CAS번호",       "width_mm": 28 },
+        { "id": "F04_QTY",      "label": "불출량",         "width_mm": 20 },
+        { "id": "F05_UNIT",     "label": "단위",           "width_mm": 16 },
+        { "id": "F06_DEST",     "label": "불출처/수령자",  "width_mm": 32 },
+        { "id": "F07_PURPOSE",  "label": "용도",           "width_mm": 30 },
+        { "id": "F08_HANDLER",  "label": "취급자",         "width_mm": 22 },
+        { "id": "F09_REMARK",   "label": "비고",           "width_mm": 49 }
+      ]
+    }
+  ]
+}

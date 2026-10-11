@@ -1,0 +1,62 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B12-BULK-BUILD-001",
+    "form_type": "REGISTER",
+    "source_id": "LAB-02",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "연구실 안전관리",
+    "work_trigger": "연구실 정밀안전진단 후 개선조치 등록·추적 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 진단일·지적·우선도·담당·완료증빙 추적 대장.",
+    "design_gate_ref": "WO-REF01-060-B12-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "연구실 정밀안전진단 개선조치 대장",
+    "doc_id": "TAI-FORM-LAB-02-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "landscape" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "연구기관명" },
+        { "id": "F02", "label": "진단 회차/기간" },
+        { "id": "F03", "label": "관리담당자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 개선조치 반복 추적 기록표.",
+      "default_row_count": 10,
+      "min_row_height_mm": 9,
+      "columns": [
+        { "id": "F01_NO",     "label": "번호",             "width_mm": 12 },
+        { "id": "F02_DATE",   "label": "진단일",           "width_mm": 22 },
+        { "id": "F03_ISSUE",  "label": "지적 내용",        "width_mm": 70 },
+        { "id": "F04_PRIO",   "label": "우선도",           "width_mm": 20 },
+        { "id": "F05_OWNER",  "label": "담당자",           "width_mm": 24 },
+        { "id": "F06_DUE",    "label": "완료예정일",       "width_mm": 22 },
+        { "id": "F07_DONE",   "label": "완료일",           "width_mm": 22 },
+        { "id": "F08_EVID",   "label": "완료증빙(입력)",   "width_mm": 65 }
+      ]
+    }
+  ]
+}

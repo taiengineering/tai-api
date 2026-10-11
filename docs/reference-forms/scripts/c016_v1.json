@@ -1,0 +1,102 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-059-B5-B2-RESUME-001",
+    "form_type": "PLAN",
+    "source_id": "REF-C016",
+    "schema_version": "common-v1",
+    "legal_review_status": "PENDING",
+    "source_text_status": "NATIVE_PARAGRAPH_VERIFIED (WO-047 HWP-16 Para 1994-2197)",
+    "source_visual_layout_status": "PDF_CROSSCHECK_VERIFIED (Page 118, WO-047)",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_checksum": "e94d8d8a271c148973111ff0c74b4d67ba2f9884aff59e87301e261b5794aefe",
+    "source_access": "OWNER_UPLOADED_HWP_TEXT_PARSED_PARTIAL",
+    "source_section": "HWP-16 Para 1994-2197",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "page_orientation_note": "A4 landscape = TAI 설계 선택 (원본 PDF는 portrait 렌더링). 원본 HWP 방향 미검증.",
+    "naming_note": "blank = 기존 출력 명명 규칙 유지; 내부에는 원본 예시 본문 포함",
+    "month_width_note": "10월·11월·12월 = 12mm (1~9월 = 10mm). 해결안 A: CELL_PAD 6mm 소비 후 10mm 가용폭 4mm에서 '10' 분리 현상 해결. WO-B5-B2-RESUME-001 승인."
+  },
+  "document": {
+    "title": "연간 교육계획 수립 서식",
+    "doc_id": "TAI-FORM-C016-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "landscape"
+    }
+  },
+  "sections": [
+    {
+      "type": "approval",
+      "id": "S01",
+      "label": "연간 교육계획",
+      "total_width_mm": 120,
+      "fields": [
+        { "id": "A01", "label": "작성" },
+        { "id": "A02", "label": "검토" },
+        { "id": "A03", "label": "승인" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "HWP-16 Para 1994-2197 원본 표 (WO-047 verified). 20 leaf columns. 교육구분(G01)/일정(G02) 2단 헤더. landscape = TAI 설계 선택.",
+      "default_row_count": 5,
+      "min_row_height_mm": 14,
+      "header_groups": [
+        {
+          "id": "G01",
+          "label": "교육구분",
+          "column_ids": [
+            "F02_EDU_SAFETY",
+            "F03_EDU_PROCESS",
+            "F04_EDU_CONTRACTOR"
+          ]
+        },
+        {
+          "id": "G02",
+          "label": "일정",
+          "column_ids": [
+            "F06_M01",
+            "F07_M02",
+            "F08_M03",
+            "F09_M04",
+            "F10_M05",
+            "F11_M06",
+            "F12_M07",
+            "F13_M08",
+            "F14_M09",
+            "F15_M10",
+            "F16_M11",
+            "F17_M12"
+          ]
+        }
+      ],
+      "columns": [
+        { "id": "F01_NO",             "label": "NO",               "width_mm": 8  },
+        { "id": "F02_EDU_SAFETY",     "label": "안전보건",          "width_mm": 14 },
+        { "id": "F03_EDU_PROCESS",    "label": "공정안전",          "width_mm": 14 },
+        { "id": "F04_EDU_CONTRACTOR", "label": "수급업체",          "width_mm": 14 },
+        { "id": "F05_COURSE",         "label": "교육과정",          "width_mm": 33 },
+        { "id": "F06_M01",            "label": "1월",               "width_mm": 10 },
+        { "id": "F07_M02",            "label": "2월",               "width_mm": 10 },
+        { "id": "F08_M03",            "label": "3월",               "width_mm": 10 },
+        { "id": "F09_M04",            "label": "4월",               "width_mm": 10 },
+        { "id": "F10_M05",            "label": "5월",               "width_mm": 10 },
+        { "id": "F11_M06",            "label": "6월",               "width_mm": 10 },
+        { "id": "F12_M07",            "label": "7월",               "width_mm": 10 },
+        { "id": "F13_M08",            "label": "8월",               "width_mm": 10 },
+        { "id": "F14_M09",            "label": "9월",               "width_mm": 10 },
+        { "id": "F15_M10",            "label": "10월",              "width_mm": 12 },
+        { "id": "F16_M11",            "label": "11월",              "width_mm": 12 },
+        { "id": "F17_M12",            "label": "12월",              "width_mm": 12 },
+        { "id": "F18_HEADCOUNT",      "label": "대상인원(명)",       "width_mm": 14 },
+        { "id": "F19_METHOD",         "label": "교육방법(내·외부)",  "width_mm": 18 },
+        { "id": "F20_REMARK",         "label": "비고",              "width_mm": 16 }
+      ]
+    }
+  ]
+}

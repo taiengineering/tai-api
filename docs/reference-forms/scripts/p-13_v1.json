@@ -1,0 +1,63 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B10-BULK-BUILD-001",
+    "form_type": "CHECKLIST",
+    "source_id": "P-13",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "위험요인 관리",
+    "work_trigger": "현장 순찰·점검 시 위험요인 지적 및 조치 추적",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. WO-052 분류 CHECKLIST 유지. 위험요인 발견·조치·재점검 이력 대장.",
+    "design_gate_ref": "WO-REF01-060-B10-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "위험요인 지적·조치·재점검 대장",
+    "doc_id": "TAI-FORM-P-13-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "landscape"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 관리 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "관리부서" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 위험요인 지적·조치·재점검 반복 기록표.",
+      "default_row_count": 8,
+      "min_row_height_mm": 12,
+      "columns": [
+        { "id": "F01_DATE",    "label": "발견일",             "width_mm": 22 },
+        { "id": "F02_HAZARD",  "label": "위험요인 내용",       "width_mm": 50 },
+        { "id": "F03_FINDER",  "label": "발견자",             "width_mm": 22 },
+        { "id": "F04_LOC",     "label": "위치/공정",           "width_mm": 26 },
+        { "id": "F05_ACTION",  "label": "조치내용",           "width_mm": 48 },
+        { "id": "F06_OWNER",   "label": "조치자",             "width_mm": 22 },
+        { "id": "F07_DONE",    "label": "조치일",             "width_mm": 22 },
+        { "id": "F08_RECHECK", "label": "재점검 결과(입력)",  "width_mm": 45 }
+      ]
+    }
+  ]
+}

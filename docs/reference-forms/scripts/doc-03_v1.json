@@ -1,0 +1,78 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
+    "form_type": "FORM",
+    "source_id": "DOC-03",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "문서·기록 관리",
+    "work_trigger": "안전관리 기록물 보존 기간 관리 및 폐기 일정 수립 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 안전관리 기록물 유형·보존근거·보존기산일·폐기예정일 관리 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
+  },
+  "document": {
+    "title": "안전관리 기록물 보존·폐기 일정표",
+    "doc_id": "TAI-FORM-DOC-03-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "작성일" },
+        { "id": "F03", "label": "담당자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기록물별 보존·폐기 일정 반복 기록표.",
+      "default_row_count": 15,
+      "min_row_height_mm": 8,
+      "columns": [
+        { "id": "F01_NO",       "label": "번호",            "width_mm": 10 },
+        { "id": "F02_DOCTYPE",  "label": "문서 유형",       "width_mm": 54 },
+        { "id": "F03_BASIS",    "label": "보존 근거",       "width_mm": 36 },
+        { "id": "F04_START",    "label": "보존 기산일",     "width_mm": 26 },
+        { "id": "F05_DISPOSE",  "label": "폐기 예정일",     "width_mm": 22 },
+        { "id": "F06_APPROVE",  "label": "승인(입력)",      "width_mm": 22 }
+      ]
+    },
+    {
+      "type": "text_flow",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 주의문구.",
+      "paragraphs": [
+        { "id": "N01", "text": "※ 보존 근거는 법령 조항 또는 내부 규정을 기입. 보존기간 만료 전 승인 후 폐기.", "align": "left" }
+      ]
+    },
+    {
+      "type": "approval",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "작성자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}

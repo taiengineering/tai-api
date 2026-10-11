@@ -1,0 +1,61 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B15-BULK-BUILD-001",
+    "form_type": "REGISTER",
+    "source_id": "PRA-22-02",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "화학물질 관리",
+    "work_trigger": "화학물질 로케이션 적치·이동 발생 시 기록",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 화학물질 적치 위치 및 이동 이력 추적 대장. B14_TAI_NEW_PROPOSAL.",
+    "design_gate_ref": "WO-REF01-060-B15-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "화학물질 로케이션 적치·이동기록",
+    "doc_id": "TAI-FORM-PRA-22-02-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "landscape" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "기록 기간" },
+        { "id": "F03", "label": "담당자" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 화학물질 적치·이동 이력 반복 기록표.",
+      "default_row_count": 10,
+      "min_row_height_mm": 8,
+      "columns": [
+        { "id": "F01_NO",       "label": "번호",             "width_mm": 12 },
+        { "id": "F02_CHEM",     "label": "물질명",            "width_mm": 44 },
+        { "id": "F03_LOC",      "label": "로케이션(적치구역)", "width_mm": 46 },
+        { "id": "F04_DATE",     "label": "이동일",            "width_mm": 26 },
+        { "id": "F05_DEST",     "label": "이동 후 위치",      "width_mm": 46 },
+        { "id": "F06_REASON",   "label": "이동 사유",         "width_mm": 48 },
+        { "id": "F07_CONFIRM",  "label": "확인자",            "width_mm": 35 }
+      ]
+    }
+  ]
+}

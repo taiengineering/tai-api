@@ -1,0 +1,100 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-059-B4-B",
+    "form_type": "REGISTER",
+    "source_id": "REF-C004",
+    "schema_version": "common-v1",
+    "legal_review_status": "PENDING",
+    "source_text_status": "NATIVE_PARAGRAPH_VERIFIED (WO-047 HWP-04 Para 908-974)",
+    "source_visual_layout_status": "PDF_CROSSCHECK_VERIFIED (Page 91 lower, WO-047)",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_checksum": "e94d8d8a271c148973111ff0c74b4d67ba2f9884aff59e87301e261b5794aefe",
+    "source_access": "OWNER_UPLOADED_HWP_TEXT_PARSED_PARTIAL",
+    "source_section": "HWP-04 Para 908-974",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "page_orientation_note": "A4 landscape = TAI 설계 선택 (원본 PDF는 portrait 렌더링). 원본 HWP 방향 미검증.",
+    "naming_note": "blank = 기존 출력 명명 규칙 유지; 내부에는 원본 예시 본문 포함"
+  },
+  "document": {
+    "title": "유해·위험물질 목록 작성 서식",
+    "doc_id": "TAI-FORM-C004-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "landscape"
+    }
+  },
+  "sections": [
+    {
+      "type": "repeat_table",
+      "id": "S01",
+      "source_note": "HWP-04 Para 908-974 원본 표 (WO-047 verified). 15 leaf columns. 폭발한계(%) 2단 헤더. landscape = TAI 설계 선택.",
+      "default_row_count": 10,
+      "min_row_height_mm": 14,
+      "header_groups": [
+        {
+          "id": "G01",
+          "label": "폭발한계(%)",
+          "column_ids": ["F04_EXPL_LOWER", "F04_EXPL_UPPER"]
+        }
+      ],
+      "columns": [
+        { "id": "F01_CHEMICAL",   "label": "화학물질",          "width_mm": 22 },
+        { "id": "F02_CAS_NO",     "label": "CAS No",             "width_mm": 20 },
+        { "id": "F03_FORMULA",    "label": "분자식",             "width_mm": 12 },
+        { "id": "F04_EXPL_LOWER", "label": "하한",               "width_mm": 10 },
+        { "id": "F04_EXPL_UPPER", "label": "상한",               "width_mm": 10 },
+        { "id": "F05_EXPOSURE",   "label": "노출기준",           "width_mm": 20 },
+        { "id": "F06_TOXICITY",   "label": "독성치",             "width_mm": 44 },
+        { "id": "F07_FLASH",      "label": "인화점(℃)",         "width_mm": 12 },
+        { "id": "F08_IGNITION",   "label": "발화점(℃)",         "width_mm": 12 },
+        { "id": "F09_VAPOR",      "label": "증기압(20℃, mmHg)", "width_mm": 18 },
+        { "id": "F10_CORROSION",  "label": "부식성유무",         "width_mm": 12 },
+        { "id": "F11_REACTION",   "label": "이상반응유무",       "width_mm": 25 },
+        { "id": "F12_DAILY_USE",  "label": "일일사용량",         "width_mm": 12 },
+        { "id": "F13_STOCK",      "label": "저장량",             "width_mm": 12 },
+        { "id": "F14_REMARK",     "label": "비고",               "width_mm": 16 }
+      ]
+    },
+    {
+      "type": "text_flow",
+      "id": "S02",
+      "source_note": "HWP-04 Para 969-974 원본 주석 ①-⑥ (WO-REF01-059-B4-B STEP 0 verified).",
+      "paragraphs": [
+        {
+          "id": "N01",
+          "text": "주) ① 유해·위험물질은 제출대상 설비에서 제조 또는 취급하는 모든 화학물질을 기재합니다.",
+          "align": "left"
+        },
+        {
+          "id": "N02",
+          "text": "② 증기압은 상온에서 증기압을 말합니다.",
+          "align": "left"
+        },
+        {
+          "id": "N03",
+          "text": "③ 부식성 유무는 있으면 ○, 없으면 ×로 표시합니다.",
+          "align": "left"
+        },
+        {
+          "id": "N04",
+          "text": "④ 이상반응 여부는 그 물질과 이상반응을 일으키는 물질과 그 조건(금수성 등)을 표시하고 필요시 별도로 작성합니다.",
+          "align": "left"
+        },
+        {
+          "id": "N05",
+          "text": "⑤ 노출기준에는 시간가중평균노출기준(TWA)을 기재합니다.",
+          "align": "left"
+        },
+        {
+          "id": "N06",
+          "text": "⑥ 독성치에는 LD50(경구, 쥐), LD50(경피, 쥐 또는 토끼) 또는 LC50(흡입, 4시간 쥐)을 기재합니다.",
+          "align": "left"
+        }
+      ]
+    }
+  ]
+}

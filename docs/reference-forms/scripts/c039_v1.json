@@ -1,0 +1,110 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-WAVE2-BATCH-001",
+    "form_type": "REGISTER",
+    "source_id": "REF-C039",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "MIXED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "물질목록",
+    "work_trigger": "취급물질 등록/변경",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). source_evidence=MIXED(참조 존재 미확인). 사업장 화학물질 취급목록 수동 관리용. 외부 DB 자동 연동 없음. CAS번호는 확인된 경우만 기재. 9열 landscape 배치. GPT 검토 전 빌드 차단.",
+    "design_gate_ref": "WO-REF01-060-B8-WAVE2-BUILD-003"
+  },
+  "document": {
+    "title": "사업장 화학물질 취급목록 관리대장",
+    "doc_id": "TAI-FORM-C039-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "landscape"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 관리 기본정보.",
+      "fields": [
+        {
+          "id": "F01",
+          "label": "사업장명"
+        },
+        {
+          "id": "F02",
+          "label": "작성일"
+        },
+        {
+          "id": "F03",
+          "label": "작성자"
+        }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 화학물질 취급목록 반복 등록표. 외부 DB 자동 연동 없음. CAS번호는 확인 시에만 기재.",
+      "default_row_count": 10,
+      "min_row_height_mm": 10,
+      "columns": [
+        {
+          "id": "F01_SUBSTANCE",
+          "label": "물질명",
+          "width_mm": 35
+        },
+        {
+          "id": "F02_PRODUCT",
+          "label": "제품명",
+          "width_mm": 35
+        },
+        {
+          "id": "F03_SUPPLIER",
+          "label": "공급자",
+          "width_mm": 28
+        },
+        {
+          "id": "F04_CAS",
+          "label": "CAS번호(확인 시)",
+          "width_mm": 24
+        },
+        {
+          "id": "F05_PROCESS",
+          "label": "취급 공정",
+          "width_mm": 28
+        },
+        {
+          "id": "F06_AMOUNT",
+          "label": "사용량",
+          "width_mm": 20
+        },
+        {
+          "id": "F07_STORAGE",
+          "label": "보관 장소",
+          "width_mm": 28
+        },
+        {
+          "id": "F08_MSDS",
+          "label": "MSDS 연결(입력)",
+          "width_mm": 25
+        },
+        {
+          "id": "F09_REVIEW",
+          "label": "검토일",
+          "width_mm": 34
+        }
+      ]
+    }
+  ]
+}

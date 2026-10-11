@@ -1,0 +1,74 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B11-BULK-BUILD-001",
+    "form_type": "FORM",
+    "source_id": "RP-02",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "설비 유지보수 관리",
+    "work_trigger": "설비 고장·정비 작업 요청 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 고장내용·우선순위·조치결과 기록 서식.",
+    "design_gate_ref": "WO-REF01-060-B11-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "설비 고장·정비 작업요청서",
+    "doc_id": "TAI-FORM-RP-02-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 요청 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "요청일" },
+        { "id": "F03", "label": "설비명/번호" },
+        { "id": "F04", "label": "고장 우선순위" },
+        { "id": "F05", "label": "요청자" }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 고장 상세 내용 및 현상.",
+      "label": "고장 상세 내용 및 현상",
+      "min_height_mm": 35
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 조치 내용 및 결과.",
+      "label": "조치 내용 및 결과",
+      "min_height_mm": 35
+    },
+    {
+      "type": "approval",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 요청·담당·확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "요청자" },
+        { "id": "A02", "label": "작업 담당자" },
+        { "id": "A03", "label": "확인자" }
+      ]
+    }
+  ]
+}

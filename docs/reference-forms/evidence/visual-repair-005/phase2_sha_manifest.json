@@ -1,0 +1,36 @@
+{
+  "base_head": "448c6f37a1e11504244d13446f48d450a1cc6bb1",
+  "engine": {
+    "common_v1_engine.py": "be4899dad868d4336756ce61134546748ac2b0f5f4eb4dbbf7488e795d3f2aba",
+    "common_v1_engine.cjs": "375250c74ef1e22786526c1fa2446d989bbed95e8e513e85deeccc3bfb727925"
+  },
+  "replacements": {
+    "c031": {
+      "json_orig": "ddf20f4ad82d94cccd965a6faa0925e68fbce19f5e6706f7027d07e30ea2fdce",
+      "json_new": "ea9c00d54af988e8f8616b81ab6101e1b3aabb12c6e56b21e7da9768fedc5ea2",
+      "pdf_orig": "b12cd430e64f0938e908aa7b523ff1059799795414c2fd8c4c64ef6d185f5593",
+      "pdf_new": "dcd52a9f204cbc06cc419d47987c84125b76b99df33fe060b976da7715905b2d",
+      "docx_orig": "2f0e8d4431e816f5fa138dce36ff86b5d2932edffd753668f004980193206af5",
+      "docx_new": "bd2c2d35f764373726aae5eb641057f1ee44f667ce04b80617c294283694bbed",
+      "candidate_json": "ca47e6dc67dfa9f8371cffc4a6ba4a1e01c78fcb3a26e0a00a85c61ea190ced3"
+    },
+    "c043": {
+      "json_orig": "0fe94d508ceda3d203b1535aa0f31ff9544ce25b2e7dc7e0f3c2e91418a5a8f6",
+      "json_new": "454ed11fb6f4d70be189490883d0051416703fa7fc125e29af5654f74f6d415a",
+      "pdf_orig": "275540374285c881beb0124e0393ff8e1acd3219bae71f22f603cacfcac065e4",
+      "pdf_new": "13334054dc1b1c9a0058ac7836a1110d35486f88cee7fe8970121a046350d9e4",
+      "docx_orig": "f19ff42ab7e915a0d06ad796ca4fc595448410bdc735c671973f41022ca8a375",
+      "docx_new": "b0e9f95f3e29ec9b8b4c988067e4d2b0f1bf0e7638a3fa093989482bb6381778",
+      "candidate_json": "bb56687ed0a9cd256bb4eb936222a15c0b8acfd933987e09a812f57a505c450a"
+    },
+    "c044": {
+      "json_orig": "3a789037d6db4cf1aa589e054dda39154cd440efc8349eefd23386bec7d81e57",
+      "json_new": "9c7dacfa9ad4622e3a016c1675f442c457ab7c9d6c7f61cd05af54a07ba90fe5",
+      "pdf_orig": "e7dc0b22ab666ff512a820aa235bcbffc0c68c89927ef9ce79d0137be47e80ca",
+      "pdf_new": "6b4f51a5d40da64fa0031861f8e920b0b0c9812725e040cc04d4817b0bf16eeb",
+      "docx_orig": "d08e8fae4e75e13b724d978d0627670e7b7cd60fb3cda2403afbc83e630c5f1b",
+      "docx_new": "c1e3da22c8ef6ec138d8a21977ae4b4ef21ac4ad664dba67f289a4cb376fe48f",
+      "candidate_json": "d7452c2a80c08af77a3a350314137115076aa08151cca6331080a3de2a30ff95"
+    }
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-WAVE2-BATCH-001",
+    "form_type": "CHECKLIST",
+    "source_id": "REF-C041",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "MIXED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "화학경고표지",
+    "work_trigger": "용기·라벨 확인",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). source_evidence=MIXED(참조 존재 미확인). 화학물질 경고표지 확인 점검 실무 기반. 라벨 유무·식별성은 텍스트 입력. 법정 GHS 요구사항 주장 금지(LEG 미검증). GPT 검토 전 빌드 차단.",
+    "design_gate_ref": "WO-REF01-060-B8-WAVE2-BUILD-003"
+  },
+  "document": {
+    "title": "화학물질 경고표지 확인 점검표",
+    "doc_id": "TAI-FORM-C041-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 점검 기본정보.",
+      "fields": [
+        {
+          "id": "F01",
+          "label": "사업장명"
+        },
+        {
+          "id": "F02",
+          "label": "점검 구역"
+        },
+        {
+          "id": "F03",
+          "label": "점검일"
+        },
+        {
+          "id": "F04",
+          "label": "점검자"
+        }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 화학물질 경고표지 점검 항목 반복 입력표. 결과는 텍스트 직접 입력.",
+      "default_row_count": 10,
+      "min_row_height_mm": 10,
+      "columns": [
+        {
+          "id": "F01_CONTAINER",
+          "label": "용기·설비/위치",
+          "width_mm": 48
+        },
+        {
+          "id": "F02_LABEL",
+          "label": "라벨 유무(입력)",
+          "width_mm": 22
+        },
+        {
+          "id": "F03_CLARITY",
+          "label": "식별성(입력)",
+          "width_mm": 22
+        },
+        {
+          "id": "F04_FINDING",
+          "label": "발견 사항",
+          "width_mm": 48
+        },
+        {
+          "id": "F05_COMPLETE",
+          "label": "시정 완료일",
+          "width_mm": 30
+        }
+      ]
+    },
+    {
+      "type": "text_flow",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 점검결과 기재 안내.",
+      "paragraphs": [
+        {
+          "id": "N01",
+          "text": "【입력 안내】 라벨 유무 및 식별성란에 양호 / 불량 / 없음 등 사업장 기준에 따라 직접 기재하십시오. 이 서식은 GHS·화학물질관리법 등 법령상 요구사항을 확인한 것이 아닙니다.",
+          "align": "left"
+        }
+      ]
+    }
+  ]
+}

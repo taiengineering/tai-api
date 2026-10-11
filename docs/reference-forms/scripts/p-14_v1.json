@@ -1,0 +1,79 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B11-BULK-BUILD-001",
+    "form_type": "FORM",
+    "source_id": "P-14",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "작업중지 관리",
+    "work_trigger": "작업중지 명령 및 재개 승인 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 중지사유·조치·판단·재개승인 기록 서식.",
+    "design_gate_ref": "WO-REF01-060-B11-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "작업중지·재개 승인기록",
+    "doc_id": "TAI-FORM-P-14-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "발생일시" },
+        { "id": "F03", "label": "작업명/위치" },
+        { "id": "F04", "label": "중지 명령자" }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 중지 사유 및 위험요인.",
+      "label": "중지 사유 및 위험요인",
+      "min_height_mm": 35
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 조치 내용.",
+      "label": "조치 내용",
+      "min_height_mm": 35
+    },
+    {
+      "type": "freeform_area",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 재개 조건 확인.",
+      "label": "재개 조건 확인",
+      "min_height_mm": 25
+    },
+    {
+      "type": "approval",
+      "id": "S05",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 중지·재개 승인란. 승인란은 기록용이며 실제 승인권자 의사결정을 자동 생성하지 않음.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "중지 명령자" },
+        { "id": "A02", "label": "재개 승인자" }
+      ]
+    }
+  ]
+}

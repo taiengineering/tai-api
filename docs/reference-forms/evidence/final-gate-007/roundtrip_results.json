@@ -1,0 +1,114 @@
+{
+  "C026": {
+    "markers_total": 20,
+    "markers_found": 20,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": null,
+    "edited_render": "RENDERED"
+  },
+  "C027": {
+    "markers_total": 16,
+    "markers_found": 16,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": null,
+    "edited_render": "RENDERED"
+  },
+  "C028": {
+    "markers_total": 16,
+    "markers_found": 16,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": null,
+    "edited_render": "RENDERED"
+  },
+  "C029": {
+    "markers_total": 18,
+    "markers_found": 18,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": null,
+    "edited_render": "RENDERED"
+  },
+  "C031": {
+    "markers_total": 18,
+    "markers_found": 18,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": true,
+    "edited_render": "RENDERED"
+  },
+  "C033": {
+    "markers_total": 16,
+    "markers_found": 16,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": null,
+    "edited_render": "RENDERED"
+  },
+  "C037": {
+    "markers_total": 18,
+    "markers_found": 18,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": null,
+    "edited_render": "RENDERED"
+  },
+  "C039": {
+    "markers_total": 21,
+    "markers_found": 21,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": null,
+    "edited_render": "RENDERED"
+  },
+  "C040": {
+    "markers_total": 16,
+    "markers_found": 16,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": null,
+    "edited_render": "RENDERED"
+  },
+  "C041": {
+    "markers_total": 14,
+    "markers_found": 14,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": null,
+    "edited_render": "RENDERED"
+  },
+  "C042": {
+    "markers_total": 14,
+    "markers_found": 14,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": null,
+    "edited_render": "RENDERED"
+  },
+  "C043": {
+    "markers_total": 17,
+    "markers_found": 17,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": null,
+    "edited_render": "RENDERED"
+  },
+  "C044": {
+    "markers_total": 16,
+    "markers_found": 16,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": null,
+    "edited_render": "RENDERED"
+  },
+  "GOV-01": {
+    "markers_total": 18,
+    "markers_found": 18,
+    "markers_missing": [],
+    "roundtrip": "PASS",
+    "guidance_ok": null,
+    "edited_render": "RENDERED"
+  }
+}

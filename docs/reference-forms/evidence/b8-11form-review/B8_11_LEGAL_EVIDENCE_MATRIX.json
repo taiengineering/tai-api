@@ -1,0 +1,279 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-11FORM-LEGAL-RIGHTS-EVIDENCE-010",
+    "doc_type": "LEGAL_EVIDENCE_MATRIX",
+    "date": "2026-10-10",
+    "base_head": "f32702d2950935c5312bbbd593acc69b327c0f05",
+    "evidence_basis": "SECONDARY_RESEARCH_DOCS_ONLY — 법령 원문 독립 접근 미실시",
+    "leg_contract_status": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+    "note": "법령 인용은 2차 연구 문서(OBJ-REF-01-*)에서 추출. LEG 미확인. 법정 서식·필수 기재항목은 LEG 최종 판정 대상."
+  },
+  "forms": [
+    {
+      "form_id": "C026",
+      "form_title": "위험성평가 기록표(3단계 판단법)",
+      "legal_duty_area": "위험성평가",
+      "legal_evidence": [
+        {
+          "law": "산업안전보건법 제36조",
+          "description": "위험성평가 실시 의무 — 사업주는 건설물·기계·기구 등의 유해·위험요인을 찾아내어 위험성을 결정하고 감소대책을 수립·실행",
+          "source_doc": "OBJ-REF-01-OFFICIAL-SOURCE-DISCOVERY-02.md S4 (KOSHA FAQ 스니펫 간접 언급)",
+          "source_url": "https://edu.kosha.or.kr/headquater/support/pds/filedownload/20240618161529_4648504880514822912_pdf",
+          "url_status": "INDEXED_SNIPPET_ONLY — 원문 미직접 확인",
+          "effective_date": "UNVERIFIED",
+          "applicability_condition": "UNVERIFIED",
+          "evidence_grade": "SECONDARY_EVIDENCE_ONLY"
+        }
+      ],
+      "activity_duty": "REVIEW_REQUIRED — 위험성평가 의무 존재, 3단계 판단법 법정 필수 여부 미확인",
+      "prescribed_form": "NO_PRESCRIBED_FORM_FOUND_IN_REVIEWED_SCOPE",
+      "mandatory_fields": "UNVERIFIED",
+      "leg_rpc_status": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+      "legal_review_status": "PENDING"
+    },
+    {
+      "form_id": "C027",
+      "form_title": "체크리스트형 위험성평가표",
+      "legal_duty_area": "위험성평가",
+      "legal_evidence": [
+        {
+          "law": "산업안전보건법 제36조",
+          "description": "위험성평가 실시 의무 — 체크리스트형은 KOSHA FAQ 스니펫에서 인정 방법 중 하나로 언급됨",
+          "source_doc": "OBJ-REF-01-OFFICIAL-SOURCE-DISCOVERY-02.md S4",
+          "source_url": "https://edu.kosha.or.kr/headquater/support/pds/filedownload/20240618161529_4648504880514822912_pdf",
+          "url_status": "INDEXED_SNIPPET_ONLY — 원문 미직접 확인",
+          "effective_date": "UNVERIFIED",
+          "applicability_condition": "UNVERIFIED",
+          "evidence_grade": "SECONDARY_EVIDENCE_ONLY"
+        }
+      ],
+      "activity_duty": "REVIEW_REQUIRED — 위험성평가 의무 존재, 체크리스트형 법정 서식 여부 미확인",
+      "prescribed_form": "NO_PRESCRIBED_FORM_FOUND_IN_REVIEWED_SCOPE",
+      "mandatory_fields": "UNVERIFIED",
+      "leg_rpc_status": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+      "legal_review_status": "PENDING"
+    },
+    {
+      "form_id": "C028",
+      "form_title": "핵심요인 분석법(OPS) 위험성평가표",
+      "legal_duty_area": "위험성평가",
+      "legal_evidence": [
+        {
+          "law": "산업안전보건법 제36조",
+          "description": "위험성평가 실시 의무 — KOSHA FAQ 스니펫에서 핵심요인 기법(key-factor method) 언급",
+          "source_doc": "OBJ-REF-01-OFFICIAL-SOURCE-DISCOVERY-02.md S4",
+          "source_url": "https://edu.kosha.or.kr/headquater/support/pds/filedownload/20240618161529_4648504880514822912_pdf",
+          "url_status": "INDEXED_SNIPPET_ONLY — 원문 미직접 확인",
+          "effective_date": "UNVERIFIED",
+          "applicability_condition": "UNVERIFIED",
+          "evidence_grade": "SECONDARY_EVIDENCE_ONLY"
+        }
+      ],
+      "activity_duty": "REVIEW_REQUIRED — 위험성평가 의무 존재, OPS법 법정 인정 여부 미확인",
+      "prescribed_form": "NO_PRESCRIBED_FORM_FOUND_IN_REVIEWED_SCOPE",
+      "mandatory_fields": "UNVERIFIED",
+      "ops_methodology_note": "UNVERIFIED — 'OPS' 약어 출처·소유권 불명. 연구 문서에서 key-factor method(핵심요인 기법)만 언급. OPS 구체 방법론의 법정 지위 미확인.",
+      "leg_rpc_status": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+      "legal_review_status": "PENDING"
+    },
+    {
+      "form_id": "C037",
+      "form_title": "종사자 위험개선 건의·조치대장",
+      "legal_duty_area": "근로자 참여 / 위험요인 신고·개선",
+      "legal_evidence": [
+        {
+          "law": "산업안전보건법 — 종사자 의견수렴 및 개선 이행 업무",
+          "description": "KOSHA e-catalog(p17 이하)에서 종사자 의견 청취 및 개선 이행이 안전보건관리체계의 업무 단계로 언급",
+          "source_doc": "OBJ-REF-01-GOVERNANCE-WORKFLOW-15.md S4",
+          "source_url": "https://www.kosha.or.kr/ebook/fcatalog/access/ecatalogt.jsp?Dir=512&callmode=normal&catimage=&eclang=ko&start=16&um=s",
+          "url_status": "WORKFLOW_CANDIDATE_ONLY — 특정 조문 미확인",
+          "effective_date": "UNVERIFIED",
+          "applicability_condition": "UNVERIFIED",
+          "evidence_grade": "SECONDARY_EVIDENCE_ONLY"
+        }
+      ],
+      "activity_duty": "REVIEW_REQUIRED — 근로자 참여·의견수렴 업무 존재, 건의대장 법정 별지 여부 미확인",
+      "prescribed_form": "NO_PRESCRIBED_FORM_FOUND_IN_REVIEWED_SCOPE",
+      "mandatory_fields": "UNVERIFIED",
+      "specific_law_article": "UNVERIFIED — 특정 조문 번호 미확인 (제36조 제2항 참여 의무 또는 별도 규정 — LEG 확인 필요)",
+      "leg_rpc_status": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+      "legal_review_status": "PENDING"
+    },
+    {
+      "form_id": "GOV-01",
+      "form_title": "산업안전보건위원회 회의록",
+      "legal_duty_area": "산업안전보건위원회 운영",
+      "legal_evidence": [
+        {
+          "law": "산업안전보건법 제24조 (시행 2026-08-01)",
+          "description": "일정 대상 사업장의 산업안전보건위원회는 중요 사항 심의·의결 및 회의록 작성·보존 의무",
+          "source_doc": "OBJ-REF-01-GOVERNANCE-WORKFLOW-15.md S1",
+          "source_url": "https://www.law.go.kr/lsLinkCommonInfo.do?ancYnChk=&chrClsCd=010202&lsJoLnkSeq=1019429287",
+          "url_status": "SECONDARY_EVIDENCE — 연구 문서 인용, 원문 독립 확인 미실시",
+          "effective_date": "2026-08-01 (연구 문서 표기)",
+          "applicability_condition": "시행령 별표9 대상 사업장 — UNVERIFIED",
+          "evidence_grade": "SECONDARY_EVIDENCE_ONLY"
+        },
+        {
+          "law": "산업안전보건법 시행령 제34~35조 (시행 2026-08-01)",
+          "description": "산업안전보건위원회 구성대상과 구성원 구분",
+          "source_doc": "OBJ-REF-01-GOVERNANCE-WORKFLOW-15.md S2",
+          "source_url": "https://law.go.kr/lsLinkCommonInfo.do?lspttninfSeq=153989",
+          "url_status": "SECONDARY_EVIDENCE — 연구 문서 인용, 원문 독립 확인 미실시",
+          "effective_date": "2026-08-01 (연구 문서 표기)",
+          "applicability_condition": "UNVERIFIED",
+          "evidence_grade": "SECONDARY_EVIDENCE_ONLY"
+        }
+      ],
+      "activity_duty": "ACTIVITY_DUTY_CONFIRMED_CONDITIONAL — 법 제24조 회의록 작성·보존 의무 언급 (WO-008B 유지). 적용 사업장 조건(시행령 별표9) 미확정.",
+      "prescribed_form": "NO_PRESCRIBED_FORM_FOUND_IN_REVIEWED_SCOPE — 법 제24조는 특정 양식 지정 없음. TAI 열 구조는 법정 별지 아님.",
+      "mandatory_fields": "UNVERIFIED — 법정 필수 기재항목 목록 미확인",
+      "leg_rpc_status": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+      "legal_review_status": "PENDING"
+    },
+    {
+      "form_id": "C039",
+      "form_title": "사업장 화학물질 취급목록 관리대장",
+      "legal_duty_area": "화학물질 취급목록 관리",
+      "legal_evidence": [
+        {
+          "law": "화학물질관리법 — 취급목록 관리 의무 (조건부 추정)",
+          "description": "화학물질 취급사업장의 취급목록 관리 관련 의무. 연구 문서 OBJ-10에서 화학물질관리법·산업안전보건법 관련 조항 추정 언급.",
+          "source_doc": "OBJ-REF-01-CHEM-FIRE-OFFICIAL-EVIDENCE-10.md",
+          "source_url": "NOT_CITED_IN_RESEARCH_DOC",
+          "url_status": "NO_URL_EVIDENCED",
+          "effective_date": "UNVERIFIED",
+          "applicability_condition": "취급 물질 종류·수량 조건 — UNVERIFIED",
+          "evidence_grade": "SECONDARY_EVIDENCE_ONLY"
+        }
+      ],
+      "activity_duty": "REVIEW_REQUIRED — 취급목록 관리 의무 존재 추정, 구체 조문·적용조건 미확인",
+      "prescribed_form": "NO_PRESCRIBED_FORM_FOUND_IN_REVIEWED_SCOPE",
+      "mandatory_fields": "UNVERIFIED",
+      "leg_rpc_status": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+      "legal_review_status": "PENDING"
+    },
+    {
+      "form_id": "C040",
+      "form_title": "제품별 MSDS 수령·개정 이력대장",
+      "legal_duty_area": "MSDS 관리 (비치·게시 이력)",
+      "legal_evidence": [
+        {
+          "law": "산업안전보건법 제114조",
+          "description": "MSDS 게시 및 비치 의무. 이력대장은 MSDS 원본이 아니라 수령·개정 관리 기록.",
+          "source_doc": "OBJ-REF-01-CHEM-FIRE-OFFICIAL-EVIDENCE-10.md (CHEM-02 설명 맥락)",
+          "source_url": "NOT_CITED_IN_RESEARCH_DOC",
+          "url_status": "NO_URL_EVIDENCED",
+          "effective_date": "UNVERIFIED",
+          "applicability_condition": "UNVERIFIED",
+          "evidence_grade": "SECONDARY_EVIDENCE_ONLY"
+        }
+      ],
+      "activity_duty": "REVIEW_REQUIRED — MSDS 비치 의무 존재, 이력대장 법정 별지 여부 미확인",
+      "prescribed_form": "NO_PRESCRIBED_FORM_FOUND_IN_REVIEWED_SCOPE",
+      "mandatory_fields": "UNVERIFIED",
+      "leg_rpc_status": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+      "legal_review_status": "PENDING"
+    },
+    {
+      "form_id": "C041",
+      "form_title": "화학물질 경고표지 확인 점검표",
+      "legal_duty_area": "경고표지 부착 확인",
+      "legal_evidence": [
+        {
+          "law": "산업안전보건법 제115조",
+          "description": "화학물질 경고표지 부착 의무. 점검표는 경고표지 이미지가 아니라 부착 여부·식별성 확인 기록.",
+          "source_doc": "OBJ-REF-01-CHEM-FIRE-OFFICIAL-EVIDENCE-10.md (CHEM-03 설명 맥락)",
+          "source_url": "NOT_CITED_IN_RESEARCH_DOC",
+          "url_status": "NO_URL_EVIDENCED",
+          "effective_date": "UNVERIFIED",
+          "applicability_condition": "UNVERIFIED",
+          "evidence_grade": "SECONDARY_EVIDENCE_ONLY"
+        }
+      ],
+      "activity_duty": "REVIEW_REQUIRED — 경고표지 의무 존재, 점검표 법정 별지 여부 미확인",
+      "prescribed_form": "NO_PRESCRIBED_FORM_FOUND_IN_REVIEWED_SCOPE",
+      "mandatory_fields": "UNVERIFIED",
+      "leg_rpc_status": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+      "legal_review_status": "PENDING"
+    },
+    {
+      "form_id": "C042",
+      "form_title": "화학물질 저장구역 점검표",
+      "legal_duty_area": "화학물질 보관·저장 관리",
+      "legal_evidence": [
+        {
+          "law": "화학물질관리법 — 보관·저장시설 기준 (조건부 추정)",
+          "description": "화학물질 보관시설 기준 및 취급기준 관련 의무. 구체 조문 미확인.",
+          "source_doc": "OBJ-REF-01-CHEM-FIRE-OFFICIAL-EVIDENCE-10.md (CHEM-04 설명 맥락)",
+          "source_url": "NOT_CITED_IN_RESEARCH_DOC",
+          "url_status": "NO_URL_EVIDENCED",
+          "effective_date": "UNVERIFIED",
+          "applicability_condition": "취급 물질 종류·수량·저장량 조건 — UNVERIFIED",
+          "evidence_grade": "SECONDARY_EVIDENCE_ONLY"
+        }
+      ],
+      "activity_duty": "REVIEW_REQUIRED — 보관시설 기준 의무 존재 추정, 점검표 법정 별지 여부 미확인",
+      "prescribed_form": "NO_PRESCRIBED_FORM_FOUND_IN_REVIEWED_SCOPE",
+      "mandatory_fields": "UNVERIFIED",
+      "leg_rpc_status": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+      "legal_review_status": "PENDING"
+    },
+    {
+      "form_id": "C043",
+      "form_title": "화학물질 누출 비상대응 훈련기록",
+      "legal_duty_area": "비상대응 훈련 기록",
+      "legal_evidence": [
+        {
+          "law": "화학물질관리법 — 비상대응 훈련 의무 (조건부 추정)",
+          "description": "화학물질 누출 시 비상대응 계획 및 훈련 관련 의무. 화학물질관리법 제41조 연관 추정. 구체 조문·적용조건 미확인.",
+          "source_doc": "OBJ-REF-01-CHEM-FIRE-OFFICIAL-EVIDENCE-10.md (CHEM-05 설명 맥락)",
+          "source_url": "NOT_CITED_IN_RESEARCH_DOC",
+          "url_status": "NO_URL_EVIDENCED",
+          "effective_date": "UNVERIFIED",
+          "applicability_condition": "취급 물질·수량 조건 — UNVERIFIED",
+          "evidence_grade": "SECONDARY_EVIDENCE_ONLY"
+        }
+      ],
+      "activity_duty": "REVIEW_REQUIRED — 비상대응 훈련 의무 추정, 훈련기록 법정 별지 여부 미확인",
+      "prescribed_form": "NO_PRESCRIBED_FORM_FOUND_IN_REVIEWED_SCOPE",
+      "mandatory_fields": "UNVERIFIED",
+      "leg_rpc_status": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+      "legal_review_status": "PENDING"
+    },
+    {
+      "form_id": "C044",
+      "form_title": "MSDS 교육·주지 확인 기록",
+      "legal_duty_area": "MSDS 교육·주지 의무",
+      "legal_evidence": [
+        {
+          "law": "산업안전보건법 제114조",
+          "description": "MSDS 주지 의무 — 화학물질 취급 근로자에게 MSDS 내용을 알려야 함. 교육 기록이 법정 별지인지 별도 확인 필요.",
+          "source_doc": "OBJ-REF-01-CHEM-FIRE-OFFICIAL-EVIDENCE-10.md (CHEM-06 설명 맥락)",
+          "source_url": "NOT_CITED_IN_RESEARCH_DOC",
+          "url_status": "NO_URL_EVIDENCED",
+          "effective_date": "UNVERIFIED",
+          "applicability_condition": "화학물질 취급 사업장 — UNVERIFIED",
+          "evidence_grade": "SECONDARY_EVIDENCE_ONLY"
+        }
+      ],
+      "activity_duty": "REVIEW_REQUIRED — MSDS 주지 의무 존재, 교육기록 법정 별지 여부 미확인",
+      "prescribed_form": "NO_PRESCRIBED_FORM_FOUND_IN_REVIEWED_SCOPE",
+      "mandatory_fields": "UNVERIFIED",
+      "leg_rpc_status": "LEGAL_RPC_CONTRACT_UNRESOLVED",
+      "legal_review_status": "PENDING"
+    }
+  ],
+  "summary": {
+    "total_forms": 11,
+    "primary_source_evidenced": 0,
+    "secondary_evidence_only": 11,
+    "activity_duty_confirmed_conditional": 1,
+    "activity_duty_review_required": 10,
+    "prescribed_form_found": 0,
+    "prescribed_form_not_found_in_scope": 11,
+    "mandatory_fields_confirmed": 0,
+    "leg_rpc_contract_unresolved": 11,
+    "legal_review_required": 11
+  }
+}

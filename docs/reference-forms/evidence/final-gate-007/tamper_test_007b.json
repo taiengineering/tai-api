@@ -1,0 +1,64 @@
+{
+  "T1_NORMAL": {
+    "exit_code": 0,
+    "key_lines": [
+      "B8 OUTPUT SHA: 28/28 MATCH  FAIL=0",
+      "FROZEN SHA:    24/24 MATCH  FAIL=0",
+      "ENGINE PY:  be4899da  MATCH",
+      "ENGINE CJS: 375250c7  MATCH",
+      "QA GATE PASS: all checks passed"
+    ],
+    "pass": true
+  },
+  "T2_B8_PDF": {
+    "exit_code": 1,
+    "key_lines": [
+      "B8 OUTPUT SHA: 27/28 MATCH  FAIL=1",
+      "FROZEN SHA:    24/24 MATCH  FAIL=0",
+      "ENGINE PY:  be4899da  MATCH",
+      "ENGINE CJS: 375250c7  MATCH",
+      "QA GATE FAIL: B8_SHA_FAIL=1"
+    ],
+    "pass": true
+  },
+  "T3_B8_DOCX": {
+    "exit_code": 1,
+    "key_lines": [
+      "B8 OUTPUT SHA: 27/28 MATCH  FAIL=1",
+      "FROZEN SHA:    24/24 MATCH  FAIL=0",
+      "ENGINE PY:  be4899da  MATCH",
+      "ENGINE CJS: 375250c7  MATCH",
+      "QA GATE FAIL: B8_SHA_FAIL=1"
+    ],
+    "pass": true
+  },
+  "T4_FROZEN_SHA": {
+    "exit_code": 1,
+    "key_lines": [
+      "B8 OUTPUT SHA: 28/28 MATCH  FAIL=0",
+      "FROZEN SHA:    23/24 MATCH  FAIL=1",
+      "ENGINE PY:  be4899da  MATCH",
+      "ENGINE CJS: 375250c7  MATCH",
+      "QA GATE FAIL: FROZEN_SHA_FAIL=1"
+    ],
+    "pass": true
+  },
+  "T5_ENGINE_SHA": {
+    "exit_code": 1,
+    "key_lines": [
+      "B8 OUTPUT SHA: 28/28 MATCH  FAIL=0",
+      "FROZEN SHA:    24/24 MATCH  FAIL=0",
+      "ENGINE PY:  da6fd7fe  MISMATCH",
+      "ENGINE CJS: 375250c7  MATCH",
+      "QA GATE FAIL: ENGINE_PY_SHA_MISMATCH"
+    ],
+    "pass": true
+  },
+  "T6_QA_HOLD": {
+    "exit_code": 1,
+    "key_lines": [
+      "QA GATE FAIL: C026_A_PDF_HOLD"
+    ],
+    "pass": true
+  }
+}

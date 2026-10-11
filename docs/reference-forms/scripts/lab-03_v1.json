@@ -1,0 +1,77 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
+    "form_type": "RECORD",
+    "source_id": "LAB-03",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "연구실 안전관리",
+    "work_trigger": "연구실안전관리위원회 정기 회의 개최 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 연구실안전관리위원회 회의 안건·결정사항·이행계획 기록 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
+  },
+  "document": {
+    "title": "연구실안전관리위원회 회의록",
+    "doc_id": "TAI-FORM-LAB-03-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 회의 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "연구기관명" },
+        { "id": "F02", "label": "회의 일시" },
+        { "id": "F03", "label": "회의 장소" },
+        { "id": "F04", "label": "참석자" }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 안건 및 심의 내용.",
+      "label": "안건 및 심의 내용",
+      "min_height_mm": 50
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 결정사항 및 이행 계획.",
+      "label": "결정사항 및 이행 계획",
+      "min_height_mm": 40
+    },
+    {
+      "type": "freeform_area",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기타 사항.",
+      "label": "기타 사항",
+      "min_height_mm": 25
+    },
+    {
+      "type": "approval",
+      "id": "S05",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "작성자" },
+        { "id": "A02", "label": "위원장" }
+      ]
+    }
+  ]
+}

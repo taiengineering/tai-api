@@ -1,0 +1,130 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-059-B7-BATCH-REMEDIATION-002",
+    "form_type": "REPORT",
+    "source_id": "REF-C013",
+    "schema_version": "common-v1",
+    "legal_review_status": "PENDING",
+    "source_text_status": "NATIVE_PARAGRAPH_VERIFIED (WO-047 HWP-13 Para 1807-1845)",
+    "source_visual_layout_status": "PDF_CROSSCHECK_VERIFIED (Page 113, WO-047)",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_checksum": "e94d8d8a271c148973111ff0c74b4d67ba2f9884aff59e87301e261b5794aefe",
+    "source_access": "OWNER_UPLOADED_HWP_TEXT_PARSED_PARTIAL",
+    "source_section": "HWP-13 Para 1807-1845",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "layout_variant_note": "원본 사고조사 보고서(사고조사반 2인+사고명/일시+인적·물적 피해+사고장소·상해부위·사고형태+서술 5항+기타+사진)를 basic_info(기본정보) + freeform_area(서술 구역) 조합으로 재배치. 기능·내용 보존. B6-B2에서 ENGINE_GAP BLOCKED → B7-REMEDIATION-002에서 TAI_EDITABLE_VARIANT로 재설계.",
+    "naming_note": "blank = 기존 출력 명명 규칙 유지",
+    "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
+    "design_gate_ref": "WO-REF01-059-B7-BATCH-BUILD-005",
+    "design_gate_notes": "원본은 사고조사반 sub-table(2인 4셀) + 서술형 행 혼합 구조. 현 엔진 반복 테이블 내 sub-table 미지원. TAI_EDITABLE_VARIANT: basic_info(사고조사반 4필드) + basic_info(사고명/일시) + freeform_area(피해/경위/원인/대책 구역) 조합. seq 7936-8110."
+  },
+  "document": {
+    "title": "사고조사 보고서",
+    "doc_id": "TAI-FORM-C013-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "HWP-13 seq 7956-7976. 사고조사반 2인 구조(소속/성명 × 2). basic_info 4필드 → 2행(행1: 소속1·성명1, 행2: 소속2·성명2).",
+      "fields": [
+        { "id": "F01", "label": "사고조사반 소속(1)" },
+        { "id": "F02", "label": "성명(1)" },
+        { "id": "F03", "label": "소속(2)" },
+        { "id": "F04", "label": "성명(2)" }
+      ]
+    },
+    {
+      "type": "basic_info",
+      "id": "S02",
+      "source_note": "HWP-13 seq 7997-8006. 사고명 + 사고일시.",
+      "fields": [
+        { "id": "F01", "label": "사고명" },
+        { "id": "F02", "label": "사고일시" }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "source_note": "HWP-13 seq 8015-8020. 인적 피해(소속·성명·직급 기재).",
+      "label": "인적 피해",
+      "min_height_mm": 28
+    },
+    {
+      "type": "freeform_area",
+      "id": "S04",
+      "source_note": "HWP-13 seq 8025-8034. 물적 피해.",
+      "label": "물적 피해",
+      "min_height_mm": 24
+    },
+    {
+      "type": "basic_info",
+      "id": "S05",
+      "source_note": "HWP-13 seq 8034-8052. 사고장소/상해부위/사고형태.",
+      "fields": [
+        { "id": "F01", "label": "사고장소" },
+        { "id": "F02", "label": "상해부위" },
+        { "id": "F03", "label": "사고형태" }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S06",
+      "source_note": "HWP-13 seq 8061-8070. 사고내용.",
+      "label": "사고내용",
+      "min_height_mm": 40
+    },
+    {
+      "type": "freeform_area",
+      "id": "S07",
+      "source_note": "HWP-13 seq 8070-8079. 사고원인.",
+      "label": "사고원인",
+      "min_height_mm": 40
+    },
+    {
+      "type": "freeform_area",
+      "id": "S08",
+      "source_note": "HWP-13 seq 8079-8088. 피해내용.",
+      "label": "피해내용",
+      "min_height_mm": 28
+    },
+    {
+      "type": "freeform_area",
+      "id": "S09",
+      "source_note": "HWP-13 seq 8088-8097. 의사/외부전문가 소견.",
+      "label": "의사/외부전문가 소견",
+      "min_height_mm": 28
+    },
+    {
+      "type": "freeform_area",
+      "id": "S10",
+      "source_note": "HWP-13 seq 8097-8106. 재발방지 대책.",
+      "label": "재발방지 대책",
+      "min_height_mm": 40
+    },
+    {
+      "type": "freeform_area",
+      "id": "S11",
+      "source_note": "HWP-13 seq 8106-8110. 기타내용.",
+      "label": "기타내용",
+      "min_height_mm": 20
+    },
+    {
+      "type": "freeform_area",
+      "id": "S12",
+      "source_note": "HWP-13 seq 8110. 사고조사 사진 첨부 구역.",
+      "label": "사고조사 사진",
+      "min_height_mm": 80
+    }
+  ]
+}

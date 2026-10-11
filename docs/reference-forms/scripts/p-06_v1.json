@@ -1,0 +1,63 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B10-BULK-BUILD-001",
+    "form_type": "REGISTER",
+    "source_id": "P-06",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "위험작업 관리",
+    "work_trigger": "위험작업 허가 발행 후 이력 등록",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 위험작업 허가 발행·이행·완료 이력 대장. 완료확인(입력)은 사용자 직접 기재.",
+    "design_gate_ref": "WO-REF01-060-B10-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "통합 위험작업 허가관리대장",
+    "doc_id": "TAI-FORM-P-06-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "landscape"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 관리 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "관리부서" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 위험작업 허가 이력 반복 등록표. 완료확인은 사용자 직접 기재.",
+      "default_row_count": 8,
+      "min_row_height_mm": 12,
+      "columns": [
+        { "id": "F01_PERMIT",   "label": "허가번호/일자",    "width_mm": 30 },
+        { "id": "F02_TYPE",     "label": "작업종류",         "width_mm": 28 },
+        { "id": "F03_LOC",      "label": "작업위치",         "width_mm": 28 },
+        { "id": "F04_CONTENT",  "label": "작업내용",         "width_mm": 44 },
+        { "id": "F05_AUTH",     "label": "허가자",           "width_mm": 22 },
+        { "id": "F06_WORKER",   "label": "작업자",           "width_mm": 22 },
+        { "id": "F07_SAFETY",   "label": "안전조치",         "width_mm": 52 },
+        { "id": "F08_COMPLETE", "label": "완료확인(입력)",   "width_mm": 31 }
+      ]
+    }
+  ]
+}

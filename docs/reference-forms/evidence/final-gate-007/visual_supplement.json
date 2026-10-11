@@ -1,0 +1,373 @@
+{
+  "C031": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9634,
+        169.9
+      ]
+    ],
+    "inject_count": 12,
+    "para_count": 6,
+    "text_total_chars": 62,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_C031_p1.png"
+  },
+  "C043": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9635,
+        170.0
+      ]
+    ],
+    "inject_count": 10,
+    "para_count": 5,
+    "text_total_chars": 0,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_C043_p1.png"
+  },
+  "C044": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9635,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ]
+    ],
+    "inject_count": 9,
+    "para_count": 5,
+    "text_total_chars": 0,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_C044_p1.png"
+  },
+  "GOV-01": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9636,
+        170.0
+      ]
+    ],
+    "inject_count": 10,
+    "para_count": 5,
+    "text_total_chars": 0,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_GOV-01_p1.png"
+  },
+  "C026": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9634,
+        169.9
+      ]
+    ],
+    "inject_count": 12,
+    "para_count": 5,
+    "text_total_chars": 165,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_C026_p1.png"
+  },
+  "C027": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9635,
+        170.0
+      ]
+    ],
+    "inject_count": 10,
+    "para_count": 5,
+    "text_total_chars": 105,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_C027_p1.png"
+  },
+  "C028": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9635,
+        170.0
+      ]
+    ],
+    "inject_count": 10,
+    "para_count": 5,
+    "text_total_chars": 87,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_C028_p1.png"
+  },
+  "C029": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9634,
+        169.9
+      ]
+    ],
+    "inject_count": 11,
+    "para_count": 5,
+    "text_total_chars": 146,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_C029_p1.png"
+  },
+  "C033": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9635,
+        170.0
+      ]
+    ],
+    "inject_count": 10,
+    "para_count": 5,
+    "text_total_chars": 98,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_C033_p1.png"
+  },
+  "C037": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        14570,
+        257.0
+      ],
+      [
+        "dxa",
+        14570,
+        257.0
+      ],
+      [
+        "dxa",
+        14566,
+        256.9
+      ]
+    ],
+    "inject_count": 10,
+    "para_count": 3,
+    "text_total_chars": 0,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_C037_p1.png"
+  },
+  "C039": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        14570,
+        257.0
+      ],
+      [
+        "dxa",
+        14570,
+        257.0
+      ],
+      [
+        "dxa",
+        14566,
+        256.9
+      ]
+    ],
+    "inject_count": 12,
+    "para_count": 3,
+    "text_total_chars": 0,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_C039_p1.png"
+  },
+  "C040": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9635,
+        170.0
+      ]
+    ],
+    "inject_count": 9,
+    "para_count": 3,
+    "text_total_chars": 0,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_C040_p1.png"
+  },
+  "C041": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9636,
+        170.0
+      ]
+    ],
+    "inject_count": 9,
+    "para_count": 5,
+    "text_total_chars": 101,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_C041_p1.png"
+  },
+  "C042": {
+    "tbl_widths_twips": [
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9637,
+        170.0
+      ],
+      [
+        "dxa",
+        9635,
+        170.0
+      ]
+    ],
+    "inject_count": 9,
+    "para_count": 5,
+    "text_total_chars": 107,
+    "render": "RENDERED",
+    "render_png": "evidence/final-gate-007/render_realistic/REAL_C042_p1.png"
+  }
+}

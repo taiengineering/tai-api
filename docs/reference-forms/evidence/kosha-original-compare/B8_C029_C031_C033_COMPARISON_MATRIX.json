@@ -1,0 +1,172 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-KOSHA-ORIGINAL-COMPARE-009",
+    "doc_type": "KOSHA_ORIGINAL_COMPARISON_MATRIX",
+    "date": "2026-10-10",
+    "base_head": "14f02992dd8e951643275c68fa09d17dd0eebc59",
+    "comparison_method": "TAI_JSON_KNOWN_VS_KOSHA_PAGE_ENUMERATED_ONLY",
+    "kosha_source_url": "https://www.kosha.or.kr/kosha/intro/busanHeadquarters_A.do?articleNo=453942&boardNo=141&mode=view",
+    "kosha_access_status": "SOURCE_UNAVAILABLE_JWT_REQUIRED",
+    "kosha_field_data_status": "NOT_OBTAINED",
+    "note": "KOSHA 원본 파일(HWP/ZIP) 미확보 상태에서 작성. TAI 서식 구조 = JSON 기반 확인. KOSHA 구조 = 페이지 열거 제목만 확인. 필드 수준 비교 불가."
+  },
+  "forms": [
+    {
+      "form_id": "C029",
+      "tai_title": "빈도·강도법 위험성평가표",
+      "tai_doc_id": "TAI-FORM-C029-v0.2",
+      "tai_authoring_class": "TAI_ORIGINAL_DRAFT",
+      "tai_source_evidence": "TAI_PROPOSED",
+      "tai_source_match": "NOT_VERIFIED",
+      "tai_json_sha256": "78d98e840728fad23b8b01473151fc31f1136f5f0f674c74a6c82445bcdf2392",
+      "tai_structure": {
+        "sections": 3,
+        "S01_type": "basic_info",
+        "S01_fields": ["사업장명", "공정/작업명", "평가일", "평가자"],
+        "S02_type": "repeat_table",
+        "S02_columns": [
+          "평가대상",
+          "위험요인",
+          "빈도/가능성(입력)",
+          "강도/중대성(입력)",
+          "위험수준(입력)",
+          "개선 대책",
+          "재평가일"
+        ],
+        "S02_column_count": 7,
+        "S03_type": "text_flow",
+        "S03_content": "입력 안내 문구"
+      },
+      "kosha_match_candidate": {
+        "kosha_ref": "KOSHA-24-#06",
+        "kosha_name_verbatim": "위험성평가표(빈도강도법)",
+        "kosha_attachment": "붙임2 HWP",
+        "kosha_source_verification": "PAGE_ENUMERATED",
+        "kosha_field_data": "NOT_OBTAINED",
+        "kosha_column_count": "UNKNOWN",
+        "kosha_access_status": "SOURCE_UNAVAILABLE_JWT_REQUIRED"
+      },
+      "comparison": {
+        "name_similarity": "HIGH — 빈도강도법 위험성평가표 vs 위험성평가표(빈도강도법) (동일 개념, 표기 순서 차이)",
+        "field_comparison": "IMPOSSIBLE — KOSHA 원본 필드 미확보",
+        "layout_comparison": "IMPOSSIBLE — KOSHA 원본 레이아웃 미확보",
+        "similarity_verdict": "UNVERIFIED",
+        "independence_verdict": "UNVERIFIED",
+        "note": "제목 유사성은 확인됨. 필드·레이아웃 비교는 원본 HWP 확보 후 가능."
+      },
+      "original_compare_gate": "HOLD",
+      "gate_reason": "SOURCE_UNAVAILABLE_JWT_REQUIRED — 붙임2 HWP 미확보"
+    },
+    {
+      "form_id": "C031",
+      "tai_title": "안전보건교육 실시일지",
+      "tai_doc_id": "TAI-FORM-C031-v0.2",
+      "tai_authoring_class": "TAI_ORIGINAL_DRAFT",
+      "tai_source_evidence": "TAI_PROPOSED",
+      "tai_source_match": "NOT_VERIFIED",
+      "tai_json_sha256": "ea9c00d54af988e8f8616b81ab6101e1b3aabb12c6e56b21e7da9768fedc5ea2",
+      "tai_structure": {
+        "sections": 4,
+        "S01_type": "basic_info",
+        "S01_fields": [
+          "교육 구분",
+          "교육 주제",
+          "교육 일시",
+          "장소",
+          "교육자(강사)",
+          "교육자료·버전",
+          "출석증빙·보관"
+        ],
+        "S01_field_count": 7,
+        "S02_type": "freeform_area",
+        "S02_label": "교육 내용 요약",
+        "S03_type": "repeat_table",
+        "S03_columns": [
+          "번호",
+          "성명",
+          "소속/부서",
+          "직책",
+          "서명(확인)"
+        ],
+        "S03_column_count": 5,
+        "S04_type": "text_flow",
+        "S04_content": "출석증빙 기재 안내"
+      },
+      "kosha_match_candidate": {
+        "kosha_ref": "KOSHA-24-#24",
+        "kosha_name_verbatim": "안전보건교육일지 서식(엑셀, 한글)",
+        "kosha_attachment": "붙임5 ZIP",
+        "kosha_source_verification": "PAGE_ENUMERATED",
+        "kosha_field_data": "NOT_OBTAINED",
+        "kosha_column_count": "UNKNOWN",
+        "kosha_access_status": "SOURCE_UNAVAILABLE_JWT_REQUIRED"
+      },
+      "comparison": {
+        "name_similarity": "HIGH — 안전보건교육 실시일지 vs 안전보건교육일지 서식 (동일 개념, '실시' 어휘 차이)",
+        "field_comparison": "IMPOSSIBLE — KOSHA 원본 필드 미확보",
+        "layout_comparison": "IMPOSSIBLE — KOSHA 원본 레이아웃 미확보",
+        "similarity_verdict": "UNVERIFIED",
+        "independence_verdict": "UNVERIFIED",
+        "note": "제목 유사성은 확인됨. ZIP 내 HWP·엑셀 파일 구조 비교는 원본 확보 후 가능. C031은 WO-VISUAL-REPAIR-005-PHASE2-CANONICAL-006에서 교체됨 — 교체 전후 모두 TAI_ORIGINAL_DRAFT."
+      },
+      "original_compare_gate": "HOLD",
+      "gate_reason": "SOURCE_UNAVAILABLE_JWT_REQUIRED — 붙임5 ZIP 미확보"
+    },
+    {
+      "form_id": "C033",
+      "tai_title": "도급업체 안전관리 이행점검표",
+      "tai_doc_id": "TAI-FORM-C033-v0.1",
+      "tai_authoring_class": "TAI_ORIGINAL_DRAFT",
+      "tai_source_evidence": "TAI_PROPOSED",
+      "tai_source_match": "NOT_VERIFIED",
+      "tai_json_sha256": "cb95eb99a73658577f61b1e4094b9884cdba3de90028cfcac5c88345ae0e6ae3",
+      "tai_structure": {
+        "sections": 3,
+        "S01_type": "basic_info",
+        "S01_fields": ["도급업체명", "공사·작업명", "점검일", "점검자"],
+        "S01_field_count": 4,
+        "S02_type": "repeat_table",
+        "S02_columns": [
+          "점검항목",
+          "점검기준(입력)",
+          "결과(입력)",
+          "미이행 내용",
+          "시정책임/기한",
+          "재확인일"
+        ],
+        "S02_column_count": 6,
+        "S03_type": "text_flow",
+        "S03_content": "결과 입력 기준 안내"
+      },
+      "kosha_match_candidate": {
+        "kosha_ref": "KOSHA-24-#11",
+        "kosha_name_verbatim": "도급·용역·위탁 업체 안전보건 수준 평가",
+        "kosha_attachment": "붙임2 HWP",
+        "kosha_source_verification": "PAGE_ENUMERATED",
+        "kosha_field_data": "NOT_OBTAINED",
+        "kosha_column_count": "UNKNOWN",
+        "kosha_access_status": "SOURCE_UNAVAILABLE_JWT_REQUIRED"
+      },
+      "comparison": {
+        "name_similarity": "PARTIAL — 도급업체 안전관리 이행점검표 vs 도급·용역·위탁 업체 안전보건 수준 평가 (도급 안전관리 동일 영역; '이행점검' vs '수준 평가' — 목적 어휘 차이)",
+        "field_comparison": "IMPOSSIBLE — KOSHA 원본 필드 미확보",
+        "layout_comparison": "IMPOSSIBLE — KOSHA 원본 레이아웃 미확보",
+        "similarity_verdict": "UNVERIFIED",
+        "independence_verdict": "UNVERIFIED",
+        "note": "동일 영역(도급 안전) 서식이나 '수준 평가'와 '이행점검'은 목적이 다를 수 있음. 필드 비교 없이 판단 불가."
+      },
+      "original_compare_gate": "HOLD",
+      "gate_reason": "SOURCE_UNAVAILABLE_JWT_REQUIRED — 붙임2 HWP 미확보"
+    }
+  ],
+  "summary": {
+    "total_forms": 3,
+    "kosha_source_obtained": 0,
+    "field_comparison_possible": 0,
+    "similarity_verified": 0,
+    "independence_verified": 0,
+    "original_compare_gate_hold": 3,
+    "name_similarity_high": 2,
+    "name_similarity_partial": 1
+  }
+}
