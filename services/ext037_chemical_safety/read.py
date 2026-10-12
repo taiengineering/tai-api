@@ -54,22 +54,24 @@ def _get_current_snapshot_id(client: Any) -> str | None:
     return rows[0]["id"] if rows else None
 
 
-def get_chemical_safety_by_cas(cas_no: str) -> list[dict[str, Any]]:
+def get_chemical_safety_by_cas(cas_no: str) -> list[dict[str, Any]] | None:
     """현행 EXT-037 스냅샷에서 CAS 번호로 화학물질 안전정보 조회.
 
-    Returns list of dicts with public fields only.
-    빈 목록은 정상 응답 (CAS가 수집 DB에 없음).
+    Returns:
+      None  — 현행 COMPLETED 스냅샷이 없음 (caller → NO_CURRENT_SNAPSHOT)
+      []    — 스냅샷은 있지만 CAS 일치 없음
+      [...]  — 일치하는 레코드 목록
 
     Raises:
       ValueError         — invalid CAS format (caller → 422)
-      Ext037Unavailable  — DB not configured or query failure (caller → 503)
+      Ext037Unavailable  — DB not configured or query failure (caller → UNAVAILABLE)
     """
     cas = validate_cas(cas_no)
     try:
         client = _get_client()
         snapshot_id = _get_current_snapshot_id(client)
         if snapshot_id is None:
-            return []
+            return None
 
         res = (
             client.table(TABLE_ITEMS)

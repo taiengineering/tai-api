@@ -287,19 +287,32 @@ def test_t07_current_snapshot_used(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# T08: Snapshot 없음 → 빈 목록 (STAGING 또는 현행 스냅샷 없을 때)
+# T08: Snapshot 없음 → None 반환 (STAGING 또는 현행 스냅샷 없을 때)
 # ---------------------------------------------------------------------------
 
-def test_t08_no_current_snapshot_returns_empty(monkeypatch):
+def test_t08_no_current_snapshot_returns_none(monkeypatch):
     _patch_ext037(monkeypatch, [], [])
     result = get_chemical_safety_by_cas(_CAS)
-    assert result == []
+    assert result is None
 
 
-def test_t08b_no_current_snapshot_ext132_returns_empty(monkeypatch):
+def test_t08b_no_current_snapshot_ext132_returns_none(monkeypatch):
     _patch_ext132(monkeypatch, [], [])
     result = get_hazardous_material_by_cas(_CAS)
-    assert result == []
+    assert result is None
+
+
+def test_t08c_no_snapshot_api_returns_no_current_snapshot_status(monkeypatch):
+    _patch_ext037(monkeypatch, [], [])
+    _patch_ext132(monkeypatch, [], [])
+    client = TestClient(_make_app())
+    resp = client.get(f"/public/chemical-enrichment/by-cas/{_CAS}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["chemical_safety"]["status"] == "NO_CURRENT_SNAPSHOT"
+    assert data["chemical_safety"]["items"] == []
+    assert data["hazardous_material"]["status"] == "NO_CURRENT_SNAPSHOT"
+    assert data["hazardous_material"]["items"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +514,7 @@ def test_resp_no_snapshot_status(monkeypatch):
     resp = client.get(f"/public/chemical-enrichment/by-cas/{_CAS}")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["chemical_safety"]["status"] == "AVAILABLE"
+    assert data["chemical_safety"]["status"] == "NO_CURRENT_SNAPSHOT"
     assert data["chemical_safety"]["items"] == []
-    assert data["hazardous_material"]["status"] == "AVAILABLE"
+    assert data["hazardous_material"]["status"] == "NO_CURRENT_SNAPSHOT"
     assert data["hazardous_material"]["items"] == []
