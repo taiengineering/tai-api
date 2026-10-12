@@ -38,7 +38,8 @@ from __future__ import annotations
 from typing import Any, Callable, Iterable, Iterator, Optional
 
 from services.shared_search.adapters import (
-    ChemAdapter, ChemRegulationAdapter, CsiAccidentAdapter, GuideAdapter,
+    ChemAccidentAdapter, ChemAdapter, ChemRegulationAdapter, ChemSafetyAdapter,
+    CsiAccidentAdapter, GuideAdapter, HazardousMaterialAdapter,
     KnowledgeAdapter, LegalAdapter, MarketingKnowledgeAdapter,
     PrecedentAdapter, ReferenceFormAdapter, RiskAdapter, SafetyMaterialAdapter,
 )
@@ -763,6 +764,177 @@ def _make_risk_adapter(_client: SupabaseClient) -> RiskAdapter:
     return RiskAdapter()
 
 
+# ---------------------------------------------------------------------------
+# WP-04: EXT-037 / EXT-132 / EXT-165 adapters
+# ---------------------------------------------------------------------------
+
+
+def _make_chem_safety_adapter(client: SupabaseClient) -> ChemSafetyAdapter:
+    """EXT-037 화학물질 안전정보. Snapshot: is_current=True, COMPLETED."""
+    from services.ext037_chemical_safety.contract import (
+        SNAPSHOT_COMPLETED as _EXT037_COMPLETED,
+        TABLE_ITEMS as _EXT037_ITEMS,
+        TABLE_SNAPSHOTS as _EXT037_SNAP,
+    )
+
+    def _get_snap() -> Optional[tuple]:
+        r = (client.table(_EXT037_SNAP)
+                 .select("id,completed_at")
+                 .eq("status", _EXT037_COMPLETED)
+                 .eq("is_current", True)
+                 .order("completed_at", desc=True)
+                 .limit(1)
+                 .execute())
+        rows = list(getattr(r, "data", None) or [])
+        return (rows[0]["id"], rows[0].get("completed_at")) if rows else None
+
+    def _iter_current() -> Iterator[dict]:
+        snap = _get_snap()
+        if snap is None:
+            return
+        snap_id, snap_completed = snap
+        for row in paginate_supabase(
+            client,
+            table=_EXT037_ITEMS,
+            select="datano,raw",
+            apply_filters=lambda q: q.eq("snapshot_id", snap_id),
+            order_column="datano",
+        ):
+            row["_snapshot_completed_at"] = snap_completed
+            yield row
+
+    def _by_id(datano: str) -> Optional[dict]:
+        snap = _get_snap()
+        if snap is None:
+            return None
+        snap_id, snap_completed = snap
+        r = (client.table(_EXT037_ITEMS)
+                 .select("datano,raw")
+                 .eq("snapshot_id", snap_id)
+                 .eq("datano", datano)
+                 .limit(1)
+                 .execute())
+        rows = list(getattr(r, "data", None) or [])
+        if not rows:
+            return None
+        row = dict(rows[0])
+        row["_snapshot_completed_at"] = snap_completed
+        return row
+
+    return ChemSafetyAdapter(fetch_current=_iter_current, fetch_by_id=_by_id)
+
+
+def _make_hazardous_material_adapter(client: SupabaseClient) -> HazardousMaterialAdapter:
+    """EXT-132 위험물안전관리. Snapshot: is_current=True, COMPLETED."""
+    from services.ext132_hazardous_material.contract import (
+        SNAPSHOT_COMPLETED as _EXT132_COMPLETED,
+        TABLE_ITEMS as _EXT132_ITEMS,
+        TABLE_SNAPSHOTS as _EXT132_SNAP,
+    )
+
+    def _get_snap() -> Optional[tuple]:
+        r = (client.table(_EXT132_SNAP)
+                 .select("id,completed_at")
+                 .eq("status", _EXT132_COMPLETED)
+                 .eq("is_current", True)
+                 .order("completed_at", desc=True)
+                 .limit(1)
+                 .execute())
+        rows = list(getattr(r, "data", None) or [])
+        return (rows[0]["id"], rows[0].get("completed_at")) if rows else None
+
+    def _iter_current() -> Iterator[dict]:
+        snap = _get_snap()
+        if snap is None:
+            return
+        snap_id, snap_completed = snap
+        for row in paginate_supabase(
+            client,
+            table=_EXT132_ITEMS,
+            select="chemicalno,raw",
+            apply_filters=lambda q: q.eq("snapshot_id", snap_id),
+            order_column="chemicalno",
+        ):
+            row["_snapshot_completed_at"] = snap_completed
+            yield row
+
+    def _by_id(chemicalno: str) -> Optional[dict]:
+        snap = _get_snap()
+        if snap is None:
+            return None
+        snap_id, snap_completed = snap
+        r = (client.table(_EXT132_ITEMS)
+                 .select("chemicalno,raw")
+                 .eq("snapshot_id", snap_id)
+                 .eq("chemicalno", chemicalno)
+                 .limit(1)
+                 .execute())
+        rows = list(getattr(r, "data", None) or [])
+        if not rows:
+            return None
+        row = dict(rows[0])
+        row["_snapshot_completed_at"] = snap_completed
+        return row
+
+    return HazardousMaterialAdapter(fetch_current=_iter_current, fetch_by_id=_by_id)
+
+
+def _make_chem_accident_adapter(client: SupabaseClient) -> ChemAccidentAdapter:
+    """EXT-165 화학사고. Snapshot: is_current=True, COMPLETED, collect_scope IS NULL."""
+    from services.ext165_chemical_accident.contract import (
+        SNAPSHOT_COMPLETED as _EXT165_COMPLETED,
+        TABLE_ITEMS as _EXT165_ITEMS,
+        TABLE_SNAPSHOTS as _EXT165_SNAP,
+    )
+
+    def _get_snap() -> Optional[tuple]:
+        r = (client.table(_EXT165_SNAP)
+                 .select("id,completed_at")
+                 .eq("status", _EXT165_COMPLETED)
+                 .eq("is_current", True)
+                 .is_("collect_scope", "null")
+                 .order("completed_at", desc=True)
+                 .limit(1)
+                 .execute())
+        rows = list(getattr(r, "data", None) or [])
+        return (rows[0]["id"], rows[0].get("completed_at")) if rows else None
+
+    def _iter_current() -> Iterator[dict]:
+        snap = _get_snap()
+        if snap is None:
+            return
+        snap_id, snap_completed = snap
+        for row in paginate_supabase(
+            client,
+            table=_EXT165_ITEMS,
+            select="datano,raw",
+            apply_filters=lambda q: q.eq("snapshot_id", snap_id),
+            order_column="datano",
+        ):
+            row["_snapshot_completed_at"] = snap_completed
+            yield row
+
+    def _by_id(datano: str) -> Optional[dict]:
+        snap = _get_snap()
+        if snap is None:
+            return None
+        snap_id, snap_completed = snap
+        r = (client.table(_EXT165_ITEMS)
+                 .select("datano,raw")
+                 .eq("snapshot_id", snap_id)
+                 .eq("datano", datano)
+                 .limit(1)
+                 .execute())
+        rows = list(getattr(r, "data", None) or [])
+        if not rows:
+            return None
+        row = dict(rows[0])
+        row["_snapshot_completed_at"] = snap_completed
+        return row
+
+    return ChemAccidentAdapter(fetch_current=_iter_current, fetch_by_id=_by_id)
+
+
 def _make_chem_regulation_adapter(
     legal_client: Optional[SupabaseClient] = None,
 ) -> ChemRegulationAdapter:
@@ -964,6 +1136,9 @@ def build_production_adapters(
         _make_risk_adapter(client),
         _make_chem_regulation_adapter(legal_client=legal_client),
         _make_reference_form_adapter(client),
+        _make_chem_safety_adapter(client),
+        _make_hazardous_material_adapter(client),
+        _make_chem_accident_adapter(client),
     ]
     if marketing_client is not None:
         adapters.append(_make_marketing_knowledge_adapter(marketing_client))

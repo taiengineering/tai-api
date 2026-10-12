@@ -26,6 +26,9 @@ from services.shared_search.adapters.precedent import PrecedentAdapter
 from services.shared_search.adapters.legal import LegalAdapter
 from services.shared_search.adapters.risk import RiskAdapter
 from services.shared_search.adapters.reference_form import ReferenceFormAdapter
+from services.shared_search.adapters.ext037_chem_safety import ChemSafetyAdapter
+from services.shared_search.adapters.ext132_hazardous import HazardousMaterialAdapter
+from services.shared_search.adapters.ext165_chem_accident import ChemAccidentAdapter
 
 __all__ = [
     "DomainAdapter", "AdapterBlockedSubtype",
@@ -33,4 +36,5 @@ __all__ = [
     "ChemAdapter", "ChemRegulationAdapter", "KnowledgeAdapter",
     "MarketingKnowledgeAdapter", "PrecedentAdapter",
     "LegalAdapter", "RiskAdapter", "ReferenceFormAdapter",
+    "ChemSafetyAdapter", "HazardousMaterialAdapter", "ChemAccidentAdapter",
 ]

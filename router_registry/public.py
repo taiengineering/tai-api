@@ -12,6 +12,8 @@ ROUTERS = [
     {"module": "routers.public_keco_chemical"},  # CHEM-004A KECO public chemical read
     {"module": "routers.public_knowledge_graph"},  # WAVE3 OBJ-GRAPH public read
     {"module": "routers.public_csi_accidents"},  # OBJ-CSI public READY-only read
+    {"module": "routers.public_chemical_enrichment"},  # WP-01 EXT-037/132 CAS-based enrichment read
+    {"module": "routers.public_chemical_accident"},  # WP-03 EXT-165 chemical accident public read
     # WO-ISOLATE-001: 축3 익명진단 생성/조회/claim 격리.
     #   라이브(tai-www)는 /diagnosis/run(생성)·/diagnosis/result(조회)만 사용 → 축3 URL 미사용.
     #   파일 routers/anonymous_diagnosis.py 는 보존(anonymous_diagnosis_leg 가 _build_step1_body 등 import).
