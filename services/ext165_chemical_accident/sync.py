@@ -21,6 +21,11 @@ from services.public_data_sync.errors import PageFencedError, PageSaveError
 
 logger = logging.getLogger(__name__)
 
+# EXT-165 정상 resultCode — XML 응답 기준 "00"
+_EXT165_OK_CODES: frozenset[str] = frozenset({"00"})
+# data.go.kr 플랫폼 공통 속도제한 코드 (EXT-132와 동일 플랫폼)
+_EXT165_RATE_LIMIT_CODES: frozenset[str] = frozenset({"22", "23"})
+
 
 class SyncStatus(str, Enum):
     COMPLETED = "COMPLETED"
@@ -80,7 +85,7 @@ def collect_all(
         request_budget = 10
     budget = _make_budget(request_budget)
 
-    from services.ext165_chemical_accident.client import fetch_page
+    from services.ext165_chemical_accident.client import fetch_page, RateLimitError
     items: list[Ext165Item] = []
     pages_fetched = 0
 
@@ -104,6 +109,16 @@ def collect_all(
 
         try:
             raw = fetch_page(page_no, num_of_rows=num_of_rows, yyyy=yyyy, timeout=timeout_seconds)
+        except RateLimitError:
+            logger.warning("ext165 rate limit page_no=%d — PARTIAL/RATE_LIMITED", page_no)
+            return SyncResult(
+                status=SyncStatus.PARTIAL,
+                fetched=len(items),
+                items=items,
+                pages_fetched=pages_fetched,
+                budget_used=budget.used,
+                error_code="RATE_LIMITED",
+            )
         except Exception as exc:
             logger.error("ext165 fetch_page failed page_no=%d %s", page_no, type(exc).__name__)
             return SyncResult(
@@ -130,8 +145,22 @@ def collect_all(
                 error_message=str(exc)[:200],
             )
 
-        # PATCH-002-05: reject API error response codes — not treated as empty results
-        if page.result_code is not None and page.result_code != "00":
+        # PATCH-002-05 / PATCH-A: EXT-165 정상 코드 = "00"; 속도제한 코드 22/23 → PARTIAL
+        if page.result_code is not None and page.result_code not in _EXT165_OK_CODES:
+            if page.result_code in _EXT165_RATE_LIMIT_CODES:
+                logger.warning(
+                    "ext165 API rate limit code page_no=%d result_code=%s — PARTIAL/RATE_LIMITED",
+                    page_no, page.result_code,
+                )
+                return SyncResult(
+                    status=SyncStatus.PARTIAL,
+                    fetched=len(items),
+                    items=items,
+                    pages_fetched=pages_fetched,
+                    budget_used=budget.used,
+                    error_code="RATE_LIMITED",
+                    error_message=f"resultCode={page.result_code}",
+                )
             logger.error(
                 "ext165 API error response page_no=%d result_code=%s result_msg=%s",
                 page_no, page.result_code, page.result_msg,

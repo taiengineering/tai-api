@@ -34,6 +34,7 @@ from services.legal_helpers import (
     get_construction_amount_threshold,
     get_effective_worker_count,
 )
+from services.canonical.saas_appendix3_contract import check_saas_appendix3_contract
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
@@ -171,8 +172,10 @@ async def diagnose_industrial_leg(body: SafeIndustrialLegBody, authorization: Op
     _assert_leg_site_scope_http(supabase, resolution.commercial_version_id, "factory", body.factory_id)
     if not leg_runtime_client.is_enabled():                   # LEG availability (TAI fallback 금지)
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
+    # WO-008: Appendix3 contract gate (flag DEFAULT OFF). After entitlement, before LEG.
+    app3_projection = check_saas_appendix3_contract(supabase, body.factory_id, "INDUSTRIAL", body.input)
     try:
-        out = run_safe_industrial_leg(supabase, body.factory_id, body.input)
+        out = run_safe_industrial_leg(supabase, body.factory_id, body.input, app3_projection=app3_projection)
     except EquipmentSourceLoadError as e:
         # WO-EQUIPMENT-A2-EXISTING-SEAM-PATCH-001 PATCH1-B: Equipment read failure 503.
         # READ FAILURE != EMPTY SOURCE — LEG must not be called on equipment read error.
@@ -214,6 +217,17 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
     _assert_leg_site_scope_http(supabase, resolution.commercial_version_id, "site", body.site_id)
     if not leg_runtime_client.is_enabled():                   # LEG availability (TAI fallback 금지)
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
+    # WO-008: Appendix3 contract gate. site→factory for contract check (site-factory mismatch proof).
+    _site_fac_row = (
+        supabase.table("construction_sites")
+        .select("factory_id").eq("id", body.site_id).limit(1).execute()
+    )
+    _site_fac_data = getattr(_site_fac_row, "data", None) or []
+    _cst_factory_id = _site_fac_data[0].get("factory_id") if _site_fac_data else None
+    if _cst_factory_id:
+        app3_projection = check_saas_appendix3_contract(supabase, _cst_factory_id, "CONSTRUCTION", body.input)
+    else:
+        app3_projection = None  # no factory linked — ConstructionSiteBridgeError raised inside runtime
     try:
         out = run_safe_construction_leg(
             supabase,
@@ -221,6 +235,7 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
             body.input,
             subcontract_legal_event_id=body.subcontract_legal_event_id,
             subcontractor_id=body.subcontractor_id,
+            app3_projection=app3_projection,
         )
     except ConstructionSiteBridgeError as e:
         raise HTTPException(status_code=409, detail=str(e))    # site↔factory 미연결 fail-closed
@@ -264,6 +279,8 @@ async def diagnose_building_leg(body: SafeBuildingLegBody, authorization: Option
     _assert_leg_site_scope_http(supabase, resolution.commercial_version_id, "factory", body.factory_id)
     if not leg_runtime_client.is_enabled():
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
+    # WO-008: Appendix3 contract gate (flag DEFAULT OFF). After entitlement, before LEG.
+    app3_projection = check_saas_appendix3_contract(supabase, body.factory_id, "BUILDING", body.input)
     from services.occupancy_capacity.canonical_adapter import SourceUnresolved
     try:
         out = run_safe_building_leg(
@@ -272,6 +289,7 @@ async def diagnose_building_leg(body: SafeBuildingLegBody, authorization: Option
             body.input,
             material_inout_event_id=body.material_inout_event_id,
             occupancy_assessment_id=body.occupancy_assessment_id,
+            app3_projection=app3_projection,
         )
     except SourceUnresolved as e:
         raise HTTPException(

@@ -45,4 +45,6 @@ ROUTERS = [
     {"module": "routers.company_users"},
     # WO-FE-SAFE-01: 현재 SaaS 이용계약 + CV + Site Scope (GET /me/commercial/contract)
     {"module": "routers.member_commercial"},
+    # WO-008: factory legal-classification (GET+POST/confirm, service-role-only table)
+    {"module": "routers.factory_legal_classification"},
 ]

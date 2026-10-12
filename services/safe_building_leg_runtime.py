@@ -59,8 +59,11 @@ def run_safe_building_leg(
     consumer_input,
     material_inout_event_id: str = None,
     occupancy_assessment_id: str = None,
+    app3_projection: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """SAFE BUILDING 공식 LEG 진단. full_result 반환(저장/결제/factory 생성 없음).
+
+    app3_projection: WO-008 서버 생성 AP01-05 leaves (flag ON 시만 비None).
     H01: floor_count / building_height provenance guard → on-demand hydration.
     H03: floor_area_sum_at_or_above_11f derivation (authoritative floor_count >= 11 시).
     H02: occupancy_capacity — direct numeric input PROHIBITED; exact assessment only.
@@ -176,6 +179,12 @@ def run_safe_building_leg(
     for k, v in overrides.items():
         values[k] = v
         unresolved.discard(k)
+
+    # C'. WO-008: server AP01-05 projection injection (flag ON only).
+    #     consumer override 이후, build_saas_leg_step1 이전. 서버 생성 leaves 전용.
+    if app3_projection:
+        for leaf_key, leaf_val in app3_projection.items():
+            values[leaf_key] = leaf_val
 
     # D. WO-010 STEP-2C : unified LEG input contract 경유.
     from services.work_source.store import load_work_rows_optional

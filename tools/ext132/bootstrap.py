@@ -190,7 +190,10 @@ def cmd_bootstrap() -> int:
             except Exception as exc:
                 raise PageSaveError(f"page {page_no} save failed: {type(exc).__name__}") from exc
             # PATCH-03: belt-and-suspenders post-save heartbeat check
-            alive = store.heartbeat(run_id)
+            try:
+                alive = store.heartbeat(run_id)
+            except Exception as exc:
+                raise PageSaveError(f"heartbeat RPC failed: {type(exc).__name__}") from exc
             if not alive:
                 raise PageFencedError("heartbeat returned False — lease may have expired")
 
@@ -198,7 +201,6 @@ def cmd_bootstrap() -> int:
         print(f"  status={result.status.value} fetched={result.fetched} pages={result.pages_fetched}")
 
         # PATCH-003: PARTIAL/FENCED/SAVE_ERROR → preserve STAGING snapshot for resume (no fail_snapshot)
-        # SAVE_ERROR = transient RPC failure; checkpoint is accurate, page can be re-fetched (idempotent).
         if result.status == SyncStatus.PARTIAL or (
             result.status == SyncStatus.FAILED and result.error_code in ("FENCED", "SAVE_ERROR")
         ):
@@ -282,7 +284,10 @@ def cmd_resume() -> int:
             except Exception as exc:
                 raise PageSaveError(f"page {page_no} save failed: {type(exc).__name__}") from exc
             # PATCH-03: belt-and-suspenders post-save heartbeat check
-            alive = store.heartbeat(run_id)
+            try:
+                alive = store.heartbeat(run_id)
+            except Exception as exc:
+                raise PageSaveError(f"heartbeat RPC failed: {type(exc).__name__}") from exc
             if not alive:
                 raise PageFencedError("heartbeat returned False — lease may have expired")
 
@@ -295,7 +300,6 @@ def cmd_resume() -> int:
         print(f"  status={result.status.value} fetched={result.fetched} pages={result.pages_fetched}")
 
         # PATCH-003: PARTIAL/FENCED/SAVE_ERROR → preserve STAGING snapshot for resume (no fail_snapshot)
-        # SAVE_ERROR = transient RPC failure; checkpoint is accurate, page can be re-fetched (idempotent).
         if result.status == SyncStatus.PARTIAL or (
             result.status == SyncStatus.FAILED and result.error_code in ("FENCED", "SAVE_ERROR")
         ):

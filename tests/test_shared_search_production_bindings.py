@@ -170,6 +170,8 @@ def _empty_prod_supabase():
         "ext132_hazardous_material_snapshot_items": [],
         "ext165_chemical_accident_snapshots": [],
         "ext165_chemical_accident_snapshot_items": [],
+        "reference_form_public_view": [],
+        "reference_form_content": [],
     })
 
 
@@ -179,6 +181,7 @@ def test_registry_builds_all_eight_adapters():
     assert names == [
         "GUIDE", "SAFETY_MATERIAL", "CSI_ACCIDENT", "CHEM",
         "KNOWLEDGE", "PRECEDENT", "LEGAL", "RISK", "CHEM_REGULATION",
+        "REFERENCE_FORM",
         "CHEM_SAFETY", "HAZARDOUS_MATERIAL", "CHEM_ACCIDENT",
     ]
 

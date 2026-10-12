@@ -191,16 +191,18 @@ def cmd_bootstrap(yyyy: str | None = None) -> int:
                 raise  # RPC-level fencing — stop collection
             except Exception as exc:
                 raise PageSaveError(f"page {page_no} save failed: {type(exc).__name__}") from exc
-            # PATCH-03: belt-and-suspenders post-save heartbeat check
-            alive = store.heartbeat(run_id)
+            # PATCH-03/PATCH-B: belt-and-suspenders post-save heartbeat check
+            try:
+                alive = store.heartbeat(run_id)
+            except Exception as exc:
+                raise PageSaveError(f"heartbeat RPC failed: {type(exc).__name__}") from exc
             if not alive:
                 raise PageFencedError("heartbeat returned False — lease may have expired")
 
         result = collect_all(yyyy=yyyy, on_page_complete=_on_page)
         print(f"  status={result.status.value} fetched={result.fetched} pages={result.pages_fetched}")
 
-        # PATCH-003: PARTIAL/FENCED/SAVE_ERROR → preserve STAGING snapshot for resume (no fail_snapshot)
-        # SAVE_ERROR = transient RPC failure; checkpoint is accurate, page can be re-fetched (idempotent).
+        # PATCH-003/PATCH-C: PARTIAL/FENCED/SAVE_ERROR → preserve STAGING snapshot for resume (no fail_snapshot)
         if result.status == SyncStatus.PARTIAL or (
             result.status == SyncStatus.FAILED and result.error_code in ("FENCED", "SAVE_ERROR")
         ):
@@ -285,8 +287,11 @@ def cmd_resume() -> int:
                 raise  # RPC-level fencing — stop collection
             except Exception as exc:
                 raise PageSaveError(f"page {page_no} save failed: {type(exc).__name__}") from exc
-            # PATCH-03: belt-and-suspenders post-save heartbeat check
-            alive = store.heartbeat(run_id)
+            # PATCH-03/PATCH-B: belt-and-suspenders post-save heartbeat check
+            try:
+                alive = store.heartbeat(run_id)
+            except Exception as exc:
+                raise PageSaveError(f"heartbeat RPC failed: {type(exc).__name__}") from exc
             if not alive:
                 raise PageFencedError("heartbeat returned False — lease may have expired")
 
@@ -299,8 +304,7 @@ def cmd_resume() -> int:
         )
         print(f"  status={result.status.value} fetched={result.fetched} pages={result.pages_fetched}")
 
-        # PATCH-003: PARTIAL/FENCED/SAVE_ERROR → preserve STAGING snapshot for resume (no fail_snapshot)
-        # SAVE_ERROR = transient RPC failure; checkpoint is accurate, page can be re-fetched (idempotent).
+        # PATCH-003/PATCH-C: PARTIAL/FENCED/SAVE_ERROR → preserve STAGING snapshot for resume (no fail_snapshot)
         if result.status == SyncStatus.PARTIAL or (
             result.status == SyncStatus.FAILED and result.error_code in ("FENCED", "SAVE_ERROR")
         ):

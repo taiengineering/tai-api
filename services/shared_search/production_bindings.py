@@ -41,8 +41,9 @@ from services.shared_search.adapters import (
     ChemAccidentAdapter, ChemAdapter, ChemRegulationAdapter, ChemSafetyAdapter,
     CsiAccidentAdapter, GuideAdapter, HazardousMaterialAdapter,
     KnowledgeAdapter, LegalAdapter, MarketingKnowledgeAdapter,
-    PrecedentAdapter, RiskAdapter, SafetyMaterialAdapter,
+    PrecedentAdapter, ReferenceFormAdapter, RiskAdapter, SafetyMaterialAdapter,
 )
+from services.shared_search.adapters.reference_form import cleared_form_ids as _rf_cleared_ids
 from services.shared_search.source_reader import (
     SupabaseClient, paginate_supabase,
 )
@@ -688,6 +689,74 @@ def _make_legal_adapter(
     )
 
 
+def _make_reference_form_adapter(client: SupabaseClient) -> ReferenceFormAdapter:
+    _VIEW_SELECT = (
+        "id,canonical_slug,title,description,"
+        "published_at,updated_at,legacy_codes"
+    )
+
+    def _body_html_map(form_ids: list[str]) -> dict[str, str]:
+        """Batch-fetch body_html from reference_form_content (lang=ko).
+        Returns empty strings for missing rows; never raises."""
+        if not form_ids:
+            return {}
+        try:
+            r = (client.table("reference_form_content")
+                     .select("form_id,body_html")
+                     .in_("form_id", form_ids)
+                     .eq("lang", "ko")
+                     .execute())
+            rows = list(getattr(r, "data", None) or [])
+        except Exception:
+            return {}
+        return {
+            str(row["form_id"]): row.get("body_html") or ""
+            for row in rows if row.get("form_id")
+        }
+
+    _CHUNK = 200   # keep each rights + body batch small
+
+    def _iter_current() -> Iterator[dict]:
+        offset = 0
+        while True:
+            r = (client.table("reference_form_public_view")
+                     .select(_VIEW_SELECT)
+                     .order("id")
+                     .range(offset, offset + _CHUNK - 1)
+                     .execute())
+            rows = list(getattr(r, "data", None) or [])
+            if not rows:
+                break
+            ids = [str(row["id"]) for row in rows if row.get("id")]
+            cleared = _rf_cleared_ids(client, ids)
+            body_map = _body_html_map(ids)
+            for row in rows:
+                fid = str(row.get("id") or "")
+                if fid not in cleared:
+                    continue   # rights not CLEARED — exclude from index
+                row["_body_html"] = body_map.get(fid, "")
+                yield row
+            if len(rows) < _CHUNK:
+                break
+            offset += _CHUNK
+
+    def _by_id(form_id: str) -> Optional[dict]:
+        row = _fetch_one(
+            client, table="reference_form_public_view",
+            select=_VIEW_SELECT,
+            key_column="id", key_value=form_id,
+        )
+        if row is None:
+            return None
+        if form_id not in _rf_cleared_ids(client, [form_id]):
+            return None   # rights not CLEARED
+        body_map = _body_html_map([form_id])
+        row["_body_html"] = body_map.get(form_id, "")
+        return row
+
+    return ReferenceFormAdapter(fetch_current=_iter_current, fetch_by_id=_by_id)
+
+
 def _make_risk_adapter(_client: SupabaseClient) -> RiskAdapter:
     # F2 §24: RISK yields zero until RISK-C02 opens the ACTIVE gate.
     # No fetcher wired here — the adapter's default empty iterator
@@ -1066,6 +1135,7 @@ def build_production_adapters(
         _make_legal_adapter(client, legal_client=legal_client),
         _make_risk_adapter(client),
         _make_chem_regulation_adapter(legal_client=legal_client),
+        _make_reference_form_adapter(client),
         _make_chem_safety_adapter(client),
         _make_hazardous_material_adapter(client),
         _make_chem_accident_adapter(client),
