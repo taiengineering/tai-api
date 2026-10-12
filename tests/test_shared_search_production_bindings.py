@@ -52,6 +52,12 @@ class _Query:
         self._filters.append(("in", col, list(values)))
         return self
 
+    def is_(self, col, val):
+        # val == "null" → filter rows where col is None
+        if val == "null":
+            self._filters.append(("is_null", col, None))
+        return self
+
     def order(self, col, desc=False):
         self._order = (col, desc)
         return self
@@ -73,6 +79,8 @@ class _Query:
                 rows = [r for r in rows if r.get(col) != val]
             elif op == "in":
                 rows = [r for r in rows if r.get(col) in val]
+            elif op == "is_null":
+                rows = [r for r in rows if r.get(col) is None]
         if self._order is not None:
             col, desc = self._order
             rows.sort(key=lambda r: (r.get(col) is None, r.get(col)),
@@ -156,6 +164,12 @@ def _empty_prod_supabase():
         "kosha_safety_material_storage_holds": [],
         "law_master": [],
         "law_article": [],
+        "ext037_chemical_safety_snapshots": [],
+        "ext037_chemical_safety_snapshot_items": [],
+        "ext132_hazardous_material_snapshots": [],
+        "ext132_hazardous_material_snapshot_items": [],
+        "ext165_chemical_accident_snapshots": [],
+        "ext165_chemical_accident_snapshot_items": [],
     })
 
 
@@ -165,6 +179,7 @@ def test_registry_builds_all_eight_adapters():
     assert names == [
         "GUIDE", "SAFETY_MATERIAL", "CSI_ACCIDENT", "CHEM",
         "KNOWLEDGE", "PRECEDENT", "LEGAL", "RISK", "CHEM_REGULATION",
+        "CHEM_SAFETY", "HAZARDOUS_MATERIAL", "CHEM_ACCIDENT",
     ]
 
 
@@ -566,17 +581,43 @@ def test_registry_full_rebuild_all_domains(monkeypatch):
             "is_deleted_in_version": False,
             "enforcement_date": "2026-01-01T00:00:00+00:00",
         }],
+        "ext037_chemical_safety_snapshots": [{
+            "id": "ecs1", "completed_at": "2026-01-02T00:00:00+00:00",
+            "status": "COMPLETED", "is_current": True,
+        }],
+        "ext037_chemical_safety_snapshot_items": [{
+            "snapshot_id": "ecs1", "datano": "D-001",
+            "raw": {"dataNo": "D-001", "chemKo": "암모니아", "casNo": "7664-41-7"},
+        }],
+        "ext132_hazardous_material_snapshots": [{
+            "id": "hms1", "completed_at": "2026-01-02T00:00:00+00:00",
+            "status": "COMPLETED", "is_current": True,
+        }],
+        "ext132_hazardous_material_snapshot_items": [{
+            "snapshot_id": "hms1", "chemicalno": "HM-001",
+            "raw": {"chemicalname": "아세톤", "casno": "67-64-1"},
+        }],
+        "ext165_chemical_accident_snapshots": [{
+            "id": "cas1", "completed_at": "2026-01-02T00:00:00+00:00",
+            "status": "COMPLETED", "is_current": True, "collect_scope": None,
+        }],
+        "ext165_chemical_accident_snapshot_items": [{
+            "snapshot_id": "cas1", "datano": "ACC-001",
+            "raw": {"dataNo": "ACC-001", "cscTy": "폭발", "area": "경기도",
+                    "chem": "암모니아", "summary": "누출"},
+        }],
     })
     adapters = build_production_adapters(sb, legal_client=sb)
     store = MemoryStore()
     indexer = Indexer(store)
     result = indexer.full_rebuild(adapters)
     assert result.status == "PROMOTED"
-    # 7 Domains produce docs; RISK contributes zero.
-    assert result.promoted_count == 7
+    # 10 Domains produce docs; RISK contributes zero.
+    assert result.promoted_count == 10
     types = {row["object_type"] for row in store.iter_current()}
     assert types == {"GUIDE", "SAFETY_MATERIAL", "CSI_ACCIDENT", "CHEM",
-                     "KNOWLEDGE", "PRECEDENT", "LEGAL"}
+                     "KNOWLEDGE", "PRECEDENT", "LEGAL",
+                     "CHEM_SAFETY", "HAZARDOUS_MATERIAL", "CHEM_ACCIDENT"}
 
 
 # ---------------------------------------------------------------------------
