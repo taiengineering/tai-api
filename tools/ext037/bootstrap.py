@@ -182,7 +182,10 @@ def cmd_bootstrap() -> int:
                 raise
             except Exception as exc:
                 raise PageSaveError(f"page {page_no} save failed: {type(exc).__name__}") from exc
-            alive = store.heartbeat(run_id)
+            try:
+                alive = store.heartbeat(run_id)
+            except Exception as exc:
+                raise PageSaveError(f"heartbeat RPC failed: {type(exc).__name__}") from exc
             if not alive:
                 raise PageFencedError("heartbeat returned False — lease may have expired")
 
@@ -270,7 +273,10 @@ def cmd_resume() -> int:
                 raise
             except Exception as exc:
                 raise PageSaveError(f"page {page_no} save failed: {type(exc).__name__}") from exc
-            alive = store.heartbeat(run_id)
+            try:
+                alive = store.heartbeat(run_id)
+            except Exception as exc:
+                raise PageSaveError(f"heartbeat RPC failed: {type(exc).__name__}") from exc
             if not alive:
                 raise PageFencedError("heartbeat returned False — lease may have expired")
 
