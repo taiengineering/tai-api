@@ -246,6 +246,57 @@ def _run_public_data_sync_tick(p):
     return {"executed": len(results), "results": results}
 
 
+def _run_leg_law_refresh(p):
+    """Trigger used-law form refresh via LEG API (WO-TAI-LEG-USED-LAW-REFRESH-001).
+
+    Resolves Case C scope from TAI DB (law_master.is_active + law_api_id set)
+    and passes law_targets to LEG server. LEG does not connect to TAI DB.
+    """
+    import requests
+    base = os.environ.get("LEG_RUNTIME_URL", "").rstrip("/")
+    if not base:
+        raise RuntimeError("LEG_RUNTIME_URL not set")
+    token = os.environ.get("LEG_INTERNAL_API_KEY", "")
+    if not token:
+        raise RuntimeError("LEG_INTERNAL_API_KEY not set")
+    timeout = int(p.get("timeout_seconds", 300))
+
+    # Resolve Case C scope: all active laws with confirmed law_api_id in TAI DB
+    sb = _sb()
+    rows = (
+        sb.table("law_master")
+        .select("law_name, law_api_id, law_mst_no")
+        .eq("is_active", True)
+        .not_.is_("law_api_id", "null")
+        .execute()
+    )
+    law_targets = [
+        {
+            "law_name": r["law_name"] or "",
+            "law_api_id": r["law_api_id"],
+            "law_mst_no": r.get("law_mst_no") or "",
+        }
+        for r in (rows.data or [])
+        if r.get("law_api_id")
+    ]
+
+    resp = requests.post(
+        f"{base}/law-intake/refresh",
+        json={"law_targets": law_targets},
+        headers={"X-Leg-Internal-Token": token},
+        timeout=timeout,
+    )
+    try:
+        body = resp.json()
+    except Exception:
+        body = {"text": resp.text[:500]}
+    return {
+        "http_status": resp.status_code,
+        "body": body,
+        "scope_sent": len(law_targets),
+    }
+
+
 def register_direct_handlers() -> dict[str, Handler]:
     if DIRECT_HANDLERS:
         return DIRECT_HANDLERS
@@ -283,6 +334,7 @@ def register_direct_handlers() -> dict[str, Handler]:
         "direct://saas_recurring_billing":    _run_saas_recurring_billing,
         "direct://qa_scheduler_tick":         _run_qa_scheduler_tick,
         "direct://public_data_sync_tick":     _run_public_data_sync_tick,
+        "direct://leg_law_refresh":           _run_leg_law_refresh,
     })
     return DIRECT_HANDLERS
 
