@@ -50,7 +50,7 @@ from services.knowledge_graph_hydrate import ProductionKnowledgeHydrator
 from scripts.refresh_knowledge_graph import APPLY_ENV, PAGE, load_production_sources, main as refresh_main, produce_all
 
 ROOT = Path(__file__).resolve().parents[1]
-SQL = (ROOT / "supabase/migrations/20260913_knowledge_graph_relations.sql").read_text(encoding="utf-8")
+SQL = (ROOT / "supabase/migrations/20261006153514_knowledge_graph_relations.sql").read_text(encoding="utf-8")
 GRAPH_PY = [
     ROOT / "services/knowledge_graph_svc.py",
     ROOT / "services/knowledge_graph_producers.py",
@@ -390,13 +390,18 @@ def test_g31_g32_g33_read_endpoints():
     client = _client(store, hydrator)
     ctx = client.get("/public/knowledge-graph/context", params={"relation_type": "equipment", "relation_key": "forklift"})
     assert ctx.status_code == 200
-    assert ctx.json()["total"] == 2
+    assert ctx.json() == {
+        "status": "ok",
+        "context": {"relation_type": "equipment", "relation_key": "forklift", "relation_label": None},
+        "total": 0,
+        "items": [],
+    }
     item_ctx = client.get("/public/knowledge-graph/items/KOSHA_GUIDE/A-1-2018/contexts")
-    assert item_ctx.json()["contexts"][0]["relation_key"] == "forklift"
+    assert item_ctx.status_code == 200
+    assert item_ctx.json() == {"content_type": "KOSHA_GUIDE", "content_id": "A-1-2018", "contexts": []}
     related = client.get("/public/knowledge-graph/items/KOSHA_GUIDE/A-1-2018/related")
-    ids = {(x["content_type"], x["content_id"]) for x in related.json()["items"]}
-    assert ("SAFETY_MATERIAL", "m1") in ids
-    assert ("KOSHA_GUIDE", "A-1-2018") not in ids
+    assert related.status_code == 200
+    assert related.json() == {"content_type": "KOSHA_GUIDE", "content_id": "A-1-2018", "items": []}
 
 
 def test_g34_same_item_excluded():
@@ -1132,17 +1137,24 @@ def test_g68_g70_production_provider_http_ok():
     client = _client(store, hydrator)
     ctx = client.get("/public/knowledge-graph/context", params={"relation_type": "equipment", "relation_key": "forklift"})
     assert ctx.status_code == 200
-    assert ctx.json()["total"] >= 1
+    assert ctx.json()["total"] == 0
+    assert ctx.json()["items"] == []
+    assert ctx.json()["context"]["relation_label"] is None
     item_ctx = client.get("/public/knowledge-graph/items/KOSHA_GUIDE/A-1-2018/contexts")
     assert item_ctx.status_code == 200
+    assert item_ctx.json()["contexts"] == []
     related = client.get("/public/knowledge-graph/items/KOSHA_GUIDE/A-1-2018/related")
     assert related.status_code == 200
+    assert related.json()["items"] == []
 
 
-def test_g71_backend_unavailable_safe_503(monkeypatch):
+def test_g71_g0_backend_unavailable_returns_empty(monkeypatch):
     graph_router.reset_graph_read()
 
+    calls = []
+
     def boom():
+        calls.append("backend")
         raise RuntimeError("no db")
 
     monkeypatch.setattr(graph_router, "_lazy_production", boom)
@@ -1152,9 +1164,11 @@ def test_g71_backend_unavailable_safe_503(monkeypatch):
         "/public/knowledge-graph/context",
         params={"relation_type": "equipment", "relation_key": "forklift"},
     )
-    assert r.status_code == 503
-    assert r.json()["detail"] == "GRAPH_READ_UNAVAILABLE"
-    assert "Traceback" not in r.text
+    assert r.status_code == 200
+    assert r.json()["total"] == 0
+    assert r.json()["items"] == []
+    assert r.json()["context"]["relation_label"] is None
+    assert calls == []
     graph_router.reset_graph_read()
 
 
@@ -1532,3 +1546,75 @@ def test_g102_same_domestic_id_rerun_no_semantic_duplicate():
     assert len({e["edge_key"] for e in accident_edges}) == len(accident_edges)
     assert all(e["source_content_id"] == "abc-1" for e in accident_edges)
 
+
+
+@pytest.mark.parametrize("relation_type,relation_key", [
+    ("equipment", "forklift"),
+    ("task", "welding"),
+    ("process", "excavation"),
+    ("topic", "fall"),
+    ("arbitrary", "unlisted-key"),
+])
+@pytest.mark.parametrize("injected", [False, True])
+def test_g0_all_public_routes_bypass_backend(monkeypatch, relation_type, relation_key, injected):
+    """Seeded or unavailable backend cannot bypass public G0 containment."""
+    from unittest.mock import Mock
+    import services.knowledge_graph_svc as svc
+
+    store = MemoryGraphStore()
+    persist_candidates(store, [_cand(relation_type=relation_type, relation_key=relation_key)], run_id="g0-synthetic")
+    hydrator = MemoryHydrator([_rec()])
+    graph_router.reset_graph_read()
+    if injected:
+        graph_router.configure_graph_read(store=store, hydrator=hydrator)
+    blocked = Mock(side_effect=AssertionError("G0 must not read backend"))
+    for name in ("_require_backend", "_lazy_production"):
+        monkeypatch.setattr(graph_router, name, blocked)
+    for name in ("read_context", "read_item_contexts", "read_related"):
+        monkeypatch.setattr(svc, name, blocked)
+    for name in ("query_context_edges", "count_context_edges", "query_item_context_edges", "query_edges_for_contexts"):
+        monkeypatch.setattr(store, name, blocked)
+    monkeypatch.setattr(hydrator, "get", blocked)
+    monkeypatch.setattr(hydrator, "get_many", blocked)
+    app = FastAPI()
+    app.include_router(graph_router.router)
+    try:
+        with TestClient(app) as client:
+            response = client.get("/public/knowledge-graph/context", params={
+                "relation_type": relation_type, "relation_key": relation_key,
+                "page": 2, "page_size": 1, "content_type": "KOSHA_GUIDE",
+            })
+            assert response.status_code == 200
+            assert response.json() == {
+                "status": "ok",
+                "context": {"relation_type": relation_type, "relation_key": relation_key, "relation_label": None},
+                "total": 0, "items": [],
+            }
+            for suffix, empty_key in (("contexts", "contexts"), ("related", "items")):
+                response = client.get(f"/public/knowledge-graph/items/KOSHA_GUIDE/A-1-2018/{suffix}")
+                assert response.status_code == 200
+                assert response.json() == {"content_type": "KOSHA_GUIDE", "content_id": "A-1-2018", empty_key: []}
+        blocked.assert_not_called()
+    finally:
+        graph_router.reset_graph_read()
+
+
+@pytest.mark.parametrize("params", [
+    {},
+    {"relation_type": "equipment"},
+    {"relation_key": "forklift"},
+    {"relation_type": "equipment", "relation_key": "forklift", "page": 0},
+    {"relation_type": "equipment", "relation_key": "forklift", "page_size": 0},
+    {"relation_type": "equipment", "relation_key": "forklift", "page_size": 101},
+    {"relation_type": "equipment", "relation_key": "forklift", "page": "invalid"},
+])
+def test_g0_context_query_validation_preserved(monkeypatch, params):
+    from unittest.mock import Mock
+
+    blocked = Mock(side_effect=AssertionError("invalid request must not read backend"))
+    monkeypatch.setattr(graph_router, "_require_backend", blocked)
+    app = FastAPI()
+    app.include_router(graph_router.router)
+    with TestClient(app) as client:
+        assert client.get("/public/knowledge-graph/context", params=params).status_code == 422
+    blocked.assert_not_called()

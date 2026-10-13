@@ -68,37 +68,24 @@ def public_graph_context(
     page_size: int = Query(20, ge=1, le=100),
     content_type: str | None = Query(None),
 ):
-    from services.knowledge_graph_svc import read_context
-
-    store, hydrator = _require_backend()
-    return _safe_read(
-        lambda: read_context(
-            store,
-            hydrator,
-            relation_type=relation_type,
-            relation_key=relation_key,
-            page=page,
-            page_size=page_size,
-            content_type=content_type,
-        )
-    )
+    # G0 containment: public relations remain withheld pending G1 approval.
+    return {
+        "status": "ok",
+        "context": {
+            "relation_type": relation_type,
+            "relation_key": relation_key,
+            "relation_label": None,
+        },
+        "total": 0,
+        "items": [],
+    }
 
 
 @router.get("/items/{content_type}/{content_id}/contexts")
 def public_graph_item_contexts(content_type: str, content_id: str):
-    from services.knowledge_graph_svc import read_item_contexts
-
-    store, hydrator = _require_backend()
-    return _safe_read(
-        lambda: read_item_contexts(store, hydrator, content_type=content_type, content_id=content_id)
-    )
+    return {"content_type": content_type, "content_id": content_id, "contexts": []}
 
 
 @router.get("/items/{content_type}/{content_id}/related")
 def public_graph_related(content_type: str, content_id: str):
-    from services.knowledge_graph_svc import read_related
-
-    store, hydrator = _require_backend()
-    return _safe_read(
-        lambda: read_related(store, hydrator, content_type=content_type, content_id=content_id)
-    )
+    return {"content_type": content_type, "content_id": content_id, "items": []}
