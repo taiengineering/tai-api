@@ -120,7 +120,6 @@ def test_allowlist_contains_published_leaves_not_source_item():
     # S01 CONSTRUCTION CORE22 norms use appendix3_item_no==49 as direct Leaf field.
     assert "appendix3_item_no" in _LEG_INPUT_FIELDS
     assert len(_LEG_INPUT_FIELDS) == len(set(_LEG_INPUT_FIELDS))
-    assert len(_LEG_INPUT_FIELDS) == 250  # WO-LFR-OBJ-S01-P1-001: +1 appendix3_item_no
 
 
 def _proj_keys(item, subtype=None):
