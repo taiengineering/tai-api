@@ -186,9 +186,10 @@ def get_pdf_signed_url(
     if pdf_url.startswith("http"):
         return {"status": "success", "url": pdf_url, "type": "external"}
 
-    # Storage 경로 prefix가 소유 사업장과 일치하는지 검증 (P0-03)
-    path_prefix = pdf_url.split("/")[0] if "/" in pdf_url else None
-    if path_prefix != sub["factory_id"]:
+    # Storage 경로: factory_id + submission_id 모두 일치해야 함 (P0-03)
+    # 표준 경로: {factory_id}/{submission_id}.pdf — 같은 사업장 다른 submission 경로도 거부
+    expected_path = f"{sub['factory_id']}/{submission_id}.pdf"
+    if pdf_url != expected_path:
         raise HTTPException(status_code=403, detail="PDF 경로가 유효하지 않습니다")
 
     signed = _get_signed_url(supabase, pdf_url, expires_in)
@@ -569,13 +570,15 @@ def create_form_submission(
 
     event_id = body.get("event_id")
     if event_id:
-        # event_id 소유권 검증: 같은 사업장 소유인지 확인
+        # event_id 소유권 + form_code 정합성 검증 (P0-02)
         ev_check = supabase.table("report_events").select("factory_id, form_code").eq(
             "id", event_id
         ).single().execute()
         if not ev_check.data:
             raise HTTPException(status_code=404, detail="이벤트를 찾을 수 없습니다")
         if ev_check.data.get("factory_id") != factory_id:
+            raise HTTPException(status_code=404, detail="이벤트를 찾을 수 없습니다")
+        if ev_check.data.get("form_code") and ev_check.data.get("form_code") != form_code:
             raise HTTPException(status_code=404, detail="이벤트를 찾을 수 없습니다")
 
     res = supabase.table("form_submissions").insert({
@@ -601,7 +604,18 @@ def update_form_submission(
     current_user: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
-    sub_factory_id = _fetch_submission_factory_id(supabase, submission_id)
+
+    # 현재 submission 조회 (event_id, form_code 포함) — 소유권 및 정합성 검증 선행
+    existing = supabase.table("form_submissions").select(
+        "factory_id, event_id, form_code"
+    ).eq("id", submission_id).single().execute()
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="서류를 찾을 수 없습니다")
+
+    sub_factory_id = existing.data["factory_id"]
+    sub_event_id   = existing.data.get("event_id")
+    sub_form_code  = existing.data.get("form_code")
+
     _ensure_factory_own(supabase, sub_factory_id, current_user)
 
     # pdf_url 제거: 서버 전용 관리 필드 — 클라이언트 수정 금지 (P0-03)
@@ -609,23 +623,33 @@ def update_form_submission(
     filtered = {k: v for k, v in body.items() if k in allowed}
     if not filtered:
         raise HTTPException(status_code=400, detail="수정할 항목 없음")
+
+    # submitted_at 변경 시 event 정합성 사전 검증 (P0-02)
+    # 불일치 event는 SKIP이 아니라 REJECT — 데이터 정합성 오류로 반환
+    if "submitted_at" in filtered and sub_event_id:
+        ev_chk = supabase.table("report_events").select("factory_id, form_code").eq(
+            "id", sub_event_id
+        ).single().execute()
+        if not ev_chk.data:
+            raise HTTPException(status_code=409, detail="연결된 이벤트가 존재하지 않습니다")
+        ev = ev_chk.data
+        if ev.get("factory_id") != sub_factory_id:
+            raise HTTPException(status_code=409, detail="이벤트 사업장 불일치: 서류 제출 거부")
+        if ev.get("form_code") and ev.get("form_code") != sub_form_code:
+            raise HTTPException(status_code=409, detail="이벤트 서식 불일치: 서류 제출 거부")
+
     filtered["updated_at"] = serialize_business_datetime(now_kst())
     res = supabase.table("form_submissions").update(filtered).eq("id", submission_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="서류를 찾을 수 없습니다")
-    if "submitted_at" in filtered:
-        sub = res.data[0]
-        if sub.get("event_id"):
-            # event 소유권 재확인 후 COMPLETED 처리 (P0-02)
-            ev_chk = supabase.table("report_events").select("factory_id").eq(
-                "id", sub["event_id"]
-            ).single().execute()
-            if ev_chk.data and ev_chk.data.get("factory_id") == sub_factory_id:
-                supabase.table("report_events").update(
-                    {"status": "COMPLETED",
-                     "completed_at": serialize_business_datetime(now_kst()),
-                     "updated_at": serialize_business_datetime(now_kst())}
-                ).eq("id", sub["event_id"]).eq("factory_id", sub_factory_id).execute()
+
+    if "submitted_at" in filtered and sub_event_id:
+        supabase.table("report_events").update(
+            {"status": "COMPLETED",
+             "completed_at": serialize_business_datetime(now_kst()),
+             "updated_at": serialize_business_datetime(now_kst())}
+        ).eq("id", sub_event_id).eq("factory_id", sub_factory_id).execute()
+
     return {"status": "success", "message": "서류 수정됨", "data": res.data[0]}
 
 

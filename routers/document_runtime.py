@@ -4,19 +4,17 @@ PDF 생성이 아니라 Runtime Document Projection 반환.
 
 WP-SEC0-B: 전 엔드포인트 인증 게이트 + facility_id 소유권 검증 (fail-closed).
   - get_current_user Depends 모든 라우트 적용
-  - facility_id 제공 시: runtime_facility_profile 존재 확인 →
-    facility_id를 factory_id로 직접 사용 → _ensure_factory_own
-    (근거: facility_condition.factory_id = facility_id 패턴 확인;
-     runtime_facility_profile은 factory_id 컬럼 없음)
-  - facility 미존재 시 403 (fail-closed); 타사 소유 시 404 (존재 숨김)
   - facility_id 미제공: 인증된 사용자 통과 (빈 context 유지)
+  - facility_id 제공 시: runtime_facility_profile 존재 확인 (없으면 403);
+    소유권 검증 경로 없음 → FACILITY_OWNERSHIP_MAPPING=BLOCKED (503 반환).
+    근거: 운영 DB 실측 — runtime_facility_profile.id ≠ factories.id (0/50건 일치).
+    factories 연결 경로 확보 후 Owner 승인 시 구현 예정.
   - POST /render context: facility_id만 신뢰, 나머지 키 제거 (신뢰하지 않음)
 """
 from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
-from services.company_scope import _ensure_factory_own
 from services.runtime_binding_resolver import resolve_document_runtime
 from services.conditional_rendering_resolver import resolve_conditional_fields
 from services.field_completeness_engine import (
@@ -30,13 +28,13 @@ router = APIRouter(prefix="/document-runtime", tags=["Document Runtime"])
 
 
 def _validate_facility_ownership(facility_id: str, current_user: dict) -> None:
-    """facility_id → runtime_facility_profile 존재 확인 → factories 소유권 검증 (fail-closed).
+    """facility_id → runtime_facility_profile 존재 확인 후 소유권 검증.
 
-    runtime_facility_profile.factory_id 컬럼은 실제 운영 DB에 없음.
-    facility_condition.factory_id = facility_id 패턴에서 확인된 대로
-    facility_id 는 factories.id 와 동일한 UUID를 사용한다.
-    따라서 facility_id 를 factory_id 로 직접 사용하여 _ensure_factory_own 호출.
-    facility 미존재 → 403; 타사 소유 → 404 (존재 숨김).
+    소유권 검증 경로 없음 (FACILITY_OWNERSHIP_MAPPING=BLOCKED):
+      운영 DB 실측 결과 runtime_facility_profile.id ≠ factories.id (0/50건 일치).
+      factories/companies 연결 컬럼이 runtime_facility_profile에 없으므로
+      ownership을 검증할 수 없음 → fail-closed (503).
+    facility 미존재 → 403 (존재 숨김).
     """
     sb = get_supabase()
     result = sb.table("runtime_facility_profile").select("id").eq(
@@ -47,8 +45,16 @@ def _validate_facility_ownership(facility_id: str, current_user: dict) -> None:
             status_code=403,
             detail="facility를 찾을 수 없거나 접근 권한이 없습니다",
         )
-    # facility_id == factories.id in this service
-    _ensure_factory_own(sb, facility_id, current_user)
+    # FACILITY_OWNERSHIP_MAPPING=BLOCKED: runtime_facility_profile과 factories 간
+    # 소유권 검증 경로 미확인. Owner 승인 후 구현 예정.
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "FACILITY_OWNERSHIP_MAPPING=BLOCKED: 시설 소유권 검증 경로 미확인. "
+            "runtime_facility_profile과 factories 간 연결 컬럼 부재. "
+            "Owner 승인 후 구현 예정."
+        ),
+    )
 
 
 @router.get("/{document_type}")

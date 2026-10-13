@@ -1,4 +1,4 @@
-"""WO-TAI-DOC-SEC0-IMPLEMENT-001 / WO-TAI-DOC-SEC0-PR609-CORRECTION-001
+"""WO-TAI-DOC-SEC0-IMPLEMENT-001 / WO-TAI-DOC-SEC0-PR609-CORRECTION-001/002
    SEC0 Auth & Tenant Scope Test Suite
 
 Coverage:
@@ -13,27 +13,33 @@ Coverage:
   T09  GET  report-forms/submissions/detail/{id}: cross-company submission → 404
   T10  document-runtime: no token → 401
   T11  document-runtime: no facility_id → 200 (pass through)
-  T12  document-runtime: own facility_id → 200
-           (facility_id == factory_id UUID; runtime_facility_profile.id exists)
-  T13  document-runtime: cross-company facility_id → 4xx (fail-closed)
+  T12  document-runtime: facility_id 제공 → 503 (FACILITY_OWNERSHIP_MAPPING=BLOCKED)
+           (runtime_facility_profile.id ≠ factories.id, 운영 DB 0/50건 일치)
+  T13  document-runtime: cross-company facility_id → 503 (BLOCKED, 동일 이유)
   T14  POST report-forms/storage/upload-template: no token → 401
   T15  GET  report-forms/storage/signed-url/{id}: no token → 401
 
   T16  document-runtime: facility not in runtime_facility_profile → 403
-  T17  POST /render: cross-company facility_id in context → 4xx
+  T17  POST /render: facility_id in context → 503 (BLOCKED)
   T18  POST /submissions: cross-company event_id → 404
-  T19  PATCH /submissions: submitted_at + own-factory event → event COMPLETED
-  T20  PATCH /submissions: submitted_at + cross-factory event → event NOT updated
+  T19  PATCH /submissions: submitted_at + own-factory+form_code event → event COMPLETED
+  T20  PATCH /submissions: submitted_at + cross-factory event → 409 REJECTED
   T21  PATCH /submissions: pdf_url field rejected → 400
   T22  GET signed-url: storage path prefix mismatches factory_id → 403
   T23  document_engine_api router loads (no regression)
   T24  created_by forced from token, not body
 
+  T25  document-runtime: facility_id with genuinely different UUID (≠ factories.id) → 503
+  T26  POST /submissions: event.form_code mismatch → 404
+  T27  PATCH /submissions: submitted_at + cross-factory event → 409 (form_code variant)
+  T28  GET signed-url: same factory but wrong submission_id in path → 403
+  T29  GET signed-url: exact correct path factory_id/submission_id.pdf → 200
+
 Production DB write = 0 (mock 전용).
 mock fixture는 실제 DB 스키마와 일치 —
-  runtime_facility_profile: id (PK), facility_name 등 (factory_id 컬럼 없음)
+  runtime_facility_profile: id (PK), facility_name 등 (factory_id·company_id 컬럼 없음)
   factories: id, company_id
-  facility_id == factory_id UUID (facility_condition.factory_id=facility_id 패턴 근거)
+  FACILITY_OWNERSHIP_MAPPING=BLOCKED: runtime_facility_profile.id ≠ factories.id (0/50건)
 """
 from __future__ import annotations
 
@@ -89,15 +95,20 @@ EVENT_B = {
     "due_date": "2026-11-01",
 }
 
-# facility_id == factory_id UUID (실제 스키마 근거)
-# runtime_facility_profile.id = facility_id; factory_id 컬럼 없음
+# runtime_facility_profile: id (PK), company_id·factory_id 컬럼 없음
+# FACILITY_OWNERSHIP_MAPPING=BLOCKED: id ≠ factories.id (운영 DB 0/50건)
 FACILITY_PROFILE_A = {
-    "id": "factory-A1",  # facility_id == factory_id
+    "id": "factory-A1",  # 이전 잘못된 가정 — 실제로는 factories.id와 다른 UUID
     "facility_name": "테스트 시설",
 }
 FACILITY_PROFILE_B = {
-    "id": "factory-B1",  # facility_id == factory_id
+    "id": "factory-B1",
     "facility_name": "타사 시설",
+}
+# 운영 스키마 반영 fixture: facility_id가 factories.id와 다른 독립 UUID
+FACILITY_UUID_A = {
+    "id": "facility-uuid-001",  # ≠ factories.id ("factory-A1")
+    "facility_name": "독립 시설",
 }
 
 
@@ -384,49 +395,45 @@ def test_T11_document_runtime_no_facility_200(monkeypatch):
     app.dependency_overrides.clear()
 
 
-# ─── T12: document-runtime own facility_id → 200 ─────────────────────────────
-# facility_id == factory_id UUID; runtime_facility_profile.id exists; no factory_id column
+# ─── T12: document-runtime facility_id → 503 BLOCKED ────────────────────────
+# FACILITY_OWNERSHIP_MAPPING=BLOCKED: facility 존재해도 ownership 검증 불가
 
-def test_T12_document_runtime_own_facility_200(monkeypatch):
-    """자사 facility_id 로 document-runtime 호출 → 200.
-    mock: runtime_facility_profile.id='factory-A1' (facility_id=factory_id);
-          factories.id='factory-A1' company_id='company-A' → USER_OWN 일치.
+def test_T12_document_runtime_facility_blocked(monkeypatch):
+    """facility_id 제공 시 → 503 FACILITY_OWNERSHIP_MAPPING=BLOCKED.
+    runtime_facility_profile.id ≠ factories.id (운영 DB 0/50건) → 소유권 검증 경로 없음.
+    facility 존재 여부와 무관하게 503 반환 (존재하면 존재 확인 후 503).
     """
     from routers.document_runtime import router
     from routers.auth import get_current_user
 
     sb = _make_sb({
-        "runtime_facility_profile": [FACILITY_PROFILE_A],  # id='factory-A1', no factory_id col
-        "factories": [FACTORY_A1],  # id='factory-A1', company_id='company-A'
+        "runtime_facility_profile": [FACILITY_PROFILE_A],  # id='factory-A1' — 존재함
+        "factories": [FACTORY_A1],
     })
-    mock_payload = {"document_type": "TEST_DOC", "tenant_context": {}, "sections": []}
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_current_user] = lambda: USER_OWN
     monkeypatch.setattr("routers.document_runtime.get_supabase", lambda: sb)
-    monkeypatch.setattr("routers.document_runtime.resolve_document_runtime",
-                        lambda dt, ctx: mock_payload)
-    monkeypatch.setattr("routers.document_runtime.calculate_document_completeness",
-                        lambda s: {"total": 0, "filled": 0, "pct": 0})
 
-    assert TestClient(app, raise_server_exceptions=False).get(
+    resp = TestClient(app, raise_server_exceptions=False).get(
         "/document-runtime/TEST_DOC?facility_id=factory-A1"
-    ).status_code == 200
+    )
+    assert resp.status_code == 503, f"expected 503 BLOCKED, got {resp.status_code}"
     app.dependency_overrides.clear()
 
 
-# ─── T13: document-runtime cross-company facility_id → 4xx (fail-closed) ─────
+# ─── T13: document-runtime any facility_id (existing) → 503 BLOCKED ──────────
 
 def test_T13_document_runtime_cross_company_facility_denied(monkeypatch):
-    """타사 facility_id 로 document-runtime 호출 → 4xx (fail-closed).
-    mock: facility_id='factory-B1'; factories.company_id='company-B' ≠ USER_OWN company-A.
+    """타사 facility_id 포함 모든 facility_id 제공 → 503 BLOCKED.
+    FACILITY_OWNERSHIP_MAPPING=BLOCKED으로 소유권 구분 자체가 불가.
     """
     from routers.document_runtime import router
     from routers.auth import get_current_user
 
     sb = _make_sb({
-        "runtime_facility_profile": [FACILITY_PROFILE_B],  # id='factory-B1'
-        "factories": [FACTORY_B1],  # company_id='company-B'
+        "runtime_facility_profile": [FACILITY_PROFILE_B],  # id='factory-B1' — 존재함
+        "factories": [FACTORY_B1],
     })
     app = FastAPI()
     app.include_router(router)
@@ -436,7 +443,7 @@ def test_T13_document_runtime_cross_company_facility_denied(monkeypatch):
     resp = TestClient(app, raise_server_exceptions=False).get(
         "/document-runtime/TEST_DOC?facility_id=factory-B1"
     )
-    assert resp.status_code in (403, 404)  # _ensure_factory_own raises 404 (existence-hiding)
+    assert resp.status_code == 503, f"expected 503 BLOCKED, got {resp.status_code}"
     app.dependency_overrides.clear()
 
 
@@ -515,7 +522,7 @@ def test_T17_render_cross_company_facility_denied(monkeypatch):
         json={"document_type": "TEST_DOC",
               "context": {"facility_id": "factory-B1", "injected_key": "evil"}}
     )
-    assert resp.status_code in (403, 404)
+    assert resp.status_code == 503, f"expected 503 BLOCKED, got {resp.status_code}"
     app.dependency_overrides.clear()
 
 
@@ -604,45 +611,26 @@ def test_T19_patch_submitted_at_own_event_completed(monkeypatch):
     app.dependency_overrides.clear()
 
 
-# ─── T20: PATCH /submissions submitted_at + cross-factory event → skipped ────
+# ─── T20: PATCH /submissions submitted_at + cross-factory event → 409 ────────
 
-def test_T20_patch_submitted_at_cross_event_skipped(monkeypatch):
-    """submitted_at 수정 + 타사 event_id → event NOT updated (silent skip).
-    submission 수정 자체는 허용 (factory_id 이미 검증됨).
+def test_T20_patch_submitted_at_cross_event_rejected(monkeypatch):
+    """submitted_at 수정 + 타사 event_id → 409 REJECTED (silent skip 금지).
+    factory_id 불일치 event 연결 = 데이터 정합성 오류 → 요청 거부.
     """
     from routers.report_forms import router
     from routers.auth import get_current_user
 
-    # submission은 factory-A1이지만 event_id는 타사(factory-B1) 이벤트
     sub_cross_event = {**SUBMISSION_A, "event_id": "event-B01"}
-    updated_sub = {**sub_cross_event, "submitted_at": "2026-10-14T10:00:00+09:00"}
 
-    events_updated = []
-
-    sb_raw = _make_sb({
+    sb = _make_sb({
         "factories": [FACTORY_A1],
         "form_submissions": [sub_cross_event],
         "report_events": [EVENT_B],  # factory_id='factory-B1' ≠ factory-A1
     })
-
-    orig_side = sb_raw.table.side_effect
-    def _tbl_spy(name):
-        tbl = orig_side(name)
-        if name == "report_events":
-            orig_update = tbl.update
-            def _update_spy(data):
-                events_updated.append(data)
-                return orig_update(data)
-            tbl.update = _update_spy
-        if name == "form_submissions":
-            tbl.update.return_value = MagicMock(execute=lambda: _R([updated_sub]))
-        return tbl
-    sb_raw.table.side_effect = _tbl_spy
-
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_current_user] = lambda: USER_OWN
-    monkeypatch.setattr("routers.report_forms.get_supabase", lambda: sb_raw)
+    monkeypatch.setattr("routers.report_forms.get_supabase", lambda: sb)
     monkeypatch.setattr("routers.report_forms.now_kst",
                         lambda: __import__("datetime").datetime(2026, 10, 14))
     monkeypatch.setattr("routers.report_forms.serialize_business_datetime", lambda dt: str(dt))
@@ -651,11 +639,7 @@ def test_T20_patch_submitted_at_cross_event_skipped(monkeypatch):
         "/report-forms/submissions/sub-001",
         json={"submitted_at": "2026-10-14T10:00:00+09:00"}
     )
-    assert resp.status_code == 200
-    # 타사 event는 COMPLETED 처리되어선 안 됨
-    completed_updates = [u for u in events_updated if "COMPLETED" in str(u)]
-    assert len(completed_updates) == 0, \
-        f"타사 이벤트가 COMPLETED 처리됨: {completed_updates}"
+    assert resp.status_code == 409, f"expected 409 REJECTED, got {resp.status_code}"
     app.dependency_overrides.clear()
 
 
@@ -769,4 +753,167 @@ def test_T24_created_by_from_token(monkeypatch):
     # created_by는 token의 user id ("user-own-001"), body의 attacker-id가 아님
     assert payload.get("created_by") == "user-own-001", \
         f"created_by가 토큰에서 강제주입되지 않음: {payload.get('created_by')}"
+    app.dependency_overrides.clear()
+
+
+# ─── T25: facility UUID genuinely ≠ factories.id → 503 BLOCKED ───────────────
+
+def test_T25_facility_different_uuid_blocked(monkeypatch):
+    """facility_id가 factories.id와 다른 실제 UUID → 503 FACILITY_OWNERSHIP_MAPPING=BLOCKED.
+    FACILITY_UUID_A.id='facility-uuid-001' ≠ FACTORY_A1.id='factory-A1'.
+    ID 동일성 가정 없이도 BLOCKED 반환 확인.
+    """
+    from routers.document_runtime import router
+    from routers.auth import get_current_user
+
+    sb = _make_sb({
+        "runtime_facility_profile": [FACILITY_UUID_A],  # id='facility-uuid-001' — 존재함
+        "factories": [FACTORY_A1],  # id='factory-A1' — 다른 UUID
+    })
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: USER_OWN
+    monkeypatch.setattr("routers.document_runtime.get_supabase", lambda: sb)
+
+    resp = TestClient(app, raise_server_exceptions=False).get(
+        "/document-runtime/TEST_DOC?facility_id=facility-uuid-001"
+    )
+    assert resp.status_code == 503, f"expected 503 BLOCKED, got {resp.status_code}"
+    assert "BLOCKED" in resp.json().get("detail", ""), \
+        f"detail에 BLOCKED 없음: {resp.json()}"
+    app.dependency_overrides.clear()
+
+
+# ─── T26: POST /submissions event.form_code mismatch → 404 ───────────────────
+
+def test_T26_submission_event_form_code_mismatch_404(monkeypatch):
+    """POST /submissions: event.form_code가 submission.form_code와 다르면 404.
+    같은 사업장이라도 form_code가 다른 이벤트는 연결 불가.
+    """
+    from routers.report_forms import router
+    from routers.auth import get_current_user
+
+    event_wrong_form = {
+        "id": "event-001",
+        "factory_id": "factory-A1",  # 같은 사업장
+        "form_code": "DIFFERENT-FORM",  # 다른 서식
+        "status": "PENDING",
+    }
+    sb = _make_sb({
+        "factories": [FACTORY_A1],
+        "report_events": [event_wrong_form],
+    })
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: USER_OWN
+    monkeypatch.setattr("routers.report_forms.get_supabase", lambda: sb)
+    monkeypatch.setattr("routers.report_forms.now_kst",
+                        lambda: __import__("datetime").datetime(2026, 10, 14))
+    monkeypatch.setattr("routers.report_forms.serialize_business_datetime", lambda dt: str(dt))
+
+    resp = TestClient(app, raise_server_exceptions=False).post(
+        "/report-forms/submissions",
+        json={"factory_id": "factory-A1",
+              "form_code": "OSHACT-FORM-002",
+              "event_id": "event-001"}
+    )
+    assert resp.status_code == 404, f"expected 404 form_code mismatch, got {resp.status_code}"
+    app.dependency_overrides.clear()
+
+
+# ─── T27: PATCH submitted_at + form_code mismatch event → 409 ────────────────
+
+def test_T27_patch_submitted_at_form_code_mismatch_409(monkeypatch):
+    """PATCH /submissions: submitted_at 변경 시 event.form_code 불일치 → 409 REJECTED.
+    같은 사업장이라도 form_code가 다른 event 연결은 정합성 오류.
+    """
+    from routers.report_forms import router
+    from routers.auth import get_current_user
+
+    event_wrong_form = {
+        "id": "event-form-mismatch",
+        "factory_id": "factory-A1",  # 같은 사업장
+        "form_code": "DIFFERENT-FORM",  # 다른 서식
+        "status": "IN_PROGRESS",
+    }
+    sub_wrong_event_form = {
+        **SUBMISSION_A,
+        "event_id": "event-form-mismatch",
+        "form_code": "OSHACT-FORM-002",
+    }
+    sb = _make_sb({
+        "factories": [FACTORY_A1],
+        "form_submissions": [sub_wrong_event_form],
+        "report_events": [event_wrong_form],
+    })
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: USER_OWN
+    monkeypatch.setattr("routers.report_forms.get_supabase", lambda: sb)
+    monkeypatch.setattr("routers.report_forms.now_kst",
+                        lambda: __import__("datetime").datetime(2026, 10, 14))
+    monkeypatch.setattr("routers.report_forms.serialize_business_datetime", lambda dt: str(dt))
+
+    resp = TestClient(app, raise_server_exceptions=False).patch(
+        "/report-forms/submissions/sub-001",
+        json={"submitted_at": "2026-10-14T10:00:00+09:00"}
+    )
+    assert resp.status_code == 409, f"expected 409 form_code mismatch, got {resp.status_code}"
+    app.dependency_overrides.clear()
+
+
+# ─── T28: signed-url same factory different submission_id → 403 ───────────────
+
+def test_T28_signed_url_wrong_submission_id_403(monkeypatch):
+    """GET signed-url: pdf_url의 submission_id가 요청 submission_id와 다르면 403.
+    같은 사업장이라도 다른 서류의 PDF 경로는 거부.
+    factory_id 일치하지만 submission_id 불일치 → path = factory-A1/sub-999.pdf ≠ factory-A1/sub-001.pdf.
+    """
+    from routers.report_forms import router
+    from routers.auth import get_current_user
+
+    sub_wrong_sid = {**SUBMISSION_A, "pdf_url": "factory-A1/sub-999.pdf"}
+    sb = _make_sb({
+        "factories": [FACTORY_A1],
+        "form_submissions": [sub_wrong_sid],
+    })
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: USER_OWN
+    monkeypatch.setattr("routers.report_forms.get_supabase", lambda: sb)
+
+    resp = TestClient(app, raise_server_exceptions=False).get(
+        "/report-forms/storage/signed-url/sub-001"
+    )
+    assert resp.status_code == 403, f"expected 403 wrong submission_id in path, got {resp.status_code}"
+    app.dependency_overrides.clear()
+
+
+# ─── T29: signed-url exact correct path → 200 ────────────────────────────────
+
+def test_T29_signed_url_exact_correct_path_200(monkeypatch):
+    """GET signed-url: pdf_url = factory-A1/sub-001.pdf (정확한 경로) → 200.
+    factory_id + submission_id 모두 일치하면 정상 발급.
+    """
+    from routers.report_forms import router
+    from routers.auth import get_current_user
+
+    sub_correct = {**SUBMISSION_A, "pdf_url": "factory-A1/sub-001.pdf"}
+    sb = _make_sb({
+        "factories": [FACTORY_A1],
+        "form_submissions": [sub_correct],
+    })
+    sb.storage.from_.return_value.create_signed_url.return_value = {
+        "signedURL": "https://storage.example.com/signed-url"
+    }
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: USER_OWN
+    monkeypatch.setattr("routers.report_forms.get_supabase", lambda: sb)
+
+    resp = TestClient(app, raise_server_exceptions=False).get(
+        "/report-forms/storage/signed-url/sub-001"
+    )
+    assert resp.status_code == 200, f"expected 200 correct path, got {resp.status_code}"
+    assert "url" in resp.json(), f"url 필드 없음: {resp.json()}"
     app.dependency_overrides.clear()
