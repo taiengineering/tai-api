@@ -16,8 +16,11 @@
   DR13 form_code=OSHACT-FORM-002: law REVIEW이지만 TAI catalog 비교는 진행
   DR14 기존 CANDIDATE schema → B (not A)
   DR15 runtime_form_schema 없고 document_forms도 없음 → C (form_code + form_templates 있음)
+  DR16 복수 APPROVED runtime_form_schema → D (REVIEW_REQUIRED, 임의 first-win 금지)
 
 Production DB write = 0 (mock 전용).
+운영 DB 계약: obligation_form_mapping.obligation_code (obligation_id 컬럼 없음).
+              source_namespace는 UNVERIFIED (law_code ≠ source_namespace).
 """
 from __future__ import annotations
 
@@ -165,6 +168,8 @@ def test_DR01_reuse_full_chain():
     assert r["bylseq"] == "BYL-100"
     assert r["matching_status"] == "MATCHED_FULL"
     assert r["review_reason"] is None
+    # source_namespace는 UNVERIFIED — law_code ≠ source_namespace
+    assert r["source_namespace"] == UNVERIFIED
 
 
 # ─── DR02: B=EXTEND (field 없음) ─────────────────────────────────────────────
@@ -439,3 +444,28 @@ def test_DR15_form_only_no_catalog_classified_B_or_C():
     # form_templates만 있고 catalog/schema 없음
     assert r["reuse_status"] in ("B", "C"), f"expected B or C, got {r['reuse_status']}"
     assert r["form_code"] == "FORM-NEW-100"
+
+
+# ─── DR16: 복수 APPROVED schema → D ──────────────────────────────────────────
+
+def test_DR16_multiple_approved_schemas_review():
+    """catalog_document_id에 APPROVED schema 2건 → D (임의 first-win 금지)."""
+    schema_approved_v2 = {
+        "id": "rfs-003",
+        "status": _APPROVED,
+        "form_name": "안전점검표A v2",
+        "version": "2.0",
+        "catalog_document_id": "df-uuid-001",
+        "field_count": 20,
+    }
+    sb = _sb({
+        "obligation_form_mapping": [{"form_code": "FORM-A-001"}],
+        "form_templates":          [FORM_TEMPLATE_A],
+        "rule_doc_mapping":        [{"rule_id": "RULE-001", "doc_id": "DOC-CHK-001"}],
+        "document_forms":          [DOC_FORM_A],
+        "runtime_form_schema":     [SCHEMA_APPROVED, schema_approved_v2],
+        "runtime_field":           [FIELD_ROW],
+    })
+    r = classify_one_obligation(sb, OB_SIMPLE)
+    assert r["reuse_status"] == "D", f"expected D (multiple APPROVED), got {r['reuse_status']}"
+    assert r["review_reason"] and "복수 APPROVED" in r["review_reason"]

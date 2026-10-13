@@ -55,12 +55,13 @@ def _empty_result(obligation_code: str) -> dict:
 
 # ── Step helpers ─────────────────────────────────────────────────────────────
 
-def _step1_form_codes(sb, obligation_id: str) -> list[str]:
+def _step1_form_codes(sb, obligation_code: str) -> list[str]:
     """obligation_form_mapping에서 form_code 목록 조회.
-    obligation_id는 legal_obligations.id.
+    실제 DB 컬럼: obligation_code (obligation_id 컬럼 없음).
+    obligation_code는 legal_obligations.category_code.
     """
     res = sb.table("obligation_form_mapping").select("form_code").eq(
-        "obligation_id", obligation_id
+        "obligation_code", obligation_code
     ).execute()
     return [r["form_code"] for r in (res.data or []) if r.get("form_code")]
 
@@ -93,17 +94,20 @@ def _step4_document_form(sb, doc_id: str) -> Optional[dict]:
     return res.data[0] if res.data else None
 
 
-def _step5_runtime_schema(sb, catalog_document_id: str) -> Optional[dict]:
-    """runtime_form_schema에서 catalog_document_id로 APPROVED 스키마 조회."""
+def _step5_runtime_schema(sb, catalog_document_id: str) -> tuple[Optional[dict], bool]:
+    """(schema, multiple_approved) 반환.
+    APPROVED 복수 → multiple_approved=True → caller가 REVIEW_REQUIRED 추가.
+    """
     res = sb.table("runtime_form_schema").select(
         "id, status, form_name, version, catalog_document_id, field_count"
     ).eq("catalog_document_id", catalog_document_id).execute()
     rows = res.data or []
     approved = [r for r in rows if r.get("status") == _APPROVED]
+    multiple_approved = len(approved) > 1
     if approved:
-        return approved[0]
+        return approved[0], multiple_approved
     candidates = [r for r in rows if r.get("status") == _CANDIDATE]
-    return candidates[0] if candidates else None
+    return (candidates[0] if candidates else None), False
 
 
 def _step6_field_count(sb, form_schema_id: str) -> int:
@@ -121,8 +125,8 @@ def classify_one_obligation(sb, ob: dict) -> dict:
 
     ob 필드:
       id              — legal_obligations.id (UUID)
-      category_code   — obligation 식별 코드 (없으면 id 사용)
-      legal_rule_id   — rule_doc_mapping.rule_id 조회에 사용 (확인된 경우)
+      category_code   — obligation 식별 코드 (obligation_form_mapping 연결 키)
+      legal_rule_id   — 실제 legal_obligations에 없음; 외부 제공 시에만 유효
       law_name        — 참고 법령명 (식별자 아님)
       law_api_id      — 법제처 API ID (있는 경우)
       law_mst_no      — 법령 일련번호 (있는 경우)
@@ -142,10 +146,11 @@ def classify_one_obligation(sb, ob: dict) -> dict:
 
     review_reasons: list[str] = []
 
-    # Step 1 — form_code via obligation_form_mapping
+    # Step 1 — form_code via obligation_form_mapping.obligation_code
+    # (legal_obligations.category_code → obligation_form_mapping.obligation_code)
     form_codes: list[str] = []
-    if obligation_id:
-        form_codes = _step1_form_codes(sb, obligation_id)
+    if obligation_code:
+        form_codes = _step1_form_codes(sb, obligation_code)
 
     # 복수 form_code → REVIEW_REQUIRED
     if len(form_codes) > 1:
@@ -160,8 +165,8 @@ def classify_one_obligation(sb, ob: dict) -> dict:
     if form_code:
         ft = _step2_form_template(sb, form_code)
         if ft:
-            row["bylseq"]           = ft.get("bylseq") or UNVERIFIED
-            row["source_namespace"] = ft.get("law_code") or UNVERIFIED
+            row["bylseq"] = ft.get("bylseq") or UNVERIFIED
+            # law_code는 form_templates 내부 식별자 — source_namespace(LICBYL/ADMBYL) 증거 없음
         else:
             review_reasons.append(f"form_templates 없음: {form_code}")
 
@@ -187,9 +192,13 @@ def classify_one_obligation(sb, ob: dict) -> dict:
     # Step 5 — runtime_form_schema
     schema: Optional[dict] = None
     if df and df.get("id"):
-        schema = _step5_runtime_schema(sb, df["id"])
+        schema, multiple_approved = _step5_runtime_schema(sb, df["id"])
         if schema:
             row["runtime_form_schema_id"] = schema["id"]
+        if multiple_approved:
+            review_reasons.append(
+                f"복수 APPROVED runtime_form_schema: catalog_document_id={df['id']}"
+            )
 
     # Step 6 — runtime_field count
     field_count = 0
