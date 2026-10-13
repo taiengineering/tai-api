@@ -202,11 +202,20 @@ _APP3_OVERRIDE_FIELDS = (
     "is_relationship_contractor",
     "is_civil_construction",
 )
+# WO-E2E2000-OBJ06-G1-S02-C1C3-TRANSPORT-001: Art.68 건설공사발주자 초기 입력 사실 4개.
+# 스키마/LEG에 존재하나 override allowlist 누락으로 C2→C3 전달 차단됨.
+_S02_OVERRIDE_FIELDS = (
+    "contracts_construction_work_at_site",
+    "leads_and_manages_construction_execution",
+    "recontracts_received_construction_work",
+    "same_site_contracted_construction_work_count",
+)
 SAFE_CST_OVERRIDE_FIELDS = (
     tuple(RUNTIME_INPUT_FIELDS)
     + SEM003_DIVING_OVERRIDE_FIELDS
     + HIGH_PRESSURE_COMMON_OVERRIDE_FIELDS
     + _APP3_OVERRIDE_FIELDS
+    + _S02_OVERRIDE_FIELDS
 )
 
 

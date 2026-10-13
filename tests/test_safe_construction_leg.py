@@ -262,27 +262,34 @@ def test_T1_runtime_denominator_20():
     assert len(set(RUNTIME_INPUT_FIELDS)) == 20
 
 def test_T2_request_schema_runtime20_subset():
-    """SEM-003/HPCC 계열 override append 이후 consumer schema 는 RUNTIME20 exact-set 미러가
-    아니라 초집합이다. 불변은 세 축:
+    """SAFE_CST_OVERRIDE_FIELDS 추가 이후 consumer schema 불변 세 축:
       (1) RUNTIME_INPUT_FIELDS 는 여전히 audit-frozen 20.
-      (2) SafeConstructionConsumerInput 는 RUNTIME20 + SEM-003(8) + HP-COMMON(5) = 33 으로
-          정확히 결정된다(EXTRA 0, MISSING 0).
+      (2) SAFE_CST_OVERRIDE_FIELDS 는 schema 의 부분집합이다.
+      (3) expected_app3_revision 은 schema 에 있지만 override allowlist 에 없다(control field).
+    WO-008(APP3), WO-LFR-S02-L1(S02 4-fact), WO-E2E2000-OBJ06-G1-S02(transport repair) 누적.
     """
     from schemas.legal_engine import SafeConstructionConsumerInput
     from services.safe_construction_leg_runtime import (
         SEM003_DIVING_OVERRIDE_FIELDS, HIGH_PRESSURE_COMMON_OVERRIDE_FIELDS,
+        _APP3_OVERRIDE_FIELDS, _S02_OVERRIDE_FIELDS,
     )
     assert len(RUNTIME_INPUT_FIELDS) == 20
     schema_keys = set(SafeConstructionConsumerInput.model_fields)
-    expected = (
-        set(RUNTIME_INPUT_FIELDS)
-        | set(SEM003_DIVING_OVERRIDE_FIELDS)
-        | set(HIGH_PRESSURE_COMMON_OVERRIDE_FIELDS)
+    # SAFE_CST_OVERRIDE_FIELDS ⊆ schema_keys
+    assert set(SAFE_CST_OVERRIDE_FIELDS).issubset(schema_keys), (
+        f"override allowlist 필드가 schema 에 없음: "
+        f"{set(SAFE_CST_OVERRIDE_FIELDS) - schema_keys}"
     )
-    assert schema_keys == expected, (
-        f"consumer schema 는 RUNTIME20 ∪ SEM003 ∪ HP-COMMON 이어야 함. "
-        f"missing={expected - schema_keys}, extra={schema_keys - expected}"
-    )
+    # SEM003, HP-COMMON, APP3, S02 모두 allowlist 에 포함.
+    assert set(SEM003_DIVING_OVERRIDE_FIELDS).issubset(set(SAFE_CST_OVERRIDE_FIELDS))
+    assert set(HIGH_PRESSURE_COMMON_OVERRIDE_FIELDS).issubset(set(SAFE_CST_OVERRIDE_FIELDS))
+    assert set(_APP3_OVERRIDE_FIELDS).issubset(set(SAFE_CST_OVERRIDE_FIELDS))
+    assert set(_S02_OVERRIDE_FIELDS).issubset(set(SAFE_CST_OVERRIDE_FIELDS))
+    # expected_app3_revision: control field — schema 에만 존재, override 대상 아님.
+    assert "expected_app3_revision" in schema_keys
+    assert "expected_app3_revision" not in SAFE_CST_OVERRIDE_FIELDS
+    # subcontractor_count: canonical unresolved — override 대상 아님.
+    assert "subcontractor_count" not in SAFE_CST_OVERRIDE_FIELDS
 
 def test_T3_regulatory_false_preserved(monkeypatch):
     cap = {"called": 0}; _patch_leg(monkeypatch, cap)
