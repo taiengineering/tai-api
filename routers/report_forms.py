@@ -1,4 +1,10 @@
-# routers/report_forms.py v2.1.0
+# routers/report_forms.py v2.2.0
+# v2.2.0: WP-SEC0-A — 전 엔드포인트 인증·테넌트 소유권 게이트 추가
+#   - get_current_user Depends 전 엔드포인트 적용
+#   - factory 경로: _ensure_factory_own 으로 소유권 검증
+#   - submission/event 경로: DB에서 factory_id 조회 후 소유권 검증
+#   - upload_html_template: ALL 어드민 전용
+#   - create_form_submission: created_by 토큰 강제 주입
 # v2.1.0: Supabase 스토리지 분리 적용
 #   - HTML 템플릿: GitHub filesystem → form-templates 버킷 (동적 로드)
 #   - PDF 출력물: form-outputs 버킷 업로드 후 signed URL 반환
@@ -25,16 +31,19 @@
 #   POST /report-forms/submissions/preview-pdf
 #   POST /report-forms/submissions/{id}/pdf
 #   GET  /report-forms/storage/signed-url/{submission_id}
+#   POST /report-forms/storage/upload-template
 #   GET  /report-forms/dashboard/{factory_id}
 #   GET  /report-forms/test
 
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, HTTPException, Query, Body, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 from typing import Optional
 from datetime import datetime, date, timedelta
 from pathlib import Path
 import os, io, re
 from supabase import create_client
+from routers.auth import get_current_user
+from services.company_scope import _ensure_factory_own, _ensure_own_company, _require_admin
 from services.time import business_today, now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/report-forms", tags=["신고서식"])
@@ -131,12 +140,36 @@ def _get_signed_url(supabase, storage_path: str, expires_in: int = 3600) -> str:
     return res.get("signedURL") or res.get("signedUrl", "")
 
 
+def _fetch_submission_factory_id(supabase, submission_id: str) -> str:
+    """form_submissions에서 factory_id 조회. 미존재 시 404."""
+    res = supabase.table("form_submissions").select("factory_id").eq(
+        "id", submission_id
+    ).single().execute()
+    if not res.data or not res.data.get("factory_id"):
+        raise HTTPException(status_code=404, detail="서류를 찾을 수 없습니다")
+    return res.data["factory_id"]
+
+
+def _fetch_event_factory_id(supabase, event_id: str) -> str:
+    """report_events에서 factory_id 조회. 미존재 시 404."""
+    res = supabase.table("report_events").select("factory_id").eq(
+        "id", event_id
+    ).single().execute()
+    if not res.data or not res.data.get("factory_id"):
+        raise HTTPException(status_code=404, detail="이벤트를 찾을 수 없습니다")
+    return res.data["factory_id"]
+
+
 # ============================================================
 # 스토리지 관리 엔드포인트
 # ============================================================
 
 @router.get("/storage/signed-url/{submission_id}")
-def get_pdf_signed_url(submission_id: str, expires_in: int = Query(3600, ge=60, le=86400)):
+def get_pdf_signed_url(
+    submission_id: str,
+    expires_in: int = Query(3600, ge=60, le=86400),
+    current_user: dict = Depends(get_current_user),
+):
     """저장된 서류 PDF의 임시 다운로드 URL 발급 (기본 1시간)"""
     supabase = get_supabase()
     res = supabase.table("form_submissions").select(
@@ -146,6 +179,8 @@ def get_pdf_signed_url(submission_id: str, expires_in: int = Query(3600, ge=60, 
         raise HTTPException(status_code=404, detail="PDF가 없습니다. 먼저 PDF를 생성하세요.")
 
     sub = res.data
+    _ensure_factory_own(supabase, sub["factory_id"], current_user)
+
     # pdf_url이 버킷 내 경로면 signed URL 발급, 외부 URL이면 그대로 반환
     pdf_url = sub["pdf_url"]
     if pdf_url.startswith("http"):
@@ -162,18 +197,24 @@ def get_pdf_signed_url(submission_id: str, expires_in: int = Query(3600, ge=60, 
 
 
 @router.post("/storage/upload-template")
-def upload_html_template(body: dict = Body(...)):
+def upload_html_template(
+    body: dict = Body(...),
+    current_user: dict = Depends(get_current_user),
+):
     """
     HTML 템플릿을 form-templates 버킷에 업로드.
     body: { form_code, html_content }
     경로: {form_code}/template.html
+    플랫폼 어드민(ALL scope) 전용.
     """
+    supabase = get_supabase()
+    _require_admin(current_user, supabase)
+
     form_code    = body.get("form_code")
     html_content = body.get("html_content")
     if not form_code or not html_content:
         raise HTTPException(status_code=400, detail="form_code, html_content 필수")
 
-    supabase     = get_supabase()
     storage_path = f"{form_code}/template.html"
 
     supabase.storage.from_(BUCKET_TEMPLATES).upload(
@@ -205,6 +246,7 @@ def get_form_templates(
     is_active: bool          = Query(True),
     page:      int           = Query(1, ge=1),
     page_size: int           = Query(20, ge=1, le=100),
+    current_user: dict       = Depends(get_current_user),
 ):
     """서식 템플릿 목록 조회"""
     supabase = get_supabase()
@@ -243,7 +285,10 @@ def get_form_templates(
 
 
 @router.get("/templates/{form_code}")
-def get_form_template(form_code: str):
+def get_form_template(
+    form_code: str,
+    current_user: dict = Depends(get_current_user),
+):
     """서식 템플릿 상세 조회"""
     supabase = get_supabase()
     res = supabase.table("form_templates").select("*").eq(
@@ -268,6 +313,7 @@ def get_legal_obligations(
     oblig_type: Optional[str] = Query(None, alias="type"),
     page:       int           = Query(1, ge=1),
     page_size:  int           = Query(50, ge=1, le=100),
+    current_user: dict        = Depends(get_current_user),
 ):
     supabase = get_supabase()
     offset = (page - 1) * page_size
@@ -284,8 +330,13 @@ def get_legal_obligations(
 
 
 @router.get("/obligations/by-factory/{factory_id}")
-def get_obligations_by_factory(factory_id: str):
+def get_obligations_by_factory(
+    factory_id: str,
+    current_user: dict = Depends(get_current_user),
+):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current_user)
+
     fac_res = supabase.table("factories").select(
         "id, name, ksic_code, worker_count, site_type"
     ).eq("id", factory_id).single().execute()
@@ -317,8 +368,11 @@ def get_report_events(
     factory_id:      str,
     status:          Optional[str] = Query(None),
     include_overdue: bool          = Query(True),
+    current_user:    dict          = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current_user)
+
     q = supabase.table("report_events").select(
         "*, form_templates(form_code, form_name, submit_to, submit_timing)"
     ).eq("factory_id", factory_id)
@@ -362,13 +416,19 @@ def get_report_events(
 
 
 @router.post("/events")
-def create_report_event(body: dict):
+def create_report_event(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
     supabase = get_supabase()
     factory_id   = body.get("factory_id")
     form_code    = body.get("form_code")
     trigger_date = body.get("trigger_date")
     if not factory_id or not form_code or not trigger_date:
         raise HTTPException(status_code=400, detail="factory_id, form_code, trigger_date 필수")
+
+    _ensure_factory_own(supabase, factory_id, current_user)
+
     due_days = body.get("due_days")
     if not due_days:
         rule_res = supabase.table("master_building_legal_rules").select(
@@ -401,8 +461,15 @@ def create_report_event(body: dict):
 
 
 @router.patch("/events/{event_id}")
-def update_report_event_status(event_id: str, body: dict):
+def update_report_event_status(
+    event_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
     supabase = get_supabase()
+    event_factory_id = _fetch_event_factory_id(supabase, event_id)
+    _ensure_factory_own(supabase, event_factory_id, current_user)
+
     allowed_status = {"PENDING", "IN_PROGRESS", "COMPLETED", "OVERDUE"}
     status = body.get("status")
     if status and status not in allowed_status:
@@ -426,8 +493,11 @@ def get_form_submissions(
     form_code:  Optional[str] = Query(None),
     page:       int           = Query(1, ge=1),
     page_size:  int           = Query(20, ge=1, le=100),
+    current_user: dict        = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current_user)
+
     offset = (page - 1) * page_size
     q = supabase.table("form_submissions").select(
         "id, factory_id, form_code, event_id, pdf_url, submitted_at, created_at, "
@@ -443,24 +513,35 @@ def get_form_submissions(
 
 
 @router.get("/submissions/detail/{submission_id}")
-def get_form_submission(submission_id: str):
+def get_form_submission(
+    submission_id: str,
+    current_user: dict = Depends(get_current_user),
+):
     supabase = get_supabase()
     res = supabase.table("form_submissions").select(
         "*, form_templates(form_name, form_no, form_json, submit_to)"
     ).eq("id", submission_id).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="서류를 찾을 수 없습니다")
+
+    _ensure_factory_own(supabase, res.data["factory_id"], current_user)
+
     return {"status": "success", "data": res.data}
 
 
 @router.post("/submissions")
-def create_form_submission(body: dict):
+def create_form_submission(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
     supabase   = get_supabase()
     factory_id = body.get("factory_id")
     form_code  = body.get("form_code")
     form_data  = body.get("form_data", {})
     if not factory_id or not form_code:
         raise HTTPException(status_code=400, detail="factory_id, form_code 필수")
+
+    _ensure_factory_own(supabase, factory_id, current_user)
 
     # 사업장 기본정보 자동채움
     fac_res = supabase.table("factories").select(
@@ -484,7 +565,7 @@ def create_form_submission(body: dict):
     res = supabase.table("form_submissions").insert({
         "factory_id": factory_id, "form_code": form_code,
         "event_id":   body.get("event_id"), "form_data": form_data,
-        "created_by": body.get("created_by"),
+        "created_by": current_user.get("id"),
         "created_at": serialize_business_datetime(now_kst()),
         "updated_at": serialize_business_datetime(now_kst()),
     }).execute()
@@ -498,8 +579,15 @@ def create_form_submission(body: dict):
 
 
 @router.patch("/submissions/{submission_id}")
-def update_form_submission(submission_id: str, body: dict):
+def update_form_submission(
+    submission_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
     supabase = get_supabase()
+    sub_factory_id = _fetch_submission_factory_id(supabase, submission_id)
+    _ensure_factory_own(supabase, sub_factory_id, current_user)
+
     allowed  = {"form_data", "pdf_url", "submitted_at"}
     update_data = {k: v for k, v in body.items() if k in allowed}
     update_data["updated_at"] = serialize_business_datetime(now_kst())
@@ -523,7 +611,10 @@ def update_form_submission(submission_id: str, body: dict):
 # ============================================================
 
 @router.post("/submissions/preview-pdf")
-def preview_pdf(body: dict = Body(...)):
+def preview_pdf(
+    body: dict = Body(...),
+    current_user: dict = Depends(get_current_user),
+):
     """즉시 PDF 스트림 반환 (DB·스토리지 저장 없음)"""
     form_code = body.get("form_code", "OSHACT-FORM-002")
     form_data = body.get("form_data", {})
@@ -545,7 +636,10 @@ def preview_pdf(body: dict = Body(...)):
 
 
 @router.post("/submissions/{submission_id}/pdf")
-def generate_and_save_pdf(submission_id: str):
+def generate_and_save_pdf(
+    submission_id: str,
+    current_user: dict = Depends(get_current_user),
+):
     """
     저장된 서류 → PDF 생성 → form-outputs 버킷 업로드
     → form_submissions.pdf_url 업데이트 (버킷 내 경로)
@@ -559,6 +653,8 @@ def generate_and_save_pdf(submission_id: str):
         raise HTTPException(status_code=404, detail="서류를 찾을 수 없습니다")
 
     sub        = res.data
+    _ensure_factory_own(supabase, sub["factory_id"], current_user)
+
     form_code  = sub.get("form_code", "OSHACT-FORM-002")
     form_data  = sub.get("form_data", {})
     factory_id = sub.get("factory_id", "unknown")
@@ -592,8 +688,13 @@ def generate_and_save_pdf(submission_id: str):
 # ============================================================
 
 @router.get("/dashboard/{factory_id}")
-def get_report_dashboard(factory_id: str):
+def get_report_dashboard(
+    factory_id: str,
+    current_user: dict = Depends(get_current_user),
+):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current_user)
+
     res = supabase.table("report_events").select(
         "id, form_code, due_date, status, form_templates(form_name, submit_to)"
     ).eq("factory_id", factory_id).neq("status", "COMPLETED").execute()
@@ -634,10 +735,10 @@ def get_report_dashboard(factory_id: str):
 
 
 @router.get("/test")
-def test():
+def test(current_user: dict = Depends(get_current_user)):
     return {
         "status": "ok",
-        "message": "report-forms API v2.1.0 (Supabase 스토리지 분리)",
+        "message": "report-forms API v2.2.0 (SEC0 auth hardened)",
         "buckets": {
             "originals":  BUCKET_ORIGINALS,
             "templates":  BUCKET_TEMPLATES,

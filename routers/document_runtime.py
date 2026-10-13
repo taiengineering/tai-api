@@ -1,10 +1,18 @@
 """document_runtime.py — Runtime Document Payload API (PHASE F)
 
 PDF 생성이 아니라 Runtime Document Projection 반환.
+
+WP-SEC0-B: 전 엔드포인트 인증 게이트 + facility_id 소유권 검증 (fail-closed).
+  - get_current_user Depends 모든 라우트 적용
+  - facility_id 제공 시: runtime_facility_profile → factory_id 조회 → _ensure_factory_own
+  - facility 미존재 또는 factory_id 미존재 시 403 (fail-closed)
+  - facility_id 미제공: 인증된 사용자 통과 (빈 context 유지)
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_factory_own
 from services.runtime_binding_resolver import resolve_document_runtime
 from services.conditional_rendering_resolver import resolve_conditional_fields
 from services.field_completeness_engine import (
@@ -17,12 +25,34 @@ from services.evidence_binding_engine import (
 router = APIRouter(prefix="/document-runtime", tags=["Document Runtime"])
 
 
+def _validate_facility_ownership(facility_id: str, current_user: dict) -> None:
+    """facility_id → runtime_facility_profile → factory_id → 소유권 검증 (fail-closed).
+
+    facility 미존재, factory_id 컬럼 없음 또는 소유권 불일치 모두 403.
+    """
+    sb = get_supabase()
+    result = sb.table("runtime_facility_profile").select("factory_id").eq(
+        "id", facility_id
+    ).limit(1).execute()
+    if not result.data or not result.data[0].get("factory_id"):
+        raise HTTPException(
+            status_code=403,
+            detail="facility를 찾을 수 없거나 접근 권한이 없습니다",
+        )
+    factory_id = result.data[0]["factory_id"]
+    _ensure_factory_own(sb, factory_id, current_user)
+
+
 @router.get("/{document_type}")
 async def get_runtime_document(
     document_type: str,
     facility_id: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
 ):
     """Runtime Document Projection 반환"""
+    if facility_id:
+        _validate_facility_ownership(facility_id, current_user)
+
     context = {"facility_id": facility_id} if facility_id else {}
     payload = resolve_document_runtime(document_type, context)
 
@@ -43,13 +73,20 @@ async def get_runtime_document(
 
 
 @router.post("/render")
-async def render_runtime_document(body: dict):
+async def render_runtime_document(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
     """Runtime context 기반 문서 렌더링"""
     document_type = body.get("document_type")
     context = body.get("context", {})
 
     if not document_type:
         raise HTTPException(400, "document_type required")
+
+    facility_id = context.get("facility_id")
+    if facility_id:
+        _validate_facility_ownership(facility_id, current_user)
 
     payload = resolve_document_runtime(document_type, context)
     if "error" in payload:
@@ -73,8 +110,12 @@ async def render_runtime_document(body: dict):
 async def get_completeness(
     document_type: str,
     facility_id: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
 ):
     """Field-level completeness summary"""
+    if facility_id:
+        _validate_facility_ownership(facility_id, current_user)
+
     context = {"facility_id": facility_id} if facility_id else {}
     payload = resolve_document_runtime(document_type, context)
 
@@ -96,8 +137,12 @@ async def get_completeness(
 async def get_evidence_binding(
     document_type: str,
     facility_id: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
 ):
     """Evidence binding summary"""
+    if facility_id:
+        _validate_facility_ownership(facility_id, current_user)
+
     context = {"facility_id": facility_id} if facility_id else {}
     payload = resolve_document_runtime(document_type, context)
 
@@ -117,8 +162,12 @@ async def get_evidence_binding(
 async def check_rendering_integrity(
     document_type: str,
     facility_id: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
 ):
     """Rendering Integrity Verification (PHASE G)"""
+    if facility_id:
+        _validate_facility_ownership(facility_id, current_user)
+
     context = {"facility_id": facility_id} if facility_id else {}
     payload = resolve_document_runtime(document_type, context)
 
