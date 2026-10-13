@@ -4,9 +4,13 @@ PDF 생성이 아니라 Runtime Document Projection 반환.
 
 WP-SEC0-B: 전 엔드포인트 인증 게이트 + facility_id 소유권 검증 (fail-closed).
   - get_current_user Depends 모든 라우트 적용
-  - facility_id 제공 시: runtime_facility_profile → factory_id 조회 → _ensure_factory_own
-  - facility 미존재 또는 factory_id 미존재 시 403 (fail-closed)
+  - facility_id 제공 시: runtime_facility_profile 존재 확인 →
+    facility_id를 factory_id로 직접 사용 → _ensure_factory_own
+    (근거: facility_condition.factory_id = facility_id 패턴 확인;
+     runtime_facility_profile은 factory_id 컬럼 없음)
+  - facility 미존재 시 403 (fail-closed); 타사 소유 시 404 (존재 숨김)
   - facility_id 미제공: 인증된 사용자 통과 (빈 context 유지)
+  - POST /render context: facility_id만 신뢰, 나머지 키 제거 (신뢰하지 않음)
 """
 from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional
@@ -26,21 +30,25 @@ router = APIRouter(prefix="/document-runtime", tags=["Document Runtime"])
 
 
 def _validate_facility_ownership(facility_id: str, current_user: dict) -> None:
-    """facility_id → runtime_facility_profile → factory_id → 소유권 검증 (fail-closed).
+    """facility_id → runtime_facility_profile 존재 확인 → factories 소유권 검증 (fail-closed).
 
-    facility 미존재, factory_id 컬럼 없음 또는 소유권 불일치 모두 403.
+    runtime_facility_profile.factory_id 컬럼은 실제 운영 DB에 없음.
+    facility_condition.factory_id = facility_id 패턴에서 확인된 대로
+    facility_id 는 factories.id 와 동일한 UUID를 사용한다.
+    따라서 facility_id 를 factory_id 로 직접 사용하여 _ensure_factory_own 호출.
+    facility 미존재 → 403; 타사 소유 → 404 (존재 숨김).
     """
     sb = get_supabase()
-    result = sb.table("runtime_facility_profile").select("factory_id").eq(
+    result = sb.table("runtime_facility_profile").select("id").eq(
         "id", facility_id
     ).limit(1).execute()
-    if not result.data or not result.data[0].get("factory_id"):
+    if not result.data:
         raise HTTPException(
             status_code=403,
             detail="facility를 찾을 수 없거나 접근 권한이 없습니다",
         )
-    factory_id = result.data[0]["factory_id"]
-    _ensure_factory_own(sb, factory_id, current_user)
+    # facility_id == factories.id in this service
+    _ensure_factory_own(sb, facility_id, current_user)
 
 
 @router.get("/{document_type}")
@@ -79,14 +87,16 @@ async def render_runtime_document(
 ):
     """Runtime context 기반 문서 렌더링"""
     document_type = body.get("document_type")
-    context = body.get("context", {})
-
     if not document_type:
         raise HTTPException(400, "document_type required")
 
-    facility_id = context.get("facility_id")
+    # context는 신뢰하지 않음 — facility_id만 허용, 나머지 키 제거
+    raw_context = body.get("context", {})
+    raw_context = raw_context if isinstance(raw_context, dict) else {}
+    facility_id = raw_context.get("facility_id")
     if facility_id:
         _validate_facility_ownership(facility_id, current_user)
+    context = {"facility_id": facility_id} if facility_id else {}
 
     payload = resolve_document_runtime(document_type, context)
     if "error" in payload:
