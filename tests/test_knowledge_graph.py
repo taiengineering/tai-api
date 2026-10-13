@@ -50,7 +50,7 @@ from services.knowledge_graph_hydrate import ProductionKnowledgeHydrator
 from scripts.refresh_knowledge_graph import APPLY_ENV, PAGE, load_production_sources, main as refresh_main, produce_all
 
 ROOT = Path(__file__).resolve().parents[1]
-SQL = (ROOT / "supabase/migrations/20260913_knowledge_graph_relations.sql").read_text(encoding="utf-8")
+SQL = (ROOT / "supabase/migrations/20261006153514_knowledge_graph_relations.sql").read_text(encoding="utf-8")
 GRAPH_PY = [
     ROOT / "services/knowledge_graph_svc.py",
     ROOT / "services/knowledge_graph_producers.py",
