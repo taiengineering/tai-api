@@ -246,6 +246,21 @@ def _run_public_data_sync_tick(p):
     return {"executed": len(results), "results": results}
 
 
+def _run_leg_law_refresh(p):
+    """Trigger used-law form refresh via LEG API (WO-TAI-LEG-USED-LAW-REFRESH-001)."""
+    import requests
+    base = os.environ.get("LEG_RUNTIME_URL", "").rstrip("/")
+    if not base:
+        raise RuntimeError("LEG_RUNTIME_URL not set — cannot trigger leg law refresh")
+    timeout = int(p.get("timeout_seconds", 300))
+    resp = requests.post(f"{base}/law-intake/refresh", json={}, timeout=timeout)
+    try:
+        body = resp.json()
+    except Exception:
+        body = {"text": resp.text[:500]}
+    return {"http_status": resp.status_code, "body": body}
+
+
 def register_direct_handlers() -> dict[str, Handler]:
     if DIRECT_HANDLERS:
         return DIRECT_HANDLERS
@@ -283,6 +298,7 @@ def register_direct_handlers() -> dict[str, Handler]:
         "direct://saas_recurring_billing":    _run_saas_recurring_billing,
         "direct://qa_scheduler_tick":         _run_qa_scheduler_tick,
         "direct://public_data_sync_tick":     _run_public_data_sync_tick,
+        "direct://leg_law_refresh":           _run_leg_law_refresh,
     })
     return DIRECT_HANDLERS
 
