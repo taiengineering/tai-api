@@ -246,6 +246,46 @@ def _run_public_data_sync_tick(p):
     return {"executed": len(results), "results": results}
 
 
+def _apply_law_change_effects(
+    changed_law_names: list,
+    lm_by_name: dict,
+    sb,
+) -> dict:
+    """Apply TAI business side effects for laws confirmed changed by LEG (WO-TAI-LEG-REFRESH-MODULE-ALIGN-001).
+
+    LEG's detect_changed_laws() (lsHstInf) is the single detection point.
+    This function applies TAI-side effects without re-running detection.
+    """
+    from routers.law_collector import (
+        mark_rules_needs_review,
+        _publish_law_revision_board,
+        _notify_safety_managers_by_law_change,
+        _mark_inspection_items_law_changed,
+    )
+    change_summary = "서식 변경 감지 (법령서식정보이력)"
+    details = []
+    for law_name in changed_law_names:
+        lm = lm_by_name.get(law_name, {})
+        law_id = lm.get("id", "")
+        try:
+            rules_count = mark_rules_needs_review(law_name, change_summary, sb)
+            if law_id:
+                _publish_law_revision_board(law_id, law_name, change_summary, sb)
+            notified = _notify_safety_managers_by_law_change(law_name, change_summary, sb)
+            items_count = _mark_inspection_items_law_changed(law_name, sb)
+            details.append({
+                "law_name": law_name,
+                "rules_needs_review": rules_count,
+                "notified": notified,
+                "items_law_changed": items_count,
+                "law_id_found": bool(law_id),
+            })
+        except Exception as exc:
+            logger.error("_apply_law_change_effects failed for law_name=%s: %s", law_name, exc)
+            details.append({"law_name": law_name, "error": str(exc)})
+    return {"law_effects_applied": len(details), "details": details}
+
+
 def _run_leg_law_refresh(p):
     """Trigger used-law form refresh via LEG API (WO-TAI-LEG-USED-LAW-REFRESH-001).
 
@@ -284,7 +324,7 @@ def _run_leg_law_refresh(p):
 
     lm_rows = (
         sb.table("law_master")
-        .select("law_name, law_api_id, law_mst_no")
+        .select("id, law_name, law_api_id, law_mst_no")
         .eq("is_active", True)
         .not_.is_("law_api_id", "null")
         .execute()
@@ -328,10 +368,16 @@ def _run_leg_law_refresh(p):
     if outcome == "PARTIAL_HOLD":
         raise RuntimeError(f"LEG refresh returned PARTIAL_HOLD — non-terminal tasks remain: {body}")
 
+    changed_law_names = body.get("changed_law_names") or []
+    effects_result = {}
+    if changed_law_names:
+        effects_result = _apply_law_change_effects(changed_law_names, lm_by_name, sb)
+
     return {
         "http_status": resp.status_code,
         "body": body,
         "scope_sent": len(law_targets),
+        "law_effects": effects_result,
     }
 
 
