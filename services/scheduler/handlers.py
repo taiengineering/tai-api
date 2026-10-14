@@ -246,6 +246,81 @@ def _run_public_data_sync_tick(p):
     return {"executed": len(results), "results": results}
 
 
+def _run_leg_law_refresh(p):
+    """Trigger used-law form refresh via LEG API (WO-TAI-LEG-USED-LAW-REFRESH-001).
+
+    Resolves Case C scope (inspection_sets JOIN law_master — confirmed used laws only)
+    and passes law_targets to LEG server. LEG does not connect to TAI DB.
+    """
+    import requests
+    base = os.environ.get("LEG_RUNTIME_URL", "").rstrip("/")
+    if not base:
+        raise RuntimeError("LEG_RUNTIME_URL not set")
+    token = os.environ.get("LEG_INTERNAL_API_KEY", "")
+    if not token:
+        raise RuntimeError("LEG_INTERNAL_API_KEY not set")
+    timeout = int(p.get("timeout_seconds", 300))
+
+    # Resolve Case C scope: laws actively used in inspection_sets AND confirmed in law_master.
+    # law_master.is_active alone (768 laws) is NOT sufficient — must have usage evidence.
+    sb = _sb()
+    is_rows = (
+        sb.table("inspection_sets")
+        .select("law_name")
+        .eq("is_active", True)
+        .execute()
+    )
+    is_names = {r["law_name"] for r in (is_rows.data or []) if r.get("law_name")}
+
+    lm_rows = (
+        sb.table("law_master")
+        .select("law_name, law_api_id, law_mst_no")
+        .eq("is_active", True)
+        .not_.is_("law_api_id", "null")
+        .execute()
+    )
+    lm_by_name = {
+        r["law_name"]: r
+        for r in (lm_rows.data or [])
+        if r.get("law_name") and r.get("law_api_id")
+    }
+
+    law_targets = [
+        {
+            "law_name": name,
+            "law_api_id": lm_by_name[name]["law_api_id"],
+            "law_mst_no": lm_by_name[name].get("law_mst_no") or "",
+        }
+        for name in is_names
+        if name in lm_by_name
+    ]
+
+    resp = requests.post(
+        f"{base}/law-intake/refresh",
+        json={"law_targets": law_targets},
+        headers={"X-Leg-Internal-Token": token},
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+
+    try:
+        body = resp.json()
+    except Exception:
+        body = {"text": resp.text[:500]}
+
+    outcome = body.get("outcome", "")
+    if outcome == "ERROR":
+        raise RuntimeError(f"LEG refresh returned ERROR: {body}")
+    if outcome == "PARTIAL_HOLD":
+        raise RuntimeError(f"LEG refresh returned PARTIAL_HOLD — non-terminal tasks remain: {body}")
+
+    return {
+        "http_status": resp.status_code,
+        "body": body,
+        "scope_sent": len(law_targets),
+    }
+
+
 def register_direct_handlers() -> dict[str, Handler]:
     if DIRECT_HANDLERS:
         return DIRECT_HANDLERS
@@ -283,6 +358,7 @@ def register_direct_handlers() -> dict[str, Handler]:
         "direct://saas_recurring_billing":    _run_saas_recurring_billing,
         "direct://qa_scheduler_tick":         _run_qa_scheduler_tick,
         "direct://public_data_sync_tick":     _run_public_data_sync_tick,
+        "direct://leg_law_refresh":           _run_leg_law_refresh,
     })
     return DIRECT_HANDLERS
 
