@@ -2,8 +2,10 @@
 Reference Form public API — WO-REF05-REF09-CMS-FILE-INTEGRATION-006
 P0 repair: WO-REF05-REF09-INTEGRATION-P0-REPAIR-007
 Final P0:  WO-REF05-REF09-INTEGRATION-FINAL-P0-008
+Thumbnail: WO-WWW-B2-REF-THUMB-STAGE1-IMPLEMENTATION-004
 
 GET /reference-forms/{slug}                         — public detail (PUBLISHED + CLEARED)
+GET /reference-forms/{slug}/thumbnail               — anonymous PNG thumbnail (TAI-authored)
 GET /reference-forms/{slug}/preview/{file_id}       — anonymous preview (no-store)
 GET /reference-forms/{slug}/files/{file_id}/download — member download (auth, server proxy)
 
@@ -54,6 +56,9 @@ _MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # matches reference-forms bucket file_si
 
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._\-]")
 _ALLOWED_BUCKETS = frozenset({"reference-forms", "reference-forms-preview"})
+
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"   # 8-byte PNG signature (RFC 2083)
+_THUMBNAIL_MAX_BYTES = 512 * 1024    # 512 KiB (observed max 223,901 bytes across all 138 PNGs)
 
 
 def _safe_filename(relative_path: str) -> str:
@@ -305,6 +310,152 @@ def get_reference_form(slug: str, sb: Client = Depends(get_supabase)):
         "related_forms": related_forms,
     }
     return {"status": "ok", "data": data}
+
+
+# ---------------------------------------------------------------------------
+# GET /reference-forms/{slug}/thumbnail
+# ---------------------------------------------------------------------------
+
+@router.get("/{slug}/thumbnail")
+def get_reference_form_thumbnail(slug: str, sb: Client = Depends(get_supabase)):
+    """
+    Anonymous first-page PNG thumbnail. TAI-authored work only.
+    Gates: form PUBLISHED+CLEARED, PDF file QA_PASS+approved_at,
+    preview is_published+QA_PASS+SHA, approval binding (TOCTOU),
+    PNG MIME+magic+size via bounded chunked receive.
+    Signed URL is never returned to caller; no-store prevents caching after revocation.
+    """
+    view_row = _load_view_row(sb, slug)
+    form_id = str(view_row["id"])
+    _check_sources_cleared(sb, form_id)
+
+    # G3: select PDF with has_preview=True from qa_pass_files JSONB (no extra DB call)
+    qa_files: list = view_row.get("qa_pass_files") or []
+    candidates = [
+        f for f in qa_files
+        if f.get("format") == "pdf"
+        and f.get("has_preview") is True
+        and f.get("file_id")
+        and f.get("sha256")
+        and f.get("approved_at")
+    ]
+    if not candidates:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    # Deterministic: approved_at DESC (newest first), file_id ASC on tie.
+    # Two-pass stable sort: inner key first, outer key second (Python sort is stable).
+    # approved_at from Supabase JSONB is UTC ISO-8601; lexicographic order is correct.
+    candidates.sort(key=lambda f: str(f["file_id"]))
+    candidates.sort(key=lambda f: f["approved_at"], reverse=True)
+    selected = candidates[0]
+    file_id: str = str(selected["file_id"])
+    approved_sha256: str = selected["sha256"]
+
+    # G4: file row — form_id, active, QA_PASS, approved_at not null, SHA, preview artifact
+    try:
+        file_res = (
+            sb.table(_FILES)
+            .select("id,form_id,sha256,preview_artifact_id,is_active,qa_status,approved_at")
+            .eq("id", file_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log.error("Thumbnail file query failed file_id=%s: %s", file_id, exc)
+        raise HTTPException(status_code=503, detail="THUMBNAIL_UNAVAILABLE")
+
+    if not file_res.data:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    file_row = file_res.data[0]
+    if str(file_row.get("form_id", "")) != form_id:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    if not file_row.get("is_active") or file_row.get("qa_status") != "QA_PASS":
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    if file_row.get("approved_at") is None:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    if file_row.get("sha256") != approved_sha256:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    preview_artifact_id = file_row.get("preview_artifact_id")
+    if not preview_artifact_id:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    # G5: preview artifact — form_id, is_published, QA_PASS, SHA
+    try:
+        pa_res = (
+            sb.table(_PREVIEW)
+            .select("form_id,preview_ref,source_file_sha256,is_published,qa_status")
+            .eq("id", str(preview_artifact_id))
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log.error("Thumbnail preview artifact query failed id=%s: %s", preview_artifact_id, exc)
+        raise HTTPException(status_code=503, detail="THUMBNAIL_UNAVAILABLE")
+
+    if not pa_res.data:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    pa = pa_res.data[0]
+    if str(pa.get("form_id", "")) != form_id:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    if not pa.get("is_published") or pa.get("qa_status") != "QA_PASS":
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    if pa.get("source_file_sha256") != approved_sha256:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    # G6: TOCTOU approval binding (fresh DB read — catches revocations since view load)
+    _verify_approval_binding(sb, form_id, file_id, approved_sha256)
+
+    # G7: parse and validate storage ref → bucket-relative path; never returned to caller
+    preview_path = _parse_storage_ref(pa["preview_ref"], "reference-forms-preview")
+
+    try:
+        signed = sb.storage.from_("reference-forms-preview").create_signed_url(
+            preview_path, expires_in=60
+        )
+        signed_url = signed.get("signedURL") or signed.get("signedUrl") or ""
+        if not signed_url:
+            raise ValueError("empty signed URL")
+    except Exception as exc:
+        log.error("Thumbnail signed URL failed path=%s: %s", preview_path, exc)
+        raise HTTPException(status_code=503, detail="THUMBNAIL_UNAVAILABLE")
+
+    # G8: bounded chunked receive — enforce size limit during streaming, not after full read
+    try:
+        with httpx.stream("GET", signed_url, follow_redirects=True, timeout=30) as r:
+            r.raise_for_status()
+            ct = r.headers.get("content-type", "").split(";")[0].strip().lower()
+            if ct != "image/png":
+                log.error("Thumbnail MIME mismatch path=%s ct=%s", preview_path, ct)
+                raise HTTPException(status_code=502, detail="THUMBNAIL_MIME_MISMATCH")
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in r.iter_bytes(chunk_size=65536):
+                total += len(chunk)
+                if total > _THUMBNAIL_MAX_BYTES:
+                    log.error("Thumbnail too large path=%s bytes>%d", preview_path, _THUMBNAIL_MAX_BYTES)
+                    raise HTTPException(status_code=502, detail="THUMBNAIL_TOO_LARGE")
+                chunks.append(chunk)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("Thumbnail fetch failed path=%s: %s", preview_path, exc)
+        raise HTTPException(status_code=502, detail="THUMBNAIL_FETCH_FAILED")
+
+    body = b"".join(chunks)
+    if not body:
+        log.error("Thumbnail empty body path=%s", preview_path)
+        raise HTTPException(status_code=502, detail="THUMBNAIL_MIME_MISMATCH")
+    if not body.startswith(_PNG_MAGIC):
+        log.error("Thumbnail PNG magic mismatch path=%s first=%r", preview_path, body[:8])
+        raise HTTPException(status_code=502, detail="THUMBNAIL_MIME_MISMATCH")
+
+    return Response(
+        content=body,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

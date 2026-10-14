@@ -25,6 +25,9 @@ Gate-010 additions:
       mix of CLEARED + REVIEW_REQUIRED → only CLEARED returned; sources query fail → []
   (HTML sanitizer edge cases are in tests/test_html_sanitize.mjs — Node.js test)
 
+WO-WWW-B2-REF-THUMB-STAGE1-IMPLEMENTATION-004 additions:
+  T01-T09 thumbnail endpoint tests (see bottom of file)
+
 Mock strategy: replace the 3 supabase helpers with controlled fakes.
 Integration path: set REFERENCE_FORM_TEST_DB_URL to run against isolated Postgres
   with PR #594 migrations applied.
@@ -629,3 +632,530 @@ def test_t13_related_sources_query_error_fail_closed():
     )
     result = _load_related_forms(sb, _FORM_ID)
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Thumbnail endpoint fixtures (WO-WWW-B2-REF-THUMB-STAGE1-IMPLEMENTATION-004)
+# Do NOT modify legacy _PREVIEW_ROW (.jpg) or _PDF_BYTES above.
+# ---------------------------------------------------------------------------
+
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_PNG_BYTES = _PNG_MAGIC + b"\x00" * 50  # minimal valid fixture (magic + padding)
+
+# View row with has_preview=True + format='pdf' in qa_pass_files (thumbnail gate G3)
+_THUMB_VIEW_ROW = {
+    **_VIEW_ROW,
+    "qa_pass_files": [
+        {
+            "file_id": _FILE_ID,
+            "sha256": _SHA256,
+            "approved_at": "2026-10-11T00:00:00+00:00",
+            "has_preview": True,
+            "format": "pdf",
+        }
+    ],
+}
+
+# Preview artifact with .png path (distinct from legacy _PREVIEW_ROW which uses .jpg)
+_THUMB_PREVIEW_ROW = {
+    "form_id": _FORM_ID,
+    "preview_ref": "storage://reference-forms-preview/previews/safety-training-p1.png",
+    "source_file_sha256": _SHA256,
+    "is_published": True,
+    "qa_status": "QA_PASS",
+}
+
+# File row with explicit approved_at (thumbnail gate G4 requires IS NOT NULL)
+_THUMB_FILE_ROW = {
+    **_FILE_ROW,
+    "approved_at": "2026-10-11T00:00:00+00:00",
+}
+
+_THUMBNAIL_MAX_BYTES = 512 * 1024  # mirror for size assertion in T07
+
+
+def _mock_thumb_stream(*, content_type="image/png", chunks=None, raise_on_status=False,
+                       raise_fetch=False):
+    """Build a controlled httpx.stream mock context manager for thumbnail tests."""
+    mock_ctx = MagicMock()
+    mock_ctx.headers = {"content-type": content_type}
+    if raise_on_status:
+        mock_ctx.raise_for_status.side_effect = Exception("http error")
+    else:
+        mock_ctx.raise_for_status = MagicMock()
+    mock_ctx.iter_bytes = MagicMock(return_value=iter(chunks if chunks is not None else [_PNG_BYTES]))
+
+    mock_stream = MagicMock()
+    if raise_fetch:
+        mock_stream.side_effect = Exception("network error")
+    else:
+        mock_stream.return_value.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_stream.return_value.__exit__ = MagicMock(return_value=False)
+    return mock_stream
+
+
+def _thumb_sb(**kwargs):
+    """Shorthand: _make_sb with thumbnail-appropriate defaults."""
+    defaults = dict(
+        view_rows=[_THUMB_VIEW_ROW],
+        file_rows=[_THUMB_FILE_ROW],
+        preview_rows=[_THUMB_PREVIEW_ROW],
+        approval_rows=[_APPROVAL_ROW],
+    )
+    defaults.update(kwargs)
+    return _make_sb(**defaults)
+
+
+# ---------------------------------------------------------------------------
+# T01: 200 PNG response — magic bytes, no-store, nosniff
+# ---------------------------------------------------------------------------
+
+def test_t01_thumb_200_png_magic_and_headers():
+    """Valid ref slug → 200, image/png, Cache-Control: no-store, X-Content-Type-Options: nosniff."""
+    sb = _thumb_sb()
+    app = _app(sb)
+    with patch("routers.reference_forms.httpx.stream", _mock_thumb_stream()):
+        res = _client(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.status_code == 200, res.text
+    assert res.headers.get("content-type") == "image/png"
+    assert res.headers.get("cache-control") == "no-store"
+    assert res.headers.get("x-content-type-options") == "nosniff"
+    assert res.content[:8] == _PNG_MAGIC
+
+
+def test_t01_thumb_200_body_matches_png_bytes():
+    """Response body matches the controlled PNG fixture bytes."""
+    sb = _thumb_sb()
+    app = _app(sb)
+    with patch("routers.reference_forms.httpx.stream", _mock_thumb_stream()):
+        res = _client(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.content == _PNG_BYTES
+
+
+# ---------------------------------------------------------------------------
+# T02: 404 — unknown slug, unpublished, uncleared source
+# ---------------------------------------------------------------------------
+
+def test_t02_thumb_unknown_slug_404():
+    sb = _thumb_sb(view_rows=[])
+    c = _client(_app(sb))
+    assert c.get("/reference-forms/nonexistent-slug/thumbnail").status_code == 404
+
+
+def test_t02_thumb_unpublished_404():
+    """View returns no row for unpublished form."""
+    sb = _thumb_sb(view_rows=[])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+def test_t02_thumb_uncleared_source_404():
+    sb = _thumb_sb(source_rows=[_REVIEW_REQUIRED_SOURCE])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# T03: 404 — no has_preview, non-PDF format, missing approved_at in qa_pass_files
+# ---------------------------------------------------------------------------
+
+def test_t03_thumb_no_has_preview_404():
+    """qa_pass_files entry with has_preview=False → no candidates → 404."""
+    vr = {**_THUMB_VIEW_ROW, "qa_pass_files": [{
+        "file_id": _FILE_ID, "sha256": _SHA256,
+        "approved_at": "2026-10-11T00:00:00+00:00",
+        "has_preview": False, "format": "pdf",
+    }]}
+    sb = _thumb_sb(view_rows=[vr])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+def test_t03_thumb_non_pdf_format_404():
+    """qa_pass_files entry with format='hwp' → no candidates → 404."""
+    vr = {**_THUMB_VIEW_ROW, "qa_pass_files": [{
+        "file_id": _FILE_ID, "sha256": _SHA256,
+        "approved_at": "2026-10-11T00:00:00+00:00",
+        "has_preview": True, "format": "hwp",
+    }]}
+    sb = _thumb_sb(view_rows=[vr])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+def test_t03_thumb_missing_approved_at_in_qa_files_404():
+    """qa_pass_files entry without approved_at → no candidates → 404."""
+    vr = {**_THUMB_VIEW_ROW, "qa_pass_files": [{
+        "file_id": _FILE_ID, "sha256": _SHA256,
+        "has_preview": True, "format": "pdf",
+    }]}
+    sb = _thumb_sb(view_rows=[vr])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+def test_t03_thumb_empty_qa_pass_files_404():
+    """qa_pass_files empty list → 404."""
+    vr = {**_THUMB_VIEW_ROW, "qa_pass_files": []}
+    sb = _thumb_sb(view_rows=[vr])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# T04: 404 — file row inactive, no approved_at, qa_status not QA_PASS
+# ---------------------------------------------------------------------------
+
+def test_t04_thumb_inactive_file_404():
+    fr = {**_THUMB_FILE_ROW, "is_active": False}
+    sb = _thumb_sb(file_rows=[fr])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+def test_t04_thumb_file_qa_fail_404():
+    fr = {**_THUMB_FILE_ROW, "qa_status": "QA_FAIL"}
+    sb = _thumb_sb(file_rows=[fr])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+def test_t04_thumb_file_no_approved_at_404():
+    fr = {**_THUMB_FILE_ROW, "approved_at": None}
+    sb = _thumb_sb(file_rows=[fr])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+def test_t04_thumb_no_preview_artifact_id_404():
+    fr = {**_THUMB_FILE_ROW, "preview_artifact_id": None}
+    sb = _thumb_sb(file_rows=[fr])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# T05: 404 — SHA mismatch, revoked approval, cross-form
+# ---------------------------------------------------------------------------
+
+def test_t05_thumb_file_sha_mismatch_404():
+    """file_row.sha256 != qa_pass_files.sha256 → 404."""
+    fr = {**_THUMB_FILE_ROW, "sha256": "different-sha256"}
+    sb = _thumb_sb(file_rows=[fr])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+def test_t05_thumb_artifact_sha_mismatch_404():
+    """preview_artifact.source_file_sha256 != qa sha → 404."""
+    pa = {**_THUMB_PREVIEW_ROW, "source_file_sha256": "wrong-sha"}
+    sb = _thumb_sb(preview_rows=[pa])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+def test_t05_thumb_revoked_approval_404():
+    """approved_file_hashes empty (approval revoked) → 404."""
+    no_hash = {**_APPROVAL_ROW, "approved_file_hashes": []}
+    sb = _thumb_sb(approval_rows=[no_hash])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+def test_t05_thumb_cross_form_artifact_404():
+    """preview_artifact.form_id != current form_id → 404."""
+    pa = {**_THUMB_PREVIEW_ROW, "form_id": _OTHER_FORM_ID}
+    sb = _thumb_sb(preview_rows=[pa])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+def test_t05_thumb_artifact_not_published_404():
+    pa = {**_THUMB_PREVIEW_ROW, "is_published": False}
+    sb = _thumb_sb(preview_rows=[pa])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+def test_t05_thumb_artifact_qa_fail_404():
+    pa = {**_THUMB_PREVIEW_ROW, "qa_status": "QA_FAIL"}
+    sb = _thumb_sb(preview_rows=[pa])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# T06: storage ref — bad bucket, traversal → fail closed (500)
+# ---------------------------------------------------------------------------
+
+def test_t06_thumb_bad_storage_bucket_500():
+    pa = {**_THUMB_PREVIEW_ROW, "preview_ref": "storage://wrong-bucket/previews/p1.png"}
+    sb = _thumb_sb(preview_rows=[pa])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 500
+
+
+def test_t06_thumb_traversal_500():
+    pa = {**_THUMB_PREVIEW_ROW, "preview_ref": "storage://reference-forms-preview/../secrets/key"}
+    sb = _thumb_sb(preview_rows=[pa])
+    c = _client(_app(sb))
+    assert c.get(f"/reference-forms/{_SLUG}/thumbnail").status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# T07: PNG content validation — MIME mismatch, magic mismatch, zero-length, oversized → 502
+# ---------------------------------------------------------------------------
+
+def test_t07_thumb_mime_mismatch_502():
+    sb = _thumb_sb()
+    app = _app(sb)
+    with patch("routers.reference_forms.httpx.stream",
+               _mock_thumb_stream(content_type="application/pdf")):
+        res = _client(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.status_code == 502
+
+
+def test_t07_thumb_magic_mismatch_502():
+    """Valid PNG MIME but body has wrong magic bytes → 502."""
+    bad_body = b"\x00\x00\x00\x00bad" + b"\x00" * 50
+    sb = _thumb_sb()
+    app = _app(sb)
+    with patch("routers.reference_forms.httpx.stream",
+               _mock_thumb_stream(chunks=[bad_body])):
+        res = _client(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.status_code == 502
+
+
+def test_t07_thumb_zero_length_502():
+    """Empty body → 502 (MIME mismatch path)."""
+    sb = _thumb_sb()
+    app = _app(sb)
+    with patch("routers.reference_forms.httpx.stream",
+               _mock_thumb_stream(chunks=[b""])):
+        res = _client(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.status_code == 502
+
+
+def test_t07_thumb_oversized_502():
+    """Body exceeding 512 KiB enforced during receive → 502 THUMBNAIL_TOO_LARGE."""
+    # One chunk just over the limit
+    oversized_chunk = _PNG_MAGIC + b"\x00" * (_THUMBNAIL_MAX_BYTES + 1)
+    sb = _thumb_sb()
+    app = _app(sb)
+    with patch("routers.reference_forms.httpx.stream",
+               _mock_thumb_stream(chunks=[oversized_chunk])):
+        res = _client(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.status_code == 502
+    assert "THUMBNAIL_TOO_LARGE" in res.text
+
+
+# ---------------------------------------------------------------------------
+# T08: storage and DB transient errors → 502/503; no sensitive data in response
+# ---------------------------------------------------------------------------
+
+def test_t08_thumb_db_error_503():
+    """View query failure → 503."""
+    sb = _thumb_sb(view_error=True)
+    c = _client(_app(sb))
+    res = c.get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.status_code == 503
+    for secret in ("storage://", "reference-forms-preview", _SHA256):
+        assert secret not in res.text
+
+
+def test_t08_thumb_signed_url_error_503():
+    """Storage signed URL failure → 503."""
+    sb = _thumb_sb(storage_error=True)
+    c = _client(_app(sb))
+    res = c.get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.status_code == 503
+
+
+def test_t08_thumb_fetch_network_error_502():
+    """httpx.stream network error → 502."""
+    sb = _thumb_sb()
+    app = _app(sb)
+    with patch("routers.reference_forms.httpx.stream",
+               _mock_thumb_stream(raise_fetch=True)):
+        res = _client(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# T09: Route uniqueness — 4 routes registered, none shadow each other
+# ---------------------------------------------------------------------------
+
+def test_t09_four_routes_registered_no_conflict():
+    """Route table has all 4 endpoints; thumbnail path does not shadow detail/preview/download."""
+    from fastapi import FastAPI as _FA
+    from fastapi.routing import _IncludedRouter as _IR
+    app = _FA()
+    app.include_router(router)
+
+    # FastAPI 0.142+: include_router wraps routers in _IncludedRouter in app.routes.
+    # Unwrap via original_router to assert the mounted app's actual route table.
+    route_map: dict = {}
+    for r in app.routes:
+        if isinstance(r, _IR):
+            for sub in r.original_router.routes:
+                if hasattr(sub, "path") and hasattr(sub, "methods"):
+                    route_map[sub.path] = set(sub.methods)
+        elif hasattr(r, "path") and hasattr(r, "methods"):
+            route_map[r.path] = set(r.methods)
+
+    expected = [
+        "/reference-forms/{slug}",
+        "/reference-forms/{slug}/thumbnail",
+        "/reference-forms/{slug}/preview/{file_id}",
+        "/reference-forms/{slug}/files/{file_id}/download",
+    ]
+    for path in expected:
+        assert path in route_map, f"Route not registered: {path}"
+        assert "GET" in route_map[path], f"GET method missing for {path}"
+
+
+def test_t09_detail_route_returns_json():
+    """GET /{slug} reaches the detail handler (JSON response)."""
+    sb = _thumb_sb()
+    res = _client(_app(sb)).get(f"/reference-forms/{_SLUG}")
+    assert res.status_code == 200
+    assert res.headers.get("content-type", "").startswith("application/json")
+    assert res.json()["status"] == "ok"
+
+
+def test_t09_thumbnail_route_returns_png():
+    """GET /{slug}/thumbnail reaches the thumbnail handler (PNG response)."""
+    sb = _thumb_sb()
+    app = _app(sb)
+    with patch("routers.reference_forms.httpx.stream", _mock_thumb_stream()):
+        res = _client(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.status_code == 200
+    assert res.headers.get("content-type") == "image/png"
+
+
+def test_t09_preview_route_returns_binary():
+    """GET /{slug}/preview/{file_id} reaches the preview handler (binary response)."""
+    # Use standard _VIEW_ROW (legacy qa_pass_files without has_preview/format) for preview
+    sb = _make_sb(view_rows=[_VIEW_ROW])
+    app = _app(sb)
+    with patch("routers.reference_forms.httpx.get") as mock_get:
+        mr = MagicMock()
+        mr.content = _PDF_BYTES
+        mr.headers = {"content-type": "application/pdf"}
+        mr.raise_for_status = MagicMock()
+        mock_get.return_value = mr
+        res = _client(app).get(f"/reference-forms/{_SLUG}/preview/{_FILE_ID}")
+    assert res.status_code == 200
+    assert res.content == _PDF_BYTES
+
+
+def test_t09_download_route_requires_auth():
+    """GET /{slug}/files/{file_id}/download reaches the download handler (401 without auth)."""
+    sb = _make_sb(view_rows=[_VIEW_ROW])
+    res = _client(_app(sb)).get(f"/reference-forms/{_SLUG}/files/{_FILE_ID}/download")
+    assert res.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Ranking regression tests (WO-WWW-B2-REF-THUMB-STAGE1-R1-REPAIR-006 §2)
+# Contract: approved_at DESC (newest first), file_id ASC on tie.
+# Detection strategy: downstream file_row/preview_row/approval_row are wired only for
+# the expected winner's SHA; if the sort picks the wrong candidate, G4 SHA
+# cross-check → 404, making the wrong selection observable without spying.
+# ---------------------------------------------------------------------------
+
+_RANK_FILE_ID_A = "aaaaaaaa-rank-0000-0000-000000000010"  # lexically smaller
+_RANK_FILE_ID_Z = "zzzzzzzz-rank-0000-0000-000000000010"  # lexically larger
+_RANK_SHA_A = "aaa111bbb222" * 5   # 60-char hex fixture for candidate A
+_RANK_SHA_Z = "zzz999yyy888" * 5   # 60-char hex fixture for candidate Z
+_RANK_PREVIEW_ID = "aaaaaaaa-prev-rank-0000-000000000010"
+_RANK_AT_TIE    = "2026-10-12T00:00:00+00:00"
+_RANK_AT_NEWER  = "2026-10-13T00:00:00+00:00"
+_RANK_AT_OLDER  = "2026-10-10T00:00:00+00:00"
+
+
+def _rank_candidate(file_id, sha, approved_at):
+    return {"file_id": file_id, "sha256": sha, "approved_at": approved_at,
+            "has_preview": True, "format": "pdf"}
+
+
+def _rank_sb(candidates_list, winner_file_id, winner_sha):
+    """Supabase mock wired for ranking tests.
+    Only winner_sha appears in downstream rows; wrong sort pick → G4 SHA mismatch → 404.
+    """
+    file_row = {
+        **_THUMB_FILE_ROW,
+        "id": winner_file_id,
+        "sha256": winner_sha,
+        "preview_artifact_id": _RANK_PREVIEW_ID,
+        "form_id": _FORM_ID,
+    }
+    preview_row = {**_THUMB_PREVIEW_ROW, "source_file_sha256": winner_sha}
+    approval_row = {
+        "form_id": _FORM_ID,
+        "approved_file_hashes": [{"file_id": winner_file_id, "sha256": winner_sha}],
+    }
+    vr = {**_THUMB_VIEW_ROW, "qa_pass_files": candidates_list}
+    return _make_sb(
+        view_rows=[vr],
+        file_rows=[file_row],
+        preview_rows=[preview_row],
+        approval_rows=[approval_row],
+    )
+
+
+def test_rank_tie_file_id_asc_selects_lexically_smallest():
+    """Tied approved_at, reverse input order (Z before A): lexically smallest (A) wins.
+    Wrong pick (Z) → G4 SHA mismatch → 404; correct pick (A) → 200.
+    """
+    candidates = [
+        _rank_candidate(_RANK_FILE_ID_Z, _RANK_SHA_Z, _RANK_AT_TIE),  # Z listed first
+        _rank_candidate(_RANK_FILE_ID_A, _RANK_SHA_A, _RANK_AT_TIE),  # A listed second
+    ]
+    sb = _rank_sb(candidates, winner_file_id=_RANK_FILE_ID_A, winner_sha=_RANK_SHA_A)
+    app = _app(sb)
+    with patch("routers.reference_forms.httpx.stream", _mock_thumb_stream()):
+        res = _client(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.status_code == 200, (
+        f"Expected 200 (lexically-smallest file_id wins tie), got {res.status_code}: {res.text}"
+    )
+
+
+def test_rank_tie_both_input_orders_agree():
+    """[A, Z] and [Z, A] input orders both select A (lexically smallest on tied approved_at).
+    Uses separate patch contexts so each request gets a fresh httpx.stream mock.
+    """
+    candidates_az = [
+        _rank_candidate(_RANK_FILE_ID_A, _RANK_SHA_A, _RANK_AT_TIE),
+        _rank_candidate(_RANK_FILE_ID_Z, _RANK_SHA_Z, _RANK_AT_TIE),
+    ]
+    candidates_za = [
+        _rank_candidate(_RANK_FILE_ID_Z, _RANK_SHA_Z, _RANK_AT_TIE),
+        _rank_candidate(_RANK_FILE_ID_A, _RANK_SHA_A, _RANK_AT_TIE),
+    ]
+    sb_az = _rank_sb(candidates_az, winner_file_id=_RANK_FILE_ID_A, winner_sha=_RANK_SHA_A)
+    sb_za = _rank_sb(candidates_za, winner_file_id=_RANK_FILE_ID_A, winner_sha=_RANK_SHA_A)
+    with patch("routers.reference_forms.httpx.stream", _mock_thumb_stream()):
+        res_az = _client(_app(sb_az)).get(f"/reference-forms/{_SLUG}/thumbnail")
+    with patch("routers.reference_forms.httpx.stream", _mock_thumb_stream()):
+        res_za = _client(_app(sb_za)).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res_az.status_code == 200, f"[A,Z] order → expected 200, got {res_az.status_code}"
+    assert res_za.status_code == 200, f"[Z,A] order → expected 200, got {res_za.status_code}"
+
+
+def test_rank_newer_approved_at_wins_regardless_of_file_id():
+    """Newer approved_at beats lexically-smaller file_id.
+    Z (lexically larger) has newer approved_at → Z wins over A (older approved_at).
+    Wrong pick (A) → G4 SHA mismatch → 404; correct pick (Z) → 200.
+    """
+    candidates = [
+        _rank_candidate(_RANK_FILE_ID_A, _RANK_SHA_A, _RANK_AT_OLDER),  # A: older date
+        _rank_candidate(_RANK_FILE_ID_Z, _RANK_SHA_Z, _RANK_AT_NEWER),  # Z: newer date
+    ]
+    sb = _rank_sb(candidates, winner_file_id=_RANK_FILE_ID_Z, winner_sha=_RANK_SHA_Z)
+    app = _app(sb)
+    with patch("routers.reference_forms.httpx.stream", _mock_thumb_stream()):
+        res = _client(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.status_code == 200, (
+        f"Expected 200 (newer approved_at wins regardless of file_id), got {res.status_code}: {res.text}"
+    )
