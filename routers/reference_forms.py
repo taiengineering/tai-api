@@ -341,8 +341,11 @@ def get_reference_form_thumbnail(slug: str, sb: Client = Depends(get_supabase)):
     ]
     if not candidates:
         raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
-    # Deterministic: most-recent approved_at desc, file_id asc as tiebreaker
-    candidates.sort(key=lambda f: (f["approved_at"], f["file_id"]), reverse=True)
+    # Deterministic: approved_at DESC (newest first), file_id ASC on tie.
+    # Two-pass stable sort: inner key first, outer key second (Python sort is stable).
+    # approved_at from Supabase JSONB is UTC ISO-8601; lexicographic order is correct.
+    candidates.sort(key=lambda f: str(f["file_id"]))
+    candidates.sort(key=lambda f: f["approved_at"], reverse=True)
     selected = candidates[0]
     file_id: str = str(selected["file_id"])
     approved_sha256: str = selected["sha256"]

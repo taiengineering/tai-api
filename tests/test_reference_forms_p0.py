@@ -988,14 +988,21 @@ def test_t08_thumb_fetch_network_error_502():
 def test_t09_four_routes_registered_no_conflict():
     """Route table has all 4 endpoints; thumbnail path does not shadow detail/preview/download."""
     from fastapi import FastAPI as _FA
+    from fastapi.routing import _IncludedRouter as _IR
     app = _FA()
     app.include_router(router)
 
-    route_map = {
-        r.path: set(r.methods)
-        for r in app.routes
-        if hasattr(r, "methods") and hasattr(r, "path")
-    }
+    # FastAPI 0.142+: include_router wraps routers in _IncludedRouter in app.routes.
+    # Unwrap via original_router to assert the mounted app's actual route table.
+    route_map: dict = {}
+    for r in app.routes:
+        if isinstance(r, _IR):
+            for sub in r.original_router.routes:
+                if hasattr(sub, "path") and hasattr(sub, "methods"):
+                    route_map[sub.path] = set(sub.methods)
+        elif hasattr(r, "path") and hasattr(r, "methods"):
+            route_map[r.path] = set(r.methods)
+
     expected = [
         "/reference-forms/{slug}",
         "/reference-forms/{slug}/thumbnail",
@@ -1047,3 +1054,108 @@ def test_t09_download_route_requires_auth():
     sb = _make_sb(view_rows=[_VIEW_ROW])
     res = _client(_app(sb)).get(f"/reference-forms/{_SLUG}/files/{_FILE_ID}/download")
     assert res.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Ranking regression tests (WO-WWW-B2-REF-THUMB-STAGE1-R1-REPAIR-006 §2)
+# Contract: approved_at DESC (newest first), file_id ASC on tie.
+# Detection strategy: downstream file_row/preview_row/approval_row are wired only for
+# the expected winner's SHA; if the sort picks the wrong candidate, G4 SHA
+# cross-check → 404, making the wrong selection observable without spying.
+# ---------------------------------------------------------------------------
+
+_RANK_FILE_ID_A = "aaaaaaaa-rank-0000-0000-000000000010"  # lexically smaller
+_RANK_FILE_ID_Z = "zzzzzzzz-rank-0000-0000-000000000010"  # lexically larger
+_RANK_SHA_A = "aaa111bbb222" * 5   # 60-char hex fixture for candidate A
+_RANK_SHA_Z = "zzz999yyy888" * 5   # 60-char hex fixture for candidate Z
+_RANK_PREVIEW_ID = "aaaaaaaa-prev-rank-0000-000000000010"
+_RANK_AT_TIE    = "2026-10-12T00:00:00+00:00"
+_RANK_AT_NEWER  = "2026-10-13T00:00:00+00:00"
+_RANK_AT_OLDER  = "2026-10-10T00:00:00+00:00"
+
+
+def _rank_candidate(file_id, sha, approved_at):
+    return {"file_id": file_id, "sha256": sha, "approved_at": approved_at,
+            "has_preview": True, "format": "pdf"}
+
+
+def _rank_sb(candidates_list, winner_file_id, winner_sha):
+    """Supabase mock wired for ranking tests.
+    Only winner_sha appears in downstream rows; wrong sort pick → G4 SHA mismatch → 404.
+    """
+    file_row = {
+        **_THUMB_FILE_ROW,
+        "id": winner_file_id,
+        "sha256": winner_sha,
+        "preview_artifact_id": _RANK_PREVIEW_ID,
+        "form_id": _FORM_ID,
+    }
+    preview_row = {**_THUMB_PREVIEW_ROW, "source_file_sha256": winner_sha}
+    approval_row = {
+        "form_id": _FORM_ID,
+        "approved_file_hashes": [{"file_id": winner_file_id, "sha256": winner_sha}],
+    }
+    vr = {**_THUMB_VIEW_ROW, "qa_pass_files": candidates_list}
+    return _make_sb(
+        view_rows=[vr],
+        file_rows=[file_row],
+        preview_rows=[preview_row],
+        approval_rows=[approval_row],
+    )
+
+
+def test_rank_tie_file_id_asc_selects_lexically_smallest():
+    """Tied approved_at, reverse input order (Z before A): lexically smallest (A) wins.
+    Wrong pick (Z) → G4 SHA mismatch → 404; correct pick (A) → 200.
+    """
+    candidates = [
+        _rank_candidate(_RANK_FILE_ID_Z, _RANK_SHA_Z, _RANK_AT_TIE),  # Z listed first
+        _rank_candidate(_RANK_FILE_ID_A, _RANK_SHA_A, _RANK_AT_TIE),  # A listed second
+    ]
+    sb = _rank_sb(candidates, winner_file_id=_RANK_FILE_ID_A, winner_sha=_RANK_SHA_A)
+    app = _app(sb)
+    with patch("routers.reference_forms.httpx.stream", _mock_thumb_stream()):
+        res = _client(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.status_code == 200, (
+        f"Expected 200 (lexically-smallest file_id wins tie), got {res.status_code}: {res.text}"
+    )
+
+
+def test_rank_tie_both_input_orders_agree():
+    """[A, Z] and [Z, A] input orders both select A (lexically smallest on tied approved_at).
+    Uses separate patch contexts so each request gets a fresh httpx.stream mock.
+    """
+    candidates_az = [
+        _rank_candidate(_RANK_FILE_ID_A, _RANK_SHA_A, _RANK_AT_TIE),
+        _rank_candidate(_RANK_FILE_ID_Z, _RANK_SHA_Z, _RANK_AT_TIE),
+    ]
+    candidates_za = [
+        _rank_candidate(_RANK_FILE_ID_Z, _RANK_SHA_Z, _RANK_AT_TIE),
+        _rank_candidate(_RANK_FILE_ID_A, _RANK_SHA_A, _RANK_AT_TIE),
+    ]
+    sb_az = _rank_sb(candidates_az, winner_file_id=_RANK_FILE_ID_A, winner_sha=_RANK_SHA_A)
+    sb_za = _rank_sb(candidates_za, winner_file_id=_RANK_FILE_ID_A, winner_sha=_RANK_SHA_A)
+    with patch("routers.reference_forms.httpx.stream", _mock_thumb_stream()):
+        res_az = _client(_app(sb_az)).get(f"/reference-forms/{_SLUG}/thumbnail")
+    with patch("routers.reference_forms.httpx.stream", _mock_thumb_stream()):
+        res_za = _client(_app(sb_za)).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res_az.status_code == 200, f"[A,Z] order → expected 200, got {res_az.status_code}"
+    assert res_za.status_code == 200, f"[Z,A] order → expected 200, got {res_za.status_code}"
+
+
+def test_rank_newer_approved_at_wins_regardless_of_file_id():
+    """Newer approved_at beats lexically-smaller file_id.
+    Z (lexically larger) has newer approved_at → Z wins over A (older approved_at).
+    Wrong pick (A) → G4 SHA mismatch → 404; correct pick (Z) → 200.
+    """
+    candidates = [
+        _rank_candidate(_RANK_FILE_ID_A, _RANK_SHA_A, _RANK_AT_OLDER),  # A: older date
+        _rank_candidate(_RANK_FILE_ID_Z, _RANK_SHA_Z, _RANK_AT_NEWER),  # Z: newer date
+    ]
+    sb = _rank_sb(candidates, winner_file_id=_RANK_FILE_ID_Z, winner_sha=_RANK_SHA_Z)
+    app = _app(sb)
+    with patch("routers.reference_forms.httpx.stream", _mock_thumb_stream()):
+        res = _client(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert res.status_code == 200, (
+        f"Expected 200 (newer approved_at wins regardless of file_id), got {res.status_code}: {res.text}"
+    )
