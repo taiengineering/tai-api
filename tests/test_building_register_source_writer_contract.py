@@ -1,4 +1,4 @@
-"""WO-E2E2000-FIXOBJ05-BUILDING-SOURCE-WRITER-REPAIR-001
+"""WO-E2E2000-FIXOBJ05-PR624-SOURCE-IV-CORRECTION-001
 POST /apply/{factory_id} source-writer contract tests.
 
 W01  단일 본동 정상 등록 — H01 fields + timestamp 저장
@@ -7,10 +7,17 @@ W03  복수 본동 + PK 미확정 → H01 저장 차단 (h01_updated=False)
 W04  표제부 없는 상태 → building_register_updated_at 생성 금지
 W05  기존 캐시 있어도 표제부 누락이면 재인증 금지
 W06  다른 bdmgtsn + 기존 PK 확정 → 409 BUILDING_IDENTITY_MISMATCH
-W07  인증 없는 /apply → 401
-W08  타사 factory_id → 403/404 (_ensure_factory_own 차단)
+W07  인증 없는 /apply → 401 (실제 get_current_user 동작)
+W08  타사 factory_id → 404 (_ensure_factory_own 실제 계약)
 W09  정상 사용자 + 정확한 본동 → h01_updated=True + floor_count 저장 확인
 W10  H01 전달 결과와 저장 수치 일치 (building_height / floor_count / mgm_bldrgst_pk)
+W11  높이만 수집 → floor_count 명시적 None (기존 층수 재인증 차단)
+W12  층수만 수집 → building_height 명시적 None (기존 높이 재인증 차단)
+W13  복수 본동 PK-B 선택 → 메타데이터도 PK-B 행만 사용
+W14  본동 식별 실패 → 표제부 기반 메타데이터 저장 금지
+W15  기존 PK 존재, 기존 bdmgtsn 부재, H01 PK 불일치 → 409 BUILDING_IDENTITY_UNRESOLVED
+W16  기존 PK 존재, 기존 bdmgtsn 부재, H01 PK 일치 → 정상 연결
+W17  타사 사업장 → 404 + JUSO/H01 외부 호출 0회 + DB 쓰기 0회
 """
 import pytest
 from unittest.mock import MagicMock, patch, call
@@ -69,6 +76,28 @@ _TITLE_MULTI = [
     },
 ]
 
+# W13용 — PK별로 용도·구조가 다른 복수 본동 픽스처
+_TITLE_MULTI_DISTINCT = [
+    {
+        "mgmBldrgstPk": "11680-PK-A",
+        "mainAtchGbCdNm": "주건축물",
+        "heit": "30.0",
+        "grndFlrCnt": "7",
+        "mainPurpsCd": "02000",
+        "mainPurpsCdNm": "공장",
+        "strctCdNm": "철근콘크리트구조",
+    },
+    {
+        "mgmBldrgstPk": "11680-PK-B",
+        "mainAtchGbCdNm": "주건축물",
+        "heit": "20.0",
+        "grndFlrCnt": "5",
+        "mainPurpsCd": "04000",
+        "mainPurpsCdNm": "창고시설",
+        "strctCdNm": "철골구조",
+    },
+]
+
 
 def _sb_stub(factory_row: dict | None = None):
     """Supabase stub that returns factory_row on .single().execute()."""
@@ -93,33 +122,30 @@ def _auth_headers():
     return {"Authorization": "Bearer test-token"}
 
 
-# ── W07: 인증 없는 /apply → 401 ──────────────────────────────────────────────
+# ── W07: 인증 없는 /apply → 401 (실제 get_current_user 계약) ─────────────────
 
 def test_w07_no_auth_returns_401():
-    """W07: authorization 헤더 없으면 get_current_user가 401 발생."""
-    with patch("routers.building_register.get_supabase") as mock_sb, \
-         patch("routers.building_register.get_current_user",
-               side_effect=__import__("fastapi").HTTPException(status_code=401, detail="토큰이 없습니다")):
+    """W07: Authorization 헤더 없으면 실제 get_current_user가 401 발생."""
+    with patch("routers.building_register.get_supabase") as mock_sb:
         mock_sb.return_value = _sb_stub(_FACTORY_ROW)
         client = _make_client()
         resp = client.post("/building-register/apply/fac-001")
     assert resp.status_code == 401
 
 
-# ── W08: 타사 factory_id → 403/404 ───────────────────────────────────────────
+# ── W08: 타사 factory_id → 404 (_ensure_factory_own 실제 계약) ───────────────
 
 def test_w08_wrong_company_blocked():
-    """W08: _ensure_factory_own raises 403 for a factory belonging to a different company."""
+    """W08: _ensure_factory_own은 타사 factory에 대해 404(실제 계약)를 발생시킨다."""
     from fastapi import HTTPException as FE
     with patch("routers.building_register.get_supabase") as mock_sb, \
          patch("routers.building_register.get_current_user", return_value={"id": "user-x", "company_id": "co-x"}), \
-         patch("routers.building_register.get_juso", return_value=_JUSO_RESULT), \
          patch("routers.building_register._ensure_factory_own",
-               side_effect=FE(status_code=403, detail="권한이 없습니다")):
+               side_effect=FE(status_code=404, detail="시설을 찾을 수 없습니다")):
         mock_sb.return_value = _sb_stub(_FACTORY_ROW)
         client = _make_client()
         resp = client.post("/building-register/apply/fac-001", headers=_auth_headers())
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
 
 # ── W06: 다른 bdmgtsn + 기존 PK 확정 → 409 ──────────────────────────────────
@@ -394,3 +420,224 @@ def test_w10_h01_stored_values_match_extracted():
     assert u.get("building_height") == 99.5
     assert u.get("floor_count") == 22
     assert "building_register_updated_at" in u
+
+
+# ── W11: 높이만 수집 → floor_count 명시적 None ───────────────────────────────
+
+def test_w11_height_only_clears_floor_count():
+    """W11: H01이 높이만 반환하면 floor_count를 명시적 None으로 저장 — 기존 미인증 층수 재인증 차단."""
+    extracted = {
+        "mgm_bldrgst_pk": "11680-PARTIAL",
+        "building_height": 50.0,
+        # floor_count 없음
+    }
+    captured = {}
+
+    class _SBW11:
+        def table(self, n): return self
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def single(self): return self
+        def update(self, data):
+            captured["update"] = data
+            return self
+        def execute(self):
+            m = MagicMock()
+            m.data = _FACTORY_ROW
+            return m
+
+    with patch("routers.building_register.get_supabase", return_value=_SBW11()), \
+         patch("routers.building_register.get_current_user", return_value={"id": "u1"}), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.get_juso", return_value=_JUSO_RESULT), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn", return_value=_TITLE_SINGLE), \
+         patch("routers.building_register.extract_h01_fields", return_value=extracted):
+        client = _make_client()
+        resp = client.post("/building-register/apply/fac-001", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    u = captured.get("update", {})
+    assert u.get("building_height") == 50.0
+    assert "floor_count" in u, "floor_count must be present as explicit None"
+    assert u["floor_count"] is None
+
+
+# ── W12: 층수만 수집 → building_height 명시적 None ──────────────────────────
+
+def test_w12_floor_count_only_clears_building_height():
+    """W12: H01이 층수만 반환하면 building_height를 명시적 None으로 저장 — 기존 미인증 높이 재인증 차단."""
+    extracted = {
+        "mgm_bldrgst_pk": "11680-PARTIAL2",
+        "floor_count": 8,
+        # building_height 없음
+    }
+    captured = {}
+
+    class _SBW12:
+        def table(self, n): return self
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def single(self): return self
+        def update(self, data):
+            captured["update"] = data
+            return self
+        def execute(self):
+            m = MagicMock()
+            m.data = _FACTORY_ROW
+            return m
+
+    with patch("routers.building_register.get_supabase", return_value=_SBW12()), \
+         patch("routers.building_register.get_current_user", return_value={"id": "u1"}), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.get_juso", return_value=_JUSO_RESULT), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn", return_value=_TITLE_SINGLE), \
+         patch("routers.building_register.extract_h01_fields", return_value=extracted):
+        client = _make_client()
+        resp = client.post("/building-register/apply/fac-001", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    u = captured.get("update", {})
+    assert u.get("floor_count") == 8
+    assert "building_height" in u, "building_height must be present as explicit None"
+    assert u["building_height"] is None
+
+
+# ── W13: 복수 본동 PK-B 확정 → 메타데이터도 PK-B 행만 사용 ───────────────────
+
+def test_w13_multi_building_pk_b_metadata_source():
+    """W13: PK-B 확정 시 메타데이터(용도·구조)도 PK-B 행에서만 가져온다."""
+    factory_with_pk_b = {**_FACTORY_ROW, "mgm_bldrgst_pk": "11680-PK-B", "bdmgtsn": "1168010100103560001"}
+    extracted_b = {"mgm_bldrgst_pk": "11680-PK-B", "building_height": 20.0, "floor_count": 5}
+    captured = {}
+
+    class _SBW13:
+        def table(self, n): return self
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def single(self): return self
+        def update(self, data):
+            captured["update"] = data
+            return self
+        def execute(self):
+            m = MagicMock()
+            m.data = factory_with_pk_b
+            return m
+
+    with patch("routers.building_register.get_supabase", return_value=_SBW13()), \
+         patch("routers.building_register.get_current_user", return_value={"id": "u1"}), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.get_juso",
+               return_value={**_JUSO_RESULT, "bdMgtSn": "1168010100103560001"}), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn", return_value=_TITLE_MULTI_DISTINCT), \
+         patch("routers.building_register.extract_h01_fields", return_value=extracted_b):
+        client = _make_client()
+        resp = client.post("/building-register/apply/fac-001", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    u = captured.get("update", {})
+    # PK-B 행 기반 메타데이터 (창고시설, 철골구조) — PK-A 행(공장, 철근콘크리트구조) 아님
+    assert u.get("main_purpose_name") == "창고시설"
+    assert u.get("building_structure_name") == "철골구조"
+
+
+# ── W14: 본동 식별 실패 → 표제부 기반 메타데이터 저장 금지 ─────────────────────
+
+def test_w14_pk_unresolved_no_title_metadata():
+    """W14: PK 미확정(identity unresolved) → 표제부 기반 용도·구조 저장 금지."""
+    captured = {}
+
+    class _SBW14:
+        def table(self, n): return self
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def single(self): return self
+        def update(self, data):
+            captured["update"] = data
+            return self
+        def execute(self):
+            m = MagicMock()
+            m.data = _FACTORY_ROW
+            return m
+
+    with patch("routers.building_register.get_supabase", return_value=_SBW14()), \
+         patch("routers.building_register.get_current_user", return_value={"id": "u1"}), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.get_juso", return_value=_JUSO_RESULT), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn", return_value=_TITLE_MULTI), \
+         patch("routers.building_register.extract_h01_fields", return_value={}):
+        client = _make_client()
+        resp = client.post("/building-register/apply/fac-001", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    u = captured.get("update", {})
+    assert "main_purpose_name" not in u
+    assert "building_structure_name" not in u
+    assert "floor_count" not in u
+    assert "building_height" not in u
+    assert "building_register_updated_at" not in u
+
+
+# ── W15: 기존 PK, bdmgtsn 부재, H01 PK 불일치 → 409 ─────────────────────────
+
+def test_w15_existing_pk_no_bdmgtsn_h01_fail_409():
+    """W15: mgm_bldrgst_pk 있고 bdmgtsn 없는데 H01이 다른 PK 반환 → 409 BUILDING_IDENTITY_UNRESOLVED."""
+    factory_pk_only = {**_FACTORY_ROW, "bdmgtsn": None, "mgm_bldrgst_pk": "EXISTING-PK"}
+    with patch("routers.building_register.get_supabase") as mock_sb, \
+         patch("routers.building_register.get_current_user", return_value={"id": "u1"}), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.get_juso", return_value=_JUSO_RESULT), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn", return_value=None), \
+         patch("routers.building_register.extract_h01_fields", return_value={}):
+        mock_sb.return_value = _sb_stub(factory_pk_only)
+        client = _make_client()
+        resp = client.post("/building-register/apply/fac-001", headers=_auth_headers())
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["detail"]["code"] == "BUILDING_IDENTITY_UNRESOLVED"
+    assert body["detail"]["existing_mgm_bldrgst_pk"] == "EXISTING-PK"
+
+
+# ── W16: 기존 PK, bdmgtsn 부재, H01 동일 PK 확인 → 정상 연결 ─────────────────
+
+def test_w16_existing_pk_no_bdmgtsn_h01_confirms_ok():
+    """W16: mgm_bldrgst_pk 있고 bdmgtsn 없는데 H01이 동일 PK 확인 → 정상 저장."""
+    factory_pk_only = {**_FACTORY_ROW, "bdmgtsn": None, "mgm_bldrgst_pk": "11680-100021234"}
+    extracted = {"mgm_bldrgst_pk": "11680-100021234", "building_height": 45.0, "floor_count": 10}
+    with patch("routers.building_register.get_supabase") as mock_sb, \
+         patch("routers.building_register.get_current_user", return_value={"id": "u1"}), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.get_juso", return_value=_JUSO_RESULT), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn", return_value=_TITLE_SINGLE), \
+         patch("routers.building_register.extract_h01_fields", return_value=extracted):
+        mock_sb.return_value = _sb_stub(factory_pk_only)
+        client = _make_client()
+        resp = client.post("/building-register/apply/fac-001", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["h01_updated"] is True
+    assert body["bdmgtsn"] == "1168010100103560001"
+
+
+# ── W17: 타사 사업장 → 404 + JUSO/H01 외부 호출 0회 + DB 쓰기 0회 ─────────────
+
+def test_w17_third_party_404_no_external_calls():
+    """W17: _ensure_factory_own 404 발생 → get_juso/H01 미호출, DB 업데이트 미발생."""
+    from fastapi import HTTPException as FE
+    with patch("routers.building_register.get_supabase") as mock_sb, \
+         patch("routers.building_register.get_current_user",
+               return_value={"id": "user-x", "company_id": "co-x"}), \
+         patch("routers.building_register._ensure_factory_own",
+               side_effect=FE(status_code=404, detail="시설을 찾을 수 없습니다")), \
+         patch("routers.building_register.get_juso") as mock_juso, \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn") as mock_h01:
+        sb_instance = MagicMock()
+        mock_sb.return_value = sb_instance
+        client = _make_client()
+        resp = client.post("/building-register/apply/fac-001", headers=_auth_headers())
+
+    assert resp.status_code == 404
+    mock_juso.assert_not_called()
+    mock_h01.assert_not_called()
+    sb_instance.table.assert_not_called()

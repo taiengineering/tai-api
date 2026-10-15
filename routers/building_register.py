@@ -479,7 +479,7 @@ def fetch_all_building_data(bdmgtsn: str) -> dict:
     return result
 
 
-def build_factory_update(juso: dict, building_data: dict) -> dict:
+def build_factory_update(juso: dict, building_data: dict, verified_pk: Optional[str] = None) -> dict:
     # WO-E2E2000-FIXOBJ05: building_register_updated_at / mgm_bldrgst_pk / building_height /
     # floor_count 는 H01 공식 수집 계약(fetch_h01_title_for_bdmgtsn + extract_h01_fields) 경로만
     # 설정. 이 함수는 주소·용도·구조 등 비인증 메타데이터만 반환한다.
@@ -494,8 +494,16 @@ def build_factory_update(juso: dict, building_data: dict) -> dict:
         if juso.get("emdNm"):     update["address_dong"]    = juso.get("emdNm", "")
 
     title_items = building_data.get("title", []) or []
-    # 주건축물만 채택 — 식별 실패 시 첫 행 대체 금지.
-    title = next((i for i in title_items if i.get("mainAtchGbCdNm") == "주건축물"), None)
+    # PATCH B: verified_pk 제공 시 정확한 본동만 선택 — 첫 행 대체 금지.
+    if verified_pk:
+        title = next(
+            (i for i in title_items
+             if str(i.get("mgmBldrgstPk") or "").strip() == verified_pk
+             and i.get("mainAtchGbCdNm") == "주건축물"),
+            None,
+        )
+    else:
+        title = next((i for i in title_items if i.get("mainAtchGbCdNm") == "주건축물"), None)
 
     if title:
         update["main_purpose_code"]        = title.get("mainPurpsCd")
@@ -809,12 +817,11 @@ def apply_building_register(
             },
         )
 
-    # PATCH A: H01 공식 수집 경로 — fetch_h01_title_for_bdmgtsn + extract_h01_fields
+    # H01 공식 수집 경로 — fetch_h01_title_for_bdmgtsn + extract_h01_fields
     title_items = fetch_h01_title_for_bdmgtsn(new_bdmgtsn, existing_pk=existing_mgm_pk)
 
-    # PATCH B: H01 인증 필드(mgm_bldrgst_pk / building_register_updated_at / building_height /
-    # floor_count)는 공식 수집 성공 시에만 설정. 실패하면 h01_patch={} — 타임스탬프 생성 금지.
     h01_patch: dict = {}
+    extracted: dict = {}
     if title_items:
         extracted = extract_h01_fields(title_items, existing_pk=existing_mgm_pk)
         pk = extracted.get("mgm_bldrgst_pk")
@@ -823,18 +830,35 @@ def apply_building_register(
             or extracted.get("floor_count") is not None
         )
         if pk and has_numeric:
-            h01_patch["mgm_bldrgst_pk"] = pk
-            h01_patch["building_register_updated_at"] = serialize_business_datetime(now_kst())
-            if extracted.get("building_height") is not None:
-                h01_patch["building_height"] = extracted["building_height"]
-            if extracted.get("floor_count") is not None:
-                h01_patch["floor_count"] = extracted["floor_count"]
+            # PATCH A: 미반환 수치를 명시적 None으로 — 기존 미인증 수치의 false-auth 방지
+            h01_patch = {
+                "mgm_bldrgst_pk": pk,
+                "building_register_updated_at": serialize_business_datetime(now_kst()),
+                "building_height": extracted.get("building_height"),
+                "floor_count": extracted.get("floor_count"),
+            }
 
-    # 비인증 메타데이터 (용도·구조 등) — H01 auth 필드는 이미 제거된 build_factory_update 사용
-    building_data = {"title": title_items or [], "basis": [], "floors": [], "sewage": []}
-    meta = build_factory_update(juso, building_data)
+    # PATCH C: 기존 PK 존재, 기존 bdmgtsn 부재 → H01에서 동일 PK 확인 필수
+    if existing_mgm_pk and not existing_bdmgtsn:
+        h01_confirmed_pk = extracted.get("mgm_bldrgst_pk")
+        if h01_confirmed_pk != existing_mgm_pk:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code":                    "BUILDING_IDENTITY_UNRESOLVED",
+                    "message":                 "기존 건물 PK와 새 건물관리번호의 동일성이 H01에서 확인되지 않았습니다. 수동 확인이 필요합니다.",
+                    "existing_mgm_bldrgst_pk": existing_mgm_pk,
+                    "h01_confirmed_pk":        h01_confirmed_pk,
+                },
+            )
 
-    # h01_patch가 meta를 덮어씀 (PATCH B 우선순위)
+    # PATCH B: H01 확인된 PK와 일치하는 본동 메타데이터만 사용 — PK 미확정이면 표제부 저장 금지
+    verified_pk = h01_patch.get("mgm_bldrgst_pk")
+    title_for_meta = title_items if verified_pk else []
+    building_data = {"title": title_for_meta or [], "basis": [], "floors": [], "sewage": []}
+    meta = build_factory_update(juso, building_data, verified_pk=verified_pk)
+
+    # h01_patch가 meta를 덮어씀 (명시적 None 포함)
     final_update = {**meta, **h01_patch}
 
     if not final_update:
