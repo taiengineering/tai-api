@@ -11,21 +11,36 @@ fetch_all_building_data / build_factory_update 를 임포트하지 않고, 같�
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import json as _json
+import math
+import os
+from typing import Any, Dict, List, Optional
+
+from services.kr_public_api import kr_get
+
+_BUILDING_BASE = "https://apis.data.go.kr/1613000/BldRgstHubService"
+_TITLE_ENDPOINT = "getBrTitleInfo"
+_TITLE_PAGE_SIZE = 100
 
 
 def _safe_int(v) -> Optional[int]:
     try:
-        return int(v) if v not in (None, "", "null") else None
+        result = int(v) if v not in (None, "", "null") else None
     except (TypeError, ValueError):
         return None
+    if result is not None and result < 0:
+        return None
+    return result
 
 
 def _safe_float(v) -> Optional[float]:
     try:
-        return float(v) if v not in (None, "", "null") else None
+        result = float(v) if v not in (None, "", "null") else None
     except (TypeError, ValueError):
         return None
+    if result is not None and (not math.isfinite(result) or result < 0):
+        return None
+    return result
 
 
 def parse_bdmgtsn(bdmgtsn: str) -> Optional[Dict[str, str]]:
@@ -48,7 +63,7 @@ def extract_h01_fields(title_items: list) -> Dict[str, Any]:
         return {}
     title = next((i for i in title_items if i.get("mainAtchGbCdNm") == "주건축물"), None)
     if not title:
-        title = title_items[0]
+        return {}  # SOURCE_IDENTITY_UNRESOLVED: 주건축물 행 없음
     out: Dict[str, Any] = {}
     bh = _safe_float(title.get("heit"))
     if bh is not None:
@@ -63,54 +78,70 @@ def extract_h01_fields(title_items: list) -> Dict[str, Any]:
 
 
 def fetch_h01_title_for_bdmgtsn(bdmgtsn: str) -> Optional[list]:
-    """건물관리번호로 표제부(title) API 호출. 실패/빈값 → None."""
-    from services.kr_public_api import kr_get
-    import os, json as _json
-
+    """건물관리번호로 표제부(title) API 전체 페이지 수집. 실패/빈값 → None."""
     p = parse_bdmgtsn(bdmgtsn)
     if not p:
         return None
 
-    BUILDING_BASE = "https://apis.data.go.kr/1613000/BldRgstHubService"
-    BUILDING_KEY = os.environ.get("BUILDING_API_KEY", "")
-    params = {
-        "serviceKey": BUILDING_KEY,
+    building_key = os.environ.get("BUILDING_API_KEY", "")
+    base_params = {
+        "serviceKey": building_key,
         "sigunguCd":  p["sigunguCd"],
         "bjdongCd":   p["bjdongCd"],
         "platGbCd":   p["mountain"],
         "bun":        p["bun"],
-        "ji":         p["ji"],
-        "numOfRows":  10,
-        "pageNo":     1,
+        "numOfRows":  _TITLE_PAGE_SIZE,
         "_type":      "json",
     }
 
-    def _call(ji_val: str) -> Optional[list]:
-        params["ji"] = ji_val
-        try:
-            status, text = kr_get(
-                f"{BUILDING_BASE}/getBrTitleInfo",
-                params=params,
-                timeout=25,
-            )
-        except Exception:
-            return None
-        if status != 200 or not text:
-            return None
-        try:
-            data = _json.loads(text)
-        except Exception:
-            return None
-        body = (data.get("response") or {}).get("body") or {}
-        items = body.get("items") or {}
-        raw = items.get("item") if isinstance(items, dict) else None
-        if raw is None:
-            return None
-        return raw if isinstance(raw, list) else [raw]
+    def _fetch_all_pages(ji_val: str) -> Optional[list]:
+        params = {**base_params, "ji": ji_val}
+        all_rows: List[dict] = []
+        expected_total: Optional[int] = None
+        page = 1
 
-    result = _call(p["ji"])
+        while True:
+            call_params = {**params, "pageNo": page}
+            try:
+                status, text = kr_get(
+                    f"{_BUILDING_BASE}/{_TITLE_ENDPOINT}",
+                    params=call_params,
+                    timeout=25,
+                )
+            except Exception:
+                return None
+            if status != 200 or not text:
+                return None
+            try:
+                data = _json.loads(text)
+            except Exception:
+                return None
+            body = (data.get("response") or {}).get("body") or {}
+            try:
+                total = int(body.get("totalCount", 0))
+            except (TypeError, ValueError):
+                return None
+            if expected_total is None:
+                expected_total = total
+            if total == 0:
+                return []
+            items_obj = body.get("items") or {}
+            raw = items_obj.get("item") if isinstance(items_obj, dict) else None
+            if raw is None:
+                return None
+            page_rows = raw if isinstance(raw, list) else [raw]
+            all_rows.extend(page_rows)
+            if len(all_rows) >= expected_total:
+                break
+            page += 1
+
+        if len(all_rows) < (expected_total or 0):
+            return None
+        return all_rows or None
+
+    result = _fetch_all_pages(p["ji"])
     if not result:
-        result = _call("0000")
+        result = _fetch_all_pages("0000")
     return result or None
 
 
