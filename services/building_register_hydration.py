@@ -105,8 +105,13 @@ def extract_h01_fields(
     return out
 
 
-def fetch_h01_title_for_bdmgtsn(bdmgtsn: str) -> Optional[list]:
-    """건물관리번호로 표제부(title) API 전체 페이지 수집. 실패/빈값 → None."""
+def fetch_h01_title_for_bdmgtsn(bdmgtsn: str, existing_pk: Optional[str] = None) -> Optional[list]:
+    """건물관리번호로 표제부(title) API 전체 페이지 수집. 실패/빈값 → None.
+
+    existing_pk: factory의 기존 mgm_bldrgst_pk.
+      제공된 경우에만 ji=0000 대체 지번 fallback 허용.
+      None이면 원본 ji 빈값이어도 fallback 금지 (대체 건물 동일성 검증 불가).
+    """
     p = parse_bdmgtsn(bdmgtsn)
     if not p:
         return None
@@ -178,7 +183,9 @@ def fetch_h01_title_for_bdmgtsn(bdmgtsn: str) -> Optional[list]:
                 return None  # 기대 데이터 있으나 빈 페이지 → 부분 결과 거부
             page_rows = raw if isinstance(raw, list) else [raw]
             all_rows.extend(page_rows)
-            if len(all_rows) >= expected_total:
+            if len(all_rows) > expected_total:
+                return None  # 과수집 → 정합성 실패
+            if len(all_rows) == expected_total:
                 break
             page += 1
         else:
@@ -192,7 +199,9 @@ def fetch_h01_title_for_bdmgtsn(bdmgtsn: str) -> Optional[list]:
     if result is None:
         return None  # API 오류 → ji fallback 금지
     if not result:
-        # totalCount=0 (진짜 빈 ji) → 대체 지번 시도
+        # totalCount=0 (진짜 빈 ji) → 기존 PK 있을 때만 대체 지번 시도
+        if not existing_pk:
+            return None  # PK 없으면 대체 건물 동일성 검증 불가 → fallback 금지
         result = _fetch_all_pages("0000")
         if result is None:
             return None
@@ -225,7 +234,7 @@ def hydrate_factory_h01(supabase, factory_id: str) -> Dict[str, Any]:
     except Exception:
         return {"updated": False, "reason": "db_read_error"}
 
-    title_items = fetch_h01_title_for_bdmgtsn(str(bdmgtsn))
+    title_items = fetch_h01_title_for_bdmgtsn(str(bdmgtsn), existing_pk=existing_mgm_pk)
     if not title_items:
         return {"updated": False, "reason": "api_no_result"}
 

@@ -108,6 +108,7 @@ def test_H5_authoritative_no_hydration(monkeypatch):
         "floor_count": 10, "has_boiler": False, "is_multi_use": False,
         "building_height": 42.5,
         "building_register_updated_at": "2026-01-01T00:00:00+09:00",
+        "mgm_bldrgst_pk": "FACTORY-PK-001",
     }
     run_safe_building_leg(_FakeSB(fac), "F1", SafeBuildingConsumerInput())
     assert called["n"] == 0
@@ -241,6 +242,7 @@ def test_H12_ts_present_fc_authoritative(monkeypatch):
         "floor_count": 35, "has_boiler": False, "is_multi_use": False,
         "building_height": 80.0,
         "building_register_updated_at": "2026-01-01T00:00:00+09:00",
+        "mgm_bldrgst_pk": "FACTORY-PK-001",
     }
     out = run_safe_building_leg(_FakeSB(fac), "F1", SafeBuildingConsumerInput())
     assert cap["step1"].input.get("floor_count") == 35
@@ -374,7 +376,7 @@ def test_H20_api_no_main_building_runtime_unresolved(monkeypatch):
     cap = {}
     _patch_leg(monkeypatch, cap)
 
-    monkeypatch.setattr(_hyd_mod, "fetch_h01_title_for_bdmgtsn", lambda bdmgtsn: [
+    monkeypatch.setattr(_hyd_mod, "fetch_h01_title_for_bdmgtsn", lambda bdmgtsn, existing_pk=None: [
         {"mainAtchGbCdNm": "부속건축물", "heit": "3.0", "grndFlrCnt": "1"},
     ])
 
@@ -444,6 +446,7 @@ def test_H21_zero_floor_count_authoritative_preserved(monkeypatch):
         "floor_count": 0, "has_boiler": False, "is_multi_use": False,
         "building_height": 5.0,
         "building_register_updated_at": "2026-01-01T00:00:00+09:00",
+        "mgm_bldrgst_pk": "FACTORY-PK-001",
     }
     out = run_safe_building_leg(_FakeSB(fac), "F1", SafeBuildingConsumerInput())
     assert called["n"] == 0
@@ -492,7 +495,7 @@ def test_H24_existing_pk_no_api_match_unresolved():
 
 def test_H25_pk_absent_in_api_no_db_write(monkeypatch):
     """Fix A: API가 PK 없이 반환 → h01_identity_unresolved → DB UPDATE 0회."""
-    monkeypatch.setattr(_hyd_mod, "fetch_h01_title_for_bdmgtsn", lambda bdmgtsn: [
+    monkeypatch.setattr(_hyd_mod, "fetch_h01_title_for_bdmgtsn", lambda bdmgtsn, existing_pk=None: [
         {"mainAtchGbCdNm": "주건축물", "heit": "30.0", "grndFlrCnt": "10"},
     ])
 
@@ -555,10 +558,11 @@ def test_H27_total_count_invalid_variants_fail(monkeypatch):
     assert _hyd_mod.fetch_h01_title_for_bdmgtsn("1168010100107190000") is None
 
 
-# ── H28: ji 대체 검색 시 기존 PK 불일치 → extract_h01_fields 차단 ──────────────
+# ── H28: ji 대체 검색 — existing_pk 제공 시 fallback 허용, PK 불일치 차단 ─────
 
-def test_H28_ji_fallback_pk_mismatch_blocked(monkeypatch):
-    """Fix B: ji=0000 대체 검색 결과 건물이 기존 PK와 불일치 → extract {}."""
+def test_H28_ji_fallback_with_pk_mismatch_blocked(monkeypatch):
+    """PATCH A+: existing_pk 있으면 ji=0000 fallback 허용하되
+    API 반환 건물 PK가 기존 PK와 불일치하면 extract_h01_fields 가 {} 반환."""
     item_wrong = {
         "mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": "DIFFERENT-PK",
         "heit": "30.0", "grndFlrCnt": "10",
@@ -571,11 +575,11 @@ def test_H28_ji_fallback_pk_mismatch_blocked(monkeypatch):
         return _make_response(1, [item_wrong])  # ji=0000 has wrong-PK building
 
     monkeypatch.setattr(_hyd_mod, "kr_get", fake_kr_get)
-    # fetch returns wrong-PK item (from ji=0000 fallback)
-    items = _hyd_mod.fetch_h01_title_for_bdmgtsn(_BDMGTSN_0001)
+    # existing_pk provided → fallback permitted → returns wrong-PK item
+    items = _hyd_mod.fetch_h01_title_for_bdmgtsn(_BDMGTSN_0001, existing_pk="CORRECT-PK")
     assert items is not None and len(items) == 1
 
-    # extract with existing_pk="CORRECT-PK" → no match → {}
+    # extract with existing_pk="CORRECT-PK" → DIFFERENT-PK 불일치 → {}
     out = extract_h01_fields(items, existing_pk="CORRECT-PK")
     assert out == {}
 
@@ -588,7 +592,7 @@ def test_H29_partial_hydration_clears_unauthenticated_floor_count(monkeypatch):
     monkeypatch.setattr(_time_svc, "now_kst", lambda: "2026-10-15")
     monkeypatch.setattr(_time_svc, "serialize_business_datetime", lambda x: "TS-MOCK")
 
-    monkeypatch.setattr(_hyd_mod, "fetch_h01_title_for_bdmgtsn", lambda bdmgtsn: [
+    monkeypatch.setattr(_hyd_mod, "fetch_h01_title_for_bdmgtsn", lambda bdmgtsn, existing_pk=None: [
         {"mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": _PK_A, "heit": "30.0"},
     ])
 
@@ -634,7 +638,7 @@ def test_H30_c3_build_facility_preserves_h01_h03_values(monkeypatch):
 
 def test_H31_identity_unresolved_no_db_update(monkeypatch):
     """Fix A: 본동 식별 실패(부속만) → DB UPDATE 0회."""
-    monkeypatch.setattr(_hyd_mod, "fetch_h01_title_for_bdmgtsn", lambda bdmgtsn: [
+    monkeypatch.setattr(_hyd_mod, "fetch_h01_title_for_bdmgtsn", lambda bdmgtsn, existing_pk=None: [
         {"mainAtchGbCdNm": "부속건축물", "mgmBldrgstPk": _PK_A, "heit": "5.0"},
     ])
     fac = {"bdmgtsn": "1168010100107190000", "mgm_bldrgst_pk": None}
@@ -672,3 +676,159 @@ def test_H32_invalid_numeric_types_all_rejected():
     # bool 높이 거부
     out = extract_h01_fields([{"mainAtchGbCdNm": "주건축물", "grndFlrCnt": "5", "heit": True}])
     assert "building_height" not in out
+
+
+# ── H33: ji 빈값 + existing_pk 있음 → ji=0000 fallback 성공 ─────────────────────
+
+def test_H33_ji_fallback_permitted_with_existing_pk(monkeypatch):
+    """PATCH A: existing_pk 제공 시 원본 ji 빈값이면 ji=0000 fallback 허용."""
+    item_correct = {
+        "mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": "CORRECT-PK",
+        "heit": "30.0", "grndFlrCnt": "10",
+    }
+
+    def fake_kr_get(url, params, timeout):
+        ji = params.get("ji", "")
+        if ji == "0001":
+            return _make_response(0, None)  # 원본 ji 빈값
+        return _make_response(1, [item_correct])  # ji=0000 에 유효 데이터
+
+    monkeypatch.setattr(_hyd_mod, "kr_get", fake_kr_get)
+    items = _hyd_mod.fetch_h01_title_for_bdmgtsn(_BDMGTSN_0001, existing_pk="CORRECT-PK")
+    assert items is not None and len(items) == 1
+    assert items[0]["mgmBldrgstPk"] == "CORRECT-PK"
+
+
+# ── H34: ji 빈값 + existing_pk 없음 → fallback 금지 → None ──────────────────────
+
+def test_H34_ji_fallback_blocked_without_existing_pk(monkeypatch):
+    """PATCH A: existing_pk 없으면 원본 ji 빈값 시 fallback 금지 → None."""
+    item = {
+        "mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": "SOME-PK",
+        "heit": "30.0", "grndFlrCnt": "10",
+    }
+
+    def fake_kr_get(url, params, timeout):
+        ji = params.get("ji", "")
+        if ji == "0001":
+            return _make_response(0, None)  # 원본 ji 빈값
+        return _make_response(1, [item])
+
+    monkeypatch.setattr(_hyd_mod, "kr_get", fake_kr_get)
+    # existing_pk 미제공 → fallback 금지
+    result = _hyd_mod.fetch_h01_title_for_bdmgtsn(_BDMGTSN_0001)
+    assert result is None
+
+
+# ── H35: 과수집 (rows > expected_total) → None ──────────────────────────────────
+
+def test_H35_over_collection_rejected(monkeypatch):
+    """PATCH D: 페이지에서 totalCount보다 많은 행 수집 → 정합성 실패 → None."""
+    item = {"mainAtchGbCdNm": "주건축물", "heit": "10.0"}
+
+    def fake_kr_get(url, params, timeout):
+        # totalCount=1 이지만 페이지당 3개 반환 → 과수집
+        return _make_response(1, [item, item, item])
+
+    monkeypatch.setattr(_hyd_mod, "kr_get", fake_kr_get)
+    result = _hyd_mod.fetch_h01_title_for_bdmgtsn("1168010100107190000")
+    assert result is None
+
+
+# ── H36: hydrate_factory_h01 — existing_mgm_pk → fetch 에 전달 확인 ──────────────
+
+def test_H36_hydrate_passes_existing_pk_to_fetch(monkeypatch):
+    """PATCH A: hydrate_factory_h01 이 factory의 mgm_bldrgst_pk 를 fetch 에 전달."""
+    import services.time as _time_svc
+    monkeypatch.setattr(_time_svc, "now_kst", lambda: "2026-10-15")
+    monkeypatch.setattr(_time_svc, "serialize_business_datetime", lambda x: "TS-MOCK")
+
+    captured_pk = {}
+
+    def fake_fetch(bdmgtsn, existing_pk=None):
+        captured_pk["pk"] = existing_pk
+        return [{"mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": _PK_A, "heit": "20.0", "grndFlrCnt": "5"}]
+
+    monkeypatch.setattr(_hyd_mod, "fetch_h01_title_for_bdmgtsn", fake_fetch)
+
+    fac = {"bdmgtsn": "1168010100107190000", "mgm_bldrgst_pk": _PK_A}
+    sb = _TrackingSB(fac)
+    from services.building_register_hydration import hydrate_factory_h01
+    result = hydrate_factory_h01(sb, "F1")
+    assert result.get("updated") is True
+    assert captured_pk["pk"] == _PK_A
+
+
+# ── H37: C3 build_facility() — H01 수치가 LEG facility 에 실제 도달 확인 ─────────
+
+def test_H37_c3_build_facility_h01_fields_delivered(monkeypatch):
+    """PATCH C: run_safe_building_leg 이 생성한 step1 에 build_facility() 를 실제 호출해
+    floor_count + building_height_m 가 LEG facility 에 포함됨을 검증."""
+    from clients.leg_runtime_client import build_facility
+    import services.building_floor_hydration as _flr_mod
+
+    cap = {}
+    _patch_leg(monkeypatch, cap)
+    _no_hydrate(monkeypatch)
+    monkeypatch.setattr(_flr_mod, "resolve_floor_area_sum_11f_plus",
+                        lambda bdmgtsn, pk: {"resolved": False})
+
+    fac = {
+        "floor_count": 15, "has_boiler": False, "is_multi_use": False,
+        "building_height": 55.0,
+        "building_register_updated_at": "2026-01-01T00:00:00+09:00",
+        "bdmgtsn": "1168010100107190000",
+        "mgm_bldrgst_pk": _PK_A,
+    }
+    run_safe_building_leg(_FakeSB(fac), "F1", SafeBuildingConsumerInput())
+
+    facility = build_facility(cap["step1"])
+    assert facility.get("floor_count") == 15
+    assert facility.get("building_height_m") == 55.0
+
+
+# ── H38: PATCH B — ts+values 있지만 mgm_bldrgst_pk 없음 → 수화 트리거 ───────────
+
+def test_H38_patch_b_missing_pk_triggers_hydration(monkeypatch):
+    """PATCH B: building_register_updated_at + 수치 있어도 mgm_bldrgst_pk 없으면
+    authoritative 아님 → hydration 재시도."""
+    cap = {}
+    _patch_leg(monkeypatch, cap)
+    called = {"n": 0}
+
+    def fake_hyd(sb, fid):
+        called["n"] += 1
+        return {"updated": False, "reason": "mock"}
+
+    monkeypatch.setattr(_hyd_mod, "hydrate_factory_h01", fake_hyd)
+
+    fac = {
+        "floor_count": 10, "has_boiler": False, "is_multi_use": False,
+        "building_height": 42.5,
+        "building_register_updated_at": "2026-01-01T00:00:00+09:00",
+        # mgm_bldrgst_pk 없음
+    }
+    run_safe_building_leg(_FakeSB(fac), "F1", SafeBuildingConsumerInput())
+    assert called["n"] == 1  # PATCH B: pk 없으면 캐시 수치도 재인증 필요
+
+
+# ── H39: PATCH B — ts+values+mgm_bldrgst_pk 있음 → authoritative, 수화 없음 ────
+
+def test_H39_patch_b_with_pk_no_hydration(monkeypatch):
+    """PATCH B: building_register_updated_at + 수치 + mgm_bldrgst_pk 모두 있으면
+    authoritative → hydration 재시도 없음."""
+    cap = {}
+    _patch_leg(monkeypatch, cap)
+    called = _no_hydrate(monkeypatch)
+
+    fac = {
+        "floor_count": 10, "has_boiler": False, "is_multi_use": False,
+        "building_height": 42.5,
+        "building_register_updated_at": "2026-01-01T00:00:00+09:00",
+        "mgm_bldrgst_pk": _PK_A,
+    }
+    out = run_safe_building_leg(_FakeSB(fac), "F1", SafeBuildingConsumerInput())
+    assert called["n"] == 0
+    assert cap["step1"].input.get("building_height_m") == 42.5
+    assert cap["step1"].input.get("floor_count") == 10
+    assert "floor_count" not in out["unresolved_fields"]

@@ -102,8 +102,8 @@ def run_safe_building_leg(
     _mgm_pk = fac.get("mgm_bldrgst_pk") or None
     _bdmgtsn = str(fac.get("bdmgtsn") or "").strip()
 
-    _h01_bh_auth = _bh is not None and _ts is not None
-    _h01_fc_auth = _fc_h01 is not None and _ts is not None
+    _h01_bh_auth = _bh is not None and _ts is not None and _mgm_pk is not None
+    _h01_fc_auth = _fc_h01 is not None and _ts is not None and _mgm_pk is not None
 
     if not _h01_bh_auth or not _h01_fc_auth:
         from services.building_register_hydration import hydrate_factory_h01
