@@ -219,6 +219,98 @@ SAFE_CST_OVERRIDE_FIELDS = (
 )
 
 
+def collect_construction_leg_input(
+    supabase,
+    site_id: str,
+    consumer_input,
+    subcontract_legal_event_id: Optional[str] = None,
+    subcontractor_id: Optional[str] = None,
+    app3_projection: Optional[Dict[str, Any]] = None,
+):
+    """CONSTRUCTION 입력 조립(A-C단계). LEG 미호출, DB 쓰기 없음.
+
+    반환 (step1, sorted_unresolved, factory_id).
+    WP01-A 비교 모듈이 재사용한다.
+    """
+    from services.work_source.store import load_work_rows_optional
+    from services.material_source.store import load_factory_material_rows_optional
+    from services.equipment_source.store import load_equipment_rows_optional
+
+    # A. asset canonical (assembler, READ ONLY) — site↔factory bridge 포함.
+    contract = assemble_construction_marketing_contract(supabase, site_id)
+    factory_id = contract.get("factory_id")
+    if not factory_id:
+        raise ConstructionSiteBridgeError("현장과 시설 연결이 완료되지 않았습니다.")
+
+    values: Dict[str, Any] = dict(contract["values"])
+    unresolved = set(contract.get("unresolved_fields") or [])
+    provenance: Dict[str, Any] = dict(contract.get("provenance") or {})
+
+    # B. consumer override
+    if hasattr(consumer_input, "model_dump"):
+        overrides = consumer_input.model_dump(exclude_none=True)
+    else:
+        overrides = {k: v for k, v in dict(consumer_input or {}).items() if v is not None}
+    for f in SAFE_CST_OVERRIDE_FIELDS:
+        if f in overrides:
+            values[f] = overrides[f]
+            provenance[f] = {"mode": "CONSUMER_OVERRIDE", "source": "safe.construction-diagnosis"}
+            unresolved.discard(f)
+
+    # B-prime. CST process projection
+    cst_codes = _load_site_process_work_type_codes(supabase, site_id)
+    cst_facts = project_cst_process_codes(cst_codes)
+    for field, val in cst_facts.items():
+        values[field] = val
+        provenance[field] = {"mode": "CST_PROCESS_PROJECTION", "source": "kcsc_process_master"}
+        unresolved.discard(field)
+
+    # B-prime-prime. CST work projection
+    work_codes = _load_site_work_type_codes(supabase, site_id)
+    work_facts = project_cst_work_codes(work_codes)
+    for field, val in work_facts.items():
+        values[field] = val
+        provenance[field] = {"mode": "CST_WORK_PROJECTION", "source": "kcsc_work_master"}
+        unresolved.discard(field)
+
+    # B-prime-prime-prime. Subcontract legal event facts
+    if subcontract_legal_event_id and subcontractor_id:
+        from services.subcontract_legal_event_source.store import (
+            load_confirmed_subcontract_legal_event_context,
+        )
+        from services.subcontract_legal_event_source.canonical_adapter import (
+            project_confirmed_event, get_event_provenance
+        )
+        event_row = load_confirmed_subcontract_legal_event_context(
+            supabase, site_id=site_id, subcontractor_id=subcontractor_id,
+            event_id=subcontract_legal_event_id,
+        )
+        if event_row is not None:
+            event_facts = project_confirmed_event(event_row)
+            if event_facts:
+                prov = get_event_provenance(event_row)
+                for field, val in event_facts.items():
+                    values[field] = val
+                    provenance[field] = prov
+                    unresolved.discard(field)
+
+    # B-prime-prime-prime-prime. WO-008: app3_projection
+    if app3_projection:
+        for leaf_key, leaf_val in app3_projection.items():
+            values[leaf_key] = leaf_val
+
+    # C. build_saas_leg_step1
+    step1 = build_saas_leg_step1(
+        sector="CONSTRUCTION",
+        source_facts=values,
+        factory_id=factory_id,
+        work_rows=load_work_rows_optional(supabase, factory_id),
+        material_rows=load_factory_material_rows_optional(supabase, factory_id),
+        equipment_rows=load_equipment_rows_optional(supabase, factory_id),
+    )
+    return step1, sorted(unresolved), factory_id
+
+
 def run_safe_construction_leg(
     supabase,
     site_id: str,
@@ -231,109 +323,17 @@ def run_safe_construction_leg(
 
     app3_projection: WO-008 서버 생성 AP01-05 leaves (flag ON 시만 비None).
     """
-    # A. asset canonical (assembler, READ ONLY) — site↔factory bridge 포함.
-    contract = assemble_construction_marketing_contract(supabase, site_id)
-    factory_id = contract.get("factory_id")
-    if not factory_id:
-        # 진단 실행이 factory 를 생성하지 않는다 → fail-closed.
-        raise ConstructionSiteBridgeError("현장과 시설 연결이 완료되지 않았습니다.")
-
-    values: Dict[str, Any] = dict(contract["values"])           # 정확히 27
-    unresolved = set(contract.get("unresolved_fields") or [])
-    provenance: Dict[str, Any] = dict(contract.get("provenance") or {})
-
-    # B. consumer override — RUNTIME20 만, non-null(None=미override, false/0=override).
-    if hasattr(consumer_input, "model_dump"):
-        overrides = consumer_input.model_dump(exclude_none=True)
-    else:
-        overrides = {k: v for k, v in dict(consumer_input or {}).items() if v is not None}
-    for f in SAFE_CST_OVERRIDE_FIELDS:
-        if f in overrides:
-            values[f] = overrides[f]
-            provenance[f] = {"mode": "CONSUMER_OVERRIDE", "source": "safe.construction-diagnosis"}
-            unresolved.discard(f)
-
-    # B-prime. CST process projection (SEM-P0-01A-R4 — performs_confined_space_work,
-    #   performs_electrical_work). READ-ONLY. DB failure raises ConstructionProcessSourceLoadError
-    #   (fail-closed — LEG is NOT called on source read failure).
-    cst_codes = _load_site_process_work_type_codes(supabase, site_id)
-    cst_facts = project_cst_process_codes(cst_codes)
-    for field, val in cst_facts.items():
-        values[field] = val
-        provenance[field] = {"mode": "CST_PROCESS_PROJECTION", "source": "kcsc_process_master"}
-        unresolved.discard(field)
-
-    # B-prime-prime. CST work projection (BLK-009 — has_blasting).
-    #   READ-ONLY. DB failure raises ConstructionWorkSourceLoadError
-    #   (fail-closed — LEG is NOT called on source read failure).
-    work_codes = _load_site_work_type_codes(supabase, site_id)
-    work_facts = project_cst_work_codes(work_codes)
-    for field, val in work_facts.items():
-        values[field] = val
-        provenance[field] = {"mode": "CST_WORK_PROJECTION", "source": "kcsc_work_master"}
-        unresolved.discard(field)
-
-    # B-prime-prime-prime. Subcontract legal event facts (S02-L2, EXISTING_SOURCE_FACT)
-    # Exact-object eligibility: event_id + site_id + subcontractor_id + status=CONFIRMED.
-    # Both subcontract_legal_event_id and subcontractor_id required (co-presence enforced
-    # at schema layer). Missing = no event facts (canonical facts stay ABSENT).
-    if subcontract_legal_event_id and subcontractor_id:
-        from services.subcontract_legal_event_source.store import (
-            load_confirmed_subcontract_legal_event_context,
-        )
-        from services.subcontract_legal_event_source.canonical_adapter import (
-            project_confirmed_event, get_event_provenance
-        )
-        event_row = load_confirmed_subcontract_legal_event_context(
-            supabase,
-            site_id=site_id,
-            subcontractor_id=subcontractor_id,
-            event_id=subcontract_legal_event_id,
-        )
-        if event_row is not None:
-            event_facts = project_confirmed_event(event_row)
-            if event_facts:
-                prov = get_event_provenance(event_row)
-                for field, val in event_facts.items():
-                    values[field] = val
-                    provenance[field] = prov
-                    unresolved.discard(field)
-
-    # B-prime-prime-prime-prime. WO-008: server AP01-05 projection injection (flag ON only).
-    #   subcontract event facts 이후, build_saas_leg_step1 이전. 서버 생성 leaves 전용.
-    if app3_projection:
-        for leaf_key, leaf_val in app3_projection.items():
-            values[leaf_key] = leaf_val
-
-    # C. WO-010 STEP-2C : canonical27 final-cut 제거. TARGET_FIELDS / RUNTIME_INPUT_FIELDS 는
-    #    assembler 의 source contract 로 계속 import(unresolved_fields 반환용) — 계약 파일 delta 0.
-    #    source_facts 는 상한 없이 전량 전달하고 build_saas_leg_step1 이 _LEG_INPUT_FIELDS(103) 로
-    #    필터한다. R8 축 등 source 에 값이 있으면 배선 상한 없이 build_facility 에 도달.
-    #    construction_type synthetic 은 SaaS 에서 새로 만들지 않음 — source 있으면 전달, 없으면 ABSENT.
-    from services.work_source.store import load_work_rows_optional
-    from services.material_source.store import load_factory_material_rows_optional
-    from services.equipment_source.store import load_equipment_rows_optional
-    step1 = build_saas_leg_step1(
-        sector="CONSTRUCTION",
-        source_facts=values,
-        factory_id=factory_id,
-        work_rows=load_work_rows_optional(supabase, factory_id),
-        # WO-OBS009-MATERIAL-CANONICAL-RUNTIME-WIRING-PATCH-001: Common Material canonical
-        # adapter fed via factory_id. READ FAILURE != EMPTY SOURCE — MaterialSourceLoadError
-        # propagates fail-closed and LEG is NOT called on material read failure.
-        material_rows=load_factory_material_rows_optional(supabase, factory_id),
-        # WO-EQUIPMENT-A2-REMAINING-CONSUMER-PARITY-IMPLEMENT-001:
-        # Equipment A2 shared seam — same reader/projector as MANUFACTURING (PR #450).
-        # READ FAILURE != EMPTY SOURCE — EquipmentSourceLoadError propagates fail-closed.
-        equipment_rows=load_equipment_rows_optional(supabase, factory_id),
+    step1, unresolved_fields, factory_id = collect_construction_leg_input(
+        supabase, site_id, consumer_input,
+        subcontract_legal_event_id=subcontract_legal_event_id,
+        subcontractor_id=subcontractor_id,
+        app3_projection=app3_projection,
     )
-
-    # D. 공식 Runtime Delegate 1회 (direct evaluate_rtm / master_building_legal_rules / v510 미사용).
+    # D. 공식 Runtime Delegate 1회
     full_result = run_leg_diagnosis(step1)
-
     return {
         "full_result": full_result,
         "contract_version": CONTRACT_VERSION,
-        "unresolved_fields": sorted(unresolved),
+        "unresolved_fields": unresolved_fields,
         "factory_id": factory_id,
     }
