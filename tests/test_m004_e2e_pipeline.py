@@ -1,30 +1,44 @@
-"""WO-TAI-DOC-M004-RUNTIME-E2E-001 — 점검-문서 E2E 파이프라인 격리 테스트
+"""WO-TAI-DOC-M004-RUNTIME-E2E-001 — 점검-문서 격리 계약 테스트
 
-10개 시나리오 검증 (기존 자산 재사용):
+분류: 격리 계약 테스트 (Fake DB / 실제 DB 연결 없음 / production write = 0)
 
-  E2E-01  업무 일정·점검 연결 구조 확인 (코드 경로 검증)
-  E2E-02  DRAFT 생성 — source_inspection_id 포함
-  E2E-03  동일 점검 재요청 → 기존 문서 반환, INSERT 0
-  E2E-04  문서 필드 입력·저장 (PATCH merge semantics)
-  E2E-05a DRAFT → IN_PROGRESS 전이
-  E2E-05b IN_PROGRESS → SUBMITTED_FOR_REVIEW (제출자 identity binding)
+이 파일의 테스트는 각각 독립된 _FakeSB 인스턴스를 사용하며,
+단일 문서가 생성→수정→승인→보관까지 진행된 것을 증명하지 않는다.
+각 테스트는 해당 서비스 함수 또는 라우터의 계약을 개별 검증한다.
+
+검증 항목:
+
+  E2E-01  업무 일정·점검 연결 구조 (데이터 계약 검증)
+  E2E-02  DRAFT 생성 — source_inspection_id 포함 서비스 계약
+  E2E-03  멱등성 — 동일 점검 재요청 시 기존 행 반환, INSERT 0
+  E2E-04  필드 저장 PATCH merge semantics
+  E2E-05a DRAFT → IN_PROGRESS 전이 서비스 계약
+  E2E-05b IN_PROGRESS → SUBMITTED_FOR_REVIEW + submitted_by 바인딩
   E2E-05c SUBMITTED_FOR_REVIEW → REVIEW_PENDING 전이
-  E2E-06  APPROVED_BY_HUMAN — BLOCKED (DATABASE_URL 없음 / psycopg2 직접 연결 필요)
-  E2E-07  승인·보관 스냅샷 — BLOCKED (psycopg2 없음)
-  E2E-08  DRAFT 상태 HTML 렌더링
-  E2E-09  타 회사·사업장 접근 차단 (기존 TC1B·TC6B 회귀 확인)
+  E2E-06  confirm_document_atomic — _connect 격리 모의 / 503 단위 계약
+  E2E-07  compute_confirmed_snapshot_hash 독립 실행 · 결정성 (DB 불요)
+  E2E-08  DRAFT HTML 렌더링 계약
+  E2E-09a 타 회사 접근 차단 (TC1B 회귀)
+  E2E-09b 타 사업장 접근 차단 (TC6B 회귀)
   E2E-10a 미승인 스키마 차단
   E2E-10b 비활성 점검 차단 (is_active=False)
-  E2E-10c 잘못된 상태 전이 차단 (규칙 없음)
-  E2E-10d APPROVED_BY_HUMAN 봉인 문서 필드 수정 차단
+  E2E-10c 잘못된 상태 전이 차단
+  E2E-10d 봉인 문서 필드 수정 차단
 
-CONFLICT FINDING:
-  CF-01   APPROVED_BY_HUMAN → ARCHIVED 전이 규칙 존재 (DB 조회 확인)
-          trg_rdd_seal_guard 와의 정합성: 운영 DB 직접 검증 필요 (UNVERIFIED)
+CONFIRMED CONFLICT:
+  CF-01   runtime_state_transition_rule: APPROVED_BY_HUMAN → ARCHIVED 존재
+          trg_rdd_seal_guard: OLD.status=APPROVED_BY_HUMAN인 모든 UPDATE 거부
+          → change_status('ARCHIVED')는 fake DB에서 PASS, 운영 DB에서 트리거 차단
+          CF-01 = CONFIRMED CONFLICT (GPT READ-ONLY 독립검증, 2026-10-16)
 
-BLOCKED:
-  E2E-06, E2E-07 — DATABASE_URL 없음 (psycopg2 직접 연결 불가).
-  운영 DB 쓰기 미승인 (Owner 별도 승인 대기).
+BLOCKED (운영 DB 없이 검증 불가):
+  실제 confirm_document_atomic 트랜잭션 (psycopg2 직접 연결 필요)
+  CF-01 트리거 충돌 해소 방안 (Owner 설계 결정 필요)
+
+후속 E2E 패턴 (미실시):
+  기존 프로젝트 패턴: TEST_PG_DSN + pytest.mark.skipif(_pg_available())
+  예시: tests/test_saas_contract_atomic_apply_v2_postgres.py
+  조건: 로컬 PostgreSQL@16 + 격리 DB 스키마 적용 + Owner 승인
 
 Mock/fake DB 만 사용. production INSERT/UPDATE/DELETE = 0.
 """
@@ -349,21 +363,28 @@ def test_E2E_05c_review_pending():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def test_E2E_06_approve_blocked_no_database_url():
-    """confirm_document_atomic은 psycopg2 직접 연결(DATABASE_URL) 필요.
-    로컬 .env에 DATABASE_URL 없음 → 503 (database unavailable) 확인."""
+    """confirm_document_atomic은 psycopg2 직접 연결 필요.
+    _connect가 실패할 때 503 반환 — 단위 계약 테스트.
+
+    환경 변수(DATABASE_URL) 유무와 무관하게 격리 실행되도록
+    db.direct_sql._connect를 명시적으로 mock한다.
+    실제 승인 트랜잭션은 BLOCKED (DATABASE_URL + Owner 별도 승인 필요).
+    """
     from services.document_confirm_svc import confirm_document_atomic, ConfirmError
 
-    try:
-        confirm_document_atomic(
-            DOC_ID,
-            actor_id=None,
-            comment="테스트",
-            current_user=_user(),
-        )
-        assert False, "Should raise ConfirmError(503)"
-    except ConfirmError as e:
-        assert e.http_status == 503, \
-            f"DATABASE_URL 없으면 503 반환 필요, got {e.http_status}"
+    with patch("db.direct_sql._connect",
+               side_effect=Exception("no DATABASE_URL in test environment")):
+        try:
+            confirm_document_atomic(
+                DOC_ID,
+                actor_id=None,
+                comment="테스트",
+                current_user=_user(),
+            )
+            assert False, "Should raise ConfirmError(503)"
+        except ConfirmError as e:
+            assert e.http_status == 503, \
+                f"_connect 실패 시 503 반환 필요, got {e.http_status}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -600,17 +621,24 @@ def test_E2E_10d_sealed_document_edit_blocked():
 # CF-01  CONFLICT FINDING — APPROVED_BY_HUMAN → ARCHIVED 전이 규칙 vs 봉인 가드
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_CF_01_approved_to_archived_rule_exists_but_seal_guard_blocks():
-    """CONFLICT FINDING:
-    - DB runtime_state_transition_rule에 APPROVED_BY_HUMAN → ARCHIVED 규칙 존재 (Phase A 확인)
-    - 코드에서 change_status가 해당 규칙을 찾고 UPDATE 시도
-    - trg_rdd_seal_guard: OLD.status=APPROVED_BY_HUMAN이면 UPDATE 거부 (DB 트리거)
-    - → change_status('ARCHIVED')는 코드 경로는 통과하지만 DB 트리거에서 실패
-    - 운영 DB에서 이 충돌을 직접 검증해야 함 (UNVERIFIED)
+def test_CF_01_approved_to_archived_confirmed_conflict():
+    """CF-01 — CONFIRMED CONFLICT (GPT READ-ONLY 독립검증, 2026-10-16)
 
-    이 테스트는 코드 레벨에서 transition rule이 존재함을 확인하고
-    change_status가 해당 경로에 진입함을 검증한다.
-    트리거 차단은 실제 DB 없이는 검증 불가 → UNVERIFIED로 기록.
+    확인된 사실:
+    1. runtime_state_transition_rule: APPROVED_BY_HUMAN → ARCHIVED 규칙 존재 (Phase A DB 조회)
+    2. trg_rdd_seal_guard (운영 DB 직접 확인):
+           IF OLD.status = 'APPROVED_BY_HUMAN' THEN
+             RAISE EXCEPTION 'runtime_document_data % is sealed.', OLD.id;
+           END IF;
+    3. change_status('ARCHIVED')는 runtime_document_data에 UPDATE 수행
+    → 운영 DB에서 이 UPDATE는 트리거에 의해 차단됨 = CONFIRMED CONFLICT
+
+    이 테스트는 코드 경로(규칙 조회 + UPDATE 시도)가 존재함을 검증한다.
+    Fake DB는 트리거 없이 실행되므로 코드 레벨에서는 PASS.
+    실제 동작: 트리거 차단.
+
+    해소 방안: Owner 설계 결정 필요.
+    트리거 해제 또는 봉인 우회 수정 금지.
     """
     approved = _doc(status="APPROVED_BY_HUMAN")
     rule = {"from_status": "APPROVED_BY_HUMAN", "to_status": "ARCHIVED",
@@ -622,10 +650,11 @@ def test_CF_01_approved_to_archived_rule_exists_but_seal_guard_blocks():
         "runtime_document_approval": [],
     })
     with patch("services.document_engine_svc.get_supabase", return_value=sb):
-        # fake SB UPDATE는 트리거 없이 실행됨 → code path가 규칙을 찾음을 확인
+        # Fake DB: 트리거 없음 → code path PASS
         result = svc_mod.change_status(DOC_ID, "ARCHIVED")
     assert result.get("status") == "ARCHIVED", \
-        "code path succeeds with fake SB (no trigger); " \
-        "real DB: trg_rdd_seal_guard may block — UNVERIFIED"
-    # NOTE: 실제 DB에서는 trg_rdd_seal_guard가 이 UPDATE를 차단할 수 있음.
-    # 운영 DB 직접 검증 필요.
+        "fake DB: code path reaches UPDATE (no trigger); " \
+        "real DB: trg_rdd_seal_guard BLOCKS this UPDATE — CF-01 CONFIRMED CONFLICT"
+    # CF-01 = CONFIRMED CONFLICT.
+    # 전이 규칙과 봉인 트리거의 충돌은 설계 결정 필요.
+    # 트리거 해제·우회·봉인 정책 변경은 Owner 승인 없이 금지.
