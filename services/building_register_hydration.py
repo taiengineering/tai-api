@@ -138,6 +138,7 @@ def fetch_h01_title_for_bdmgtsn(bdmgtsn: str, existing_pk: Optional[str] = None)
         params = {**base_params, "ji": ji_val}
         all_rows: List[dict] = []
         expected_total: Optional[int] = None
+        seen_pks: set = set()  # 페이지 간 중복 mgmBldrgstPk 감지
         page = 1
 
         while page <= _MAX_TITLE_PAGES:
@@ -182,6 +183,12 @@ def fetch_h01_title_for_bdmgtsn(bdmgtsn: str, existing_pk: Optional[str] = None)
             if raw is None:
                 return None  # 기대 데이터 있으나 빈 페이지 → 부분 결과 거부
             page_rows = raw if isinstance(raw, list) else [raw]
+            for _row in page_rows:
+                _pk = str(_row.get("mgmBldrgstPk") or "").strip()
+                if _pk:
+                    if _pk in seen_pks:
+                        return None  # 동일 PK 중복 → 부분/중복 수집 → 정합성 실패
+                    seen_pks.add(_pk)
             all_rows.extend(page_rows)
             if len(all_rows) > expected_total:
                 return None  # 과수집 → 정합성 실패

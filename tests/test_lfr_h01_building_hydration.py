@@ -612,7 +612,9 @@ def test_H29_partial_hydration_clears_unauthenticated_floor_count(monkeypatch):
 # ── H30: H01+H03 수치 → C3 build_facility 보존 확인 ─────────────────────────────
 
 def test_H30_c3_build_facility_preserves_h01_h03_values(monkeypatch):
-    """Fix D: H01(floor_count + building_height_m) + H03(floor_area_sum) → step1.input."""
+    """Fix D: H01(floor_count + building_height_m) + H03(floor_area_sum) → step1.input.
+    실제 build_facility() 호출로 facility 계약까지 검증."""
+    from clients.leg_runtime_client import build_facility
     import services.building_floor_hydration as _flr_mod
     cap = {}
     _patch_leg(monkeypatch, cap)
@@ -632,6 +634,11 @@ def test_H30_c3_build_facility_preserves_h01_h03_values(monkeypatch):
     assert inp.get("building_height_m") == 55.0
     assert inp.get("floor_area_sum_at_or_above_11f") == 12500.0
     assert out["full_result"] is not None
+    # 실제 build_facility() 로 facility 계약 검증 (C3)
+    facility = build_facility(cap["step1"])
+    assert facility.get("floor_count") == 15
+    assert facility.get("building_height_m") == 55.0
+    assert facility.get("floor_area_sum_at_or_above_11f") == 12500.0
 
 
 # ── H31: 본동 식별 실패 → DB UPDATE 0회, H03 수치 생성 0 ─────────────────────────
@@ -791,7 +798,7 @@ def test_H37_c3_build_facility_h01_fields_delivered(monkeypatch):
 
 def test_H38_patch_b_missing_pk_triggers_hydration(monkeypatch):
     """PATCH B: building_register_updated_at + 수치 있어도 mgm_bldrgst_pk 없으면
-    authoritative 아님 → hydration 재시도."""
+    authoritative 아님 → hydration 재시도. 재시도 실패 시 미인증 캐시 수치가 C3에 없음."""
     cap = {}
     _patch_leg(monkeypatch, cap)
     called = {"n": 0}
@@ -808,8 +815,12 @@ def test_H38_patch_b_missing_pk_triggers_hydration(monkeypatch):
         "building_register_updated_at": "2026-01-01T00:00:00+09:00",
         # mgm_bldrgst_pk 없음
     }
-    run_safe_building_leg(_FakeSB(fac), "F1", SafeBuildingConsumerInput())
+    out = run_safe_building_leg(_FakeSB(fac), "F1", SafeBuildingConsumerInput())
     assert called["n"] == 1  # PATCH B: pk 없으면 캐시 수치도 재인증 필요
+    # 미인증 캐시 수치가 C3에 주입되지 않아야 한다
+    assert "building_height_m" not in cap["step1"].input
+    assert "floor_count" not in cap["step1"].input
+    assert "floor_count" in out["unresolved_fields"]
 
 
 # ── H39: PATCH B — ts+values+mgm_bldrgst_pk 있음 → authoritative, 수화 없음 ────
@@ -832,3 +843,50 @@ def test_H39_patch_b_with_pk_no_hydration(monkeypatch):
     assert cap["step1"].input.get("building_height_m") == 42.5
     assert cap["step1"].input.get("floor_count") == 10
     assert "floor_count" not in out["unresolved_fields"]
+
+
+# ── H40: 다음 페이지에 동일 PK 반복 → 정합성 실패 → None ───────────────────────
+
+def test_H40_duplicate_pk_across_pages_rejected(monkeypatch):
+    """FINAL GUARD: totalCount 충족이라도 동일 mgmBldrgstPk 반복 → None."""
+    item = {
+        "mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": _PK_A,
+        "heit": "45.0", "grndFlrCnt": "12",
+    }
+
+    def fake_kr_get(url, params, timeout):
+        # totalCount=2, 하지만 두 페이지 모두 동일 PK_A 행 반환
+        return _make_response(2, [item])
+
+    monkeypatch.setattr(_hyd_mod, "kr_get", fake_kr_get)
+    result = _hyd_mod.fetch_h01_title_for_bdmgtsn("1168010100107190000")
+    assert result is None
+
+
+# ── H41: 서로 다른 PK 복수 페이지 정상 수집 → 기존 PK 기준 선택 유지 ─────────────
+
+def test_H41_distinct_pk_multipage_normal_collection(monkeypatch):
+    """FINAL GUARD 회귀: 서로 다른 mgmBldrgstPk 행은 정상 수집 후 existing_pk 선택."""
+    item_a = {
+        "mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": _PK_A,
+        "heit": "45.0", "grndFlrCnt": "12",
+    }
+    item_b = {
+        "mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": _PK_B,
+        "heit": "20.0", "grndFlrCnt": "5",
+    }
+
+    def fake_kr_get(url, params, timeout):
+        page = params.get("pageNo", 1)
+        body_item = item_a if page == 1 else item_b
+        return _make_response(2, [body_item])
+
+    monkeypatch.setattr(_hyd_mod, "kr_get", fake_kr_get)
+    items = _hyd_mod.fetch_h01_title_for_bdmgtsn("1168010100107190000")
+    assert items is not None and len(items) == 2
+
+    # existing_pk=_PK_A → item_a 선택
+    out = extract_h01_fields(items, existing_pk=_PK_A)
+    assert out.get("building_height") == 45.0
+    assert out.get("floor_count") == 12
+    assert out.get("mgm_bldrgst_pk") == _PK_A
