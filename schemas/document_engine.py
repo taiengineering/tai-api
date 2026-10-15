@@ -12,6 +12,7 @@ class DocumentCreateIn(BaseModel):
     factory_id: Optional[str] = None
     company_id: Optional[str] = None
     created_by: Optional[str] = None
+    source_inspection_id: Optional[UUID] = None
 
 
 class DocumentUpdateIn(BaseModel):
