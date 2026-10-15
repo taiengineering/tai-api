@@ -1,25 +1,22 @@
-"""WO-E2E2000-C10-DB-INTEGRATION-EVIDENCE-CORRECTION-002 — 실제 PostgreSQL 통합검증.
+"""WO-E2E2000-C10-PR627-TEST-SAFETY-FINAL-003 — 실제 PostgreSQL 통합검증.
 
 실행 조건:
-  환경변수 C10_TEST_DB_URL=postgresql://postgres:testpassword@localhost:15432/c10_test
+  C10_TEST_DB_URL=postgresql://postgres:testpassword@localhost:PORT/c10_test
+  C10_TEST_DB_AUTHORIZED=1
   pytest --run-db-int
 
-CI에서는 C10_TEST_DB_URL 미설정 → 전체 자동 SKIP (안전).
+CI에서는 C10_TEST_DB_AUTHORIZED 또는 C10_TEST_DB_URL 미설정 → 전체 자동 SKIP.
 
 테스트 목록:
-  DB-INT-01  anon    SELECT → DENY (insufficient_privilege / no policy)
-  DB-INT-02  anon    INSERT → DENY
-  DB-INT-03  anon    UPDATE → DENY
-  DB-INT-04  anon    DELETE → DENY
-  DB-INT-05  authenticated SELECT → DENY
-  DB-INT-06  authenticated INSERT → DENY
-  DB-INT-07  authenticated UPDATE → DENY
-  DB-INT-08  authenticated DELETE → DENY
-  DB-INT-09  service_role SELECT → PASS (행 반환)
-  DB-INT-10  service_role INSERT/UPDATE/DELETE → PASS
-  DB-INT-11  PRE-CHECK Drift Guard — 알 수 없는 정책 삽입 시 EXCEPTION 발생
-  DB-INT-12  트랜잭션 ROLLBACK → 정책 상태 원복
-  DB-INT-13  migration 재실행 idempotency → DROP IF EXISTS 재실행 오류 없음
+  DB-INT-01~04   anon    SELECT/INSERT/UPDATE/DELETE → DENY
+  DB-INT-05~08   authenticated SELECT/INSERT/UPDATE/DELETE → DENY
+  DB-INT-09~10   service_role SELECT/INSERT·UPDATE·DELETE → PASS
+  DB-INT-11      PRE-CHECK Drift Guard: unknown 정책 삽입 시 DO $$ EXCEPTION (복사 SQL)
+  DB-INT-12      트랜잭션 ROLLBACK → 정책 상태 원복 (단일 DROP)
+  DB-INT-13      migration 재실행 idempotency
+  DB-INT-14a~14d 잘못된 DB URL 또는 미승인 환경 → DROP 이전 차단 검증
+  DB-INT-15      전체 마이그레이션 파일로 Drift Guard 실측 (unknown 정책 → 변경 없음)
+  DB-INT-16      전체 마이그레이션 트랜잭션 ROLLBACK → 정책·GRANT 완전 원복
 
 마이그레이션 파일:
   supabase/migrations/20261016000002_c10_rls_hardening_v2.sql
@@ -31,19 +28,19 @@ import hashlib
 import os
 import pathlib
 import textwrap
+from urllib.parse import urlparse
 
 import psycopg2
 import psycopg2.errors
 import pytest
 
-# ── 마이그레이션 파일 경로 ──────────────────────────────────────────────
+# ── 마이그레이션 파일 ────────────────────────────────────────────────────
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _MIGRATION = _ROOT / "supabase" / "migrations" / "20261016000002_c10_rls_hardening_v2.sql"
 _MIGRATION_SHA256 = "3d50d021f5d67fd0e9d2e83a1c3ec6406cb32bdea38ab6fc4275e71d7a590bad"
 
 # ── 운영 과다 허용 정책 6개 재현 SQL ────────────────────────────────────
 _SETUP_SQL = textwrap.dedent("""
-    -- 역할 재현
     DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN
         CREATE ROLE anon NOLOGIN; END IF;
@@ -52,8 +49,6 @@ _SETUP_SQL = textwrap.dedent("""
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN
         CREATE ROLE service_role NOLOGIN BYPASSRLS; END IF;
     END $$;
-
-    -- C10 테이블
     DROP TABLE IF EXISTS public.anonymous_diagnosis_results;
     CREATE TABLE public.anonymous_diagnosis_results (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -62,12 +57,8 @@ _SETUP_SQL = textwrap.dedent("""
       claimed_user_id UUID, status TEXT DEFAULT 'ACTIVE',
       source_type TEXT, auth_log_id UUID
     );
-
-    -- RLS 활성화
     ALTER TABLE public.anonymous_diagnosis_results ENABLE ROW LEVEL SECURITY;
     ALTER TABLE public.anonymous_diagnosis_results FORCE ROW LEVEL SECURITY;
-
-    -- 운영 정책 6개 재현
     CREATE POLICY anon_delete_anonymous_diagnosis_results
       ON public.anonymous_diagnosis_results FOR DELETE TO anon USING (true);
     CREATE POLICY anon_insert_anonymous_diagnosis_results
@@ -82,77 +73,70 @@ _SETUP_SQL = textwrap.dedent("""
     CREATE POLICY service_role_full
       ON public.anonymous_diagnosis_results FOR ALL TO service_role
       USING (true) WITH CHECK (true);
-
-    -- GRANT 재현
     GRANT SELECT, INSERT, UPDATE, DELETE
       ON public.anonymous_diagnosis_results TO anon;
     GRANT ALL ON public.anonymous_diagnosis_results TO authenticated;
     GRANT ALL ON public.anonymous_diagnosis_results TO service_role;
-
-    -- 시드 데이터
     INSERT INTO public.anonymous_diagnosis_results(status, source_type)
     VALUES ('ACTIVE','free_diag'), ('ACTIVE','site_free');
 """)
 
-
-# ── 픽스처 ───────────────────────────────────────────────────────────────
-
-@pytest.fixture(scope="module")
-def c10_db(request):
-    """격리 테스트 DB 연결. --run-db-int + C10_TEST_DB_URL 없으면 SKIP."""
-    if not request.config.getoption("--run-db-int", default=False):
-        pytest.skip("격리 DB 테스트 — --run-db-int 필요 (CI SKIP 정상)")
-
-    db_url = os.environ.get("C10_TEST_DB_URL")
-    if not db_url:
-        pytest.skip("C10_TEST_DB_URL 미설정 — 격리 DB 연결 불가")
-
-    conn = psycopg2.connect(db_url)
-    conn.autocommit = True
-    cur = conn.cursor()
-
-    # DB 버전 기록
-    cur.execute("SELECT version();")
-    db_version = cur.fetchone()[0]
-
-    # 마이그레이션 SHA256 검증
-    actual_sha = hashlib.sha256(_MIGRATION.read_bytes()).hexdigest()
-    assert actual_sha == _MIGRATION_SHA256, (
-        f"마이그레이션 파일 SHA256 불일치: 예상={_MIGRATION_SHA256}, 실제={actual_sha}"
-    )
-
-    # 스키마 초기화 (운영 상태 재현)
-    cur.execute(_SETUP_SQL)
-
-    # migration 적용
-    cur.execute(_MIGRATION.read_text(encoding="utf-8"))
-
-    yield {"conn": conn, "cur": cur, "db_version": db_version}
-
-    cur.close()
-    conn.close()
+_ORIGINAL_POLICIES = frozenset({
+    "anon_delete_anonymous_diagnosis_results",
+    "anon_insert_anonymous_diagnosis_results",
+    "anon_select_anonymous_diagnosis_results",
+    "anon_update_anonymous_diagnosis_results",
+    "authenticated_all_anonymous_diagnosis_results",
+    "service_role_full",
+})
 
 
-def _role_denied(conn, role: str, sql: str) -> bool:
-    """지정 역할로 SQL 실행 시 권한 거부 발생 여부."""
-    try:
-        with conn.cursor() as cur:
-            cur.execute(f"SET ROLE {role};")
-            cur.execute(sql)
-            conn.execute("ROLLBACK;")  # INSERT/UPDATE 결과 원복
-    except (psycopg2.errors.InsufficientPrivilege, psycopg2.errors.RaiseException) as e:
-        return True
-    except Exception:
-        return True
-    finally:
-        try:
-            conn.execute("RESET ROLE;")
-        except Exception:
-            pass
-    return False
+# ═══════════════════════════════════════════════════════════════════════
+# 안전장치 — 운영 DB 접속 방지
+# ═══════════════════════════════════════════════════════════════════════
 
+def _assert_isolated_db(db_url: str) -> None:
+    """DROP/REVOKE 실행 전 격리 DB임을 검증. 하나라도 실패하면 RuntimeError.
 
-# ── 정책 상태 조회 헬퍼 ────────────────────────────────────────────────
+    규칙:
+      1. C10_TEST_DB_AUTHORIZED=1 명시적 승인 환경변수 필요
+      2. Supabase 운영 URL 패턴 차단 (*.supabase.co / *.supabase.com)
+      3. 로컬 호스트(localhost / 127.0.0.1)만 허용
+      4. DB 이름에 격리 식별자(test / iso / c10) 포함 필요
+    접속 URL·비밀번호 원문은 오류 메시지에 포함하지 않는다.
+    """
+    if not os.environ.get("C10_TEST_DB_AUTHORIZED"):
+        raise RuntimeError(
+            "C10_TEST_DB_AUTHORIZED 환경변수가 없습니다. "
+            "격리 테스트 DB임을 확인한 후 C10_TEST_DB_AUTHORIZED=1 로 설정하세요."
+        )
+
+    parsed = urlparse(db_url)
+    host = (parsed.hostname or "").lower()
+    dbname = (parsed.path or "").lstrip("/").lower()
+
+    blocked = ["supabase.co", "supabase.com", ".supabase.io"]
+    for pattern in blocked:
+        if pattern in host:
+            raise RuntimeError(
+                f"운영 Supabase 호스트 패턴 감지 — 운영 DB 테스트 실행 금지. "
+                f"(패턴: {pattern!r})"
+            )
+
+    allowed_hosts = {"localhost", "127.0.0.1", "0.0.0.0", ""}
+    if host not in allowed_hosts:
+        raise RuntimeError(
+            f"비로컬 호스트 감지 — 통합 테스트는 localhost/127.0.0.1만 허용됩니다. "
+            f"(호스트 클래스: {'로컬' if 'local' in host else '외부'})"
+        )
+
+    safe_name_tokens = ("test", "iso", "c10")
+    if not any(t in dbname for t in safe_name_tokens):
+        raise RuntimeError(
+            f"DB 이름에 격리 식별자(test/iso/c10)가 없습니다. "
+            f"운영 DB와 구분되는 격리 DB를 사용하세요."
+        )
+
 
 def _get_policies(cur) -> list[str]:
     cur.execute(
@@ -162,74 +146,127 @@ def _get_policies(cur) -> list[str]:
     return [row[0] for row in cur.fetchall()]
 
 
+def _get_grants(cur) -> list[tuple]:
+    cur.execute(
+        "SELECT grantee, privilege_type "
+        "FROM information_schema.role_table_grants "
+        "WHERE table_name='anonymous_diagnosis_results' "
+        "ORDER BY grantee, privilege_type;"
+    )
+    return cur.fetchall()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 픽스처
+# ═══════════════════════════════════════════════════════════════════════
+
+@pytest.fixture(scope="module")
+def c10_db(request):
+    """격리 DB: 6개 정책 재현 → migration 적용 → DB-INT-01~13용."""
+    if not request.config.getoption("--run-db-int", default=False):
+        pytest.skip("격리 DB 테스트 — --run-db-int 필요 (CI SKIP 정상)")
+
+    db_url = os.environ.get("C10_TEST_DB_URL")
+    if not db_url:
+        pytest.skip("C10_TEST_DB_URL 미설정")
+
+    _assert_isolated_db(db_url)
+
+    # 마이그레이션 SHA256 검증
+    actual_sha = hashlib.sha256(_MIGRATION.read_bytes()).hexdigest()
+    assert actual_sha == _MIGRATION_SHA256, (
+        f"마이그레이션 파일 SHA256 불일치: 예상={_MIGRATION_SHA256}, 실제={actual_sha}"
+    )
+
+    conn = psycopg2.connect(db_url)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    cur.execute("SELECT version();")
+    db_version = cur.fetchone()[0]
+
+    # 6개 정책 상태 설치
+    cur.execute(_SETUP_SQL)
+
+    # migration 적용
+    cur.execute(_MIGRATION.read_text(encoding="utf-8"))
+
+    yield {"conn": conn, "cur": cur, "db_version": db_version}
+    cur.close()
+    conn.close()
+
+
+@pytest.fixture
+def c10_fresh_6policy(request):
+    """격리 DB를 6개 정책 원본 상태(migration 미적용)로 초기화하는 함수 스코프 픽스처."""
+    if not request.config.getoption("--run-db-int", default=False):
+        pytest.skip("격리 DB 테스트 — --run-db-int 필요")
+
+    db_url = os.environ.get("C10_TEST_DB_URL")
+    if not db_url:
+        pytest.skip("C10_TEST_DB_URL 미설정")
+
+    _assert_isolated_db(db_url)
+
+    conn = psycopg2.connect(db_url)
+    conn.autocommit = True
+    cur = conn.cursor()
+    cur.execute(_SETUP_SQL)  # 6개 정책, migration 미적용
+
+    yield {"conn": conn, "cur": cur, "db_url": db_url}
+    cur.close()
+    conn.close()
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # DB-INT-01~04: anon 4개 DML → DENY
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_DB_INT_01_anon_select_denied(c10_db):
-    conn = c10_db["conn"]
+def _exec_as_role_expect_deny(conn, role: str, sql: str, test_id: str):
     with conn.cursor() as cur:
-        cur.execute("SET ROLE anon;")
+        cur.execute(f"SET ROLE {role};")
         try:
-            cur.execute("SELECT COUNT(*) FROM public.anonymous_diagnosis_results;")
+            cur.execute(sql)
             conn.rollback()
-            pytest.fail("anon SELECT 허용됨 — DENY 필요")
-        except (psycopg2.errors.InsufficientPrivilege, psycopg2.errors.RaiseException):
-            conn.rollback()  # 오류 상태 정리
+            pytest.fail(f"{test_id}: {role} {sql[:30]!r} 허용됨 — DENY 필요")
+        except (psycopg2.errors.InsufficientPrivilege,
+                psycopg2.errors.RaiseException):
+            conn.rollback()
         finally:
             with conn.cursor() as r:
                 r.execute("RESET ROLE;")
+
+
+def test_DB_INT_01_anon_select_denied(c10_db):
+    _exec_as_role_expect_deny(
+        c10_db["conn"], "anon",
+        "SELECT COUNT(*) FROM public.anonymous_diagnosis_results;",
+        "DB-INT-01"
+    )
 
 
 def test_DB_INT_02_anon_insert_denied(c10_db):
-    conn = c10_db["conn"]
-    with conn.cursor() as cur:
-        cur.execute("SET ROLE anon;")
-        try:
-            cur.execute(
-                "INSERT INTO public.anonymous_diagnosis_results(status) VALUES('X');"
-            )
-            conn.rollback()
-            pytest.fail("anon INSERT 허용됨 — DENY 필요")
-        except (psycopg2.errors.InsufficientPrivilege, psycopg2.errors.RaiseException):
-            conn.rollback()
-        finally:
-            with conn.cursor() as r:
-                r.execute("RESET ROLE;")
+    _exec_as_role_expect_deny(
+        c10_db["conn"], "anon",
+        "INSERT INTO public.anonymous_diagnosis_results(status) VALUES('X');",
+        "DB-INT-02"
+    )
 
 
 def test_DB_INT_03_anon_update_denied(c10_db):
-    conn = c10_db["conn"]
-    with conn.cursor() as cur:
-        cur.execute("SET ROLE anon;")
-        try:
-            cur.execute(
-                "UPDATE public.anonymous_diagnosis_results SET status='X';"
-            )
-            conn.rollback()
-            pytest.fail("anon UPDATE 허용됨 — DENY 필요")
-        except (psycopg2.errors.InsufficientPrivilege, psycopg2.errors.RaiseException):
-            conn.rollback()
-        finally:
-            with conn.cursor() as r:
-                r.execute("RESET ROLE;")
+    _exec_as_role_expect_deny(
+        c10_db["conn"], "anon",
+        "UPDATE public.anonymous_diagnosis_results SET status='X';",
+        "DB-INT-03"
+    )
 
 
 def test_DB_INT_04_anon_delete_denied(c10_db):
-    conn = c10_db["conn"]
-    with conn.cursor() as cur:
-        cur.execute("SET ROLE anon;")
-        try:
-            cur.execute(
-                "DELETE FROM public.anonymous_diagnosis_results;"
-            )
-            conn.rollback()
-            pytest.fail("anon DELETE 허용됨 — DENY 필요")
-        except (psycopg2.errors.InsufficientPrivilege, psycopg2.errors.RaiseException):
-            conn.rollback()
-        finally:
-            with conn.cursor() as r:
-                r.execute("RESET ROLE;")
+    _exec_as_role_expect_deny(
+        c10_db["conn"], "anon",
+        "DELETE FROM public.anonymous_diagnosis_results;",
+        "DB-INT-04"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -237,69 +274,35 @@ def test_DB_INT_04_anon_delete_denied(c10_db):
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_DB_INT_05_authenticated_select_denied(c10_db):
-    conn = c10_db["conn"]
-    with conn.cursor() as cur:
-        cur.execute("SET ROLE authenticated;")
-        try:
-            cur.execute("SELECT COUNT(*) FROM public.anonymous_diagnosis_results;")
-            conn.rollback()
-            pytest.fail("authenticated SELECT 허용됨 — DENY 필요")
-        except (psycopg2.errors.InsufficientPrivilege, psycopg2.errors.RaiseException):
-            conn.rollback()
-        finally:
-            with conn.cursor() as r:
-                r.execute("RESET ROLE;")
+    _exec_as_role_expect_deny(
+        c10_db["conn"], "authenticated",
+        "SELECT COUNT(*) FROM public.anonymous_diagnosis_results;",
+        "DB-INT-05"
+    )
 
 
 def test_DB_INT_06_authenticated_insert_denied(c10_db):
-    conn = c10_db["conn"]
-    with conn.cursor() as cur:
-        cur.execute("SET ROLE authenticated;")
-        try:
-            cur.execute(
-                "INSERT INTO public.anonymous_diagnosis_results(status) VALUES('X');"
-            )
-            conn.rollback()
-            pytest.fail("authenticated INSERT 허용됨 — DENY 필요")
-        except (psycopg2.errors.InsufficientPrivilege, psycopg2.errors.RaiseException):
-            conn.rollback()
-        finally:
-            with conn.cursor() as r:
-                r.execute("RESET ROLE;")
+    _exec_as_role_expect_deny(
+        c10_db["conn"], "authenticated",
+        "INSERT INTO public.anonymous_diagnosis_results(status) VALUES('X');",
+        "DB-INT-06"
+    )
 
 
 def test_DB_INT_07_authenticated_update_denied(c10_db):
-    conn = c10_db["conn"]
-    with conn.cursor() as cur:
-        cur.execute("SET ROLE authenticated;")
-        try:
-            cur.execute(
-                "UPDATE public.anonymous_diagnosis_results SET status='X';"
-            )
-            conn.rollback()
-            pytest.fail("authenticated UPDATE 허용됨 — DENY 필요")
-        except (psycopg2.errors.InsufficientPrivilege, psycopg2.errors.RaiseException):
-            conn.rollback()
-        finally:
-            with conn.cursor() as r:
-                r.execute("RESET ROLE;")
+    _exec_as_role_expect_deny(
+        c10_db["conn"], "authenticated",
+        "UPDATE public.anonymous_diagnosis_results SET status='X';",
+        "DB-INT-07"
+    )
 
 
 def test_DB_INT_08_authenticated_delete_denied(c10_db):
-    conn = c10_db["conn"]
-    with conn.cursor() as cur:
-        cur.execute("SET ROLE authenticated;")
-        try:
-            cur.execute(
-                "DELETE FROM public.anonymous_diagnosis_results;"
-            )
-            conn.rollback()
-            pytest.fail("authenticated DELETE 허용됨 — DENY 필요")
-        except (psycopg2.errors.InsufficientPrivilege, psycopg2.errors.RaiseException):
-            conn.rollback()
-        finally:
-            with conn.cursor() as r:
-                r.execute("RESET ROLE;")
+    _exec_as_role_expect_deny(
+        c10_db["conn"], "authenticated",
+        "DELETE FROM public.anonymous_diagnosis_results;",
+        "DB-INT-08"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -307,13 +310,12 @@ def test_DB_INT_08_authenticated_delete_denied(c10_db):
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_DB_INT_09_service_role_select_passes(c10_db):
-    conn = c10_db["conn"]
-    with conn.cursor() as cur:
+    with c10_db["conn"].cursor() as cur:
         cur.execute("SET ROLE service_role;")
         cur.execute("SELECT COUNT(*) FROM public.anonymous_diagnosis_results;")
         count = cur.fetchone()[0]
         cur.execute("RESET ROLE;")
-    assert count >= 0, "service_role SELECT 실패"
+    assert isinstance(count, int) and count >= 0
 
 
 def test_DB_INT_10_service_role_write_passes(c10_db):
@@ -334,27 +336,23 @@ def test_DB_INT_10_service_role_write_passes(c10_db):
             (new_id,)
         )
         cur.execute("RESET ROLE;")
-    assert new_id is not None, "service_role INSERT/UPDATE/DELETE 실패"
+    assert new_id is not None
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# DB-INT-11: PRE-CHECK Drift Guard — unknown 정책 삽입 시 EXCEPTION
+# DB-INT-11: PRE-CHECK Drift Guard (DO $$ 복사본) — unknown 정책 → EXCEPTION
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_DB_INT_11_pre_drift_guard_blocks_unknown_policy(c10_db):
-    """unknown 정책이 존재할 때 migration PRE-CHECK DO 블록이 EXCEPTION 발생 확인."""
-    conn = c10_db["conn"]
+def test_DB_INT_11_pre_drift_guard_do_block(c10_db):
     cur = c10_db["cur"]
+    conn = c10_db["conn"]
 
-    # unknown 정책 삽입
     cur.execute(
         "CREATE POLICY unknown_intruder ON public.anonymous_diagnosis_results "
         "FOR SELECT TO anon USING (true);"
     )
-    policies_before = _get_policies(cur)
-    assert "unknown_intruder" in policies_before, "unknown 정책 삽입 실패"
+    assert "unknown_intruder" in _get_policies(cur)
 
-    # PRE-CHECK DO 블록 발췌 실행 (migration 전체 재실행 대신 핵심 블록만)
     pre_check_sql = """
     DO $$
     DECLARE unknown_count INTEGER; unknown_names TEXT;
@@ -362,8 +360,7 @@ def test_DB_INT_11_pre_drift_guard_blocks_unknown_policy(c10_db):
         SELECT COUNT(*), string_agg(policyname, ', ')
         INTO unknown_count, unknown_names
         FROM pg_policies
-        WHERE schemaname = 'public'
-          AND tablename = 'anonymous_diagnosis_results'
+        WHERE schemaname='public' AND tablename='anonymous_diagnosis_results'
           AND policyname NOT IN (
               'anon_delete_anonymous_diagnosis_results',
               'anon_insert_anonymous_diagnosis_results',
@@ -381,74 +378,55 @@ def test_DB_INT_11_pre_drift_guard_blocks_unknown_policy(c10_db):
         END IF;
     END $$;
     """
-    exception_raised = False
+    raised = False
     try:
         cur.execute(pre_check_sql)
     except psycopg2.errors.RaiseException as e:
-        exception_raised = True
-        assert "C10_PRE_DRIFT_GUARD_FAIL" in str(e), (
-            f"PRE_DRIFT_GUARD EXCEPTION 발생했으나 식별자 누락: {e}"
-        )
+        raised = True
         conn.rollback()
+        assert "C10_PRE_DRIFT_GUARD_FAIL" in str(e)
 
-    assert exception_raised, "PRE-CHECK Drift Guard가 unknown 정책에도 EXCEPTION을 발생시키지 않음"
+    assert raised, "PRE-CHECK Drift Guard가 EXCEPTION을 발생시키지 않음"
 
-    # 정리
     cur.execute(
         "DROP POLICY IF EXISTS unknown_intruder ON public.anonymous_diagnosis_results;"
     )
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# DB-INT-12: 트랜잭션 ROLLBACK → 정책 상태 원복
+# DB-INT-12: 단일 DROP 트랜잭션 ROLLBACK → 정책 원복
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_DB_INT_12_transaction_rollback_restores_state(c10_db):
-    """트랜잭션 내 DROP 후 ROLLBACK 시 정책이 원복되는지 확인."""
-    conn_url = os.environ.get("C10_TEST_DB_URL")
-    if not conn_url:
-        pytest.skip("C10_TEST_DB_URL 미설정")
-
-    # autocommit=False 연결 새로 열기
-    txn_conn = psycopg2.connect(conn_url)
-    txn_conn.autocommit = False
+def test_DB_INT_12_transaction_rollback_single_drop(c10_db):
+    db_url = os.environ.get("C10_TEST_DB_URL")
+    txn = psycopg2.connect(db_url)
+    txn.autocommit = False
     try:
-        with txn_conn.cursor() as cur:
-            # 현재 정책 목록
+        with txn.cursor() as cur:
             cur.execute(
                 "SELECT policyname FROM pg_policies "
                 "WHERE tablename='anonymous_diagnosis_results' ORDER BY policyname;"
             )
-            policies_before = [r[0] for r in cur.fetchall()]
-
-            # 트랜잭션 내 DROP
+            before = [r[0] for r in cur.fetchall()]
             cur.execute(
                 "DROP POLICY IF EXISTS service_role_full "
                 "ON public.anonymous_diagnosis_results;"
             )
             cur.execute(
                 "SELECT policyname FROM pg_policies "
-                "WHERE tablename='anonymous_diagnosis_results' ORDER BY policyname;"
+                "WHERE tablename='anonymous_diagnosis_results';"
             )
-            policies_mid = [r[0] for r in cur.fetchall()]
-            assert "service_role_full" not in policies_mid, (
-                "트랜잭션 내 DROP이 반영되지 않음"
-            )
-
-            # ROLLBACK
-            txn_conn.rollback()
-
+            mid = [r[0] for r in cur.fetchall()]
+            assert "service_role_full" not in mid
+            txn.rollback()
             cur.execute(
                 "SELECT policyname FROM pg_policies "
                 "WHERE tablename='anonymous_diagnosis_results' ORDER BY policyname;"
             )
-            policies_after = [r[0] for r in cur.fetchall()]
-
-        assert policies_before == policies_after, (
-            f"ROLLBACK 후 정책 불일치: 이전={policies_before}, 이후={policies_after}"
-        )
+            after = [r[0] for r in cur.fetchall()]
+        assert before == after
     finally:
-        txn_conn.close()
+        txn.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -456,23 +434,181 @@ def test_DB_INT_12_transaction_rollback_restores_state(c10_db):
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_DB_INT_13_migration_reapply_idempotent(c10_db):
-    """migration 재실행 시 오류 없이 완료되고 정책 상태가 동일함을 확인."""
     cur = c10_db["cur"]
-    conn = c10_db["conn"]
+    before = _get_policies(cur)
 
-    policies_before = _get_policies(cur)
+    cur.execute(_MIGRATION.read_text(encoding="utf-8"))
 
-    # migration 재실행 (DROP IF EXISTS → NOTICE만 발생, 오류 없음)
-    try:
-        cur.execute(_MIGRATION.read_text(encoding="utf-8"))
-    except Exception as e:
-        pytest.fail(f"migration 재실행 실패: {e}")
+    after = _get_policies(cur)
+    assert before == after
+    assert after == ["service_role_full"]
 
-    policies_after = _get_policies(cur)
 
-    assert policies_before == policies_after, (
-        f"재실행 후 정책 상태 불일치: 이전={policies_before}, 이후={policies_after}"
+# ═══════════════════════════════════════════════════════════════════════
+# DB-INT-14a~14d: 잘못된 DB URL / 미승인 환경 → DROP 이전 차단
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_DB_INT_14a_reject_without_authorized_env(request, monkeypatch):
+    """C10_TEST_DB_AUTHORIZED 없으면 RuntimeError."""
+    if not request.config.getoption("--run-db-int", default=False):
+        pytest.skip("--run-db-int 필요")
+    monkeypatch.delenv("C10_TEST_DB_AUTHORIZED", raising=False)
+    with pytest.raises(RuntimeError, match="C10_TEST_DB_AUTHORIZED"):
+        _assert_isolated_db("postgresql://u:p@localhost:15433/c10_test")
+
+
+def test_DB_INT_14b_reject_supabase_url(request, monkeypatch):
+    """Supabase 운영 도메인 → RuntimeError."""
+    if not request.config.getoption("--run-db-int", default=False):
+        pytest.skip("--run-db-int 필요")
+    monkeypatch.setenv("C10_TEST_DB_AUTHORIZED", "1")
+    with pytest.raises(RuntimeError, match="supabase"):
+        _assert_isolated_db("postgresql://u:p@db.abcdef.supabase.co/postgres")
+
+
+def test_DB_INT_14c_reject_nonlocal_host(request, monkeypatch):
+    """외부 호스트 → RuntimeError."""
+    if not request.config.getoption("--run-db-int", default=False):
+        pytest.skip("--run-db-int 필요")
+    monkeypatch.setenv("C10_TEST_DB_AUTHORIZED", "1")
+    with pytest.raises(RuntimeError, match="비로컬"):
+        _assert_isolated_db("postgresql://u:p@prod-db.example.com/c10_test")
+
+
+def test_DB_INT_14d_reject_unsafe_dbname(request, monkeypatch):
+    """DB 이름에 격리 식별자 없음 → RuntimeError."""
+    if not request.config.getoption("--run-db-int", default=False):
+        pytest.skip("--run-db-int 필요")
+    monkeypatch.setenv("C10_TEST_DB_AUTHORIZED", "1")
+    with pytest.raises(RuntimeError, match="격리 식별자"):
+        _assert_isolated_db("postgresql://u:p@localhost:15433/production_db")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DB-INT-15: 전체 마이그레이션 파일로 Drift Guard 실측
+#   unknown 정책 존재 시 migration PRE-CHECK가 EXCEPTION 발생,
+#   이후 DROP/REVOKE/CREATE 실행 없음 — 정책·GRANT 변경 없음
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_DB_INT_15_full_migration_drift_guard(c10_fresh_6policy):
+    """전체 migration 파일 실행 시 PRE-CHECK Drift Guard가 unknown 정책에서 차단."""
+    conn = c10_fresh_6policy["conn"]
+    cur = c10_fresh_6policy["cur"]
+    db_url = c10_fresh_6policy["db_url"]
+
+    # unknown 정책 추가
+    cur.execute(
+        "CREATE POLICY unknown_intruder ON public.anonymous_diagnosis_results "
+        "FOR SELECT TO anon USING (true);"
     )
-    assert policies_after == ["service_role_full"], (
-        f"재실행 후 예상 정책과 다름: {policies_after}"
+    policies_before = _get_policies(cur)
+    grants_before = _get_grants(cur)
+    assert "unknown_intruder" in policies_before
+    assert len(policies_before) == 7  # 6 원본 + 1 unknown
+
+    # 실제 migration 파일을 새 연결로 실행
+    migration_sql = _MIGRATION.read_text(encoding="utf-8")
+    migration_conn = psycopg2.connect(db_url)
+    migration_conn.autocommit = True
+    exception_raised = False
+    exception_msg = ""
+    try:
+        with migration_conn.cursor() as mc:
+            mc.execute(migration_sql)
+    except psycopg2.errors.RaiseException as e:
+        exception_raised = True
+        exception_msg = str(e)
+        migration_conn.rollback()
+    finally:
+        migration_conn.close()
+
+    assert exception_raised, (
+        "PRE-CHECK Drift Guard가 migration 전체 실행 시 EXCEPTION을 발생시키지 않음"
+    )
+    assert "C10_PRE_DRIFT_GUARD_FAIL" in exception_msg, (
+        f"PRE-CHECK 식별자 누락: {exception_msg!r}"
+    )
+
+    # 정책·GRANT 변경 없음 확인 (PRE-CHECK에서 멈췄으므로 DROP 미실행)
+    policies_after = _get_policies(cur)
+    grants_after = _get_grants(cur)
+    assert set(policies_after) == set(policies_before), (
+        f"PRE-CHECK 이후 정책 변경 발생: 이전={policies_before}, 이후={policies_after}"
+    )
+    assert grants_after == grants_before, (
+        f"PRE-CHECK 이후 GRANT 변경 발생"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DB-INT-16: 전체 마이그레이션 트랜잭션 ROLLBACK → 정책·GRANT 완전 원복
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_DB_INT_16_full_migration_transaction_rollback(c10_fresh_6policy):
+    """전체 migration을 트랜잭션에서 실행 후 ROLLBACK → 정책·GRANT 원복."""
+    cur = c10_fresh_6policy["cur"]
+    db_url = c10_fresh_6policy["db_url"]
+
+    # migration 적용 전 상태 기록
+    policies_before = _get_policies(cur)
+    grants_before = _get_grants(cur)
+    assert set(policies_before) == _ORIGINAL_POLICIES
+
+    # autocommit=False 연결로 migration 실행 → 중간 상태 확인 → ROLLBACK
+    txn_conn = psycopg2.connect(db_url)
+    txn_conn.autocommit = False
+    try:
+        with txn_conn.cursor() as tc:
+            migration_sql = _MIGRATION.read_text(encoding="utf-8")
+            tc.execute(migration_sql)
+
+            # 트랜잭션 내: migration 적용 상태 확인
+            tc.execute(
+                "SELECT policyname FROM pg_policies "
+                "WHERE tablename='anonymous_diagnosis_results' ORDER BY policyname;"
+            )
+            policies_mid = [r[0] for r in tc.fetchall()]
+            assert policies_mid == ["service_role_full"], (
+                f"migration 적용 후(ROLLBACK 전) 예상과 다름: {policies_mid}"
+            )
+
+            tc.execute(
+                "SELECT grantee, privilege_type "
+                "FROM information_schema.role_table_grants "
+                "WHERE table_name='anonymous_diagnosis_results' "
+                "ORDER BY grantee, privilege_type;"
+            )
+            grants_mid = tc.fetchall()
+            # migration 후 anon/authenticated GRANT 제거됨
+            grantees_mid = {row[0] for row in grants_mid}
+            assert "anon" not in grantees_mid, (
+                "migration 후 anon GRANT가 남아있음"
+            )
+
+        txn_conn.rollback()
+
+        # ROLLBACK 후 상태 확인 — 원복 여부 검증
+        with txn_conn.cursor() as tc:
+            tc.execute(
+                "SELECT policyname FROM pg_policies "
+                "WHERE tablename='anonymous_diagnosis_results' ORDER BY policyname;"
+            )
+            policies_after = [r[0] for r in tc.fetchall()]
+
+            tc.execute(
+                "SELECT grantee, privilege_type "
+                "FROM information_schema.role_table_grants "
+                "WHERE table_name='anonymous_diagnosis_results' "
+                "ORDER BY grantee, privilege_type;"
+            )
+            grants_after = tc.fetchall()
+
+    finally:
+        txn_conn.close()
+
+    assert set(policies_after) == _ORIGINAL_POLICIES, (
+        f"ROLLBACK 후 정책 불일치: 이전={sorted(policies_before)}, 이후={sorted(policies_after)}"
+    )
+    assert grants_after == grants_before, (
+        f"ROLLBACK 후 GRANT 불일치: 이전={grants_before}, 이후={grants_after}"
     )
