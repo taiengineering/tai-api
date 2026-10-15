@@ -1,4 +1,4 @@
-"""WO-TAI-DOC-M004-PR623-SOURCE-GATE-CORR-001 — 격리 테스트 (보정판)
+"""WO-TAI-DOC-M004-PR623-FINAL-GATE-CORR-002 — 격리 테스트 (최종 보정판)
 
 기존 테스트 (수정):
   T01  APPROVED 스키마 + 정상 점검 → DRAFT 생성, source_inspection_id 반영
@@ -6,8 +6,8 @@
   T03  동시 UNIQUE 충돌 시뮬레이션 → 서비스가 23505 전파
   T04  다른 회사 점검 → 404, 쓰기 0  [FIXED: outer except Exception 제거]
   T05a 존재하지 않는 점검 → 404, 쓰기 0
-  T05b assignment_id 없는 점검(legacy) → 422, 쓰기 0
-  T05c factory_id 불일치(복합키 실패) → 422, 쓰기 0
+  T05b assignment_id 없는 점검(인가 불가) → 404 정보 비노출  [CORR-002: 422→404]
+  T05c factory_id 불일치(복합키 실패) → 404 정보 비노출        [CORR-002: 422→404]
   T06  CANDIDATE 스키마 → 400, 쓰기 0
   T07  source_inspection_id 없음 → 기존 수동 생성 경로 PASS
   T08a IN_PROGRESS 점검 → 허용
@@ -18,13 +18,18 @@
   T11  법령/FORM647/자동생성/배포 경로 코드 미존재 확인
   T12  UUID 형식 오류 → 422
 
-신규 테스트 (C1/C2/C3 보정 검증):
+C1/C2/C3 보정 검증 (CORR-001):
   TC1  타 테넌트 점검 접근 시 resolve_inspection_record 미호출 (상태 비노출)
   TC2  is_active=False → 문서 생성 차단
   TC3  canonical resolver 예외 → fallback 없이 fail-closed 422
-  TC4  멱등 재조회: 저장 문서의 company/factory 불일치 → fail-closed
+  TC4  멱등 재조회: 서비스 DocumentScopeMismatchError → ValueError 서브클래스
   TC5  UNIQUE 충돌 후 재조회: company/factory 불일치 → 409
   TC6  사업장(factory) 권한 검사 실패 → 404
+
+실제 권한 함수 검증 (CORR-002 신규):
+  TC1B 실제 _ensure_own_company — COMPANY tier, 타 회사 접근 → 404 (real auth)
+  TC6B 실제 _ensure_own_company — FACTORY tier, 타 사업장 접근 → 404 (real auth)
+  TC4B 라우터 수준 C3 서비스 경로 — DocumentScopeMismatchError → 409 (not 400)
 
 Mock/fake DB만 사용. production INSERT/UPDATE/DELETE 0.
 """
@@ -317,7 +322,8 @@ def test_T05a_nonexistent_inspection_404():
 # T05b assignment_id=None legacy 점검 → 422 (인가 전 데이터 유효성 실패)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_T05b_legacy_no_assignment_id_422():
+def test_T05b_legacy_no_assignment_id_404():
+    """일정 연결 없는 점검 — 인가 불가 자원은 권한 확인 전에 404로 차단 (정보 비노출)."""
     from fastapi import HTTPException
 
     sb = _FakeSB({
@@ -340,15 +346,16 @@ def test_T05b_legacy_no_assignment_id_422():
             route_fn(body=body, current_user=user)
             assert False, "Should have raised"
         except HTTPException as e:
-            assert e.status_code == 422
+            assert e.status_code == 404
     assert all(t != "runtime_document_data" for t, _ in sb._inserts)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# T05c factory_id 불일치(복합키 실패) → 422
+# T05c factory_id 불일치(복합키 실패) → 404 (인가 불가 자원 정보 비노출)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_T05c_factory_mismatch_422():
+def test_T05c_factory_mismatch_404():
+    """업무 일정 복합키 불일치 — 인가 확인 불가 시 404로 차단 (정보 비노출)."""
     from fastapi import HTTPException
 
     sb = _FakeSB({
@@ -372,7 +379,7 @@ def test_T05c_factory_mismatch_422():
             route_fn(body=body, current_user=user)
             assert False, "Should have raised"
         except HTTPException as e:
-            assert e.status_code == 422
+            assert e.status_code == 404
     assert all(t != "runtime_document_data" for t, _ in sb._inserts)
 
 
@@ -836,3 +843,136 @@ def test_TC6_cross_factory_denied_404():
     assert resolver_call_count[0] == 0, \
         "resolver must not be called before factory auth fails"
     assert all(t != "runtime_document_data" for t, _ in sb._inserts)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TC1B  실제 _ensure_own_company 호출 — 타 회사 접근 시 404 (real auth)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_TC1B_real_auth_cross_company_404():
+    """C1 real auth: _ensure_own_company 를 패치하지 않고 COMPANY tier 사용자가
+    타 회사 점검에 접근하면 실제 권한 함수가 404를 반환하는지 검증."""
+    from fastapi import HTTPException
+
+    # role_data_scope: COMPANY_ROLE → COMPANY tier
+    sb = _FakeSB({
+        "safety_inspections": [
+            {"id": INSP_ID_B, "assignment_id": WS_ID, "factory_id": FACTORY_B,
+             "status_code": "IN_PROGRESS"}
+        ],
+        "work_schedules": [{"id": WS_ID, "company_id": COMPANY_B, "factory_id": FACTORY_B}],
+        "runtime_document_data": [],
+        "role_data_scope": [{"role_code": "COMPANY_ROLE", "scope_type": "COMPANY"}],
+    })
+    # COMPANY_A 사용자로 COMPANY_B 점검 접근
+    user = _user(cid=COMPANY_A, fid=FACTORY_A, role="COMPANY_ROLE")
+
+    resolver_call_count = [0]
+
+    def _spy_resolver(*a, **kw):
+        resolver_call_count[0] += 1
+        return {"inspection_status": "IN_PROGRESS", "is_active": True}
+
+    with patch("routers.document_engine_api.get_supabase", return_value=sb), \
+         patch("routers.document_engine_api.resolve_inspection_record",
+               side_effect=_spy_resolver), \
+         patch("routers.document_engine_api._ensure_inspection_own"):
+        from schemas.document_engine import DocumentCreateIn
+        body = DocumentCreateIn(form_schema_id=APPROVED_SCHEMA_ID,
+                                source_inspection_id=INSP_ID_B)
+        from routers.document_engine_api import create_document as route_fn
+        try:
+            route_fn(body=body, current_user=user)
+            assert False, "Should have raised HTTPException(404)"
+        except HTTPException as he:
+            assert he.status_code == 404, \
+                f"Real _ensure_own_company must return 404 for cross-company, got {he.status_code}"
+
+    assert resolver_call_count[0] == 0, \
+        "resolve_inspection_record must NOT be called before real auth fails"
+    assert all(t != "runtime_document_data" for t, _ in sb._inserts)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TC6B  실제 _ensure_own_company 호출 — 같은 회사·타 사업장 접근 시 404 (real auth)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_TC6B_real_auth_cross_factory_404():
+    """C1 real auth: FACTORY tier 사용자가 같은 회사의 타 사업장 점검에 접근하면
+    실제 _ensure_own_company 가 factory 불일치를 감지하여 404를 반환하는지 검증."""
+    from fastapi import HTTPException
+
+    # role_data_scope: FACTORY_ROLE → FACTORY tier
+    sb = _FakeSB({
+        "safety_inspections": [
+            {"id": INSP_ID_A, "assignment_id": WS_ID, "factory_id": FACTORY_B,
+             "status_code": "IN_PROGRESS"}
+        ],
+        "work_schedules": [{"id": WS_ID, "company_id": COMPANY_A, "factory_id": FACTORY_B}],
+        "runtime_document_data": [],
+        "role_data_scope": [{"role_code": "FACTORY_ROLE", "scope_type": "FACTORY"}],
+    })
+    # COMPANY_A/FACTORY_A 사용자로 COMPANY_A/FACTORY_B 점검 접근
+    user = _user(cid=COMPANY_A, fid=FACTORY_A, role="FACTORY_ROLE")
+
+    resolver_call_count = [0]
+
+    def _spy_resolver(*a, **kw):
+        resolver_call_count[0] += 1
+        return {"inspection_status": "IN_PROGRESS", "is_active": True}
+
+    with patch("routers.document_engine_api.get_supabase", return_value=sb), \
+         patch("routers.document_engine_api.resolve_inspection_record",
+               side_effect=_spy_resolver), \
+         patch("routers.document_engine_api._ensure_inspection_own"):
+        from schemas.document_engine import DocumentCreateIn
+        body = DocumentCreateIn(form_schema_id=APPROVED_SCHEMA_ID,
+                                source_inspection_id=INSP_ID_A)
+        from routers.document_engine_api import create_document as route_fn
+        try:
+            route_fn(body=body, current_user=user)
+            assert False, "Should have raised HTTPException(404)"
+        except HTTPException as he:
+            assert he.status_code == 404, \
+                f"Real _ensure_own_company must return 404 for cross-factory, got {he.status_code}"
+
+    assert resolver_call_count[0] == 0, \
+        "resolve_inspection_record must NOT be called before real factory auth fails"
+    assert all(t != "runtime_document_data" for t, _ in sb._inserts)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TC4B  C3 라우터 경로 — 서비스 멱등 조회 scope mismatch → 라우터 409 (not 400)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_TC4B_router_service_scope_mismatch_returns_409():
+    """C3 router path: svc.create_document 에서 DocumentScopeMismatchError 가
+    발생할 때 라우터가 400이 아닌 409를 반환하는지 검증."""
+    from fastapi import HTTPException
+
+    router_sb = _make_router_sb("IN_PROGRESS")
+
+    # 서비스 SB: 기존 문서가 COMPANY_B 소유 (멱등 scope mismatch 발생)
+    wrong_doc = _doc(cid=COMPANY_B, fid=FACTORY_B)
+    svc_sb = _FakeSB({
+        "runtime_form_schema": [_schema()],
+        "runtime_document_data": [wrong_doc],
+    })
+
+    with patch("routers.document_engine_api.get_supabase", return_value=router_sb), \
+         patch("routers.document_engine_api._ensure_own_company"), \
+         patch("routers.document_engine_api._ensure_inspection_own"), \
+         patch("routers.document_engine_api.resolve_inspection_record",
+               return_value={"inspection_status": "IN_PROGRESS", "is_active": True}), \
+         patch("services.document_engine_svc.get_supabase", return_value=svc_sb):
+        from schemas.document_engine import DocumentCreateIn
+        body = DocumentCreateIn(form_schema_id=APPROVED_SCHEMA_ID,
+                                source_inspection_id=INSP_ID_A)
+        from routers.document_engine_api import create_document as route_fn
+        try:
+            route_fn(body=body, current_user=_user())
+            assert False, "Should raise"
+        except HTTPException as e:
+            assert e.status_code == 409, \
+                f"DocumentScopeMismatchError must map to 409, not {e.status_code}"
+    assert all(t != "runtime_document_data" for t, _ in router_sb._inserts)

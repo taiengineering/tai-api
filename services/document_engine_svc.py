@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 from db.supabase_client import get_supabase
 from services.time import now_kst, serialize_external_utc
 
+class DocumentScopeMismatchError(ValueError):
+    """멱등 재조회 시 저장 문서의 company/factory가 서버 확정 정본과 다를 때."""
+
+
 # UUID pattern for checklist key detection (36-char with dashes)
 _UUID_RE = _re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -140,7 +144,7 @@ def create_document(
             doc = existing.data[0]
             # C3: 저장 문서의 company/factory가 서버 확정 정본과 일치해야 함 (타 테넌트 행 반환 차단)
             if doc.get("company_id") != company_id or doc.get("factory_id") != factory_id:
-                raise ValueError(
+                raise DocumentScopeMismatchError(
                     "document scope mismatch — stored company/factory does not match request"
                 )
             return doc

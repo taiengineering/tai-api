@@ -32,6 +32,7 @@ from schemas.document_engine import (
     GenerateDocumentIn,
 )
 from services import document_engine_svc as svc
+from services.document_engine_svc import DocumentScopeMismatchError
 from services.document_confirm_svc import confirm_document_atomic, ConfirmError
 from services.document_signature_svc import SignatureError, apply_profile_to_document
 from services.document_engine.catalog_resolver import resolve_catalog_runtime_schema
@@ -151,7 +152,7 @@ def create_document(
         assignment_id = insp.get("assignment_id")
         insp_factory_id = insp.get("factory_id")
         if not assignment_id or not insp_factory_id:
-            raise HTTPException(422, "일정 연결이 없는 점검에는 문서를 연결할 수 없습니다.")
+            raise HTTPException(404, "점검 레코드를 찾을 수 없습니다.")
         ws_res = (
             sb.table("work_schedules")
             .select("id,company_id,factory_id")
@@ -161,12 +162,12 @@ def create_document(
             .execute()
         )
         if not ws_res.data:
-            raise HTTPException(422, "점검과 업무 일정의 사업장 키가 일치하지 않습니다.")
+            raise HTTPException(404, "점검 레코드를 찾을 수 없습니다.")
         ws = ws_res.data[0]
         ws_company_id = ws.get("company_id")
         ws_factory_id = ws.get("factory_id")
         if not ws_company_id or not ws_factory_id:
-            raise HTTPException(422, "업무 일정의 회사/사업장 식별자를 확인할 수 없습니다.")
+            raise HTTPException(404, "점검 레코드를 찾을 수 없습니다.")
 
         # 3. 인가 먼저 — 상태 조회 전에 수행 (C1: 타 테넌트 상태 노출 차단)
         _ensure_own_company(
@@ -217,6 +218,8 @@ def create_document(
                 created_by,
             )
         return {"status": "success", "data": result}
+    except DocumentScopeMismatchError:
+        raise HTTPException(409, "이미 연결된 문서가 있습니다.")
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
