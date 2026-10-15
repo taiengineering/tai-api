@@ -30,11 +30,19 @@ _FACILITY_V1 = {"worker_count": 50, "ksic_major": "C10"}
 _FACILITY_V2 = {"worker_count": 80, "ksic_major": "C10"}  # changed worker_count
 
 
-def _c10_row(facility: dict, sector: str = "INDUSTRIAL", status: str = "ACTIVE") -> dict:
+def _c10_row(
+    facility: dict,
+    sector: str = "INDUSTRIAL",
+    status: str = "ACTIVE",
+    site_id: Optional[str] = None,
+) -> dict:
     """C10 행 — sector/status/input_data 포함 (신규 쿼리 계약 반영)."""
+    input_data: Dict[str, Any] = {"factory_id": _FAC_ID, "sector": sector}
+    if site_id:
+        input_data["site_id"] = site_id
     return {
         "id": _DIAG_ID,
-        "input_data": {"factory_id": _FAC_ID, "sector": sector},
+        "input_data": input_data,
         "full_result": {
             "facility_used": facility,
             "obligations_raw": [],
@@ -88,6 +96,9 @@ class _Q:
                     return False
             elif col == "input_data->>sector":
                 if (row.get("input_data") or {}).get("sector") != val:
+                    return False
+            elif col == "input_data->>site_id":
+                if (row.get("input_data") or {}).get("site_id") != val:
                     return False
             elif col == "status":
                 if row.get("status") != val:
@@ -271,6 +282,44 @@ def test_B10_snapshot_id_returned():
     assert sid == _DIAG_ID
 
 
+def test_B11_construction_without_site_id_raises_not_found():
+    """CONSTRUCTION sector 에 site_id 없으면 현장 특정 불가 → BaselineNotFound."""
+    supa = _FakeSupa({"anonymous_diagnosis_results": [_c10_row(_FACILITY_V1, sector="CONSTRUCTION")]})
+    with pytest.raises(BaselineNotFound):
+        load_baseline_facility(supa, _FAC_ID, "CONSTRUCTION")
+
+
+def test_B12_construction_site_id_mismatch_not_found():
+    """다른 site_id 의 C10 행은 CONSTRUCTION 조회에서 걸러진다."""
+    row = {
+        "id": _DIAG_ID,
+        "input_data": {"factory_id": _FAC_ID, "sector": "CONSTRUCTION", "site_id": str(uuid4())},
+        "full_result": {"facility_used": _FACILITY_V1},
+        "created_at": "2026-10-10T00:00:00Z",
+        "source_type": "saas",
+        "status": "ACTIVE",
+    }
+    supa = _FakeSupa({"anonymous_diagnosis_results": [row]})
+    with pytest.raises(BaselineNotFound):
+        load_baseline_facility(supa, _FAC_ID, "CONSTRUCTION", site_id=_SITE_ID)
+
+
+def test_B13_construction_site_id_matching_found():
+    """같은 site_id 의 C10 행 → CONSTRUCTION baseline 정상 반환."""
+    row = {
+        "id": _DIAG_ID,
+        "input_data": {"factory_id": _FAC_ID, "sector": "CONSTRUCTION", "site_id": _SITE_ID},
+        "full_result": {"facility_used": _FACILITY_V1},
+        "created_at": "2026-10-10T00:00:00Z",
+        "source_type": "saas",
+        "status": "ACTIVE",
+    }
+    supa = _FakeSupa({"anonymous_diagnosis_results": [row]})
+    fac, sid = load_baseline_facility(supa, _FAC_ID, "CONSTRUCTION", site_id=_SITE_ID)
+    assert fac == _FACILITY_V1
+    assert sid == _DIAG_ID
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # K01~K06  collector
 # ══════════════════════════════════════════════════════════════════════════════
@@ -435,8 +484,8 @@ def _patch_ind_collector(monkeypatch, facility: dict, unresolved: list = None):
     )
 
 
-def _c10_supa(facility: dict, sector: str = "INDUSTRIAL") -> _FakeSupa:
-    return _FakeSupa({"anonymous_diagnosis_results": [_c10_row(facility, sector=sector)]})
+def _c10_supa(facility: dict, sector: str = "INDUSTRIAL", site_id: Optional[str] = None) -> _FakeSupa:
+    return _FakeSupa({"anonymous_diagnosis_results": [_c10_row(facility, sector=sector, site_id=site_id)]})
 
 
 def _no_c10_supa() -> _FakeSupa:
@@ -569,7 +618,7 @@ def test_S12_construction_unchanged(monkeypatch):
         "services.wp01_snapshot_compare.compare.collect_current_facility_construction",
         lambda s, sid, ci, **kw: (_FACILITY_V1, [], _FAC_ID),
     )
-    supa = _c10_supa(_FACILITY_V1, sector="CONSTRUCTION")
+    supa = _c10_supa(_FACILITY_V1, sector="CONSTRUCTION", site_id=_SITE_ID)
     result = compare_snapshot(
         supa, sector="CONSTRUCTION", factory_id=_FAC_ID,
         consumer_input=SafeConstructionConsumerInput(), site_id=_SITE_ID,
@@ -583,7 +632,7 @@ def test_S13_construction_changed(monkeypatch):
         "services.wp01_snapshot_compare.compare.collect_current_facility_construction",
         lambda s, sid, ci, **kw: (_FACILITY_V2, [], _FAC_ID),
     )
-    supa = _c10_supa(_FACILITY_V1, sector="CONSTRUCTION")
+    supa = _c10_supa(_FACILITY_V1, sector="CONSTRUCTION", site_id=_SITE_ID)
     result = compare_snapshot(
         supa, sector="CONSTRUCTION", factory_id=_FAC_ID,
         consumer_input=SafeConstructionConsumerInput(), site_id=_SITE_ID,
@@ -726,6 +775,23 @@ def _stub_saas(monkeypatch):
     monkeypatch.setattr("routers.legal_engine.require_active_company_saas", lambda s, cid: None)
 
 
+class _FakeResolution:
+    """_assert_leg_compliance_core_http 반환값 stub."""
+    commercial_version_id = str(uuid4())
+
+
+def _stub_entitlement(monkeypatch):
+    """LEG Compliance Core entitlement + site scope 검사를 모두 통과시킨다."""
+    monkeypatch.setattr(
+        "routers.legal_engine._assert_leg_compliance_core_http",
+        lambda s, cid: _FakeResolution(),
+    )
+    monkeypatch.setattr(
+        "routers.legal_engine._assert_leg_site_scope_http",
+        lambda s, cvid, etype, eid: None,
+    )
+
+
 def _stub_supabase(monkeypatch, tables: dict = None):
     monkeypatch.setattr("routers.legal_engine.get_supabase", lambda: _FakeSupa(tables or {}))
 
@@ -821,6 +887,7 @@ def test_R03_industrial_compare_success(monkeypatch):
     _stub_auth(monkeypatch, _user())
     _stub_factory_own(monkeypatch)
     _stub_saas(monkeypatch)
+    _stub_entitlement(monkeypatch)
     _stub_app3(monkeypatch)
     _stub_compare(monkeypatch, _UNCHANGED_RESULT)
     resp = client.post(
@@ -840,6 +907,7 @@ def test_R04_building_compare_success(monkeypatch):
     _stub_auth(monkeypatch, _user())
     _stub_factory_own(monkeypatch)
     _stub_saas(monkeypatch)
+    _stub_entitlement(monkeypatch)
     _stub_app3(monkeypatch)
     _stub_compare(monkeypatch, {**_UNCHANGED_RESULT, "sector": "BUILDING"})
     resp = client.post(
@@ -903,6 +971,7 @@ def test_R07_construction_no_factory_id(monkeypatch):
     )
     monkeypatch.setattr("routers.legal_engine._ensure_own_company", lambda cid, u, s, msg: None)
     monkeypatch.setattr("routers.legal_engine.require_active_company_saas", lambda s, cid: None)
+    _stub_entitlement(monkeypatch)
     resp = client.post(
         "/legal-engine/diagnose/compare/construction",
         json={"site_id": _SITE_ID, "input": {}},
@@ -921,6 +990,7 @@ def test_R08_construction_compare_success(monkeypatch):
     )
     monkeypatch.setattr("routers.legal_engine._ensure_own_company", lambda cid, u, s, msg: None)
     monkeypatch.setattr("routers.legal_engine.require_active_company_saas", lambda s, cid: None)
+    _stub_entitlement(monkeypatch)
     _stub_app3(monkeypatch)
     _stub_compare(monkeypatch, {**_UNCHANGED_RESULT, "sector": "CONSTRUCTION"})
     resp = client.post(
@@ -938,6 +1008,7 @@ def test_R09_no_leg_execution(monkeypatch):
     _stub_auth(monkeypatch, _user())
     _stub_factory_own(monkeypatch)
     _stub_saas(monkeypatch)
+    _stub_entitlement(monkeypatch)
     _stub_app3(monkeypatch)
     _leg_called = {"called": False}
 
@@ -961,6 +1032,7 @@ def test_R10_industrial_app3_contract_called(monkeypatch):
     _stub_auth(monkeypatch, _user())
     _stub_factory_own(monkeypatch)
     _stub_saas(monkeypatch)
+    _stub_entitlement(monkeypatch)
     _stub_compare(monkeypatch, _UNCHANGED_RESULT)
     app3_called = {"called": False}
 
@@ -983,6 +1055,7 @@ def test_R11_baseline_snapshot_id_in_response(monkeypatch):
     _stub_auth(monkeypatch, _user())
     _stub_factory_own(monkeypatch)
     _stub_saas(monkeypatch)
+    _stub_entitlement(monkeypatch)
     _stub_app3(monkeypatch)
     _stub_compare(monkeypatch, _UNCHANGED_RESULT)
     resp = client.post(
@@ -991,3 +1064,99 @@ def test_R11_baseline_snapshot_id_in_response(monkeypatch):
         headers=_auth_header(),
     )
     assert resp.json()["data"]["baseline_snapshot_id"] == _DIAG_ID
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# R12~R15  접근통제 정합 — LEG Compliance Core + Site Scope
+# ══════════════════════════════════════════════════════════════════════════════
+
+# R12 — INDUSTRIAL: entitlement 실패 → 403 (compare 미호출)
+def test_R12_industrial_entitlement_fail_403(monkeypatch):
+    _stub_supabase(monkeypatch)
+    _stub_auth(monkeypatch, _user())
+    _stub_factory_own(monkeypatch)
+    _stub_saas(monkeypatch)
+    monkeypatch.setattr(
+        "routers.legal_engine._assert_leg_compliance_core_http",
+        lambda s, cid: (_ for _ in ()).throw(HTTPException(403, "SAAS_ENTITLEMENT_REQUIRED")),
+    )
+    compare_called = {"called": False}
+    monkeypatch.setattr(
+        "services.wp01_snapshot_compare.compare.compare_snapshot",
+        lambda *a, **kw: compare_called.update(called=True) or {},
+    )
+    resp = client.post(
+        "/legal-engine/diagnose/compare/industrial",
+        json={"factory_id": _FAC_ID, "input": {}},
+        headers=_auth_header(),
+    )
+    assert resp.status_code == 403
+    assert not compare_called["called"]
+
+
+# R13 — INDUSTRIAL: site scope 실패 → 403 (compare 미호출)
+def test_R13_industrial_site_scope_fail_403(monkeypatch):
+    _stub_supabase(monkeypatch)
+    _stub_auth(monkeypatch, _user())
+    _stub_factory_own(monkeypatch)
+    _stub_saas(monkeypatch)
+    monkeypatch.setattr(
+        "routers.legal_engine._assert_leg_compliance_core_http",
+        lambda s, cid: _FakeResolution(),
+    )
+    monkeypatch.setattr(
+        "routers.legal_engine._assert_leg_site_scope_http",
+        lambda s, cvid, etype, eid: (_ for _ in ()).throw(HTTPException(403, "SAAS_SITE_SCOPE_REQUIRED")),
+    )
+    compare_called = {"called": False}
+    monkeypatch.setattr(
+        "services.wp01_snapshot_compare.compare.compare_snapshot",
+        lambda *a, **kw: compare_called.update(called=True) or {},
+    )
+    resp = client.post(
+        "/legal-engine/diagnose/compare/industrial",
+        json={"factory_id": _FAC_ID, "input": {}},
+        headers=_auth_header(),
+    )
+    assert resp.status_code == 403
+    assert not compare_called["called"]
+
+
+# R14 — BUILDING: entitlement + site scope 검사 적용됨 (INDUSTRIAL 대칭)
+def test_R14_building_entitlement_enforced(monkeypatch):
+    _stub_supabase(monkeypatch)
+    _stub_auth(monkeypatch, _user())
+    _stub_factory_own(monkeypatch)
+    _stub_saas(monkeypatch)
+    monkeypatch.setattr(
+        "routers.legal_engine._assert_leg_compliance_core_http",
+        lambda s, cid: (_ for _ in ()).throw(HTTPException(403, "SAAS_ENTITLEMENT_REQUIRED")),
+    )
+    resp = client.post(
+        "/legal-engine/diagnose/compare/building",
+        json={"factory_id": _FAC_ID, "input": {}},
+        headers=_auth_header(),
+    )
+    assert resp.status_code == 403
+
+
+# R15 — CONSTRUCTION: entitlement + site scope 검사 적용됨
+def test_R15_construction_entitlement_enforced(monkeypatch):
+    _stub_auth(monkeypatch, _user())
+    site_row = {"id": _SITE_ID, "company_id": _COMPANY_ID, "factory_id": _FAC_ID}
+    monkeypatch.setattr(
+        "routers.legal_engine.get_supabase",
+        lambda: _FakeSupa({"construction_sites": [site_row]}),
+    )
+    monkeypatch.setattr("routers.legal_engine._ensure_own_company", lambda cid, u, s, msg: None)
+    monkeypatch.setattr("routers.legal_engine.require_active_company_saas", lambda s, cid: None)
+    monkeypatch.setattr(
+        "routers.legal_engine._assert_leg_compliance_core_http",
+        lambda s, cid: (_ for _ in ()).throw(HTTPException(403, "SAAS_ENTITLEMENT_REQUIRED")),
+    )
+    resp = client.post(
+        "/legal-engine/diagnose/compare/construction",
+        json={"site_id": _SITE_ID, "input": {}},
+        headers=_auth_header(),
+    )
+    assert resp.status_code == 403

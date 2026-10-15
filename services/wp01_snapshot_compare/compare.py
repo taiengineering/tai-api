@@ -129,10 +129,16 @@ def compare_snapshot(
         result["unresolved_reason"] = f"알 수 없는 sector: {sector!r}"
         return result
 
-    # 1. 기준 스냅샷 로드 (sector + status=ACTIVE 필터)
+    # CONSTRUCTION: site_id 없으면 현장 특정 불가 — DB 조회 전 즉시 UNRESOLVED
+    if sector == "CONSTRUCTION" and not site_id:
+        result["status"] = _STATUS_UNRESOLVED
+        result["unresolved_reason"] = "CONSTRUCTION sector requires site_id"
+        return result
+
+    # 1. 기준 스냅샷 로드 (sector + status=ACTIVE + [CONSTRUCTION] site_id 필터)
     try:
         baseline_facility, snapshot_id = load_baseline_facility(
-            supabase, factory_id, sector
+            supabase, factory_id, sector, site_id=site_id
         )
     except BaselineNotFound as exc:
         result["status"] = _STATUS_BASELINE_REQUIRED

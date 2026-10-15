@@ -467,6 +467,8 @@ async def compare_industrial_snapshot(body: LegCompareIndustrialBody, authorizat
     _ensure_factory_own(supabase, body.factory_id, current)
     company_id = str(current.get("company_id") or "")
     require_active_company_saas(supabase, company_id)
+    resolution = _assert_leg_compliance_core_http(supabase, company_id)
+    _assert_leg_site_scope_http(supabase, resolution.commercial_version_id, "factory", body.factory_id)
     # WP01-A: 공식 LEG 입력 정합 — Appendix3 서버 Projection 동일 경로 실행
     app3_projection = check_saas_appendix3_contract(supabase, body.factory_id, "INDUSTRIAL", body.input)
     result = compare_snapshot(
@@ -489,6 +491,8 @@ async def compare_building_snapshot(body: LegCompareBuildingBody, authorization:
     _ensure_factory_own(supabase, body.factory_id, current)
     company_id = str(current.get("company_id") or "")
     require_active_company_saas(supabase, company_id)
+    resolution = _assert_leg_compliance_core_http(supabase, company_id)
+    _assert_leg_site_scope_http(supabase, resolution.commercial_version_id, "factory", body.factory_id)
     # WP01-A: 공식 LEG 입력 정합 — Appendix3 서버 Projection 동일 경로 실행
     app3_projection = check_saas_appendix3_contract(supabase, body.factory_id, "BUILDING", body.input)
     result = compare_snapshot(
@@ -519,6 +523,8 @@ async def compare_construction_snapshot(body: LegCompareConstructionBody, author
     _ensure_own_company(srow.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다.")
     company_id = str(srow.data[0].get("company_id") or "")
     require_active_company_saas(supabase, company_id)
+    resolution = _assert_leg_compliance_core_http(supabase, company_id)
+    _assert_leg_site_scope_http(supabase, resolution.commercial_version_id, "site", body.site_id)
     _cst_factory_id = srow.data[0].get("factory_id") or ""
     if not _cst_factory_id:
         raise HTTPException(status_code=409, detail="현장과 시설 연결이 완료되지 않았습니다.")
