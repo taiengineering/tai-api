@@ -157,3 +157,56 @@ class TestH02VoidLifecycleFirewall:
         with patch("services.occupancy_capacity.store.get_assessment", return_value=confirmed_row):
             result = void_assessment(sub, "asmnt-1")
         assert result["status"] == "VOID"
+
+
+class TestH02AssessmentSourceContract:
+    """PATCH C: wrong factory / DRAFT / VOID status → SourceUnresolved."""
+
+    def test_wrong_factory_raises_source_unresolved(self):
+        from services.occupancy_capacity.canonical_adapter import load_confirmed_assessment_context
+        from services.occupancy_capacity.legal_registry import RULESET_VERSION, get_ruleset_sha256
+        wrong_factory_row = {
+            "id": "asmnt-wf",
+            "factory_id": "other-factory",
+            "status": "CONFIRMED",
+            "ruleset_version": RULESET_VERSION,
+            "ruleset_sha256": get_ruleset_sha256(),
+            "result_numerator": "6000",
+            "result_denominator": "1",
+        }
+        with patch("services.occupancy_capacity.canonical_adapter.get_assessment",
+                   return_value=wrong_factory_row):
+            with pytest.raises(SourceUnresolved, match="factory"):
+                load_confirmed_assessment_context(MagicMock(), "asmnt-wf", "fac-test")
+
+    def test_draft_assessment_raises_source_unresolved(self):
+        from services.occupancy_capacity.canonical_adapter import load_confirmed_assessment_context
+        draft_row = {
+            "id": "asmnt-draft",
+            "factory_id": "fac-test",
+            "status": "DRAFT",
+            "ruleset_version": "any",
+            "ruleset_sha256": "any",
+            "result_numerator": None,
+            "result_denominator": None,
+        }
+        with patch("services.occupancy_capacity.canonical_adapter.get_assessment",
+                   return_value=draft_row):
+            with pytest.raises(SourceUnresolved, match="DRAFT"):
+                load_confirmed_assessment_context(MagicMock(), "asmnt-draft", "fac-test")
+
+    def test_void_assessment_raises_source_unresolved(self):
+        from services.occupancy_capacity.canonical_adapter import load_confirmed_assessment_context
+        void_row = {
+            "id": "asmnt-void",
+            "factory_id": "fac-test",
+            "status": "VOID",
+            "ruleset_version": "any",
+            "ruleset_sha256": "any",
+            "result_numerator": None,
+            "result_denominator": None,
+        }
+        with patch("services.occupancy_capacity.canonical_adapter.get_assessment",
+                   return_value=void_row):
+            with pytest.raises(SourceUnresolved, match="VOID"):
+                load_confirmed_assessment_context(MagicMock(), "asmnt-void", "fac-test")
