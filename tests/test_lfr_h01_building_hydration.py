@@ -389,6 +389,50 @@ def test_H20_api_no_main_building_runtime_unresolved(monkeypatch):
     assert "floor_count" in out["unresolved_fields"]
 
 
+# ── 보정 WO 공용 인프라 ─────────────────────────────────────────────────────────
+
+_PK_A = "11680-10100-0-0719-0000-001"
+_PK_B = "11680-10100-0-0719-0000-002"
+_BDMGTSN_0001 = "1168010100107190001"  # ji="0001" (대체 지번 테스트용)
+
+
+class _TrackingQ:
+    def __init__(self, rows):
+        self._rows = rows
+        self.update_patches = []
+
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+    def limit(self, *a, **k): return self
+
+    def update(self, patch):
+        self.update_patches.append(dict(patch))
+        return self
+
+    def execute(self): return _Res(self._rows)
+
+
+class _TrackingSB:
+    def __init__(self, row):
+        self._q = _TrackingQ([row] if row else [])
+
+    def table(self, n): return self._q
+
+    @property
+    def update_patches(self): return self._q.update_patches
+
+
+def _make_response(total, items, page_ok=True):
+    """kr_get 가짜 응답 생성 헬퍼."""
+    import json as _j
+    if not page_ok:
+        return 500, ""
+    body = {"totalCount": total}
+    if items is not None:
+        body["items"] = {"item": items}
+    return 200, _j.dumps({"response": {"body": body}})
+
+
 # ── H21: floor_count=0 + ts 있음 → 0 그대로 LEG 입력, unresolved 없음 ──────────
 
 def test_H21_zero_floor_count_authoritative_preserved(monkeypatch):
@@ -405,3 +449,226 @@ def test_H21_zero_floor_count_authoritative_preserved(monkeypatch):
     assert called["n"] == 0
     assert cap["step1"].input.get("floor_count") == 0
     assert "floor_count" not in out["unresolved_fields"]
+
+
+# ── H22: 복수 주건축물 + 기존 PK 일치 → 정확한 건물 선택 ──────────────────────
+
+def test_H22_multiple_main_existing_pk_selects_correct():
+    """Fix A: 복수 주건축물 중 기존 PK 일치하는 1개만 선택한다."""
+    items = [
+        {"mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": _PK_A, "heit": "45.0", "grndFlrCnt": "12"},
+        {"mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": _PK_B, "heit": "20.0", "grndFlrCnt": "5"},
+    ]
+    out = extract_h01_fields(items, existing_pk=_PK_A)
+    assert out.get("building_height") == 45.0
+    assert out.get("floor_count") == 12
+    assert out.get("mgm_bldrgst_pk") == _PK_A
+
+
+# ── H23: 복수 주건축물 + 기존 PK 없음 → unresolved ──────────────────────────────
+
+def test_H23_multiple_main_no_existing_pk_unresolved():
+    """Fix A: 기존 PK 없는데 복수 주건축물 → SOURCE_IDENTITY_UNRESOLVED."""
+    items = [
+        {"mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": _PK_A, "heit": "45.0"},
+        {"mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": _PK_B, "heit": "20.0"},
+    ]
+    out = extract_h01_fields(items)
+    assert out == {}
+
+
+# ── H24: 기존 PK와 API 후보 모두 불일치 → unresolved ────────────────────────────
+
+def test_H24_existing_pk_no_api_match_unresolved():
+    """Fix A: 기존 PK가 API 어느 후보와도 일치하지 않음 → SOURCE_IDENTITY_UNRESOLVED."""
+    items = [
+        {"mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": _PK_B, "heit": "20.0"},
+    ]
+    out = extract_h01_fields(items, existing_pk=_PK_A)
+    assert out == {}
+
+
+# ── H25: API 응답에 PK 없음 → 동일성 확인 불가 → DB 쓰기 금지 ──────────────────
+
+def test_H25_pk_absent_in_api_no_db_write(monkeypatch):
+    """Fix A: API가 PK 없이 반환 → h01_identity_unresolved → DB UPDATE 0회."""
+    monkeypatch.setattr(_hyd_mod, "fetch_h01_title_for_bdmgtsn", lambda bdmgtsn: [
+        {"mainAtchGbCdNm": "주건축물", "heit": "30.0", "grndFlrCnt": "10"},
+    ])
+
+    fac = {"bdmgtsn": "1168010100107190000", "mgm_bldrgst_pk": None}
+    sb = _TrackingSB(fac)
+    from services.building_register_hydration import hydrate_factory_h01
+    result = hydrate_factory_h01(sb, "F1")
+    assert result.get("updated") is False
+    assert len(sb.update_patches) == 0
+
+
+# ── H26: totalCount 존재 + 중간 빈 페이지 → 즉시 종료 ──────────────────────────
+
+def test_H26_empty_page_with_expected_remaining_fails(monkeypatch):
+    """Fix B: totalCount=2, 두 번째 페이지 items 없음 → None (부분 결과 거부)."""
+    item1 = {"mainAtchGbCdNm": "주건축물", "heit": "45.0"}
+
+    def fake_kr_get(url, params, timeout):
+        page = params.get("pageNo", 1)
+        if page == 1:
+            return _make_response(2, [item1])
+        return _make_response(2, None)  # items key 없음
+
+    monkeypatch.setattr(_hyd_mod, "kr_get", fake_kr_get)
+    result = _hyd_mod.fetch_h01_title_for_bdmgtsn("1168010100107190000")
+    assert result is None
+
+
+# ── H27: totalCount 누락·변동·음수 → 실패 ────────────────────────────────────
+
+def test_H27_total_count_invalid_variants_fail(monkeypatch):
+    """Fix B: totalCount 누락/변동/음수 모두 None 반환."""
+    import json as _j
+
+    # H27a: totalCount 누락
+    def no_total(url, params, timeout):
+        return 200, _j.dumps({"response": {"body": {}}})  # no totalCount
+
+    monkeypatch.setattr(_hyd_mod, "kr_get", no_total)
+    assert _hyd_mod.fetch_h01_title_for_bdmgtsn("1168010100107190000") is None
+
+    # H27b: 페이지 간 totalCount 변동
+    item = {"mainAtchGbCdNm": "주건축물"}
+    page_calls = [0]
+
+    def changing_total(url, params, timeout):
+        page_calls[0] += 1
+        tc = 4 if page_calls[0] == 1 else 3
+        return _make_response(tc, [item, item])
+
+    monkeypatch.setattr(_hyd_mod, "kr_get", changing_total)
+    page_calls[0] = 0
+    assert _hyd_mod.fetch_h01_title_for_bdmgtsn("1168010100107190000") is None
+
+    # H27c: 음수 totalCount
+    def neg_total(url, params, timeout):
+        return _make_response(-1, [item])
+
+    monkeypatch.setattr(_hyd_mod, "kr_get", neg_total)
+    assert _hyd_mod.fetch_h01_title_for_bdmgtsn("1168010100107190000") is None
+
+
+# ── H28: ji 대체 검색 시 기존 PK 불일치 → extract_h01_fields 차단 ──────────────
+
+def test_H28_ji_fallback_pk_mismatch_blocked(monkeypatch):
+    """Fix B: ji=0000 대체 검색 결과 건물이 기존 PK와 불일치 → extract {}."""
+    item_wrong = {
+        "mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": "DIFFERENT-PK",
+        "heit": "30.0", "grndFlrCnt": "10",
+    }
+
+    def fake_kr_get(url, params, timeout):
+        ji = params.get("ji", "")
+        if ji == "0001":
+            return _make_response(0, None)  # totalCount=0 at original ji
+        return _make_response(1, [item_wrong])  # ji=0000 has wrong-PK building
+
+    monkeypatch.setattr(_hyd_mod, "kr_get", fake_kr_get)
+    # fetch returns wrong-PK item (from ji=0000 fallback)
+    items = _hyd_mod.fetch_h01_title_for_bdmgtsn(_BDMGTSN_0001)
+    assert items is not None and len(items) == 1
+
+    # extract with existing_pk="CORRECT-PK" → no match → {}
+    out = extract_h01_fields(items, existing_pk="CORRECT-PK")
+    assert out == {}
+
+
+# ── H29: 부분 수화(높이만) → floor_count=None PATCH, 기존 admin 값 인증 차단 ───
+
+def test_H29_partial_hydration_clears_unauthenticated_floor_count(monkeypatch):
+    """Fix C: API가 높이만 반환 → PATCH에 floor_count=None 포함 → false-auth 방지."""
+    import services.time as _time_svc
+    monkeypatch.setattr(_time_svc, "now_kst", lambda: "2026-10-15")
+    monkeypatch.setattr(_time_svc, "serialize_business_datetime", lambda x: "TS-MOCK")
+
+    monkeypatch.setattr(_hyd_mod, "fetch_h01_title_for_bdmgtsn", lambda bdmgtsn: [
+        {"mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": _PK_A, "heit": "30.0"},
+    ])
+
+    fac = {"bdmgtsn": "1168010100107190000", "mgm_bldrgst_pk": None}
+    sb = _TrackingSB(fac)
+    from services.building_register_hydration import hydrate_factory_h01
+    result = hydrate_factory_h01(sb, "F1")
+
+    assert result.get("updated") is True
+    assert len(sb.update_patches) == 1
+    p = sb.update_patches[0]
+    assert p.get("building_height") == 30.0
+    assert "floor_count" in p and p["floor_count"] is None  # 명시적 클리어
+    assert p.get("mgm_bldrgst_pk") == _PK_A
+
+
+# ── H30: H01+H03 수치 → C3 build_facility 보존 확인 ─────────────────────────────
+
+def test_H30_c3_build_facility_preserves_h01_h03_values(monkeypatch):
+    """Fix D: H01(floor_count + building_height_m) + H03(floor_area_sum) → step1.input."""
+    import services.building_floor_hydration as _flr_mod
+    cap = {}
+    _patch_leg(monkeypatch, cap)
+    _no_hydrate(monkeypatch)
+    monkeypatch.setattr(_flr_mod, "resolve_floor_area_sum_11f_plus",
+                        lambda bdmgtsn, pk: {"resolved": True, "value": 12500.0})
+    fac = {
+        "floor_count": 15, "has_boiler": False, "is_multi_use": False,
+        "building_height": 55.0,
+        "building_register_updated_at": "2026-01-01T00:00:00+09:00",
+        "bdmgtsn": "1168010100107190000",
+        "mgm_bldrgst_pk": _PK_A,
+    }
+    out = run_safe_building_leg(_FakeSB(fac), "F1", SafeBuildingConsumerInput())
+    inp = cap["step1"].input
+    assert inp.get("floor_count") == 15
+    assert inp.get("building_height_m") == 55.0
+    assert inp.get("floor_area_sum_at_or_above_11f") == 12500.0
+    assert out["full_result"] is not None
+
+
+# ── H31: 본동 식별 실패 → DB UPDATE 0회, H03 수치 생성 0 ─────────────────────────
+
+def test_H31_identity_unresolved_no_db_update(monkeypatch):
+    """Fix A: 본동 식별 실패(부속만) → DB UPDATE 0회."""
+    monkeypatch.setattr(_hyd_mod, "fetch_h01_title_for_bdmgtsn", lambda bdmgtsn: [
+        {"mainAtchGbCdNm": "부속건축물", "mgmBldrgstPk": _PK_A, "heit": "5.0"},
+    ])
+    fac = {"bdmgtsn": "1168010100107190000", "mgm_bldrgst_pk": None}
+    sb = _TrackingSB(fac)
+    from services.building_register_hydration import hydrate_factory_h01
+    result = hydrate_factory_h01(sb, "F1")
+    assert result.get("updated") is False
+    assert len(sb.update_patches) == 0
+
+
+# ── H32: bool·소수 층수·NaN float·Infinity float → 거부 ──────────────────────
+
+def test_H32_invalid_numeric_types_all_rejected():
+    """Fix C: bool/소수/NaN float/Infinity float → 수치 추출 거부."""
+    # bool 층수 거부
+    out = extract_h01_fields([{"mainAtchGbCdNm": "주건축물", "grndFlrCnt": True, "heit": "10.0"}])
+    assert "floor_count" not in out
+
+    # 소수 층수(3.5) 거부
+    out = extract_h01_fields([{"mainAtchGbCdNm": "주건축물", "grndFlrCnt": 3.5, "heit": "10.0"}])
+    assert "floor_count" not in out
+
+    # 정수형 float(3.0) → 허용 (3으로 변환)
+    out = extract_h01_fields([{"mainAtchGbCdNm": "주건축물", "grndFlrCnt": 3.0, "heit": "10.0"}])
+    assert out.get("floor_count") == 3
+
+    # NaN float 높이 거부
+    out = extract_h01_fields([{"mainAtchGbCdNm": "주건축물", "grndFlrCnt": "10", "heit": float("nan")}])
+    assert "building_height" not in out
+
+    # Infinity float 높이 거부
+    out = extract_h01_fields([{"mainAtchGbCdNm": "주건축물", "grndFlrCnt": "10", "heit": float("inf")}])
+    assert "building_height" not in out
+
+    # bool 높이 거부
+    out = extract_h01_fields([{"mainAtchGbCdNm": "주건축물", "grndFlrCnt": "5", "heit": True}])
+    assert "building_height" not in out
