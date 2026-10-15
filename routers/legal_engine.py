@@ -5,7 +5,11 @@ from typing import Optional
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own
-from schemas.legal_engine import DiagnoseStep1Body, DiagnoseStep2Body, DiagnoseStep3Body, SafeIndustrialLegBody, SafeConstructionLegBody, SafeBuildingLegBody
+from schemas.legal_engine import (
+    DiagnoseStep1Body, DiagnoseStep2Body, DiagnoseStep3Body,
+    SafeIndustrialLegBody, SafeConstructionLegBody, SafeBuildingLegBody,
+    LegCompareIndustrialBody, LegCompareBuildingBody, LegCompareConstructionBody,
+)
 from services import legal_engine_svc
 from services.legal_v510_svc import run_diagnose_step1_v510
 from services.safe_industrial_leg_runtime import run_safe_industrial_leg
@@ -445,3 +449,80 @@ def get_latest_diagnosis(factory_id: str):
 def get_diagnosis_history(factory_id: str, page: int = Query(1, ge=1), page_size: int = Query(10, ge=1, le=50)):
     supabase = get_supabase()
     return legal_engine_svc.run_get_diagnosis_history(supabase, factory_id, page, page_size)
+
+
+# ── WP01-A 스냅샷 비교 엔드포인트 (LEG 미호출, DB WRITE 0) ──────────────────
+
+def _compare_response(result: dict) -> dict:
+    return {"status": "success", "data": result}
+
+
+@router.post("/diagnose/compare/industrial")
+async def compare_industrial_snapshot(body: LegCompareIndustrialBody, authorization: Optional[str] = Header(None)):
+    """WP01-A INDUSTRIAL 스냅샷 비교. LEG 미호출, DB WRITE 0."""
+    from services.wp01_snapshot_compare.compare import compare_snapshot
+
+    supabase = get_supabase()
+    current = get_current_user(authorization)
+    _ensure_factory_own(supabase, body.factory_id, current)
+    company_id = str(current.get("company_id") or "")
+    require_active_company_saas(supabase, company_id)
+    result = compare_snapshot(
+        supabase,
+        sector="INDUSTRIAL",
+        factory_id=body.factory_id,
+        consumer_input=body.input,
+    )
+    return _compare_response(result)
+
+
+@router.post("/diagnose/compare/building")
+async def compare_building_snapshot(body: LegCompareBuildingBody, authorization: Optional[str] = Header(None)):
+    """WP01-A BUILDING 스냅샷 비교. LEG 미호출, DB WRITE 0."""
+    from services.wp01_snapshot_compare.compare import compare_snapshot
+
+    supabase = get_supabase()
+    current = get_current_user(authorization)
+    _ensure_factory_own(supabase, body.factory_id, current)
+    company_id = str(current.get("company_id") or "")
+    require_active_company_saas(supabase, company_id)
+    result = compare_snapshot(
+        supabase,
+        sector="BUILDING",
+        factory_id=body.factory_id,
+        consumer_input=body.input,
+        material_inout_event_id=body.material_inout_event_id,
+        occupancy_assessment_id=body.occupancy_assessment_id,
+    )
+    return _compare_response(result)
+
+
+@router.post("/diagnose/compare/construction")
+async def compare_construction_snapshot(body: LegCompareConstructionBody, authorization: Optional[str] = Header(None)):
+    """WP01-A CONSTRUCTION 스냅샷 비교. LEG 미호출, DB WRITE 0."""
+    from services.wp01_snapshot_compare.compare import compare_snapshot
+
+    supabase = get_supabase()
+    current = get_current_user(authorization)
+    srow = (
+        supabase.table("construction_sites")
+        .select("company_id,factory_id").eq("id", body.site_id).limit(1).execute()
+    )
+    if not srow.data:
+        raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+    _ensure_own_company(srow.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다.")
+    company_id = str(srow.data[0].get("company_id") or "")
+    require_active_company_saas(supabase, company_id)
+    _cst_factory_id = srow.data[0].get("factory_id") or ""
+    if not _cst_factory_id:
+        raise HTTPException(status_code=409, detail="현장과 시설 연결이 완료되지 않았습니다.")
+    result = compare_snapshot(
+        supabase,
+        sector="CONSTRUCTION",
+        factory_id=_cst_factory_id,
+        consumer_input=body.input,
+        site_id=body.site_id,
+        subcontract_legal_event_id=body.subcontract_legal_event_id,
+        subcontractor_id=body.subcontractor_id,
+    )
+    return _compare_response(result)
