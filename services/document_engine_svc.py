@@ -137,7 +137,13 @@ def create_document(
             .execute()
         )
         if existing.data:
-            return existing.data[0]
+            doc = existing.data[0]
+            # C3: 저장 문서의 company/factory가 서버 확정 정본과 일치해야 함 (타 테넌트 행 반환 차단)
+            if doc.get("company_id") != company_id or doc.get("factory_id") != factory_id:
+                raise ValueError(
+                    "document scope mismatch — stored company/factory does not match request"
+                )
+            return doc
 
     now = serialize_external_utc(now_kst())
     record = {

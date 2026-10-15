@@ -135,7 +135,7 @@ def create_document(
 
     if source_inspection_id:
         # ── 점검 연결 경로 ───────────────────────────────────────────────
-        # 1. 점검 레코드 조회 (id, assignment_id, factory_id, status_code)
+        # 1. 점검 레코드 존재 확인
         insp_res = (
             sb.table("safety_inspections")
             .select("id,assignment_id,factory_id,status_code")
@@ -147,23 +147,10 @@ def create_document(
             raise HTTPException(404, "점검 레코드를 찾을 수 없습니다.")
         insp = insp_res.data[0]
 
-        # 2. 점검 상태 검증 — IN_PROGRESS 또는 COMPLETED만 허용 (canonical resolver 재사용)
-        # 불명확/다른 상태는 fail-closed
-        try:
-            from services.inspection_record_resolver import resolve_inspection_record, InspectionRecordError
-            effective = resolve_inspection_record(source_inspection_id, sb)
-            insp_status = effective.get("inspection_status", "")
-        except Exception:
-            # resolver 실패 → status_code 직접 사용 (fallback)
-            insp_status = insp.get("status_code", "")
-        if insp_status not in ("IN_PROGRESS", "COMPLETED"):
-            raise HTTPException(422, f"점검 상태 '{insp_status}'는 문서 연결이 허용되지 않습니다.")
-
-        # 3. assignment_id + factory_id 기반 work_schedules 조회 (복합 키 검증)
+        # 2. assignment_id + factory_id 기반 work_schedules 조회 (복합 키 검증)
         assignment_id = insp.get("assignment_id")
         insp_factory_id = insp.get("factory_id")
         if not assignment_id or not insp_factory_id:
-            # assignment_id 없음 = legacy 점검 1건 → fail-closed
             raise HTTPException(422, "일정 연결이 없는 점검에는 문서를 연결할 수 없습니다.")
         ws_res = (
             sb.table("work_schedules")
@@ -176,15 +163,12 @@ def create_document(
         if not ws_res.data:
             raise HTTPException(422, "점검과 업무 일정의 사업장 키가 일치하지 않습니다.")
         ws = ws_res.data[0]
-
-        # 4. 회사/사업장 소유권 서버 결정 (정본 = 점검/일정, 클라이언트 값 무시)
         ws_company_id = ws.get("company_id")
         ws_factory_id = ws.get("factory_id")
         if not ws_company_id or not ws_factory_id:
             raise HTTPException(422, "업무 일정의 회사/사업장 식별자를 확인할 수 없습니다.")
 
-        # 5. 인증 사용자 접근 범위 검증
-        #    _ensure_own_company: company 일치 + factory tier 검사
+        # 3. 인가 먼저 — 상태 조회 전에 수행 (C1: 타 테넌트 상태 노출 차단)
         _ensure_own_company(
             ws_company_id,
             current_user,
@@ -192,10 +176,17 @@ def create_document(
             "점검 레코드를 찾을 수 없습니다.",
             resource_factory_id=ws_factory_id,
         )
-
-        # 6. 점검 소유권 확인 (기존 helper 재사용 — company 기준 추가 검증)
-        from routers.inspection_checklist import _ensure_inspection_own
         _ensure_inspection_own(sb, source_inspection_id, current_user)
+
+        # 4. canonical 상태 검증 — fallback 금지 (C2: resolver 실패 = fail-closed)
+        try:
+            effective = resolve_inspection_record(source_inspection_id, sb)
+        except Exception:
+            raise HTTPException(422, "점검 상태를 확인할 수 없습니다.")
+        insp_status = effective.get("inspection_status", "")
+        is_active = effective.get("is_active", False)
+        if insp_status not in ("IN_PROGRESS", "COMPLETED") or not is_active:
+            raise HTTPException(422, f"점검 상태 '{insp_status}'는 문서 연결이 허용되지 않습니다.")
 
         company_id = ws_company_id
         factory_id = ws_factory_id
@@ -229,29 +220,34 @@ def create_document(
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
-        # DB UNIQUE 충돌 (23505) → 동일 키 문서 재조회 후 반환
+        # 예상된 복합 유니크 위반만 처리; 그 외 DB 오류는 500으로 안전 처리
         err_str = str(e)
-        if "23505" in err_str or "uq_rdd_source_inspection_form_schema" in err_str:
-            if source_inspection_id:
-                existing = (
-                    sb.table("runtime_document_data")
-                    .select("*")
-                    .eq("source_inspection_id", source_inspection_id)
-                    .eq("form_schema_id", body.form_schema_id)
-                    .limit(1)
-                    .execute()
+        is_expected_unique = (
+            "uq_rdd_source_inspection_form_schema" in err_str
+            or ("23505" in err_str and source_inspection_id is not None)
+        )
+        if is_expected_unique and source_inspection_id:
+            existing = (
+                sb.table("runtime_document_data")
+                .select("*")
+                .eq("source_inspection_id", source_inspection_id)
+                .eq("form_schema_id", body.form_schema_id)
+                .limit(1)
+                .execute()
+            )
+            if existing.data:
+                doc = existing.data[0]
+                # C3: 저장 문서의 company/factory가 서버 확정 정본과 일치해야 함
+                if doc.get("company_id") != company_id or doc.get("factory_id") != factory_id:
+                    raise HTTPException(409, "이미 연결된 문서가 있습니다.")
+                _ensure_own_company(
+                    doc.get("company_id"),
+                    current_user,
+                    sb,
+                    "document not found",
+                    resource_factory_id=doc.get("factory_id"),
                 )
-                if existing.data:
-                    # 기존 문서 소유권 재검증
-                    doc = existing.data[0]
-                    _ensure_own_company(
-                        doc.get("company_id"),
-                        current_user,
-                        sb,
-                        "document not found",
-                        resource_factory_id=doc.get("factory_id"),
-                    )
-                    return {"status": "success", "data": doc}
+                return {"status": "success", "data": doc}
             raise HTTPException(409, "이미 연결된 문서가 있습니다.")
         raise HTTPException(500, "문서 생성 중 오류가 발생했습니다.")
 

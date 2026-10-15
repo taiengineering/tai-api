@@ -150,7 +150,8 @@ def _build_client(current_user, doc_row=None, render_result=SAMPLE_HTML, pdf_res
          patch("services.company_scope.require_scope_ids", side_effect=_fake_require_scope_ids), \
          patch("services.company_scope.scoped_filter", side_effect=_fake_scoped_filter), \
          patch("services.company_scope.apply_scoped_filter", side_effect=lambda q, f: q), \
-         patch("db.supabase_client.get_supabase", return_value=fake_sb):
+         patch("db.supabase_client.get_supabase", return_value=fake_sb), \
+         patch("services.document_engine_svc.get_supabase", return_value=fake_sb):
         from routers.document_engine_api import router as doc_router
         from routers.auth import get_current_user
 
