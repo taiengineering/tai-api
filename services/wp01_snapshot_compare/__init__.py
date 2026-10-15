@@ -4,6 +4,6 @@
 DB WRITE 0, LEG EXECUTION 0.
 """
 from services.wp01_snapshot_compare.compare import compare_snapshot
-from services.wp01_snapshot_compare.errors import CollectionError, BaselineNotFound
+from services.wp01_snapshot_compare.errors import CollectionError, BaselineNotFound, BaselineQueryError
 
-__all__ = ["compare_snapshot", "CollectionError", "BaselineNotFound"]
+__all__ = ["compare_snapshot", "CollectionError", "BaselineNotFound", "BaselineQueryError"]

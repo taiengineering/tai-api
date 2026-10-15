@@ -467,11 +467,14 @@ async def compare_industrial_snapshot(body: LegCompareIndustrialBody, authorizat
     _ensure_factory_own(supabase, body.factory_id, current)
     company_id = str(current.get("company_id") or "")
     require_active_company_saas(supabase, company_id)
+    # WP01-A: 공식 LEG 입력 정합 — Appendix3 서버 Projection 동일 경로 실행
+    app3_projection = check_saas_appendix3_contract(supabase, body.factory_id, "INDUSTRIAL", body.input)
     result = compare_snapshot(
         supabase,
         sector="INDUSTRIAL",
         factory_id=body.factory_id,
         consumer_input=body.input,
+        app3_projection=app3_projection,
     )
     return _compare_response(result)
 
@@ -486,6 +489,8 @@ async def compare_building_snapshot(body: LegCompareBuildingBody, authorization:
     _ensure_factory_own(supabase, body.factory_id, current)
     company_id = str(current.get("company_id") or "")
     require_active_company_saas(supabase, company_id)
+    # WP01-A: 공식 LEG 입력 정합 — Appendix3 서버 Projection 동일 경로 실행
+    app3_projection = check_saas_appendix3_contract(supabase, body.factory_id, "BUILDING", body.input)
     result = compare_snapshot(
         supabase,
         sector="BUILDING",
@@ -493,6 +498,7 @@ async def compare_building_snapshot(body: LegCompareBuildingBody, authorization:
         consumer_input=body.input,
         material_inout_event_id=body.material_inout_event_id,
         occupancy_assessment_id=body.occupancy_assessment_id,
+        app3_projection=app3_projection,
     )
     return _compare_response(result)
 
@@ -516,6 +522,8 @@ async def compare_construction_snapshot(body: LegCompareConstructionBody, author
     _cst_factory_id = srow.data[0].get("factory_id") or ""
     if not _cst_factory_id:
         raise HTTPException(status_code=409, detail="현장과 시설 연결이 완료되지 않았습니다.")
+    # WP01-A: 공식 LEG 입력 정합 — Appendix3 서버 Projection 동일 경로 실행
+    app3_projection = check_saas_appendix3_contract(supabase, _cst_factory_id, "CONSTRUCTION", body.input)
     result = compare_snapshot(
         supabase,
         sector="CONSTRUCTION",
@@ -524,5 +532,6 @@ async def compare_construction_snapshot(body: LegCompareConstructionBody, author
         site_id=body.site_id,
         subcontract_legal_event_id=body.subcontract_legal_event_id,
         subcontractor_id=body.subcontractor_id,
+        app3_projection=app3_projection,
     )
     return _compare_response(result)

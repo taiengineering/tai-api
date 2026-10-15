@@ -4,51 +4,80 @@ DB WRITE 0, LEG EXECUTION 0.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
-from services.wp01_snapshot_compare.errors import BaselineNotFound
+from services.wp01_snapshot_compare.errors import BaselineNotFound, BaselineQueryError
 
 
-def load_baseline_facility(supabase: Any, factory_id: str) -> Dict[str, Any]:
-    """C10(anonymous_diagnosis_results)에서 최신 source_type='saas' 행의 facility_used 반환.
+def load_baseline_facility(
+    supabase: Any,
+    factory_id: str,
+    sector: str,
+) -> Tuple[Dict[str, Any], str]:
+    """C10(anonymous_diagnosis_results)에서 최신 확정 스냅샷의 facility_used 반환.
 
-    full_result.facility_used 가 없거나 행 자체가 없으면 BaselineNotFound 를 올린다.
-    source_type='saas' rows 만 대상(paid_diag / site_free 등 비SaaS 제외).
+    반환: (facility_used_dict, snapshot_id).
+
+    선택 조건:
+      - source_type = 'saas'
+      - status = 'ACTIVE'  (EXPIRED/CLAIMED 제외)
+      - input_data->>'factory_id' = factory_id
+      - input_data->>'sector' = sector  (섹터 혼입 차단)
+      - created_at DESC, LIMIT 1
+
+    오류 구분:
+      - DB/권한/연결 오류 → BaselineQueryError  → 호출부에서 UNRESOLVED
+      - 행 없음(진단 이력 없음) → BaselineNotFound  → 호출부에서 BASELINE_REQUIRED
+      - 행 있으나 facility_used 결함 → BaselineNotFound  → 호출부에서 BASELINE_REQUIRED
     """
     if not factory_id or not isinstance(factory_id, str):
-        raise BaselineNotFound("factory_id 누락", factory_id=factory_id)
+        raise BaselineQueryError("factory_id 누락 또는 타입 오류", factory_id=factory_id)
+    if not sector or not isinstance(sector, str):
+        raise BaselineQueryError("sector 누락 또는 타입 오류", factory_id=factory_id)
 
     try:
         res = (
             supabase.table("anonymous_diagnosis_results")
             .select("id,full_result,created_at")
             .eq("source_type", "saas")
+            .eq("status", "ACTIVE")
             .eq("input_data->>factory_id", factory_id)
+            .eq("input_data->>sector", sector)
             .order("created_at", desc=True)
             .limit(1)
             .execute()
         )
     except Exception as exc:
-        raise BaselineNotFound(
-            f"C10 기준 스냅샷 조회 실패: {exc}", factory_id=factory_id
+        raise BaselineQueryError(
+            f"C10 기준 스냅샷 조회 실패: {type(exc).__name__}", factory_id=factory_id
         ) from exc
 
-    rows = getattr(res, "data", None) or []
+    rows = getattr(res, "data", None)
+    if rows is None:
+        raise BaselineQueryError(
+            "C10 응답 형식 오류(data=None)", factory_id=factory_id
+        )
     if not rows:
         raise BaselineNotFound(
-            "기준 스냅샷 없음(source_type=saas 행 0건)", factory_id=factory_id
+            f"기준 스냅샷 없음(source_type=saas, status=ACTIVE, sector={sector!r})",
+            factory_id=factory_id,
         )
 
-    full_result: Optional[Any] = rows[0].get("full_result")
+    row = rows[0]
+    snapshot_id: str = str(row.get("id") or "")
+
+    full_result: Optional[Any] = row.get("full_result")
     if not isinstance(full_result, dict):
         raise BaselineNotFound(
-            "C10 full_result 형식 오류", factory_id=factory_id
+            "C10 full_result 형식 오류 — 구형 또는 손상된 스냅샷",
+            factory_id=factory_id,
         )
 
     facility_used: Optional[Any] = full_result.get("facility_used")
     if not isinstance(facility_used, dict):
         raise BaselineNotFound(
-            "C10 full_result.facility_used 없음 — 구형 스냅샷이거나 LEG 미실행", factory_id=factory_id
+            "C10 full_result.facility_used 없음 — LEG 미실행 또는 구형 스냅샷",
+            factory_id=factory_id,
         )
 
-    return facility_used
+    return facility_used, snapshot_id
