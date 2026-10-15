@@ -32,6 +32,7 @@ from schemas.document_engine import (
     GenerateDocumentIn,
 )
 from services import document_engine_svc as svc
+from services.document_engine_svc import DocumentScopeMismatchError
 from services.document_confirm_svc import confirm_document_atomic, ConfirmError
 from services.document_signature_svc import SignatureError, apply_profile_to_document
 from services.document_engine.catalog_resolver import resolve_catalog_runtime_schema
@@ -121,31 +122,137 @@ def create_document(
     body: DocumentCreateIn,
     current_user: dict = Depends(get_current_user),
 ):
-    """문서 생성 (DRAFT 상태)"""
+    """문서 생성 (DRAFT 상태).
+
+    source_inspection_id가 있으면 점검 소유권 검증 후 회사·사업장을 점검/일정 정본에서 서버 결정.
+    source_inspection_id가 없으면 기존 수동 생성 경로 유지 (CORR-19).
+    """
     sb = get_supabase()
     created_by = str(current_user.get("id") or "").strip() or None
 
-    # CORR-19: server-side scope resolution — client-supplied ids not trusted
-    scope = require_scope_ids(current_user, sb, ["company_id", "factory_id"])
-    company_id = scope.get("company_id")
+    source_inspection_id = (
+        str(body.source_inspection_id) if body.source_inspection_id else None
+    )
 
-    # factory_id: FACTORY/TEAM tiers get server-assigned factory; others may opt-in
-    factory_id = scope.get("factory_id")
-    if factory_id is None and body.factory_id:
-        # COMPANY/ALL tier supplying optional factory — verify ownership
-        _ensure_factory_own(sb, body.factory_id, current_user)
-        factory_id = body.factory_id
+    if source_inspection_id:
+        # ── 점검 연결 경로 ───────────────────────────────────────────────
+        # 1. 점검 레코드 존재 확인
+        insp_res = (
+            sb.table("safety_inspections")
+            .select("id,assignment_id,factory_id,status_code")
+            .eq("id", source_inspection_id)
+            .limit(1)
+            .execute()
+        )
+        if not insp_res.data:
+            raise HTTPException(404, "점검 레코드를 찾을 수 없습니다.")
+        insp = insp_res.data[0]
+
+        # 2. assignment_id + factory_id 기반 work_schedules 조회 (복합 키 검증)
+        assignment_id = insp.get("assignment_id")
+        insp_factory_id = insp.get("factory_id")
+        if not assignment_id or not insp_factory_id:
+            raise HTTPException(404, "점검 레코드를 찾을 수 없습니다.")
+        ws_res = (
+            sb.table("work_schedules")
+            .select("id,company_id,factory_id")
+            .eq("id", assignment_id)
+            .eq("factory_id", insp_factory_id)
+            .limit(1)
+            .execute()
+        )
+        if not ws_res.data:
+            raise HTTPException(404, "점검 레코드를 찾을 수 없습니다.")
+        ws = ws_res.data[0]
+        ws_company_id = ws.get("company_id")
+        ws_factory_id = ws.get("factory_id")
+        if not ws_company_id or not ws_factory_id:
+            raise HTTPException(404, "점검 레코드를 찾을 수 없습니다.")
+
+        # 3. 인가 먼저 — 상태 조회 전에 수행 (C1: 타 테넌트 상태 노출 차단)
+        _ensure_own_company(
+            ws_company_id,
+            current_user,
+            sb,
+            "점검 레코드를 찾을 수 없습니다.",
+            resource_factory_id=ws_factory_id,
+        )
+        _ensure_inspection_own(sb, source_inspection_id, current_user)
+
+        # 4. canonical 상태 검증 — fallback 금지 (C2: resolver 실패 = fail-closed)
+        try:
+            effective = resolve_inspection_record(source_inspection_id, sb)
+        except Exception:
+            raise HTTPException(422, "점검 상태를 확인할 수 없습니다.")
+        insp_status = effective.get("inspection_status", "")
+        is_active = effective.get("is_active", False)
+        if insp_status not in ("IN_PROGRESS", "COMPLETED") or not is_active:
+            raise HTTPException(422, f"점검 상태 '{insp_status}'는 문서 연결이 허용되지 않습니다.")
+
+        company_id = ws_company_id
+        factory_id = ws_factory_id
+
+    else:
+        # ── 기존 수동 생성 경로 (CORR-19) ───────────────────────────────
+        scope = require_scope_ids(current_user, sb, ["company_id", "factory_id"])
+        company_id = scope.get("company_id")
+        factory_id = scope.get("factory_id")
+        if factory_id is None and body.factory_id:
+            _ensure_factory_own(sb, body.factory_id, current_user)
+            factory_id = body.factory_id
 
     try:
-        result = svc.create_document(
-            body.form_schema_id,
-            factory_id,
-            company_id,
-            created_by,
-        )
+        if source_inspection_id:
+            result = svc.create_document(
+                body.form_schema_id,
+                factory_id,
+                company_id,
+                created_by,
+                source_inspection_id=source_inspection_id,
+            )
+        else:
+            result = svc.create_document(
+                body.form_schema_id,
+                factory_id,
+                company_id,
+                created_by,
+            )
         return {"status": "success", "data": result}
+    except DocumentScopeMismatchError:
+        raise HTTPException(409, "이미 연결된 문서가 있습니다.")
     except ValueError as e:
         raise HTTPException(400, str(e))
+    except Exception as e:
+        # 예상된 복합 유니크 위반만 처리; 그 외 DB 오류는 500으로 안전 처리
+        err_str = str(e)
+        is_expected_unique = (
+            "uq_rdd_source_inspection_form_schema" in err_str
+            or ("23505" in err_str and source_inspection_id is not None)
+        )
+        if is_expected_unique and source_inspection_id:
+            existing = (
+                sb.table("runtime_document_data")
+                .select("*")
+                .eq("source_inspection_id", source_inspection_id)
+                .eq("form_schema_id", body.form_schema_id)
+                .limit(1)
+                .execute()
+            )
+            if existing.data:
+                doc = existing.data[0]
+                # C3: 저장 문서의 company/factory가 서버 확정 정본과 일치해야 함
+                if doc.get("company_id") != company_id or doc.get("factory_id") != factory_id:
+                    raise HTTPException(409, "이미 연결된 문서가 있습니다.")
+                _ensure_own_company(
+                    doc.get("company_id"),
+                    current_user,
+                    sb,
+                    "document not found",
+                    resource_factory_id=doc.get("factory_id"),
+                )
+                return {"status": "success", "data": doc}
+            raise HTTPException(409, "이미 연결된 문서가 있습니다.")
+        raise HTTPException(500, "문서 생성 중 오류가 발생했습니다.")
 
 
 @router.get("/documents")

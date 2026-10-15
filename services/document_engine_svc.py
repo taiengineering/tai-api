@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 from db.supabase_client import get_supabase
 from services.time import now_kst, serialize_external_utc
 
+class DocumentScopeMismatchError(ValueError):
+    """멱등 재조회 시 저장 문서의 company/factory가 서버 확정 정본과 다를 때."""
+
+
 # UUID pattern for checklist key detection (36-char with dashes)
 _UUID_RE = _re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -102,7 +106,14 @@ def create_document(
     factory_id: str = None,
     company_id: str = None,
     created_by: str = None,
+    source_inspection_id: str = None,
 ) -> dict:
+    """DRAFT 문서 생성.
+
+    source_inspection_id가 있으면 동일 (source_inspection_id, form_schema_id) 문서를
+    먼저 조회한다. 존재하면 기존 행 반환(INSERT 0). 없으면 신규 INSERT.
+    DB UNIQUE 충돌은 호출자(router)가 처리한다 — 여기서는 잡지 않는다.
+    """
     sb = get_supabase()
     schema = (
         sb.table("runtime_form_schema")
@@ -118,6 +129,26 @@ def create_document(
             f"schema not approved for runtime use: {form_schema_id} "
             f"(status={schema.data['status']})"
         )
+
+    # 멱등성: 동일 (source_inspection_id, form_schema_id) 문서가 있으면 기존 행 반환
+    if source_inspection_id:
+        existing = (
+            sb.table("runtime_document_data")
+            .select("*")
+            .eq("source_inspection_id", source_inspection_id)
+            .eq("form_schema_id", form_schema_id)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            doc = existing.data[0]
+            # C3: 저장 문서의 company/factory가 서버 확정 정본과 일치해야 함 (타 테넌트 행 반환 차단)
+            if doc.get("company_id") != company_id or doc.get("factory_id") != factory_id:
+                raise DocumentScopeMismatchError(
+                    "document scope mismatch — stored company/factory does not match request"
+                )
+            return doc
+
     now = serialize_external_utc(now_kst())
     record = {
         "form_schema_id": form_schema_id,
@@ -134,6 +165,8 @@ def create_document(
         record["company_id"] = company_id
     if created_by:
         record["created_by"] = created_by
+    if source_inspection_id:
+        record["source_inspection_id"] = source_inspection_id
     res = sb.table("runtime_document_data").insert(record).execute()
     doc = res.data[0] if res.data else {}
     if doc:
