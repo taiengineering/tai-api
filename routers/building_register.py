@@ -5,7 +5,7 @@
 # - bdMgtSn 없으면 jibunAddr로 재시도
 # - 모든 예외 500 방지
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from datetime import datetime
 from typing import Optional, Any, List
 import asyncio, re, requests, urllib3, os, traceback, time
@@ -14,6 +14,9 @@ from supabase import create_client
 from services.kr_public_api import get_proxies, kr_get
 from tenacity import retry, stop_after_attempt, wait_fixed
 from services.time import now_kst, serialize_business_datetime
+from routers.auth import get_current_user
+from services.company_scope import _ensure_factory_own
+from services.building_register_hydration import fetch_h01_title_for_bdmgtsn, extract_h01_fields
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -476,8 +479,11 @@ def fetch_all_building_data(bdmgtsn: str) -> dict:
     return result
 
 
-def build_factory_update(juso: dict, building_data: dict) -> dict:
-    update = {"building_register_updated_at": serialize_business_datetime(now_kst())}
+def build_factory_update(juso: dict, building_data: dict, verified_pk: Optional[str] = None) -> dict:
+    # WO-E2E2000-FIXOBJ05: building_register_updated_at / mgm_bldrgst_pk / building_height /
+    # floor_count 는 H01 공식 수집 계약(fetch_h01_title_for_bdmgtsn + extract_h01_fields) 경로만
+    # 설정. 이 함수는 주소·용도·구조 등 비인증 메타데이터만 반환한다.
+    update: dict = {}
     if juso:
         update["bdmgtsn"] = juso.get("bdMgtSn", "")
         if juso.get("roadAddr"):  update["address_road"]    = juso.get("roadAddrPart1", "")
@@ -488,12 +494,18 @@ def build_factory_update(juso: dict, building_data: dict) -> dict:
         if juso.get("emdNm"):     update["address_dong"]    = juso.get("emdNm", "")
 
     title_items = building_data.get("title", []) or []
-    title = next((i for i in title_items if i.get("mainAtchGbCdNm") == "주건축물"), None)
-    if not title and title_items:
-        title = title_items[0]
+    # PATCH B: verified_pk 제공 시 정확한 본동만 선택 — 첫 행 대체 금지.
+    if verified_pk:
+        title = next(
+            (i for i in title_items
+             if str(i.get("mgmBldrgstPk") or "").strip() == verified_pk
+             and i.get("mainAtchGbCdNm") == "주건축물"),
+            None,
+        )
+    else:
+        title = next((i for i in title_items if i.get("mainAtchGbCdNm") == "주건축물"), None)
 
     if title:
-        update["mgm_bldrgst_pk"]           = title.get("mgmBldrgstPk")
         update["main_purpose_code"]        = title.get("mainPurpsCd")
         update["main_purpose_name"]        = title.get("mainPurpsCdNm", "").strip() or None
         update["etc_purpose"]              = title.get("etcPurps", "").strip() or None
@@ -501,7 +513,6 @@ def build_factory_update(juso: dict, building_data: dict) -> dict:
         update["building_structure_name"]  = title.get("strctCdNm", "").strip() or None
         update["roof_code"]                = title.get("roofCd")
         update["roof_name"]                = title.get("roofCdNm", "").strip() or None
-        update["building_height"]          = _to_float(title.get("heit"))
         update["building_coverage_ratio"]  = _to_float(title.get("bcRat"))
         update["floor_area_ratio"]         = _to_float(title.get("vlRat"))
         update["arch_area"]                = _to_float(title.get("archArea"))
@@ -516,8 +527,6 @@ def build_factory_update(juso: dict, building_data: dict) -> dict:
         update["earthquake_design_applied"]= title.get("rserthqkDsgnApplyYn") == "1"
         if _to_float(title.get("totArea")):   update["building_area"]           = _to_float(title.get("totArea"))
         if _to_float(title.get("platArea")):  update["land_area"]               = _to_float(title.get("platArea"))
-        _fc = _safe_int(title.get("grndFlrCnt"))
-        if _fc is not None:                    update["floor_count"]             = _fc
         if _to_int(title.get("ugrndFlrCnt")): update["underground_floor_count"] = _to_int(title.get("ugrndFlrCnt"))
         if title.get("useAprDay") and len(str(title["useAprDay"])) >= 4:
             update["completion_year"] = int(str(title["useAprDay"])[:4])
@@ -763,12 +772,18 @@ async def search_building(
 @router.post("/apply/{factory_id}")
 def apply_building_register(
     factory_id: str,
-    address: Optional[str] = Query(None)
+    address: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
 ):
-    """건축물대장 → factories 테이블 자동 저장"""
-    supabase    = get_supabase()
+    """건축물대장 → factories 테이블 자동 저장 (PATCH C: 인증+소유권 필수)"""
+    supabase = get_supabase()
+
+    # PATCH C: 인증 + factory 소유권 확인
+    current = get_current_user(authorization)
+    _ensure_factory_own(supabase, factory_id, current)
+
     factory_res = supabase.table("factories").select(
-        "id,name,address_road,address_jibun,bdmgtsn"
+        "id,name,address_road,address_jibun,bdmgtsn,mgm_bldrgst_pk"
     ).eq("id", factory_id).single().execute()
 
     if not factory_res.data:
@@ -783,31 +798,89 @@ def apply_building_register(
     if not juso:
         raise HTTPException(status_code=404, detail=f"주소를 찾을 수 없습니다: {query_addr}")
 
-    bdmgtsn = (juso.get("bdMgtSn") or "").strip()
-    if not bdmgtsn:
+    new_bdmgtsn = (juso.get("bdMgtSn") or "").strip()
+    if not new_bdmgtsn:
         raise HTTPException(status_code=404, detail="건물관리번호를 찾을 수 없습니다")
 
-    building_data = fetch_all_building_data(bdmgtsn)
-    update_data   = build_factory_update(juso, building_data)
+    existing_bdmgtsn = str(factory.get("bdmgtsn") or "").strip()
+    existing_mgm_pk  = str(factory.get("mgm_bldrgst_pk") or "").strip() or None
 
-    if not update_data:
-        return {"status": "warning", "message": "건축물대장 데이터 없음", "bdmgtsn": bdmgtsn}
+    # PATCH D: 이미 인증된 건물(기존 bdmgtsn+mgm_bldrgst_pk 확정)과 다른 건물번호 → 자동 덮어쓰기 차단
+    if existing_bdmgtsn and existing_mgm_pk and new_bdmgtsn != existing_bdmgtsn:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code":           "BUILDING_IDENTITY_MISMATCH",
+                "message":        "이미 인증된 건물과 다른 건물관리번호입니다. 수동 확인이 필요합니다.",
+                "existing_bdmgtsn": existing_bdmgtsn,
+                "new_bdmgtsn":      new_bdmgtsn,
+            },
+        )
 
-    supabase.table("factories").update(update_data).eq("id", factory_id).execute()
+    # H01 공식 수집 경로 — fetch_h01_title_for_bdmgtsn + extract_h01_fields
+    title_items = fetch_h01_title_for_bdmgtsn(new_bdmgtsn, existing_pk=existing_mgm_pk)
+
+    h01_patch: dict = {}
+    extracted: dict = {}
+    if title_items:
+        extracted = extract_h01_fields(title_items, existing_pk=existing_mgm_pk)
+        pk = extracted.get("mgm_bldrgst_pk")
+        has_numeric = (
+            extracted.get("building_height") is not None
+            or extracted.get("floor_count") is not None
+        )
+        if pk and has_numeric:
+            # PATCH A: 미반환 수치를 명시적 None으로 — 기존 미인증 수치의 false-auth 방지
+            h01_patch = {
+                "mgm_bldrgst_pk": pk,
+                "building_register_updated_at": serialize_business_datetime(now_kst()),
+                "building_height": extracted.get("building_height"),
+                "floor_count": extracted.get("floor_count"),
+            }
+
+    # PATCH C: 기존 PK 존재, 기존 bdmgtsn 부재 → H01에서 동일 PK 확인 필수
+    if existing_mgm_pk and not existing_bdmgtsn:
+        h01_confirmed_pk = extracted.get("mgm_bldrgst_pk")
+        if h01_confirmed_pk != existing_mgm_pk:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code":                    "BUILDING_IDENTITY_UNRESOLVED",
+                    "message":                 "기존 건물 PK와 새 건물관리번호의 동일성이 H01에서 확인되지 않았습니다. 수동 확인이 필요합니다.",
+                    "existing_mgm_bldrgst_pk": existing_mgm_pk,
+                    "h01_confirmed_pk":        h01_confirmed_pk,
+                },
+            )
+
+    # PATCH B: H01 확인된 PK와 일치하는 본동 메타데이터만 사용 — PK 미확정이면 표제부 저장 금지
+    verified_pk = h01_patch.get("mgm_bldrgst_pk")
+    title_for_meta = title_items if verified_pk else []
+    building_data = {"title": title_for_meta or [], "basis": [], "floors": [], "sewage": []}
+    meta = build_factory_update(juso, building_data, verified_pk=verified_pk)
+
+    # h01_patch가 meta를 덮어씀 (명시적 None 포함)
+    final_update = {**meta, **h01_patch}
+
+    if not final_update:
+        return {"status": "warning", "message": "건축물대장 데이터 없음", "bdmgtsn": new_bdmgtsn}
+
+    supabase.table("factories").update(final_update).eq("id", factory_id).execute()
 
     return {
         "status":         "success",
         "factory_id":     factory_id,
         "factory_name":   factory.get("name"),
-        "bdmgtsn":        bdmgtsn,
-        "updated_fields": list(update_data.keys()),
-        "updated_count":  len(update_data),
+        "bdmgtsn":        new_bdmgtsn,
+        "h01_updated":    bool(h01_patch),
+        "updated_fields": list(final_update.keys()),
+        "updated_count":  len(final_update),
         "summary": {
-            "building_area":   update_data.get("building_area"),
-            "floor_count":     update_data.get("floor_count"),
-            "completion_year": update_data.get("completion_year"),
-            "main_purpose":    update_data.get("main_purpose_name"),
-        }
+            "floor_count":     h01_patch.get("floor_count"),
+            "building_height": h01_patch.get("building_height"),
+            "mgm_bldrgst_pk":  h01_patch.get("mgm_bldrgst_pk"),
+            "completion_year": meta.get("completion_year"),
+            "main_purpose":    meta.get("main_purpose_name"),
+        },
     }
 
 
