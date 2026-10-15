@@ -17,7 +17,7 @@ W13  복수 본동 PK-B 선택 → 메타데이터도 PK-B 행만 사용
 W14  본동 식별 실패 → 표제부 기반 메타데이터 저장 금지
 W15  기존 PK 존재, 기존 bdmgtsn 부재, H01 PK 불일치 → 409 BUILDING_IDENTITY_UNRESOLVED
 W16  기존 PK 존재, 기존 bdmgtsn 부재, H01 PK 일치 → 정상 연결
-W17  타사 사업장 → 404 + JUSO/H01 외부 호출 0회 + DB 쓰기 0회
+W17  타사 사업장 → 실제 _ensure_factory_own() 실행, 404 + JUSO/H01 0회 + UPDATE 0회
 """
 import pytest
 from unittest.mock import MagicMock, patch, call
@@ -620,24 +620,42 @@ def test_w16_existing_pk_no_bdmgtsn_h01_confirms_ok():
     assert body["bdmgtsn"] == "1168010100103560001"
 
 
-# ── W17: 타사 사업장 → 404 + JUSO/H01 외부 호출 0회 + DB 쓰기 0회 ─────────────
+# ── W17: 타사 사업장 → 실제 _ensure_factory_own() 실행 + 404 + 외부 호출 0회 ───
 
-def test_w17_third_party_404_no_external_calls():
-    """W17: _ensure_factory_own 404 발생 → get_juso/H01 미호출, DB 업데이트 미발생."""
-    from fastapi import HTTPException as FE
-    with patch("routers.building_register.get_supabase") as mock_sb, \
+def test_w17_third_party_404_actual_ownership_check():
+    """W17: 실제 _ensure_factory_own() 실행 — 타사 company_id → 404, JUSO/H01 미호출, UPDATE 미발생.
+
+    _ensure_factory_own 자체를 Mock하지 않는다. 실제 소유권 검증 경로를 통과시켜
+    사용자 co-x가 co-y 소유 factory에 접근하면 404가 발생함을 검증한다.
+    """
+    # role_data_scope → COMPANY 스코프 반환 (비관리자 — _is_admin=False 통과)
+    scope_mock = MagicMock()
+    scope_result = MagicMock()
+    scope_result.data = [{"scope_type": "COMPANY"}]
+    scope_mock.select.return_value.eq.return_value.limit.return_value.execute.return_value = scope_result
+
+    # factories → co-y 소유 반환 (사용자 co-x ≠ co-y → 404)
+    factories_mock = MagicMock()
+    ownership_result = MagicMock()
+    ownership_result.data = [{"company_id": "co-y"}]
+    factories_mock.select.return_value.eq.return_value.limit.return_value.execute.return_value = ownership_result
+
+    _table_cache = {"role_data_scope": scope_mock, "factories": factories_mock}
+    sb_instance = MagicMock()
+    sb_instance.table.side_effect = lambda name: _table_cache.get(name, MagicMock())
+
+    with patch("routers.building_register.get_supabase", return_value=sb_instance), \
          patch("routers.building_register.get_current_user",
-               return_value={"id": "user-x", "company_id": "co-x"}), \
-         patch("routers.building_register._ensure_factory_own",
-               side_effect=FE(status_code=404, detail="시설을 찾을 수 없습니다")), \
+               return_value={"id": "user-x", "company_id": "co-x", "role_code": "MEMBER"}), \
          patch("routers.building_register.get_juso") as mock_juso, \
          patch("routers.building_register.fetch_h01_title_for_bdmgtsn") as mock_h01:
-        sb_instance = MagicMock()
-        mock_sb.return_value = sb_instance
         client = _make_client()
         resp = client.post("/building-register/apply/fac-001", headers=_auth_headers())
 
+    # 실제 _ensure_factory_own() 가 타사 접근을 404로 차단
     assert resp.status_code == 404
+    # 소유권 거부 이후 외부 API 호출 없음
     mock_juso.assert_not_called()
     mock_h01.assert_not_called()
-    sb_instance.table.assert_not_called()
+    # 소유권 거부 이후 DB UPDATE 없음
+    factories_mock.update.assert_not_called()
