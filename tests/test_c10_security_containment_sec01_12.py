@@ -1,4 +1,4 @@
-"""WO-E2E2000-C10-PR626-SECURITY-GATE-CORRECTION-001 — SEC01-SEC12 (API 전용).
+"""WO-E2E2000-C10-PR626-627-FINAL-TEST-GATE-001 — SEC01-SEC18 (API 전용).
 
 PR #626 범위: routers/anonymous_diagnosis_admin.py S2 RBAC 강화만 포함.
 DB 마이그레이션(S1) 테스트는 별도 DB PR에 위치.
@@ -15,6 +15,12 @@ DB 마이그레이션(S1) 테스트는 별도 DB PR에 위치.
   SEC10  GET /admin/list   — admin(001) → role check 통과 후 200
   SEC11  GET /admin/list   — 인증 없음 → 401 (토큰 없는 요청 차단)
   SEC12  POST /admin/expire-stale — 인증 없음에도 200 (크론 계약 불변)
+  SEC13  GET /admin/detail/{id} — admin(001) 정상 조회 → 200
+  SEC14  PATCH /admin/{id}       — admin(001) 상태 변경 → 200
+  SEC15  DELETE /admin/{id}      — admin(001) 삭제 → 200
+  SEC16  PATCH /admin/{id}       — non-admin → 403 AND get_supabase 미호출 (DB 변경 전 차단)
+  SEC17  DELETE /admin/{id}      — non-admin → 403 AND get_supabase 미호출 (DB 변경 전 차단)
+  SEC18  인증 없음 detail/patch/delete → 401 (엔드포인트별 무인증 차단 전수)
 """
 from __future__ import annotations
 
@@ -236,3 +242,220 @@ def test_SEC12_expire_stale_no_auth_200(monkeypatch):
     assert resp.status_code == 200, f"기대 200, 실제 {resp.status_code}: {resp.text}"
     body = resp.json()
     assert body.get("status") == "success"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SEC13-SEC15: 관리자(001) 정상 경로 — detail/patch/delete
+# ═══════════════════════════════════════════════════════════════════════
+
+class _RowResult:
+    def __init__(self, rows: list):
+        self.data = rows
+        self.count = len(rows)
+
+
+class _RowQ:
+    """반환값을 테이블별로 주입받는 fake query."""
+    def __init__(self, rows: list):
+        self._rows = rows
+
+    def select(self, *a, **kw): return self
+    def eq(self, *a, **kw): return self
+    def neq(self, *a, **kw): return self
+    def lt(self, *a, **kw): return self
+    def lte(self, *a, **kw): return self
+    def gt(self, *a, **kw): return self
+    def gte(self, *a, **kw): return self
+    def ilike(self, *a, **kw): return self
+    def order(self, *a, **kw): return self
+    def range(self, *a, **kw): return self
+    def limit(self, *a, **kw): return self
+    def in_(self, *a, **kw): return self
+    def update(self, *a, **kw): return self
+    def delete(self, *a, **kw): return self
+    def execute(self): return _RowResult(self._rows)
+
+
+class _MultiTableSB:
+    """테이블 이름별로 다른 반환 행을 지원하는 fake SB."""
+    def __init__(self, tables: dict):
+        self._tables = tables
+
+    def table(self, name: str) -> _RowQ:
+        return _RowQ(self._tables.get(name, []))
+
+
+def _make_app_rows(role_code: str, monkeypatch, tables: dict):
+    """테이블별 반환값을 지정할 수 있는 TestClient 팩토리."""
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    from routers.anonymous_diagnosis_admin import router
+    from routers.auth import get_current_user
+
+    sb = _MultiTableSB(tables)
+    monkeypatch.setattr("routers.anonymous_diagnosis_admin.get_supabase", lambda: sb)
+
+    app = FastAPI()
+    app.include_router(router)
+
+    if role_code == "__NO_AUTH__":
+        def _raise_401():
+            raise HTTPException(status_code=401, detail="토큰이 없습니다.")
+        app.dependency_overrides[get_current_user] = _raise_401
+    else:
+        app.dependency_overrides[get_current_user] = lambda: {
+            "id": "admin-user",
+            "role_code": role_code,
+        }
+
+    return TestClient(app, raise_server_exceptions=False), app
+
+
+_FAKE_ROW = {"id": "rec-001", "auth_log_id": None, "status": "ACTIVE", "public_token": "tok"}
+
+
+def test_SEC13_detail_admin_001_returns_200(monkeypatch):
+    """admin(001) 상세 조회 — DB 행 존재 시 200."""
+    client, app = _make_app_rows("001", monkeypatch, {
+        "anonymous_diagnosis_results": [_FAKE_ROW],
+        "diagnosis_auth_log": [],
+    })
+    resp = client.get("/anonymous-diagnosis/admin/detail/rec-001", headers={"Authorization": "Bearer valid"})
+    assert resp.status_code == 200, f"기대 200, 실제 {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body.get("status") == "success"
+    assert body["data"]["id"] == "rec-001"
+    app.dependency_overrides.clear()
+
+
+def test_SEC14_patch_admin_001_returns_200(monkeypatch):
+    """admin(001) 상태 변경 — DB 행 존재 시 200."""
+    patched_row = {"id": "rec-001", "status": "EXPIRED"}
+    client, app = _make_app_rows("001", monkeypatch, {
+        "anonymous_diagnosis_results": [patched_row],
+    })
+    resp = client.patch(
+        "/anonymous-diagnosis/admin/rec-001",
+        json={"status": "EXPIRED"},
+        headers={"Authorization": "Bearer valid"},
+    )
+    assert resp.status_code == 200, f"기대 200, 실제 {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body.get("status") == "success"
+    assert body["data"]["status"] == "EXPIRED"
+    app.dependency_overrides.clear()
+
+
+def test_SEC15_delete_admin_001_returns_200(monkeypatch):
+    """admin(001) 삭제 — DB 행 존재 시 200."""
+    client, app = _make_app_rows("001", monkeypatch, {
+        "anonymous_diagnosis_results": [_FAKE_ROW],
+    })
+    resp = client.delete("/anonymous-diagnosis/admin/rec-001", headers={"Authorization": "Bearer valid"})
+    assert resp.status_code == 200, f"기대 200, 실제 {resp.status_code}: {resp.text}"
+    assert resp.json().get("status") == "success"
+    app.dependency_overrides.clear()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SEC16-SEC17: non-admin → 403 AND get_supabase 미호출 (DB 변경 전 차단)
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_SEC16_nonadmin_patch_403_before_db(monkeypatch):
+    """non-admin PATCH → 403이 DB 변경보다 먼저 발생."""
+    call_log: list = []
+
+    def _tracking_sb():
+        call_log.append("get_supabase")
+        return _FakeSB()
+
+    monkeypatch.setattr("routers.anonymous_diagnosis_admin.get_supabase", _tracking_sb)
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers.anonymous_diagnosis_admin import router
+    from routers.auth import get_current_user
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: {"id": "u", "role_code": "099"}
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.patch(
+        "/anonymous-diagnosis/admin/rec-001",
+        json={"status": "EXPIRED"},
+        headers={"Authorization": "Bearer fake"},
+    )
+    assert resp.status_code == 403, f"기대 403, 실제 {resp.status_code}"
+    assert "get_supabase" not in call_log, (
+        "non-admin PATCH에서 get_supabase가 호출됨 — role 검사 전에 DB 접근 발생"
+    )
+    app.dependency_overrides.clear()
+
+
+def test_SEC17_nonadmin_delete_403_before_db(monkeypatch):
+    """non-admin DELETE → 403이 DB 변경보다 먼저 발생."""
+    call_log: list = []
+
+    def _tracking_sb():
+        call_log.append("get_supabase")
+        return _FakeSB()
+
+    monkeypatch.setattr("routers.anonymous_diagnosis_admin.get_supabase", _tracking_sb)
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers.anonymous_diagnosis_admin import router
+    from routers.auth import get_current_user
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: {"id": "u", "role_code": "099"}
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.delete("/anonymous-diagnosis/admin/rec-001", headers={"Authorization": "Bearer fake"})
+    assert resp.status_code == 403, f"기대 403, 실제 {resp.status_code}"
+    assert "get_supabase" not in call_log, (
+        "non-admin DELETE에서 get_supabase가 호출됨 — role 검사 전에 DB 접근 발생"
+    )
+    app.dependency_overrides.clear()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SEC18: 무인증 detail/patch/delete → 401 전수
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_SEC18_unauthenticated_admin_endpoints_401(monkeypatch):
+    """무인증 요청은 모든 관리자 엔드포인트(list 제외)에서 401."""
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    from routers.anonymous_diagnosis_admin import router
+    from routers.auth import get_current_user
+
+    monkeypatch.setattr("routers.anonymous_diagnosis_admin.get_supabase", lambda: _FakeSB())
+
+    app = FastAPI()
+    app.include_router(router)
+
+    def _raise_401():
+        raise HTTPException(status_code=401, detail="인증이 필요합니다.")
+
+    app.dependency_overrides[get_current_user] = _raise_401
+    client = TestClient(app, raise_server_exceptions=False)
+
+    cases = [
+        ("GET",    "/anonymous-diagnosis/admin/detail/x"),
+        ("PATCH",  "/anonymous-diagnosis/admin/x"),
+        ("DELETE", "/anonymous-diagnosis/admin/x"),
+    ]
+    for method, path in cases:
+        if method == "GET":
+            resp = client.get(path)
+        elif method == "PATCH":
+            resp = client.patch(path, json={"status": "EXPIRED"})
+        else:
+            resp = client.delete(path)
+        assert resp.status_code == 401, (
+            f"{method} {path}: 기대 401, 실제 {resp.status_code}"
+        )
+    app.dependency_overrides.clear()
