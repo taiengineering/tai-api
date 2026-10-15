@@ -1,9 +1,15 @@
-"""WO-E2E2000-C10-PR627-TEST-SAFETY-FINAL-003 — 실제 PostgreSQL 통합검증.
+"""WO-E2E2000-C10-PR627-ISOLATION-GUARD-FIX-004 — 실제 PostgreSQL 통합검증.
 
 실행 조건:
-  C10_TEST_DB_URL=postgresql://postgres:testpassword@localhost:PORT/c10_test
-  C10_TEST_DB_AUTHORIZED=1
-  pytest --run-db-int
+  1. 격리 컨테이너 준비 (postgres:17-alpine)
+  2. 격리 마커 설치 (테스트 코드가 생성하지 않음 — 수동 설치):
+       psql -c "CREATE TABLE _c10_test_isolation_marker(marker_value TEXT NOT NULL);
+                INSERT INTO _c10_test_isolation_marker VALUES('C10_TEST_ISOLATION_CONFIRMED');"
+  3. 환경변수 설정:
+       C10_TEST_DB_URL=postgresql://postgres:testpassword@localhost:PORT/c10_test
+       C10_TEST_DB_AUTHORIZED=1
+  4. 실행:
+       pytest --run-db-int
 
 CI에서는 C10_TEST_DB_AUTHORIZED 또는 C10_TEST_DB_URL 미설정 → 전체 자동 SKIP.
 
@@ -14,7 +20,16 @@ CI에서는 C10_TEST_DB_AUTHORIZED 또는 C10_TEST_DB_URL 미설정 → 전체 �
   DB-INT-11      PRE-CHECK Drift Guard: unknown 정책 삽입 시 DO $$ EXCEPTION (복사 SQL)
   DB-INT-12      트랜잭션 ROLLBACK → 정책 상태 원복 (단일 DROP)
   DB-INT-13      migration 재실행 idempotency
-  DB-INT-14a~14d 잘못된 DB URL 또는 미승인 환경 → DROP 이전 차단 검증
+  DB-INT-14a     C10_TEST_DB_AUTHORIZED 미설정 → 차단
+  DB-INT-14b     Supabase 운영 URL → 차단
+  DB-INT-14c     비로컬 호스트 → 차단
+  DB-INT-14d     DB 이름 미승인 → 차단
+  DB-INT-14e     C10_TEST_DB_AUTHORIZED=0 → 차단 (정확히 "1"만 허용)
+  DB-INT-17      빈 호스트 → 차단
+  DB-INT-18      0.0.0.0 호스트 → 차단
+  DB-INT-19      격리 마커 테이블 없음 → 차단
+  DB-INT-20      격리 마커 값 불일치 → 차단
+  DB-INT-21      정상 격리 마커 → PASS (c10_db 픽스처에서 암묵적 검증)
   DB-INT-15      전체 마이그레이션 파일로 Drift Guard 실측 (unknown 정책 → 변경 없음)
   DB-INT-16      전체 마이그레이션 트랜잭션 ROLLBACK → 정책·GRANT 완전 원복
 
@@ -90,6 +105,15 @@ _ORIGINAL_POLICIES = frozenset({
     "service_role_full",
 })
 
+# ── 격리 마커 상수 ────────────────────────────────────────────────────
+_MARKER_TABLE = "_c10_test_isolation_marker"
+_MARKER_VALUE = "C10_TEST_ISOLATION_CONFIRMED"
+
+# ── 승인된 격리 DB 이름 목록 (env 재정의 가능) ──────────────────────────
+def _approved_db_names() -> frozenset[str]:
+    names = os.environ.get("C10_TEST_DB_NAMES", "c10_test")
+    return frozenset(n.strip() for n in names.split(",") if n.strip())
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 안전장치 — 운영 DB 접속 방지
@@ -99,22 +123,24 @@ def _assert_isolated_db(db_url: str) -> None:
     """DROP/REVOKE 실행 전 격리 DB임을 검증. 하나라도 실패하면 RuntimeError.
 
     규칙:
-      1. C10_TEST_DB_AUTHORIZED=1 명시적 승인 환경변수 필요
+      1. C10_TEST_DB_AUTHORIZED 값이 정확히 "1"이어야 함 (0 또는 미설정 거부)
       2. Supabase 운영 URL 패턴 차단 (*.supabase.co / *.supabase.com)
-      3. 로컬 호스트(localhost / 127.0.0.1)만 허용
-      4. DB 이름에 격리 식별자(test / iso / c10) 포함 필요
+      3. localhost 또는 127.0.0.1만 허용 (0.0.0.0 및 빈 호스트 포함 거부)
+      4. DB 이름이 승인 목록과 정확히 일치해야 함 (부분 문자열 불허)
     접속 URL·비밀번호 원문은 오류 메시지에 포함하지 않는다.
     """
-    if not os.environ.get("C10_TEST_DB_AUTHORIZED"):
+    # 규칙 1: 정확히 "1"만 허용
+    if os.environ.get("C10_TEST_DB_AUTHORIZED") != "1":
         raise RuntimeError(
-            "C10_TEST_DB_AUTHORIZED 환경변수가 없습니다. "
-            "격리 테스트 DB임을 확인한 후 C10_TEST_DB_AUTHORIZED=1 로 설정하세요."
+            "C10_TEST_DB_AUTHORIZED 값이 정확히 '1'이어야 합니다. "
+            "0 또는 미설정은 거부됩니다. 격리 테스트 DB임을 확인 후 설정하세요."
         )
 
     parsed = urlparse(db_url)
     host = (parsed.hostname or "").lower()
-    dbname = (parsed.path or "").lstrip("/").lower()
+    dbname = (parsed.path or "").lstrip("/")
 
+    # 규칙 2: Supabase 운영 URL 차단
     blocked = ["supabase.co", "supabase.com", ".supabase.io"]
     for pattern in blocked:
         if pattern in host:
@@ -123,18 +149,60 @@ def _assert_isolated_db(db_url: str) -> None:
                 f"(패턴: {pattern!r})"
             )
 
-    allowed_hosts = {"localhost", "127.0.0.1", "0.0.0.0", ""}
-    if host not in allowed_hosts:
+    # 규칙 3: localhost / 127.0.0.1만 허용 (0.0.0.0·빈 문자열 포함 거부)
+    if host not in {"localhost", "127.0.0.1"}:
         raise RuntimeError(
-            f"비로컬 호스트 감지 — 통합 테스트는 localhost/127.0.0.1만 허용됩니다. "
-            f"(호스트 클래스: {'로컬' if 'local' in host else '외부'})"
+            "허용되지 않는 호스트입니다. localhost 또는 127.0.0.1만 허용됩니다. "
+            "0.0.0.0, 빈 호스트, 외부 주소는 모두 거부됩니다."
         )
 
-    safe_name_tokens = ("test", "iso", "c10")
-    if not any(t in dbname for t in safe_name_tokens):
+    # 규칙 4: DB 이름 정확히 일치
+    approved = _approved_db_names()
+    if dbname not in approved:
         raise RuntimeError(
-            f"DB 이름에 격리 식별자(test/iso/c10)가 없습니다. "
-            f"운영 DB와 구분되는 격리 DB를 사용하세요."
+            f"DB 이름이 승인 목록에 없습니다. "
+            f"승인 목록: {sorted(approved)}. 정확히 일치해야 합니다."
+        )
+
+
+def _assert_isolation_marker(conn) -> None:
+    """DB 내부 격리 식별 마커 확인 (읽기 전용).
+
+    테스트 코드는 마커를 생성하지 않는다. 마커는 격리 테스트 DB 준비 시
+    수동으로 설치되어야 한다:
+      CREATE TABLE _c10_test_isolation_marker(marker_value TEXT NOT NULL);
+      INSERT INTO _c10_test_isolation_marker VALUES('C10_TEST_ISOLATION_CONFIRMED');
+
+    마커 없음, 행 없음, 값 불일치 모두 RuntimeError 발생 → _SETUP_SQL 실행 차단.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT marker_value FROM {_MARKER_TABLE} LIMIT 1;"
+            )
+            row = cur.fetchone()
+    except psycopg2.errors.UndefinedTable:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"격리 식별 마커 테이블({_MARKER_TABLE})이 없습니다. "
+            "격리 테스트 DB 준비 시 수동으로 설치하세요: "
+            f"CREATE TABLE {_MARKER_TABLE}(marker_value TEXT NOT NULL); "
+            f"INSERT INTO {_MARKER_TABLE} VALUES('{_MARKER_VALUE}');"
+        )
+
+    if not row:
+        raise RuntimeError(
+            f"격리 마커 행이 없습니다. "
+            f"INSERT INTO {_MARKER_TABLE} VALUES('{_MARKER_VALUE}') 로 설치하세요."
+        )
+
+    if row[0] != _MARKER_VALUE:
+        raise RuntimeError(
+            f"격리 마커 값 불일치. 예상='{_MARKER_VALUE}', 실제='{row[0]!r}'. "
+            "올바른 격리 DB를 사용하세요."
         )
 
 
@@ -185,6 +253,9 @@ def c10_db(request):
     cur.execute("SELECT version();")
     db_version = cur.fetchone()[0]
 
+    # 격리 마커 확인 — _SETUP_SQL(DROP TABLE) 실행 전에 반드시 통과
+    _assert_isolation_marker(conn)
+
     # 6개 정책 상태 설치
     cur.execute(_SETUP_SQL)
 
@@ -210,6 +281,10 @@ def c10_fresh_6policy(request):
 
     conn = psycopg2.connect(db_url)
     conn.autocommit = True
+
+    # 격리 마커 확인 — _SETUP_SQL(DROP TABLE) 실행 전에 반드시 통과
+    _assert_isolation_marker(conn)
+
     cur = conn.cursor()
     cur.execute(_SETUP_SQL)  # 6개 정책, migration 미적용
 
@@ -471,17 +546,113 @@ def test_DB_INT_14c_reject_nonlocal_host(request, monkeypatch):
     if not request.config.getoption("--run-db-int", default=False):
         pytest.skip("--run-db-int 필요")
     monkeypatch.setenv("C10_TEST_DB_AUTHORIZED", "1")
-    with pytest.raises(RuntimeError, match="비로컬"):
+    with pytest.raises(RuntimeError, match="허용되지 않는 호스트"):
         _assert_isolated_db("postgresql://u:p@prod-db.example.com/c10_test")
 
 
 def test_DB_INT_14d_reject_unsafe_dbname(request, monkeypatch):
-    """DB 이름에 격리 식별자 없음 → RuntimeError."""
+    """DB 이름이 승인 목록에 없음 → RuntimeError."""
     if not request.config.getoption("--run-db-int", default=False):
         pytest.skip("--run-db-int 필요")
     monkeypatch.setenv("C10_TEST_DB_AUTHORIZED", "1")
-    with pytest.raises(RuntimeError, match="격리 식별자"):
+    monkeypatch.setenv("C10_TEST_DB_NAMES", "c10_test")
+    with pytest.raises(RuntimeError, match="승인 목록"):
         _assert_isolated_db("postgresql://u:p@localhost:15433/production_db")
+
+
+def test_DB_INT_14e_reject_authorized_zero(request, monkeypatch):
+    """C10_TEST_DB_AUTHORIZED=0 → RuntimeError (정확히 '1'만 허용)."""
+    if not request.config.getoption("--run-db-int", default=False):
+        pytest.skip("--run-db-int 필요")
+    monkeypatch.setenv("C10_TEST_DB_AUTHORIZED", "0")
+    with pytest.raises(RuntimeError, match="정확히 '1'"):
+        _assert_isolated_db("postgresql://u:p@localhost:15433/c10_test")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DB-INT-17~18: 0.0.0.0 / 빈 호스트 → 차단
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_DB_INT_17_reject_empty_host(request, monkeypatch):
+    """빈 호스트(socket 연결) → RuntimeError."""
+    if not request.config.getoption("--run-db-int", default=False):
+        pytest.skip("--run-db-int 필요")
+    monkeypatch.setenv("C10_TEST_DB_AUTHORIZED", "1")
+    with pytest.raises(RuntimeError, match="허용되지 않는 호스트"):
+        _assert_isolated_db("postgresql:///c10_test")  # 호스트 없음
+
+
+def test_DB_INT_18_reject_zero_zero_host(request, monkeypatch):
+    """0.0.0.0 호스트 → RuntimeError."""
+    if not request.config.getoption("--run-db-int", default=False):
+        pytest.skip("--run-db-int 필요")
+    monkeypatch.setenv("C10_TEST_DB_AUTHORIZED", "1")
+    with pytest.raises(RuntimeError, match="허용되지 않는 호스트"):
+        _assert_isolated_db("postgresql://u:p@0.0.0.0:15433/c10_test")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DB-INT-19~21: 격리 마커 검증
+# ═══════════════════════════════════════════════════════════════════════
+
+class _MarkerCursor:
+    """_assert_isolation_marker 단위 테스트용 최소 Mock 커서."""
+    def __init__(self, behavior: str):
+        self._behavior = behavior
+
+    def execute(self, sql: str):
+        if self._behavior == "no_table":
+            raise psycopg2.errors.UndefinedTable("relation does not exist")
+
+    def fetchone(self):
+        if self._behavior == "no_row":
+            return None
+        if self._behavior == "wrong_value":
+            return ("WRONG_VALUE_XYZ",)
+        return (_MARKER_VALUE,)
+
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
+
+
+class _MarkerConn:
+    """_assert_isolation_marker 단위 테스트용 최소 Mock 연결."""
+    def __init__(self, behavior: str):
+        self._behavior = behavior
+        self._rolled_back = False
+
+    def cursor(self):
+        return _MarkerCursor(self._behavior)
+
+    def rollback(self):
+        self._rolled_back = True
+
+
+def test_DB_INT_19_reject_missing_marker_table(request):
+    """격리 마커 테이블 없음 → RuntimeError."""
+    if not request.config.getoption("--run-db-int", default=False):
+        pytest.skip("--run-db-int 필요")
+    mock_conn = _MarkerConn("no_table")
+    with pytest.raises(RuntimeError, match=_MARKER_TABLE):
+        _assert_isolation_marker(mock_conn)
+    assert mock_conn._rolled_back, "UndefinedTable 오류 후 rollback 호출 필요"
+
+
+def test_DB_INT_20_reject_wrong_marker_value(request):
+    """격리 마커 값 불일치 → RuntimeError."""
+    if not request.config.getoption("--run-db-int", default=False):
+        pytest.skip("--run-db-int 필요")
+    mock_conn = _MarkerConn("wrong_value")
+    with pytest.raises(RuntimeError, match="마커 값 불일치"):
+        _assert_isolation_marker(mock_conn)
+
+
+def test_DB_INT_21_correct_marker_passes(request):
+    """정상 격리 마커 → RuntimeError 없음."""
+    if not request.config.getoption("--run-db-int", default=False):
+        pytest.skip("--run-db-int 필요")
+    mock_conn = _MarkerConn("correct")
+    _assert_isolation_marker(mock_conn)  # 예외 없으면 PASS
 
 
 # ═══════════════════════════════════════════════════════════════════════
