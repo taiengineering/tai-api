@@ -213,6 +213,7 @@ def test_DB_SQL_11_no_authenticated_dml_policy_recreated():
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_DB_SQL_12_drift_guard_do_block_exists():
+    """사후 Drift Guard: DROP 이후 예상치 못한 정책이 남아 있으면 EXCEPTION."""
     sql_u = _sql_upper()
     assert "DRIFT_GUARD" in sql_u or "DRIFT GUARD" in sql_u, (
         "Drift Guard 블록 없음 — 예상치 못한 과다 허용 정책 차단 보장 필요"
@@ -223,3 +224,35 @@ def test_DB_SQL_12_drift_guard_do_block_exists():
     assert "RAISE EXCEPTION" in sql_u, (
         "Drift Guard RAISE EXCEPTION 없음 — 예상치 못한 정책 발견 시 적용 중단 필요"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DB-SQL-13: PRE-CHECK DRIFT GUARD DO $$ 블록 존재 (DROP 이전 중단)
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_DB_SQL_13_pre_check_drift_guard_exists():
+    """사전 Drift Guard: DROP 이전에 알 수 없는 정책 발견 시 EXCEPTION으로 중단.
+
+    C10_PRE_DRIFT_GUARD_FAIL 식별자 포함 + DROP POLICY 이전 위치에 있어야 함.
+    """
+    sql = _sql()
+    sql_u = sql.upper()
+
+    assert "C10_PRE_DRIFT_GUARD_FAIL" in sql_u, (
+        "PRE-CHECK Drift Guard(C10_PRE_DRIFT_GUARD_FAIL) 블록 없음 — "
+        "DROP 이전에 알 수 없는 정책 탐지 후 중단 필요"
+    )
+
+    # PRE-CHECK가 DROP POLICY 이전에 위치하는지 확인
+    pre_check_pos = sql_u.find("C10_PRE_DRIFT_GUARD_FAIL")
+    first_drop_pos = sql_u.find("DROP POLICY")
+    assert pre_check_pos < first_drop_pos, (
+        f"PRE-CHECK Drift Guard(pos={pre_check_pos})가 첫 DROP POLICY(pos={first_drop_pos}) 이후에 위치함. "
+        "DROP 이전에 선행 검사가 실행되어야 합니다."
+    )
+
+    # NOT IN 절에 운영 DB 실측 이름이 포함되는지 확인
+    for name in LIVE_POLICY_NAMES:
+        assert name.upper() in sql_u, (
+            f"PRE-CHECK NOT IN 절에 운영 정책 이름 누락: {name}"
+        )

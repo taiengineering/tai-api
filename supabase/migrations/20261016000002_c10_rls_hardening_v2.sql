@@ -22,6 +22,48 @@
 --
 -- DRAFT — DB_PUSH_APPLY_MIGRATION = BLOCKED (Owner 승인 + RAILWAY_ENV_NAME_VERIFICATION 완료 후 적용)
 
+-- ── 0. PRE-CHECK DRIFT GUARD — 알 수 없는 정책 존재 시 DROP 전 중단 ───────
+
+DO $$
+DECLARE
+    unknown_count INTEGER;
+    unknown_names TEXT;
+BEGIN
+    SELECT COUNT(*), string_agg(policyname, ', ')
+    INTO unknown_count, unknown_names
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'anonymous_diagnosis_results'
+      AND policyname NOT IN (
+          -- 운영 DB 실측 이름 (GPT IV 확인, 2026-10-16)
+          'anon_delete_anonymous_diagnosis_results',
+          'anon_insert_anonymous_diagnosis_results',
+          'anon_select_anonymous_diagnosis_results',
+          'anon_update_anonymous_diagnosis_results',
+          'authenticated_all_anonymous_diagnosis_results',
+          'service_role_full',
+          -- 소스 DDL(20260405_anon_diag_cron_and_rls.sql) 구형 이름
+          'anon_diag_insert_open',
+          'anon_diag_select_by_token',
+          'anon_diag_select_claimed',
+          'anon_diag_update_claim',
+          'anon_diag_admin_all',
+          'anon_diag_service_role',
+          -- v1 마이그레이션 이름 (미적용)
+          'anon_select_all',
+          'anon_update_all',
+          'anon_delete_all',
+          'authenticated_all'
+      );
+
+    IF unknown_count > 0 THEN
+        RAISE EXCEPTION
+            'C10_PRE_DRIFT_GUARD_FAIL: 알 수 없는 RLS 정책 %개 발견(DROP 전 중단): [%]. '
+            '이 마이그레이션이 인식하지 못하는 정책이 있습니다. 수동 조사 후 적용하세요.',
+            unknown_count, unknown_names;
+    END IF;
+END $$;
+
 -- ── 1. 기존 정책 전부 DROP ────────────────────────────────────────────
 
 -- 운영 DB 실측 이름
