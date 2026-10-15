@@ -185,10 +185,11 @@ def fetch_h01_title_for_bdmgtsn(bdmgtsn: str, existing_pk: Optional[str] = None)
             page_rows = raw if isinstance(raw, list) else [raw]
             for _row in page_rows:
                 _pk = str(_row.get("mgmBldrgstPk") or "").strip()
-                if _pk:
-                    if _pk in seen_pks:
-                        return None  # 동일 PK 중복 → 부분/중복 수집 → 정합성 실패
-                    seen_pks.add(_pk)
+                if not _pk:
+                    return None  # PK 없는 행 → 동일성 검증 불가 → 정합성 실패
+                if _pk in seen_pks:
+                    return None  # 동일 PK 중복 → 부분/중복 수집 → 정합성 실패
+                seen_pks.add(_pk)
             all_rows.extend(page_rows)
             if len(all_rows) > expected_total:
                 return None  # 과수집 → 정합성 실패

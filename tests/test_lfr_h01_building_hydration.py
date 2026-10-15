@@ -294,10 +294,11 @@ def test_H16_negative_height_rejected():
 # ── H17: fetch_h01_title_for_bdmgtsn — totalCount 기반 2-page 페치 ────────────
 
 def test_H17_fetch_pagination_fetches_all_pages(monkeypatch):
-    """Fix B: totalCount=2, 첫 페이지 1개 → 두 번째 페이지 추가 호출해 전체 반환."""
+    """Fix B: totalCount=2, 첫 페이지 1개 → 두 번째 페이지 추가 호출해 전체 반환.
+    PK 포함 행만 허용(PKLESS-GUARD-001 보완)."""
     import json as _j
-    item1 = {"mainAtchGbCdNm": "주건축물", "heit": "45.0", "grndFlrCnt": "12"}
-    item2 = {"mainAtchGbCdNm": "부속건축물", "heit": "3.0", "grndFlrCnt": "1"}
+    item1 = {"mainAtchGbCdNm": "주건축물",   "mgmBldrgstPk": "PK-001", "heit": "45.0", "grndFlrCnt": "12"}
+    item2 = {"mainAtchGbCdNm": "부속건축물", "mgmBldrgstPk": "PK-002", "heit": "3.0",  "grndFlrCnt": "1"}
     calls = []
 
     def fake_kr_get(url, params, timeout):
@@ -890,3 +891,26 @@ def test_H41_distinct_pk_multipage_normal_collection(monkeypatch):
     assert out.get("building_height") == 45.0
     assert out.get("floor_count") == 12
     assert out.get("mgm_bldrgst_pk") == _PK_A
+
+
+# ── H42: 유효 PK 행 + PK 없는 행 혼재 → fail-closed ──────────────────────────────
+
+def test_H42_pkless_row_in_response_rejected(monkeypatch):
+    """PKLESS-GUARD-001: 유효 PK 행과 PK 없는 행이 함께 오면
+    동일성 검증 불가 → None (부분 수집 거부)."""
+    item_with_pk = {
+        "mainAtchGbCdNm": "주건축물", "mgmBldrgstPk": _PK_A,
+        "heit": "45.0", "grndFlrCnt": "12",
+    }
+    item_no_pk = {
+        "mainAtchGbCdNm": "부속건축물",  # mgmBldrgstPk 없음
+        "heit": "3.0", "grndFlrCnt": "1",
+    }
+
+    def fake_kr_get(url, params, timeout):
+        # 단일 페이지에 PK 있는 행 + PK 없는 행
+        return _make_response(2, [item_with_pk, item_no_pk])
+
+    monkeypatch.setattr(_hyd_mod, "kr_get", fake_kr_get)
+    result = _hyd_mod.fetch_h01_title_for_bdmgtsn("1168010100107190000")
+    assert result is None
