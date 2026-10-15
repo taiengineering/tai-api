@@ -315,6 +315,29 @@ class SafeBuildingConsumerInput(BaseModel):
     is_real_estate_management: Optional[StrictBool] = None
     expected_app3_revision: Optional[Annotated[StrictInt, Field(ge=1)]] = None
 
+    @field_validator(
+        "underground_connection_entrance_distance_m",
+        "connection_open_space_floor_area_m2",
+        "connection_open_space_open_area_ratio",
+        "stair_or_ramp_effective_width_m",
+        mode="before",
+    )
+    @classmethod
+    def _geometry_non_negative_finite(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError(f"Boolean은 수치 입력으로 사용할 수 없습니다: {v!r}")
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"수치로 변환할 수 없습니다: {v!r}")
+        if not math.isfinite(fv):
+            raise ValueError(f"유효하지 않은 수치입니다: {v!r}")
+        if fv < 0:
+            raise ValueError(f"음수 입력 불가: {v!r}")
+        return fv
+
     @field_validator("work_height_m", "truck_loading_height_m", "manual_handling_weight_kg")
     @classmethod
     def _non_negative_finite(cls, v: Optional[float]) -> Optional[float]:

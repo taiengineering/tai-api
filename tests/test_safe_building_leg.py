@@ -56,9 +56,10 @@ def _patch(monkeypatch, cap):
 
 def test_owned_exact_read(monkeypatch):
     cap = {}; _patch(monkeypatch, cap)
-    # H01 provenance: building_register_updated_at non-null for floor_count to be authoritative
+    # H01 provenance: building_register_updated_at + mgm_bldrgst_pk both non-null for AUTHORITATIVE.
     fac = {"floor_count": 12, "has_boiler": True, "is_multi_use": False,
-           "building_register_updated_at": "2026-01-01T00:00:00+09:00"}
+           "building_register_updated_at": "2026-01-01T00:00:00+09:00",
+           "mgm_bldrgst_pk": "TEST-PK-001"}
     out = run_safe_building_leg(_FakeSB(fac), "F1", SafeBuildingConsumerInput())
     inp = cap["step1"].input
     assert inp["floor_count"] == 12 and inp["has_boiler"] is True and inp["is_multi_use"] is False
@@ -230,3 +231,77 @@ def test_t8_explicit_false_true_preserved(monkeypatch):
     assert inp.get("has_high_pressure_gas") is False
     assert inp.get("has_chemical_substance") is True
     assert inp.get("has_hazardous_material") is False
+
+
+# ── PATCH B: underground geometry C1→C2→C3 transport ──────────────────────────
+
+def test_t9_geometry_transport(monkeypatch):
+    """T9: 4 geometry fields via consumer → C3 build_facility preserves all."""
+    cap = {}; _patch(monkeypatch, cap)
+    ci = SafeBuildingConsumerInput(
+        underground_connection_entrance_distance_m=30.0,
+        connection_open_space_floor_area_m2=500.0,
+        connection_open_space_open_area_ratio=0.5,
+        stair_or_ramp_effective_width_m=1.5,
+    )
+    run_safe_building_leg(_FakeSB({}), "F1", ci)
+    from clients.leg_runtime_client import build_facility
+    facility = build_facility(cap["step1"])
+    assert facility["underground_connection_entrance_distance_m"] == 30.0
+    assert facility["connection_open_space_floor_area_m2"] == 500.0
+    assert facility["connection_open_space_open_area_ratio"] == 0.5
+    assert facility["stair_or_ramp_effective_width_m"] == 1.5
+
+
+def test_t10_geometry_zero_preserved(monkeypatch):
+    """T10: connection_open_space_open_area_ratio=0.0 (falsy) is preserved, not treated as absent."""
+    cap = {}; _patch(monkeypatch, cap)
+    ci = SafeBuildingConsumerInput(connection_open_space_open_area_ratio=0.0)
+    run_safe_building_leg(_FakeSB({}), "F1", ci)
+    from clients.leg_runtime_client import build_facility
+    facility = build_facility(cap["step1"])
+    assert facility.get("connection_open_space_open_area_ratio") == 0.0
+
+
+def test_t11_geometry_absent(monkeypatch):
+    """T11: no geometry fields provided → absent from C3 facility."""
+    cap = {}; _patch(monkeypatch, cap)
+    run_safe_building_leg(_FakeSB({}), "F1", SafeBuildingConsumerInput())
+    from clients.leg_runtime_client import build_facility
+    facility = build_facility(cap["step1"])
+    assert "underground_connection_entrance_distance_m" not in facility
+    assert "connection_open_space_floor_area_m2" not in facility
+    assert "connection_open_space_open_area_ratio" not in facility
+    assert "stair_or_ramp_effective_width_m" not in facility
+
+
+def test_geometry_negative_rejected():
+    """PATCH A: negative geometry value → ValidationError."""
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        SafeBuildingConsumerInput(underground_connection_entrance_distance_m=-1.0)
+
+
+def test_geometry_nan_rejected():
+    """PATCH A: NaN geometry value → ValidationError."""
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        SafeBuildingConsumerInput(connection_open_space_floor_area_m2=float("nan"))
+
+
+def test_geometry_inf_rejected():
+    """PATCH A: Infinity geometry value → ValidationError."""
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        SafeBuildingConsumerInput(connection_open_space_open_area_ratio=float("inf"))
+
+
+def test_geometry_bool_rejected():
+    """PATCH A: bool geometry value → ValidationError (bool은 수치 입력 금지)."""
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        SafeBuildingConsumerInput(stair_or_ramp_effective_width_m=True)
