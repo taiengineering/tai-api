@@ -1,7 +1,7 @@
-"""WO-TAI-DOC-M004-EXISTING-PROCESSOR-E2E-001 + CORR-001
+"""WO-TAI-DOC-M004-EXISTING-PROCESSOR-E2E-001 + CORR-001 + CORR-002
 기존 문서 프로세서 E2E — 격리 PostgreSQL (로컬) 통합 테스트.
 
-대상: PR #625 HEAD 06abf5678f5429501ee6ec2b730d041884a23aa5
+대상: PR #625
 DB:   tai_test_m004_e2e (localhost:5432) — 운영 DB 연결 금지
 
 실행 조건:
@@ -50,9 +50,17 @@ DB:   tai_test_m004_e2e (localhost:5432) — 운영 DB 연결 금지
 ## CORR-001 적용 내역
   - 트리거 ERRCODE: check_violation → raise_exception (운영 정본 일치)
   - CF-01-B: CheckViolation → RaiseException
-  - DSN 안전성 가드: dbname=tai_test_m004_e2e 검증 강제
+  - DSN 연결 후 안전성 가드: dbname=tai_test_m004_e2e 검증 강제
   - _DATABASE_URL 복원: monkeypatch 자동 복원 + 명시 주석
   - 원자 롤백 검증 3건 추가 (PG-R1, PG-R2, PG-R3)
+
+## CORR-002 적용 내역 (GPT Preflight CORR-001)
+  - _validate_dsn_isolation(): 연결 전 DSN 파싱 검증 (dbname/host/hostaddr)
+  - _db_available(): 격리 검증 선행, 불일치 시 RuntimeError (SKIP 아닌 명시적 오류)
+  - 잘못된 DSN 차단 테스트 2건 추가:
+      DSN-G1  wrong dbname → RuntimeError (연결 전)
+      DSN-G2  remote host → RuntimeError (연결 전)
+  - 기존 _assert_isolated_db() (연결 후 SQL 재확인) 유지
 """
 from __future__ import annotations
 
@@ -69,9 +77,51 @@ import pytest
 _DSN = os.getenv("TEST_M004_DSN", "host=localhost dbname=tai_test_m004_e2e user=taiwangsim")
 
 _EXPECTED_DBNAME = "tai_test_m004_e2e"
+_ALLOWED_HOSTS   = frozenset({"", "localhost", "127.0.0.1", "::1"})
+
+
+def _validate_dsn_isolation(dsn: str) -> None:
+    """DSN 파싱하여 격리 DB 조건 검증 — 연결 시도 전 실행.
+
+    허용:
+      dbname = tai_test_m004_e2e
+      host ∈ {localhost, 127.0.0.1, ::1, ''(기본값)}
+      hostaddr ∈ {127.0.0.1, ::1, ''}
+
+    불일치 시 RuntimeError (SKIP 아닌 명시적 오류).
+    """
+    try:
+        parsed = psycopg2.extensions.parse_dsn(dsn)
+    except Exception as e:
+        raise RuntimeError(f"DSN 파싱 실패: {e}") from e
+
+    dbname   = parsed.get("dbname", "")
+    host     = parsed.get("host", "localhost")
+    hostaddr = parsed.get("hostaddr", "")
+
+    if dbname != _EXPECTED_DBNAME:
+        raise RuntimeError(
+            f"격리 DB DSN 안전성 위반: dbname={dbname!r}, 예상={_EXPECTED_DBNAME!r}. "
+            "연결 전 차단."
+        )
+    if host not in _ALLOWED_HOSTS:
+        raise RuntimeError(
+            f"격리 DB DSN 안전성 위반: host={host!r}. 원격 연결 금지."
+        )
+    if hostaddr and hostaddr not in {"127.0.0.1", "::1"}:
+        raise RuntimeError(
+            f"격리 DB DSN 안전성 위반: hostaddr={hostaddr!r}. 원격 연결 금지."
+        )
 
 
 def _db_available() -> bool:
+    """격리 DB 사용 가능 여부 확인.
+
+    순서:
+      1. DSN 격리 검증 (연결 전) — 불일치 시 RuntimeError 전파 (SKIP 아닌 명시적 오류)
+      2. psycopg2 연결 시도 — 실패 시 False 반환 (SKIP)
+    """
+    _validate_dsn_isolation(_DSN)
     try:
         conn = psycopg2.connect(_DSN + " connect_timeout=2")
         conn.close()
@@ -824,4 +874,33 @@ def test_pg_r3_seal_update_fail_rollback(pg, monkeypatch):
         cur.execute(
             "DROP TRIGGER IF EXISTS test_trg_block_seal ON public.runtime_document_data; "
             "DROP FUNCTION IF EXISTS public.fn_test_block_seal_update();"
+        )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# [DSN 격리 가드 단위 테스트 — CORR-002]
+# 연결 전 _validate_dsn_isolation() 차단 동작 검증.
+# DB 연결 불필요. 격리 DB가 있는 경우에도 pytestmark skipif 통과 후 실행됨.
+# ════════════════════════════════════════════════════════════════════════
+
+def test_dsn_g1_guard_blocks_wrong_dbname(pg):
+    """DSN-G1 — 잘못된 dbname은 연결 전 RuntimeError로 차단
+
+    CORR-002: _validate_dsn_isolation()가 연결 시도 없이 즉시 RuntimeError를 발생.
+    'pg' 픽스처는 격리 DB가 실제 있어야 하므로 DB 연결 성공 환경에서만 실행됨.
+    """
+    with pytest.raises(RuntimeError, match="dbname"):
+        _validate_dsn_isolation(
+            "host=localhost dbname=postgres user=taiwangsim"
+        )
+
+
+def test_dsn_g2_guard_blocks_remote_host(pg):
+    """DSN-G2 — 원격 host는 연결 전 RuntimeError로 차단
+
+    CORR-002: 원격 주소 host는 _validate_dsn_isolation()가 연결 시도 없이 차단.
+    """
+    with pytest.raises(RuntimeError, match="host"):
+        _validate_dsn_isolation(
+            "host=prod-db.example.com dbname=tai_test_m004_e2e user=taiwangsim"
         )
