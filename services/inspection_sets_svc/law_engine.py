@@ -32,7 +32,9 @@ _SET_SELECT = (
     "id, factory_id, company_id, source, legal_obligation_atom_id, "
     "operation_time_rule, assignee_user_id, "
     "inspection_set_name, inspection_category, description, "
-    "holiday_process_type"
+    "holiday_process_type, scope_b_deactivation_date"
+    # NOTE: scope_b_deactivation_date requires migration 20261017000001_wp01d_inspection_sets_scope_b.sql
+    # DEPLOYMENT BLOCKED until migration is applied.
 )
 
 _RECONCILE_STATUSES = frozenset({"planned", "scheduled"})
@@ -383,6 +385,12 @@ def run_generate_operation_schedules(factory_id: str, supabase) -> dict:
 
         planned_s = planned.isoformat()
         set_id = iset["id"]
+
+        # P0-01: scope_b_deactivation_date 가드 (migration 적용 후 활성화)
+        deactivation_date = iset.get("scope_b_deactivation_date")
+        if deactivation_date is not None and planned_s >= str(deactivation_date):
+            counters["skipped_no_condition"] += 1
+            continue
 
         # 1–4: ENSURE EXPECTED_LATEST_EXECUTABLE → verify
         secured = _ensure_expected_latest_executable(

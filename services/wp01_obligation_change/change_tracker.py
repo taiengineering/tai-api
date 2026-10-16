@@ -64,6 +64,7 @@ def load_previous_materialized_obligations(
     exclude_diagnosis_id: str,
     site_id: Optional[str] = None,
     sector: Optional[str] = None,
+    new_created_at: Optional[str] = None,
 ) -> Tuple[list, bool]:
     """공장의 직전 MATERIALIZED C10 obligations_raw 로드.
 
@@ -73,6 +74,7 @@ def load_previous_materialized_obligations(
           id != exclude_diagnosis_id.
     건설현장의 경우 site_id 도 추가 필터링.
     sector 가 지정된 경우 input_data->>sector 도 일치 확인.
+    new_created_at 이 제공된 경우 신규 진단보다 이전 시점만 포함.
 
     반환: (obligations_raw: list, has_row: bool)
       has_row=True: 이전 기준 행이 존재(obligations_raw 가 빈 목록일 수 있음)
@@ -87,6 +89,9 @@ def load_previous_materialized_obligations(
         .eq("input_data->>factory_id", factory_id)
         .neq("id", exclude_diagnosis_id)
     )
+
+    if new_created_at:
+        q = q.lt("created_at", new_created_at)
 
     if site_id:
         q = q.eq("input_data->>site_id", site_id)
@@ -134,10 +139,12 @@ def load_current_removal_candidates(supabase: Any, factory_id: str) -> list:
         .execute()
     )
 
-    c10_atom_ids: Set[str] = set()
-    if c10_res.data:
-        full_result = c10_res.data[0].get("full_result") or {}
-        c10_atom_ids = extract_atom_ids(full_result.get("obligations_raw") or [])
+    if not c10_res.data:
+        # C10 없으면 기준 없음 → 빈 리스트 반환 (fail-closed)
+        return []
+
+    full_result = c10_res.data[0].get("full_result") or {}
+    c10_atom_ids: Set[str] = extract_atom_ids(full_result.get("obligations_raw") or [])
 
     sets_res = (
         supabase.table("inspection_sets")
@@ -197,7 +204,7 @@ def _is_current_removal_candidate(
         .execute()
     )
     if not c10_res.data:
-        return True  # C10 없음 → 비교 불가 → 후보로 간주
+        return False  # C10 없으면 제외 차단 (fail-closed)
 
     full_result = c10_res.data[0].get("full_result") or {}
     c10_atom_ids = extract_atom_ids(full_result.get("obligations_raw") or [])
@@ -227,12 +234,15 @@ def compute_change_summary(
       - 신규 C10 미발견 또는 factory_id 불일치 → ValueError
       - CONSTRUCTION sector 이면서 site_id 없음 → ValueError
     """
-    # 1. 신규 C10 — factory_id 소유권 포함 검증
+    # 1. 신규 C10 — factory_id 소유권 + MATERIALIZED 상태 검증
     new_res = (
         supabase.table("anonymous_diagnosis_results")
-        .select("full_result, input_data")
+        .select("full_result, input_data, created_at")
         .eq("id", new_diagnosis_id)
         .eq("input_data->>factory_id", factory_id)
+        .eq("source_type", "saas")
+        .eq("status", "ACTIVE")
+        .eq("inspection_materialization_status", "MATERIALIZED")
         .limit(1)
         .execute()
     )
@@ -245,11 +255,20 @@ def compute_change_summary(
     new_row = new_res.data[0]
     new_full_result = new_row.get("full_result") or {}
     new_obligations_raw = new_full_result.get("obligations_raw") or []
+    new_created_at: Optional[str] = new_row.get("created_at")
 
     # sector / site_id 추출
     new_input_data = new_row.get("input_data") or {}
     new_sector: Optional[str] = new_input_data.get("sector")
-    new_site_id: Optional[str] = site_id or new_input_data.get("site_id")
+    stored_site_id: Optional[str] = new_input_data.get("site_id")
+
+    # site_id 불일치 검증
+    if site_id and stored_site_id and site_id != stored_site_id:
+        raise ValueError(
+            f"site_id 불일치: 요청={site_id!r}, 진단={stored_site_id!r}"
+        )
+
+    new_site_id: Optional[str] = site_id or stored_site_id
 
     # CONSTRUCTION: site_id 필수
     if new_sector in _CONSTRUCTION_SECTORS and not new_site_id:
@@ -257,13 +276,14 @@ def compute_change_summary(
             "건설업 진단의 변경 요약에는 site_id 가 필요합니다"
         )
 
-    # 2. 이전 MATERIALIZED C10 (섹터·현장 일치)
+    # 2. 이전 MATERIALIZED C10 (섹터·현장 일치, 신규 이전 시점)
     prev_obligations_raw, has_prev_row = load_previous_materialized_obligations(
         supabase,
         factory_id,
         exclude_diagnosis_id=new_diagnosis_id,
         site_id=new_site_id,
         sector=new_sector,
+        new_created_at=new_created_at,
     )
     has_previous_baseline = has_prev_row  # row 존재 여부 — obligations 0건과 구분
 

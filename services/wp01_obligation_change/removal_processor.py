@@ -21,6 +21,7 @@ import logging
 from datetime import date
 from typing import Any, Dict, List, Optional
 
+from services.inspection_sets_svc.law_engine import _child_linked
 from services.status_vocab import normalize_ws_status_read
 
 log = logging.getLogger(__name__)
@@ -146,6 +147,10 @@ def process_scope_a(
     if not active_yn:
         return {"processed": 0, "skipped_reason": "이미 비활성 상태입니다"}
 
+    # P0-04: 연결된 배정·점검 이력 확인 (child_linked 가드)
+    if _child_linked(supabase, row["id"], factory_id):
+        return {"processed": 0, "skipped_reason": "연결된 배정·점검 이력이 있습니다"}
+
     supabase.table("work_schedules").update(
         {
             "is_excluded": True,
@@ -240,20 +245,29 @@ def process_scope_b(
     to_cancel = [s for s in all_future if not _is_preserve(s)]
     preserved_completed = [s for s in all_future if _is_preserve(s)]
 
-    # 3. 취소 (idempotent)
-    cancelled = 0
-    for s in to_cancel:
-        supabase.table("work_schedules").update(
-            {"active_yn": False}
-        ).eq("id", s["id"]).eq("factory_id", factory_id).eq("active_yn", True).execute()
-        cancelled += 1
-
-    # 4. inspection_sets: scope_b_deactivation_date 설정 + 조건부 is_active
-    today = date.today()
+    # P0-06: application_date 파싱 엄격화 (취소 처리 전 검증)
     try:
         app_dt = date.fromisoformat(str(application_date))
     except ValueError:
-        app_dt = today
+        raise ValueError(
+            f"application_date 형식이 잘못되었습니다: {application_date!r} (YYYY-MM-DD 필요)"
+        )
+
+    # 3. 취소 (idempotent) — P0-04: child_linked 확인 + 실제 UPDATE 성공 건수 집계
+    cancelled = 0
+    child_linked_count = 0
+    for s in to_cancel:
+        if _child_linked(supabase, s["id"], factory_id):
+            child_linked_count += 1
+            continue
+        res = supabase.table("work_schedules").update(
+            {"active_yn": False}
+        ).eq("id", s["id"]).eq("factory_id", factory_id).eq("active_yn", True).execute()
+        if res.data:  # 실제 변경된 행이 있는 경우만 카운트
+            cancelled += 1
+
+    # 4. inspection_sets: scope_b_deactivation_date 설정 + 조건부 is_active
+    today = date.today()
 
     is_active_false = app_dt <= today
     update_payload: Dict[str, Any] = {
@@ -283,6 +297,7 @@ def process_scope_b(
         "inspection_set_id": inspection_set_id,
         "schedules_cancelled": cancelled,
         "schedules_preserved_completed": len(preserved_completed),
+        "child_linked_count": child_linked_count,
         "is_active_set_false": is_active_false,
         "scope_b_deactivation_date": str(app_dt),
     }
