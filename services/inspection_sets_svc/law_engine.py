@@ -16,9 +16,12 @@ Invariants:
 """
 from __future__ import annotations
 
+import logging
 from typing import List, Optional
 
 from services.inspection_rolling import CONFLICT_KEY
+
+log = logging.getLogger(__name__)
 from services.inspection_sets_helpers import (
     _build_operation_schedule_row,
     _operation_planned_date,
@@ -49,28 +52,57 @@ def _has_atom(iset: dict) -> bool:
     return isinstance(atom, str) and bool(atom.strip())
 
 
+_SCOPE_B_COLUMN = "scope_b_deactivation_date"
+
+
+def _is_missing_column_exc(exc: Exception) -> bool:
+    """PostgREST '컬럼 미존재' 에러인지 판정 (migration 미적용 환경).
+
+    PostgREST HTTP 400 응답 메시지 패턴: "Could not find field", "does not exist", "unknown column"
+    """
+    msg = str(exc).lower()
+    return _SCOPE_B_COLUMN.lower() in msg and any(
+        marker in msg
+        for marker in ("does not exist", "could not find", "unknown column", "column")
+    )
+
+
 def _fetch_deactivation_dates(supabase, factory_id: str) -> dict:
     """scope_b_deactivation_date 가 설정된 inspection_sets 를 {id: date_str} 로 반환.
 
-    try/except: migration 20261017000001_wp01d_inspection_sets_scope_b.sql 미적용 환경
-    (PostgREST 400) → {} 반환 — 가드 비활성화로 안전하게 fallback.
+    컬럼 미존재(migration 20261017000001 미적용): {} 반환 — OTR 계속, Scope B 가드 비활성.
+    기타 DB 오류: 예외 re-raise — fail-closed (해당 factory OTR 전체 차단).
     """
     try:
         res = (
             supabase.table("inspection_sets")
-            .select("id, scope_b_deactivation_date")
+            .select(f"id, {_SCOPE_B_COLUMN}")
             .eq("factory_id", factory_id)
             .eq("is_active", True)
             .eq("source", "LEGAL_ENGINE")
             .execute()
         )
         return {
-            r["id"]: r["scope_b_deactivation_date"]
+            r["id"]: r[_SCOPE_B_COLUMN]
             for r in (res.data or [])
-            if r.get("scope_b_deactivation_date")
+            if r.get(_SCOPE_B_COLUMN)
         }
-    except Exception:
-        return {}
+    except Exception as exc:
+        if _is_missing_column_exc(exc):
+            log.debug(
+                "%s 컬럼 미존재 — migration 20261017000001 미적용. "
+                "factory_id=%s Scope B 가드 비활성화",
+                _SCOPE_B_COLUMN,
+                factory_id,
+            )
+            return {}
+        log.error(
+            "%s 조회 오류 — factory_id=%s: %s",
+            _SCOPE_B_COLUMN,
+            factory_id,
+            exc,
+        )
+        raise  # fail-closed: Migration 적용 후 조회 실패 시 일정 생성 차단
 
 
 def _child_linked(supabase, schedule_id: str, factory_id: str) -> bool:

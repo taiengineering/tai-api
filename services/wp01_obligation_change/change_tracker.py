@@ -170,9 +170,16 @@ def _is_current_removal_candidate(
 ) -> bool:
     """inspection_set 이 현재 유효한 REMOVAL_CANDIDATE 인지 서버 재확인.
 
-    최신 MATERIALIZED C10 의 obligations_raw 에 해당 atom_id 가 없는 경우 True.
+    FIX-02 공식 비교 계약:
+    1. inspection_set: is_active=True, source=LEGAL_ENGINE, atom_id 존재
+    2. 최신 MATERIALIZED C10 obligations_raw 가 유효한 list 여야 함 (구조 무결성)
+    3. atom 이 최신 C10 에 없어야 함 (REMOVAL CANDIDATE 조건)
+    4. atom 이 이전 C10 에 있어야 함 (최소 1회 의무였음을 증명)
+    5. sector/site 범위가 최신 C10 기준으로 일치해야 함
+
+    4 불충족(이전 기준 없음 또는 atom 미포함) → False (제외 불허).
     """
-    # inspection_set atom_id 조회
+    # 1. inspection_set 검증
     is_res = (
         supabase.table("inspection_sets")
         .select("legal_obligation_atom_id, is_active, source")
@@ -191,10 +198,10 @@ def _is_current_removal_candidate(
     if not atom_id:
         return False
 
-    # 최신 MATERIALIZED C10
+    # 2+3. 최신 MATERIALIZED C10 — id/input_data/created_at 포함 로드
     c10_res = (
         supabase.table("anonymous_diagnosis_results")
-        .select("full_result")
+        .select("id, full_result, input_data, created_at")
         .eq("source_type", "saas")
         .eq("status", "ACTIVE")
         .eq("inspection_materialization_status", "MATERIALIZED")
@@ -204,11 +211,48 @@ def _is_current_removal_candidate(
         .execute()
     )
     if not c10_res.data:
-        return False  # C10 없으면 제외 차단 (fail-closed)
+        return False  # C10 없음 → fail-closed
 
-    full_result = c10_res.data[0].get("full_result") or {}
-    c10_atom_ids = extract_atom_ids(full_result.get("obligations_raw") or [])
-    return atom_id not in c10_atom_ids
+    latest_c10 = c10_res.data[0]
+    latest_full_result = latest_c10.get("full_result") or {}
+    latest_obligations_raw = latest_full_result.get("obligations_raw")
+
+    if not isinstance(latest_obligations_raw, list):
+        log.warning(
+            "_is_current_removal_candidate: obligations_raw 비정상 구조 — "
+            "factory_id=%s diagnosis_id=%s",
+            factory_id,
+            latest_c10.get("id"),
+        )
+        return False  # 구조 무결성 실패 → fail-closed
+
+    latest_atom_ids = extract_atom_ids(latest_obligations_raw)
+    if atom_id in latest_atom_ids:
+        return False  # 최신 C10 에 존재 → 제외 후보 아님
+
+    # 4+5. 이전 기준 C10 검증 — sector/site 범위 일치
+    latest_input_data = latest_c10.get("input_data") or {}
+    prev_obligations_raw, has_prev = load_previous_materialized_obligations(
+        supabase,
+        factory_id,
+        exclude_diagnosis_id=latest_c10["id"],
+        site_id=latest_input_data.get("site_id"),
+        sector=latest_input_data.get("sector"),
+        new_created_at=latest_c10.get("created_at"),
+    )
+
+    if not has_prev:
+        log.debug(
+            "_is_current_removal_candidate: 이전 기준 없음 → 제외 불허. "
+            "factory_id=%s atom_id=%s",
+            factory_id,
+            atom_id,
+        )
+        return False  # 이전 기준 없으면 제외 불허
+
+    # atom 이 이전 C10 에 포함돼야 제외 후보 성립
+    prev_atom_ids = extract_atom_ids(prev_obligations_raw)
+    return atom_id in prev_atom_ids
 
 
 # ---------------------------------------------------------------------------

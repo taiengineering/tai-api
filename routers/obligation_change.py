@@ -113,7 +113,7 @@ def process_scope_a_removal(
     _require_company_admin(current, supabase)
     _require_company_factory(supabase, body.factory_id, current)
 
-    # inspection_set_id 가져오기 (work_schedule → inspection_set)
+    # FIX-03: inspection_set_id 검증 강화 — 누락·미연결·비후보 전부 차단
     ws_res = (
         supabase.table("work_schedules")
         .select("inspection_set_id")
@@ -122,10 +122,13 @@ def process_scope_a_removal(
         .limit(1)
         .execute()
     )
-    if ws_res.data:
-        iset_id = ws_res.data[0].get("inspection_set_id")
-        if iset_id and not _is_current_removal_candidate(supabase, body.factory_id, iset_id):
-            raise HTTPException(409, "해당 의무는 현재 제외 후보가 아닙니다")
+    if not ws_res.data:
+        raise HTTPException(404, "해당 일정을 찾을 수 없습니다")
+    iset_id = ws_res.data[0].get("inspection_set_id")
+    if not iset_id:
+        raise HTTPException(409, "해당 일정에 점검 세트가 연결되지 않았습니다")
+    if not _is_current_removal_candidate(supabase, body.factory_id, iset_id):
+        raise HTTPException(409, "해당 의무는 현재 제외 후보가 아닙니다")
 
     log.info(
         "[OBLIGATION_CHANGE] scope_a factory=%s schedule=%s reason=%s user=%s",

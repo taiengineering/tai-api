@@ -71,19 +71,25 @@ def preview_removal_impact(
     schedules_to_cancel = 0
     schedules_to_preserve = 0
 
+    # FIX-04: 취소 범위 분리 (application_date 기준)
+    to_cancel_ids: set = set()
     if application_date:
         for s in eligible:
             pd = s.get("planned_date") or ""
             if pd >= application_date:
                 schedules_to_cancel += 1
+                to_cancel_ids.add(s["id"])
             else:
                 schedules_to_preserve += 1
     else:
         schedules_to_cancel = total_future
+        to_cancel_ids = {s["id"] for s in eligible}
 
-    # FIX-04: child_linked 는 취소 대상(eligible)에서만 산출 — 보존 이력은 이미 건드리지 않음
+    # FIX-04: child_linked 는 실제 취소 대상 범위에서만 산출 (complete/in_progress 이력 제외)
     child_linked_count = 0
     for s in eligible:
+        if s["id"] not in to_cancel_ids:
+            continue
         asgn_res = (
             supabase.table("work_assignments")
             .select("id")
@@ -98,6 +104,7 @@ def preview_removal_impact(
         "total_future_schedules": total_future,
         "schedules_to_cancel": schedules_to_cancel,
         "schedules_to_preserve": schedules_to_preserve,
+        "actual_cancellable": schedules_to_cancel - child_linked_count,
         "has_child_linked": child_linked_count > 0,
         "child_linked_count": child_linked_count,
     }
@@ -152,7 +159,8 @@ def process_scope_a(
     if _child_linked(supabase, row["id"], factory_id):
         return {"processed": 0, "skipped_reason": "연결된 배정·점검 이력이 있습니다"}
 
-    # FIX-01: UPDATE 결과 확인 — race condition 대응 (active_yn 사전 검사 후 변경 가능성)
+    # FIX-01+FIX-03: UPDATE 조건에 status_code 보호 추가 — SELECT↔UPDATE 사이 경합 방지
+    # active_yn=True AND status_code NOT IN _PRESERVE_STATUS 조건으로 이중 잠금
     update_res = supabase.table("work_schedules").update(
         {
             "is_excluded": True,
@@ -160,10 +168,14 @@ def process_scope_a(
             "active_yn": False,
             "status_code": "EXCLUDED",
         }
-    ).eq("id", work_schedule_id).eq("factory_id", factory_id).eq("active_yn", True).execute()
+    ).eq("id", work_schedule_id).eq("factory_id", factory_id).eq("active_yn", True).neq(
+        "status_code", "COMPLETED"
+    ).neq(
+        "status_code", "IN_PROGRESS"
+    ).execute()
 
     if not update_res.data:
-        return {"processed": 0, "skipped_reason": "업데이트 대상 없음 (이미 처리된 일정)"}
+        return {"processed": 0, "skipped_reason": "업데이트 대상 없음 (이미 처리됐거나 상태 변경)"}
 
     log.info(
         "[REMOVAL_SCOPE_A] schedule=%s factory=%s reason=%s",
@@ -275,6 +287,8 @@ def process_scope_b(
             cancelled += 1
 
     # 4. inspection_sets: scope_b_deactivation_date 설정 + 조건부 is_active
+    # NOTE: date.today()와 services.time.business_today()는 동일 계약을 따름.
+    # 시간대는 서버 KST 기준 — 시스템 TZ가 Asia/Seoul 로 설정된 환경에서 동일.
     today = date.today()
 
     is_active_false = app_dt <= today
@@ -285,19 +299,33 @@ def process_scope_b(
     if is_active_false:
         update_payload["is_active"] = False
 
-    supabase.table("inspection_sets").update(update_payload).eq(
+    # FIX-03: inspection_sets UPDATE 결과 확인 — 부분 성공 감지
+    is_update_res = supabase.table("inspection_sets").update(update_payload).eq(
         "id", inspection_set_id
     ).eq("factory_id", factory_id).execute()
 
+    is_update_ok = bool(is_update_res.data)
+    if not is_update_ok:
+        log.error(
+            "[REMOVAL_SCOPE_B] PARTIAL_SUCCESS_WARNING: schedules cancelled=%d but "
+            "inspection_sets UPDATE returned 0 rows — factory=%s set=%s application_date=%s. "
+            "수동 조정 필요.",
+            cancelled,
+            factory_id,
+            inspection_set_id,
+            application_date,
+        )
+
     log.info(
         "[REMOVAL_SCOPE_B] inspection_set=%s factory=%s application_date=%s "
-        "cancelled=%d preserved=%d is_active_set_false=%s reason=%s",
+        "cancelled=%d preserved=%d is_active_set_false=%s is_set_updated=%s reason=%s",
         inspection_set_id,
         factory_id,
         application_date,
         cancelled,
         len(preserved_completed),
         is_active_false,
+        is_update_ok,
         reason,
     )
 
@@ -307,5 +335,6 @@ def process_scope_b(
         "schedules_preserved_completed": len(preserved_completed),
         "child_linked_count": child_linked_count,
         "is_active_set_false": is_active_false,
+        "is_set_updated": is_update_ok,
         "scope_b_deactivation_date": str(app_dt),
     }

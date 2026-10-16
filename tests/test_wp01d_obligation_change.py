@@ -706,6 +706,7 @@ def test_scope_a_update_zero_rows_returns_processed_zero():
 
     update_chain = MagicMock()
     update_chain.eq.return_value = update_chain
+    update_chain.neq.return_value = update_chain
     # 0행 반영 시뮬 (race condition: active_yn 이미 False)
     update_chain.execute.return_value = _mk_execute([])
 
@@ -1353,25 +1354,43 @@ def test_p06i_atom_still_in_c10_not_a_candidate():
 
 
 def test_p06i_atom_absent_from_c10_is_candidate():
-    """inspection_set 의 atom 이 최신 C10 에 없음 → REMOVAL_CANDIDATE 확인."""
+    """inspection_set 의 atom 이 최신 C10 에 없고 이전 C10 에 있음 → REMOVAL_CANDIDATE 확인."""
     is_data = [{
         "id": "is-gone",
         "is_active": True,
         "source": "LEGAL_ENGINE",
         "legal_obligation_atom_id": "ATOM-GONE",
     }]
-    c10_data = [{"full_result": {"obligations_raw": [{"atom_id": "ATOM-OTHER"}]}}]
+    # Latest C10: ATOM-GONE 없음
+    latest_c10_data = [{
+        "id": "diag-latest",
+        "full_result": {"obligations_raw": [{"atom_id": "ATOM-OTHER"}]},
+        "input_data": {"factory_id": "f1", "sector": "MANUFACTURING"},
+        "created_at": "2026-10-17T10:00:00Z",
+    }]
+    # Previous C10: ATOM-GONE 있음 → 이전에 의무였음 증명
+    prev_c10_data = [{
+        "id": "diag-prev",
+        "full_result": {"obligations_raw": [{"atom_id": "ATOM-GONE"}]},
+        "input_data": {"factory_id": "f1", "sector": "MANUFACTURING"},
+        "created_at": "2026-10-01T10:00:00Z",
+    }]
 
+    adr_call = [0]
     sb = MagicMock()
 
     def _table(name):
         leaf = MagicMock()
-        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+        for m in ("select", "eq", "neq", "gte", "lt", "order", "limit"):
             setattr(leaf, m, MagicMock(return_value=leaf))
         if name == "inspection_sets":
             leaf.execute.return_value = _mk_execute(is_data)
         elif name == "anonymous_diagnosis_results":
-            leaf.execute.return_value = _mk_execute(c10_data)
+            adr_call[0] += 1
+            if adr_call[0] == 1:
+                leaf.execute.return_value = _mk_execute(latest_c10_data)
+            else:
+                leaf.execute.return_value = _mk_execute(prev_c10_data)
         else:
             leaf.execute.return_value = _mk_execute([])
         return leaf
@@ -1379,7 +1398,7 @@ def test_p06i_atom_absent_from_c10_is_candidate():
     sb.table.side_effect = _table
 
     result = _is_current_removal_candidate(sb, "f1", "is-gone")
-    assert result is True    # C10 에 없음 → 처리 허용
+    assert result is True    # 최신 C10 에 없고 이전 C10 에 있음 → 처리 허용
 
 
 def test_p06i_inactive_inspection_set_not_candidate():
@@ -1687,25 +1706,41 @@ def test_r05_atom_in_latest_c10_not_candidate():
 # ---------------------------------------------------------------------------
 
 def test_r06_valid_removal_candidate_allowed():
-    """atom이 C10에 없으면 removal candidate True."""
+    """atom이 최신 C10에 없고 이전 C10에 있으면 removal candidate True."""
     is_data = [{
         "id": "is-gone",
         "is_active": True,
         "source": "LEGAL_ENGINE",
         "legal_obligation_atom_id": "ATOM-GONE",
     }]
-    c10_data = [{"full_result": {"obligations_raw": [{"atom_id": "ATOM-OTHER"}]}}]
+    latest_c10_data = [{
+        "id": "diag-latest",
+        "full_result": {"obligations_raw": [{"atom_id": "ATOM-OTHER"}]},
+        "input_data": {"factory_id": "f1", "sector": "MANUFACTURING"},
+        "created_at": "2026-10-17T10:00:00Z",
+    }]
+    prev_c10_data = [{
+        "id": "diag-prev",
+        "full_result": {"obligations_raw": [{"atom_id": "ATOM-GONE"}]},
+        "input_data": {"factory_id": "f1", "sector": "MANUFACTURING"},
+        "created_at": "2026-10-01T10:00:00Z",
+    }]
 
+    adr_call = [0]
     sb = MagicMock()
 
     def _table(name):
         leaf = MagicMock()
-        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+        for m in ("select", "eq", "neq", "gte", "lt", "order", "limit"):
             setattr(leaf, m, MagicMock(return_value=leaf))
         if name == "inspection_sets":
             leaf.execute.return_value = _mk_execute(is_data)
         elif name == "anonymous_diagnosis_results":
-            leaf.execute.return_value = _mk_execute(c10_data)
+            adr_call[0] += 1
+            if adr_call[0] == 1:
+                leaf.execute.return_value = _mk_execute(latest_c10_data)
+            else:
+                leaf.execute.return_value = _mk_execute(prev_c10_data)
         else:
             leaf.execute.return_value = _mk_execute([])
         return leaf
@@ -2136,49 +2171,249 @@ def test_r19_no_delete_operations():
 
 
 # ---------------------------------------------------------------------------
-# R20: Migration 미적용 환경 → law_engine scope_b null safe
+# R20a/R20b: _fetch_deactivation_dates 컬럼 미존재 vs DB 오류 분기
 # ---------------------------------------------------------------------------
 
-def test_r20_law_engine_scope_b_null_safe():
-    """scope_b_deactivation_date=None (migration 미적용 시뮬) → 정상 처리 (P0-01)."""
-    from services.inspection_sets_svc.law_engine import run_generate_operation_schedules
+def test_r20a_missing_column_returns_empty_dict():
+    """Migration 미적용: 컬럼 미존재 예외 → {} 반환 (Scope B 가드 비활성, OTR 계속)."""
+    from services.inspection_sets_svc.law_engine import _fetch_deactivation_dates
 
-    today_iso = date.today().isoformat()
+    sb = MagicMock()
+    leaf = MagicMock()
+    leaf.execute.side_effect = Exception(
+        "Could not find the 'scope_b_deactivation_date' column of 'inspection_sets'"
+    )
+    for m in ("select", "eq"):
+        setattr(leaf, m, MagicMock(return_value=leaf))
+    sb.table.return_value = leaf
 
-    # scope_b_deactivation_date = None → .get() 반환 None → 가드 통과
-    iset_data = [{
-        "id": "is-r20",
-        "factory_id": "f1",
-        "company_id": "c1",
+    result = _fetch_deactivation_dates(sb, "f1")
+    assert result == {}, "컬럼 미존재 예외는 빈 dict 로 처리돼야 한다 (fail-open)"
+
+
+def test_r20b_db_error_after_migration_raises():
+    """Migration 적용 후 일반 DB 오류 → 예외 re-raise (fail-closed, OTR 차단)."""
+    from services.inspection_sets_svc.law_engine import _fetch_deactivation_dates
+
+    sb = MagicMock()
+    leaf = MagicMock()
+    leaf.execute.side_effect = Exception("connection timeout")
+    for m in ("select", "eq"):
+        setattr(leaf, m, MagicMock(return_value=leaf))
+    sb.table.return_value = leaf
+
+    with pytest.raises(Exception, match="connection timeout"):
+        _fetch_deactivation_dates(sb, "f1")
+
+
+# ---------------------------------------------------------------------------
+# R21: _is_current_removal_candidate — 이전 C10 기준 없음 → False
+# ---------------------------------------------------------------------------
+
+def test_r21_no_previous_baseline_returns_false():
+    """이전 MATERIALIZED C10 없음 → _is_current_removal_candidate False (FIX-02)."""
+    from services.wp01_obligation_change.change_tracker import _is_current_removal_candidate
+
+    iset_row = {
+        "legal_obligation_atom_id": "ATOM-NEW",
+        "is_active": True,
         "source": "LEGAL_ENGINE",
-        "legal_obligation_atom_id": "ATOM-R20",
-        "operation_time_rule": {"operator": "ONCE", "due_date": today_iso},
-        "assignee_user_id": None,
-        "inspection_set_name": "R20 Test",
-        "inspection_category": "SAFETY",
-        "description": None,
-        "holiday_process_type": None,
-        "scope_b_deactivation_date": None,  # migration 미적용 시뮬
-    }]
+    }
+    # latest C10: ATOM-NEW 없음 → removal candidate 조건 만족
+    latest_c10_row = {
+        "id": "diag-latest",
+        "full_result": {"obligations_raw": [{"atom_id": "ATOM-OTHER"}]},
+        "input_data": {"factory_id": "f1", "sector": "MANUFACTURING"},
+        "created_at": "2026-10-17T10:00:00Z",
+    }
 
+    adr_call = [0]
     sb = MagicMock()
 
     def _table(name):
         leaf = MagicMock()
-        for m in ("select", "eq", "neq", "gte", "order", "limit", "upsert"):
+        for m in ("select", "eq", "neq", "gte", "lt", "order", "limit"):
             setattr(leaf, m, MagicMock(return_value=leaf))
         if name == "inspection_sets":
-            leaf.execute.return_value = _mk_execute(iset_data)
+            leaf.execute.return_value = _mk_execute([iset_row])
+        elif name == "anonymous_diagnosis_results":
+            adr_call[0] += 1
+            if adr_call[0] == 1:
+                leaf.execute.return_value = _mk_execute([latest_c10_row])
+            else:
+                # 이전 C10 없음
+                leaf.execute.return_value = _mk_execute([])
         else:
             leaf.execute.return_value = _mk_execute([])
         return leaf
 
     sb.table.side_effect = _table
 
-    # scope_b_deactivation_date=None → 가드 조건 미충족 → 정상 OTR 처리 경로 진입
-    result = run_generate_operation_schedules("f1", sb)
-    # 가드로 인해 차단되지 않고 total_sets=1 이어야 함
-    assert result["total_sets"] == 1
-    # created=0 일 수 있음 (ONCE OTR 처리 실패 시 skipped_no_condition 증가)
-    # 중요: R08처럼 scope_b_deactivation_date 가드로 차단되지 않아야 함
-    assert result.get("skipped_no_condition", 0) < 2 or result["created"] >= 0
+    result = _is_current_removal_candidate(sb, "f1", "iset-1")
+    assert result is False, "이전 C10 기준 없으면 제외 후보 아님"
+
+
+# ---------------------------------------------------------------------------
+# R22: _is_current_removal_candidate — atom이 이전 C10에 없음 → False
+# ---------------------------------------------------------------------------
+
+def test_r22_atom_not_in_prev_baseline_returns_false():
+    """atom이 이전 C10에도 없음 → _is_current_removal_candidate False (FIX-02)."""
+    from services.wp01_obligation_change.change_tracker import _is_current_removal_candidate
+
+    iset_row = {
+        "legal_obligation_atom_id": "ATOM-GHOST",
+        "is_active": True,
+        "source": "LEGAL_ENGINE",
+    }
+    latest_c10_row = {
+        "id": "diag-latest",
+        "full_result": {"obligations_raw": [{"atom_id": "ATOM-OTHER"}]},
+        "input_data": {"factory_id": "f1", "sector": "MANUFACTURING"},
+        "created_at": "2026-10-17T10:00:00Z",
+    }
+    prev_c10_row = {
+        "id": "diag-prev",
+        "full_result": {"obligations_raw": [{"atom_id": "ATOM-OLD"}]},  # ATOM-GHOST 없음
+        "input_data": {"factory_id": "f1", "sector": "MANUFACTURING"},
+        "created_at": "2026-10-01T10:00:00Z",
+    }
+
+    adr_call = [0]
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "lt", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "inspection_sets":
+            leaf.execute.return_value = _mk_execute([iset_row])
+        elif name == "anonymous_diagnosis_results":
+            adr_call[0] += 1
+            if adr_call[0] == 1:
+                leaf.execute.return_value = _mk_execute([latest_c10_row])
+            else:
+                leaf.execute.return_value = _mk_execute([prev_c10_row])
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = _is_current_removal_candidate(sb, "f1", "iset-1")
+    assert result is False, "이전 C10에도 atom 없으면 제외 후보 아님"
+
+
+# ---------------------------------------------------------------------------
+# R23: Scope A 라우터 — work_schedule 미발견 → 404
+# ---------------------------------------------------------------------------
+
+def test_r23_scope_a_router_404_when_schedule_not_found():
+    """work_schedule 미발견 → 404 HTTPException (FIX-03 라우터 강화)."""
+    from fastapi import HTTPException
+    from unittest.mock import patch
+
+    sb = MagicMock()
+    leaf = MagicMock()
+    for m in ("select", "eq", "limit"):
+        setattr(leaf, m, MagicMock(return_value=leaf))
+    leaf.execute.return_value = _mk_execute([])  # 일정 없음
+    sb.table.return_value = leaf
+
+    current = {"id": "u1", "role_code": "ALL", "company_id": "c1"}
+
+    with patch("routers.obligation_change.get_supabase", return_value=sb), \
+         patch("routers.obligation_change._require_company_admin"), \
+         patch("routers.obligation_change._require_company_factory"):
+        from routers.obligation_change import process_scope_a_removal
+        from schemas.obligation_change import ScopeARemovalRequest
+
+        body = ScopeARemovalRequest(
+            factory_id="f1",
+            work_schedule_id="ws-missing",
+            reason="테스트",
+        )
+        try:
+            process_scope_a_removal(body, current)
+            assert False, "HTTPException 발생해야 함"
+        except HTTPException as e:
+            assert e.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# R24: Scope A 라우터 — inspection_set_id 누락 → 409
+# ---------------------------------------------------------------------------
+
+def test_r24_scope_a_router_409_when_iset_id_missing():
+    """inspection_set_id=None → 409 HTTPException (FIX-03 라우터 강화)."""
+    from fastapi import HTTPException
+    from unittest.mock import patch
+
+    sb = MagicMock()
+    leaf = MagicMock()
+    for m in ("select", "eq", "limit"):
+        setattr(leaf, m, MagicMock(return_value=leaf))
+    leaf.execute.return_value = _mk_execute([{"inspection_set_id": None}])
+    sb.table.return_value = leaf
+
+    current = {"id": "u1", "role_code": "ALL", "company_id": "c1"}
+
+    with patch("routers.obligation_change.get_supabase", return_value=sb), \
+         patch("routers.obligation_change._require_company_admin"), \
+         patch("routers.obligation_change._require_company_factory"):
+        from routers.obligation_change import process_scope_a_removal
+        from schemas.obligation_change import ScopeARemovalRequest
+
+        body = ScopeARemovalRequest(
+            factory_id="f1",
+            work_schedule_id="ws-no-iset",
+            reason="테스트",
+        )
+        try:
+            process_scope_a_removal(body, current)
+            assert False, "HTTPException 발생해야 함"
+        except HTTPException as e:
+            assert e.status_code == 409
+            assert "점검 세트" in e.detail
+
+
+# ---------------------------------------------------------------------------
+# R25: Scope B — inspection_sets UPDATE 실패 시 is_set_updated=False 반환
+# ---------------------------------------------------------------------------
+
+def test_r25_scope_b_partial_success_detected():
+    """inspection_sets UPDATE 0행 → is_set_updated=False (FIX-03 부분 갱신 감지)."""
+    from services.wp01_obligation_change.removal_processor import process_scope_b
+
+    iset_row = {
+        "id": "is-r25",
+        "is_active": True,
+        "source": "LEGAL_ENGINE",
+        "scope_b_deactivation_date": None,
+    }
+
+    sb = MagicMock()
+    call_seq = [0]
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "update", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "inspection_sets":
+            call_seq[0] += 1
+            if call_seq[0] == 1:
+                # SELECT 검증
+                leaf.execute.return_value = _mk_execute([iset_row])
+            else:
+                # UPDATE 실패: 0행 반환
+                leaf.execute.return_value = _mk_execute([])
+        else:
+            # work_schedules: 활성 일정 없음
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = process_scope_b(sb, "f1", "is-r25", "2026-10-20", "테스트 이유")
+    assert result["is_set_updated"] is False, "UPDATE 0행 → is_set_updated=False"
+    assert result["schedules_cancelled"] == 0
