@@ -39,13 +39,14 @@ from services.canonical.saas_appendix3_contract import check_saas_appendix3_cont
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
 
-def _finalize_saas_leg_http(supabase, *, factory_id: str, leg_out: dict):
+def _finalize_saas_leg_http(supabase, *, factory_id: str, leg_out: dict, site_id: Optional[str] = None):
     """Common SaaS LEG finalizer. HTTP 오류변환은 라우터. sector runtime except 와 분리.
 
     SaasPersistError 는 ValueError 하위이므로 persist 실패(500)를 company_id(422)보다 먼저 매핑한다.
+    site_id: CONSTRUCTION 현장 격리용 — 서버 검증 완료 값만 전달.
     """
     try:
-        return finalize_saas_leg_result(supabase, factory_id=factory_id, leg_out=leg_out)
+        return finalize_saas_leg_result(supabase, factory_id=factory_id, leg_out=leg_out, site_id=site_id)
     except SaasPersistError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
     except LookupError as e:
@@ -262,7 +263,8 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
         ) from e
     except (LegDiagnosisError, LegRuntimeError) as e:
         raise HTTPException(status_code=502, detail="LEG 실행 실패: {}".format(e))
-    return _finalize_saas_leg_http(supabase, factory_id=out["factory_id"], leg_out=out)
+    # B-3: 인증·소유권·현장 Scope 검증 통과한 site_id 전달 → C10 input_data 격리 저장
+    return _finalize_saas_leg_http(supabase, factory_id=out["factory_id"], leg_out=out, site_id=body.site_id)
 
 
 
