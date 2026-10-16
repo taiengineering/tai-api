@@ -212,11 +212,11 @@ def test_tc05_scope_a_single_occurrence():
         {"id": "sched-1", "status_code": "SCHEDULED", "active_yn": True, "factory_id": "f1"}
     ])
 
-    # update 체인
+    # update 체인 — FIX-01: non-empty data 반환 (1행 업데이트됨)
     update_leaf = MagicMock()
     for m in ("update", "eq"):
         setattr(update_leaf, m, MagicMock(return_value=update_leaf))
-    update_leaf.execute.return_value = _mk_execute([])
+    update_leaf.execute.return_value = _mk_execute([{"id": "sched-1"}])
 
     # table 라우팅
     def _table(name):
@@ -262,7 +262,8 @@ def test_tc05_scope_a_sets_is_excluded():
 
     for m in ("eq",):
         setattr(update_leaf, m, MagicMock(return_value=update_leaf))
-    update_leaf.execute.return_value = _mk_execute([])
+    # FIX-01: UPDATE 성공 시 non-empty data 반환
+    update_leaf.execute.return_value = _mk_execute([{"id": "sched-1"}])
     update_leaf.update = _capture_update
 
     def _table(name):
@@ -692,6 +693,39 @@ def test_scope_a_schedule_not_found():
     assert result["skipped_reason"] is not None
 
 
+def test_scope_a_update_zero_rows_returns_processed_zero():
+    """FIX-01: UPDATE 가 0행 반영(race condition) → processed=0 반환."""
+    sb = MagicMock()
+
+    select_leaf = MagicMock()
+    for m in ("select", "eq", "neq", "gte", "order", "limit"):
+        setattr(select_leaf, m, MagicMock(return_value=select_leaf))
+    select_leaf.execute.return_value = _mk_execute([
+        {"id": "s1", "status_code": "SCHEDULED", "active_yn": True, "factory_id": "f1"}
+    ])
+
+    update_chain = MagicMock()
+    update_chain.eq.return_value = update_chain
+    # 0행 반영 시뮬 (race condition: active_yn 이미 False)
+    update_chain.execute.return_value = _mk_execute([])
+
+    def _table(name):
+        if name == "work_schedules":
+            tbl = MagicMock()
+            tbl.select.return_value = select_leaf
+            tbl.update.return_value = update_chain
+            return tbl
+        return MagicMock()
+
+    sb.table.side_effect = _table
+
+    with patch("services.wp01_obligation_change.removal_processor._child_linked", return_value=False):
+        result = process_scope_a(sb, "f1", "s1", "사유")
+
+    assert result["processed"] == 0
+    assert result["skipped_reason"] is not None
+
+
 # ---------------------------------------------------------------------------
 # Scope B — invalid inspection_set
 # ---------------------------------------------------------------------------
@@ -828,7 +862,8 @@ def test_scope_a_sets_active_yn_false():
 
     update_chain = MagicMock()
     update_chain.eq.return_value = update_chain
-    update_chain.execute.return_value = _mk_execute([])
+    # FIX-01: UPDATE 성공 시 non-empty data 반환 (1행 업데이트됨)
+    update_chain.execute.return_value = _mk_execute([{"id": "s1"}])
 
     def _capture(payload):
         captured.append(payload)
@@ -996,7 +1031,8 @@ def test_p06d_scope_a_isolates_to_single_schedule():
     eq_id_values = []
 
     update_chain = MagicMock()
-    update_chain.execute.return_value = _mk_execute([])
+    # FIX-01: UPDATE 성공 시 non-empty data 반환
+    update_chain.execute.return_value = _mk_execute([{"id": target_id}])
 
     def _capture_eq(field, value):
         if field == "id":
@@ -2018,8 +2054,19 @@ def test_r16_reentry_server_based():
 # ---------------------------------------------------------------------------
 
 def test_r17_scope_isolation_all_four():
-    """ALL/COMPANY 허용, FACTORY/TEAM 차단 (기존 P06-G 테스트로 커버됨)."""
-    pass  # covered by test_p06g_*
+    """ALL/COMPANY → 관리자 함수 통과; FACTORY/TEAM → 403 HTTPException."""
+    from unittest.mock import patch as _patch
+    from routers.obligation_change import _require_company_admin
+
+    for allowed in ("ALL", "COMPANY"):
+        with _patch("routers.obligation_change._get_scope", return_value=allowed):
+            _require_company_admin({"role_code": "X"}, None)  # 예외 없음
+
+    for blocked in ("FACTORY", "TEAM", "UNKNOWN"):
+        with _patch("routers.obligation_change._get_scope", return_value=blocked):
+            with pytest.raises(HTTPException) as exc:
+                _require_company_admin({"role_code": "X"}, None)
+            assert exc.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -2027,8 +2074,53 @@ def test_r17_scope_isolation_all_four():
 # ---------------------------------------------------------------------------
 
 def test_r18_sector_filtering_all_three():
-    """3섹터 site_id 처리 확인 (기존 P06-H 테스트로 커버됨)."""
-    assert True  # covered by test_p06h_*
+    """CONSTRUCTION: site_id 없으면 ValueError. MANUFACTURING: site_id 없어도 정상 처리."""
+    # CONSTRUCTION without site_id → ValueError
+    new_diag_construction = {
+        "full_result": {"obligations_raw": [{"atom_id": "A1"}]},
+        "input_data": {"factory_id": "f1", "sector": "CONSTRUCTION"},
+        "created_at": "2026-10-17T10:00:00Z",
+    }
+    sb_c = MagicMock()
+
+    def _table_c(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "lt", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        leaf.execute.return_value = _mk_execute([new_diag_construction])
+        return leaf
+
+    sb_c.table.side_effect = _table_c
+
+    with pytest.raises(ValueError, match="site_id"):
+        compute_change_summary(sb_c, "f1", "diag-r18-c")
+
+    # MANUFACTURING without site_id → 정상 처리 (ValueError 없음)
+    new_diag_mfg = {
+        "full_result": {"obligations_raw": [{"atom_id": "A1"}]},
+        "input_data": {"factory_id": "f1", "sector": "MANUFACTURING"},
+        "created_at": "2026-10-17T10:00:00Z",
+    }
+    adr_count = [0]
+    sb_m = MagicMock()
+
+    def _table_m(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "lt", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "anonymous_diagnosis_results":
+            adr_count[0] += 1
+            leaf.execute.return_value = _mk_execute(
+                [new_diag_mfg] if adr_count[0] == 1 else []
+            )
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb_m.table.side_effect = _table_m
+
+    result = compute_change_summary(sb_m, "f1", "diag-r18-m")
+    assert result["added_count"] == 1
 
 
 # ---------------------------------------------------------------------------

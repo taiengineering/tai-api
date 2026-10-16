@@ -81,8 +81,9 @@ def preview_removal_impact(
     else:
         schedules_to_cancel = total_future
 
+    # FIX-04: child_linked 는 취소 대상(eligible)에서만 산출 — 보존 이력은 이미 건드리지 않음
     child_linked_count = 0
-    for s in all_schedules:
+    for s in eligible:
         asgn_res = (
             supabase.table("work_assignments")
             .select("id")
@@ -151,7 +152,8 @@ def process_scope_a(
     if _child_linked(supabase, row["id"], factory_id):
         return {"processed": 0, "skipped_reason": "연결된 배정·점검 이력이 있습니다"}
 
-    supabase.table("work_schedules").update(
+    # FIX-01: UPDATE 결과 확인 — race condition 대응 (active_yn 사전 검사 후 변경 가능성)
+    update_res = supabase.table("work_schedules").update(
         {
             "is_excluded": True,
             "excluded_reason": excluded_reason,
@@ -159,6 +161,9 @@ def process_scope_a(
             "status_code": "EXCLUDED",
         }
     ).eq("id", work_schedule_id).eq("factory_id", factory_id).eq("active_yn", True).execute()
+
+    if not update_res.data:
+        return {"processed": 0, "skipped_reason": "업데이트 대상 없음 (이미 처리된 일정)"}
 
     log.info(
         "[REMOVAL_SCOPE_A] schedule=%s factory=%s reason=%s",
@@ -230,28 +235,31 @@ def process_scope_b(
             "scope_b_deactivation_date": iset.get("scope_b_deactivation_date"),
         }
 
-    # 2. 대상 일정 로드
-    sched_res = (
-        supabase.table("work_schedules")
-        .select("id, status_code")
-        .eq("factory_id", factory_id)
-        .eq("inspection_set_id", inspection_set_id)
-        .eq("active_yn", True)
-        .gte("planned_date", application_date)
-        .execute()
-    )
-
-    all_future: List[Dict] = sched_res.data or []
-    to_cancel = [s for s in all_future if not _is_preserve(s)]
-    preserved_completed = [s for s in all_future if _is_preserve(s)]
-
-    # P0-06: application_date 파싱 엄격화 (취소 처리 전 검증)
+    # P0-06: application_date 파싱 엄격화 — 쿼리 전 검증
     try:
         app_dt = date.fromisoformat(str(application_date))
     except ValueError:
         raise ValueError(
             f"application_date 형식이 잘못되었습니다: {application_date!r} (YYYY-MM-DD 필요)"
         )
+
+    # FIX-03: 과거 소급 취소 차단 — application_date 가 과거라도 오늘 이전 미완료 일정 보존
+    effective_from = max(app_dt, date.today())
+
+    # 2. 대상 일정 로드 (effective_from 기준: 오늘 이후만)
+    sched_res = (
+        supabase.table("work_schedules")
+        .select("id, status_code")
+        .eq("factory_id", factory_id)
+        .eq("inspection_set_id", inspection_set_id)
+        .eq("active_yn", True)
+        .gte("planned_date", str(effective_from))
+        .execute()
+    )
+
+    all_future: List[Dict] = sched_res.data or []
+    to_cancel = [s for s in all_future if not _is_preserve(s)]
+    preserved_completed = [s for s in all_future if _is_preserve(s)]
 
     # 3. 취소 (idempotent) — P0-04: child_linked 확인 + 실제 UPDATE 성공 건수 집계
     cancelled = 0

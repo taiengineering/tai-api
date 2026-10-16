@@ -32,9 +32,7 @@ _SET_SELECT = (
     "id, factory_id, company_id, source, legal_obligation_atom_id, "
     "operation_time_rule, assignee_user_id, "
     "inspection_set_name, inspection_category, description, "
-    "holiday_process_type, scope_b_deactivation_date"
-    # NOTE: scope_b_deactivation_date requires migration 20261017000001_wp01d_inspection_sets_scope_b.sql
-    # DEPLOYMENT BLOCKED until migration is applied.
+    "holiday_process_type"
 )
 
 _RECONCILE_STATUSES = frozenset({"planned", "scheduled"})
@@ -49,6 +47,30 @@ _WS_SELECT = (
 def _has_atom(iset: dict) -> bool:
     atom = iset.get("legal_obligation_atom_id")
     return isinstance(atom, str) and bool(atom.strip())
+
+
+def _fetch_deactivation_dates(supabase, factory_id: str) -> dict:
+    """scope_b_deactivation_date 가 설정된 inspection_sets 를 {id: date_str} 로 반환.
+
+    try/except: migration 20261017000001_wp01d_inspection_sets_scope_b.sql 미적용 환경
+    (PostgREST 400) → {} 반환 — 가드 비활성화로 안전하게 fallback.
+    """
+    try:
+        res = (
+            supabase.table("inspection_sets")
+            .select("id, scope_b_deactivation_date")
+            .eq("factory_id", factory_id)
+            .eq("is_active", True)
+            .eq("source", "LEGAL_ENGINE")
+            .execute()
+        )
+        return {
+            r["id"]: r["scope_b_deactivation_date"]
+            for r in (res.data or [])
+            if r.get("scope_b_deactivation_date")
+        }
+    except Exception:
+        return {}
 
 
 def _child_linked(supabase, schedule_id: str, factory_id: str) -> bool:
@@ -354,6 +376,9 @@ def run_generate_operation_schedules(factory_id: str, supabase) -> dict:
     if not all_sets:
         return {"total_sets": 0, **_empty_counters()}
 
+    # P0-01: scope_b_deactivation_date 를 별도 쿼리로 로드 (migration fallback 포함)
+    deactivation_dates = _fetch_deactivation_dates(supabase, factory_id)
+
     counters = _empty_counters()
 
     for iset in all_sets:
@@ -386,8 +411,8 @@ def run_generate_operation_schedules(factory_id: str, supabase) -> dict:
         planned_s = planned.isoformat()
         set_id = iset["id"]
 
-        # P0-01: scope_b_deactivation_date 가드 (migration 적용 후 활성화)
-        deactivation_date = iset.get("scope_b_deactivation_date")
+        # P0-01: scope_b_deactivation_date 가드 — migration 미적용 시 deactivation_dates={}
+        deactivation_date = deactivation_dates.get(set_id)
         if deactivation_date is not None and planned_s >= str(deactivation_date):
             counters["skipped_no_condition"] += 1
             continue

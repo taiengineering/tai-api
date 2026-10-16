@@ -94,6 +94,9 @@ def get_removal_preview(
     supabase = get_supabase()
     _require_company_admin(current, supabase)
     _require_company_factory(supabase, body.factory_id, current)
+    # FIX-04: 후보 재검증 — 최신 C10 기준 제외 후보가 아니면 차단
+    if not _is_current_removal_candidate(supabase, body.factory_id, body.inspection_set_id):
+        raise HTTPException(409, "해당 의무는 현재 제외 후보가 아닙니다")
     result = preview_removal_impact(
         supabase, body.factory_id, body.inspection_set_id, body.application_date
     )
