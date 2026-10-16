@@ -78,7 +78,7 @@ class _InsertEmpty:
 
 
 class _UpdateCapture:
-    """supabase update() 호출을 캡처하는 stub."""
+    """supabase update() 호출을 캡처하고 저장된 값을 그대로 반환하는 stub."""
     def __init__(self):
         self.called_with: Optional[dict] = None
         self._payload: Optional[dict] = None
@@ -90,11 +90,14 @@ class _UpdateCapture:
     def eq(self, *_args, **_kw):
         return self
 
+    def select(self, *_):  # chained .select() 지원
+        return self
+
     def execute(self):
         self.called_with = self._payload
-        class _R:
-            data = [{}]
-        return _R()
+        # 업데이트된 row 반환 — 실제 DB와 동일하게 payload 포함
+        payload_copy = dict(self._payload or {})
+        return type("_R", (), {"data": [payload_copy]})()
 
 
 class _UpdateFail:
@@ -105,8 +108,42 @@ class _UpdateFail:
     def eq(self, *_, **__):
         return self
 
+    def select(self, *_):
+        return self
+
     def execute(self):
         raise RuntimeError("DB update failed")
+
+
+class _UpdateZeroRows:
+    """supabase update() → 0행 수정(대상 row 없음) stub."""
+    def update(self, *_):
+        return self
+
+    def eq(self, *_, **__):
+        return self
+
+    def select(self, *_):
+        return self
+
+    def execute(self):
+        return type("_R", (), {"data": []})()
+
+
+class _UpdateMismatch:
+    """supabase update() → 저장된 상태가 요청값과 다름(불일치) stub."""
+    def update(self, *_):
+        return self
+
+    def eq(self, *_, **__):
+        return self
+
+    def select(self, *_):
+        return self
+
+    def execute(self):
+        # 저장된 상태가 의도치 않게 다른 값으로 남은 경우를 시뮬레이션
+        return type("_R", (), {"data": [{"inspection_materialization_status": "WRONG_STATUS"}]})()
 
 
 class _InspectionSetsEmpty:
@@ -508,3 +545,73 @@ def test_T12_migration_file_exists():
     content = files[0].read_text()
     assert "inspection_materialization_status" in content
     assert "TEXT" in content.upper()
+
+
+# ── T13-T16: _record_materialization_status 직접 단위 테스트 ──────────────────
+
+from services.saas_diagnosis_result_persistence import _record_materialization_status
+
+
+def test_T13_update_success_status_match_no_warning(caplog):
+    """UPDATE 성공 + 상태 일치 → 경고 없음."""
+
+    class _MatchSupa:
+        def table(self, _):
+            return self
+        def update(self, payload):
+            self._payload = payload
+            return self
+        def eq(self, *_, **__):
+            return self
+        def select(self, *_):
+            return self
+        def execute(self):
+            return type("_R", (), {"data": [{"inspection_materialization_status": "MATERIALIZED"}]})()
+
+    with caplog.at_level(logging.WARNING, logger="services.saas_diagnosis_result_persistence"):
+        _record_materialization_status(_MatchSupa(), _DIAG_ID, _FAC_ID, "MATERIALIZED")
+
+    warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+    assert not warning_msgs, f"예상치 못한 경고: {warning_msgs}"
+
+
+def test_T14_update_zero_rows_logs_warning(caplog):
+    """UPDATE 0행 수정 → WARNING 기록."""
+
+    class _ZeroSupa:
+        def table(self, _):
+            return _UpdateZeroRows()
+
+    with caplog.at_level(logging.WARNING, logger="services.saas_diagnosis_result_persistence"):
+        _record_materialization_status(_ZeroSupa(), _DIAG_ID, _FAC_ID, "MATERIALIZED")
+
+    assert any("0 rows affected" in r.message for r in caplog.records), \
+        "0행 수정 WARNING 없음"
+
+
+def test_T15_update_exception_logs_error(caplog):
+    """UPDATE 예외 → ERROR 기록, 예외 전파 금지."""
+
+    class _ExcSupa:
+        def table(self, _):
+            return _UpdateFail()
+
+    with caplog.at_level(logging.ERROR, logger="services.saas_diagnosis_result_persistence"):
+        _record_materialization_status(_ExcSupa(), _DIAG_ID, _FAC_ID, "MATERIALIZED")
+
+    assert any("status update failed" in r.message for r in caplog.records), \
+        "UPDATE 예외 ERROR 없음"
+
+
+def test_T16_update_mismatch_logs_warning(caplog):
+    """UPDATE 후 저장 상태 불일치 → WARNING 기록."""
+
+    class _MismatchSupa:
+        def table(self, _):
+            return _UpdateMismatch()
+
+    with caplog.at_level(logging.WARNING, logger="services.saas_diagnosis_result_persistence"):
+        _record_materialization_status(_MismatchSupa(), _DIAG_ID, _FAC_ID, "MATERIALIZED")
+
+    assert any("mismatch" in r.message for r in caplog.records), \
+        "상태 불일치 WARNING 없음"

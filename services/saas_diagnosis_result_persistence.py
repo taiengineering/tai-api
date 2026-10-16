@@ -133,12 +133,32 @@ def _record_materialization_status(
 ) -> None:
     """C-10 행의 inspection_materialization_status 를 기록.
 
-    실패 시 row 가 PENDING 으로 유지 → WP01-A 기준 선택 제외(보안 보장). log만 남김.
+    실패·0행·상태불일치 시 row 가 PENDING 으로 유지 → WP01-A 기준 선택 제외(보안 보장).
+    0행 수정·상태 불일치 시 WARNING 기록 — 호출부가 응답으로 식별 가능.
+    예외 시 log.exception 1회(PATCH-0A). 어떤 경우에도 raise 금지.
     """
     try:
-        supabase.table("anonymous_diagnosis_results").update(
-            {"inspection_materialization_status": mat_status}
-        ).eq("id", diagnosis_id).execute()
+        res = (
+            supabase.table("anonymous_diagnosis_results")
+            .update({"inspection_materialization_status": mat_status})
+            .eq("id", diagnosis_id)
+            .execute()
+        )
+        updated = getattr(res, "data", None)
+        if not updated:  # None or [] → 0행 수정
+            log.warning(
+                "[SAAS_C10] status update 0 rows affected — row stays PENDING "
+                "factory_id=%s diagnosis_id=%s mat_status=%s",
+                factory_id, diagnosis_id, mat_status,
+            )
+            return
+        actual = updated[0].get("inspection_materialization_status")
+        if actual != mat_status:
+            log.warning(
+                "[SAAS_C10] status update mismatch — stored=%r expected=%r "
+                "factory_id=%s diagnosis_id=%s",
+                actual, mat_status, factory_id, diagnosis_id,
+            )
     except Exception:  # noqa: BLE001
         log.exception(
             "[SAAS_C10] status update failed — row stays PENDING "
