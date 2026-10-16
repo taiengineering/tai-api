@@ -359,6 +359,80 @@ def test_B15_materialized_status_found():
     assert sid == _DIAG_ID
 
 
+def test_B16_pending_status_returns_not_found():
+    """inspection_materialization_status=PENDING(canonical 반영 전) → 기준 불가."""
+    row = {
+        "id": _DIAG_ID,
+        "input_data": {"factory_id": _FAC_ID, "sector": "INDUSTRIAL"},
+        "full_result": {"facility_used": _FACILITY_V1, "obligations_raw": []},
+        "created_at": "2026-10-10T00:00:00Z",
+        "source_type": "saas",
+        "status": "ACTIVE",
+        "inspection_materialization_status": "PENDING",
+    }
+    supa = _FakeSupa({"anonymous_diagnosis_results": [row]})
+    with pytest.raises(BaselineNotFound):
+        load_baseline_facility(supa, _FAC_ID, "INDUSTRIAL")
+
+
+def test_B17_failed_status_returns_not_found():
+    """inspection_materialization_status=FAILED(canonical 반영 실패) → 기준 불가."""
+    row = {
+        "id": _DIAG_ID,
+        "input_data": {"factory_id": _FAC_ID, "sector": "INDUSTRIAL"},
+        "full_result": {"facility_used": _FACILITY_V1, "obligations_raw": []},
+        "created_at": "2026-10-10T00:00:00Z",
+        "source_type": "saas",
+        "status": "ACTIVE",
+        "inspection_materialization_status": "FAILED",
+    }
+    supa = _FakeSupa({"anonymous_diagnosis_results": [row]})
+    with pytest.raises(BaselineNotFound):
+        load_baseline_facility(supa, _FAC_ID, "INDUSTRIAL")
+
+
+def test_B18_blocked_legacy_rows_status_returns_not_found():
+    """inspection_materialization_status=BLOCKED_LEGACY_ROWS(legacy 충돌) → 기준 불가."""
+    row = {
+        "id": _DIAG_ID,
+        "input_data": {"factory_id": _FAC_ID, "sector": "INDUSTRIAL"},
+        "full_result": {"facility_used": _FACILITY_V1, "obligations_raw": []},
+        "created_at": "2026-10-10T00:00:00Z",
+        "source_type": "saas",
+        "status": "ACTIVE",
+        "inspection_materialization_status": "BLOCKED_LEGACY_ROWS",
+    }
+    supa = _FakeSupa({"anonymous_diagnosis_results": [row]})
+    with pytest.raises(BaselineNotFound):
+        load_baseline_facility(supa, _FAC_ID, "INDUSTRIAL")
+
+
+def test_B19_only_materialized_row_selected_when_mixed():
+    """PENDING + MATERIALIZED 복수 행 → MATERIALIZED 행만 baseline 후보."""
+    pending_row = {
+        "id": str(uuid4()),
+        "input_data": {"factory_id": _FAC_ID, "sector": "INDUSTRIAL"},
+        "full_result": {"facility_used": {"worker_count": 99}, "obligations_raw": []},
+        "created_at": "2026-10-09T00:00:00Z",  # 더 오래됨
+        "source_type": "saas",
+        "status": "ACTIVE",
+        "inspection_materialization_status": "PENDING",
+    }
+    materialized_row = {
+        "id": _DIAG_ID,
+        "input_data": {"factory_id": _FAC_ID, "sector": "INDUSTRIAL"},
+        "full_result": {"facility_used": _FACILITY_V1, "obligations_raw": []},
+        "created_at": "2026-10-10T00:00:00Z",  # 최신
+        "source_type": "saas",
+        "status": "ACTIVE",
+        "inspection_materialization_status": "MATERIALIZED",
+    }
+    supa = _FakeSupa({"anonymous_diagnosis_results": [pending_row, materialized_row]})
+    fac, sid = load_baseline_facility(supa, _FAC_ID, "INDUSTRIAL")
+    assert fac == _FACILITY_V1  # PENDING의 99가 아닌 MATERIALIZED의 값
+    assert sid == _DIAG_ID
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # K01~K06  collector
 # ══════════════════════════════════════════════════════════════════════════════
@@ -776,6 +850,28 @@ def test_S22_expired_status_row_baseline_required(monkeypatch):
     _patch_ind_collector(monkeypatch, _FACILITY_V1)
     supa = _FakeSupa({
         "anonymous_diagnosis_results": [_c10_row(_FACILITY_V1, status="EXPIRED")]
+    })
+    result = compare_snapshot(supa, sector="INDUSTRIAL", factory_id=_FAC_ID, consumer_input=SafeIndustrialConsumerInput())
+    assert result["status"] == "BASELINE_REQUIRED"
+
+
+# S23 — PENDING mat_status row → BASELINE_REQUIRED (compare 레벨 통합)
+def test_S23_pending_mat_status_row_baseline_required(monkeypatch):
+    """inspection_materialization_status=PENDING C10 행 → compare_snapshot에서 BASELINE_REQUIRED."""
+    _patch_ind_collector(monkeypatch, _FACILITY_V1)
+    supa = _FakeSupa({
+        "anonymous_diagnosis_results": [_c10_row(_FACILITY_V1, mat_status="PENDING")]
+    })
+    result = compare_snapshot(supa, sector="INDUSTRIAL", factory_id=_FAC_ID, consumer_input=SafeIndustrialConsumerInput())
+    assert result["status"] == "BASELINE_REQUIRED"
+
+
+# S24 — FAILED mat_status row → BASELINE_REQUIRED (compare 레벨 통합)
+def test_S24_failed_mat_status_row_baseline_required(monkeypatch):
+    """inspection_materialization_status=FAILED C10 행 → compare_snapshot에서 BASELINE_REQUIRED."""
+    _patch_ind_collector(monkeypatch, _FACILITY_V1)
+    supa = _FakeSupa({
+        "anonymous_diagnosis_results": [_c10_row(_FACILITY_V1, mat_status="FAILED")]
     })
     result = compare_snapshot(supa, sector="INDUSTRIAL", factory_id=_FAC_ID, consumer_input=SafeIndustrialConsumerInput())
     assert result["status"] == "BASELINE_REQUIRED"
