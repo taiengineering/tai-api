@@ -32,6 +32,7 @@ from fastapi.testclient import TestClient
 # Import 대상 모듈
 # ---------------------------------------------------------------------------
 from services.wp01_obligation_change.change_tracker import (
+    _is_current_removal_candidate,
     compute_change_summary,
     diff_obligations,
     extract_atom_ids,
@@ -848,3 +849,664 @@ def test_scope_a_sets_active_yn_false():
     assert payload.get("active_yn") is False
     assert payload.get("is_excluded") is True
     assert payload.get("status_code") == "EXCLUDED"
+
+
+# ===========================================================================
+# P0-06 ACCEPTANCE TESTS — Scenarios A through K
+# ===========================================================================
+# A: 입력 변경 → LEG → 신규 의무 ADDED 감지
+# B: 의무 유지 → RETAINED, 운영값 보존(DB 쓰기 없음)
+# C: 의무 제외 → REMOVAL_CANDIDATE + inspection_set 표시 정보 포함
+# D: 이번 회차 제외 → 해당 일정만 차단, 동일 점검세트 다른 일정 미영향
+# E: 미래 적용일 → application_date 이전 회차 유지, 이후 회차만 중단
+# F: 완료/진행 상태 이력 보존 — Scope A·B 모두 건드리지 않음
+# G: 권한 격리 — 고객사 관리자/일반사용자/타사 차단
+# H: 건설업 site_id 격리 — 전환/재진입 시 올바른 필터
+# I: 최신 스냅샷 불일치 → 처리 차단 (409 상당)
+# J: 중복 요청 → 멱등, 중복 처리 없음
+# K: 제조업/건물업/건설업 섹터별 변경관리 연결
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# Scenario A: 입력 변경 → 신규 의무 ADDED 감지
+# ---------------------------------------------------------------------------
+
+def test_p06a_input_change_new_obligation_added():
+    """LEG 진단 후 신규 atom 이 의무 추가로 감지되고 요약에 올바르게 반영됨."""
+    new_diag = {
+        "full_result": {"obligations_raw": [{"atom_id": "A1"}, {"atom_id": "A2_NEW"}]},
+        "input_data": {"factory_id": "f1"},
+    }
+    prev_diag = {
+        "full_result": {"obligations_raw": [{"atom_id": "A1"}]},
+    }
+
+    adr_count = [0]
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "anonymous_diagnosis_results":
+            adr_count[0] += 1
+            leaf.execute.return_value = _mk_execute(
+                [new_diag] if adr_count[0] == 1 else [prev_diag]
+            )
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = compute_change_summary(sb, "f1", "diag-a")
+
+    assert result["added_count"] == 1        # A2_NEW 신규
+    assert result["retained_count"] == 1     # A1 유지
+    assert result["removal_candidate_count"] == 0
+    assert result["has_previous_baseline"] is True
+
+
+# ---------------------------------------------------------------------------
+# Scenario B: 의무 유지 → RETAINED, DB 쓰기 없음
+# ---------------------------------------------------------------------------
+
+def test_p06b_retained_obligations_no_db_write():
+    """전회차와 동일 atom → RETAINED, diff 함수는 supabase 를 호출하지 않음."""
+    prev = [{"atom_id": "A1"}, {"atom_id": "A2"}]
+    new = [{"atom_id": "A1"}, {"atom_id": "A2"}]
+
+    result = diff_obligations(prev, new)
+
+    assert result["added_atom_ids"] == []
+    assert sorted(result["retained_atom_ids"]) == ["A1", "A2"]
+    assert result["removal_candidate_atom_ids"] == []
+    # diff_obligations 는 순수 함수 — supabase 파라미터 없음
+
+
+# ---------------------------------------------------------------------------
+# Scenario C: 의무 제외 → REMOVAL_CANDIDATE + inspection_set 표시 정보 포함
+# ---------------------------------------------------------------------------
+
+def test_p06c_removal_candidate_includes_inspection_set_display_info():
+    """REMOVAL_CANDIDATE 에 law_name, law_article, inspection_set_id 가 모두 포함됨."""
+    new_diag = {
+        "full_result": {"obligations_raw": [{"atom_id": "A1"}]},
+        "input_data": {"factory_id": "f1"},
+    }
+    prev_diag = {
+        "full_result": {"obligations_raw": [{"atom_id": "A1"}, {"atom_id": "A_REMOVED"}]},
+    }
+    is_row = {
+        "id": "iset-99",
+        "inspection_set_name": "화학물질 취급 점검",
+        "law_name": "화학물질관리법",
+        "law_article": "제25조",
+        "legal_obligation_atom_id": "A_REMOVED",
+    }
+
+    adr_count = [0]
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "anonymous_diagnosis_results":
+            adr_count[0] += 1
+            leaf.execute.return_value = _mk_execute(
+                [new_diag] if adr_count[0] == 1 else [prev_diag]
+            )
+        elif name == "inspection_sets":
+            leaf.execute.return_value = _mk_execute([is_row])
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = compute_change_summary(sb, "f1", "diag-c")
+
+    assert result["removal_candidate_count"] == 1
+    candidates = result["removal_candidates"]
+    assert len(candidates) == 1
+    c = candidates[0]
+    assert c["atom_id"] == "A_REMOVED"
+    assert c["inspection_set_id"] == "iset-99"
+    assert c["law_name"] == "화학물질관리법"
+    assert c["law_article"] == "제25조"
+    assert c["name"] == "화학물질 취급 점검"
+
+
+# ---------------------------------------------------------------------------
+# Scenario D: 이번 회차 제외 → 해당 일정만 차단, 다른 일정 미영향
+# ---------------------------------------------------------------------------
+
+def test_p06d_scope_a_isolates_to_single_schedule():
+    """Scope A: 지정된 work_schedule_id 만 업데이트, 동일 inspection_set 의 타 일정 불변."""
+    target_id = "sched-target"
+    other_id = "sched-other"
+
+    eq_id_values = []
+
+    update_chain = MagicMock()
+    update_chain.execute.return_value = _mk_execute([])
+
+    def _capture_eq(field, value):
+        if field == "id":
+            eq_id_values.append(value)
+        return update_chain
+
+    update_chain.eq = _capture_eq
+
+    select_leaf = MagicMock()
+    for m in ("select", "eq", "neq", "gte", "order", "limit"):
+        setattr(select_leaf, m, MagicMock(return_value=select_leaf))
+    select_leaf.execute.return_value = _mk_execute([
+        {"id": target_id, "status_code": "SCHEDULED", "active_yn": True, "factory_id": "f1"}
+    ])
+
+    sb = MagicMock()
+
+    def _table(name):
+        if name == "work_schedules":
+            tbl = MagicMock()
+            tbl.select.return_value = select_leaf
+            tbl.update.return_value = update_chain
+            return tbl
+        return MagicMock()
+
+    sb.table.side_effect = _table
+
+    result = process_scope_a(sb, "f1", target_id, "법령 제외")
+
+    assert result["processed"] == 1
+    # eq("id", ...) 호출 시 target_id 만 사용됨
+    assert eq_id_values == [target_id]
+    assert other_id not in eq_id_values
+
+
+# ---------------------------------------------------------------------------
+# Scenario E: 미래 적용일 → 이전 회차 유지, 이후 회차만 중단
+# ---------------------------------------------------------------------------
+
+def test_p06e_scope_b_boundary_future_date():
+    """Scope B: 미래 날짜 — application_date 이후 일정만 취소, is_active 즉시 변경 없음."""
+    today = date.today()
+    application_date = (today + timedelta(days=30)).isoformat()
+
+    # Supabase gte 필터 모의: application_date 이후 일정만 반환
+    future_schedules = [
+        {"id": "s_on", "planned_date": application_date, "status_code": "SCHEDULED"},
+        {"id": "s_after", "planned_date": (today + timedelta(days=60)).isoformat(), "status_code": "SCHEDULED"},
+    ]
+    is_data = [{"id": "is-e", "is_active": True, "source": "LEGAL_ENGINE", "scope_b_deactivation_date": None}]
+
+    sb = MagicMock()
+    update_leaf = MagicMock()
+    for m in ("update", "eq"):
+        setattr(update_leaf, m, MagicMock(return_value=update_leaf))
+    update_leaf.execute.return_value = _mk_execute([])
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "inspection_sets":
+            leaf.execute.return_value = _mk_execute(is_data)
+            leaf.update.return_value = update_leaf
+        elif name == "work_schedules":
+            leaf.execute.return_value = _mk_execute(future_schedules)
+            leaf.update.return_value = update_leaf
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = process_scope_b(sb, "f1", "is-e", application_date, "법령 변경")
+
+    assert result["schedules_cancelled"] == 2       # on + after 모두 취소
+    assert result["is_active_set_false"] is False   # 미래 날짜 → 즉시 비활성화 없음
+    assert result["scope_b_deactivation_date"] == application_date
+
+
+# ---------------------------------------------------------------------------
+# Scenario F: completed/in_progress 이력 보존 — Scope A·B 모두 불변
+# ---------------------------------------------------------------------------
+
+def test_p06f_scope_a_blocks_completed():
+    """Scope A: COMPLETED 일정 → processed=0, 건드리지 않음."""
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        leaf.execute.return_value = _mk_execute([
+            {"id": "s-done", "status_code": "COMPLETED", "active_yn": True, "factory_id": "f1"}
+        ])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = process_scope_a(sb, "f1", "s-done", "사유")
+
+    assert result["processed"] == 0
+    assert result["skipped_reason"] is not None
+    assert "COMPLETED" in result["skipped_reason"] or "completed" in result["skipped_reason"].lower()
+
+
+def test_p06f_scope_b_preserves_completed_in_progress():
+    """Scope B: COMPLETED/IN_PROGRESS 는 planned_date 관계없이 보존."""
+    today = date.today()
+    application_date = (today - timedelta(days=10)).isoformat()
+
+    schedules = [
+        {"id": "s1", "planned_date": today.isoformat(), "status_code": "COMPLETED"},
+        {"id": "s2", "planned_date": today.isoformat(), "status_code": "IN_PROGRESS"},
+        {"id": "s3", "planned_date": today.isoformat(), "status_code": "SCHEDULED"},
+    ]
+    is_data = [{"id": "is-f", "is_active": True, "source": "LEGAL_ENGINE", "scope_b_deactivation_date": None}]
+
+    sb = MagicMock()
+    update_leaf = MagicMock()
+    for m in ("update", "eq"):
+        setattr(update_leaf, m, MagicMock(return_value=update_leaf))
+    update_leaf.execute.return_value = _mk_execute([])
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "inspection_sets":
+            leaf.execute.return_value = _mk_execute(is_data)
+            leaf.update.return_value = update_leaf
+        elif name == "work_schedules":
+            leaf.execute.return_value = _mk_execute(schedules)
+            leaf.update.return_value = update_leaf
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = process_scope_b(sb, "f1", "is-f", application_date, "사유")
+
+    assert result["schedules_cancelled"] == 1           # SCHEDULED 만 취소
+    assert result["schedules_preserved_completed"] == 2  # COMPLETED + IN_PROGRESS 보존
+
+
+# ---------------------------------------------------------------------------
+# Scenario G: 권한 격리
+# ---------------------------------------------------------------------------
+
+def test_p06g_all_scope_passes():
+    """ALL scope(플랫폼 총관) → 의무 변경관리 허용."""
+    from routers.obligation_change import _require_company_admin
+    sb = MagicMock()
+    with patch("routers.obligation_change._get_scope", return_value="ALL"):
+        _require_company_admin({"role_code": "001"}, sb)  # no exception
+
+
+def test_p06g_company_scope_passes():
+    """COMPANY scope(고객사 관리자) → 의무 변경관리 허용."""
+    from routers.obligation_change import _require_company_admin
+    sb = MagicMock()
+    with patch("routers.obligation_change._get_scope", return_value="COMPANY"):
+        _require_company_admin({"role_code": "002"}, sb)  # no exception
+
+
+def test_p06g_factory_scope_blocked():
+    """FACTORY scope → 403 차단."""
+    from routers.obligation_change import _require_company_admin
+    sb = MagicMock()
+    with patch("routers.obligation_change._get_scope", return_value="FACTORY"):
+        with pytest.raises(HTTPException) as exc:
+            _require_company_admin({"role_code": "003"}, sb)
+        assert exc.value.status_code == 403
+
+
+def test_p06g_team_scope_blocked():
+    """TEAM scope → 403 차단."""
+    from routers.obligation_change import _require_company_admin
+    sb = MagicMock()
+    with patch("routers.obligation_change._get_scope", return_value="TEAM"):
+        with pytest.raises(HTTPException) as exc:
+            _require_company_admin({}, sb)
+        assert exc.value.status_code == 403
+
+
+def test_p06g_cross_company_factory_404():
+    """다른 company_id 소유 공장 → 404 차단."""
+    from routers.obligation_change import _require_company_factory
+    sb = _mk_sb_chain([])  # 빈 결과 → 타사 공장
+    with pytest.raises(HTTPException) as exc:
+        _require_company_factory(sb, "factory-other", {"company_id": "my-co"})
+    assert exc.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Scenario H: 건설업 site_id 격리
+# ---------------------------------------------------------------------------
+
+def test_p06h_construction_without_site_id_raises():
+    """건설업 진단에 site_id 없으면 ValueError — 다른 사업장 오염 방지."""
+    new_diag = {
+        "full_result": {"obligations_raw": [{"atom_id": "A1"}]},
+        "input_data": {"factory_id": "f1", "sector": "CONSTRUCTION"},
+    }
+
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "anonymous_diagnosis_results":
+            leaf.execute.return_value = _mk_execute([new_diag])
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    with pytest.raises(ValueError, match="site_id"):
+        compute_change_summary(sb, "f1", "diag-h-no-site")
+
+
+def test_p06h_construction_with_site_id_succeeds():
+    """건설업 진단 + site_id 제공 → 정상 처리."""
+    new_diag = {
+        "full_result": {"obligations_raw": [{"atom_id": "A1"}]},
+        "input_data": {"factory_id": "f1", "sector": "CONSTRUCTION", "site_id": "site-001"},
+    }
+
+    adr_count = [0]
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "anonymous_diagnosis_results":
+            adr_count[0] += 1
+            leaf.execute.return_value = _mk_execute([new_diag] if adr_count[0] == 1 else [])
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = compute_change_summary(sb, "f1", "diag-h-with-site", site_id="site-001")
+    assert "has_previous_baseline" in result
+
+
+def test_p06h_manufacturing_sector_no_site_id_required():
+    """제조업 진단 → site_id 없어도 정상 처리."""
+    new_diag = {
+        "full_result": {"obligations_raw": [{"atom_id": "A1"}]},
+        "input_data": {"factory_id": "f1", "sector": "MANUFACTURING"},
+    }
+
+    adr_count = [0]
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "anonymous_diagnosis_results":
+            adr_count[0] += 1
+            leaf.execute.return_value = _mk_execute([new_diag] if adr_count[0] == 1 else [])
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = compute_change_summary(sb, "f1", "diag-h-manufacturing")
+    assert result["added_count"] == 1
+    assert result["has_previous_baseline"] is False
+
+
+# ---------------------------------------------------------------------------
+# Scenario I: 최신 스냅샷 불일치 → 처리 차단
+# ---------------------------------------------------------------------------
+
+def test_p06i_atom_still_in_c10_not_a_candidate():
+    """inspection_set 의 atom 이 최신 C10 에 존재 → REMOVAL_CANDIDATE 아님."""
+    is_data = [{
+        "id": "is-present",
+        "is_active": True,
+        "source": "LEGAL_ENGINE",
+        "legal_obligation_atom_id": "ATOM-PRESENT",
+    }]
+    c10_data = [{"full_result": {"obligations_raw": [{"atom_id": "ATOM-PRESENT"}]}}]
+
+    call_idx = [0]
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "inspection_sets":
+            leaf.execute.return_value = _mk_execute(is_data)
+        elif name == "anonymous_diagnosis_results":
+            leaf.execute.return_value = _mk_execute(c10_data)
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = _is_current_removal_candidate(sb, "f1", "is-present")
+    assert result is False   # C10 에 여전히 존재 → 처리 차단
+
+
+def test_p06i_atom_absent_from_c10_is_candidate():
+    """inspection_set 의 atom 이 최신 C10 에 없음 → REMOVAL_CANDIDATE 확인."""
+    is_data = [{
+        "id": "is-gone",
+        "is_active": True,
+        "source": "LEGAL_ENGINE",
+        "legal_obligation_atom_id": "ATOM-GONE",
+    }]
+    c10_data = [{"full_result": {"obligations_raw": [{"atom_id": "ATOM-OTHER"}]}}]
+
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "inspection_sets":
+            leaf.execute.return_value = _mk_execute(is_data)
+        elif name == "anonymous_diagnosis_results":
+            leaf.execute.return_value = _mk_execute(c10_data)
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = _is_current_removal_candidate(sb, "f1", "is-gone")
+    assert result is True    # C10 에 없음 → 처리 허용
+
+
+def test_p06i_inactive_inspection_set_not_candidate():
+    """is_active=False 인 inspection_set → 이미 비활성, REMOVAL_CANDIDATE 아님."""
+    is_data = [{
+        "id": "is-inactive",
+        "is_active": False,
+        "source": "LEGAL_ENGINE",
+        "legal_obligation_atom_id": "ATOM-X",
+    }]
+
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "inspection_sets":
+            leaf.execute.return_value = _mk_execute(is_data)
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = _is_current_removal_candidate(sb, "f1", "is-inactive")
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Scenario J: 중복 요청 → 멱등, 중복 처리 없음
+# ---------------------------------------------------------------------------
+
+def test_p06j_scope_a_already_excluded_idempotent():
+    """Scope A: 이미 active_yn=False 인 일정 → processed=0, 멱등."""
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        leaf.execute.return_value = _mk_execute([
+            {"id": "s-excl", "status_code": "EXCLUDED", "active_yn": False, "factory_id": "f1"}
+        ])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = process_scope_a(sb, "f1", "s-excl", "재요청")
+    assert result["processed"] == 0
+    assert result["skipped_reason"] is not None
+
+
+def test_p06j_scope_b_already_processed_idempotent():
+    """Scope B: is_active=False + scope_b_deactivation_date 설정 완료 → 0건 반환."""
+    is_data = [{
+        "id": "is-done",
+        "is_active": False,
+        "source": "LEGAL_ENGINE",
+        "scope_b_deactivation_date": "2026-11-15",
+    }]
+
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "inspection_sets":
+            leaf.execute.return_value = _mk_execute(is_data)
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = process_scope_b(sb, "f1", "is-done", "2026-11-15", "중복 요청")
+
+    assert result["schedules_cancelled"] == 0
+    assert result["is_active_set_false"] is False
+    assert result["scope_b_deactivation_date"] == "2026-11-15"
+
+
+# ---------------------------------------------------------------------------
+# Scenario K: 제조업/건물업/건설업 섹터별 변경관리 연결
+# ---------------------------------------------------------------------------
+
+def test_p06k_construction_applies_site_id_filter():
+    """건설업: load_previous 쿼리에 input_data->>site_id 필터 적용됨."""
+    new_diag = {
+        "full_result": {"obligations_raw": [{"atom_id": "A1"}]},
+        "input_data": {"factory_id": "f1", "sector": "CONSTRUCTION", "site_id": "site-A"},
+    }
+    prev_diag = {
+        "full_result": {"obligations_raw": [{"atom_id": "A1"}, {"atom_id": "A2"}]},
+    }
+
+    all_eq_calls = []   # (field, value) 전체 수집
+    adr_count = [0]
+    sb = MagicMock()
+
+    def _make_tracking_leaf(return_data):
+        leaf = MagicMock()
+
+        def _eq(field, value):
+            all_eq_calls.append((field, value))
+            return leaf
+
+        leaf.eq = _eq
+        for m in ("select", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        leaf.execute.return_value = _mk_execute(return_data)
+        return leaf
+
+    def _table(name):
+        if name == "anonymous_diagnosis_results":
+            adr_count[0] += 1
+            return _make_tracking_leaf([new_diag] if adr_count[0] == 1 else [prev_diag])
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = compute_change_summary(sb, "f1", "diag-k-const", site_id="site-A")
+
+    site_filters = [v for f, v in all_eq_calls if f == "input_data->>site_id"]
+    assert "site-A" in site_filters, f"site_id filter not applied; eq calls: {all_eq_calls}"
+
+
+def test_p06k_manufacturing_no_site_filter_applied():
+    """제조업: load_previous 쿼리에 site_id 필터 없음, 섹터 필터만 적용됨."""
+    new_diag = {
+        "full_result": {"obligations_raw": [{"atom_id": "A1"}]},
+        "input_data": {"factory_id": "f1", "sector": "MANUFACTURING"},
+    }
+
+    all_eq_calls = []
+    adr_count = [0]
+    sb = MagicMock()
+
+    def _make_tracking_leaf(return_data):
+        leaf = MagicMock()
+
+        def _eq(field, value):
+            all_eq_calls.append((field, value))
+            return leaf
+
+        leaf.eq = _eq
+        for m in ("select", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        leaf.execute.return_value = _mk_execute(return_data)
+        return leaf
+
+    def _table(name):
+        if name == "anonymous_diagnosis_results":
+            adr_count[0] += 1
+            return _make_tracking_leaf([new_diag] if adr_count[0] == 1 else [])
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = compute_change_summary(sb, "f1", "diag-k-mfg")
+
+    # site_id 필터 없음
+    site_filters = [v for f, v in all_eq_calls if f == "input_data->>site_id"]
+    assert site_filters == [], f"Unexpected site_id filter: {site_filters}"
+    # sector 필터는 적용됨
+    sector_filters = [v for f, v in all_eq_calls if f == "input_data->>sector"]
+    assert "MANUFACTURING" in sector_filters
