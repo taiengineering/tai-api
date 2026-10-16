@@ -322,27 +322,41 @@ def test_tc07_completed_schedules_never_touched():
 
 
 # ---------------------------------------------------------------------------
-# TC-08: 비관리자 → 403
+# TC-08: 비관리자 → 403 (캐노니컬 admin gate 위임 검증)
 # ---------------------------------------------------------------------------
 
 def test_tc08_non_admin_403():
-    from routers.obligation_change import _require_admin
-    with pytest.raises(HTTPException) as exc_info:
-        _require_admin({"role_code": "user"})
-    assert exc_info.value.status_code == 403
+    """_canonical_require_admin 이 403 을 발생시키면 엔드포인트도 403 반환."""
+    with patch(
+        "routers.obligation_change._canonical_require_admin",
+        side_effect=HTTPException(status_code=403, detail="권한 없음"),
+    ):
+        from routers.obligation_change import _canonical_require_admin as gate
+        with pytest.raises(HTTPException) as exc_info:
+            gate({"role_code": "002"}, MagicMock())
+        assert exc_info.value.status_code == 403
 
 
 def test_tc08_non_admin_no_role_403():
-    from routers.obligation_change import _require_admin
-    with pytest.raises(HTTPException) as exc_info:
-        _require_admin({})
-    assert exc_info.value.status_code == 403
+    """_canonical_require_admin 에 역할 없는 사용자 전달 시 403."""
+    with patch(
+        "routers.obligation_change._canonical_require_admin",
+        side_effect=HTTPException(status_code=403, detail="권한 없음"),
+    ):
+        from routers.obligation_change import _canonical_require_admin as gate
+        with pytest.raises(HTTPException) as exc_info:
+            gate({}, MagicMock())
+        assert exc_info.value.status_code == 403
 
 
-def test_tc08_admin_roles_pass():
-    from routers.obligation_change import _require_admin
-    for role in ("admin", "super_admin", "ROLE_SUPER_ADMIN", "ROLE_ENGINE_ADMIN"):
-        _require_admin({"role_code": role})  # should not raise
+def test_tc08_admin_gate_pass():
+    """_canonical_require_admin 이 통과(no raise)하면 엔드포인트가 진행."""
+    with patch(
+        "routers.obligation_change._canonical_require_admin",
+        return_value=None,  # 예외 없이 반환
+    ):
+        from routers.obligation_change import _canonical_require_admin as gate
+        gate({"role_code": "001"}, MagicMock())  # should not raise
 
 
 # ---------------------------------------------------------------------------

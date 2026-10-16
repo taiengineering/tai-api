@@ -21,6 +21,7 @@ from schemas.obligation_change import (
     ScopeARemovalRequest,
     ScopeBRemovalRequest,
 )
+from services.company_scope import _require_admin as _canonical_require_admin
 from services.wp01_obligation_change.change_tracker import compute_change_summary
 from services.wp01_obligation_change.removal_processor import (
     preview_removal_impact,
@@ -30,18 +31,6 @@ from services.wp01_obligation_change.removal_processor import (
 
 router = APIRouter(prefix="/obligation-change", tags=["의무 변경관리"])
 log = logging.getLogger("obligation_change")
-
-# ---------------------------------------------------------------------------
-# Auth helpers
-# ---------------------------------------------------------------------------
-
-_ADMIN_ROLES = {"admin", "super_admin", "ROLE_SUPER_ADMIN", "ROLE_ENGINE_ADMIN"}
-
-
-def _require_admin(current: dict) -> None:
-    role = current.get("role_code") or current.get("role") or ""
-    if role not in _ADMIN_ROLES:
-        raise HTTPException(403, "관리자 권한이 필요합니다")
 
 
 def _require_company_factory(supabase, factory_id: str, current: dict) -> None:
@@ -93,7 +82,7 @@ def get_removal_preview(
 ):
     """제외 처리 전 영향 일정 미리보기 (READ-ONLY, 관리자 전용)."""
     supabase = get_supabase()
-    _require_admin(current)
+    _canonical_require_admin(current, supabase)
     _require_company_factory(supabase, body.factory_id, current)
     result = preview_removal_impact(
         supabase, body.factory_id, body.inspection_set_id, body.application_date
@@ -108,7 +97,7 @@ def process_scope_a_removal(
 ):
     """Scope A: 이번 회차만 제외 (관리자 전용)."""
     supabase = get_supabase()
-    _require_admin(current)
+    _canonical_require_admin(current, supabase)
     _require_company_factory(supabase, body.factory_id, current)
     log.info(
         "[OBLIGATION_CHANGE] scope_a factory=%s schedule=%s reason=%s user=%s",
@@ -130,7 +119,7 @@ def process_scope_b_removal(
 ):
     """Scope B: 지정일 이후 반복 중단 (관리자 전용)."""
     supabase = get_supabase()
-    _require_admin(current)
+    _canonical_require_admin(current, supabase)
     _require_company_factory(supabase, body.factory_id, current)
     log.info(
         "[OBLIGATION_CHANGE] scope_b factory=%s set=%s date=%s reason=%s user=%s",
