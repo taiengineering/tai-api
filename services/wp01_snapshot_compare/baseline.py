@@ -23,6 +23,7 @@ def load_baseline_facility(
     선택 조건:
       - source_type = 'saas'
       - status = 'ACTIVE'  (EXPIRED/CLAIMED 제외)
+      - inspection_materialization_status = 'MATERIALIZED'  (canonical inspection_sets 반영 확정)
       - input_data->>'factory_id' = factory_id
       - input_data->>'sector' = sector  (섹터 혼입 차단)
       - [CONSTRUCTION only] input_data->>'site_id' = site_id  (현장 격리)
@@ -35,7 +36,7 @@ def load_baseline_facility(
 
     오류 구분:
       - DB/권한/연결 오류 → BaselineQueryError  → 호출부에서 UNRESOLVED
-      - 행 없음(진단 이력 없음) → BaselineNotFound  → 호출부에서 BASELINE_REQUIRED
+      - 행 없음(진단 이력 없음 또는 MATERIALIZED 미완료) → BaselineNotFound  → 호출부에서 BASELINE_REQUIRED
       - 행 있으나 facility_used 결함 → BaselineNotFound  → 호출부에서 BASELINE_REQUIRED
     """
     if not factory_id or not isinstance(factory_id, str):
@@ -56,6 +57,7 @@ def load_baseline_facility(
             .select("id,full_result,created_at")
             .eq("source_type", "saas")
             .eq("status", "ACTIVE")
+            .eq("inspection_materialization_status", "MATERIALIZED")
             .eq("input_data->>factory_id", factory_id)
             .eq("input_data->>sector", sector)
         )

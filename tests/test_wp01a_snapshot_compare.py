@@ -35,8 +35,9 @@ def _c10_row(
     sector: str = "INDUSTRIAL",
     status: str = "ACTIVE",
     site_id: Optional[str] = None,
+    mat_status: str = "MATERIALIZED",
 ) -> dict:
-    """C10 행 — sector/status/input_data 포함 (신규 쿼리 계약 반영)."""
+    """C10 행 — sector/status/input_data/inspection_materialization_status 포함."""
     input_data: Dict[str, Any] = {"factory_id": _FAC_ID, "sector": sector}
     if site_id:
         input_data["site_id"] = site_id
@@ -51,6 +52,7 @@ def _c10_row(
         "created_at": "2026-10-10T00:00:00+00:00",
         "source_type": "saas",
         "status": status,
+        "inspection_materialization_status": mat_status,
     }
 
 
@@ -105,6 +107,9 @@ class _Q:
                     return False
             elif col == "source_type":
                 if row.get("source_type") != val:
+                    return False
+            elif col == "inspection_materialization_status":
+                if row.get("inspection_materialization_status") != val:
                     return False
             elif col == "id":
                 if str(row.get("id") or "") != str(val):
@@ -313,9 +318,43 @@ def test_B13_construction_site_id_matching_found():
         "created_at": "2026-10-10T00:00:00Z",
         "source_type": "saas",
         "status": "ACTIVE",
+        "inspection_materialization_status": "MATERIALIZED",
     }
     supa = _FakeSupa({"anonymous_diagnosis_results": [row]})
     fac, sid = load_baseline_facility(supa, _FAC_ID, "CONSTRUCTION", site_id=_SITE_ID)
+    assert fac == _FACILITY_V1
+    assert sid == _DIAG_ID
+
+
+def test_B14_non_materialized_status_returns_not_found():
+    """inspection_materialization_status=NULL(미반영) C10 행 → BASELINE_REQUIRED."""
+    row = {
+        "id": _DIAG_ID,
+        "input_data": {"factory_id": _FAC_ID, "sector": "INDUSTRIAL"},
+        "full_result": {"facility_used": _FACILITY_V1, "obligations_raw": []},
+        "created_at": "2026-10-10T00:00:00Z",
+        "source_type": "saas",
+        "status": "ACTIVE",
+        "inspection_materialization_status": None,  # PENDING/FAILED/NULL: 미반영 → 기준 불가
+    }
+    supa = _FakeSupa({"anonymous_diagnosis_results": [row]})
+    with pytest.raises(BaselineNotFound):
+        load_baseline_facility(supa, _FAC_ID, "INDUSTRIAL")
+
+
+def test_B15_materialized_status_found():
+    """inspection_materialization_status=MATERIALIZED 행만 baseline 후보."""
+    row = {
+        "id": _DIAG_ID,
+        "input_data": {"factory_id": _FAC_ID, "sector": "INDUSTRIAL"},
+        "full_result": {"facility_used": _FACILITY_V1, "obligations_raw": []},
+        "created_at": "2026-10-10T00:00:00Z",
+        "source_type": "saas",
+        "status": "ACTIVE",
+        "inspection_materialization_status": "MATERIALIZED",
+    }
+    supa = _FakeSupa({"anonymous_diagnosis_results": [row]})
+    fac, sid = load_baseline_facility(supa, _FAC_ID, "INDUSTRIAL")
     assert fac == _FACILITY_V1
     assert sid == _DIAG_ID
 
