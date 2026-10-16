@@ -9,9 +9,11 @@ DB 쓰기 없음(READ-ONLY). 실패 시 fail-closed(ValueError 발생).
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 log = logging.getLogger(__name__)
+
+_CONSTRUCTION_SECTORS = {"CONSTRUCTION", "construction"}
 
 
 # ---------------------------------------------------------------------------
@@ -56,27 +58,13 @@ def diff_obligations(prev_obligations_raw: list, new_obligations_raw: list) -> d
 # DB read helpers
 # ---------------------------------------------------------------------------
 
-def _get_obligations_raw_from_diagnosis(supabase: Any, diagnosis_id: str) -> list:
-    """anonymous_diagnosis_results 에서 obligations_raw 로드."""
-    res = (
-        supabase.table("anonymous_diagnosis_results")
-        .select("full_result")
-        .eq("id", diagnosis_id)
-        .limit(1)
-        .execute()
-    )
-    if not res.data:
-        return []
-    full_result = res.data[0].get("full_result") or {}
-    return full_result.get("obligations_raw") or []
-
-
 def load_previous_materialized_obligations(
     supabase: Any,
     factory_id: str,
     exclude_diagnosis_id: str,
     site_id: Optional[str] = None,
-) -> list:
+    sector: Optional[str] = None,
+) -> Tuple[list, bool]:
     """공장의 직전 MATERIALIZED C10 obligations_raw 로드.
 
     조건: source_type=saas, status=ACTIVE,
@@ -84,7 +72,11 @@ def load_previous_materialized_obligations(
           input_data->>factory_id = factory_id,
           id != exclude_diagnosis_id.
     건설현장의 경우 site_id 도 추가 필터링.
-    결과 없으면 빈 목록 반환.
+    sector 가 지정된 경우 input_data->>sector 도 일치 확인.
+
+    반환: (obligations_raw: list, has_row: bool)
+      has_row=True: 이전 기준 행이 존재(obligations_raw 가 빈 목록일 수 있음)
+      has_row=False: 이전 기준 없음(첫 진단)
     """
     q = (
         supabase.table("anonymous_diagnosis_results")
@@ -99,19 +91,23 @@ def load_previous_materialized_obligations(
     if site_id:
         q = q.eq("input_data->>site_id", site_id)
 
+    if sector:
+        q = q.eq("input_data->>sector", sector)
+
     res = q.order("created_at", desc=True).limit(1).execute()
 
     if not res.data:
         log.debug(
             "load_previous_materialized_obligations: no previous MATERIALIZED row "
-            "factory_id=%s exclude=%s",
+            "factory_id=%s sector=%s exclude=%s",
             factory_id,
+            sector,
             exclude_diagnosis_id,
         )
-        return []
+        return [], False
 
     full_result = res.data[0].get("full_result") or {}
-    return full_result.get("obligations_raw") or []
+    return full_result.get("obligations_raw") or [], True
 
 
 def load_current_removal_candidates(supabase: Any, factory_id: str) -> list:
@@ -126,7 +122,6 @@ def load_current_removal_candidates(supabase: Any, factory_id: str) -> list:
     반환 필드: id, inspection_set_name, law_name, law_article,
                legal_obligation_atom_id, obligation_type, status_code
     """
-    # 1. 최신 MATERIALIZED C10 atom_ids
     c10_res = (
         supabase.table("anonymous_diagnosis_results")
         .select("full_result")
@@ -144,7 +139,6 @@ def load_current_removal_candidates(supabase: Any, factory_id: str) -> list:
         full_result = c10_res.data[0].get("full_result") or {}
         c10_atom_ids = extract_atom_ids(full_result.get("obligations_raw") or [])
 
-    # 2. 활성 canonical inspection_sets
     sets_res = (
         supabase.table("inspection_sets")
         .select(
@@ -158,12 +152,56 @@ def load_current_removal_candidates(supabase: Any, factory_id: str) -> list:
     )
 
     rows = sets_res.data or []
-
-    # 3. C10 에 없는 rows = REMOVAL_CANDIDATE
     return [
         r for r in rows
         if r.get("legal_obligation_atom_id") not in c10_atom_ids
     ]
+
+
+def _is_current_removal_candidate(
+    supabase: Any, factory_id: str, inspection_set_id: str
+) -> bool:
+    """inspection_set 이 현재 유효한 REMOVAL_CANDIDATE 인지 서버 재확인.
+
+    최신 MATERIALIZED C10 의 obligations_raw 에 해당 atom_id 가 없는 경우 True.
+    """
+    # inspection_set atom_id 조회
+    is_res = (
+        supabase.table("inspection_sets")
+        .select("legal_obligation_atom_id, is_active, source")
+        .eq("id", inspection_set_id)
+        .eq("factory_id", factory_id)
+        .limit(1)
+        .execute()
+    )
+    if not is_res.data:
+        return False
+    iset = is_res.data[0]
+    if not iset.get("is_active") or iset.get("source") != "LEGAL_ENGINE":
+        return False
+
+    atom_id = iset.get("legal_obligation_atom_id")
+    if not atom_id:
+        return False
+
+    # 최신 MATERIALIZED C10
+    c10_res = (
+        supabase.table("anonymous_diagnosis_results")
+        .select("full_result")
+        .eq("source_type", "saas")
+        .eq("status", "ACTIVE")
+        .eq("inspection_materialization_status", "MATERIALIZED")
+        .eq("input_data->>factory_id", factory_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not c10_res.data:
+        return True  # C10 없음 → 비교 불가 → 후보로 간주
+
+    full_result = c10_res.data[0].get("full_result") or {}
+    c10_atom_ids = extract_atom_ids(full_result.get("obligations_raw") or [])
+    return atom_id not in c10_atom_ids
 
 
 # ---------------------------------------------------------------------------
@@ -185,13 +223,16 @@ def compute_change_summary(
         removal_candidates: list[{inspection_set_id, atom_id, name, law_name, law_article}]
         has_previous_baseline: bool
 
-    fail-closed: 신규 C10 미발견 → ValueError 발생.
+    fail-closed:
+      - 신규 C10 미발견 또는 factory_id 불일치 → ValueError
+      - CONSTRUCTION sector 이면서 site_id 없음 → ValueError
     """
-    # 1. 신규 C10 obligations_raw
+    # 1. 신규 C10 — factory_id 소유권 포함 검증
     new_res = (
         supabase.table("anonymous_diagnosis_results")
-        .select("full_result")
+        .select("full_result, input_data")
         .eq("id", new_diagnosis_id)
+        .eq("input_data->>factory_id", factory_id)
         .limit(1)
         .execute()
     )
@@ -201,14 +242,30 @@ def compute_change_summary(
             f"진단 결과를 찾을 수 없습니다: diagnosis_id={new_diagnosis_id}"
         )
 
-    new_full_result = new_res.data[0].get("full_result") or {}
+    new_row = new_res.data[0]
+    new_full_result = new_row.get("full_result") or {}
     new_obligations_raw = new_full_result.get("obligations_raw") or []
 
-    # 2. 이전 MATERIALIZED C10
-    prev_obligations_raw = load_previous_materialized_obligations(
-        supabase, factory_id, exclude_diagnosis_id=new_diagnosis_id, site_id=site_id
+    # sector / site_id 추출
+    new_input_data = new_row.get("input_data") or {}
+    new_sector: Optional[str] = new_input_data.get("sector")
+    new_site_id: Optional[str] = site_id or new_input_data.get("site_id")
+
+    # CONSTRUCTION: site_id 필수
+    if new_sector in _CONSTRUCTION_SECTORS and not new_site_id:
+        raise ValueError(
+            "건설업 진단의 변경 요약에는 site_id 가 필요합니다"
+        )
+
+    # 2. 이전 MATERIALIZED C10 (섹터·현장 일치)
+    prev_obligations_raw, has_prev_row = load_previous_materialized_obligations(
+        supabase,
+        factory_id,
+        exclude_diagnosis_id=new_diagnosis_id,
+        site_id=new_site_id,
+        sector=new_sector,
     )
-    has_previous_baseline = bool(prev_obligations_raw)
+    has_previous_baseline = has_prev_row  # row 존재 여부 — obligations 0건과 구분
 
     # 3. Diff
     diff = diff_obligations(prev_obligations_raw, new_obligations_raw)

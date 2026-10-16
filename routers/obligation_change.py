@@ -21,8 +21,11 @@ from schemas.obligation_change import (
     ScopeARemovalRequest,
     ScopeBRemovalRequest,
 )
-from services.company_scope import _require_admin as _canonical_require_admin
-from services.wp01_obligation_change.change_tracker import compute_change_summary
+from services.company_scope import _scope as _get_scope
+from services.wp01_obligation_change.change_tracker import (
+    _is_current_removal_candidate,
+    compute_change_summary,
+)
 from services.wp01_obligation_change.removal_processor import (
     preview_removal_impact,
     process_scope_a,
@@ -31,6 +34,13 @@ from services.wp01_obligation_change.removal_processor import (
 
 router = APIRouter(prefix="/obligation-change", tags=["의무 변경관리"])
 log = logging.getLogger("obligation_change")
+
+
+def _require_company_admin(current: dict, supabase) -> None:
+    """ALL(플랫폼 총관) 또는 COMPANY(고객사 관리자) 스코프 허용."""
+    scope = _get_scope(supabase, current.get("role_code"))
+    if scope not in ("ALL", "COMPANY"):
+        raise HTTPException(403, "관리자 권한이 필요합니다")
 
 
 def _require_company_factory(supabase, factory_id: str, current: dict) -> None:
@@ -82,7 +92,7 @@ def get_removal_preview(
 ):
     """제외 처리 전 영향 일정 미리보기 (READ-ONLY, 관리자 전용)."""
     supabase = get_supabase()
-    _canonical_require_admin(current, supabase)
+    _require_company_admin(current, supabase)
     _require_company_factory(supabase, body.factory_id, current)
     result = preview_removal_impact(
         supabase, body.factory_id, body.inspection_set_id, body.application_date
@@ -97,8 +107,23 @@ def process_scope_a_removal(
 ):
     """Scope A: 이번 회차만 제외 (관리자 전용)."""
     supabase = get_supabase()
-    _canonical_require_admin(current, supabase)
+    _require_company_admin(current, supabase)
     _require_company_factory(supabase, body.factory_id, current)
+
+    # inspection_set_id 가져오기 (work_schedule → inspection_set)
+    ws_res = (
+        supabase.table("work_schedules")
+        .select("inspection_set_id")
+        .eq("id", body.work_schedule_id)
+        .eq("factory_id", body.factory_id)
+        .limit(1)
+        .execute()
+    )
+    if ws_res.data:
+        iset_id = ws_res.data[0].get("inspection_set_id")
+        if iset_id and not _is_current_removal_candidate(supabase, body.factory_id, iset_id):
+            raise HTTPException(409, "해당 의무는 현재 제외 후보가 아닙니다")
+
     log.info(
         "[OBLIGATION_CHANGE] scope_a factory=%s schedule=%s reason=%s user=%s",
         body.factory_id,
@@ -119,8 +144,12 @@ def process_scope_b_removal(
 ):
     """Scope B: 지정일 이후 반복 중단 (관리자 전용)."""
     supabase = get_supabase()
-    _canonical_require_admin(current, supabase)
+    _require_company_admin(current, supabase)
     _require_company_factory(supabase, body.factory_id, current)
+
+    if not _is_current_removal_candidate(supabase, body.factory_id, body.inspection_set_id):
+        raise HTTPException(409, "해당 의무는 현재 제외 후보가 아닙니다")
+
     log.info(
         "[OBLIGATION_CHANGE] scope_b factory=%s set=%s date=%s reason=%s user=%s",
         body.factory_id,

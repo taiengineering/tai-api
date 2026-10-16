@@ -2,24 +2,37 @@
 
 WP01-D: 의무 제거 처리 (관리자 전용).
 
-Scope A: 단일 회차 제외 — work_schedule.is_excluded = True
-Scope B: 지정일 이후 반복 중단 — future work_schedules.active_yn = False
-         + inspection_sets.is_active = False
+Scope A: 단일 회차 제외
+  - work_schedule.is_excluded=True, active_yn=False, status_code='EXCLUDED'
+Scope B: 지정일 이후 반복 중단
+  - work_schedules: planned_date >= application_date → active_yn=False
+  - inspection_sets: scope_b_deactivation_date = application_date (P0-01)
+                     is_active=False only if application_date <= today
+  REQUIRES: scope_b_deactivation_date 컬럼
+  (migration: 20261017000001_wp01d_inspection_sets_scope_b.sql)
 
 제약:
-- status=completed / in_progress 인 work_schedules 는 절대 건드리지 않음.
+- status_code=completed / in_progress 인 work_schedules 는 절대 변경 금지.
 - 레코드 삭제 없음.
-- DB 마이그레이션 없음(기존 컬럼만 사용).
 """
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any, Dict, List, Optional
+
+from services.status_vocab import normalize_ws_status_read
 
 log = logging.getLogger(__name__)
 
-# 절대 변경 금지 상태값
+# 정규화된 상태값 기준 — 절대 변경 금지
 _PRESERVE_STATUS = {"completed", "in_progress"}
+
+
+def _is_preserve(row: dict) -> bool:
+    """work_schedules row 가 보호 대상 상태인지 확인 (status_code 정규화)."""
+    normalized = normalize_ws_status_read(row.get("status_code"))
+    return (normalized or "") in _PRESERVE_STATUS
 
 
 # ---------------------------------------------------------------------------
@@ -35,28 +48,23 @@ def preview_removal_impact(
     """READ-ONLY: 제외 처리 전 영향 일정 미리보기.
 
     반환:
-        total_future_schedules: int — 활성 예정 일정 총 건수
+        total_future_schedules: int — 활성·미완료 일정 총 건수
         schedules_to_cancel: int — application_date 이후로 취소 대상
         schedules_to_preserve: int — application_date 이전 또는 보존 대상
         has_child_linked: bool — work_assignments 연결된 일정 존재 여부
         child_linked_count: int
     """
-    # 활성 + 미완료 일정 로드
-    q = (
+    res = (
         supabase.table("work_schedules")
-        .select("id, planned_date, status")
+        .select("id, planned_date, status_code")
         .eq("factory_id", factory_id)
         .eq("inspection_set_id", inspection_set_id)
         .eq("active_yn", True)
+        .execute()
     )
-    res = q.execute()
     all_schedules: List[Dict] = res.data or []
 
-    # completed / in_progress 제외
-    eligible = [
-        s for s in all_schedules
-        if s.get("status") not in _PRESERVE_STATUS
-    ]
+    eligible = [s for s in all_schedules if not _is_preserve(s)]
 
     total_future = len(eligible)
     schedules_to_cancel = 0
@@ -72,7 +80,6 @@ def preview_removal_impact(
     else:
         schedules_to_cancel = total_future
 
-    # work_assignments 연결 확인 (전체 활성 일정 대상)
     child_linked_count = 0
     for s in all_schedules:
         asgn_res = (
@@ -106,17 +113,17 @@ def process_scope_a(
 ) -> dict:
     """Scope A: 이번 회차 단건 제외.
 
-    work_schedules.is_excluded = True, excluded_reason = excluded_reason
-    조건: active_yn=True, status NOT IN _PRESERVE_STATUS
+    work_schedules: is_excluded=True, excluded_reason, active_yn=False, status_code='EXCLUDED'
+    기존 work_schedules 계약 (is_excluded=TRUE → status_code='EXCLUDED', active_yn=FALSE) 준수.
+    조건: active_yn=True, status_code NOT IN _PRESERVE_STATUS
 
     반환:
         processed: 1 성공 / 0 스킵
         skipped_reason: str or None
     """
-    # 현재 상태 확인
     res = (
         supabase.table("work_schedules")
-        .select("id, status, active_yn, factory_id")
+        .select("id, status_code, active_yn, factory_id")
         .eq("id", work_schedule_id)
         .eq("factory_id", factory_id)
         .limit(1)
@@ -127,23 +134,24 @@ def process_scope_a(
         return {"processed": 0, "skipped_reason": "일정을 찾을 수 없습니다"}
 
     row = res.data[0]
-    status = row.get("status", "")
     active_yn = row.get("active_yn", False)
 
-    if status in _PRESERVE_STATUS:
+    if _is_preserve(row):
+        status_code = row.get("status_code", "")
         return {
             "processed": 0,
-            "skipped_reason": f"status={status} 인 일정은 제외할 수 없습니다",
+            "skipped_reason": f"status_code={status_code} 인 일정은 제외할 수 없습니다",
         }
 
     if not active_yn:
         return {"processed": 0, "skipped_reason": "이미 비활성 상태입니다"}
 
-    # 업데이트
     supabase.table("work_schedules").update(
         {
             "is_excluded": True,
             "excluded_reason": excluded_reason,
+            "active_yn": False,
+            "status_code": "EXCLUDED",
         }
     ).eq("id", work_schedule_id).eq("factory_id", factory_id).eq("active_yn", True).execute()
 
@@ -168,30 +176,27 @@ def process_scope_b(
     application_date: str,
     reason: str,
 ) -> dict:
-    """Scope B: application_date 이후 일정 취소 + inspection_sets.is_active=False.
+    """Scope B: 지정일 이후 반복 중단.
 
-    1. inspection_sets 존재 및 활성 확인
-    2. planned_date >= application_date, active_yn=True,
-       status NOT IN _PRESERVE_STATUS 인 일정에 active_yn=False 설정
-    3. inspection_sets.is_active = False (향후 일정 생성 차단)
-    4. reason 은 서버 로그에만 기록(DB 저장 없음)
-
+    1. inspection_set 유효성 확인 (LEGAL_ENGINE, is_active=True)
+    2. work_schedules: planned_date >= application_date, NOT preserve → active_yn=False
+    3. inspection_sets:
+       - scope_b_deactivation_date = application_date (영속 기록)
+       - scope_b_reason = reason
+       - is_active=False ONLY IF application_date <= today
+         (미래 날짜: 스케줄러가 scope_b_deactivation_date 를 조회해 차단)
     반환:
-        inspection_set_id: str
-        schedules_cancelled: int
-        schedules_preserved_completed: int
-        is_active_set_false: bool
-
-    레코드 삭제 없음.
-    status=completed/in_progress 는 절대 건드리지 않음.
+        inspection_set_id, schedules_cancelled, schedules_preserved_completed,
+        is_active_set_false, scope_b_deactivation_date
+    멱등: is_active=False 이고 scope_b_deactivation_date 이미 설정 → 0건 반환.
     """
     if not application_date:
         raise ValueError("application_date 는 필수입니다")
 
-    # 1. inspection_set 존재 및 활성 확인
+    # 1. inspection_set 검증
     is_res = (
         supabase.table("inspection_sets")
-        .select("id, is_active, source")
+        .select("id, is_active, source, scope_b_deactivation_date")
         .eq("id", inspection_set_id)
         .eq("factory_id", factory_id)
         .limit(1)
@@ -199,29 +204,31 @@ def process_scope_b(
     )
 
     if not is_res.data:
-        raise ValueError(f"inspection_set 을 찾을 수 없습니다: {inspection_set_id}")
-
-    is_row = is_res.data[0]
-    if is_row.get("source") != "LEGAL_ENGINE":
-        raise ValueError("LEGAL_ENGINE source 가 아닌 inspection_set 은 Scope B 처리 불가")
-
-    if not is_row.get("is_active", False):
-        # 이미 비활성 — idempotent
-        log.info(
-            "[REMOVAL_SCOPE_B] inspection_set=%s already is_active=False (idempotent)",
-            inspection_set_id,
+        raise ValueError(
+            f"inspection_set 을 찾을 수 없습니다: id={inspection_set_id}"
         )
+
+    iset = is_res.data[0]
+
+    if iset.get("source") != "LEGAL_ENGINE":
+        raise ValueError(
+            "Scope B 는 LEGAL_ENGINE 출처의 의무 세트만 처리 가능합니다"
+        )
+
+    # 멱등: 이미 처리 완료
+    if not iset.get("is_active") and iset.get("scope_b_deactivation_date"):
         return {
             "inspection_set_id": inspection_set_id,
             "schedules_cancelled": 0,
             "schedules_preserved_completed": 0,
             "is_active_set_false": False,
+            "scope_b_deactivation_date": iset.get("scope_b_deactivation_date"),
         }
 
     # 2. 대상 일정 로드
     sched_res = (
         supabase.table("work_schedules")
-        .select("id, status")
+        .select("id, status_code")
         .eq("factory_id", factory_id)
         .eq("inspection_set_id", inspection_set_id)
         .eq("active_yn", True)
@@ -230,11 +237,10 @@ def process_scope_b(
     )
 
     all_future: List[Dict] = sched_res.data or []
+    to_cancel = [s for s in all_future if not _is_preserve(s)]
+    preserved_completed = [s for s in all_future if _is_preserve(s)]
 
-    to_cancel = [s for s in all_future if s.get("status") not in _PRESERVE_STATUS]
-    preserved_completed = [s for s in all_future if s.get("status") in _PRESERVE_STATUS]
-
-    # 3. 취소 — 각 일정 개별 업데이트(idempotent)
+    # 3. 취소 (idempotent)
     cancelled = 0
     for s in to_cancel:
         supabase.table("work_schedules").update(
@@ -242,19 +248,34 @@ def process_scope_b(
         ).eq("id", s["id"]).eq("factory_id", factory_id).eq("active_yn", True).execute()
         cancelled += 1
 
-    # 4. inspection_sets.is_active = False
-    supabase.table("inspection_sets").update(
-        {"is_active": False}
-    ).eq("id", inspection_set_id).eq("factory_id", factory_id).execute()
+    # 4. inspection_sets: scope_b_deactivation_date 설정 + 조건부 is_active
+    today = date.today()
+    try:
+        app_dt = date.fromisoformat(str(application_date))
+    except ValueError:
+        app_dt = today
+
+    is_active_false = app_dt <= today
+    update_payload: Dict[str, Any] = {
+        "scope_b_deactivation_date": str(app_dt),
+        "scope_b_reason": reason,
+    }
+    if is_active_false:
+        update_payload["is_active"] = False
+
+    supabase.table("inspection_sets").update(update_payload).eq(
+        "id", inspection_set_id
+    ).eq("factory_id", factory_id).execute()
 
     log.info(
         "[REMOVAL_SCOPE_B] inspection_set=%s factory=%s application_date=%s "
-        "cancelled=%d preserved=%d reason=%s",
+        "cancelled=%d preserved=%d is_active_set_false=%s reason=%s",
         inspection_set_id,
         factory_id,
         application_date,
         cancelled,
         len(preserved_completed),
+        is_active_false,
         reason,
     )
 
@@ -262,5 +283,6 @@ def process_scope_b(
         "inspection_set_id": inspection_set_id,
         "schedules_cancelled": cancelled,
         "schedules_preserved_completed": len(preserved_completed),
-        "is_active_set_false": True,
+        "is_active_set_false": is_active_false,
+        "scope_b_deactivation_date": str(app_dt),
     }

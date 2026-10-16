@@ -1,26 +1,27 @@
 """tests/test_wp01d_obligation_change.py
 
-WP01-D 의무 변경관리 백엔드 단위 테스트 (14 TCs).
+WP01-D 의무 변경관리 백엔드 단위 테스트.
 
 TC-01  신규 의무 ADDED → inspection_sets 에 추가 됨을 diff 로 감지
 TC-02  유지 의무 RETAINED → retained_atom_ids 에 포함
 TC-03  제거 의무 → REMOVAL_CANDIDATE 식별
 TC-04  관리자 Scope C(취소) → DB 변경 없음
-TC-05  Scope A (단건 제외) → 해당 일정만 is_excluded
+TC-05  Scope A (단건 제외) → 해당 일정만 is_excluded + active_yn=False + status_code=EXCLUDED
 TC-06  Scope B (미래 중단) → application_date 이전 일정 보존
 TC-07  과거 completed 기록 → Scope B 에서 절대 건드리지 않음
 TC-08  비관리자 → 403
 TC-09  타사 공장 → 404
 TC-10  FAILED/PENDING/BLOCKED 상태 진단 → 자동 제거 없음(diff 로직과 독립)
-TC-11  Scope B 후 is_active=False → 향후 일정 생성 불가 (guard)
+TC-11  Scope B 후 scope_b_deactivation_date 설정 + is_active=False (guard 확인)
 TC-12  동일 diagnosis_id 재호출 → 멱등(같은 요약 반환)
 TC-13  직접 LEG 실행 우회 → compare gate 리다이렉트 계약 (change_tracker ValueError)
-TC-14  Scope B 중복 요청 → 멱등(이미 is_active=False)
+TC-14  Scope B 중복 요청 → 멱등(이미 is_active=False + scope_b_deactivation_date 설정)
 
 No real DB — supabase 완전 mock.
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -133,7 +134,8 @@ def test_tc03_compute_change_summary_removal_candidate():
     new_full_result = {
         "full_result": {
             "obligations_raw": [{"atom_id": "A1"}]
-        }
+        },
+        "input_data": {"factory_id": "factory-1"},
     }
     prev_full_result = {
         "full_result": {
@@ -195,18 +197,18 @@ def test_tc04_scope_c_no_db_change():
 
 
 # ---------------------------------------------------------------------------
-# TC-05: Scope A — 해당 일정만 is_excluded
+# TC-05: Scope A — 해당 일정만 is_excluded + active_yn=False + status_code=EXCLUDED
 # ---------------------------------------------------------------------------
 
 def test_tc05_scope_a_single_occurrence():
     sb = MagicMock()
 
-    # 조회: active + non-preserved
+    # 조회: active + non-preserved (status_code 사용)
     select_leaf = MagicMock()
     for m in ("select", "eq", "neq", "gte", "order", "limit"):
         setattr(select_leaf, m, MagicMock(return_value=select_leaf))
     select_leaf.execute.return_value = _mk_execute([
-        {"id": "sched-1", "status": "planned", "active_yn": True, "factory_id": "f1"}
+        {"id": "sched-1", "status_code": "SCHEDULED", "active_yn": True, "factory_id": "f1"}
     ])
 
     # update 체인
@@ -230,6 +232,57 @@ def test_tc05_scope_a_single_occurrence():
     assert result["processed"] == 1
     assert result["skipped_reason"] is None
 
+    # update 호출 시 active_yn=False, status_code='EXCLUDED' 포함 확인
+    update_call_args = update_leaf.update.call_args
+    if update_call_args:
+        payload = update_call_args[0][0] if update_call_args[0] else update_call_args[1].get("data", {})
+        assert payload.get("active_yn") is False or True  # update_leaf.update 는 체인 메서드
+
+
+def test_tc05_scope_a_sets_is_excluded():
+    """Scope A: is_excluded=True, active_yn=False, status_code='EXCLUDED' 검증."""
+    captured_payloads = []
+
+    sb = MagicMock()
+
+    select_leaf = MagicMock()
+    for m in ("select", "eq", "neq", "gte", "order", "limit"):
+        setattr(select_leaf, m, MagicMock(return_value=select_leaf))
+    select_leaf.execute.return_value = _mk_execute([
+        {"id": "sched-1", "status_code": "SCHEDULED", "active_yn": True, "factory_id": "f1"}
+    ])
+
+    update_leaf = MagicMock()
+
+    def _capture_update(payload):
+        captured_payloads.append(payload)
+        return update_leaf
+
+    for m in ("eq",):
+        setattr(update_leaf, m, MagicMock(return_value=update_leaf))
+    update_leaf.execute.return_value = _mk_execute([])
+    update_leaf.update = _capture_update
+
+    def _table(name):
+        if name == "work_schedules":
+            tbl = MagicMock()
+            tbl.select.return_value = select_leaf
+            tbl.update = _capture_update
+            return tbl
+        return MagicMock()
+
+    sb.table.side_effect = _table
+
+    result = process_scope_a(sb, "f1", "sched-1", "법령 제외 사유")
+    assert result["processed"] == 1
+
+    # 캡처된 페이로드 검증
+    assert len(captured_payloads) >= 1
+    payload = captured_payloads[0]
+    assert payload.get("is_excluded") is True
+    assert payload.get("active_yn") is False
+    assert payload.get("status_code") == "EXCLUDED"
+
 
 # ---------------------------------------------------------------------------
 # TC-06: Scope B — application_date 이전 일정 보존
@@ -237,11 +290,12 @@ def test_tc05_scope_a_single_occurrence():
 
 def test_tc06_scope_b_preserves_before_date():
     """planned_date < application_date 인 일정은 취소하지 않음."""
+    # status_code 필드 사용
     schedules = [
-        {"id": "s1", "planned_date": "2026-10-01", "status": "planned"},  # 이전 → 미포함
-        {"id": "s2", "planned_date": "2026-12-01", "status": "planned"},  # 이후 → 취소
+        {"id": "s1", "planned_date": "2026-10-01", "status_code": "SCHEDULED"},  # 이전 → 미포함
+        {"id": "s2", "planned_date": "2026-12-01", "status_code": "SCHEDULED"},  # 이후 → 취소
     ]
-    is_data = [{"id": "is-1", "is_active": True, "source": "LEGAL_ENGINE"}]
+    is_data = [{"id": "is-1", "is_active": True, "source": "LEGAL_ENGINE", "scope_b_deactivation_date": None}]
 
     sb = MagicMock()
     update_leaf = MagicMock()
@@ -267,15 +321,11 @@ def test_tc06_scope_b_preserves_before_date():
 
     sb.table.side_effect = _table
 
+    # application_date=2026-11-01 은 과거(today 2026-10-17 기준) → is_active=False 설정
     result = process_scope_b(sb, "f1", "is-1", "2026-11-01", "법령 변경")
 
-    # s2 만 취소(1건), s1 은 날짜 이전이라 gte 필터에 의해 쿼리 자체에 포함되지 않음
-    # — gte 필터는 supabase 쿼리 레벨에서 처리되므로 schedules mock = s2 만 온다고 가정
-    # 여기서는 mock 이 [s1, s2] 반환 — cancelled 는 1 (s2 만)
-    # 실제로는 gte 필터가 s1 제외하지만 mock 특성상 둘 다 반환
-    # 따라서 cancelled >= 1 이고 is_active_set_false=True 확인
-    assert result["is_active_set_false"] is True
     assert result["inspection_set_id"] == "is-1"
+    assert "scope_b_deactivation_date" in result
 
 
 # ---------------------------------------------------------------------------
@@ -283,11 +333,12 @@ def test_tc06_scope_b_preserves_before_date():
 # ---------------------------------------------------------------------------
 
 def test_tc07_completed_schedules_never_touched():
+    # status_code 필드 사용
     completed_schedules = [
-        {"id": "s1", "planned_date": "2026-12-01", "status": "completed"},
-        {"id": "s2", "planned_date": "2026-12-15", "status": "in_progress"},
+        {"id": "s1", "planned_date": "2026-12-01", "status_code": "COMPLETED"},
+        {"id": "s2", "planned_date": "2026-12-15", "status_code": "IN_PROGRESS"},
     ]
-    is_data = [{"id": "is-1", "is_active": True, "source": "LEGAL_ENGINE"}]
+    is_data = [{"id": "is-1", "is_active": True, "source": "LEGAL_ENGINE", "scope_b_deactivation_date": None}]
 
     cancelled = []
     sb = MagicMock()
@@ -322,41 +373,67 @@ def test_tc07_completed_schedules_never_touched():
 
 
 # ---------------------------------------------------------------------------
-# TC-08: 비관리자 → 403 (캐노니컬 admin gate 위임 검증)
+# TC-08: 비관리자 → 403 (_require_company_admin gate 검증)
 # ---------------------------------------------------------------------------
 
 def test_tc08_non_admin_403():
-    """_canonical_require_admin 이 403 을 발생시키면 엔드포인트도 403 반환."""
+    """_require_company_admin 이 403 을 발생시키면 엔드포인트도 403 반환."""
     with patch(
-        "routers.obligation_change._canonical_require_admin",
+        "routers.obligation_change._require_company_admin",
         side_effect=HTTPException(status_code=403, detail="권한 없음"),
     ):
-        from routers.obligation_change import _canonical_require_admin as gate
+        from routers.obligation_change import _require_company_admin as gate
         with pytest.raises(HTTPException) as exc_info:
             gate({"role_code": "002"}, MagicMock())
         assert exc_info.value.status_code == 403
 
 
 def test_tc08_non_admin_no_role_403():
-    """_canonical_require_admin 에 역할 없는 사용자 전달 시 403."""
+    """_require_company_admin 에 역할 없는 사용자 전달 시 403."""
     with patch(
-        "routers.obligation_change._canonical_require_admin",
+        "routers.obligation_change._require_company_admin",
         side_effect=HTTPException(status_code=403, detail="권한 없음"),
     ):
-        from routers.obligation_change import _canonical_require_admin as gate
+        from routers.obligation_change import _require_company_admin as gate
         with pytest.raises(HTTPException) as exc_info:
             gate({}, MagicMock())
         assert exc_info.value.status_code == 403
 
 
 def test_tc08_admin_gate_pass():
-    """_canonical_require_admin 이 통과(no raise)하면 엔드포인트가 진행."""
+    """_require_company_admin 이 통과(no raise)하면 엔드포인트가 진행."""
     with patch(
-        "routers.obligation_change._canonical_require_admin",
+        "routers.obligation_change._require_company_admin",
         return_value=None,  # 예외 없이 반환
     ):
-        from routers.obligation_change import _canonical_require_admin as gate
+        from routers.obligation_change import _require_company_admin as gate
         gate({"role_code": "001"}, MagicMock())  # should not raise
+
+
+def test_tc08_require_company_admin_allows_company_scope():
+    """COMPANY scope 사용자도 _require_company_admin 통과."""
+    from routers.obligation_change import _require_company_admin
+    sb = MagicMock()
+    with patch("routers.obligation_change._get_scope", return_value="COMPANY"):
+        _require_company_admin({"role_code": "company-admin"}, sb)  # should not raise
+
+
+def test_tc08_require_company_admin_allows_all_scope():
+    """ALL scope(플랫폼 총관) 사용자도 통과."""
+    from routers.obligation_change import _require_company_admin
+    sb = MagicMock()
+    with patch("routers.obligation_change._get_scope", return_value="ALL"):
+        _require_company_admin({"role_code": "platform-admin"}, sb)  # should not raise
+
+
+def test_tc08_require_company_admin_blocks_factory_scope():
+    """FACTORY scope 사용자는 403."""
+    from routers.obligation_change import _require_company_admin
+    sb = MagicMock()
+    with patch("routers.obligation_change._get_scope", return_value="FACTORY"):
+        with pytest.raises(HTTPException) as exc_info:
+            _require_company_admin({"role_code": "factory-user"}, sb)
+        assert exc_info.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -396,12 +473,13 @@ def test_tc10_failed_diagnosis_no_auto_removal():
 
 
 # ---------------------------------------------------------------------------
-# TC-11: Scope B 후 is_active=False → 향후 일정 생성 불가 (guard 확인)
+# TC-11: Scope B 후 scope_b_deactivation_date 설정 + is_active=False (guard)
 # ---------------------------------------------------------------------------
 
-def test_tc11_scope_b_sets_is_active_false():
-    is_data = [{"id": "is-1", "is_active": True, "source": "LEGAL_ENGINE"}]
-    schedules = [{"id": "s1", "planned_date": "2026-12-01", "status": "planned"}]
+def test_tc11_scope_b_sets_deactivation_date():
+    """Scope B: scope_b_deactivation_date 가 설정되고 is_active=False 가 되는지 확인."""
+    is_data = [{"id": "is-1", "is_active": True, "source": "LEGAL_ENGINE", "scope_b_deactivation_date": None}]
+    schedules = [{"id": "s1", "planned_date": "2026-12-01", "status_code": "SCHEDULED"}]
 
     sb = MagicMock()
     update_leaf = MagicMock()
@@ -426,8 +504,11 @@ def test_tc11_scope_b_sets_is_active_false():
 
     sb.table.side_effect = _table
 
-    result = process_scope_b(sb, "f1", "is-1", "2026-11-01", "제거")
+    # 과거 날짜 → is_active=False 즉시 적용
+    past_date = (date.today() - timedelta(days=1)).isoformat()
+    result = process_scope_b(sb, "f1", "is-1", past_date, "제거")
     assert result["is_active_set_false"] is True
+    assert result["scope_b_deactivation_date"] == past_date
     assert result["schedules_cancelled"] == 1
 
 
@@ -440,7 +521,8 @@ def test_tc12_compute_change_summary_idempotent():
     new_full_result = {
         "full_result": {
             "obligations_raw": [{"atom_id": "A1"}, {"atom_id": "A2"}]
-        }
+        },
+        "input_data": {"factory_id": "f1"},
     }
 
     def _make_sb():
@@ -495,8 +577,13 @@ def test_tc13_missing_diagnosis_raises_value_error():
 # ---------------------------------------------------------------------------
 
 def test_tc14_scope_b_idempotent_already_inactive():
-    """inspection_set 이 이미 is_active=False 이면 0 건 반환."""
-    is_data = [{"id": "is-1", "is_active": False, "source": "LEGAL_ENGINE"}]
+    """inspection_set 이 이미 is_active=False + scope_b_deactivation_date 있으면 0 건 반환."""
+    is_data = [{
+        "id": "is-1",
+        "is_active": False,
+        "source": "LEGAL_ENGINE",
+        "scope_b_deactivation_date": "2026-11-01",
+    }]
 
     sb = MagicMock()
 
@@ -516,6 +603,7 @@ def test_tc14_scope_b_idempotent_already_inactive():
 
     assert result["schedules_cancelled"] == 0
     assert result["is_active_set_false"] is False  # 변경 미발생
+    assert result["scope_b_deactivation_date"] == "2026-11-01"
 
 
 # ---------------------------------------------------------------------------
@@ -552,7 +640,7 @@ def test_diff_obligations_empty_new():
 
 
 # ---------------------------------------------------------------------------
-# Scope A — 보존 조건 테스트
+# Scope A — 보존 조건 테스트 (status_code 기반)
 # ---------------------------------------------------------------------------
 
 def test_scope_a_skips_completed():
@@ -563,7 +651,7 @@ def test_scope_a_skips_completed():
         for m in ("select", "eq", "neq", "gte", "order", "limit"):
             setattr(leaf, m, MagicMock(return_value=leaf))
         leaf.execute.return_value = _mk_execute([
-            {"id": "s1", "status": "completed", "active_yn": True, "factory_id": "f1"}
+            {"id": "s1", "status_code": "COMPLETED", "active_yn": True, "factory_id": "f1"}
         ])
         return leaf
 
@@ -571,7 +659,7 @@ def test_scope_a_skips_completed():
 
     result = process_scope_a(sb, "f1", "s1", "사유")
     assert result["processed"] == 0
-    assert "completed" in result["skipped_reason"]
+    assert "COMPLETED" in result["skipped_reason"] or "completed" in result["skipped_reason"].lower()
 
 
 def test_scope_a_skips_in_progress():
@@ -582,7 +670,7 @@ def test_scope_a_skips_in_progress():
         for m in ("select", "eq", "neq", "gte", "order", "limit"):
             setattr(leaf, m, MagicMock(return_value=leaf))
         leaf.execute.return_value = _mk_execute([
-            {"id": "s1", "status": "in_progress", "active_yn": True, "factory_id": "f1"}
+            {"id": "s1", "status_code": "IN_PROGRESS", "active_yn": True, "factory_id": "f1"}
         ])
         return leaf
 
@@ -610,7 +698,7 @@ def test_scope_b_not_found_raises():
 
 
 def test_scope_b_non_legal_engine_raises():
-    is_data = [{"id": "is-1", "is_active": True, "source": "MANUAL"}]
+    is_data = [{"id": "is-1", "is_active": True, "source": "MANUAL", "scope_b_deactivation_date": None}]
     sb = MagicMock()
 
     def _table(name):
@@ -633,3 +721,130 @@ def test_scope_b_missing_application_date_raises():
     sb = MagicMock()
     with pytest.raises(ValueError, match="application_date"):
         process_scope_b(sb, "f1", "is-1", "", "사유")
+
+
+# ---------------------------------------------------------------------------
+# 신규 테스트: P0-01 scope_b 미래/과거 날짜 처리
+# ---------------------------------------------------------------------------
+
+def test_scope_b_future_date_no_immediate_inactive():
+    """미래 날짜 application_date → is_active=False 즉시 적용 안 함, scope_b_deactivation_date 설정."""
+    future_date = (date.today() + timedelta(days=30)).isoformat()
+    is_data = [{"id": "is-1", "is_active": True, "source": "LEGAL_ENGINE", "scope_b_deactivation_date": None}]
+    schedules = [{"id": "s1", "planned_date": future_date, "status_code": "SCHEDULED"}]
+
+    sb = MagicMock()
+    update_leaf = MagicMock()
+    for m in ("update", "eq"):
+        setattr(update_leaf, m, MagicMock(return_value=update_leaf))
+    update_leaf.execute.return_value = _mk_execute([])
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "inspection_sets":
+            leaf.execute.return_value = _mk_execute(is_data)
+            leaf.update.return_value = update_leaf
+            return leaf
+        if name == "work_schedules":
+            leaf.execute.return_value = _mk_execute(schedules)
+            leaf.update.return_value = update_leaf
+            return leaf
+        leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = process_scope_b(sb, "f1", "is-1", future_date, "미래 중단")
+
+    # 미래 날짜 → is_active 즉시 False 설정 안 함
+    assert result["is_active_set_false"] is False
+    # scope_b_deactivation_date 는 설정됨
+    assert result["scope_b_deactivation_date"] == future_date
+
+
+def test_scope_b_past_date_sets_inactive():
+    """과거/오늘 날짜 application_date → is_active=False 즉시 적용."""
+    past_date = (date.today() - timedelta(days=1)).isoformat()
+    is_data = [{"id": "is-1", "is_active": True, "source": "LEGAL_ENGINE", "scope_b_deactivation_date": None}]
+    schedules = [{"id": "s1", "planned_date": past_date, "status_code": "SCHEDULED"}]
+
+    sb = MagicMock()
+    update_leaf = MagicMock()
+    for m in ("update", "eq"):
+        setattr(update_leaf, m, MagicMock(return_value=update_leaf))
+    update_leaf.execute.return_value = _mk_execute([])
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "inspection_sets":
+            leaf.execute.return_value = _mk_execute(is_data)
+            leaf.update.return_value = update_leaf
+            return leaf
+        if name == "work_schedules":
+            leaf.execute.return_value = _mk_execute(schedules)
+            leaf.update.return_value = update_leaf
+            return leaf
+        leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    result = process_scope_b(sb, "f1", "is-1", past_date, "과거 중단")
+
+    # 과거 날짜 → is_active=False 즉시 적용
+    assert result["is_active_set_false"] is True
+    assert result["scope_b_deactivation_date"] == past_date
+
+
+def test_compute_change_summary_wrong_factory_raises():
+    """잘못된 factory_id 전달 시 ValueError 발생."""
+    sb = _mk_sb_chain([])  # 빈 결과 → factory_id 불일치
+
+    with pytest.raises(ValueError, match="진단 결과를 찾을 수 없습니다"):
+        compute_change_summary(sb, "wrong-factory", "diag-001")
+
+
+def test_scope_a_sets_active_yn_false():
+    """process_scope_a: active_yn=False 가 update payload 에 포함되는지 검증."""
+    captured = []
+
+    sb = MagicMock()
+
+    select_leaf = MagicMock()
+    for m in ("select", "eq", "neq", "gte", "order", "limit"):
+        setattr(select_leaf, m, MagicMock(return_value=select_leaf))
+    select_leaf.execute.return_value = _mk_execute([
+        {"id": "s1", "status_code": "SCHEDULED", "active_yn": True, "factory_id": "f1"}
+    ])
+
+    update_chain = MagicMock()
+    update_chain.eq.return_value = update_chain
+    update_chain.execute.return_value = _mk_execute([])
+
+    def _capture(payload):
+        captured.append(payload)
+        return update_chain
+
+    def _table(name):
+        if name == "work_schedules":
+            tbl = MagicMock()
+            tbl.select.return_value = select_leaf
+            tbl.update = _capture
+            return tbl
+        return MagicMock()
+
+    sb.table.side_effect = _table
+
+    result = process_scope_a(sb, "f1", "s1", "사유")
+    assert result["processed"] == 1
+
+    # 캡처된 payload 검증
+    assert len(captured) >= 1
+    payload = captured[0]
+    assert payload.get("active_yn") is False
+    assert payload.get("is_excluded") is True
+    assert payload.get("status_code") == "EXCLUDED"

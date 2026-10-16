@@ -87,6 +87,17 @@ def generate_schedule(inspection_set_id: str):
 
         planned_date_str = str(next_date)
 
+        # P0-01: Scope B 적용일 이후 회차 생성 차단
+        deactivation_date = s.get("scope_b_deactivation_date")
+        if deactivation_date and str(planned_date_str) >= str(deactivation_date):
+            return {
+                "success": False,
+                "reason": "SCOPE_B_DEACTIVATED",
+                "message": "Scope B 적용일 이후는 일정을 생성할 수 없습니다.",
+                "inspection_set_id": inspection_set_id,
+                "created_count": 0,
+            }
+
         # ── 중복 체크 ──
         existing = (
             supabase.table("work_schedules")
