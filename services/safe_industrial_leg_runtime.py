@@ -51,6 +51,61 @@ _SAFE_EXPLICIT_CONFIRM_FIELDS = (
 )
 
 
+def collect_industrial_leg_input(
+    supabase,
+    factory_id: str,
+    consumer_input,
+    app3_projection: Optional[Dict[str, Any]] = None,
+):
+    """INDUSTRIAL 입력 조립(A-C단계). LEG 미호출, DB 쓰기 없음.
+
+    반환 (step1, sorted_unresolved_fields).
+    WP01-A 비교 모듈이 재사용한다.
+    """
+    from services.work_source.store import load_work_rows_optional
+    from services.material_source.store import load_factory_material_rows_optional
+    from services.equipment_source.store import load_equipment_rows_optional
+
+    # A. asset canonical (FROZEN assembler, READ ONLY)
+    contract = assemble_industrial_marketing_contract(supabase, factory_id)
+    values: Dict[str, Any] = dict(contract["values"])           # 정확히 29
+    unresolved = set(contract.get("unresolved_fields") or [])
+    provenance: Dict[str, Any] = dict(contract.get("provenance") or {})
+
+    # B'. Safe-route USER_CONFIRM mask — assembler 이후, consumer override 이전.
+    for f in _SAFE_EXPLICIT_CONFIRM_FIELDS:
+        values[f] = None
+        provenance[f] = {"mode": "EXPLICIT_CONFIRM_REQUIRED", "source": "safe-route-mask"}
+        unresolved.add(f)
+
+    # B. consumer override — non-null 만(None=미override, false/0/""=override).
+    if hasattr(consumer_input, "model_dump"):
+        overrides = consumer_input.model_dump(exclude_none=True)
+    else:
+        overrides = {k: v for k, v in dict(consumer_input or {}).items() if v is not None}
+    for f in SAFE_UI_OVERRIDE_FIELDS:
+        if f in overrides:
+            values[f] = overrides[f]
+            provenance[f] = {"mode": "CONSUMER_OVERRIDE", "source": "safe.diagnosis-step1"}
+            unresolved.discard(f)
+
+    # B''. WO-008: server AP01-05 projection injection (flag ON only).
+    if app3_projection:
+        for leaf_key, leaf_val in app3_projection.items():
+            values[leaf_key] = leaf_val
+
+    # C. build_saas_leg_step1 — _LEG_INPUT_FIELDS(103) 필터, LEG 미호출.
+    step1 = build_saas_leg_step1(
+        sector="INDUSTRIAL",
+        source_facts=values,
+        factory_id=factory_id,
+        work_rows=load_work_rows_optional(supabase, factory_id),
+        material_rows=load_factory_material_rows_optional(supabase, factory_id),
+        equipment_rows=load_equipment_rows_optional(supabase, factory_id),
+    )
+    return step1, sorted(unresolved)
+
+
 def run_safe_industrial_leg(
     supabase,
     factory_id: str,
@@ -62,66 +117,13 @@ def run_safe_industrial_leg(
     app3_projection: WO-008 서버 생성 AP01-05 leaves (flag ON 시만 비None).
                      consumer override 이후, build_saas_leg_step1 이전에 values에 주입.
     """
-    # A. asset canonical (FROZEN assembler, READ ONLY)
-    contract = assemble_industrial_marketing_contract(supabase, factory_id)
-    values: Dict[str, Any] = dict(contract["values"])           # 정확히 29
-    unresolved = set(contract.get("unresolved_fields") or [])
-    provenance: Dict[str, Any] = dict(contract.get("provenance") or {})
-
-    # B'. Safe-route USER_CONFIRM mask — assembler 이후, consumer override 이전.
-    #     _SAFE_EXPLICIT_CONFIRM_FIELDS(10)는 consumer explicit confirm 없이 LEG source가 될 수 없다.
-    #     factories 등록값(FACTORY_DIRECT)이 assembler를 통해 values에 들어왔더라도 제거.
-    for f in _SAFE_EXPLICIT_CONFIRM_FIELDS:
-        values[f] = None
-        provenance[f] = {"mode": "EXPLICIT_CONFIRM_REQUIRED", "source": "safe-route-mask"}
-        unresolved.add(f)
-
-    # B. consumer override — non-null 만 우선(None=미override, false/0/""=override).
-    #    Pydantic model 이면 exclude_none, dict 이면 None 제외.
-    if hasattr(consumer_input, "model_dump"):
-        overrides = consumer_input.model_dump(exclude_none=True)
-    else:
-        overrides = {k: v for k, v in dict(consumer_input or {}).items() if v is not None}
-    for f in SAFE_UI_OVERRIDE_FIELDS:
-        if f in overrides:
-            values[f] = overrides[f]
-            provenance[f] = {"mode": "CONSUMER_OVERRIDE", "source": "safe.diagnosis-step1"}
-            unresolved.discard(f)     # 명시 입력으로 해소(None 은 여기 안 옴)
-
-    # B''. WO-008: server AP01-05 projection injection (flag ON only).
-    #     override 이후, build_saas_leg_step1 이전. 서버 생성 leaves — client 직접 공급 금지.
-    if app3_projection:
-        for leaf_key, leaf_val in app3_projection.items():
-            values[leaf_key] = leaf_val
-
-    # C. WO-010 STEP-2C : canonical29 final-cut 제거. TARGET_FIELDS 는 assembler 의 source contract
-    #    로 계속 import(unresolved_fields 반환용) — 계약 파일 delta 0. source_facts 는 상한 없이
-    #    전량 전달하고 build_saas_leg_step1 이 _LEG_INPUT_FIELDS(103) 로 필터한다. R1 축 등
-    #    source 에 값이 있으면 배선 상한 없이 build_facility 에 도달, 없으면 ABSENT/UNRESOLVED 유지.
-    from services.work_source.store import load_work_rows_optional
-    from services.material_source.store import load_factory_material_rows_optional
-    # WO-EQUIPMENT-A2-EXISTING-SEAM-PATCH-001: Equipment A2 seam.
-    # CONSTRUCTION inline reader 공통 seam 재사용. READ FAILURE != EMPTY SOURCE —
-    # EquipmentSourceLoadError propagates fail-closed (LEG not called on read failure).
-    from services.equipment_source.store import load_equipment_rows_optional
-    step1 = build_saas_leg_step1(
-        sector="INDUSTRIAL",
-        source_facts=values,
-        factory_id=factory_id,
-        work_rows=load_work_rows_optional(supabase, factory_id),
-        # WO-OBS009-MATERIAL-CANONICAL-RUNTIME-WIRING-PATCH-001: Common Material canonical
-        # adapter feeds is_managed_/is_permit_required_/is_special_management_hazardous_substance
-        # into the LEG input bag. READ FAILURE != EMPTY SOURCE — MaterialSourceLoadError
-        # propagates fail-closed and LEG is NOT called on material read failure.
-        material_rows=load_factory_material_rows_optional(supabase, factory_id),
-        equipment_rows=load_equipment_rows_optional(supabase, factory_id),
+    step1, unresolved_fields = collect_industrial_leg_input(
+        supabase, factory_id, consumer_input, app3_projection
     )
-
     # D. 공식 Runtime Delegate 1회 (direct evaluate_rtm / send_industrial_canonical_to_leg 미사용).
     full_result = run_leg_diagnosis(step1)
-
     return {
         "full_result": full_result,
         "contract_version": CONTRACT_VERSION,
-        "unresolved_fields": sorted(unresolved),
+        "unresolved_fields": unresolved_fields,
     }

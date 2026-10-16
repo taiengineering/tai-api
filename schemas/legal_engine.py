@@ -372,3 +372,30 @@ class SafeBuildingLegBody(BaseModel):
     input: SafeBuildingConsumerInput
     material_inout_event_id: Optional[str] = None
     occupancy_assessment_id: Optional[str] = None
+
+
+# WP01-A: 스냅샷 비교 요청 스키마 (sector별 공통 envelope).
+# LEG 미호출 — 입력 사실 변경 여부만 확인한다.
+class LegCompareIndustrialBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    factory_id: str
+    input: SafeIndustrialConsumerInput
+
+
+class LegCompareBuildingBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    factory_id: str
+    input: SafeBuildingConsumerInput
+    material_inout_event_id: Optional[str] = None
+    occupancy_assessment_id: Optional[str] = None
+
+
+class LegCompareConstructionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    site_id: str
+    input: SafeConstructionConsumerInput
+    subcontract_legal_event_id: Optional[str] = None
+    subcontractor_id: Optional[str] = None
