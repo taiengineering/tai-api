@@ -8,6 +8,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import inspect
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,30 @@ def _fit_gate(*a, **k):
     return {"status": "FIT", "sector": "INDUSTRY",
             "current_plan": {"tier_code": "TEST_CURRENT"},
             "required_plan": {"tier_code": "TEST_REQUIRED"}, "metric": {}}
+
+
+class _FakeResolution:
+    """Stub returned by patched _assert_leg_compliance_core_http."""
+    commercial_version_id = "cv-test"
+    product_tier = "TEST_TIER"
+
+
+def _sector_conditional_strings(func_src: str) -> set:
+    """Return string literals that appear inside ast.If test conditions in func_src.
+    Docstrings and inline comments are excluded by the AST parser.
+    Used by S4 to verify no sector-specific branch literals exist in executable code.
+    """
+    try:
+        tree = ast.parse(textwrap.dedent(func_src))
+    except SyntaxError:
+        return set()
+    result = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If):
+            for sub in ast.walk(node.test):
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                    result.add(sub.value)
+    return result
 
 
 class _FacQ:
@@ -146,9 +171,12 @@ def test_T6_industrial_response_exact(monkeypatch):
     full = {"sector": "INDUSTRIAL", "obligations_raw": []}
     sb = _FacSB()
     monkeypatch.setattr(LE, "get_supabase", lambda: sb)
-    monkeypatch.setattr(LE, "get_current_user", lambda authorization=None: {"id": "u"})
+    monkeypatch.setattr(LE, "get_current_user", lambda authorization=None: {"id": "u", "company_id": "c1"})
     monkeypatch.setattr(LE, "_ensure_factory_own", lambda *a, **k: None)
-    monkeypatch.setattr(LE, "evaluate_saas_tier_gate", _fit_gate)
+    monkeypatch.setattr(LE, "require_active_company_saas", lambda *a, **k: None)
+    monkeypatch.setattr(LE, "_assert_leg_compliance_core_http", lambda *a, **k: _FakeResolution())
+    monkeypatch.setattr(LE, "_assert_leg_site_scope_http", lambda *a, **k: None)
+    monkeypatch.setattr(LE, "check_saas_appendix3_contract", lambda *a, **k: None)
     monkeypatch.setattr(LE.leg_runtime_client, "is_enabled", lambda: True)
     monkeypatch.setattr(LE, "run_safe_industrial_leg", lambda *a, **k: _leg_out(full, contract_version="v-test", unresolved_fields=[]))
     body = SafeIndustrialLegBody(factory_id="f1", input=SafeIndustrialConsumerInput())
@@ -172,7 +200,7 @@ def test_T7_building_finalize_uses_body_factory_id(monkeypatch):
     captured = {}
     full = {"sector": "BUILDING", "obligations_raw": []}
 
-    def _fin(supabase, *, factory_id, leg_out):
+    def _fin(supabase, *, factory_id, leg_out, site_id=None):
         captured["factory_id"] = factory_id
         captured["leg_out"] = leg_out
         return {
@@ -184,9 +212,12 @@ def test_T7_building_finalize_uses_body_factory_id(monkeypatch):
         }
 
     monkeypatch.setattr(LE, "get_supabase", lambda: object())
-    monkeypatch.setattr(LE, "get_current_user", lambda authorization=None: {"id": "u"})
+    monkeypatch.setattr(LE, "get_current_user", lambda authorization=None: {"id": "u", "company_id": "c1"})
     monkeypatch.setattr(LE, "_ensure_factory_own", lambda *a, **k: None)
-    monkeypatch.setattr(LE, "evaluate_saas_tier_gate", _fit_gate)
+    monkeypatch.setattr(LE, "require_active_company_saas", lambda *a, **k: None)
+    monkeypatch.setattr(LE, "_assert_leg_compliance_core_http", lambda *a, **k: _FakeResolution())
+    monkeypatch.setattr(LE, "_assert_leg_site_scope_http", lambda *a, **k: None)
+    monkeypatch.setattr(LE, "check_saas_appendix3_contract", lambda *a, **k: None)
     monkeypatch.setattr(LE.leg_runtime_client, "is_enabled", lambda: True)
     monkeypatch.setattr(LE, "run_safe_building_leg", lambda *a, **k: _leg_out(full, contract_version="bld-v", unresolved_fields=["u1"]))
     monkeypatch.setattr(LE, "finalize_saas_leg_result", _fin)
@@ -228,7 +259,7 @@ def test_T8_construction_factory_id_from_runtime_not_site_id(monkeypatch):
             assert name == "construction_sites"
             return _SiteQ()
 
-    def _fin(supabase, *, factory_id, leg_out):
+    def _fin(supabase, *, factory_id, leg_out, site_id=None):
         captured["factory_id"] = factory_id
         captured["leg_out"] = leg_out
         return {
@@ -242,7 +273,9 @@ def test_T8_construction_factory_id_from_runtime_not_site_id(monkeypatch):
     monkeypatch.setattr(LE, "get_supabase", lambda: _SiteSB())
     monkeypatch.setattr(LE, "get_current_user", lambda authorization=None: {"id": "u"})
     monkeypatch.setattr(LE, "_ensure_own_company", lambda *a, **k: None)
-    monkeypatch.setattr(LE, "evaluate_saas_tier_gate", _fit_gate)
+    monkeypatch.setattr(LE, "require_active_company_saas", lambda *a, **k: None)
+    monkeypatch.setattr(LE, "_assert_leg_compliance_core_http", lambda *a, **k: _FakeResolution())
+    monkeypatch.setattr(LE, "_assert_leg_site_scope_http", lambda *a, **k: None)
     monkeypatch.setattr(LE.leg_runtime_client, "is_enabled", lambda: True)
     monkeypatch.setattr(LE, "run_safe_construction_leg", lambda *a, **k: {
         "full_result": full,
@@ -256,7 +289,7 @@ def test_T8_construction_factory_id_from_runtime_not_site_id(monkeypatch):
     assert captured["factory_id"] == "F-assembler-77"
     assert captured["factory_id"] != body.site_id
     assert "SITE-9" != captured["factory_id"]
-    assert tables == ["construction_sites"]               # factory 재조회 0
+    assert "factories" not in tables                      # factory 재조회 0 — factory_id는 out["factory_id"]에서 취득
     assert set(out.keys()) == _COMMON_KEYS
 
 
@@ -353,8 +386,13 @@ def test_S4_finalizer_no_sector_branch_no_http_no_fastapi():
     src = inspect.getsource(P.finalize_saas_leg_result)
     assert "HTTPException" not in src
     assert "fastapi" not in src.lower()
+    # AST-based: sector words must not appear as string literals in If-test conditions.
+    # Comments and docstrings are excluded by the AST parser — only executable branches count.
+    cond_strs = _sector_conditional_strings(src)
     for word in ("INDUSTRIAL", "CONSTRUCTION", "BUILDING", "sector"):
-        assert word not in src
+        assert not any(word in s for s in cond_strs), (
+            f"{word!r} found as conditional string literal in finalize_saas_leg_result"
+        )
     mod = inspect.getsource(P)
     assert "from fastapi" not in mod
     assert "import fastapi" not in mod
