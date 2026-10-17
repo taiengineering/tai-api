@@ -56,6 +56,7 @@ def collect_industrial_leg_input(
     factory_id: str,
     consumer_input,
     app3_projection: Optional[Dict[str, Any]] = None,
+    company_id: Optional[str] = None,
 ):
     """INDUSTRIAL 입력 조립(A-C단계). LEG 미호출, DB 쓰기 없음.
 
@@ -94,6 +95,12 @@ def collect_industrial_leg_input(
         for leaf_key, leaf_val in app3_projection.items():
             values[leaf_key] = leaf_val
 
+    # WIRING-012: L1 company_id → CHEM L4 DIRECT load (fail-closed: re-raise on error).
+    chemical_facts = None
+    if company_id:
+        from clients.chem_internal_client import load_chemical_facts
+        chemical_facts = load_chemical_facts(factory_id, company_id)
+
     # C. build_saas_leg_step1 — _LEG_INPUT_FIELDS(103) 필터, LEG 미호출.
     step1 = build_saas_leg_step1(
         sector="INDUSTRIAL",
@@ -102,6 +109,7 @@ def collect_industrial_leg_input(
         work_rows=load_work_rows_optional(supabase, factory_id),
         material_rows=load_factory_material_rows_optional(supabase, factory_id),
         equipment_rows=load_equipment_rows_optional(supabase, factory_id),
+        chemical_facts=chemical_facts,
     )
     return step1, sorted(unresolved)
 
@@ -111,14 +119,16 @@ def run_safe_industrial_leg(
     factory_id: str,
     consumer_input,
     app3_projection: Optional[Dict[str, Any]] = None,
+    company_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """SAFE INDUSTRIAL 공식 LEG 진단. full_result 반환(저장/결제 없음).
 
     app3_projection: WO-008 서버 생성 AP01-05 leaves (flag ON 시만 비None).
                      consumer override 이후, build_saas_leg_step1 이전에 values에 주입.
+    company_id: WIRING-012 L1 인증 회사 ID. None이면 CHEM 미호출(backward-compat).
     """
     step1, unresolved_fields = collect_industrial_leg_input(
-        supabase, factory_id, consumer_input, app3_projection
+        supabase, factory_id, consumer_input, app3_projection, company_id=company_id
     )
     # D. 공식 Runtime Delegate 1회 (direct evaluate_rtm / send_industrial_canonical_to_leg 미사용).
     full_result = run_leg_diagnosis(step1)

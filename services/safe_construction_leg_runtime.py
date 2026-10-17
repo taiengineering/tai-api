@@ -226,6 +226,7 @@ def collect_construction_leg_input(
     subcontract_legal_event_id: Optional[str] = None,
     subcontractor_id: Optional[str] = None,
     app3_projection: Optional[Dict[str, Any]] = None,
+    company_id: Optional[str] = None,
 ):
     """CONSTRUCTION 입력 조립(A-C단계). LEG 미호출, DB 쓰기 없음.
 
@@ -299,6 +300,13 @@ def collect_construction_leg_input(
         for leaf_key, leaf_val in app3_projection.items():
             values[leaf_key] = leaf_val
 
+    # WIRING-012: L1 company_id → CHEM L4 DIRECT load (fail-closed: re-raise on error).
+    # factory_id comes from site→factory bridge above — ownership-verified path only.
+    chemical_facts = None
+    if company_id:
+        from clients.chem_internal_client import load_chemical_facts
+        chemical_facts = load_chemical_facts(factory_id, company_id)
+
     # C. build_saas_leg_step1
     step1 = build_saas_leg_step1(
         sector="CONSTRUCTION",
@@ -307,6 +315,7 @@ def collect_construction_leg_input(
         work_rows=load_work_rows_optional(supabase, factory_id),
         material_rows=load_factory_material_rows_optional(supabase, factory_id),
         equipment_rows=load_equipment_rows_optional(supabase, factory_id),
+        chemical_facts=chemical_facts,
     )
     return step1, sorted(unresolved), factory_id
 
@@ -318,16 +327,19 @@ def run_safe_construction_leg(
     subcontract_legal_event_id: Optional[str] = None,
     subcontractor_id: Optional[str] = None,
     app3_projection: Optional[Dict[str, Any]] = None,
+    company_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """SAFE CONSTRUCTION 공식 LEG 진단. full_result 반환(저장/결제/factory 생성 없음).
 
     app3_projection: WO-008 서버 생성 AP01-05 leaves (flag ON 시만 비None).
+    company_id: WIRING-012 L1 인증 회사 ID. None이면 CHEM 미호출(backward-compat).
     """
     step1, unresolved_fields, factory_id = collect_construction_leg_input(
         supabase, site_id, consumer_input,
         subcontract_legal_event_id=subcontract_legal_event_id,
         subcontractor_id=subcontractor_id,
         app3_projection=app3_projection,
+        company_id=company_id,
     )
     # D. 공식 Runtime Delegate 1회
     full_result = run_leg_diagnosis(step1)
