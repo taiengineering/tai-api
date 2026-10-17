@@ -41,17 +41,17 @@ class _FakeResolution:
 
 
 def _sector_conditional_strings(func_src: str) -> set:
-    """Return string literals that appear inside ast.If test conditions in func_src.
+    """Return string literals in If/IfExp test conditions.
+
+    Raises SyntaxError (fail-closed) if src cannot be parsed — caller test will FAIL.
+    Covers ast.If (if-statements) and ast.IfExp (ternary expressions).
+    Detects sector strings regardless of dict-key vs comparator position.
     Docstrings and inline comments are excluded by the AST parser.
-    Used by S4 to verify no sector-specific branch literals exist in executable code.
     """
-    try:
-        tree = ast.parse(textwrap.dedent(func_src))
-    except SyntaxError:
-        return set()
+    tree = ast.parse(textwrap.dedent(func_src))  # propagates SyntaxError → test FAIL
     result = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.If):
+        if isinstance(node, (ast.If, ast.IfExp)):
             for sub in ast.walk(node.test):
                 if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
                     result.add(sub.value)
@@ -398,3 +398,55 @@ def test_S4_finalizer_no_sector_branch_no_http_no_fastapi():
     assert "import fastapi" not in mod
     assert "HTTPException" not in mod
     assert "finalize_saas_leg_result" in P.__all__
+
+
+# ── S4 guard regression — _sector_conditional_strings behaviour ──────────────
+
+def test_S4a_docstring_construction_not_detected():
+    """CONSTRUCTION in docstring only → not in conditional strings."""
+    src = '''
+def f():
+    """B-3: CONSTRUCTION 현장 격리."""
+    return 42
+'''
+    assert not any("CONSTRUCTION" in s for s in _sector_conditional_strings(src))
+
+
+def test_S4b_if_sector_eq_building_detected():
+    """`if sector == "BUILDING":` → BUILDING detected."""
+    src = '''
+def f(sector):
+    if sector == "BUILDING":
+        return True
+    return False
+'''
+    cond = _sector_conditional_strings(src)
+    assert any("BUILDING" in s for s in cond)
+
+
+def test_S4c_full_result_get_sector_eq_construction_detected():
+    """`if full_result.get("sector") == "CONSTRUCTION":` → CONSTRUCTION (and "sector") detected."""
+    src = '''
+def f(full_result):
+    if full_result.get("sector") == "CONSTRUCTION":
+        return True
+    return False
+'''
+    cond = _sector_conditional_strings(src)
+    assert any("CONSTRUCTION" in s for s in cond)
+
+
+def test_S4d_ternary_sector_branch_detected():
+    """Ternary `"a" if sector == "INDUSTRIAL" else "b"` → INDUSTRIAL detected."""
+    src = '''
+def f(sector):
+    return "a" if sector == "INDUSTRIAL" else "b"
+'''
+    cond = _sector_conditional_strings(src)
+    assert any("INDUSTRIAL" in s for s in cond)
+
+
+def test_S4e_syntax_error_propagates_fail_closed():
+    """Unparseable source → SyntaxError propagated (fail-closed, not silent pass)."""
+    with pytest.raises(SyntaxError):
+        _sector_conditional_strings("def f(: invalid syntax !!!")
