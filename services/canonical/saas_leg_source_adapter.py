@@ -41,6 +41,7 @@ def build_saas_leg_step1(
     work_rows: Optional[list] = None,
     material_rows: Optional[list] = None,
     equipment_rows: Optional[list] = None,
+    chemical_facts: Optional[Dict[str, Any]] = None,
 ) -> DiagnoseStep1Body:
     """SaaS source facts → DiagnoseStep1Body via unified LEG input contract.
 
@@ -71,6 +72,11 @@ def build_saas_leg_step1(
         has_pressure_vessel/has_emergency_gen/has_boiler). Merge policy: source_facts explicit
         wins; absent/None filled by equipment projection; missing != false.
         NUMERIC_PROJECTION = 0 (attributes/capacity = HOLD).
+    chemical_facts : optional
+        CHEM internal API L4 DIRECT facts (WIRING-010). Currently: {"has_chemical": bool}.
+        Merge policy: source_facts explicit value wins (even False); absent/None filled by
+        chemical_facts. contract_gaps must not be passed here — stripped by caller.
+        NON-DIRECT facts (L4 CONVERT/AGGREGATE/COMPOSITION) blocked until OBJ04.
     """
     facts: Dict[str, Any] = dict(source_facts or {})
     if work_rows:
@@ -87,6 +93,15 @@ def build_saas_leg_step1(
         from services.equipment_source.projector import project_equipment_rows as _proj_eq
         _projected_eq = _proj_eq(equipment_rows)
         for k, v in _projected_eq.items():
+            if facts.get(k) is None:
+                facts[k] = v
+    # WIRING-010: L4 DIRECT chemical facts — source_facts explicit wins; absent/None filled.
+    #   BUILDING has_chemical_substance boundary preserved: chemical_facts supplies has_chemical
+    #   only; BUILDING patch-A exact-key (has_chemical_substance) path below is unaffected.
+    #   CONSTRUCTION alias policy preserved: has_chemical reaches build_facility unchanged;
+    #   build_facility renames it to has_chemical_substance for CONSTRUCTION sector.
+    if chemical_facts:
+        for k, v in chemical_facts.items():
             if facts.get(k) is None:
                 facts[k] = v
 
