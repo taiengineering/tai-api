@@ -1031,7 +1031,7 @@ def apply_building_register_verified(
 
     # factory 조회 + BUILDING 섹터 확인
     factory_res = supabase.table("factories").select(
-        "id,name,sector,bdmgtsn,mgm_bldrgst_pk,building_height,floor_count"
+        "id,name,sector,bdmgtsn,mgm_bldrgst_pk,building_height,floor_count,building_register_updated_at"
     ).eq("id", factory_id).single().execute()
 
     if not factory_res.data:
@@ -1111,22 +1111,26 @@ def apply_building_register_verified(
             "message": "PK는 확인됐으나 건물 높이·층수가 없어 공식 인증을 완료할 수 없습니다.",
         }
 
-    # 멱등성: 동일 PK + 동일 수치이면 불필요한 UPDATE 없음
-    cur_height = factory.get("building_height")
-    cur_floor  = factory.get("floor_count")
-    new_height = extracted.get("building_height")
-    new_floor  = extracted.get("floor_count")
+    # 멱등성: PK·bdmgtsn·공식 타임스탬프·수치 5조건 모두 동일해야 불필요한 UPDATE 생략
+    cur_bdmgtsn   = str(factory.get("bdmgtsn") or "").strip()
+    cur_timestamp = factory.get("building_register_updated_at")
+    cur_height    = factory.get("building_height")
+    cur_floor     = factory.get("floor_count")
+    new_height    = extracted.get("building_height")
+    new_floor     = extracted.get("floor_count")
 
     if (existing_pk == server_pk
+            and cur_bdmgtsn == bdmgtsn
+            and cur_timestamp is not None
             and cur_height == new_height
             and cur_floor == new_floor):
         return {
-            "status": "success",
-            "h01_updated": False,
-            "idempotent": True,
-            "factory_id": factory_id,
+            "status":         "success",
+            "h01_updated":    False,
+            "idempotent":     True,
+            "factory_id":     factory_id,
             "mgm_bldrgst_pk": server_pk,
-            "message": "동일 PK·동일 수치 — 불필요한 UPDATE 없음.",
+            "message":        "동일 PK·bdmgtsn·수치·공식출처 — 불필요한 UPDATE 없음.",
         }
 
     # 단일 DB UPDATE

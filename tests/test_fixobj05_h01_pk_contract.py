@@ -52,10 +52,11 @@ _FACTORY_CONSTRUCTION = {
 
 _FACTORY_WITH_PK = {
     **_FACTORY_BUILDING,
-    "bdmgtsn":        _BDMGTSN,
-    "mgm_bldrgst_pk": _PK_A,
-    "building_height": 45.0,
-    "floor_count":    10,
+    "bdmgtsn":                      _BDMGTSN,
+    "mgm_bldrgst_pk":               _PK_A,
+    "building_height":              45.0,
+    "floor_count":                  10,
+    "building_register_updated_at": "2026-10-01T10:00:00+09:00",
 }
 
 _TITLE_SINGLE = [
@@ -549,3 +550,194 @@ def test_pk16_same_pk_updated_numeric_triggers_update():
     sb.table.return_value.update.assert_called_once()
     updated_patch = sb.table.return_value.update.call_args[0][0]
     assert updated_patch["floor_count"] == 11
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ID01~ID08 — 멱등성 5조건 계약
+#   ID01  최초 인증(timestamp=None) → 멱등 생략 불가, UPDATE 실행
+#   ID02  동일 bdmgtsn + NULL timestamp + 동일 수치 → 멱등 생략 불가, UPDATE 실행
+#   ID03  다른 bdmgtsn + 동일 수치 → 멱등 생략 불가, UPDATE 실행
+#   ID04  5조건 전부 충족 → 멱등 생략, UPDATE 0
+#   ID05  PK 동일 + timestamp 있음 + 수치 일치 + bdmgtsn 불일치 → UPDATE 실행
+#   ID06  PK 동일 + timestamp 있음 + bdmgtsn 일치 + height 변경 → UPDATE 실행
+#   ID07  PK 동일 + timestamp 있음 + bdmgtsn 일치 + floor 변경 → UPDATE 실행
+#   ID08  PK 불일치(이미 다른 PK) + 5조건 무관 → 409
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def test_id01_first_certification_no_timestamp_triggers_update():
+    """ID01: 최초 인증 — timestamp=None이면 멱등 생략 불가, UPDATE 실행."""
+    factory_no_ts = {
+        **_FACTORY_WITH_PK,
+        "building_register_updated_at": None,
+    }
+    sb = _sb_stub(factory_no_ts)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn",
+               return_value=_TITLE_SINGLE), \
+         patch("routers.building_register.extract_h01_fields",
+               return_value={"mgm_bldrgst_pk": _PK_A, "building_height": 45.0, "floor_count": 10}):
+        client = _make_client()
+        resp = client.post("/building-register/apply-verified/fac-001",
+                           json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_A},
+                           headers=_auth())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["h01_updated"] is True
+    assert data.get("idempotent") is not True
+    sb.table.return_value.update.assert_called_once()
+
+
+def test_id02_same_pk_and_numerics_but_no_timestamp_triggers_update():
+    """ID02: PK·수치 동일이어도 timestamp=None → UPDATE 실행 (미인증 상태)."""
+    factory_no_ts = {
+        **_FACTORY_WITH_PK,
+        "building_register_updated_at": None,
+    }
+    sb = _sb_stub(factory_no_ts)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn",
+               return_value=_TITLE_SINGLE), \
+         patch("routers.building_register.extract_h01_fields",
+               return_value={"mgm_bldrgst_pk": _PK_A, "building_height": 45.0, "floor_count": 10}):
+        client = _make_client()
+        resp = client.post("/building-register/apply-verified/fac-001",
+                           json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_A},
+                           headers=_auth())
+    assert resp.status_code == 200
+    assert resp.json()["h01_updated"] is True
+    sb.table.return_value.update.assert_called_once()
+
+
+def test_id03_different_bdmgtsn_same_numerics_triggers_update():
+    """ID03: bdmgtsn 불일치 — 같은 수치이어도 멱등 생략 불가, UPDATE 실행."""
+    other_bdmgtsn = "1168010100103560002"
+    factory_other_bn = {
+        **_FACTORY_WITH_PK,
+        "bdmgtsn": other_bdmgtsn,
+    }
+    sb = _sb_stub(factory_other_bn)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn",
+               return_value=_TITLE_SINGLE), \
+         patch("routers.building_register.extract_h01_fields",
+               return_value={"mgm_bldrgst_pk": _PK_A, "building_height": 45.0, "floor_count": 10}):
+        client = _make_client()
+        # 요청 bdmgtsn = _BDMGTSN, DB bdmgtsn = other_bdmgtsn → 불일치
+        resp = client.post("/building-register/apply-verified/fac-001",
+                           json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_A},
+                           headers=_auth())
+    assert resp.status_code == 200
+    assert resp.json()["h01_updated"] is True
+    sb.table.return_value.update.assert_called_once()
+
+
+def test_id04_all_five_conditions_met_skips_update():
+    """ID04: 5조건(PK·bdmgtsn·timestamp·height·floor) 전부 충족 → 멱등 생략, UPDATE 0."""
+    sb = _sb_stub(_FACTORY_WITH_PK)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn",
+               return_value=_TITLE_SINGLE), \
+         patch("routers.building_register.extract_h01_fields",
+               return_value={"mgm_bldrgst_pk": _PK_A, "building_height": 45.0, "floor_count": 10}):
+        client = _make_client()
+        resp = client.post("/building-register/apply-verified/fac-001",
+                           json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_A},
+                           headers=_auth())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["h01_updated"] is False
+    assert data["idempotent"] is True
+    sb.table.return_value.update.assert_not_called()
+
+
+def test_id05_bdmgtsn_mismatch_skips_idempotent():
+    """ID05: PK·timestamp·수치 일치이어도 bdmgtsn 다르면 UPDATE 실행."""
+    factory_diff_bn = {
+        **_FACTORY_WITH_PK,
+        "bdmgtsn": "1168010100103560009",
+    }
+    sb = _sb_stub(factory_diff_bn)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn",
+               return_value=_TITLE_SINGLE), \
+         patch("routers.building_register.extract_h01_fields",
+               return_value={"mgm_bldrgst_pk": _PK_A, "building_height": 45.0, "floor_count": 10}):
+        client = _make_client()
+        resp = client.post("/building-register/apply-verified/fac-001",
+                           json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_A},
+                           headers=_auth())
+    assert resp.status_code == 200
+    assert resp.json()["h01_updated"] is True
+    sb.table.return_value.update.assert_called_once()
+
+
+def test_id06_height_changed_skips_idempotent():
+    """ID06: bdmgtsn·PK·timestamp·floor 일치이어도 building_height 변경 → UPDATE 실행."""
+    sb = _sb_stub(_FACTORY_WITH_PK)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn",
+               return_value=_TITLE_SINGLE), \
+         patch("routers.building_register.extract_h01_fields",
+               return_value={"mgm_bldrgst_pk": _PK_A, "building_height": 50.0, "floor_count": 10}):
+        client = _make_client()
+        resp = client.post("/building-register/apply-verified/fac-001",
+                           json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_A},
+                           headers=_auth())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["h01_updated"] is True
+    assert data.get("idempotent") is not True
+    sb.table.return_value.update.assert_called_once()
+
+
+def test_id07_floor_changed_skips_idempotent():
+    """ID07: bdmgtsn·PK·timestamp·height 일치이어도 floor_count 변경 → UPDATE 실행."""
+    sb = _sb_stub(_FACTORY_WITH_PK)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn",
+               return_value=_TITLE_SINGLE), \
+         patch("routers.building_register.extract_h01_fields",
+               return_value={"mgm_bldrgst_pk": _PK_A, "building_height": 45.0, "floor_count": 12}):
+        client = _make_client()
+        resp = client.post("/building-register/apply-verified/fac-001",
+                           json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_A},
+                           headers=_auth())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["h01_updated"] is True
+    assert data.get("idempotent") is not True
+    sb.table.return_value.update.assert_called_once()
+
+
+def test_id08_pk_mismatch_returns_409_idempotency_irrelevant():
+    """ID08: 기존 PK(B)와 제출 PK(A) 불일치 → 409, 멱등성 평가 전 차단."""
+    factory_pk_b = {
+        **_FACTORY_WITH_PK,
+        "mgm_bldrgst_pk":               _PK_B,
+        "building_register_updated_at": "2026-10-01T10:00:00+09:00",
+    }
+    sb = _sb_stub(factory_pk_b)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"):
+        client = _make_client()
+        resp = client.post("/building-register/apply-verified/fac-001",
+                           json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_A},
+                           headers=_auth())
+    assert resp.status_code == 409
+    sb.table.return_value.update.assert_not_called()
