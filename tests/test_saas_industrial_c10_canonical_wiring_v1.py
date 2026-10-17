@@ -53,6 +53,7 @@ class _Q:
     def is_(self, c, v): self._isnull = (c, v); return self
     def limit(self, n): return self
     def insert(self, row): self._op = "insert"; self._payload = row; return self
+    def update(self, payload): self._op = "update"; self._payload = payload; return self
 
     def execute(self):
         class R: pass
@@ -60,6 +61,9 @@ class _Q:
         if self.name == "anonymous_diagnosis_results" and self._op == "insert":
             self.sb.c10_inserts.append(self._payload)
             r.data = [] if self.sb.c10_fail else [{"id": "diag-1", **self._payload}]
+        elif self.name == "anonymous_diagnosis_results" and self._op == "update":
+            self.sb.c10_status_updates.append(self._payload)
+            r.data = [self._payload]
         else:
             r.data = []
         return r
@@ -90,7 +94,7 @@ class _WriterQ:
 class _SB:
     def __init__(self, legacy_rows=None, c10_fail=False):
         self.legacy_rows = legacy_rows or []; self.c10_fail = c10_fail
-        self.c10_inserts = []; self.writer_inserts = []; self.writer_updates = []
+        self.c10_inserts = []; self.c10_status_updates = []; self.writer_inserts = []; self.writer_updates = []
     def table(self, name):
         if name == "inspection_sets":
             return _WriterQ(self)
@@ -113,7 +117,9 @@ def test_T2_T4_T5_T7_T8_persist_row():
     # PATCH-0B: 최소 row 만(created_at 수동 생성 0)
     assert "created_at" not in row
     assert set(row.keys()) == {"public_token", "input_data", "full_result",
-                               "status", "source_type", "engine_version"}
+                               "status", "source_type", "engine_version",
+                               "inspection_materialization_status"}
+    assert row["inspection_materialization_status"] == "PENDING"  # B-2: INSERT 초기값
 
 
 def test_T3_full_result_mutation_zero():
@@ -426,7 +432,7 @@ def test_industrial_leg_explicit_return_additive_company_id_from_factory(monkeyp
         "unresolved_fields": [],
     })
 
-    def _fake_wiring(supabase, factory_id, company_id, full_result):
+    def _fake_wiring(supabase, factory_id, company_id, full_result, *, site_id=None):
         captured["args"] = (factory_id, company_id, full_result)
         return {
             "diagnosis_id": "diag-x",
@@ -438,6 +444,7 @@ def test_industrial_leg_explicit_return_additive_company_id_from_factory(monkeyp
         "services.saas_diagnosis_result_persistence.run_saas_c10_and_materialize",
         _fake_wiring,
     )
+    monkeypatch.setattr(LE, "check_saas_appendix3_contract", lambda *a, **k: None)
     body = SafeIndustrialLegBody(factory_id="f1", input=SafeIndustrialConsumerInput())
     out = asyncio.run(LE.diagnose_industrial_leg(body, authorization="Bearer x"))
     assert captured["args"] == ("f1", "c-server", full)
