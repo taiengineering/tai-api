@@ -16,13 +16,19 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from supabase import create_client
-from db.supabase_client import SUPABASE_URL, SUPABASE_KEY
+from db.supabase_client import SUPABASE_URL, _resolve_service_role_key
 
 _ENGINE_SCHEMA = "engine_isolated"
 _engine_client = None
 
 
 def _make_engine_client():
+    key = _resolve_service_role_key()
+    if not key:
+        raise RuntimeError(
+            "engine_isolated client 생성 실패: service_role 키가 없습니다. "
+            "SUPABASE_SERVICE_ROLE_KEY 또는 SUPABASE_SERVICE_KEY를 설정하세요."
+        )
     # 1) Preferred: dedicated client whose default schema is engine_isolated.
     try:
         try:
@@ -30,12 +36,12 @@ def _make_engine_client():
         except Exception:  # pragma: no cover - alt import path
             from supabase import ClientOptions  # type: ignore
         return create_client(
-            SUPABASE_URL, SUPABASE_KEY, options=ClientOptions(schema=_ENGINE_SCHEMA)
+            SUPABASE_URL, key, options=ClientOptions(schema=_ENGINE_SCHEMA)
         )
     except Exception:
         pass
     # 2) Fallback: default client scoped via .schema() (newer supabase-py).
-    base = create_client(SUPABASE_URL, SUPABASE_KEY)
+    base = create_client(SUPABASE_URL, key)
     try:
         return base.schema(_ENGINE_SCHEMA)
     except Exception:
