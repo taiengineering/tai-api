@@ -62,8 +62,8 @@ class _Q:
             self.sb.c10_inserts.append(self._payload)
             r.data = [] if self.sb.c10_fail else [{"id": "diag-1", **self._payload}]
         elif self.name == "anonymous_diagnosis_results" and self._op == "update":
-            self.sb.c10_status_updates.append(self._payload)
-            r.data = [self._payload]
+            self.sb.c10_status_updates.append({"payload": self._payload, "filter": dict(self._eq)})
+            r.data = [self._payload]  # _record_materialization_status가 res.data[0]으로 검증
         else:
             r.data = []
         return r
@@ -216,6 +216,11 @@ def test_T21_writer_failure_preserves_c10_failed_status_and_logs(monkeypatch, ca
     assert out["inspection_materialization"] == {"status": "FAILED"}   # silent swallow 0
     assert out["diagnosis_id"] == "diag-1"
     assert len(sb.c10_inserts) == 1                                    # C-10 보존
+    # B-2: FAILED 상태 UPDATE 정확히 1건, 올바른 값·필터
+    assert len(sb.c10_status_updates) == 1
+    upd = sb.c10_status_updates[0]
+    assert upd["payload"]["inspection_materialization_status"] == "FAILED"
+    assert upd["filter"].get("id") == "diag-1"
     # PATCH-0A: exception log 1회 발생
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR and "[SAAS_C10]" in r.getMessage()]
     assert len(errors) == 1
@@ -434,6 +439,7 @@ def test_industrial_leg_explicit_return_additive_company_id_from_factory(monkeyp
 
     def _fake_wiring(supabase, factory_id, company_id, full_result, *, site_id=None):
         captured["args"] = (factory_id, company_id, full_result)
+        captured["site_id"] = site_id
         return {
             "diagnosis_id": "diag-x",
             "inspection_materialization": {"status": "MATERIALIZED"},
@@ -448,6 +454,7 @@ def test_industrial_leg_explicit_return_additive_company_id_from_factory(monkeyp
     body = SafeIndustrialLegBody(factory_id="f1", input=SafeIndustrialConsumerInput())
     out = asyncio.run(LE.diagnose_industrial_leg(body, authorization="Bearer x"))
     assert captured["args"] == ("f1", "c-server", full)
+    assert captured["site_id"] is None                   # INDUSTRIAL: site_id 미전달
     assert sb.factory_select == "company_id"
     assert sb.factory_eq == ("id", "f1")
     assert out["status"] == "success"
