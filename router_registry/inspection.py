@@ -16,4 +16,5 @@ ROUTERS = [
     {"module": "routers.corrective_actions"},
     {"module": "routers.factory_process_v3"},
     {"module": "routers.legal_status_api"},
+    {"module": "routers.obligation_change"},
 ]
