@@ -1057,8 +1057,10 @@ def apply_building_register_verified(
             "submitted_mgm_bldrgst_pk": expected_pk,
         })
 
-    # H01 공식 표제부 재조회 — existing_pk=expected_pk 로 ji fallback 허용
-    title_items = fetch_h01_title_for_bdmgtsn(bdmgtsn, existing_pk=expected_pk)
+    # H01 공식 표제부 재조회 — ji fallback은 DB 확정 PK가 있을 때만 허용
+    # existing_pk(DB 값): None → fallback 금지 / 확정값 → fallback 허용
+    # expected_pk(사용자 제출): extract_h01_fields의 정확 일치 필터에만 사용
+    title_items = fetch_h01_title_for_bdmgtsn(bdmgtsn, existing_pk=existing_pk)
 
     if title_items is None:
         raise HTTPException(status_code=502, detail={

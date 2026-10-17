@@ -741,3 +741,170 @@ def test_id08_pk_mismatch_returns_409_idempotency_irrelevant():
                            headers=_auth())
     assert resp.status_code == 409
     sb.table.return_value.update.assert_not_called()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SG01~SG06 — H01 출처 신뢰 경계 + 실제 추출 함수 통합 계약
+#   SG01  최초 인증, DB PK 없음 → fetch에 existing_pk=None 전달
+#   SG02  기존 확정 PK 있음 → fetch에 existing_pk=DB값 전달
+#   SG03  실제 extract_h01_fields, 제출 PK ≠ H01 PK → 409 / UPDATE 0
+#   SG04  실제 extract_h01_fields, 복수 본동 중 제출 PK 정확히 1건 일치 → 해당 수치 사용
+#   SG05  실제 extract_h01_fields, 주건축물 없음(부속건축물만) → 식별 불가 / UPDATE 0
+#   SG06  멱등성 5조건 회귀 — 실제 extract 사용, UPDATE 0 유지
+# ════════════════════════════════════════════════════════════════════════════
+
+_TITLE_ATTACHED_ONLY = [
+    {
+        "mgmBldrgstPk":   _PK_A,
+        "mainAtchGbCdNm": "부속건축물",
+        "heit":           "10.0",
+        "grndFlrCnt":     "2",
+    }
+]
+
+
+def test_sg01_first_registration_fetch_called_with_none_existing_pk():
+    """SG01: 최초 인증 — DB PK 없음 → fetch에 existing_pk=None 전달.
+
+    사용자 제출 expected_pk를 fetch의 existing_pk로 사용하면
+    미확정 PK를 근거로 대체 지번 fallback이 허용되는 결함이 생긴다.
+    DB에서 읽은 existing_pk(None)를 전달해야 한다.
+    """
+    factory_first = {**_FACTORY_BUILDING, "bdmgtsn": None, "mgm_bldrgst_pk": None,
+                     "building_register_updated_at": None}
+    sb = _sb_stub(factory_first)
+    fetch_mock = MagicMock(return_value=_TITLE_SINGLE)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn", fetch_mock), \
+         patch("routers.building_register.extract_h01_fields",
+               return_value={"mgm_bldrgst_pk": _PK_A, "building_height": 45.0, "floor_count": 10}):
+        client = _make_client()
+        client.post("/building-register/apply-verified/fac-001",
+                    json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_A},
+                    headers=_auth())
+    _, kwargs = fetch_mock.call_args
+    assert kwargs.get("existing_pk") is None, (
+        f"expected existing_pk=None (DB value), got {kwargs.get('existing_pk')!r}"
+    )
+
+
+def test_sg02_confirmed_pk_fetch_called_with_db_pk():
+    """SG02: 기존 확정 PK 있음 → fetch에 DB에서 읽은 existing_pk 전달.
+
+    DB 확정 PK가 있을 때 ji=0000 fallback은 허용된다.
+    사용자 제출 expected_pk 대신 DB 값을 전달하는지 확인한다.
+    """
+    sb = _sb_stub(_FACTORY_WITH_PK)  # existing_pk = _PK_A in DB
+    fetch_mock = MagicMock(return_value=_TITLE_SINGLE)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn", fetch_mock), \
+         patch("routers.building_register.extract_h01_fields",
+               return_value={"mgm_bldrgst_pk": _PK_A, "building_height": 45.0, "floor_count": 10}):
+        client = _make_client()
+        client.post("/building-register/apply-verified/fac-001",
+                    json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_A},
+                    headers=_auth())
+    _, kwargs = fetch_mock.call_args
+    assert kwargs.get("existing_pk") == _PK_A, (
+        f"expected existing_pk={_PK_A!r} (DB value), got {kwargs.get('existing_pk')!r}"
+    )
+
+
+def test_sg03_real_extract_pk_mismatch_returns_409_no_update():
+    """SG03: 실제 extract_h01_fields — 제출 PK(_PK_B) ≠ H01 PK(_PK_A) → 409, UPDATE 0.
+
+    extract_h01_fields Mock 없이 실제 함수 실행.
+    H01에는 _PK_A만 있고, 사용자가 _PK_B를 제출하면 extract는 {} 반환 → 409.
+    """
+    factory_first = {**_FACTORY_BUILDING, "bdmgtsn": None, "mgm_bldrgst_pk": None,
+                     "building_register_updated_at": None}
+    sb = _sb_stub(factory_first)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn",
+               return_value=_TITLE_SINGLE):  # H01에는 _PK_A만 있음
+        client = _make_client()
+        resp = client.post("/building-register/apply-verified/fac-001",
+                           json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_B},
+                           headers=_auth())
+    assert resp.status_code == 409
+    sb.table.return_value.update.assert_not_called()
+
+
+def test_sg04_real_extract_multi_building_exact_pk_match_uses_correct_numerics():
+    """SG04: 실제 extract_h01_fields — 복수 본동(_PK_A·_PK_B) 중 _PK_A 정확 1건 일치 → 해당 수치만 사용.
+
+    extract_h01_fields Mock 없이 실제 함수 실행.
+    _TITLE_MULTI에서 _PK_A(45m/10층)만 추출되어야 한다.
+    """
+    factory_first = {**_FACTORY_BUILDING, "bdmgtsn": None, "mgm_bldrgst_pk": None,
+                     "building_register_updated_at": None}
+    sb = _sb_stub(factory_first)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn",
+               return_value=_TITLE_MULTI):  # _PK_A(45m/10층) + _PK_B(20m/5층)
+        client = _make_client()
+        resp = client.post("/building-register/apply-verified/fac-001",
+                           json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_A},
+                           headers=_auth())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["h01_updated"] is True
+    assert data["mgm_bldrgst_pk"] == _PK_A
+    assert data["building_height"] == 45.0
+    assert data["floor_count"] == 10
+    # _PK_B 수치(20m/5층)가 혼입됐으면 안 됨
+    sb.table.return_value.update.assert_called_once()
+
+
+def test_sg05_real_extract_no_main_building_unresolvable_no_update():
+    """SG05: 실제 extract_h01_fields — 부속건축물만 있어 주건축물 식별 불가 → UPDATE 0.
+
+    extract_h01_fields Mock 없이 실제 함수 실행.
+    모든 행이 '부속건축물'이면 extract는 {} 반환 → 409.
+    """
+    factory_first = {**_FACTORY_BUILDING, "bdmgtsn": None, "mgm_bldrgst_pk": None,
+                     "building_register_updated_at": None}
+    sb = _sb_stub(factory_first)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn",
+               return_value=_TITLE_ATTACHED_ONLY):  # 주건축물 없음
+        client = _make_client()
+        resp = client.post("/building-register/apply-verified/fac-001",
+                           json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_A},
+                           headers=_auth())
+    assert resp.status_code == 409
+    sb.table.return_value.update.assert_not_called()
+
+
+def test_sg06_idempotency_regression_with_real_extract():
+    """SG06: 멱등성 5조건 회귀 — 실제 extract_h01_fields 경로에서 UPDATE 0 유지.
+
+    소스 게이트 수정(existing_pk 인자 교정) 후에도 멱등성이 정상 작동해야 한다.
+    _FACTORY_WITH_PK(PK_A/45m/10층/타임스탬프 있음) + _TITLE_SINGLE(PK_A) → idempotent=True.
+    extract_h01_fields Mock 없이 실제 실행.
+    """
+    sb = _sb_stub(_FACTORY_WITH_PK)
+    with patch("routers.building_register.get_supabase", return_value=sb), \
+         patch("routers.building_register.get_current_user", return_value=_user()), \
+         patch("routers.building_register._ensure_factory_own"), \
+         patch("routers.building_register.fetch_h01_title_for_bdmgtsn",
+               return_value=_TITLE_SINGLE):  # PK_A / 45m / 10층
+        client = _make_client()
+        resp = client.post("/building-register/apply-verified/fac-001",
+                           json={"bdmgtsn": _BDMGTSN, "expected_mgm_bldrgst_pk": _PK_A},
+                           headers=_auth())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["h01_updated"] is False
+    assert data["idempotent"] is True
+    sb.table.return_value.update.assert_not_called()
