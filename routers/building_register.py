@@ -1,4 +1,4 @@
-# routers/building_register.py v2.1.0
+# routers/building_register.py v2.5.0
 # 카카오 축약 주소 → juso.go.kr 전체형 자동 변환 추가
 # - /diagnose: JUSO+건축물대장 API 연결 상태 직접 확인
 # - 다단계 주소 폴백: 풀주소 → 시군구+도로명 → 도로명만 → 지번
@@ -6,6 +6,7 @@
 # - 모든 예외 500 방지
 
 from fastapi import APIRouter, Header, HTTPException, Query
+from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, Any, List
 import asyncio, re, requests, urllib3, os, traceback, time
@@ -902,4 +903,257 @@ def get_factory_floor_outline(factory_id: str):
         "factory_name": factory.get("name"),
         "floor_count":  len(floor_data),
         "floors":       floor_data
+    }
+
+
+# ============================================================
+# WO-E2E2000-FIXOBJ05-H01-PK-CONTRACT-BE-001
+# PK 기반 건축물 식별 — 후보 조회 + 검증 적용 (DB WRITE 0 / DB WRITE 1)
+# ============================================================
+
+# ---------- 요청 모델 ----------
+
+class ApplyVerifiedRequest(BaseModel):
+    bdmgtsn: str = Field(..., description="건물관리번호 19자리")
+    expected_mgm_bldrgst_pk: str = Field(..., description="사용자가 선택한 건축물대장 관리PK")
+
+
+# ---------- GET /h01-candidates ----------
+
+@router.get("/h01-candidates")
+def get_h01_candidates(
+    bdmgtsn: str = Query(..., description="건물관리번호 19자리"),
+    authorization: Optional[str] = Header(None),
+):
+    """건물관리번호 → 건축물대장 주건축물 PK 후보 목록 조회 (DB WRITE 0).
+
+    JUSO 검색을 거치지 않고 bdmgtsn 직접 사용. 복수 본동 모두 반환 — 첫 행 자동 선택 없음.
+    """
+    get_current_user(authorization)  # 인증 필수
+
+    if not bdmgtsn or len(bdmgtsn) != 19 or not bdmgtsn.isdigit():
+        raise HTTPException(status_code=400, detail={
+            "code": "BDMGTSN_FORMAT_INVALID",
+            "message": "bdmgtsn은 숫자 19자리여야 합니다.",
+        })
+
+    title_items = fetch_h01_title_for_bdmgtsn(bdmgtsn)
+    if title_items is None:
+        raise HTTPException(status_code=502, detail={
+            "code": "SOURCE_UNAVAILABLE",
+            "message": "건축물대장 API 조회에 실패했습니다. 잠시 후 다시 시도해주세요.",
+        })
+
+    candidates_raw = [i for i in title_items if i.get("mainAtchGbCdNm") == "주건축물"]
+
+    if not candidates_raw:
+        return {
+            "status": "unresolved",
+            "code": "SOURCE_IDENTITY_UNRESOLVED",
+            "bdmgtsn": bdmgtsn,
+            "candidates": [],
+            "total": 0,
+        }
+
+    candidates = []
+    for row in candidates_raw:
+        pk = str(row.get("mgmBldrgstPk") or "").strip()
+        if not pk:
+            # PK 없는 행 — 동일성 검증 불가 → fail-closed (해당 행 건너뜀)
+            continue
+        candidates.append({
+            "mgm_bldrgst_pk":       pk,
+            "building_name":        (row.get("bldNm") or "").strip() or None,
+            "address":              (row.get("platPlc") or row.get("newPlatPlc") or "").strip() or None,
+            "main_purpose_name":    (row.get("mainPurpsCdNm") or "").strip() or None,
+            "main_purpose_code":    row.get("mainPurpsCd"),
+            "floor_count":          _safe_int(row.get("grndFlrCnt")),
+            "underground_floor_count": _safe_int(row.get("ugrndFlrCnt")),
+            "building_height":      _safe_float(row.get("heit")),
+            "structure_name":       (row.get("strctCdNm") or "").strip() or None,
+            "completion_year":      (
+                int(str(row.get("useAprDay") or "")[:4])
+                if row.get("useAprDay") and len(str(row.get("useAprDay"))) >= 4
+                else None
+            ),
+        })
+
+    if not candidates:
+        return {
+            "status": "unresolved",
+            "code": "SOURCE_IDENTITY_UNRESOLVED",
+            "bdmgtsn": bdmgtsn,
+            "candidates": [],
+            "total": 0,
+        }
+
+    return {
+        "status": "success",
+        "bdmgtsn": bdmgtsn,
+        "candidates": candidates,
+        "total": len(candidates),
+        "note": "복수 후보 시 사용자가 정확한 건축물을 직접 선택해야 합니다." if len(candidates) > 1 else None,
+    }
+
+
+# ---------- POST /apply-verified/{factory_id} ----------
+
+@router.post("/apply-verified/{factory_id}")
+def apply_building_register_verified(
+    factory_id: str,
+    body: ApplyVerifiedRequest,
+    authorization: Optional[str] = Header(None),
+):
+    """PK 검증 기반 건축물대장 적용 (H01 official fields only, single DB UPDATE).
+
+    클라이언트 제출 PK를 서버가 H01 공식 재조회로 검증 후 일치 시에만 UPDATE.
+    주소 재검색(JUSO) 없이 bdmgtsn 직접 사용. 기존 /apply 계약 불변.
+    """
+    # 인증 먼저 — get_supabase() 전에 토큰 검사 (SUPABASE_URL 미설정 환경도 401 선행)
+    current  = get_current_user(authorization)
+    supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
+
+    # 입력 형식 검증
+    bdmgtsn = (body.bdmgtsn or "").strip()
+    expected_pk = (body.expected_mgm_bldrgst_pk or "").strip()
+
+    if not bdmgtsn or len(bdmgtsn) != 19 or not bdmgtsn.isdigit():
+        raise HTTPException(status_code=400, detail={
+            "code": "BDMGTSN_FORMAT_INVALID",
+            "message": "bdmgtsn은 숫자 19자리여야 합니다.",
+        })
+    if not expected_pk:
+        raise HTTPException(status_code=400, detail={
+            "code": "EXPECTED_PK_MISSING",
+            "message": "expected_mgm_bldrgst_pk가 비어 있습니다.",
+        })
+
+    # factory 조회 + BUILDING 섹터 확인
+    factory_res = supabase.table("factories").select(
+        "id,name,sector,bdmgtsn,mgm_bldrgst_pk,building_height,floor_count,building_register_updated_at"
+    ).eq("id", factory_id).single().execute()
+
+    if not factory_res.data:
+        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
+
+    factory = factory_res.data
+    sector  = str(factory.get("sector") or "").upper()
+
+    if sector != "BUILDING":
+        raise HTTPException(status_code=422, detail={
+            "code": "SECTOR_NOT_BUILDING",
+            "message": f"건축물 PK 인증은 BUILDING 섹터 전용입니다. 현재 섹터: {sector or 'UNKNOWN'}",
+        })
+
+    existing_pk  = str(factory.get("mgm_bldrgst_pk") or "").strip() or None
+
+    # 기존 확정 PK ≠ 제출 PK → 409
+    if existing_pk and existing_pk != expected_pk:
+        raise HTTPException(status_code=409, detail={
+            "code": "BUILDING_IDENTITY_MISMATCH",
+            "message": "이미 확정된 건축물 PK와 다릅니다. 수동 확인이 필요합니다.",
+            "existing_mgm_bldrgst_pk": existing_pk,
+            "submitted_mgm_bldrgst_pk": expected_pk,
+        })
+
+    # H01 공식 표제부 재조회 — ji fallback은 DB 확정 PK가 있을 때만 허용
+    # existing_pk(DB 값): None → fallback 금지 / 확정값 → fallback 허용
+    # expected_pk(사용자 제출): extract_h01_fields의 정확 일치 필터에만 사용
+    title_items = fetch_h01_title_for_bdmgtsn(bdmgtsn, existing_pk=existing_pk)
+
+    if title_items is None:
+        raise HTTPException(status_code=502, detail={
+            "code": "SOURCE_UNAVAILABLE",
+            "message": "건축물대장 API 조회에 실패했습니다. 잠시 후 다시 시도해주세요.",
+        })
+
+    if not title_items:
+        return {
+            "status": "unresolved",
+            "code": "SOURCE_IDENTITY_UNRESOLVED",
+            "h01_updated": False,
+            "factory_id": factory_id,
+            "message": "건축물대장에서 해당 건물 정보를 찾을 수 없습니다.",
+        }
+
+    # 제출 PK와 일치하는 주건축물 정확히 1건 확인
+    extracted = extract_h01_fields(title_items, existing_pk=expected_pk)
+
+    if not extracted:
+        raise HTTPException(status_code=409, detail={
+            "code": "BUILDING_IDENTITY_MISMATCH",
+            "message": "제출한 PK와 H01 공식 조회 결과가 일치하지 않습니다. 후보를 다시 확인하세요.",
+            "submitted_mgm_bldrgst_pk": expected_pk,
+        })
+
+    server_pk = extracted.get("mgm_bldrgst_pk", "")
+    # 이중 안전 검증 — extract_h01_fields가 필터링하지만 명시적 비교
+    if server_pk != expected_pk:
+        raise HTTPException(status_code=409, detail={
+            "code": "BUILDING_IDENTITY_MISMATCH",
+            "message": "서버가 확인한 PK와 제출 PK가 다릅니다.",
+            "server_mgm_bldrgst_pk": server_pk,
+            "submitted_mgm_bldrgst_pk": expected_pk,
+        })
+
+    # H01 공식 수치 미확정 → 인증 완료 선언 금지
+    has_numeric = (
+        extracted.get("building_height") is not None
+        or extracted.get("floor_count") is not None
+    )
+
+    if not has_numeric:
+        return {
+            "status": "partial",
+            "code": "H01_NUMERIC_ABSENT",
+            "h01_updated": False,
+            "factory_id": factory_id,
+            "mgm_bldrgst_pk": server_pk,
+            "message": "PK는 확인됐으나 건물 높이·층수가 없어 공식 인증을 완료할 수 없습니다.",
+        }
+
+    # 멱등성: PK·bdmgtsn·공식 타임스탬프·수치 5조건 모두 동일해야 불필요한 UPDATE 생략
+    cur_bdmgtsn   = str(factory.get("bdmgtsn") or "").strip()
+    cur_timestamp = factory.get("building_register_updated_at")
+    cur_height    = factory.get("building_height")
+    cur_floor     = factory.get("floor_count")
+    new_height    = extracted.get("building_height")
+    new_floor     = extracted.get("floor_count")
+
+    if (existing_pk == server_pk
+            and cur_bdmgtsn == bdmgtsn
+            and cur_timestamp is not None
+            and cur_height == new_height
+            and cur_floor == new_floor):
+        return {
+            "status":         "success",
+            "h01_updated":    False,
+            "idempotent":     True,
+            "factory_id":     factory_id,
+            "mgm_bldrgst_pk": server_pk,
+            "message":        "동일 PK·bdmgtsn·수치·공식출처 — 불필요한 UPDATE 없음.",
+        }
+
+    # 단일 DB UPDATE
+    h01_patch = {
+        "bdmgtsn":                      bdmgtsn,
+        "mgm_bldrgst_pk":               server_pk,
+        "building_height":              new_height,
+        "floor_count":                  new_floor,
+        "building_register_updated_at": serialize_business_datetime(now_kst()),
+    }
+
+    supabase.table("factories").update(h01_patch).eq("id", factory_id).execute()
+
+    return {
+        "status":          "success",
+        "h01_updated":     True,
+        "factory_id":      factory_id,
+        "factory_name":    factory.get("name"),
+        "bdmgtsn":         bdmgtsn,
+        "mgm_bldrgst_pk":  server_pk,
+        "building_height": new_height,
+        "floor_count":     new_floor,
+        "updated_fields":  list(h01_patch.keys()),
     }
