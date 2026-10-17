@@ -112,7 +112,16 @@ def load_previous_materialized_obligations(
         return [], False
 
     full_result = res.data[0].get("full_result") or {}
-    return full_result.get("obligations_raw") or [], True
+    obligations_raw = full_result.get("obligations_raw")
+    # P4-05: 누락(None)과 정상 0건([])을 구분 — 구조 무결성 경고
+    if obligations_raw is None:
+        log.warning(
+            "load_previous_materialized_obligations: obligations_raw 필드 누락 "
+            "(None) — id=%s factory_id=%s",
+            res.data[0].get("id"),
+            factory_id,
+        )
+    return obligations_raw or [], True
 
 
 def load_current_removal_candidates(supabase: Any, factory_id: str) -> list:
@@ -298,7 +307,14 @@ def compute_change_summary(
 
     new_row = new_res.data[0]
     new_full_result = new_row.get("full_result") or {}
-    new_obligations_raw = new_full_result.get("obligations_raw") or []
+    _raw_val = new_full_result.get("obligations_raw")
+    # P4-05: 누락(None)과 정상 0건([])을 구분 — 구조 무결성 경고
+    if _raw_val is None:
+        log.warning(
+            "[compute_change_summary] obligations_raw 필드 누락 — diagnosis_id=%s",
+            new_diagnosis_id,
+        )
+    new_obligations_raw = _raw_val or []
     new_created_at: Optional[str] = new_row.get("created_at")
 
     # sector / site_id 추출

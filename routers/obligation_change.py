@@ -172,6 +172,17 @@ def process_scope_b_removal(
             body.application_date,
             body.reason,
         )
-        return {"status": "success", "data": result}
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+    # P4-02: inspection_sets UPDATE 실패 → partial_success (재시도 금지, 관리자 확인 필요)
+    if not result.get("is_set_updated", True):
+        return {
+            "status": "partial_success",
+            "data": result,
+            "message": (
+                f"일정 {result.get('schedules_cancelled', 0)}건이 취소됐으나 "
+                "의무 세트 상태 갱신에 실패했습니다. 관리자 확인이 필요합니다."
+            ),
+        }
+    return {"status": "success", "data": result}

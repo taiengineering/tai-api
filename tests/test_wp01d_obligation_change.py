@@ -1965,7 +1965,7 @@ def test_r13_zero_update_not_success():
 
     sb = MagicMock()
     update_leaf = MagicMock()
-    for m in ("update", "eq"):
+    for m in ("update", "eq", "neq"):
         setattr(update_leaf, m, MagicMock(return_value=update_leaf))
     # UPDATE 결과가 빈 data (0건 실제 변경)
     update_leaf.execute.return_value = _mk_execute([])
@@ -2417,3 +2417,271 @@ def test_r25_scope_b_partial_success_detected():
     result = process_scope_b(sb, "f1", "is-r25", "2026-10-20", "테스트 이유")
     assert result["is_set_updated"] is False, "UPDATE 0행 → is_set_updated=False"
     assert result["schedules_cancelled"] == 0
+
+
+# ===========================================================================
+# PATCH-4A TESTS
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# P4-01: 소문자 상태값 보호 + _apply_preserve_guard 컨트랙트
+# ---------------------------------------------------------------------------
+
+def test_p4_01_lowercase_completed_is_preserved():
+    """DB 소문자 completed → _is_preserve=True (정규화 경유)."""
+    from services.wp01_obligation_change.removal_processor import _is_preserve
+    assert _is_preserve({"status_code": "completed"}) is True
+    assert _is_preserve({"status_code": "in_progress"}) is True
+
+
+def test_p4_01_preserve_update_exclude_contains_lowercase():
+    """_PRESERVE_UPDATE_EXCLUDE 에 소문자 completed / in_progress 포함."""
+    from services.wp01_obligation_change.removal_processor import _PRESERVE_UPDATE_EXCLUDE
+    assert "completed" in _PRESERVE_UPDATE_EXCLUDE
+    assert "in_progress" in _PRESERVE_UPDATE_EXCLUDE
+
+
+def test_p4_01_scope_a_lowercase_completed_race_update_zero():
+    """소문자 completed → SELECT 시 SCHEDULED 이었다가 경합 → UPDATE 0건 → processed=0."""
+    sb = MagicMock()
+
+    select_leaf = MagicMock()
+    for m in ("select", "eq", "limit"):
+        setattr(select_leaf, m, MagicMock(return_value=select_leaf))
+    # SELECT: planned 상태 (보호 대상 아님)
+    select_leaf.execute.return_value = _mk_execute([
+        {"id": "s1", "status_code": "planned", "active_yn": True, "factory_id": "f1"}
+    ])
+
+    # UPDATE: 0건 (경합 중 completed 로 변경됨)
+    update_chain = MagicMock()
+    update_chain.eq.return_value = update_chain
+    update_chain.neq.return_value = update_chain
+    update_chain.execute.return_value = _mk_execute([])
+
+    def _table(name):
+        if name == "work_schedules":
+            tbl = MagicMock()
+            tbl.select.return_value = select_leaf
+            tbl.update.return_value = update_chain
+            return tbl
+        return MagicMock()
+
+    sb.table.side_effect = _table
+
+    with patch("services.wp01_obligation_change.removal_processor._child_linked", return_value=False):
+        result = process_scope_a(sb, "f1", "s1", "사유")
+
+    assert result["processed"] == 0, "UPDATE 0건 → processed=0"
+    assert result["skipped_reason"] is not None
+
+
+# ---------------------------------------------------------------------------
+# P4-02: Scope B 부분 성공 → 라우터 partial_success 반환
+# ---------------------------------------------------------------------------
+
+def test_p4_02_scope_b_partial_success_router_response():
+    """is_set_updated=False → 라우터 status=partial_success, message 포함 (P4-02)."""
+    from unittest.mock import patch
+    from routers.obligation_change import process_scope_b_removal
+    from schemas.obligation_change import ScopeBRemovalRequest
+
+    body = ScopeBRemovalRequest(
+        factory_id="f1",
+        inspection_set_id="iset-1",
+        application_date="2026-12-01",
+        reason="테스트",
+    )
+    current = {"id": "u1", "role_code": "ALL", "company_id": "c1"}
+    partial_result = {
+        "inspection_set_id": "iset-1",
+        "schedules_cancelled": 3,
+        "schedules_preserved_completed": 0,
+        "child_linked_count": 0,
+        "is_active_set_false": True,
+        "is_set_updated": False,  # 부분 성공
+        "scope_b_deactivation_date": "2026-12-01",
+    }
+
+    with patch("routers.obligation_change.get_supabase", return_value=MagicMock()), \
+         patch("routers.obligation_change._require_company_admin"), \
+         patch("routers.obligation_change._require_company_factory"), \
+         patch("routers.obligation_change._is_current_removal_candidate", return_value=True), \
+         patch("routers.obligation_change.process_scope_b", return_value=partial_result):
+        response = process_scope_b_removal(body, current)
+
+    assert response["status"] == "partial_success", "부분 성공 시 status=partial_success"
+    assert "message" in response
+    assert "3건" in response["message"]
+    assert response["data"]["is_set_updated"] is False
+
+
+# ---------------------------------------------------------------------------
+# P4-03: Preview — _child_linked 를 통해 3종 테이블 확인
+# ---------------------------------------------------------------------------
+
+def test_p4_03_preview_uses_child_linked_not_direct_query():
+    """preview_removal_impact 가 _child_linked 를 호출한다 (P4-03)."""
+    schedules = [
+        {"id": "s1", "planned_date": "2026-12-01", "status_code": "planned"},
+    ]
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "work_schedules":
+            leaf.execute.return_value = _mk_execute(schedules)
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    with patch(
+        "services.wp01_obligation_change.removal_processor._child_linked",
+        return_value=True,
+    ) as mock_cl:
+        result = preview_removal_impact(sb, "f1", "iset-1", "2026-12-01")
+
+    mock_cl.assert_called_once_with(sb, "s1", "f1")
+    assert result["child_linked_count"] == 1
+    assert result["has_child_linked"] is True
+    assert result["actual_cancellable"] == 0
+
+
+def test_p4_03_preview_no_child_link():
+    """자식 연결 없음 → actual_cancellable = schedules_to_cancel."""
+    schedules = [
+        {"id": "s1", "planned_date": "2026-12-01", "status_code": "planned"},
+        {"id": "s2", "planned_date": "2027-01-01", "status_code": "planned"},
+    ]
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "work_schedules":
+            leaf.execute.return_value = _mk_execute(schedules)
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    with patch(
+        "services.wp01_obligation_change.removal_processor._child_linked",
+        return_value=False,
+    ):
+        result = preview_removal_impact(sb, "f1", "iset-1", "2026-12-01")
+
+    assert result["actual_cancellable"] == 2
+    assert result["has_child_linked"] is False
+
+
+# ---------------------------------------------------------------------------
+# P4-04: 타사 공장 → 404 (cross-company isolation)
+# ---------------------------------------------------------------------------
+
+def test_p4_04_cross_company_factory_blocked():
+    """타사 공장 ID → _require_company_factory 에서 404 HTTPException."""
+    from fastapi import HTTPException
+    from unittest.mock import patch
+
+    sb = MagicMock()
+    leaf = MagicMock()
+    for m in ("select", "eq", "limit"):
+        setattr(leaf, m, MagicMock(return_value=leaf))
+    # 타사 공장: company_id 필터 결과 없음
+    leaf.execute.return_value = _mk_execute([])
+    sb.table.return_value = leaf
+
+    current = {"id": "u1", "role_code": "COMPANY", "company_id": "company-A"}
+
+    with patch("routers.obligation_change.get_supabase", return_value=sb), \
+         patch("routers.obligation_change._require_company_admin"):
+        from routers.obligation_change import get_removal_preview
+        from schemas.obligation_change import RemovalPreviewRequest
+
+        body = RemovalPreviewRequest(
+            factory_id="factory-of-company-B",
+            inspection_set_id="iset-1",
+        )
+        try:
+            get_removal_preview(body, current)
+            assert False, "HTTPException 발생해야 함"
+        except HTTPException as e:
+            assert e.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# P4-05: obligations_raw None vs [] 구분 — compute_change_summary 로깅 검증
+# ---------------------------------------------------------------------------
+
+def test_p4_05_obligations_raw_none_vs_empty(caplog):
+    """obligations_raw=None → 경고 로그, 빈 리스트로 처리 (P4-05)."""
+    import logging
+    # full_result 에 obligations_raw 필드 없음 (None)
+    new_diag = {
+        "full_result": {},  # obligations_raw 필드 누락
+        "input_data": {"factory_id": "f1", "sector": "MANUFACTURING"},
+        "created_at": "2026-10-17T10:00:00Z",
+    }
+
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "lt", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "anonymous_diagnosis_results":
+            leaf.execute.return_value = _mk_execute([new_diag])
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    with caplog.at_level(logging.WARNING, logger="services.wp01_obligation_change.change_tracker"):
+        result = compute_change_summary(sb, "f1", "diag-p4-05")
+
+    assert result["added_count"] == 0
+    assert result["retained_count"] == 0
+    # obligations_raw 누락 경고가 기록되었는지 확인
+    assert any("obligations_raw" in r.message and "누락" in r.message for r in caplog.records), \
+        "obligations_raw 누락 시 WARNING 로그 필요"
+
+
+def test_p4_05_obligations_raw_empty_no_warning(caplog):
+    """obligations_raw=[] → 경고 없이 정상 처리 (0건 의무 유효)."""
+    import logging
+    new_diag = {
+        "full_result": {"obligations_raw": []},  # 명시적 빈 목록
+        "input_data": {"factory_id": "f1", "sector": "MANUFACTURING"},
+        "created_at": "2026-10-17T10:00:00Z",
+    }
+
+    sb = MagicMock()
+
+    def _table(name):
+        leaf = MagicMock()
+        for m in ("select", "eq", "neq", "gte", "lt", "order", "limit"):
+            setattr(leaf, m, MagicMock(return_value=leaf))
+        if name == "anonymous_diagnosis_results":
+            leaf.execute.return_value = _mk_execute([new_diag])
+        else:
+            leaf.execute.return_value = _mk_execute([])
+        return leaf
+
+    sb.table.side_effect = _table
+
+    with caplog.at_level(logging.WARNING, logger="services.wp01_obligation_change.change_tracker"):
+        result = compute_change_summary(sb, "f1", "diag-p4-05b")
+
+    assert result["added_count"] == 0
+    warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert not any("obligations_raw" in m and "누락" in m for m in warning_msgs), \
+        "obligations_raw=[] 는 경고 없음"

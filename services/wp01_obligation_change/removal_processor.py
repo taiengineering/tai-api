@@ -22,12 +22,23 @@ from datetime import date
 from typing import Any, Dict, List, Optional
 
 from services.inspection_sets_svc.law_engine import _child_linked
-from services.status_vocab import normalize_ws_status_read
+from services.status_vocab import normalize_ws_status_read, ws_completed_query_values
 
 log = logging.getLogger(__name__)
 
 # 정규화된 상태값 기준 — 절대 변경 금지
 _PRESERVE_STATUS = {"completed", "in_progress"}
+
+# DB 소문자 정본 + 전환기 구값 — UPDATE neq 체인에 사용 (P4-01)
+# ws_completed_query_values() = ["completed", "DONE", "done"]
+_PRESERVE_UPDATE_EXCLUDE: tuple = (*ws_completed_query_values(), "in_progress")
+
+
+def _apply_preserve_guard(query):
+    """UPDATE 빌더에 보호 상태 neq 조건 추가 — SELECT↔UPDATE 경합 방지."""
+    for sv in _PRESERVE_UPDATE_EXCLUDE:
+        query = query.neq("status_code", sv)
+    return query
 
 
 def _is_preserve(row: dict) -> bool:
@@ -52,8 +63,9 @@ def preview_removal_impact(
         total_future_schedules: int — 활성·미완료 일정 총 건수
         schedules_to_cancel: int — application_date 이후로 취소 대상
         schedules_to_preserve: int — application_date 이전 또는 보존 대상
-        has_child_linked: bool — work_assignments 연결된 일정 존재 여부
+        has_child_linked: bool — work_assignments/safety_inspections/equipment_checkins 연결 존재 여부
         child_linked_count: int
+        actual_cancellable: int — 실제 처리 가능 건수 (to_cancel - child_linked)
     """
     res = (
         supabase.table("work_schedules")
@@ -85,19 +97,13 @@ def preview_removal_impact(
         schedules_to_cancel = total_future
         to_cancel_ids = {s["id"] for s in eligible}
 
-    # FIX-04: child_linked 는 실제 취소 대상 범위에서만 산출 (complete/in_progress 이력 제외)
+    # P4-03: child_linked 는 실제 취소 대상 범위에서만 산출 — _child_linked 로 3종 테이블 확인
+    # (work_assignments / safety_inspections / equipment_checkins)
     child_linked_count = 0
     for s in eligible:
         if s["id"] not in to_cancel_ids:
             continue
-        asgn_res = (
-            supabase.table("work_assignments")
-            .select("id")
-            .eq("schedule_id", s["id"])
-            .limit(1)
-            .execute()
-        )
-        if asgn_res.data:
+        if _child_linked(supabase, s["id"], factory_id):
             child_linked_count += 1
 
     return {
@@ -159,19 +165,17 @@ def process_scope_a(
     if _child_linked(supabase, row["id"], factory_id):
         return {"processed": 0, "skipped_reason": "연결된 배정·점검 이력이 있습니다"}
 
-    # FIX-01+FIX-03: UPDATE 조건에 status_code 보호 추가 — SELECT↔UPDATE 사이 경합 방지
-    # active_yn=True AND status_code NOT IN _PRESERVE_STATUS 조건으로 이중 잠금
-    update_res = supabase.table("work_schedules").update(
-        {
-            "is_excluded": True,
-            "excluded_reason": excluded_reason,
-            "active_yn": False,
-            "status_code": "EXCLUDED",
-        }
-    ).eq("id", work_schedule_id).eq("factory_id", factory_id).eq("active_yn", True).neq(
-        "status_code", "COMPLETED"
-    ).neq(
-        "status_code", "IN_PROGRESS"
+    # P4-01: _apply_preserve_guard — DB 소문자 정본 + 전환기 구값 전체 제외
+    # active_yn=True AND status_code NOT IN (completed/in_progress/done/DONE) 이중 잠금
+    update_res = _apply_preserve_guard(
+        supabase.table("work_schedules").update(
+            {
+                "is_excluded": True,
+                "excluded_reason": excluded_reason,
+                "active_yn": False,
+                "status_code": "EXCLUDED",
+            }
+        ).eq("id", work_schedule_id).eq("factory_id", factory_id).eq("active_yn", True)
     ).execute()
 
     if not update_res.data:
@@ -280,9 +284,10 @@ def process_scope_b(
         if _child_linked(supabase, s["id"], factory_id):
             child_linked_count += 1
             continue
-        res = supabase.table("work_schedules").update(
-            {"active_yn": False}
-        ).eq("id", s["id"]).eq("factory_id", factory_id).eq("active_yn", True).execute()
+        res = _apply_preserve_guard(
+            supabase.table("work_schedules").update({"active_yn": False})
+            .eq("id", s["id"]).eq("factory_id", factory_id).eq("active_yn", True)
+        ).execute()
         if res.data:  # 실제 변경된 행이 있는 경우만 카운트
             cancelled += 1
 
