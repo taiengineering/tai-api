@@ -39,15 +39,39 @@ from services.kosha_msds.contract import (
 
 CURRENT_VIEW = "kosha_msds_current"
 PREVIEW_VIEW = "kosha_msds_seo_preview_display"
+SEO_PREVIEW_CURRENT_VIEW = "kosha_msds_seo_preview_current"
 SECTIONS_TABLE = "kosha_msds_sections"
 CHEMICALS_TABLE = "kosha_msds_chemicals"
+
+# Section numbers needed for display-field hydration
+# 1=제품명(chemical_name_ko fallback), 2=GHS, 3=CAS번호(cas_no fallback), 15=Regulatory
+_HYDRATION_SECTION_NOS = (1, 2, 3, 15)
+
+# KOSHA MSDS section 1 item codes (제품 및 업체 정보)
+_S1_PRODUCT_NAME = "A02"    # 제품명 → chemical_name_ko fallback
+
+# KOSHA MSDS section 2 item codes (GHS classification / 경고 표지)
+_S2_HAZARD_CLASS = "B02"    # 유해성·위험성 분류
+_S2_PICTOGRAMS = "B0402"    # 그림문자
+_S2_SIGNAL_WORD = "B0404"   # 신호어
+
+# KOSHA MSDS section 3 item codes (구성 성분의 명칭 및 함유량)
+_S3_CAS_NO = "C06"          # CAS 번호 → cas_no fallback
+
+# KOSHA MSDS section 15 item codes (Regulatory)
+_S15_REG_SAOLAW = "O02"     # 산업안전보건법에 의한 규제
+_S15_REG_DANGEROUS = "O06"  # 위험물안전관리법에 의한 규제
+
+# Values treated as NULL in KOSHA MSDS fields (mirrors display view NULLIF logic)
+_NULL_SENTINEL_VALUES = frozenset({"자료없음", "해당없음"})
 
 
 def _view_for_scope(scope: str) -> str:
     """Return the SQL view name for the given publication scope.
 
     FULL         → kosha_msds_current           (PUBLISHED_FULL only)
-    SEO_PREVIEW  → kosha_msds_seo_preview_current (PUBLISHED_SEO_PREVIEW only)
+    SEO_PREVIEW  → kosha_msds_seo_preview_display (section-aggregated display view)
+                   Use SEO_PREVIEW_CURRENT_VIEW for lightweight membership-only reads.
 
     Unknown scope raises ValueError — callers must validate the scope
     before reaching store methods.
@@ -91,6 +115,7 @@ SECTIONS_SELECT = (
     "chemical_id,section_no,payload_json,section_hash,result_code,"
     "result_message,fetched_at"
 )
+_HYDRATION_SECTIONS_SELECT = "chemical_id,section_no,payload_json"
 
 
 class SectionNoOutOfRange(ValueError):
@@ -117,6 +142,80 @@ def _clamp_pagination(limit: int, offset: int) -> tuple[int, int]:
     if off < 0:
         off = 0
     return lim, off
+
+
+def _extract_item(items: list, code: str) -> Optional[str]:
+    """Mirrors nz CTE: NULLIF(NULLIF(btrim(COALESCE(MAX(val) FILTER (code), '')), '자료없음'), '해당없음').
+
+    btrim() = SQL default btrim: removes ASCII space U+0020 only (NOT \\n, \\r, \\t).
+    Applies uniformly to ALL 7 item codes (A02, C06, B02, B0404, B0402, O02, O06).
+    - Item absent or itemDetail is JSON null → returns "" (COALESCE '' default)
+    - "자료없음" / "해당없음" (after space-only btrim) → returns None (NULLIF sentinel)
+    - All other values → returns btrim(val) preserving \\n/\\r/\\t
+    """
+    val: Optional[str] = None
+    for item in items:
+        if str(item.get("msdsItemCode", "")).strip(" ") == code:
+            detail = item.get("itemDetail")
+            if detail is not None:
+                candidate = str(detail)
+                if val is None or candidate > val:  # MAX lexicographic semantics
+                    val = candidate
+    result = val.strip(" ") if val is not None else ""
+    return None if result in _NULL_SENTINEL_VALUES else result
+
+
+def _coalesce_btrim(primary: Optional[str], fallback: Optional[str]) -> Optional[str]:
+    """Mirrors COALESCE(NULLIF(btrim(COALESCE(primary,'')), ''), fallback).
+
+    btrim() = SQL default btrim: removes ASCII space U+0020 only (NOT \\n, \\r, \\t).
+    Falls back ONLY when primary is None or empty-after-btrim.
+    Sentinel values in primary are NOT replaced (SQL NULLIF only checks '').
+    """
+    trimmed = str(primary).strip(" ") if primary is not None else ""
+    return trimmed if trimmed else fallback
+
+
+def _hydrate_from_sections(sections: list[dict], last_date: Optional[str]) -> dict:
+    """Compute display fields from raw section rows + last_date from chemicals.
+
+    Mirrors the COALESCE/NULLIF/btrim/max FILTER logic of
+    kosha_msds_seo_preview_display without querying that view.
+    Sections must include section_no IN (1, 2, 3, 15) for full hydration.
+
+    chemical_name_ko: COALESCE(current.chemical_name_ko, section1 A02)
+    cas_no:           COALESCE(current.cas_no, section3 C06)
+    The caller passes current-view values in the `row` dict; the
+    COALESCE fallbacks are applied in list_current_fast / MemoryMsdsReadStore.
+    This function returns the section-derived fallback values only.
+    """
+    sec1: list = []
+    sec2: list = []
+    sec3: list = []
+    sec15: list = []
+    for s in sections:
+        payload = s.get("payload_json")
+        if not isinstance(payload, list):
+            continue
+        no = int(s.get("section_no") or 0)
+        if no == 1:
+            sec1 = payload
+        elif no == 2:
+            sec2 = payload
+        elif no == 3:
+            sec3 = payload
+        elif no == 15:
+            sec15 = payload
+    return {
+        "chemical_name_ko_fallback": _extract_item(sec1, _S1_PRODUCT_NAME),
+        "cas_no_fallback": _extract_item(sec3, _S3_CAS_NO),
+        "hazard_class": _extract_item(sec2, _S2_HAZARD_CLASS),
+        "signal_word": _extract_item(sec2, _S2_SIGNAL_WORD),
+        "pictograms": _extract_item(sec2, _S2_PICTOGRAMS),
+        "reg_saolaw": _extract_item(sec15, _S15_REG_SAOLAW),
+        "reg_dangerous": _extract_item(sec15, _S15_REG_DANGEROUS),
+        "last_date": last_date,
+    }
 
 
 def _current_row_to_contract(row: dict, *, last_date: Optional[str]) -> dict:
@@ -212,8 +311,24 @@ class MemoryMsdsReadStore:
         return dict(self._chemicals.get(str(chemical_id), {}))
 
     def list_current(self, *, limit: int, offset: int, scope: str = PUBLICATION_SCOPE_FULL) -> tuple[list[dict], int]:
-        rows = sorted(self._rows_for_scope(scope), key=lambda r: r.get("chem_id") or "")
-        return [dict(r) for r in rows[offset : offset + limit]], len(rows)
+        all_rows = sorted(self._rows_for_scope(scope), key=lambda r: r.get("chem_id") or "")
+        page = [dict(r) for r in all_rows[offset : offset + limit]]
+        if scope == PUBLICATION_SCOPE_SEO_PREVIEW:
+            hydrated = []
+            for row in page:
+                cid = str(row.get("id", ""))
+                secs = [s for s in self._sections if str(s.get("chemical_id")) == cid
+                        and int(s.get("section_no") or 0) in _HYDRATION_SECTION_NOS]
+                last_date = (self._chemicals.get(cid) or {}).get("last_date")
+                fields = _hydrate_from_sections(secs, last_date)
+                name_ko_fallback = fields.pop("chemical_name_ko_fallback")
+                cas_no_fallback = fields.pop("cas_no_fallback")
+                merged = {**row, **fields}
+                merged["chemical_name_ko"] = _coalesce_btrim(row.get("chemical_name_ko"), name_ko_fallback)
+                merged["cas_no"] = _coalesce_btrim(row.get("cas_no"), cas_no_fallback)
+                hydrated.append(merged)
+            return hydrated, len(all_rows)
+        return page, len(all_rows)
 
     def search_current(
         self,
@@ -286,15 +401,20 @@ class SupabaseMsdsReadStore:
         FULL scope → kosha_msds_current (currently 0 rows until a
                      PUBLISHED_FULL snapshot exists).
         SEO_PREVIEW → kosha_msds_seo_preview_current
-                     (currently 1,997 rows).
+                     (currently 1,997 rows; lightweight, no section JOIN).
 
         Used by ops.collect_production_status() to fill the
         `chemicals` / `preview_current` / `full_current` fields
         against a live Supabase — see WO-CHEM-FULL-READINESS-004
         PATCH-1 §A.
         """
+        view = (
+            SEO_PREVIEW_CURRENT_VIEW
+            if scope == PUBLICATION_SCOPE_SEO_PREVIEW
+            else _view_for_scope(scope)
+        )
         r = (
-            self.sb.table(_view_for_scope(scope))
+            self.sb.table(view)
             .select("chem_id", count="exact")
             .limit(1)
             .execute()
@@ -323,7 +443,75 @@ class SupabaseMsdsReadStore:
         rows = r.data or []
         return dict(rows[0]) if rows else {}
 
+    def list_current_fast(self, *, limit: int, offset: int) -> tuple[list[dict], int]:
+        """Published-First, Targeted-Hydration for SEO_PREVIEW list.
+
+        1. Page from kosha_msds_seo_preview_current (lightweight — no section JOIN, no GROUP BY)
+        2. Batch section_no IN (1, 2, 3, 15) for page chemicals only (~100×4 rows max)
+        3. Batch last_date from kosha_msds_chemicals for page chemicals
+        4. Python-side display-field hydration (mirrors seo_preview_display SQL logic)
+           - chemical_name_ko: COALESCE(current.chemical_name_ko, section1 A02)
+           - cas_no:           COALESCE(current.cas_no, section3 C06)
+        """
+        r = (
+            self.sb.table(SEO_PREVIEW_CURRENT_VIEW)
+            .select(CURRENT_VIEW_SELECT, count="exact")
+            .order("chem_id")
+            .range(offset, offset + limit - 1)
+            .execute()
+        )
+        rows = list(r.data or [])
+        total = int(r.count or 0)
+        if not rows:
+            return rows, total
+
+        chemical_ids = [str(row["id"]) for row in rows if row.get("id")]
+
+        # Batch fetch sections 2+15 for this page only
+        sec_r = (
+            self.sb.table(SECTIONS_TABLE)
+            .select(_HYDRATION_SECTIONS_SELECT)
+            .in_("chemical_id", chemical_ids)
+            .in_("section_no", list(_HYDRATION_SECTION_NOS))
+            .execute()
+        )
+        sections_by_chem: dict[str, list] = {}
+        for s in (sec_r.data or []):
+            cid = str(s.get("chemical_id", ""))
+            sections_by_chem.setdefault(cid, []).append(s)
+
+        # Batch fetch last_date from chemicals
+        chem_r = (
+            self.sb.table(CHEMICALS_TABLE)
+            .select(CHEMICALS_EXTRA_SELECT)
+            .in_("id", chemical_ids)
+            .execute()
+        )
+        last_dates: dict[str, Optional[str]] = {
+            str(c["id"]): c.get("last_date")
+            for c in (chem_r.data or [])
+            if c.get("id")
+        }
+
+        # Merge hydrated display fields into rows; apply COALESCE for name/cas fallbacks
+        hydrated = []
+        for row in rows:
+            cid = str(row.get("id", ""))
+            fields = _hydrate_from_sections(sections_by_chem.get(cid, []), last_dates.get(cid))
+            # Pop section-derived fallbacks before merging to avoid leaking them
+            name_ko_fallback = fields.pop("chemical_name_ko_fallback")
+            cas_no_fallback = fields.pop("cas_no_fallback")
+            merged = {**row, **fields}
+            # COALESCE: current view returns NULL for these when not stored in chemicals table
+            merged["chemical_name_ko"] = _coalesce_btrim(row.get("chemical_name_ko"), name_ko_fallback)
+            merged["cas_no"] = _coalesce_btrim(row.get("cas_no"), cas_no_fallback)
+            hydrated.append(merged)
+
+        return hydrated, total
+
     def list_current(self, *, limit: int, offset: int, scope: str = PUBLICATION_SCOPE_FULL) -> tuple[list[dict], int]:
+        if scope == PUBLICATION_SCOPE_SEO_PREVIEW:
+            return self.list_current_fast(limit=limit, offset=offset)
         r = (
             self.sb.table(_view_for_scope(scope))
             .select(_select_for_scope(scope), count="exact")
