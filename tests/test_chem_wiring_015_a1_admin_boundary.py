@@ -61,10 +61,11 @@ class _FakeSupa:
     ):
         self._last_table: str | None = None
         self._last_factory_id: str | None = None
-        self._factory_company_map = factory_company_map or {
-            _FACTORY_A: _COMPANY_A,
-            _FACTORY_B: _COMPANY_B,
-        }
+        self._factory_company_map = (
+            {_FACTORY_A: _COMPANY_A, _FACTORY_B: _COMPANY_B}
+            if factory_company_map is None
+            else factory_company_map
+        )
         self._site_company_id = site_company_id
         self._site_factory_id = site_factory_id
 
@@ -425,3 +426,93 @@ def test_A15_17_empty_company_id_blocked_at_router(monkeypatch):
         _run(diagnose_building_leg(body_bld, authorization="Bearer tok"))
     assert exc_bld.value.status_code == 403
     assert called_bld["n"] == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A15-18~20 — PATCH-01: CONSTRUCTION App3 조회 순서 검증
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_A15_18_construction_mismatch_app3_not_called(monkeypatch):
+    """A15-18 (PATCH-01): CONSTRUCTION 타사 factory → App3 호출 0, runtime 호출 0.
+
+    factory-company 검증이 check_saas_appendix3_contract 보다 먼저 실행되어
+    타사 factory 자료를 App3 조회 전에 차단해야 한다.
+    """
+    supa = _FakeSupa(factory_company_map={_FACTORY_A: _COMPANY_B}, site_factory_id=_FACTORY_A)
+    _patch_chain(monkeypatch, supa=supa, company_id=_COMPANY_A)
+
+    app3_called = {"n": 0}
+    runtime_called = {"n": 0}
+
+    def fake_app3(sb, fac_id, sector, inp):
+        app3_called["n"] += 1
+        return None
+
+    def fake_run(*a, **kw):
+        runtime_called["n"] += 1
+        return _CST_OUT
+
+    monkeypatch.setattr("routers.legal_engine.check_saas_appendix3_contract", fake_app3)
+    monkeypatch.setattr("routers.legal_engine.run_safe_construction_leg", fake_run)
+
+    body = SafeConstructionLegBody(site_id=_SITE_ID, input=SafeConstructionConsumerInput())
+    from routers.legal_engine import diagnose_construction_leg
+    with pytest.raises(HTTPException) as exc_info:
+        _run(diagnose_construction_leg(body, authorization="Bearer tok"))
+
+    assert exc_info.value.status_code == 403
+    assert app3_called["n"] == 0, "타사 factory 시 App3 조회 금지 (PATCH-01)"
+    assert runtime_called["n"] == 0, "타사 factory 시 runtime 호출 금지"
+
+
+def test_A15_19_construction_same_company_app3_still_called(monkeypatch):
+    """A15-19 (PATCH-01): CONSTRUCTION 자사 factory → App3 호출 1 (기존 동작 유지)."""
+    supa = _FakeSupa(factory_company_map={_FACTORY_A: _COMPANY_A}, site_factory_id=_FACTORY_A)
+    _patch_chain(monkeypatch, supa=supa, company_id=_COMPANY_A)
+
+    app3_called = {"n": 0}
+
+    def fake_app3(sb, fac_id, sector, inp):
+        app3_called["n"] += 1
+        return None
+
+    def fake_run(*a, **kw):
+        return _CST_OUT
+
+    monkeypatch.setattr("routers.legal_engine.check_saas_appendix3_contract", fake_app3)
+    monkeypatch.setattr("routers.legal_engine.run_safe_construction_leg", fake_run)
+
+    body = SafeConstructionLegBody(site_id=_SITE_ID, input=SafeConstructionConsumerInput())
+    from routers.legal_engine import diagnose_construction_leg
+    _run(diagnose_construction_leg(body, authorization="Bearer tok"))
+
+    assert app3_called["n"] == 1, "자사 factory → App3 조회 정상 호출"
+
+
+def test_A15_20_construction_factory_not_found_fail_closed(monkeypatch):
+    """A15-20 (PATCH-01): CONSTRUCTION factory 미존재 → 403 fail-closed (App3·runtime 미호출)."""
+    supa = _FakeSupa(factory_company_map={}, site_factory_id=_FACTORY_A)
+    _patch_chain(monkeypatch, supa=supa, company_id=_COMPANY_A)
+
+    app3_called = {"n": 0}
+    runtime_called = {"n": 0}
+
+    def fake_app3(*a, **kw):
+        app3_called["n"] += 1
+        return None
+
+    def fake_run(*a, **kw):
+        runtime_called["n"] += 1
+        return _CST_OUT
+
+    monkeypatch.setattr("routers.legal_engine.check_saas_appendix3_contract", fake_app3)
+    monkeypatch.setattr("routers.legal_engine.run_safe_construction_leg", fake_run)
+
+    body = SafeConstructionLegBody(site_id=_SITE_ID, input=SafeConstructionConsumerInput())
+    from routers.legal_engine import diagnose_construction_leg
+    with pytest.raises(HTTPException) as exc_info:
+        _run(diagnose_construction_leg(body, authorization="Bearer tok"))
+
+    assert exc_info.value.status_code == 403
+    assert app3_called["n"] == 0, "factory 미존재 시 App3 조회 금지"
+    assert runtime_called["n"] == 0, "factory 미존재 시 runtime 호출 금지"

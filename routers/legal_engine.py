@@ -238,8 +238,7 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
     _site_fac_data = getattr(_site_fac_row, "data", None) or []
     _cst_factory_id = _site_fac_data[0].get("factory_id") if _site_fac_data else None
     if _cst_factory_id:
-        app3_projection = check_saas_appendix3_contract(supabase, _cst_factory_id, "CONSTRUCTION", body.input)
-        # WIRING-013: CHEM 호출 전 factory 회사 일치 검증 (site company 검증과 별도).
+        # A15 PATCH-01: factory-company 검증을 App3 조회보다 먼저 — 타사 자료 선조회 차단.
         _fac_cid_row = (
             supabase.table("factories")
             .select("company_id").eq("id", _cst_factory_id).limit(1).execute()
@@ -247,6 +246,7 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
         _fac_cid_data = getattr(_fac_cid_row, "data", None) or []
         if not _fac_cid_data or str(_fac_cid_data[0].get("company_id") or "") != company_id:
             raise HTTPException(status_code=403, detail="현장과 시설의 회사가 일치하지 않습니다.")
+        app3_projection = check_saas_appendix3_contract(supabase, _cst_factory_id, "CONSTRUCTION", body.input)
     else:
         app3_projection = None  # no factory linked — ConstructionSiteBridgeError raised inside runtime
     try:
