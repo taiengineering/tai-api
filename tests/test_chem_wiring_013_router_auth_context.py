@@ -237,27 +237,32 @@ def test_R13_07_construction_factory_company_mismatch_403(monkeypatch):
     assert called["n"] == 0, "factory 회사 불일치 시 run_safe_construction_leg 호출 금지"
 
 
-# ─── R13-08 INDUSTRIAL company_id 빈 문자열 전달 ─────────────────────────────
+# ─── R13-08 INDUSTRIAL company_id 빈 문자열 → 403 (A15 CHEM guard) ───────────
 
-def test_R13_08_industrial_empty_company_id_forwarded(monkeypatch):
-    """current에 company_id=None인 경우 빈 문자열 "" 이 그대로 전달된다(CHEM 미호출)."""
+def test_R13_08_industrial_empty_company_id_403(monkeypatch):
+    """current에 company_id=None인 경우 A15 CHEM guard → HTTP 403 (CHEM 미호출, runtime 미호출).
+
+    WIRING-015 이전: 빈 문자열이 그대로 전달되어 CHEM 클라이언트에서 차단됨.
+    WIRING-015 이후: 라우터 레벨 _ensure_factory_company_match에서 403 차단.
+    """
     _patch_chain(monkeypatch)
-    # company_id=None → str(None or "") = ""
     monkeypatch.setattr("routers.legal_engine.get_current_user",
                         lambda auth: {"company_id": None})
-    captured = {}
+    called = {"n": 0}
 
     def fake_run(supa, factory_id, consumer_input, *, app3_projection=None, company_id=None):
-        captured["company_id"] = company_id
+        called["n"] += 1
         return _LEG_OUT
 
     monkeypatch.setattr("routers.legal_engine.run_safe_industrial_leg", fake_run)
 
     body = SafeIndustrialLegBody(factory_id=_FACTORY_ID, input=SafeIndustrialConsumerInput())
     from routers.legal_engine import diagnose_industrial_leg
-    _run(diagnose_industrial_leg(body, authorization="Bearer tok"))
+    with pytest.raises(HTTPException) as exc_info:
+        _run(diagnose_industrial_leg(body, authorization="Bearer tok"))
 
-    assert captured["company_id"] == "", "company_id None → 빈 문자열 전달"
+    assert exc_info.value.status_code == 403
+    assert called["n"] == 0, "빈 company_id 시 run_safe_industrial_leg 호출 금지"
 
 
 # ─── R13-09 INDUSTRIAL LegDiagnosisError → 502 (회귀 없음) ─────────────────

@@ -4,7 +4,7 @@ from typing import Optional
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
-from services.company_scope import _ensure_factory_own
+from services.company_scope import _ensure_factory_own, _ensure_factory_company_match
 from schemas.legal_engine import (
     DiagnoseStep1Body, DiagnoseStep2Body, DiagnoseStep3Body,
     SafeIndustrialLegBody, SafeConstructionLegBody, SafeBuildingLegBody,
@@ -173,6 +173,7 @@ async def diagnose_industrial_leg(body: SafeIndustrialLegBody, authorization: Op
     current = get_current_user(authorization)                 # AUTH first (실패 시 assembler DB read 금지)
     _ensure_factory_own(supabase, body.factory_id, current)   # OWNERSHIP (타사 factory -> 404)
     company_id = str(current.get("company_id") or "")
+    _ensure_factory_company_match(supabase, body.factory_id, company_id)  # A15: CHEM guard — no admin bypass
     require_active_company_saas(supabase, company_id)
     resolution = _assert_leg_compliance_core_http(supabase, company_id)
     _assert_leg_site_scope_http(supabase, resolution.commercial_version_id, "factory", body.factory_id)
@@ -298,6 +299,7 @@ async def diagnose_building_leg(body: SafeBuildingLegBody, authorization: Option
     current = get_current_user(authorization)
     _ensure_factory_own(supabase, body.factory_id, current)
     company_id = str(current.get("company_id") or "")
+    _ensure_factory_company_match(supabase, body.factory_id, company_id)  # A15: CHEM guard — no admin bypass
     require_active_company_saas(supabase, company_id)
     resolution = _assert_leg_compliance_core_http(supabase, company_id)
     _assert_leg_site_scope_http(supabase, resolution.commercial_version_id, "factory", body.factory_id)
