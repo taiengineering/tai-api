@@ -17,6 +17,23 @@ from typing import Any, Iterable, Optional
 
 
 PRODUCT_NAME_ITEM_CODE = "A02"
+CAS_NO_ITEM_CODE = "C06"  # Section 3
+
+
+def extract_cas_no(section3_payload: Any) -> Optional[str]:
+    """Return Section 3 C06 `itemDetail` (CAS number), or None if absent/blank."""
+    for item in _iter_items(section3_payload):
+        code = item.get("msdsItemCode")
+        if code is None:
+            continue
+        if str(code).strip() != CAS_NO_ITEM_CODE:
+            continue
+        detail = item.get("itemDetail")
+        if detail is None:
+            return None
+        text = str(detail).strip()
+        return text or None
+    return None
 
 
 def extract_product_name(section1_payload: Any) -> Optional[str]:

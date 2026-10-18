@@ -115,7 +115,7 @@ def _normalize_chem(row: dict, *, public_allowed: bool) -> Optional[dict]:
     if ts is MISSING_TIMESTAMP:
         return None
     en = row.get("chemical_name_en")
-    cas = row.get("cas_no")
+    cas = row.get("_section3_cas_no") or row.get("cas_no")
     ke = row.get("ke_no")
     en_no = row.get("en_no")
     un = row.get("un_no")

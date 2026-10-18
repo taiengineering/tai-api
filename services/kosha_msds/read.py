@@ -380,6 +380,40 @@ class MemoryMsdsReadStore:
                 return dict(s)
         return None
 
+    def hydrate_chem_ids(self, chem_ids: list[str]) -> list[dict]:
+        """Fetch + hydrate display fields for an ordered list of chem_ids.
+
+        Mirrors list_current() SEO_PREVIEW hydration but for an arbitrary
+        set of chem_ids (e.g., returned by OS search). Preserves input order.
+        """
+        if not chem_ids:
+            return []
+        rows_by_chem_id: dict[str, dict] = {}
+        for row in self._preview:
+            cid = row.get("chem_id")
+            if cid in chem_ids:
+                rows_by_chem_id[cid] = dict(row)
+        result = []
+        for cid in chem_ids:
+            row = rows_by_chem_id.get(cid)
+            if row is None:
+                continue
+            uuid_str = str(row.get("id", ""))
+            secs = [
+                s for s in self._sections
+                if str(s.get("chemical_id")) == uuid_str
+                and int(s.get("section_no") or 0) in _HYDRATION_SECTION_NOS
+            ]
+            last_date = (self._chemicals.get(uuid_str) or {}).get("last_date")
+            fields = _hydrate_from_sections(secs, last_date)
+            name_ko_fallback = fields.pop("chemical_name_ko_fallback")
+            cas_no_fallback = fields.pop("cas_no_fallback")
+            merged = {**row, **fields}
+            merged["chemical_name_ko"] = _coalesce_btrim(row.get("chemical_name_ko"), name_ko_fallback)
+            merged["cas_no"] = _coalesce_btrim(row.get("cas_no"), cas_no_fallback)
+            result.append(merged)
+        return result
+
 
 class SupabaseMsdsReadStore:
     """Supabase SELECT-only read store. No insert/update/delete methods.
@@ -575,6 +609,78 @@ class SupabaseMsdsReadStore:
         rows = r.data or []
         return dict(rows[0]) if rows else None
 
+    def hydrate_chem_ids(self, chem_ids: list[str]) -> list[dict]:
+        """Fetch + hydrate display fields for an ordered list of chem_ids.
+
+        Used by the OS-backed search path (WO-WWW-PERF-004-P0S) to hydrate
+        results returned by OpenSearch. Preserves input order; silently
+        drops chem_ids not found in seo_preview_current.
+
+        3-query P0-A fast path: no display view, no CROSS JOIN LATERAL.
+        """
+        if not chem_ids:
+            return []
+        r = (
+            self.sb.table(SEO_PREVIEW_CURRENT_VIEW)
+            .select(CURRENT_VIEW_SELECT)
+            .in_("chem_id", chem_ids)
+            .execute()
+        )
+        rows_by_chem_id: dict[str, dict] = {}
+        for row in (r.data or []):
+            cid = row.get("chem_id")
+            if cid:
+                rows_by_chem_id[cid] = row
+
+        chemical_ids = [
+            str(rows_by_chem_id[cid]["id"])
+            for cid in chem_ids
+            if cid in rows_by_chem_id and rows_by_chem_id[cid].get("id")
+        ]
+        if not chemical_ids:
+            return []
+
+        sec_r = (
+            self.sb.table(SECTIONS_TABLE)
+            .select(_HYDRATION_SECTIONS_SELECT)
+            .in_("chemical_id", chemical_ids)
+            .in_("section_no", list(_HYDRATION_SECTION_NOS))
+            .execute()
+        )
+        sections_by_chem: dict[str, list] = {}
+        for s in (sec_r.data or []):
+            uuid_str = str(s.get("chemical_id", ""))
+            sections_by_chem.setdefault(uuid_str, []).append(s)
+
+        chem_r = (
+            self.sb.table(CHEMICALS_TABLE)
+            .select(CHEMICALS_EXTRA_SELECT)
+            .in_("id", chemical_ids)
+            .execute()
+        )
+        last_dates: dict[str, Optional[str]] = {
+            str(c["id"]): c.get("last_date")
+            for c in (chem_r.data or [])
+            if c.get("id")
+        }
+
+        result = []
+        for cid in chem_ids:
+            row = rows_by_chem_id.get(cid)
+            if row is None:
+                continue
+            uuid_str = str(row.get("id", ""))
+            fields = _hydrate_from_sections(
+                sections_by_chem.get(uuid_str, []), last_dates.get(uuid_str)
+            )
+            name_ko_fallback = fields.pop("chemical_name_ko_fallback")
+            cas_no_fallback = fields.pop("cas_no_fallback")
+            merged = {**row, **fields}
+            merged["chemical_name_ko"] = _coalesce_btrim(row.get("chemical_name_ko"), name_ko_fallback)
+            merged["cas_no"] = _coalesce_btrim(row.get("cas_no"), cas_no_fallback)
+            result.append(merged)
+        return result
+
 
 # ---------------------------------------------------------------------------
 # Service operations
@@ -701,6 +807,31 @@ def search(
         "items": [
             _current_row_to_contract(row, last_date=None) for row in rows
         ],
+        "total": int(total),
+        "limit": lim,
+        "offset": off,
+    }
+
+
+def search_from_chem_ids(
+    *,
+    store,
+    chem_ids: list[str],
+    total: int,
+    limit: int,
+    offset: int,
+) -> dict:
+    """Hydrate and format results from an OS-returned (chem_ids, total) pair.
+
+    Used by the OpenSearch-backed search path (WO-WWW-PERF-004-P0S).
+    chem_ids is the page already sliced by OS (limit/offset applied there).
+    total is the OS-reported hit count (track_total_hits=true).
+    """
+    lim = max(1, min(int(limit), MAX_LIMIT))
+    off = max(0, int(offset))
+    rows = store.hydrate_chem_ids(chem_ids)
+    return {
+        "items": [_current_row_to_contract(row, last_date=None) for row in rows],
         "total": int(total),
         "limit": lim,
         "offset": off,

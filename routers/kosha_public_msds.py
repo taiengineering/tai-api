@@ -36,6 +36,7 @@ from services.kosha_msds.contract import (
     PUBLIC_MODE_OFF,
     PUBLIC_MODE_SEO_PREVIEW,
 )
+from services.kosha_msds.opensearch_query import os_chem_available, search_os
 from services.kosha_msds.read import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
@@ -47,8 +48,9 @@ from services.kosha_msds.read import (
     get_section,
     list_current,
     search,
+    search_from_chem_ids,
 )
-from services.kosha_msds.search_adapter import search_by_q
+from services.kosha_msds.search_adapter import search_by_q, search_by_q_os
 
 router = APIRouter(
     prefix="/public/kosha/msds",
@@ -161,22 +163,52 @@ def list_or_search_msds(
     mode = _require_active_mode()
     scope = _mode_to_scope(mode)
     store = get_store()
-    if q is not None and q.strip():
-        return search_by_q(q=q, store=store, limit=limit, offset=offset, scope=scope)
-    if _has_any_search_filter(chem_id, cas_no, ke_no, en_no, un_no, name_ko, name_en):
-        return search(
-            store=store,
-            chem_id=chem_id,
-            cas_no=cas_no,
-            ke_no=ke_no,
-            en_no=en_no,
-            un_no=un_no,
-            name_ko=name_ko,
-            name_en=name_en,
-            limit=limit,
-            offset=offset,
-            scope=scope,
-        )
+
+    has_q = q is not None and q.strip()
+    has_filter = _has_any_search_filter(chem_id, cas_no, ke_no, en_no, un_no, name_ko, name_en)
+
+    if has_q or has_filter:
+        # OS path: avoids kosha_msds_seo_preview_display timeout (57014).
+        # Falls back to legacy Supabase path when OS is unavailable so
+        # that degraded behaviour matches the prior baseline (may timeout).
+        try:
+            if has_q:
+                chem_ids, total, match_meta = search_by_q_os(
+                    q=q, limit=limit, offset=offset
+                )
+                result = search_from_chem_ids(
+                    store=store, chem_ids=chem_ids,
+                    total=total, limit=limit, offset=offset,
+                )
+                result["match_metadata"] = match_meta
+                return result
+            else:
+                chem_ids, total = search_os(
+                    chem_id=chem_id, cas_no=cas_no, ke_no=ke_no,
+                    en_no=en_no, un_no=un_no,
+                    name_ko=name_ko, name_en=name_en,
+                    limit=limit, offset=offset,
+                )
+                return search_from_chem_ids(
+                    store=store, chem_ids=chem_ids,
+                    total=total, limit=limit, offset=offset,
+                )
+        except Exception:
+            # OS unavailable — fall back to legacy path
+            import logging
+            logging.getLogger(__name__).exception(
+                "MSDS OS search failed; falling back to Supabase path"
+            )
+            if has_q:
+                return search_by_q(q=q, store=store, limit=limit, offset=offset, scope=scope)
+            return search(
+                store=store,
+                chem_id=chem_id, cas_no=cas_no,
+                ke_no=ke_no, en_no=en_no, un_no=un_no,
+                name_ko=name_ko, name_en=name_en,
+                limit=limit, offset=offset, scope=scope,
+            )
+
     return list_current(store=store, limit=limit, offset=offset, scope=scope)
 
 
