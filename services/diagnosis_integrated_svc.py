@@ -230,6 +230,19 @@ def get_price_tier_payload(
     }
 
 
+def _validate_art68_count_field(form_data: dict) -> None:
+    """ART68 건수 필드 정수 계약 검증. form_data에 필드 부재(None)는 허용(기존 요청 호환).
+    위반 시 HTTPException(422) raise. CONSTRUCTION sector에서만 호출한다."""
+    val = form_data.get("same_site_contracted_construction_work_count")
+    if val is None:
+        return
+    if not (isinstance(val, int) and not isinstance(val, bool) and val >= 0):
+        raise HTTPException(
+            status_code=422,
+            detail="same_site_contracted_construction_work_count must be a non-negative integer",
+        )
+
+
 def _ensure_disclaimer_for_paid_entry(supabase, auth_row: dict) -> str:
     """유료 결제 직입(runPaidDiagnosis) — disclaimer_log_id 없을 때 자동 기록."""
     from services.diagnosis_helpers import _now
@@ -382,14 +395,6 @@ def _build_unified_step1_body(
     # no 1.0 synthetic. Non-construction does not receive this bridge.
     if engine_sector == "CONSTRUCTION" and contract_amount_eok is not None:
         runtime_facts["contract_amount_eok"] = contract_amount_eok
-    # ART68 건수 필드 정수 경계 검증: form_data 경유 우회 입력 차단.
-    # SaaS는 SafeConstructionConsumerInput(StrictInt≥0) Pydantic 검증.
-    # 유료진단은 form_data(Dict[str,Any])로 수신 → 서버 경계에서 해당 필드 한정 검증.
-    if engine_sector == "CONSTRUCTION" and isinstance(_fd_alias_src, dict):
-        _count_val = _fd_alias_src.get("same_site_contracted_construction_work_count")
-        if _count_val is not None:
-            if not (isinstance(_count_val, int) and not isinstance(_count_val, bool) and _count_val >= 0):
-                raise HTTPException(status_code=422, detail="same_site_contracted_construction_work_count must be a non-negative integer")
     # WO-CST-SYNTHETIC-CONSTRUCTION-TYPE-HOTFIX-001: CST construction_type synthetic default 제거.
     #   소비자가 construction_type 을 입력하지 않으면 ABSENT 로 둔다(Unified "미입력=ABSENT" 계약).
     #   이전엔 "건축" 을 생성해 Unified/Facility 로 전달 → LEG 가 construction_type 을 ENUM 미등록으로
@@ -478,6 +483,10 @@ def run_diagnosis(
     # CHILD gate validated SECOND — item_no==49 is now confirmed present.
     # After appendix3 source validation, before disclaimer / quota / engine / persist.
     validate_explicit_construction_predicates(body, getattr(body, "sector", None))
+    # ART68 건수 필드 조기 검증 — 면책 동의 DB 기록 이전 (인증 이후).
+    _early_fd = getattr(body, "form_data", None) or {}
+    if normalize_sector_db(body.sector) == "CONSTRUCTION" and isinstance(_early_fd, dict):
+        _validate_art68_count_field(_early_fd)
     disclaimer_log_id = (body.disclaimer_log_id or "").strip()
     if not disclaimer_log_id:
         if body.payment_ref:
