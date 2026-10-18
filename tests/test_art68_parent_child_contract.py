@@ -1,18 +1,22 @@
 """ART68 부모-자식 입력 계약 검증 테스트.
 
-WO-LEGAL-ADDITIONAL-INPUT-GAPA-FINAL-GATE-PATCH-003 D항 필수 테스트 (서버 경계).
+WO-LEGAL-ADDITIONAL-INPUT-GAPA-MERGE-GATE-CLOSURE-004 A항 (키 존재 여부 교정 포함).
 
 검증 범위:
   - ART68 필드 없음: 기존 요청 호환 통과
   - 부모 비boolean 차단
+  - 부모 키 존재 + null → 422 (키 존재 교정)
+  - 자식 키 존재 + null 부모 없음 → 422 (키 존재 교정)
   - 부모=false + 자식 없음: 통과
   - 부모=false + 자식 있음: 422 차단
+  - 부모=false + 자식 키 존재(null 포함) → 422 (키 존재 교정)
   - 자식 단독 제출 차단
   - 부모=true + 자식 누락: 422
   - 부모=true + 자식 문자열: 422
   - 부모=true + 자식 모두 valid + 건수=0: 통과
   - 부모=true + 자식 모두 valid + 건수=2: 통과
   - 부모=true + 건수 미입력: 422
+  - 부모=true + 건수 키 존재 + null → 422 (키 존재 교정)
   - 부모=true + 건수 소수: 422
   - 부모=true + 건수 boolean: 422
 """
@@ -137,3 +141,39 @@ def test_parent_true_count_two_passes():
 
 def test_parent_true_all_false_with_zero_passes():
     _validate_art68_parent_child_contract({P: True, L: False, R: False, C: 0})
+
+
+# ── 키 존재 교정 반례 (CLOSURE-004 추가) ────────────────────────────────────
+def test_parent_key_null_rejected():
+    """부모 키 존재 + 값 null → boolean 아님 → 422."""
+    with pytest.raises(HTTPException) as exc:
+        _validate_art68_parent_child_contract({P: None})
+    assert exc.value.status_code == 422
+
+
+def test_child_key_null_no_parent_rejected():
+    """자식 키 존재(null) + 부모 없음 → parent field required → 422."""
+    with pytest.raises(HTTPException) as exc:
+        _validate_art68_parent_child_contract({L: None})
+    assert exc.value.status_code == 422
+
+
+def test_parent_false_child_key_null_rejected():
+    """부모=false + 자식 키 존재(null) → stray child → 422."""
+    with pytest.raises(HTTPException) as exc:
+        _validate_art68_parent_child_contract({P: False, L: None})
+    assert exc.value.status_code == 422
+
+
+def test_parent_false_count_key_null_rejected():
+    """부모=false + 건수 키 존재(null) → stray child → 422."""
+    with pytest.raises(HTTPException) as exc:
+        _validate_art68_parent_child_contract({P: False, C: None})
+    assert exc.value.status_code == 422
+
+
+def test_parent_true_count_key_null_rejected():
+    """부모=true + 건수 키 존재 + 값 null → 비정수 → 422."""
+    with pytest.raises(HTTPException) as exc:
+        _validate_art68_parent_child_contract({P: True, L: True, R: False, C: None})
+    assert exc.value.status_code == 422

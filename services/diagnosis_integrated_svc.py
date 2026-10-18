@@ -250,16 +250,16 @@ _ART68_ALL_CHILDREN = _ART68_CHILD_BOOLS + (_ART68_COUNT,)
 
 
 def _validate_art68_parent_child_contract(form_data: dict) -> None:
-    """ART68 부모-자식 입력 계약 검증. CONSTRUCTION sector에서만 호출한다.
+    """ART68 부모-자식 입력 계약 검증. 키 존재 여부로 판별. CONSTRUCTION sector에서만 호출한다.
 
-    - ART68 필드 전혀 없음: 기존 요청 호환, 통과.
-    - 자식 단독 제출: 422.
-    - 부모 비boolean: 422.
-    - 부모=false + 자식 있음: 422.
-    - 부모=true + 자식 boolean 미완결 or 건수 없음/비정수: 422.
+    - ART68 키 4개 전혀 없음: 기존 요청 호환, 통과.
+    - 부모 키 존재(null 포함): 반드시 boolean. null → 422.
+    - 자식 키만 존재(null 포함): 422 (부모 필요).
+    - 부모=false + 자식 키 존재(null 포함): 422.
+    - 부모=true + 자식 boolean 미완결 or 건수 키 없음/비정수/null: 422.
     """
-    has_parent = _ART68_PARENT in form_data and form_data[_ART68_PARENT] is not None
-    has_any_child = any(form_data.get(k) is not None for k in _ART68_ALL_CHILDREN)
+    has_parent = _ART68_PARENT in form_data
+    has_any_child = any(k in form_data for k in _ART68_ALL_CHILDREN)
 
     if not has_parent and not has_any_child:
         return  # 기존 요청 호환
@@ -272,24 +272,23 @@ def _validate_art68_parent_child_contract(form_data: dict) -> None:
         raise HTTPException(status_code=422, detail=f"{_ART68_PARENT} must be a boolean")
 
     if parent_val is False:
-        stray = [k for k in _ART68_ALL_CHILDREN if form_data.get(k) is not None]
+        stray = [k for k in _ART68_ALL_CHILDREN if k in form_data]
         if stray:
             raise HTTPException(status_code=422, detail="ART68: child fields must not be present when parent is false")
         return
 
     # parent_val is True: 자식 boolean 2개
     for cb in _ART68_CHILD_BOOLS:
-        val = form_data.get(cb)
-        if val is None or not isinstance(val, bool):
+        if cb not in form_data or not isinstance(form_data[cb], bool):
             raise HTTPException(
                 status_code=422,
                 detail=f"{cb} must be a boolean when {_ART68_PARENT} is true",
             )
 
-    # 건수 완결성 + 정수
-    count_val = form_data.get(_ART68_COUNT)
-    if count_val is None:
+    # 건수: 키 존재 필수, 값은 non-negative integer
+    if _ART68_COUNT not in form_data:
         raise HTTPException(status_code=422, detail=f"{_ART68_COUNT} is required when {_ART68_PARENT} is true")
+    count_val = form_data[_ART68_COUNT]
     if not (isinstance(count_val, int) and not isinstance(count_val, bool) and count_val >= 0):
         raise HTTPException(status_code=422, detail=f"{_ART68_COUNT} must be a non-negative integer")
 
