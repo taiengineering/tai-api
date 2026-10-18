@@ -20,6 +20,7 @@ from services.hazardous_material_event_source.store import HazardousMaterialEven
 from services.company_scope import _ensure_own_company
 from clients import leg_runtime_client
 from clients.leg_runtime_client import LegRuntimeError
+from clients.chem_internal_client import ChemicalSourceLoadError
 from services.leg_diagnosis_svc import LegDiagnosisError
 from services.work_source.merge import WorkSourceMergeConflict
 from services.work_source.store import WorkSourceLoadError
@@ -180,7 +181,13 @@ async def diagnose_industrial_leg(body: SafeIndustrialLegBody, authorization: Op
     # WO-008: Appendix3 contract gate (flag DEFAULT OFF). After entitlement, before LEG.
     app3_projection = check_saas_appendix3_contract(supabase, body.factory_id, "INDUSTRIAL", body.input)
     try:
-        out = run_safe_industrial_leg(supabase, body.factory_id, body.input, app3_projection=app3_projection)
+        out = run_safe_industrial_leg(
+            supabase, body.factory_id, body.input,
+            app3_projection=app3_projection,
+            company_id=company_id,
+        )
+    except ChemicalSourceLoadError:
+        raise HTTPException(status_code=503, detail={"code": "CHEM_SOURCE_UNAVAILABLE", "message": "화학물질 정보를 불러오는 중 오류가 발생했습니다."})
     except EquipmentSourceLoadError as e:
         # WO-EQUIPMENT-A2-EXISTING-SEAM-PATCH-001 PATCH1-B: Equipment read failure 503.
         # READ FAILURE != EMPTY SOURCE — LEG must not be called on equipment read error.
@@ -231,6 +238,14 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
     _cst_factory_id = _site_fac_data[0].get("factory_id") if _site_fac_data else None
     if _cst_factory_id:
         app3_projection = check_saas_appendix3_contract(supabase, _cst_factory_id, "CONSTRUCTION", body.input)
+        # WIRING-013: CHEM 호출 전 factory 회사 일치 검증 (site company 검증과 별도).
+        _fac_cid_row = (
+            supabase.table("factories")
+            .select("company_id").eq("id", _cst_factory_id).limit(1).execute()
+        )
+        _fac_cid_data = getattr(_fac_cid_row, "data", None) or []
+        if not _fac_cid_data or str(_fac_cid_data[0].get("company_id") or "") != company_id:
+            raise HTTPException(status_code=403, detail="현장과 시설의 회사가 일치하지 않습니다.")
     else:
         app3_projection = None  # no factory linked — ConstructionSiteBridgeError raised inside runtime
     try:
@@ -241,6 +256,7 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
             subcontract_legal_event_id=body.subcontract_legal_event_id,
             subcontractor_id=body.subcontractor_id,
             app3_projection=app3_projection,
+            company_id=company_id,
         )
     except ConstructionSiteBridgeError as e:
         raise HTTPException(status_code=409, detail=str(e))    # site↔factory 미연결 fail-closed
@@ -249,6 +265,8 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
             status_code=503,
             detail={"code": "SUBCONTRACT_LEGAL_EVENT_SOURCE_UNAVAILABLE", "message": str(e)},
         ) from e
+    except ChemicalSourceLoadError:
+        raise HTTPException(status_code=503, detail={"code": "CHEM_SOURCE_UNAVAILABLE", "message": "화학물질 정보를 불러오는 중 오류가 발생했습니다."})
     except EquipmentSourceLoadError as e:
         # WO-EQUIPMENT-A2-REMAINING-CONSUMER-PARITY-IMPLEMENT-001: Equipment read failure 503.
         raise HTTPException(
@@ -296,6 +314,7 @@ async def diagnose_building_leg(body: SafeBuildingLegBody, authorization: Option
             material_inout_event_id=body.material_inout_event_id,
             occupancy_assessment_id=body.occupancy_assessment_id,
             app3_projection=app3_projection,
+            company_id=company_id,
         )
     except SourceUnresolved as e:
         raise HTTPException(
@@ -307,6 +326,8 @@ async def diagnose_building_leg(body: SafeBuildingLegBody, authorization: Option
             status_code=503,
             detail={"code": "HAZARDOUS_MATERIAL_EVENT_SOURCE_UNAVAILABLE", "message": str(e)},
         ) from e
+    except ChemicalSourceLoadError:
+        raise HTTPException(status_code=503, detail={"code": "CHEM_SOURCE_UNAVAILABLE", "message": "화학물질 정보를 불러오는 중 오류가 발생했습니다."})
     except EquipmentSourceLoadError as e:
         # WO-EQUIPMENT-A2-REMAINING-CONSUMER-PARITY-IMPLEMENT-001: Equipment read failure 503.
         raise HTTPException(
