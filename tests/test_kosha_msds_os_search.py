@@ -2,6 +2,8 @@
 
 PATCH-08: WO-WWW-PERF-004-P0S-OS-PATCH-001 adds coverage for all
 failure-contract changes introduced by PATCH-01~07.
+PATCH-02C/02E: WO-WWW-PERF-004-P0S-OS-PATCH-002 adds coverage for
+dependency separation and hydration integrity gate.
 
 Covers:
   S01  extract_cas_no (section_fields)
@@ -10,15 +12,17 @@ Covers:
   S03b check_snapshot_gate (count-comparison, PATCH-02)
   S04  MemoryMsdsReadStore.hydrate_chem_ids (incl. scope param, PATCH-07)
   S05  SupabaseMsdsReadStore.hydrate_chem_ids contract (structure, no live DB)
-  S06  search_from_chem_ids service function (incl. scope param, PATCH-07)
-  S07  search_by_q_os — identifier detection routing
+  S06  search_from_chem_ids service function (incl. scope + integrity, PATCH-07/02E)
+  S07  search_by_q_os — identifier detection routing (now in opensearch_query)
   S08  search_by_q_os — free-text routing
   S09  router list_or_search_msds via OS path (MemoryMsdsReadStore)
   S10  router OS error → 503 (PATCH-01: no legacy fallback)
   S11  regression: extract_product_name unaffected
   S12  regression: section_fields has no shared_search dep
   S13  search_os failure contracts (PATCH-03/04/05/06)
-  S14  router 503 error codes (PATCH-01/02/03/06)
+  S14  router 503 error codes (PATCH-01/02/03/06/02E)
+  S15  hydration integrity gate (PATCH-02E)
+  S16  search_by_q_os module location (PATCH-02C dependency separation)
 """
 from __future__ import annotations
 
@@ -517,21 +521,26 @@ def test_search_from_chem_ids_with_scope():
 
 
 def test_search_from_chem_ids_full_scope_empty():
-    """FULL scope with no full rows → empty items (PATCH-07)."""
+    """FULL scope with no full rows → MsdsHydrationIntegrityError (PATCH-02E).
+
+    OS returning an ID that's absent from the DB scope is membership drift —
+    the function now raises MsdsHydrationIntegrityError instead of silently
+    returning a short page.
+    """
+    from services.kosha_msds.opensearch_query import MsdsHydrationIntegrityError
     store = _make_store()
-    result = search_from_chem_ids(
-        store=store, chem_ids=["000001"], total=1, limit=10, offset=0,
-        scope=PUBLICATION_SCOPE_FULL,
-    )
-    assert result["items"] == []
-    assert result["total"] == 1  # total from OS, not hydration count
+    with pytest.raises(MsdsHydrationIntegrityError):
+        search_from_chem_ids(
+            store=store, chem_ids=["000001"], total=1, limit=10, offset=0,
+            scope=PUBLICATION_SCOPE_FULL,
+        )
 
 
 # ---------------------------------------------------------------------------
 # S07  search_by_q_os — identifier detection
 # ---------------------------------------------------------------------------
 
-from services.kosha_msds.search_adapter import search_by_q_os
+from services.kosha_msds.opensearch_query import search_by_q_os
 
 
 def test_search_by_q_os_chem_id_exact():
@@ -787,3 +796,87 @@ def test_section_fields_no_shared_search_dep():
     ).read_text(encoding="utf-8")
     assert "shared_search" not in text
     assert "SearchDocument" not in text
+
+
+# ---------------------------------------------------------------------------
+# S15  hydration integrity gate (PATCH-02E)
+# ---------------------------------------------------------------------------
+
+from services.kosha_msds.opensearch_query import MsdsHydrationIntegrityError
+
+
+def test_hydration_integrity_error_raised_on_gap():
+    """search_from_chem_ids raises MsdsHydrationIntegrityError when OS
+    returns IDs not found in the scoped DB view (PATCH-02E).
+    """
+    store = _make_store()  # preview_rows only
+    with pytest.raises(MsdsHydrationIntegrityError) as exc_info:
+        search_from_chem_ids(
+            store=store, chem_ids=["000001", "MISSING_ID"], total=2,
+            limit=10, offset=0, scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+        )
+    assert "2" in str(exc_info.value) or "1" in str(exc_info.value)
+
+
+def test_hydration_integrity_empty_chem_ids_no_error():
+    """Empty chem_ids (legitimate 0-result search) must not raise (PATCH-02E)."""
+    store = _make_store()
+    result = search_from_chem_ids(
+        store=store, chem_ids=[], total=0, limit=10, offset=0,
+        scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+    )
+    assert result["items"] == []
+    assert result["total"] == 0
+
+
+def test_hydration_integrity_all_found_no_error():
+    """All OS IDs found in scope → normal result, no error (PATCH-02E)."""
+    store = _make_store()
+    result = search_from_chem_ids(
+        store=store, chem_ids=["000001"], total=1, limit=10, offset=0,
+        scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+    )
+    assert len(result["items"]) == 1
+    assert result["total"] == 1
+
+
+def test_router_hydration_integrity_fail_503(monkeypatch, seo_store):
+    """Hydration integrity failure → 503 MSDS_HYDRATION_INTEGRITY_FAIL (PATCH-02E)."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    app = _make_app(seo_store, None)
+
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_os",
+               return_value=(["OS_ONLY_ID"], 1)):
+        client = TestClient(app)
+        resp = client.get("/public/kosha/msds?name_ko=염산")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "MSDS_HYDRATION_INTEGRITY_FAIL"
+
+
+# ---------------------------------------------------------------------------
+# S16  search_by_q_os module location (PATCH-02C dependency separation)
+# ---------------------------------------------------------------------------
+
+
+def test_search_by_q_os_lives_in_opensearch_query():
+    """search_by_q_os must be importable from opensearch_query (PATCH-02C)."""
+    from services.kosha_msds.opensearch_query import search_by_q_os as fn
+    assert callable(fn)
+
+
+def test_search_adapter_has_no_opensearch_reference():
+    """search_adapter.py must not reference opensearch (PATCH-02C).
+
+    This is the existing test_14 contract: CHEM-09's plan module must not
+    import any search engine. After PATCH-02C, search_by_q_os is moved to
+    opensearch_query.py so this module is clean.
+    """
+    import pathlib
+    src = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "services" / "kosha_msds" / "search_adapter.py"
+    ).read_text(encoding="utf-8")
+    assert "opensearch" not in src.lower(), (
+        "search_adapter.py must not reference opensearch after PATCH-02C"
+    )

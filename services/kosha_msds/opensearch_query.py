@@ -72,6 +72,15 @@ class MsdsPaginationDepthExceededError(MsdsOsError):
     """offset + limit > 9,900: would exceed OS max_result_window."""
 
 
+class MsdsHydrationIntegrityError(MsdsOsError):
+    """OS result IDs not fully found in DB scope — membership drift detected.
+
+    Raised when len(hydrated_rows) < len(os_chem_ids): at least one OS
+    result is absent from the scoped DB view. Signals OS/DB out-of-sync
+    rather than silently returning a short page (PATCH-02E).
+    """
+
+
 # ---------------------------------------------------------------------------
 # Snapshot gate (PATCH-02)
 # ---------------------------------------------------------------------------
@@ -310,3 +319,53 @@ def search_os(
         for h in (hits_obj.get("hits") or [])
     ]
     return [sk for sk in source_keys if sk], total
+
+
+# ---------------------------------------------------------------------------
+# OS-backed adapter (PATCH-02C: moved from search_adapter to eliminate
+# search-engine dependency from the CHEM-09 plan module)
+# ---------------------------------------------------------------------------
+
+
+def search_by_q_os(
+    *,
+    q: str,
+    limit: int = 20,
+    offset: int = 0,
+    dictionary_lookup=None,
+    client=None,
+) -> tuple[list[str], int, dict]:
+    """OS-backed free-text search for MSDS.
+
+    Returns (chem_ids_page, total, match_metadata). Uses identifier
+    detection for exact queries, BM25/Nori for free text. Caller
+    hydrates via read.search_from_chem_ids().
+
+    Moved from services.kosha_msds.search_adapter (PATCH-02C) so that
+    search_adapter.py has no OpenSearch import and passes the
+    no_new_search_engine_dependency test contract.
+    """
+    from services.kosha_msds.search_adapter import build_search_plan, _clamp_pagination
+
+    lim, off = _clamp_pagination(limit, offset)
+    plan = build_search_plan(q, dictionary_lookup=dictionary_lookup)
+    match_meta: dict = {
+        "normalized_query": plan.normalized_query,
+        "compact_query": plan.compact_query,
+        "identifier_kind": plan.identifier_kind,
+        "tokens": list(plan.tokens),
+        "expanded_terms": list(plan.expanded_terms),
+    }
+
+    if plan.is_empty:
+        return [], 0, match_meta
+
+    if plan.identifier_kind is not None:
+        kwargs: dict = {plan.identifier_kind: plan.identifier_value}
+        chem_ids, total = search_os(limit=lim, offset=off, client=client, **kwargs)
+        return chem_ids, total, match_meta
+
+    chem_ids, total = search_os(
+        q=plan.normalized_query, limit=lim, offset=off, client=client
+    )
+    return chem_ids, total, match_meta

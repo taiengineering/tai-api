@@ -45,11 +45,13 @@ from services.kosha_msds.contract import (
 )
 from services.kosha_msds.opensearch_query import (
     MsdsCasIndexNotReadyError,
+    MsdsHydrationIntegrityError,
     MsdsOsError,
     MsdsPaginationDepthExceededError,
     MsdsSnapshotGateError,
     check_snapshot_gate,
     os_chem_available,
+    search_by_q_os,
     search_os,
 )
 from services.kosha_msds.read import (
@@ -69,7 +71,6 @@ from services.kosha_msds.search_adapter import (
     MATCH_BM25_NORI,
     MATCH_IDENTIFIER_EXACT,
     search_by_q,
-    search_by_q_os,
 )
 
 logger = logging.getLogger(__name__)
@@ -239,6 +240,11 @@ def list_or_search_msds(
             raise HTTPException(
                 status_code=503,
                 detail={"code": "MSDS_PAGINATION_DEPTH_EXCEEDED", "message": str(exc)},
+            ) from exc
+        except MsdsHydrationIntegrityError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "MSDS_HYDRATION_INTEGRITY_FAIL", "message": str(exc)},
             ) from exc
         except Exception as exc:
             logger.exception("MSDS OS search failed")
