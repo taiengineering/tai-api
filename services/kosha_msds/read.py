@@ -873,17 +873,20 @@ def search_from_chem_ids(
         PUBLICATION_SCOPE_SEO_PREVIEW if scope is None else scope
     )
     rows = store.hydrate_chem_ids(chem_ids, scope=hydration_scope)
-    # PATCH-02E: hard gate — OS/DB membership drift must not silently produce
-    # a short page. If any OS result ID is absent from the scoped DB view,
-    # raise MsdsHydrationIntegrityError (→ 503) so operators are alerted.
+    # PATCH-02E/003H: hard gate — OS/DB membership drift must not silently
+    # produce a short or mismatched page. Check both count AND ID set equality.
     # Legitimate empty results (chem_ids=[]) are not affected.
-    if chem_ids and len(rows) != len(chem_ids):
+    if chem_ids:
         from services.kosha_msds.opensearch_query import MsdsHydrationIntegrityError
-        missing = len(chem_ids) - len(rows)
-        raise MsdsHydrationIntegrityError(
-            f"OS/DB membership drift: {missing}/{len(chem_ids)} ID(s) "
-            f"not found in scope {hydration_scope!r}"
-        )
+        os_id_set = set(chem_ids)
+        hydrated_id_set = {row.get("chem_id") for row in rows}
+        if os_id_set != hydrated_id_set:
+            missing = os_id_set - hydrated_id_set
+            extra = hydrated_id_set - os_id_set
+            raise MsdsHydrationIntegrityError(
+                f"OS/DB ID mismatch: missing={len(missing)} extra={len(extra)} "
+                f"in scope {hydration_scope!r}"
+            )
     return {
         "items": [_current_row_to_contract(row, last_date=None) for row in rows],
         "total": int(total),

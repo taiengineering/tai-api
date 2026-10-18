@@ -21,19 +21,23 @@ CAS_NO_ITEM_CODE = "C06"  # Section 3
 
 
 def extract_cas_no(section3_payload: Any) -> Optional[str]:
-    """Return Section 3 C06 `itemDetail` (CAS number), or None if absent/blank."""
+    """Return MAX(btrim(C06.itemDetail)) — matches DB view kosha_msds_current.cas_no.
+
+    btrim() in PostgreSQL removes only space characters (ASCII 32), not tabs/newlines.
+    MAX() uses lexicographic ordering over non-empty trimmed values.
+    Returns None when no valid C06 value exists.
+    """
+    candidates: list[str] = []
     for item in _iter_items(section3_payload):
-        code = item.get("msdsItemCode")
-        if code is None:
-            continue
-        if str(code).strip() != CAS_NO_ITEM_CODE:
+        if str(item.get("msdsItemCode", "")).strip() != CAS_NO_ITEM_CODE:
             continue
         detail = item.get("itemDetail")
         if detail is None:
-            return None
-        text = str(detail).strip()
-        return text or None
-    return None
+            continue
+        trimmed = str(detail).strip(" ")  # btrim: spaces only, not \t\n
+        if trimmed:
+            candidates.append(trimmed)
+    return max(candidates) if candidates else None
 
 
 def extract_product_name(section1_payload: Any) -> Optional[str]:

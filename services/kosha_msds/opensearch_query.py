@@ -1,13 +1,17 @@
 """MSDS OpenSearch query adapter — WO-WWW-PERF-004-P0S.
 
 PATCH-01~06: WO-WWW-PERF-004-P0S-OS-PATCH-001.
+PATCH-003C~G: WO-WWW-PERF-004-P0S-PATCH-003.
 
 source_key = chem_id (6-digit KOSHA ID). Caller hydrates via
 SupabaseMsdsReadStore.hydrate_chem_ids() — the P0-A fast path.
 
-Snapshot gate (PATCH-02): check_snapshot_gate() compares OS CHEM doc
-count against DB kosha_msds_seo_preview_current count. Cached 5 min.
-Raises MsdsSnapshotGateError on divergence or lookup failure (fail-closed).
+Snapshot gate (PATCH-02 → PATCH-003B): check_snapshot_gate() now
+validates a registered SnapshotProof (membership-level parity) rather
+than comparing counts. The current gate state (snapshot_id,
+physical_index, outbox_wm) is cached for 60 s. Raises
+MsdsSnapshotGateError when no valid proof covers the current state
+(fail-closed).
 
 CAS gate (PATCH-03): KOSHA_MSDS_CAS_INDEX_READY env var (default false)
 gates cas_no queries. Until OS is rebuilt with CAS in aliases, cas_no
@@ -17,13 +21,18 @@ returning 0 results.
 AND filters (PATCH-04): all structured params combined as AND filter
 clauses — no if/elif priority chain.
 
-Search semantics (PATCH-05):
-  - name_ko/name_en: Nori match on title; sorted source_key ASC
+Search semantics (PATCH-05 / PATCH-003C/D):
+  - name_ko: wildcard on title.raw (keyword) for ILIKE substring semantics,
+    case_insensitive=True; sorted source_key ASC
+  - name_en: match on summary (Nori); sorted source_key ASC
+    NOTE: summary.raw not indexed; name_en uses Nori match approximation.
+    Exact ILIKE requires mapping extension (add summary.raw keyword subfield
+    + reindex).
   - q: BM25 multi_match on title^5/aliases^4/search_text; sorted _score DESC
 
-Deep pagination guard (PATCH-06): offset + limit > _DEEP_PAGINATION_LIMIT
-(9,900) raises MsdsPaginationDepthExceededError — stays within OS default
-max_result_window=10,000.
+Deep pagination (PATCH-06 / PATCH-003F): offset + limit > _DEEP_PAGINATION_LIMIT
+(9,900) uses PIT + search_after instead of raising.
+MsdsPaginationDepthExceededError is raised only when PIT creation fails.
 
 track_total_hits=true gives accurate pagination totals.
 """
@@ -46,8 +55,9 @@ _CHEM_BASE_FILTER: list[dict] = [
 ]
 
 _DEEP_PAGINATION_LIMIT = 9_900
-_SNAPSHOT_CACHE_TTL = 300        # 5 minutes
-_SNAPSHOT_COUNT_TOLERANCE = 50   # allow ±50 docs during re-index window
+_SNAPSHOT_CACHE_TTL = 300        # 5 minutes (legacy count-based cache, kept for helpers)
+_SNAPSHOT_COUNT_TOLERANCE = 50   # allow ±50 docs during re-index window (legacy)
+_STATE_CACHE_TTL = 60            # 60 s TTL for gate-state cache (PATCH-003B)
 _CAS_INDEX_ENV_VAR = "KOSHA_MSDS_CAS_INDEX_READY"
 
 
@@ -69,7 +79,7 @@ class MsdsCasIndexNotReadyError(MsdsOsError):
 
 
 class MsdsPaginationDepthExceededError(MsdsOsError):
-    """offset + limit > 9,900: would exceed OS max_result_window."""
+    """PIT creation failed during deep pagination (offset + limit > 9,900)."""
 
 
 class MsdsHydrationIntegrityError(MsdsOsError):
@@ -82,11 +92,16 @@ class MsdsHydrationIntegrityError(MsdsOsError):
 
 
 # ---------------------------------------------------------------------------
-# Snapshot gate (PATCH-02)
+# Snapshot gate (PATCH-02 → PATCH-003B proof-registry gate)
 # ---------------------------------------------------------------------------
 
 _snapshot_cache_lock = threading.Lock()
 _snapshot_cache: dict = {}
+
+# State cache (PATCH-003B): caches (snapshot_id, physical_index, outbox_wm)
+# for _STATE_CACHE_TTL seconds to avoid hitting DB/OS on every request.
+_state_cache_lock = threading.Lock()
+_state_cache: dict = {}
 
 
 def _cas_index_ready() -> bool:
@@ -95,6 +110,7 @@ def _cas_index_ready() -> bool:
 
 
 def _get_db_chem_count(sb=None) -> Optional[int]:
+    """Legacy count helper — kept for os_chem_available()."""
     try:
         if sb is None:
             from db.supabase_client import get_supabase
@@ -113,6 +129,7 @@ def _get_db_chem_count(sb=None) -> Optional[int]:
 
 
 def _get_os_chem_count(client=None) -> Optional[int]:
+    """Legacy count helper — kept for os_chem_available()."""
     try:
         if client is None:
             client = get_client()
@@ -126,59 +143,95 @@ def _get_os_chem_count(client=None) -> Optional[int]:
         return None
 
 
-def _set_snapshot_cache(*, ok: bool, reason: Optional[str], ts: float) -> None:
-    with _snapshot_cache_lock:
-        _snapshot_cache.update({"ok": ok, "reason": reason, "ts": ts})
+def _get_current_gate_state(client, sb) -> tuple[str, str, int]:
+    """Return (snapshot_id, physical_index, outbox_wm) — the state triple.
+
+    Used to match against a registered SnapshotProof. Returns ('', '', 0)
+    when any sub-lookup fails (fail-closed: caller raises MsdsSnapshotGateError).
+    """
+    from services.kosha_msds.snapshot_proof import (
+        _get_current_snapshot,
+        _get_outbox_watermark,
+        _get_physical_index,
+    )
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+
+    try:
+        snapshot_id, _ = _get_current_snapshot(sb, PUBLICATION_SCOPE_SEO_PREVIEW)
+        physical_index = _get_physical_index(client)
+        outbox_wm = _get_outbox_watermark(sb)
+        return (snapshot_id, physical_index, outbox_wm)
+    except Exception as exc:
+        logger.warning("MSDS gate state lookup failed: %s", exc)
+        return ("", "", 0)
 
 
 def check_snapshot_gate(*, client=None, sb=None) -> None:
-    """Verify OS CHEM doc count matches DB published CHEM count.
+    """Verify a registered SnapshotProof covers the current system state.
 
     Raises MsdsSnapshotGateError when:
-    - Either count lookup fails (fail-closed)
-    - |OS_count - DB_count| > _SNAPSHOT_COUNT_TOLERANCE
+    - Current state lookup fails (fail-closed)
+    - No proof is registered
+    - Registered proof does not match the current state triple
+      (snapshot_id, physical_index, outbox_wm)
+    - verify_proof(proof) returns False
 
-    Result is cached for _SNAPSHOT_CACHE_TTL seconds (5 minutes).
+    The current state triple is cached for _STATE_CACHE_TTL seconds (60 s).
     Call _clear_snapshot_cache() in tests to force a re-check.
     """
+    from services.kosha_msds.snapshot_proof import get_registered_proof, verify_proof
+
+    if client is None:
+        client = get_client()
+    if sb is None:
+        from db.supabase_client import get_supabase
+        sb = get_supabase()
+
     now = time.monotonic()
-    with _snapshot_cache_lock:
-        cached = dict(_snapshot_cache)
 
-    if cached and (now - cached.get("ts", 0)) < _SNAPSHOT_CACHE_TTL:
-        if not cached.get("ok"):
-            raise MsdsSnapshotGateError(cached.get("reason", "snapshot gate fail (cached)"))
-        return
+    # Check state cache first
+    with _state_cache_lock:
+        cached_state = dict(_state_cache)
 
-    db_count = _get_db_chem_count(sb=sb)
-    os_count = _get_os_chem_count(client=client)
+    if cached_state and (now - cached_state.get("ts", 0)) < _STATE_CACHE_TTL:
+        current_state = cached_state.get("state")
+    else:
+        current_state = _get_current_gate_state(client, sb)
+        with _state_cache_lock:
+            _state_cache.update({"state": current_state, "ts": now})
 
-    if db_count is None:
-        reason = "DB CHEM count lookup failed"
-        _set_snapshot_cache(ok=False, reason=reason, ts=now)
-        raise MsdsSnapshotGateError(reason)
-
-    if os_count is None:
-        reason = "OS CHEM count lookup failed"
-        _set_snapshot_cache(ok=False, reason=reason, ts=now)
-        raise MsdsSnapshotGateError(reason)
-
-    diff = abs(os_count - db_count)
-    if diff > _SNAPSHOT_COUNT_TOLERANCE:
-        reason = (
-            f"OS/DB CHEM count divergence: OS={os_count} DB={db_count} "
-            f"diff={diff} (tolerance {_SNAPSHOT_COUNT_TOLERANCE})"
+    if not current_state or current_state == ("", "", 0):
+        raise MsdsSnapshotGateError(
+            "Snapshot gate state lookup failed (fail-closed)"
         )
-        _set_snapshot_cache(ok=False, reason=reason, ts=now)
-        raise MsdsSnapshotGateError(reason)
 
-    _set_snapshot_cache(ok=True, reason=None, ts=now)
+    proof = get_registered_proof()
+
+    if proof is None:
+        raise MsdsSnapshotGateError(
+            "No snapshot proof registered; gate is closed until a valid proof is loaded"
+        )
+
+    # Check that proof covers current state
+    proof_state = (proof.snapshot_id, proof.physical_index, proof.chem_outbox_high_watermark)
+    if proof_state != current_state:
+        raise MsdsSnapshotGateError(
+            f"Registered proof state mismatch: proof={proof_state} current={current_state}"
+        )
+
+    if not verify_proof(proof):
+        raise MsdsSnapshotGateError(
+            f"Registered proof failed verification: status={proof.verification_status} "
+            f"error={proof.error_message!r}"
+        )
 
 
 def _clear_snapshot_cache() -> None:
-    """Reset the snapshot gate cache. For tests only."""
+    """Reset both snapshot gate caches. For tests only."""
     with _snapshot_cache_lock:
         _snapshot_cache.clear()
+    with _state_cache_lock:
+        _state_cache.clear()
 
 
 def os_chem_available(client=None) -> bool:
@@ -192,7 +245,99 @@ def os_chem_available(client=None) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Search (PATCH-03..06)
+# Wildcard escape helper (PATCH-003D)
+# ---------------------------------------------------------------------------
+
+
+def _wildcard_escape(term: str) -> str:
+    """Escape OpenSearch wildcard special chars: *, ?, \\"""
+    return term.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
+
+
+# ---------------------------------------------------------------------------
+# PIT deep-page helper (PATCH-003F)
+# ---------------------------------------------------------------------------
+
+_PIT_BATCH = 1_000
+_PIT_KEEP_ALIVE = "2m"
+
+
+def _search_os_deep_page(
+    *,
+    query_body: dict,
+    sort: list[dict],
+    offset: int,
+    limit: int,
+    client,
+) -> tuple[list[str], int]:
+    """PIT + search_after based pagination for offset+limit > 9,900.
+
+    Creates a PIT, scans in batches of 1,000 until offset+limit results
+    are accumulated, then slices and cleans up PIT.
+
+    Raises MsdsPaginationDepthExceededError if PIT creation fails
+    (e.g., OS version does not support PIT).
+    """
+    try:
+        pit_resp = client.create_point_in_time(
+            index=CURRENT_ALIAS,
+            params={"keep_alive": _PIT_KEEP_ALIVE}
+        )
+        pit_id = pit_resp.get("pit_id") or ""
+    except Exception as exc:
+        raise MsdsPaginationDepthExceededError(
+            f"PIT creation failed (OS may not support PIT): {exc}"
+        ) from exc
+
+    if not pit_id:
+        raise MsdsPaginationDepthExceededError("PIT creation returned empty pit_id")
+
+    try:
+        collected: list[str] = []
+        search_after = None
+        total = 0
+        needed = offset + limit
+
+        while len(collected) < needed:
+            body: dict = {
+                **query_body,
+                "sort": sort,
+                "size": _PIT_BATCH,
+                "track_total_hits": True,
+                "pit": {"id": pit_id, "keep_alive": _PIT_KEEP_ALIVE},
+                "_source": ["source_key"],
+            }
+            if search_after:
+                body["search_after"] = search_after
+            resp = client.search(body=body)  # no index needed with PIT
+            hits_obj = resp.get("hits") or {}
+            total_raw = hits_obj.get("total") or {}
+            total = (
+                total_raw.get("value", 0)
+                if isinstance(total_raw, dict)
+                else int(total_raw or 0)
+            )
+            hits = hits_obj.get("hits") or []
+            if not hits:
+                break
+            for h in hits:
+                sk = (h.get("_source") or {}).get("source_key", "")
+                if sk:
+                    collected.append(sk)
+            search_after = hits[-1].get("sort")
+            if len(hits) < _PIT_BATCH:
+                break
+
+        return collected[offset: offset + limit], total
+    finally:
+        try:
+            client.delete_point_in_time(body={"pit_id": pit_id})
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Search (PATCH-03..06 + PATCH-003C/D/F)
 # ---------------------------------------------------------------------------
 
 
@@ -219,22 +364,17 @@ def search_os(
 
     PATCH-04: all structured params are AND filter clauses (no if/elif).
 
-    PATCH-05: name_ko/name_en → Nori match on title, source_key ASC sort;
-              q → BM25 multi_match, _score DESC sort.
+    PATCH-003C/D:
+      name_ko → wildcard on title.raw (case_insensitive=True) for ILIKE semantics;
+      name_en → match on summary (Nori approximation; summary.raw not indexed).
 
-    PATCH-06: offset + limit > 9,900 → MsdsPaginationDepthExceededError.
+    PATCH-003F: offset + limit > 9,900 → PIT + search_after (deep page).
+    MsdsPaginationDepthExceededError raised only on PIT failure.
 
     track_total_hits=true ensures accurate totals beyond 10,000 hits.
     """
     if client is None:
         client = get_client()
-
-    # PATCH-06: deep pagination guard
-    if offset + limit > _DEEP_PAGINATION_LIMIT:
-        raise MsdsPaginationDepthExceededError(
-            f"offset({offset}) + limit({limit}) = {offset + limit} "
-            f"exceeds {_DEEP_PAGINATION_LIMIT}"
-        )
 
     # PATCH-03: CAS index guard
     if cas_no and not _cas_index_ready():
@@ -256,20 +396,27 @@ def search_os(
     if un_no:
         filters.append({"term": {"aliases.raw": un_no}})
 
-    # PATCH-05: text must clauses
+    # PATCH-003C/D: text must clauses
     must_clauses: list[dict] = []
     text_q = (q or "").strip()
 
     if name_ko:
+        # PATCH-003D: wildcard on title.raw for ILIKE semantics
+        escaped = _wildcard_escape(name_ko)
         must_clauses.append({
-            "match": {
-                "title": {"query": name_ko, "analyzer": "tai_nori_search"}
+            "wildcard": {
+                "title.raw": {
+                    "value": f"*{escaped}*",
+                    "case_insensitive": True,
+                }
             }
         })
     if name_en:
+        # PATCH-003C: chemical_name_en is stored in summary field (not title)
+        # summary.raw not indexed — use Nori match approximation
         must_clauses.append({
             "match": {
-                "title": {"query": name_en, "analyzer": "tai_nori_search"}
+                "summary": {"query": name_en, "analyzer": "tai_nori_search"}
             }
         })
     if text_q:
@@ -296,6 +443,16 @@ def search_os(
     else:
         query_body = {"bool": {"filter": filters}}
         sort = [{"source_key": "asc"}]
+
+    # PATCH-003F: deep pagination routing — use PIT when offset+limit > threshold
+    if offset + limit > _DEEP_PAGINATION_LIMIT:
+        return _search_os_deep_page(
+            query_body={"query": query_body},
+            sort=sort,
+            offset=offset,
+            limit=limit,
+            client=client,
+        )
 
     body: dict = {
         "query": query_body,
@@ -327,6 +484,9 @@ def search_os(
 # ---------------------------------------------------------------------------
 
 
+_MAX_CANDIDATE_LIMIT = 100  # per sub-query candidate collection limit (PATCH-003E)
+
+
 def search_by_q_os(
     *,
     q: str,
@@ -338,14 +498,30 @@ def search_by_q_os(
     """OS-backed free-text search for MSDS.
 
     Returns (chem_ids_page, total, match_metadata). Uses identifier
-    detection for exact queries, BM25/Nori for free text. Caller
-    hydrates via read.search_from_chem_ids().
+    detection for exact queries; for free text uses CHEM-09 priority
+    structure: BM25 → name_ko → name_en → expanded_terms → tokens,
+    with dedup preserving first-seen order (PATCH-003E).
+
+    P0: Identifier exact → single direct OS call (IDENTIFIER_EXACT).
+    P1: Free-text priority collection:
+      1. BM25 multi_match (most relevant)
+      2. name_ko wildcard (title.raw)
+      3. name_en Nori match (summary)
+      4. Each expanded_term: name_ko + name_en
+      5. Each token: name_ko + name_en
+    Dedup by chem_id preserving first-seen order. Total = len(deduped).
+    Page = deduped[off:off+lim].
 
     Moved from services.kosha_msds.search_adapter (PATCH-02C) so that
     search_adapter.py has no OpenSearch import and passes the
     no_new_search_engine_dependency test contract.
     """
-    from services.kosha_msds.search_adapter import build_search_plan, _clamp_pagination
+    from services.kosha_msds.search_adapter import (
+        MATCH_BM25_NORI,
+        MATCH_IDENTIFIER_EXACT,
+        _clamp_pagination,
+        build_search_plan,
+    )
 
     lim, off = _clamp_pagination(limit, offset)
     plan = build_search_plan(q, dictionary_lookup=dictionary_lookup)
@@ -355,17 +531,92 @@ def search_by_q_os(
         "identifier_kind": plan.identifier_kind,
         "tokens": list(plan.tokens),
         "expanded_terms": list(plan.expanded_terms),
+        "match_type": None,
     }
 
     if plan.is_empty:
         return [], 0, match_meta
 
+    # P0: Identifier exact — single direct OS call
     if plan.identifier_kind is not None:
         kwargs: dict = {plan.identifier_kind: plan.identifier_value}
         chem_ids, total = search_os(limit=lim, offset=off, client=client, **kwargs)
+        match_meta["match_type"] = MATCH_IDENTIFIER_EXACT
         return chem_ids, total, match_meta
 
-    chem_ids, total = search_os(
-        q=plan.normalized_query, limit=lim, offset=off, client=client
+    # P1: Free-text — collect candidates with dedup, then page
+    match_meta["match_type"] = MATCH_BM25_NORI
+
+    seen: set[str] = set()
+    all_deduped: list[str] = []
+
+    def _collect(ids: list[str]) -> None:
+        for cid in ids:
+            if cid not in seen:
+                seen.add(cid)
+                all_deduped.append(cid)
+
+    # 1. BM25 free-text (most relevant)
+    bm25_ids, _ = search_os(
+        q=plan.normalized_query,
+        limit=_MAX_CANDIDATE_LIMIT,
+        offset=0,
+        client=client,
     )
-    return chem_ids, total, match_meta
+    _collect(bm25_ids)
+
+    # 2. name_ko exact match
+    ko_ids, _ = search_os(
+        name_ko=plan.normalized_query,
+        limit=_MAX_CANDIDATE_LIMIT,
+        offset=0,
+        client=client,
+    )
+    _collect(ko_ids)
+
+    # 3. name_en exact match
+    en_ids, _ = search_os(
+        name_en=plan.normalized_query,
+        limit=_MAX_CANDIDATE_LIMIT,
+        offset=0,
+        client=client,
+    )
+    _collect(en_ids)
+
+    # 4. expanded_terms
+    for term in plan.expanded_terms:
+        t_ko, _ = search_os(
+            name_ko=term,
+            limit=_MAX_CANDIDATE_LIMIT,
+            offset=0,
+            client=client,
+        )
+        _collect(t_ko)
+        t_en, _ = search_os(
+            name_en=term,
+            limit=_MAX_CANDIDATE_LIMIT,
+            offset=0,
+            client=client,
+        )
+        _collect(t_en)
+
+    # 5. tokens
+    for token in plan.tokens:
+        tok_ko, _ = search_os(
+            name_ko=token,
+            limit=_MAX_CANDIDATE_LIMIT,
+            offset=0,
+            client=client,
+        )
+        _collect(tok_ko)
+        tok_en, _ = search_os(
+            name_en=token,
+            limit=_MAX_CANDIDATE_LIMIT,
+            offset=0,
+            client=client,
+        )
+        _collect(tok_en)
+
+    total = len(all_deduped)
+    page = all_deduped[off: off + lim]
+    return page, total, match_meta
