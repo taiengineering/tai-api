@@ -282,7 +282,7 @@ class TestB1407MalformedResponse:
         resp.json.side_effect = Exception("not json")
         resp.text = "not json"
         with patch("clients.chem_internal_client.httpx.get", return_value=resp):
-            with pytest.raises(ChemicalSourceLoadError, match="invalid json"):
+            with pytest.raises(ChemicalSourceLoadError, match="invalid JSON"):
                 load_active_components(_FAC, _CO)
 
     def test_b14_07_components_not_list_raises(self, monkeypatch):
@@ -626,3 +626,202 @@ class TestB1417NoC4Call:
         src = pathlib.Path("clients/leg_runtime_client.py").read_text()
         for fn in ["load_active_components", "load_consumption_lines", "load_issue_lines"]:
             assert fn not in src, f"{fn} found in leg_runtime_client.py"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P14B-01 — HTTP 실패 응답 본문 예외·로그 미노출 (PATCH-A)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestP14B01HttpErrorBodyRedacted:
+
+    def test_p14b_01_confidential_name_in_error_body_not_in_exception(self, monkeypatch, caplog):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_active_components, ChemicalSourceLoadError
+        secret_compound = "ULTRA_SECRET_COMPOUND_403"
+        resp = MagicMock()
+        resp.status_code = 403
+        resp.json.return_value = {"detail": f"component={secret_compound}"}
+        resp.text = f'{{"detail": "component={secret_compound}"}}'
+        import logging
+        with caplog.at_level(logging.DEBUG, logger="clients.chem_internal_client"):
+            with patch("clients.chem_internal_client.httpx.get", return_value=resp):
+                with pytest.raises(ChemicalSourceLoadError) as exc_info:
+                    load_active_components(_FAC, _CO)
+        assert secret_compound not in str(exc_info.value)
+        assert secret_compound not in caplog.text
+
+    def test_p14b_01_http_error_message_contains_only_status_code(self, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_active_components, ChemicalSourceLoadError
+        resp = _make_resp(500, {"detail": "internal error with sensitive data"})
+        with patch("clients.chem_internal_client.httpx.get", return_value=resp):
+            with pytest.raises(ChemicalSourceLoadError) as exc_info:
+                load_active_components(_FAC, _CO)
+        msg = str(exc_info.value)
+        assert "500" in msg
+        assert "sensitive data" not in msg
+        assert "internal error" not in msg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P14B-02 — 네트워크·JSON 오류 내부 원문 미노출 (PATCH-A)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestP14B02NetworkJsonRedacted:
+
+    def test_p14b_02_timeout_no_url_in_message(self, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_active_components, ChemicalSourceLoadError
+        import httpx
+        with patch("clients.chem_internal_client.httpx.get",
+                   side_effect=httpx.TimeoutException(f"timed out connecting to http://chem-internal/{_FAC}")):
+            with pytest.raises(ChemicalSourceLoadError) as exc_info:
+                load_active_components(_FAC, _CO)
+        msg = str(exc_info.value)
+        assert "http://" not in msg
+        assert "chem-internal" not in msg
+
+    def test_p14b_02_json_error_no_body_content_in_message(self, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_active_components, ChemicalSourceLoadError
+        secret_in_body = "CONFIDENTIAL_IN_JSON_BODY"
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.side_effect = Exception(f"decode error: {secret_in_body}")
+        resp.text = secret_in_body
+        with patch("clients.chem_internal_client.httpx.get", return_value=resp):
+            with pytest.raises(ChemicalSourceLoadError) as exc_info:
+                load_active_components(_FAC, _CO)
+        assert secret_in_body not in str(exc_info.value)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P14B-03 — company_id 누락 시 HTTP 호출 0 (PATCH-B)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestP14B03MissingCompanyId:
+
+    @pytest.mark.parametrize("bad_company_id", ["", "   ", None])
+    def test_p14b_03_empty_company_id_components_raises(self, bad_company_id, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_active_components, ChemicalSourceLoadError
+        with patch("clients.chem_internal_client.httpx.get") as mock_get:
+            with pytest.raises(ChemicalSourceLoadError, match="company_id"):
+                load_active_components(_FAC, bad_company_id or "")
+        mock_get.assert_not_called()
+
+    @pytest.mark.parametrize("bad_company_id", ["", "   "])
+    def test_p14b_03_empty_company_id_consumption_raises(self, bad_company_id, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_consumption_lines, ChemicalSourceLoadError
+        with patch("clients.chem_internal_client.httpx.get") as mock_get:
+            with pytest.raises(ChemicalSourceLoadError, match="company_id"):
+                load_consumption_lines(_FAC, bad_company_id, _FROM, _UNTIL)
+        mock_get.assert_not_called()
+
+    @pytest.mark.parametrize("bad_company_id", ["", "   "])
+    def test_p14b_03_empty_company_id_issue_raises(self, bad_company_id, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_issue_lines, ChemicalSourceLoadError
+        with patch("clients.chem_internal_client.httpx.get") as mock_get:
+            with pytest.raises(ChemicalSourceLoadError, match="company_id"):
+                load_issue_lines(_FAC, bad_company_id, _FROM, _UNTIL)
+        mock_get.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P14B-04 — factory_id 누락 시 HTTP 호출 0 (PATCH-B)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestP14B04MissingFactoryId:
+
+    @pytest.mark.parametrize("bad_factory_id", ["", "   "])
+    def test_p14b_04_empty_factory_id_components_raises(self, bad_factory_id, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_active_components, ChemicalSourceLoadError
+        with patch("clients.chem_internal_client.httpx.get") as mock_get:
+            with pytest.raises(ChemicalSourceLoadError, match="factory_id"):
+                load_active_components(bad_factory_id, _CO)
+        mock_get.assert_not_called()
+
+    @pytest.mark.parametrize("bad_factory_id", ["", "   "])
+    def test_p14b_04_empty_factory_id_consumption_raises(self, bad_factory_id, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_consumption_lines, ChemicalSourceLoadError
+        with patch("clients.chem_internal_client.httpx.get") as mock_get:
+            with pytest.raises(ChemicalSourceLoadError, match="factory_id"):
+                load_consumption_lines(bad_factory_id, _CO, _FROM, _UNTIL)
+        mock_get.assert_not_called()
+
+    @pytest.mark.parametrize("bad_factory_id", ["", "   "])
+    def test_p14b_04_empty_factory_id_issue_raises(self, bad_factory_id, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_issue_lines, ChemicalSourceLoadError
+        with patch("clients.chem_internal_client.httpx.get") as mock_get:
+            with pytest.raises(ChemicalSourceLoadError, match="factory_id"):
+                load_issue_lines(bad_factory_id, _CO, _FROM, _UNTIL)
+        mock_get.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P14B-05 — 세 Reader 정상 수신 및 빈 배열 계약 유지
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestP14B05ReadersStillWork:
+
+    def test_p14b_05_active_components_normal(self, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_active_components
+        components = [{"id": "c1", "component_name_normalized": "X", "is_confidential": False}]
+        resp = _make_resp(200, {"factory_id": _FAC, "components": components})
+        with patch("clients.chem_internal_client.httpx.get", return_value=resp):
+            result = load_active_components(_FAC, _CO)
+        assert result == components
+
+    def test_p14b_05_consumption_normal(self, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_consumption_lines
+        lines = [{"document_id": "d1", "document_type": "CONSUMPTION"}]
+        resp = _make_resp(200, {"factory_id": _FAC, "lines": lines})
+        with patch("clients.chem_internal_client.httpx.get", return_value=resp):
+            result = load_consumption_lines(_FAC, _CO, _FROM, _UNTIL)
+        assert result == lines
+
+    def test_p14b_05_issue_empty_valid(self, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_issue_lines
+        resp = _make_resp(200, {"factory_id": _FAC, "lines": []})
+        with patch("clients.chem_internal_client.httpx.get", return_value=resp):
+            result = load_issue_lines(_FAC, _CO, _FROM, _UNTIL)
+        assert result == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P14B-06 — 기존 load_chemical_facts() 회귀 없음
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestP14B06LoadChemicalFactsRegression:
+
+    def test_p14b_06_has_chemical_true(self, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_chemical_facts
+        resp = _make_resp(200, {"factory_id": _FAC, "facts": {"has_chemical": True}, "contract_gaps": []})
+        with patch("clients.chem_internal_client.httpx.get", return_value=resp):
+            result = load_chemical_facts(_FAC, _CO)
+        assert result == {"has_chemical": True}
+
+    def test_p14b_06_has_chemical_false_preserved(self, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_chemical_facts
+        resp = _make_resp(200, {"factory_id": _FAC, "facts": {"has_chemical": False}, "contract_gaps": []})
+        with patch("clients.chem_internal_client.httpx.get", return_value=resp):
+            result = load_chemical_facts(_FAC, _CO)
+        assert result == {"has_chemical": False}
+
+    def test_p14b_06_http_error_raises(self, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_chemical_facts, ChemicalSourceLoadError
+        resp = _make_resp(403, {"detail": "INVALID_INTERNAL_SECRET"})
+        with patch("clients.chem_internal_client.httpx.get", return_value=resp):
+            with pytest.raises(ChemicalSourceLoadError, match="403"):
+                load_chemical_facts(_FAC, _CO)

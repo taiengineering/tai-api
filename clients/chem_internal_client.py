@@ -61,17 +61,21 @@ def _get(url: str, params: dict, secret: str, timeout: float) -> Any:
             timeout=timeout,
         )
     except httpx.TimeoutException as exc:
-        raise ChemicalSourceLoadError(f"timeout: {exc}") from exc
+        # Do not include exc details — may contain internal URL or host info.
+        raise ChemicalSourceLoadError("CHEM request timeout") from exc
     except httpx.RequestError as exc:
-        raise ChemicalSourceLoadError(f"network: {exc}") from exc
+        # Do not include exc details — may contain internal URL or host info.
+        raise ChemicalSourceLoadError("CHEM network error") from exc
 
     if resp.status_code != 200:
-        raise ChemicalSourceLoadError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        # Do not include resp.text — CHEM error body may contain confidential content.
+        raise ChemicalSourceLoadError(f"CHEM HTTP {resp.status_code}")
 
     try:
         return resp.json()
     except Exception as exc:
-        raise ChemicalSourceLoadError(f"invalid json: {exc}") from exc
+        # Do not include exc details — may contain partial response body with confidential content.
+        raise ChemicalSourceLoadError("CHEM invalid JSON response") from exc
 
 
 def _check_factory_id(data: Any, expected: str) -> None:
@@ -110,6 +114,13 @@ def load_chemical_facts(
     return out
 
 
+def _require_identifiers(factory_id: str, company_id: str) -> None:
+    if not factory_id or not factory_id.strip():
+        raise ChemicalSourceLoadError("factory_id is required")
+    if not company_id or not company_id.strip():
+        raise ChemicalSourceLoadError("company_id is required")
+
+
 def load_active_components(
     factory_id: str,
     company_id: str,
@@ -123,6 +134,7 @@ def load_active_components(
     Empty list (0 active links) is a valid result — not an error.
     Raises ChemicalSourceLoadError on any failure (fail-closed).
     """
+    _require_identifiers(factory_id, company_id)
     base, secret = _require_env()
 
     url = f"{base}/internal/factories/{factory_id}/active-components"
@@ -153,6 +165,7 @@ def load_consumption_lines(
     Empty list is a valid result — not an error.
     Raises ChemicalSourceLoadError on any failure (fail-closed).
     """
+    _require_identifiers(factory_id, company_id)
     if from_at.tzinfo is None:
         raise ChemicalSourceLoadError("from_at must be timezone-aware")
     if until_at_exclusive.tzinfo is None:
@@ -199,6 +212,7 @@ def load_issue_lines(
     Empty list is a valid result — not an error.
     Raises ChemicalSourceLoadError on any failure (fail-closed).
     """
+    _require_identifiers(factory_id, company_id)
     if from_at.tzinfo is None:
         raise ChemicalSourceLoadError("from_at must be timezone-aware")
     if until_at_exclusive.tzinfo is None:
