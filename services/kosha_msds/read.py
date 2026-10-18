@@ -147,30 +147,32 @@ def _clamp_pagination(limit: int, offset: int) -> tuple[int, int]:
 def _extract_item(items: list, code: str) -> Optional[str]:
     """Mirrors nz CTE: NULLIF(NULLIF(btrim(COALESCE(MAX(val) FILTER (code), '')), '자료없음'), '해당없음').
 
+    btrim() = SQL default btrim: removes ASCII space U+0020 only (NOT \\n, \\r, \\t).
     Applies uniformly to ALL 7 item codes (A02, C06, B02, B0404, B0402, O02, O06).
     - Item absent or itemDetail is JSON null → returns "" (COALESCE '' default)
-    - "자료없음" / "해당없음" → returns None (NULLIF sentinel treatment)
-    - All other values → returns btrim(val) including ""
+    - "자료없음" / "해당없음" (after space-only btrim) → returns None (NULLIF sentinel)
+    - All other values → returns btrim(val) preserving \\n/\\r/\\t
     """
     val: Optional[str] = None
     for item in items:
-        if str(item.get("msdsItemCode", "")).strip() == code:
+        if str(item.get("msdsItemCode", "")).strip(" ") == code:
             detail = item.get("itemDetail")
             if detail is not None:
                 candidate = str(detail)
                 if val is None or candidate > val:  # MAX lexicographic semantics
                     val = candidate
-    result = val.strip() if val is not None else ""
+    result = val.strip(" ") if val is not None else ""
     return None if result in _NULL_SENTINEL_VALUES else result
 
 
 def _coalesce_btrim(primary: Optional[str], fallback: Optional[str]) -> Optional[str]:
     """Mirrors COALESCE(NULLIF(btrim(COALESCE(primary,'')), ''), fallback).
 
-    Falls back ONLY when primary is None or empty string after btrim.
-    Sentinel values in primary are NOT replaced (SQL uses NULLIF(...,'') not NULLIF(...,sentinel)).
+    btrim() = SQL default btrim: removes ASCII space U+0020 only (NOT \\n, \\r, \\t).
+    Falls back ONLY when primary is None or empty-after-btrim.
+    Sentinel values in primary are NOT replaced (SQL NULLIF only checks '').
     """
-    trimmed = str(primary).strip() if primary is not None else ""
+    trimmed = str(primary).strip(" ") if primary is not None else ""
     return trimmed if trimmed else fallback
 
 

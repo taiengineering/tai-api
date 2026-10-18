@@ -452,16 +452,23 @@ def test_T10_memory_store_list_current_full_unchanged():
 
 @pytest.mark.parametrize("detail,expected", [
     ("경고", "경고"),
-    ("  경고  ", "경고"),          # btrim
+    ("  경고  ", "경고"),          # space-only btrim: spaces removed
+    ("경고\n", "경고\n"),          # LF at end PRESERVED (btrim space-only, not strip())
+    ("경고\r\n", "경고\r\n"),      # CRLF at end PRESERVED
+    ("경고\t", "경고\t"),          # TAB at end PRESERVED
+    ("\n경고\n", "\n경고\n"),      # LF at both ends PRESERVED
     ("", ""),                      # empty itemDetail → COALESCE '' → btrim → "" (not None!)
-    ("   ", ""),                   # blank → btrim → ""
+    ("   ", ""),                   # space-only blank → btrim → ""
     (None, ""),                    # JSON null itemDetail → item skipped → COALESCE '' → ""
-    ("자료없음", None),             # sentinel → NULLIF → None
-    ("해당없음", None),             # sentinel → NULLIF → None
-    ("  자료없음  ", None),         # sentinel with whitespace → btrim → NULLIF → None
+    ("자료없음", None),             # sentinel → space-btrim → NULLIF → None
+    ("해당없음", None),             # sentinel → space-btrim → NULLIF → None
+    ("  자료없음  ", None),         # sentinel + spaces → strip(" ") → "자료없음" → NULLIF → None
+    ("자료없음\n", "자료없음\n"),   # sentinel + LF → btrim space-only → "자료없음\n" ≠ sentinel → preserved
 ])
 def test_T11_extract_item_display_view_parity(detail, expected):
     """_extract_item must exactly mirror nz CTE: NULLIF(NULLIF(btrim(COALESCE(MAX(val),'')),'자료없음'),'해당없음').
+
+    SQL btrim() = space U+0020 only. \\n/\\r/\\t are preserved.
     Empty itemDetail and missing items return "" (COALESCE default), not None.
     """
     items = [{"msdsItemCode": "B0404", "itemDetail": detail}]
@@ -602,16 +609,20 @@ def test_T14_cas_no_primary_wins_over_fallback():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("primary,fallback,expected", [
-    ("염산", "fallback", "염산"),             # primary wins
-    (None, "fallback", "fallback"),           # primary NULL → fallback
-    ("", "fallback", "fallback"),             # empty string → fallback
-    ("  ", "fallback", "fallback"),           # blank → btrim → "" → fallback
-    ("자료없음", "fallback", "자료없음"),      # sentinel stays — SQL NULLIF(..,'') not NULLIF(..,sentinel)
-    ("해당없음", "fallback", "해당없음"),      # sentinel stays — same
-    (None, None, None),                       # both NULL → None
-    ("  화학  ", "fallback", "화학"),         # btrim primary
+    ("염산", "fallback", "염산"),               # primary wins
+    (None, "fallback", "fallback"),             # primary NULL → fallback
+    ("", "fallback", "fallback"),               # empty string → fallback
+    ("  ", "fallback", "fallback"),             # space-only → btrim → "" → fallback
+    ("자료없음", "fallback", "자료없음"),        # sentinel stays — SQL NULLIF(..,'') not NULLIF(..,sentinel)
+    ("해당없음", "fallback", "해당없음"),        # sentinel stays — same
+    (None, None, None),                         # both NULL → None
+    ("  화학  ", "fallback", "화학"),           # space btrim primary
+    ("화학\n", "fallback", "화학\n"),           # LF PRESERVED (btrim space-only, not strip())
+    ("화학\r\n", "fallback", "화학\r\n"),       # CRLF PRESERVED
+    ("화학\t", "fallback", "화학\t"),           # TAB PRESERVED
 ])
 def test_T15_coalesce_btrim(primary, fallback, expected):
+    """_coalesce_btrim uses SQL btrim() semantics: space U+0020 only, \\n/\\r/\\t preserved."""
     assert _coalesce_btrim(primary, fallback) == expected
 
 
