@@ -1,10 +1,12 @@
-"""WO-WWW-PERF-003-P0A — Published-First, Targeted-Hydration tests.
+"""WO-WWW-PERF-003-P0A-R1 — Published-First, Targeted-Hydration tests.
 
 Validates that SupabaseMsdsReadStore.list_current (SEO_PREVIEW) now:
   1. Uses kosha_msds_seo_preview_current (lightweight) for pagination
-  2. Batch-fetches sections IN (2, 15) for the page's chemicals only
+  2. Batch-fetches sections IN (1, 2, 3, 15) for the page's chemicals only
   3. Batch-fetches last_date from kosha_msds_chemicals
   4. Computes display fields in Python (not via heavy seo_preview_display view)
+  5. COALESCE(current.chemical_name_ko, section1 A02) — covers NULL in seo_preview_current
+  6. COALESCE(current.cas_no, section3 C06) — covers NULL in seo_preview_current
 
 Contract tests (no live DB):
   T1  list_current SEO_PREVIEW dispatches to list_current_fast
@@ -17,8 +19,12 @@ Contract tests (no live DB):
   T8  FULL scope list_current unchanged (still uses display view)
   T9  search_current SEO_PREVIEW unchanged (still uses display view — no parity proven)
   T10 MemoryMsdsReadStore.list_current SEO_PREVIEW hydrates from seeded sections
-  T11 _extract_item respects btrim / NULLIF semantics (blank → None)
-  T12 display_view constant preserved for non-list callers (search / get_by_chem_id)
+  T11 _extract_item respects btrim / NULLIF / 자료없음 / 해당없음 semantics
+  T12 Constants correct (section_nos, view names, item codes)
+  T13 chemical_name_ko COALESCE fallback from section 1 A02 when current=NULL
+  T14 cas_no COALESCE fallback from section 3 C06 when current=NULL
+  T15 _coalesce_btrim: primary wins, fallback used only when primary NULL/blank
+  T16 Fallback keys (chemical_name_ko_fallback/cas_no_fallback) not in merged output
 """
 from __future__ import annotations
 
@@ -39,11 +45,15 @@ from services.kosha_msds.read import (
     SEO_PREVIEW_CURRENT_VIEW,
     SECTIONS_TABLE,
     _HYDRATION_SECTION_NOS,
+    _NULL_SENTINEL_VALUES,
+    _S1_PRODUCT_NAME,
     _S2_HAZARD_CLASS,
     _S2_PICTOGRAMS,
     _S2_SIGNAL_WORD,
+    _S3_CAS_NO,
     _S15_REG_DANGEROUS,
     _S15_REG_SAOLAW,
+    _coalesce_btrim,
     _extract_item,
     _hydrate_from_sections,
     MemoryMsdsReadStore,
@@ -75,6 +85,20 @@ def _chem_row(chem_id: str, uid: Optional[str] = None) -> dict:
         "source_dataset_url": "https://www.data.go.kr/data/15157612/openapi.do",
         "snapshot_id": "snap-001",
     }
+
+
+def _sec1_items(*, product_name: str = "염산 구아니딘") -> list:
+    return [
+        {"msdsItemCode": _S1_PRODUCT_NAME, "msdsItemNameKor": "제품명",
+         "itemDetail": product_name, "lev": "1", "ordrIdx": "1001", "upMsdsItemCode": "A"},
+    ]
+
+
+def _sec3_items(*, cas_no: str = "50-01-1") -> list:
+    return [
+        {"msdsItemCode": _S3_CAS_NO, "msdsItemNameKor": "CAS 번호",
+         "itemDetail": cas_no, "lev": "1", "ordrIdx": "1062", "upMsdsItemCode": "C"},
+    ]
 
 
 def _sec2_items(
@@ -429,8 +453,11 @@ def test_T10_memory_store_list_current_full_unchanged():
     ("", None),                # NULLIF("", "")
     ("   ", None),             # btrim then NULLIF
     (None, None),              # itemDetail absent
+    ("자료없음", None),         # KOSHA sentinel → NULL
+    ("해당없음", None),         # KOSHA sentinel → NULL
+    ("  자료없음  ", None),     # sentinel with whitespace
 ])
-def test_T11_extract_item_btrim_nullif(detail, expected):
+def test_T11_extract_item_btrim_nullif_sentinels(detail, expected):
     items = [{"msdsItemCode": "B0404", "itemDetail": detail}]
     assert _extract_item(items, "B0404") == expected
 
@@ -440,18 +467,138 @@ def test_T11_extract_item_missing_code_returns_none():
     assert _extract_item(items, "XXXX") is None
 
 
+def test_T11_null_sentinel_values_set():
+    assert "자료없음" in _NULL_SENTINEL_VALUES
+    assert "해당없음" in _NULL_SENTINEL_VALUES
+
+
 # ---------------------------------------------------------------------------
-# T12 — PREVIEW_VIEW constant preserved for non-list callers
+# T12 — Constants correct (section_nos, view names, item codes)
 # ---------------------------------------------------------------------------
 
-def test_T12_preview_view_constant_preserved():
+def test_T12_constants_correct():
     assert read.PREVIEW_VIEW == "kosha_msds_seo_preview_display", (
         "PREVIEW_VIEW must remain seo_preview_display — search + get_by_chem_id still use it"
     )
     assert read.SEO_PREVIEW_CURRENT_VIEW == "kosha_msds_seo_preview_current"
-    assert read._HYDRATION_SECTION_NOS == (2, 15)
+    assert read._HYDRATION_SECTION_NOS == (1, 2, 3, 15), (
+        "R1: sections 1 (제품명) and 3 (CAS) added for chemical_name_ko/cas_no fallbacks"
+    )
+    assert read._S1_PRODUCT_NAME == "A02"
     assert read._S2_HAZARD_CLASS == "B02"
     assert read._S2_SIGNAL_WORD == "B0404"
     assert read._S2_PICTOGRAMS == "B0402"
+    assert read._S3_CAS_NO == "C06"
     assert read._S15_REG_SAOLAW == "O02"
     assert read._S15_REG_DANGEROUS == "O06"
+
+
+# ---------------------------------------------------------------------------
+# T13 — chemical_name_ko COALESCE fallback from section 1 A02
+# ---------------------------------------------------------------------------
+
+def test_T13_chemical_name_ko_fallback_from_section1():
+    """When current.chemical_name_ko is NULL, section 1 A02 provides the fallback."""
+    row = {**_chem_row("000001"), "chemical_name_ko": None}  # simulate NULL in seo_preview_current
+    sec1_items = _sec1_items(product_name="염산 구아니딘")
+    sections = [_section_row(row["id"], 1, sec1_items)]
+    chemicals = [{"id": row["id"], "last_date": None}]
+
+    store = MemoryMsdsReadStore(preview_rows=[row], sections=sections, chemicals=chemicals)
+    result_rows, _ = store.list_current(limit=20, offset=0, scope=PUBLICATION_SCOPE_SEO_PREVIEW)
+    assert result_rows[0]["chemical_name_ko"] == "염산 구아니딘", (
+        "chemical_name_ko must be populated from section 1 A02 when current view returns NULL"
+    )
+
+
+def test_T13_chemical_name_ko_primary_wins_over_fallback():
+    """When current.chemical_name_ko is populated, it wins over section 1 fallback."""
+    row = {**_chem_row("000001"), "chemical_name_ko": "기존 이름"}
+    sec1_items = _sec1_items(product_name="다른 제품명")
+    sections = [_section_row(row["id"], 1, sec1_items)]
+    chemicals = [{"id": row["id"], "last_date": None}]
+
+    store = MemoryMsdsReadStore(preview_rows=[row], sections=sections, chemicals=chemicals)
+    result_rows, _ = store.list_current(limit=20, offset=0, scope=PUBLICATION_SCOPE_SEO_PREVIEW)
+    assert result_rows[0]["chemical_name_ko"] == "기존 이름", (
+        "primary chemical_name_ko must win over section 1 fallback"
+    )
+
+
+def test_T13_chemical_name_ko_sentinel_falls_to_section():
+    """When current.chemical_name_ko is sentinel '자료없음', section 1 fallback applies."""
+    row = {**_chem_row("000001"), "chemical_name_ko": "자료없음"}
+    sec1_items = _sec1_items(product_name="염산 구아니딘")
+    sections = [_section_row(row["id"], 1, sec1_items)]
+    chemicals = [{"id": row["id"], "last_date": None}]
+
+    store = MemoryMsdsReadStore(preview_rows=[row], sections=sections, chemicals=chemicals)
+    result_rows, _ = store.list_current(limit=20, offset=0, scope=PUBLICATION_SCOPE_SEO_PREVIEW)
+    assert result_rows[0]["chemical_name_ko"] == "염산 구아니딘"
+
+
+# ---------------------------------------------------------------------------
+# T14 — cas_no COALESCE fallback from section 3 C06
+# ---------------------------------------------------------------------------
+
+def test_T14_cas_no_fallback_from_section3():
+    """When current.cas_no is NULL, section 3 C06 provides the fallback."""
+    row = {**_chem_row("000001"), "cas_no": None}
+    sec3_items = _sec3_items(cas_no="50-01-1")
+    sections = [_section_row(row["id"], 3, sec3_items)]
+    chemicals = [{"id": row["id"], "last_date": None}]
+
+    store = MemoryMsdsReadStore(preview_rows=[row], sections=sections, chemicals=chemicals)
+    result_rows, _ = store.list_current(limit=20, offset=0, scope=PUBLICATION_SCOPE_SEO_PREVIEW)
+    assert result_rows[0]["cas_no"] == "50-01-1", (
+        "cas_no must be populated from section 3 C06 when current view returns NULL"
+    )
+
+
+def test_T14_cas_no_primary_wins_over_fallback():
+    row = {**_chem_row("000001"), "cas_no": "7647-01-0"}
+    sec3_items = _sec3_items(cas_no="50-01-1")
+    sections = [_section_row(row["id"], 3, sec3_items)]
+    chemicals = [{"id": row["id"], "last_date": None}]
+
+    store = MemoryMsdsReadStore(preview_rows=[row], sections=sections, chemicals=chemicals)
+    result_rows, _ = store.list_current(limit=20, offset=0, scope=PUBLICATION_SCOPE_SEO_PREVIEW)
+    assert result_rows[0]["cas_no"] == "7647-01-0"
+
+
+# ---------------------------------------------------------------------------
+# T15 — _coalesce_btrim: primary wins, fallback used only when primary NULL/blank
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("primary,fallback,expected", [
+    ("염산", "fallback", "염산"),          # primary wins
+    (None, "fallback", "fallback"),        # primary NULL → fallback
+    ("", "fallback", "fallback"),          # empty string → fallback
+    ("  ", "fallback", "fallback"),        # blank → fallback
+    ("자료없음", "fallback", "fallback"),   # sentinel → fallback
+    ("해당없음", "fallback", "fallback"),   # sentinel → fallback
+    (None, None, None),                    # both NULL → None
+    ("  화학  ", "fallback", "화학"),      # btrim primary
+])
+def test_T15_coalesce_btrim(primary, fallback, expected):
+    assert _coalesce_btrim(primary, fallback) == expected
+
+
+# ---------------------------------------------------------------------------
+# T16 — Fallback keys not exposed in merged output
+# ---------------------------------------------------------------------------
+
+def test_T16_fallback_keys_not_in_merged_output():
+    """chemical_name_ko_fallback and cas_no_fallback must not appear in list result."""
+    row = {**_chem_row("000001"), "chemical_name_ko": None, "cas_no": None}
+    sections = [
+        _section_row(row["id"], 1, _sec1_items()),
+        _section_row(row["id"], 3, _sec3_items()),
+    ]
+    chemicals = [{"id": row["id"], "last_date": None}]
+
+    store = MemoryMsdsReadStore(preview_rows=[row], sections=sections, chemicals=chemicals)
+    result_rows, _ = store.list_current(limit=20, offset=0, scope=PUBLICATION_SCOPE_SEO_PREVIEW)
+    item = result_rows[0]
+    assert "chemical_name_ko_fallback" not in item, "internal fallback key must not leak into output"
+    assert "cas_no_fallback" not in item, "internal fallback key must not leak into output"
