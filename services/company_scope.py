@@ -224,6 +224,22 @@ def _ensure_factory_own(sb, factory_id, current) -> None:
         raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
 
 
+def _ensure_factory_company_match(sb, factory_id: str, company_id: str) -> None:
+    """A15: CHEM call guard — factory.company_id must equal company_id. No role bypass.
+
+    Unlike _ensure_factory_own(), never returns early for ANY role.
+    For INDUSTRIAL/BUILDING LEG routes only — prevents cross-tenant CHEM data mismatch.
+    Raises 403 if mismatch or empty company_id, 404 if factory not found.
+    """
+    if not company_id:
+        raise HTTPException(status_code=403, detail="시설 접근이 거부되었습니다")
+    row = sb.table("factories").select("company_id").eq("id", factory_id).limit(1).execute()
+    if not row.data:
+        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
+    if str(row.data[0].get("company_id") or "") != company_id:
+        raise HTTPException(status_code=403, detail="시설 접근이 거부되었습니다")
+
+
 def _forced_company_id(current: dict, supabase, company_id=None):
     """비-ALL 이면 토큰 company_id(클라 값 무시). ALL 이면 클라 값 유지."""
     if _is_admin(_scope(supabase, current.get("role_code"))):

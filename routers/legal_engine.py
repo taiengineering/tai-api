@@ -4,7 +4,7 @@ from typing import Optional
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
-from services.company_scope import _ensure_factory_own
+from services.company_scope import _ensure_factory_own, _ensure_factory_company_match
 from schemas.legal_engine import (
     DiagnoseStep1Body, DiagnoseStep2Body, DiagnoseStep3Body,
     SafeIndustrialLegBody, SafeConstructionLegBody, SafeBuildingLegBody,
@@ -173,6 +173,7 @@ async def diagnose_industrial_leg(body: SafeIndustrialLegBody, authorization: Op
     current = get_current_user(authorization)                 # AUTH first (실패 시 assembler DB read 금지)
     _ensure_factory_own(supabase, body.factory_id, current)   # OWNERSHIP (타사 factory -> 404)
     company_id = str(current.get("company_id") or "")
+    _ensure_factory_company_match(supabase, body.factory_id, company_id)  # A15: CHEM guard — no admin bypass
     require_active_company_saas(supabase, company_id)
     resolution = _assert_leg_compliance_core_http(supabase, company_id)
     _assert_leg_site_scope_http(supabase, resolution.commercial_version_id, "factory", body.factory_id)
@@ -237,8 +238,7 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
     _site_fac_data = getattr(_site_fac_row, "data", None) or []
     _cst_factory_id = _site_fac_data[0].get("factory_id") if _site_fac_data else None
     if _cst_factory_id:
-        app3_projection = check_saas_appendix3_contract(supabase, _cst_factory_id, "CONSTRUCTION", body.input)
-        # WIRING-013: CHEM 호출 전 factory 회사 일치 검증 (site company 검증과 별도).
+        # A15 PATCH-01: factory-company 검증을 App3 조회보다 먼저 — 타사 자료 선조회 차단.
         _fac_cid_row = (
             supabase.table("factories")
             .select("company_id").eq("id", _cst_factory_id).limit(1).execute()
@@ -246,6 +246,7 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
         _fac_cid_data = getattr(_fac_cid_row, "data", None) or []
         if not _fac_cid_data or str(_fac_cid_data[0].get("company_id") or "") != company_id:
             raise HTTPException(status_code=403, detail="현장과 시설의 회사가 일치하지 않습니다.")
+        app3_projection = check_saas_appendix3_contract(supabase, _cst_factory_id, "CONSTRUCTION", body.input)
     else:
         app3_projection = None  # no factory linked — ConstructionSiteBridgeError raised inside runtime
     try:
@@ -298,6 +299,7 @@ async def diagnose_building_leg(body: SafeBuildingLegBody, authorization: Option
     current = get_current_user(authorization)
     _ensure_factory_own(supabase, body.factory_id, current)
     company_id = str(current.get("company_id") or "")
+    _ensure_factory_company_match(supabase, body.factory_id, company_id)  # A15: CHEM guard — no admin bypass
     require_active_company_saas(supabase, company_id)
     resolution = _assert_leg_compliance_core_http(supabase, company_id)
     _assert_leg_site_scope_http(supabase, resolution.commercial_version_id, "factory", body.factory_id)
