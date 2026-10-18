@@ -39,15 +39,29 @@ from services.kosha_msds.contract import (
 
 CURRENT_VIEW = "kosha_msds_current"
 PREVIEW_VIEW = "kosha_msds_seo_preview_display"
+SEO_PREVIEW_CURRENT_VIEW = "kosha_msds_seo_preview_current"
 SECTIONS_TABLE = "kosha_msds_sections"
 CHEMICALS_TABLE = "kosha_msds_chemicals"
+
+# Section numbers needed for display-field hydration (section 2=GHS, 15=Regulatory)
+_HYDRATION_SECTION_NOS = (2, 15)
+
+# KOSHA MSDS section 2 item codes (GHS classification / 경고 표지)
+_S2_HAZARD_CLASS = "B02"    # 유해성·위험성 분류
+_S2_PICTOGRAMS = "B0402"    # 그림문자
+_S2_SIGNAL_WORD = "B0404"   # 신호어
+
+# KOSHA MSDS section 15 item codes (Regulatory)
+_S15_REG_SAOLAW = "O02"     # 산업안전보건법에 의한 규제
+_S15_REG_DANGEROUS = "O06"  # 위험물안전관리법에 의한 규제
 
 
 def _view_for_scope(scope: str) -> str:
     """Return the SQL view name for the given publication scope.
 
     FULL         → kosha_msds_current           (PUBLISHED_FULL only)
-    SEO_PREVIEW  → kosha_msds_seo_preview_current (PUBLISHED_SEO_PREVIEW only)
+    SEO_PREVIEW  → kosha_msds_seo_preview_display (section-aggregated display view)
+                   Use SEO_PREVIEW_CURRENT_VIEW for lightweight membership-only reads.
 
     Unknown scope raises ValueError — callers must validate the scope
     before reaching store methods.
@@ -91,6 +105,7 @@ SECTIONS_SELECT = (
     "chemical_id,section_no,payload_json,section_hash,result_code,"
     "result_message,fetched_at"
 )
+_HYDRATION_SECTIONS_SELECT = "chemical_id,section_no,payload_json"
 
 
 class SectionNoOutOfRange(ValueError):
@@ -117,6 +132,45 @@ def _clamp_pagination(limit: int, offset: int) -> tuple[int, int]:
     if off < 0:
         off = 0
     return lim, off
+
+
+def _extract_item(items: list, code: str) -> Optional[str]:
+    """Return btrim(itemDetail) for the first item matching msdsItemCode, or None."""
+    for item in items:
+        if str(item.get("msdsItemCode", "")).strip() == code:
+            detail = item.get("itemDetail")
+            if detail is None:
+                return None
+            return str(detail).strip() or None
+    return None
+
+
+def _hydrate_from_sections(sections: list[dict], last_date: Optional[str]) -> dict:
+    """Compute display fields from raw section rows + last_date from chemicals.
+
+    Mirrors the COALESCE/NULLIF/btrim/max FILTER logic of
+    kosha_msds_seo_preview_display without querying that view.
+    Sections must include section_no IN (2, 15) for full hydration.
+    """
+    sec2: list = []
+    sec15: list = []
+    for s in sections:
+        payload = s.get("payload_json")
+        if not isinstance(payload, list):
+            continue
+        no = int(s.get("section_no") or 0)
+        if no == 2:
+            sec2 = payload
+        elif no == 15:
+            sec15 = payload
+    return {
+        "hazard_class": _extract_item(sec2, _S2_HAZARD_CLASS),
+        "signal_word": _extract_item(sec2, _S2_SIGNAL_WORD),
+        "pictograms": _extract_item(sec2, _S2_PICTOGRAMS),
+        "reg_saolaw": _extract_item(sec15, _S15_REG_SAOLAW),
+        "reg_dangerous": _extract_item(sec15, _S15_REG_DANGEROUS),
+        "last_date": last_date,
+    }
 
 
 def _current_row_to_contract(row: dict, *, last_date: Optional[str]) -> dict:
@@ -212,8 +266,19 @@ class MemoryMsdsReadStore:
         return dict(self._chemicals.get(str(chemical_id), {}))
 
     def list_current(self, *, limit: int, offset: int, scope: str = PUBLICATION_SCOPE_FULL) -> tuple[list[dict], int]:
-        rows = sorted(self._rows_for_scope(scope), key=lambda r: r.get("chem_id") or "")
-        return [dict(r) for r in rows[offset : offset + limit]], len(rows)
+        all_rows = sorted(self._rows_for_scope(scope), key=lambda r: r.get("chem_id") or "")
+        page = [dict(r) for r in all_rows[offset : offset + limit]]
+        if scope == PUBLICATION_SCOPE_SEO_PREVIEW:
+            hydrated = []
+            for row in page:
+                cid = str(row.get("id", ""))
+                secs = [s for s in self._sections if str(s.get("chemical_id")) == cid
+                        and int(s.get("section_no") or 0) in _HYDRATION_SECTION_NOS]
+                last_date = (self._chemicals.get(cid) or {}).get("last_date")
+                fields = _hydrate_from_sections(secs, last_date)
+                hydrated.append({**row, **fields})
+            return hydrated, len(all_rows)
+        return page, len(all_rows)
 
     def search_current(
         self,
@@ -286,15 +351,20 @@ class SupabaseMsdsReadStore:
         FULL scope → kosha_msds_current (currently 0 rows until a
                      PUBLISHED_FULL snapshot exists).
         SEO_PREVIEW → kosha_msds_seo_preview_current
-                     (currently 1,997 rows).
+                     (currently 1,997 rows; lightweight, no section JOIN).
 
         Used by ops.collect_production_status() to fill the
         `chemicals` / `preview_current` / `full_current` fields
         against a live Supabase — see WO-CHEM-FULL-READINESS-004
         PATCH-1 §A.
         """
+        view = (
+            SEO_PREVIEW_CURRENT_VIEW
+            if scope == PUBLICATION_SCOPE_SEO_PREVIEW
+            else _view_for_scope(scope)
+        )
         r = (
-            self.sb.table(_view_for_scope(scope))
+            self.sb.table(view)
             .select("chem_id", count="exact")
             .limit(1)
             .execute()
@@ -323,7 +393,66 @@ class SupabaseMsdsReadStore:
         rows = r.data or []
         return dict(rows[0]) if rows else {}
 
+    def list_current_fast(self, *, limit: int, offset: int) -> tuple[list[dict], int]:
+        """Published-First, Targeted-Hydration for SEO_PREVIEW list.
+
+        1. Page from kosha_msds_seo_preview_current (lightweight — no section JOIN, no GROUP BY)
+        2. Batch section_no IN (2, 15) for page chemicals only (~100×2 rows max)
+        3. Batch last_date from kosha_msds_chemicals for page chemicals
+        4. Python-side display-field hydration (mirrors seo_preview_display SQL logic)
+        """
+        r = (
+            self.sb.table(SEO_PREVIEW_CURRENT_VIEW)
+            .select(CURRENT_VIEW_SELECT, count="exact")
+            .order("chem_id")
+            .range(offset, offset + limit - 1)
+            .execute()
+        )
+        rows = list(r.data or [])
+        total = int(r.count or 0)
+        if not rows:
+            return rows, total
+
+        chemical_ids = [str(row["id"]) for row in rows if row.get("id")]
+
+        # Batch fetch sections 2+15 for this page only
+        sec_r = (
+            self.sb.table(SECTIONS_TABLE)
+            .select(_HYDRATION_SECTIONS_SELECT)
+            .in_("chemical_id", chemical_ids)
+            .in_("section_no", list(_HYDRATION_SECTION_NOS))
+            .execute()
+        )
+        sections_by_chem: dict[str, list] = {}
+        for s in (sec_r.data or []):
+            cid = str(s.get("chemical_id", ""))
+            sections_by_chem.setdefault(cid, []).append(s)
+
+        # Batch fetch last_date from chemicals
+        chem_r = (
+            self.sb.table(CHEMICALS_TABLE)
+            .select(CHEMICALS_EXTRA_SELECT)
+            .in_("id", chemical_ids)
+            .execute()
+        )
+        last_dates: dict[str, Optional[str]] = {
+            str(c["id"]): c.get("last_date")
+            for c in (chem_r.data or [])
+            if c.get("id")
+        }
+
+        # Merge hydrated display fields into rows
+        hydrated = []
+        for row in rows:
+            cid = str(row.get("id", ""))
+            fields = _hydrate_from_sections(sections_by_chem.get(cid, []), last_dates.get(cid))
+            hydrated.append({**row, **fields})
+
+        return hydrated, total
+
     def list_current(self, *, limit: int, offset: int, scope: str = PUBLICATION_SCOPE_FULL) -> tuple[list[dict], int]:
+        if scope == PUBLICATION_SCOPE_SEO_PREVIEW:
+            return self.list_current_fast(limit=limit, offset=offset)
         r = (
             self.sb.table(_view_for_scope(scope))
             .select(_select_for_scope(scope), count="exact")
