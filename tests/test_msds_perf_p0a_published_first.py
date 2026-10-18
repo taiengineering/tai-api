@@ -281,16 +281,19 @@ def test_T5_last_date_from_chemicals_batch():
 
 
 # ---------------------------------------------------------------------------
-# T6 — Missing sections → None display fields (no KeyError)
+# T6 — Missing sections → "" display fields (matches display view COALESCE '' default)
 # ---------------------------------------------------------------------------
 
-def test_T6_missing_sections_yields_none_display_fields():
+def test_T6_missing_sections_yields_empty_display_fields():
+    """Display view returns "" not None for absent items (COALESCE(MAX(val),'') → btrim → NULLIF sentinels)."""
     result = _hydrate_from_sections([], last_date=None)
-    assert result["hazard_class"] is None
-    assert result["signal_word"] is None
-    assert result["pictograms"] is None
-    assert result["reg_saolaw"] is None
-    assert result["reg_dangerous"] is None
+    assert result["hazard_class"] == ""
+    assert result["signal_word"] == ""
+    assert result["pictograms"] == ""
+    assert result["reg_saolaw"] == ""
+    assert result["reg_dangerous"] == ""
+    assert result["chemical_name_ko_fallback"] == ""
+    assert result["cas_no_fallback"] == ""
     assert result["last_date"] is None
 
 
@@ -300,7 +303,7 @@ def test_T6_list_current_fast_empty_sections_no_error():
     store = SupabaseMsdsReadStore.__new__(SupabaseMsdsReadStore)
     store.sb = sb
     result_rows, _ = store.list_current_fast(limit=20, offset=0)
-    assert result_rows[0]["hazard_class"] is None
+    assert result_rows[0]["hazard_class"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -449,27 +452,49 @@ def test_T10_memory_store_list_current_full_unchanged():
 
 @pytest.mark.parametrize("detail,expected", [
     ("경고", "경고"),
-    ("  경고  ", "경고"),      # btrim
-    ("", None),                # NULLIF("", "")
-    ("   ", None),             # btrim then NULLIF
-    (None, None),              # itemDetail absent
-    ("자료없음", None),         # KOSHA sentinel → NULL
-    ("해당없음", None),         # KOSHA sentinel → NULL
-    ("  자료없음  ", None),     # sentinel with whitespace
+    ("  경고  ", "경고"),          # btrim
+    ("", ""),                      # empty itemDetail → COALESCE '' → btrim → "" (not None!)
+    ("   ", ""),                   # blank → btrim → ""
+    (None, ""),                    # JSON null itemDetail → item skipped → COALESCE '' → ""
+    ("자료없음", None),             # sentinel → NULLIF → None
+    ("해당없음", None),             # sentinel → NULLIF → None
+    ("  자료없음  ", None),         # sentinel with whitespace → btrim → NULLIF → None
 ])
-def test_T11_extract_item_btrim_nullif_sentinels(detail, expected):
+def test_T11_extract_item_display_view_parity(detail, expected):
+    """_extract_item must exactly mirror nz CTE: NULLIF(NULLIF(btrim(COALESCE(MAX(val),'')),'자료없음'),'해당없음').
+    Empty itemDetail and missing items return "" (COALESCE default), not None.
+    """
     items = [{"msdsItemCode": "B0404", "itemDetail": detail}]
     assert _extract_item(items, "B0404") == expected
 
 
-def test_T11_extract_item_missing_code_returns_none():
+def test_T11_extract_item_missing_code_returns_empty():
+    """No matching code → item skipped → COALESCE '' → returns ""."""
     items = [{"msdsItemCode": "B0404", "itemDetail": "경고"}]
-    assert _extract_item(items, "XXXX") is None
+    assert _extract_item(items, "XXXX") == ""
 
 
 def test_T11_null_sentinel_values_set():
     assert "자료없음" in _NULL_SENTINEL_VALUES
     assert "해당없음" in _NULL_SENTINEL_VALUES
+
+
+def test_T11_duplicate_code_max_contract():
+    """Display view uses MAX(val) FILTER; Python tracks lexicographic max across duplicates.
+    Production data verified: 0 duplicate codes in 143,972 items.
+    Both agree when first item is already the MAX.
+    """
+    items_first_is_max = [
+        {"msdsItemCode": "B02", "itemDetail": "구분2"},
+        {"msdsItemCode": "B02", "itemDetail": "구분1"},
+    ]
+    assert _extract_item(items_first_is_max, "B02") == "구분2"  # MAX = "구분2"
+
+    items_second_is_max = [
+        {"msdsItemCode": "B02", "itemDetail": "구분1"},
+        {"msdsItemCode": "B02", "itemDetail": "구분2"},
+    ]
+    assert _extract_item(items_second_is_max, "B02") == "구분2"  # MAX semantics: "구분2"
 
 
 # ---------------------------------------------------------------------------
@@ -525,8 +550,12 @@ def test_T13_chemical_name_ko_primary_wins_over_fallback():
     )
 
 
-def test_T13_chemical_name_ko_sentinel_falls_to_section():
-    """When current.chemical_name_ko is sentinel '자료없음', section 1 fallback applies."""
+def test_T13_chemical_name_ko_sentinel_stays_in_primary():
+    """When current.chemical_name_ko is sentinel '자료없음', _coalesce_btrim keeps it.
+
+    Display view SQL: COALESCE(NULLIF(btrim(COALESCE(primary,'')), ''), a02)
+    Only falls back for EMPTY '' — not for sentinels like '자료없음'.
+    """
     row = {**_chem_row("000001"), "chemical_name_ko": "자료없음"}
     sec1_items = _sec1_items(product_name="염산 구아니딘")
     sections = [_section_row(row["id"], 1, sec1_items)]
@@ -534,7 +563,9 @@ def test_T13_chemical_name_ko_sentinel_falls_to_section():
 
     store = MemoryMsdsReadStore(preview_rows=[row], sections=sections, chemicals=chemicals)
     result_rows, _ = store.list_current(limit=20, offset=0, scope=PUBLICATION_SCOPE_SEO_PREVIEW)
-    assert result_rows[0]["chemical_name_ko"] == "염산 구아니딘"
+    assert result_rows[0]["chemical_name_ko"] == "자료없음", (
+        "_coalesce_btrim must NOT fall back for sentinels — SQL only NULLIF(..,'') not NULLIF(..,sentinel)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -571,14 +602,14 @@ def test_T14_cas_no_primary_wins_over_fallback():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("primary,fallback,expected", [
-    ("염산", "fallback", "염산"),          # primary wins
-    (None, "fallback", "fallback"),        # primary NULL → fallback
-    ("", "fallback", "fallback"),          # empty string → fallback
-    ("  ", "fallback", "fallback"),        # blank → fallback
-    ("자료없음", "fallback", "fallback"),   # sentinel → fallback
-    ("해당없음", "fallback", "fallback"),   # sentinel → fallback
-    (None, None, None),                    # both NULL → None
-    ("  화학  ", "fallback", "화학"),      # btrim primary
+    ("염산", "fallback", "염산"),             # primary wins
+    (None, "fallback", "fallback"),           # primary NULL → fallback
+    ("", "fallback", "fallback"),             # empty string → fallback
+    ("  ", "fallback", "fallback"),           # blank → btrim → "" → fallback
+    ("자료없음", "fallback", "자료없음"),      # sentinel stays — SQL NULLIF(..,'') not NULLIF(..,sentinel)
+    ("해당없음", "fallback", "해당없음"),      # sentinel stays — same
+    (None, None, None),                       # both NULL → None
+    ("  화학  ", "fallback", "화학"),         # btrim primary
 ])
 def test_T15_coalesce_btrim(primary, fallback, expected):
     assert _coalesce_btrim(primary, fallback) == expected
