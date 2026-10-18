@@ -18,7 +18,7 @@ WO-LFR-OBJ-H03-FAST-01: floor_area_sum_at_or_above_11f derivation from 층별개
 DB WRITE: H01 hydration path 한정(1 PATCH / leg call, 조건부). factory 생성 side effect 0.
 """
 from __future__ import annotations
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from services.canonical.saas_leg_source_adapter import build_saas_leg_step1
 from services.leg_diagnosis_svc import run_leg_diagnosis
@@ -62,6 +62,7 @@ def collect_building_leg_input(
     app3_projection=None,
     *,
     allow_h01_db_write: bool = True,
+    company_id: Optional[str] = None,
 ):
     """BUILDING 입력 조립(A-D단계). LEG 미호출.
 
@@ -182,6 +183,12 @@ def collect_building_leg_input(
         for leaf_key, leaf_val in app3_projection.items():
             values[leaf_key] = leaf_val
 
+    # WIRING-012: L1 company_id → CHEM L4 DIRECT load (fail-closed: re-raise on error).
+    chemical_facts = None
+    if company_id:
+        from clients.chem_internal_client import load_chemical_facts
+        chemical_facts = load_chemical_facts(factory_id, company_id)
+
     # D. build_saas_leg_step1
     step1 = build_saas_leg_step1(
         sector="BUILDING",
@@ -190,6 +197,7 @@ def collect_building_leg_input(
         work_rows=load_work_rows_optional(supabase, factory_id),
         material_rows=load_factory_material_rows_optional(supabase, factory_id),
         equipment_rows=load_equipment_rows_optional(supabase, factory_id),
+        chemical_facts=chemical_facts,
     )
     return step1, sorted(unresolved), h01_absent_fields
 
@@ -201,6 +209,7 @@ def run_safe_building_leg(
     material_inout_event_id: str = None,
     occupancy_assessment_id: str = None,
     app3_projection=None,
+    company_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """SAFE BUILDING 공식 LEG 진단. full_result 반환(저장/결제/factory 생성 없음).
 
@@ -208,6 +217,7 @@ def run_safe_building_leg(
     H01: floor_count / building_height provenance guard → on-demand hydration.
     H03: floor_area_sum_at_or_above_11f derivation (authoritative floor_count >= 11 시).
     H02: occupancy_capacity — direct numeric input PROHIBITED; exact assessment only.
+    company_id: WIRING-012 L1 인증 회사 ID. None이면 CHEM 미호출(backward-compat).
     """
     step1, unresolved_fields, _ = collect_building_leg_input(
         supabase, factory_id, consumer_input,
@@ -215,6 +225,7 @@ def run_safe_building_leg(
         occupancy_assessment_id=occupancy_assessment_id,
         app3_projection=app3_projection,
         allow_h01_db_write=True,
+        company_id=company_id,
     )
     # E. 공식 Runtime Delegate 1회.
     full_result = run_leg_diagnosis(step1)
