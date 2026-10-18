@@ -243,6 +243,57 @@ def _validate_art68_count_field(form_data: dict) -> None:
         )
 
 
+_ART68_PARENT = "contracts_construction_work_at_site"
+_ART68_CHILD_BOOLS = ("leads_and_manages_construction_execution", "recontracts_received_construction_work")
+_ART68_COUNT = "same_site_contracted_construction_work_count"
+_ART68_ALL_CHILDREN = _ART68_CHILD_BOOLS + (_ART68_COUNT,)
+
+
+def _validate_art68_parent_child_contract(form_data: dict) -> None:
+    """ART68 부모-자식 입력 계약 검증. CONSTRUCTION sector에서만 호출한다.
+
+    - ART68 필드 전혀 없음: 기존 요청 호환, 통과.
+    - 자식 단독 제출: 422.
+    - 부모 비boolean: 422.
+    - 부모=false + 자식 있음: 422.
+    - 부모=true + 자식 boolean 미완결 or 건수 없음/비정수: 422.
+    """
+    has_parent = _ART68_PARENT in form_data and form_data[_ART68_PARENT] is not None
+    has_any_child = any(form_data.get(k) is not None for k in _ART68_ALL_CHILDREN)
+
+    if not has_parent and not has_any_child:
+        return  # 기존 요청 호환
+
+    if not has_parent and has_any_child:
+        raise HTTPException(status_code=422, detail="ART68: parent field required when child fields are present")
+
+    parent_val = form_data[_ART68_PARENT]
+    if not isinstance(parent_val, bool):
+        raise HTTPException(status_code=422, detail=f"{_ART68_PARENT} must be a boolean")
+
+    if parent_val is False:
+        stray = [k for k in _ART68_ALL_CHILDREN if form_data.get(k) is not None]
+        if stray:
+            raise HTTPException(status_code=422, detail="ART68: child fields must not be present when parent is false")
+        return
+
+    # parent_val is True: 자식 boolean 2개
+    for cb in _ART68_CHILD_BOOLS:
+        val = form_data.get(cb)
+        if val is None or not isinstance(val, bool):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{cb} must be a boolean when {_ART68_PARENT} is true",
+            )
+
+    # 건수 완결성 + 정수
+    count_val = form_data.get(_ART68_COUNT)
+    if count_val is None:
+        raise HTTPException(status_code=422, detail=f"{_ART68_COUNT} is required when {_ART68_PARENT} is true")
+    if not (isinstance(count_val, int) and not isinstance(count_val, bool) and count_val >= 0):
+        raise HTTPException(status_code=422, detail=f"{_ART68_COUNT} must be a non-negative integer")
+
+
 def _ensure_disclaimer_for_paid_entry(supabase, auth_row: dict) -> str:
     """유료 결제 직입(runPaidDiagnosis) — disclaimer_log_id 없을 때 자동 기록."""
     from services.diagnosis_helpers import _now
@@ -483,10 +534,10 @@ def run_diagnosis(
     # CHILD gate validated SECOND — item_no==49 is now confirmed present.
     # After appendix3 source validation, before disclaimer / quota / engine / persist.
     validate_explicit_construction_predicates(body, getattr(body, "sector", None))
-    # ART68 건수 필드 조기 검증 — 면책 동의 DB 기록 이전 (인증 이후).
+    # ART68 부모-자식 계약 검증 — 면책 동의 DB 기록 이전 (인증 이후).
     _early_fd = getattr(body, "form_data", None) or {}
     if normalize_sector_db(body.sector) == "CONSTRUCTION" and isinstance(_early_fd, dict):
-        _validate_art68_count_field(_early_fd)
+        _validate_art68_parent_child_contract(_early_fd)
     disclaimer_log_id = (body.disclaimer_log_id or "").strip()
     if not disclaimer_log_id:
         if body.payment_ref:
