@@ -1,18 +1,25 @@
-"""CHEM internal chemical facts client — WIRING-010.
+"""CHEM internal chemical facts client — WIRING-010 / WIRING-014B.
 
-Calls CHEM /internal/factories/{id}/leg-input-facts to retrieve
-L4 DIRECT chemical facts (has_chemical only at this stage).
+Endpoints:
+  /internal/factories/{id}/leg-input-facts      → load_chemical_facts  (L4 DIRECT)
+  /internal/factories/{id}/active-components    → load_active_components  (L2 Reader A)
+  /internal/factories/{id}/consumption-lines    → load_consumption_lines  (L2 Reader C1)
+  /internal/factories/{id}/issue-lines          → load_issue_lines  (L2 Reader C2)
 
 Auth: X-Internal-Secret header using CHEM_INTERNAL_API_SECRET env.
 Base URL: CHEM_INTERNAL_BASE_URL env.
 Fail-closed: raises ChemicalSourceLoadError on any failure.
-  Never synthesizes False on connection failure.
-contract_gaps are stripped — they are CHEM internal gaps, not LEG facts.
+  Never synthesizes False/empty on connection failure.
+  Empty list vs. failure are distinct — empty list returns [], failure raises.
+
+B1: is_confidential=True components are returned as-is (internal M2M raw delivery).
+  Caller must NOT forward to SAFE external responses, logs, or LEG Canonical results.
 """
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from datetime import datetime
+from typing import Any, Dict, List
 
 import httpx
 
@@ -35,30 +42,21 @@ def _secret() -> str:
     return os.environ.get("CHEM_INTERNAL_API_SECRET", "")
 
 
-def load_chemical_facts(
-    factory_id: str,
-    company_id: str,
-    timeout: float = _TIMEOUT,
-) -> Dict[str, Any]:
-    """CHEM internal API → approved LEG-facing chemical facts dict.
-
-    Returns subset of CHEM facts approved for LEG input.
-    Currently: {"has_chemical": bool} only.
-    contract_gaps are stripped — not LEG input facts.
-    Raises ChemicalSourceLoadError on any failure (fail-closed).
-    """
+def _require_env() -> tuple[str, str]:
     base = _base_url()
     if not base:
         raise ChemicalSourceLoadError("CHEM_INTERNAL_BASE_URL not set")
     secret = _secret()
     if not secret:
         raise ChemicalSourceLoadError("CHEM_INTERNAL_API_SECRET not set")
+    return base, secret
 
-    url = f"{base}/internal/factories/{factory_id}/leg-input-facts"
+
+def _get(url: str, params: dict, secret: str, timeout: float) -> Any:
     try:
         resp = httpx.get(
             url,
-            params={"company_id": company_id},
+            params=params,
             headers={"X-Internal-Secret": secret},
             timeout=timeout,
         )
@@ -71,9 +69,37 @@ def load_chemical_facts(
         raise ChemicalSourceLoadError(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
     try:
-        data = resp.json()
+        return resp.json()
     except Exception as exc:
         raise ChemicalSourceLoadError(f"invalid json: {exc}") from exc
+
+
+def _check_factory_id(data: Any, expected: str) -> None:
+    if not isinstance(data, dict):
+        raise ChemicalSourceLoadError("response is not a JSON object")
+    returned = data.get("factory_id")
+    if returned != expected:
+        raise ChemicalSourceLoadError(
+            f"factory_id mismatch: expected {expected!r}, got {returned!r}"
+        )
+
+
+def load_chemical_facts(
+    factory_id: str,
+    company_id: str,
+    timeout: float = _TIMEOUT,
+) -> Dict[str, Any]:
+    """CHEM internal API → approved LEG-facing chemical facts dict.
+
+    Returns subset of CHEM facts approved for LEG input.
+    Currently: {"has_chemical": bool} only.
+    contract_gaps are stripped — not LEG input facts.
+    Raises ChemicalSourceLoadError on any failure (fail-closed).
+    """
+    base, secret = _require_env()
+
+    url = f"{base}/internal/factories/{factory_id}/leg-input-facts"
+    data = _get(url, {"company_id": company_id}, secret, timeout)
 
     raw_facts: Dict[str, Any] = data.get("facts", {}) if isinstance(data, dict) else {}
 
@@ -82,3 +108,123 @@ def load_chemical_facts(
     if "has_chemical" in raw_facts:
         out["has_chemical"] = raw_facts["has_chemical"]
     return out
+
+
+def load_active_components(
+    factory_id: str,
+    company_id: str,
+    timeout: float = _TIMEOUT,
+) -> List[Dict[str, Any]]:
+    """CHEM L2 Reader A — MSDS component rows for all ACTIVE material links.
+
+    Returns list of component dicts with original fields preserved.
+    is_confidential=True rows are returned as-is (B1 contract).
+    Caller must NOT expose confidential components in SAFE responses or logs.
+    Empty list (0 active links) is a valid result — not an error.
+    Raises ChemicalSourceLoadError on any failure (fail-closed).
+    """
+    base, secret = _require_env()
+
+    url = f"{base}/internal/factories/{factory_id}/active-components"
+    data = _get(url, {"company_id": company_id}, secret, timeout)
+
+    _check_factory_id(data, factory_id)
+
+    components = data.get("components")
+    if not isinstance(components, list):
+        raise ChemicalSourceLoadError(
+            f"expected 'components' list, got {type(components).__name__}"
+        )
+    return components
+
+
+def load_consumption_lines(
+    factory_id: str,
+    company_id: str,
+    from_at: datetime,
+    until_at_exclusive: datetime,
+    timeout: float = _TIMEOUT,
+) -> List[Dict[str, Any]]:
+    """CHEM L2 Reader C1 — CONSUMPTION document lines in [from_at, until_at_exclusive).
+
+    Both datetimes must be timezone-aware and from_at < until_at_exclusive.
+    Caller is responsible for providing a meaningful period — no auto-generation.
+    CONSUMPTION and ISSUE lines must NOT be mixed by the caller.
+    Empty list is a valid result — not an error.
+    Raises ChemicalSourceLoadError on any failure (fail-closed).
+    """
+    if from_at.tzinfo is None:
+        raise ChemicalSourceLoadError("from_at must be timezone-aware")
+    if until_at_exclusive.tzinfo is None:
+        raise ChemicalSourceLoadError("until_at_exclusive must be timezone-aware")
+    if from_at >= until_at_exclusive:
+        raise ChemicalSourceLoadError("from_at must be strictly before until_at_exclusive")
+
+    base, secret = _require_env()
+
+    url = f"{base}/internal/factories/{factory_id}/consumption-lines"
+    data = _get(
+        url,
+        {
+            "company_id": company_id,
+            "from_at": from_at.isoformat(),
+            "until_at_exclusive": until_at_exclusive.isoformat(),
+        },
+        secret,
+        timeout,
+    )
+
+    _check_factory_id(data, factory_id)
+
+    lines = data.get("lines")
+    if not isinstance(lines, list):
+        raise ChemicalSourceLoadError(
+            f"expected 'lines' list, got {type(lines).__name__}"
+        )
+    return lines
+
+
+def load_issue_lines(
+    factory_id: str,
+    company_id: str,
+    from_at: datetime,
+    until_at_exclusive: datetime,
+    timeout: float = _TIMEOUT,
+) -> List[Dict[str, Any]]:
+    """CHEM L2 Reader C2 — ISSUE document lines in [from_at, until_at_exclusive).
+
+    Both datetimes must be timezone-aware and from_at < until_at_exclusive.
+    NOTE: ISSUE occurred_at reflects document creation time, not actual issue time.
+      Do not reclassify as usage data or use for legal aggregation automatically.
+    Empty list is a valid result — not an error.
+    Raises ChemicalSourceLoadError on any failure (fail-closed).
+    """
+    if from_at.tzinfo is None:
+        raise ChemicalSourceLoadError("from_at must be timezone-aware")
+    if until_at_exclusive.tzinfo is None:
+        raise ChemicalSourceLoadError("until_at_exclusive must be timezone-aware")
+    if from_at >= until_at_exclusive:
+        raise ChemicalSourceLoadError("from_at must be strictly before until_at_exclusive")
+
+    base, secret = _require_env()
+
+    url = f"{base}/internal/factories/{factory_id}/issue-lines"
+    data = _get(
+        url,
+        {
+            "company_id": company_id,
+            "from_at": from_at.isoformat(),
+            "until_at_exclusive": until_at_exclusive.isoformat(),
+        },
+        secret,
+        timeout,
+    )
+
+    _check_factory_id(data, factory_id)
+
+    lines = data.get("lines")
+    if not isinstance(lines, list):
+        raise ChemicalSourceLoadError(
+            f"expected 'lines' list, got {type(lines).__name__}"
+        )
+    return lines
