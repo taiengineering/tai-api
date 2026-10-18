@@ -26,7 +26,10 @@ non-current chemical are never returned.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Iterable, Optional
+
+logger = logging.getLogger(__name__)
 
 from services.kosha_msds.contract import (
     ALLOWED_PUBLICATION_SCOPES,
@@ -380,19 +383,33 @@ class MemoryMsdsReadStore:
                 return dict(s)
         return None
 
-    def hydrate_chem_ids(self, chem_ids: list[str]) -> list[dict]:
+    def hydrate_chem_ids(
+        self,
+        chem_ids: list[str],
+        *,
+        scope: str = PUBLICATION_SCOPE_SEO_PREVIEW,
+    ) -> list[dict]:
         """Fetch + hydrate display fields for an ordered list of chem_ids.
 
-        Mirrors list_current() SEO_PREVIEW hydration but for an arbitrary
-        set of chem_ids (e.g., returned by OS search). Preserves input order.
+        Mirrors list_current() hydration but for an arbitrary set of
+        chem_ids (e.g., returned by OS search). Preserves input order.
+        Silently drops chem_ids not found in the scoped rows; logs a
+        warning so operators can detect OS/DB membership drift (PATCH-07).
         """
         if not chem_ids:
             return []
+        source_rows = self._rows_for_scope(scope)
         rows_by_chem_id: dict[str, dict] = {}
-        for row in self._preview:
+        for row in source_rows:
             cid = row.get("chem_id")
             if cid in chem_ids:
                 rows_by_chem_id[cid] = dict(row)
+        missing = [cid for cid in chem_ids if cid not in rows_by_chem_id]
+        if missing:
+            logger.warning(
+                "hydrate_chem_ids: %d chem_id(s) not found in scope %s: %s",
+                len(missing), scope, missing[:5],
+            )
         result = []
         for cid in chem_ids:
             row = rows_by_chem_id.get(cid)
@@ -609,19 +626,33 @@ class SupabaseMsdsReadStore:
         rows = r.data or []
         return dict(rows[0]) if rows else None
 
-    def hydrate_chem_ids(self, chem_ids: list[str]) -> list[dict]:
+    def hydrate_chem_ids(
+        self,
+        chem_ids: list[str],
+        *,
+        scope: str = PUBLICATION_SCOPE_SEO_PREVIEW,
+    ) -> list[dict]:
         """Fetch + hydrate display fields for an ordered list of chem_ids.
 
         Used by the OS-backed search path (WO-WWW-PERF-004-P0S) to hydrate
         results returned by OpenSearch. Preserves input order; silently
-        drops chem_ids not found in seo_preview_current.
+        drops chem_ids not found in the scoped view; logs a warning so
+        operators can detect OS/DB membership drift (PATCH-07).
 
         3-query P0-A fast path: no display view, no CROSS JOIN LATERAL.
+        scope selects the membership view (PATCH-07):
+          SEO_PREVIEW → kosha_msds_seo_preview_current (default)
+          FULL        → kosha_msds_current
         """
         if not chem_ids:
             return []
+        view = (
+            SEO_PREVIEW_CURRENT_VIEW
+            if scope == PUBLICATION_SCOPE_SEO_PREVIEW
+            else CURRENT_VIEW
+        )
         r = (
-            self.sb.table(SEO_PREVIEW_CURRENT_VIEW)
+            self.sb.table(view)
             .select(CURRENT_VIEW_SELECT)
             .in_("chem_id", chem_ids)
             .execute()
@@ -631,6 +662,12 @@ class SupabaseMsdsReadStore:
             cid = row.get("chem_id")
             if cid:
                 rows_by_chem_id[cid] = row
+        missing = [cid for cid in chem_ids if cid not in rows_by_chem_id]
+        if missing:
+            logger.warning(
+                "hydrate_chem_ids: %d chem_id(s) not found in scope %s: %s",
+                len(missing), scope, missing[:5],
+            )
 
         chemical_ids = [
             str(rows_by_chem_id[cid]["id"])
@@ -820,16 +857,22 @@ def search_from_chem_ids(
     total: int,
     limit: int,
     offset: int,
+    scope: Optional[str] = None,
 ) -> dict:
     """Hydrate and format results from an OS-returned (chem_ids, total) pair.
 
     Used by the OpenSearch-backed search path (WO-WWW-PERF-004-P0S).
     chem_ids is the page already sliced by OS (limit/offset applied there).
     total is the OS-reported hit count (track_total_hits=true).
+    scope selects the membership view for hydration (PATCH-07); defaults
+    to PUBLICATION_SCOPE_SEO_PREVIEW when None.
     """
     lim = max(1, min(int(limit), MAX_LIMIT))
     off = max(0, int(offset))
-    rows = store.hydrate_chem_ids(chem_ids)
+    hydration_scope = (
+        PUBLICATION_SCOPE_SEO_PREVIEW if scope is None else scope
+    )
+    rows = store.hydrate_chem_ids(chem_ids, scope=hydration_scope)
     return {
         "items": [_current_row_to_contract(row, last_date=None) for row in rows],
         "total": int(total),

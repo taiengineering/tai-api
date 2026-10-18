@@ -18,9 +18,16 @@ KOSHA_MSDS_PUBLIC_MODE) so activation can be flipped without code:
 
 Router registration in router_registry/public.py is still a separate
 future WO. This file remains not-imported by the app.
+
+WO-WWW-PERF-004-P0S-OS-PATCH-001:
+  PATCH-01  no legacy fallback — OS errors → 503 with stable error codes
+  PATCH-02  check_snapshot_gate() called before every OS search
+  PATCH-05  per-item match_type / matched_term annotations on q-path
+  PATCH-07  scope passed to search_from_chem_ids → hydrate_chem_ids
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Optional
 
@@ -36,7 +43,15 @@ from services.kosha_msds.contract import (
     PUBLIC_MODE_OFF,
     PUBLIC_MODE_SEO_PREVIEW,
 )
-from services.kosha_msds.opensearch_query import os_chem_available, search_os
+from services.kosha_msds.opensearch_query import (
+    MsdsCasIndexNotReadyError,
+    MsdsOsError,
+    MsdsPaginationDepthExceededError,
+    MsdsSnapshotGateError,
+    check_snapshot_gate,
+    os_chem_available,
+    search_os,
+)
 from services.kosha_msds.read import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
@@ -50,7 +65,14 @@ from services.kosha_msds.read import (
     search,
     search_from_chem_ids,
 )
-from services.kosha_msds.search_adapter import search_by_q, search_by_q_os
+from services.kosha_msds.search_adapter import (
+    MATCH_BM25_NORI,
+    MATCH_IDENTIFIER_EXACT,
+    search_by_q,
+    search_by_q_os,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/public/kosha/msds",
@@ -147,15 +169,18 @@ def list_or_search_msds(
     """List / filter / free-text search the current KOSHA MSDS catalog.
 
     Precedence:
-      - `q` present  → search_by_q  (CHEM-09 adapter → Kiwi + dictionary
-                                     → CHEM-06 read.search)
-      - structured filter present  → CHEM-06 read.search
+      - `q` present  → search_by_q_os (CHEM-09 plan → OS BM25/Nori)
+      - structured filter present  → search_os AND filter
                                      (chem_id / cas_no / ke_no / en_no /
                                       un_no / name_ko / name_en)
       - nothing        → CHEM-06 read.list_current (chem_id ASC)
 
     `q` and structured filters are not mixed in one call. If both are
     supplied, `q` wins; structured filters are ignored for that request.
+
+    OS errors raise 503 with stable error codes — no legacy Supabase
+    fallback (PATCH-01). check_snapshot_gate() is called before every
+    OS operation (PATCH-02).
 
     Publication scope is derived from the KOSHA_MSDS_PUBLIC_MODE env var
     at request time. Preview mode never leaks non-preview chemicals.
@@ -168,18 +193,24 @@ def list_or_search_msds(
     has_filter = _has_any_search_filter(chem_id, cas_no, ke_no, en_no, un_no, name_ko, name_en)
 
     if has_q or has_filter:
-        # OS path: avoids kosha_msds_seo_preview_display timeout (57014).
-        # Falls back to legacy Supabase path when OS is unavailable so
-        # that degraded behaviour matches the prior baseline (may timeout).
         try:
+            check_snapshot_gate()  # PATCH-02: fail-closed freshness guard
+
             if has_q:
                 chem_ids, total, match_meta = search_by_q_os(
                     q=q, limit=limit, offset=offset
                 )
                 result = search_from_chem_ids(
                     store=store, chem_ids=chem_ids,
-                    total=total, limit=limit, offset=offset,
+                    total=total, limit=limit, offset=offset, scope=scope,
                 )
+                # PATCH-05: per-item match type annotation
+                ident_kind = match_meta.get("identifier_kind")
+                for item in result["items"]:
+                    item["match_type"] = (
+                        MATCH_IDENTIFIER_EXACT if ident_kind else MATCH_BM25_NORI
+                    )
+                    item["matched_term"] = match_meta.get("normalized_query")
                 result["match_metadata"] = match_meta
                 return result
             else:
@@ -191,23 +222,33 @@ def list_or_search_msds(
                 )
                 return search_from_chem_ids(
                     store=store, chem_ids=chem_ids,
-                    total=total, limit=limit, offset=offset,
+                    total=total, limit=limit, offset=offset, scope=scope,
                 )
-        except Exception:
-            # OS unavailable — fall back to legacy path
-            import logging
-            logging.getLogger(__name__).exception(
-                "MSDS OS search failed; falling back to Supabase path"
-            )
-            if has_q:
-                return search_by_q(q=q, store=store, limit=limit, offset=offset, scope=scope)
-            return search(
-                store=store,
-                chem_id=chem_id, cas_no=cas_no,
-                ke_no=ke_no, en_no=en_no, un_no=un_no,
-                name_ko=name_ko, name_en=name_en,
-                limit=limit, offset=offset, scope=scope,
-            )
+
+        except MsdsSnapshotGateError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "MSDS_SNAPSHOT_GATE_FAIL", "message": str(exc)},
+            ) from exc
+        except MsdsCasIndexNotReadyError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "MSDS_CAS_INDEX_NOT_READY", "message": str(exc)},
+            ) from exc
+        except MsdsPaginationDepthExceededError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "MSDS_PAGINATION_DEPTH_EXCEEDED", "message": str(exc)},
+            ) from exc
+        except Exception as exc:
+            logger.exception("MSDS OS search failed")
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "MSDS_SEARCH_UNAVAILABLE",
+                    "message": "MSDS OpenSearch search is currently unavailable",
+                },
+            ) from exc
 
     return list_current(store=store, limit=limit, offset=offset, scope=scope)
 

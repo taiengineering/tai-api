@@ -97,6 +97,22 @@ def client(monkeypatch):
     monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "full")
     store = _make_store_two_currents()
     monkeypatch.setattr(router_mod, "get_store", lambda: store)
+    # PATCH-02: check_snapshot_gate() is now called before every OS search;
+    # mock it out so these tests don't hit real DB/OS.
+    monkeypatch.setattr(router_mod, "check_snapshot_gate", lambda **kw: None)
+
+    def _mem_search_os(*, chem_id=None, cas_no=None, ke_no=None, en_no=None,
+                       un_no=None, name_ko=None, name_en=None, q=None,
+                       limit=20, offset=0, client=None):
+        from services.kosha_msds.contract import PUBLICATION_SCOPE_FULL
+        rows, total = store.search_current(
+            chem_id=chem_id, cas_no=cas_no, ke_no=ke_no, en_no=en_no,
+            un_no=un_no, name_ko=name_ko, name_en=name_en,
+            limit=limit, offset=offset, scope=PUBLICATION_SCOPE_FULL,
+        )
+        return [r["chem_id"] for r in rows], total
+
+    monkeypatch.setattr(router_mod, "search_os", _mem_search_os)
     app = FastAPI()
     app.include_router(router_mod.router)
     with TestClient(app) as c:
@@ -108,6 +124,20 @@ def client_empty(monkeypatch):
     monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "full")
     store = read.MemoryMsdsReadStore()  # empty current view
     monkeypatch.setattr(router_mod, "get_store", lambda: store)
+    monkeypatch.setattr(router_mod, "check_snapshot_gate", lambda **kw: None)
+
+    def _mem_search_os(*, chem_id=None, cas_no=None, ke_no=None, en_no=None,
+                       un_no=None, name_ko=None, name_en=None, q=None,
+                       limit=20, offset=0, client=None):
+        from services.kosha_msds.contract import PUBLICATION_SCOPE_FULL
+        rows, total = store.search_current(
+            chem_id=chem_id, cas_no=cas_no, ke_no=ke_no, en_no=en_no,
+            un_no=un_no, name_ko=name_ko, name_en=name_en,
+            limit=limit, offset=offset, scope=PUBLICATION_SCOPE_FULL,
+        )
+        return [r["chem_id"] for r in rows], total
+
+    monkeypatch.setattr(router_mod, "search_os", _mem_search_os)
     app = FastAPI()
     app.include_router(router_mod.router)
     with TestClient(app) as c:

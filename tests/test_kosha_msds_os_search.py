@@ -1,18 +1,24 @@
-"""WO-WWW-PERF-004-P0S-OS-IMPL-001 — MSDS OpenSearch search adapter tests.
+"""WO-WWW-PERF-004-P0S — MSDS OpenSearch search adapter tests.
+
+PATCH-08: WO-WWW-PERF-004-P0S-OS-PATCH-001 adds coverage for all
+failure-contract changes introduced by PATCH-01~07.
 
 Covers:
   S01  extract_cas_no (section_fields)
   S02  search_os (opensearch_query) via fake OS client
-  S03  os_chem_available gate
-  S04  MemoryMsdsReadStore.hydrate_chem_ids
+  S03  os_chem_available gate (count-based, backwards-compat)
+  S03b check_snapshot_gate (count-comparison, PATCH-02)
+  S04  MemoryMsdsReadStore.hydrate_chem_ids (incl. scope param, PATCH-07)
   S05  SupabaseMsdsReadStore.hydrate_chem_ids contract (structure, no live DB)
-  S06  search_from_chem_ids service function
+  S06  search_from_chem_ids service function (incl. scope param, PATCH-07)
   S07  search_by_q_os — identifier detection routing
   S08  search_by_q_os — free-text routing
   S09  router list_or_search_msds via OS path (MemoryMsdsReadStore)
-  S10  router fallback to legacy on OS exception
+  S10  router OS error → 503 (PATCH-01: no legacy fallback)
   S11  regression: extract_product_name unaffected
   S12  regression: section_fields has no shared_search dep
+  S13  search_os failure contracts (PATCH-03/04/05/06)
+  S14  router 503 error codes (PATCH-01/02/03/06)
 """
 from __future__ import annotations
 
@@ -87,7 +93,15 @@ def _fake_os_client(source_keys: list[str], total: int):
 # S02  search_os
 # ---------------------------------------------------------------------------
 
-from services.kosha_msds.opensearch_query import search_os
+from services.kosha_msds.opensearch_query import (
+    MsdsCasIndexNotReadyError,
+    MsdsPaginationDepthExceededError,
+    MsdsSnapshotGateError,
+    _clear_snapshot_cache,
+    check_snapshot_gate,
+    os_chem_available,
+    search_os,
+)
 
 
 def test_search_os_by_chem_id():
@@ -100,7 +114,9 @@ def test_search_os_by_chem_id():
     assert any(f == {"term": {"source_key": "000001"}} for f in filters)
 
 
-def test_search_os_by_cas_no():
+def test_search_os_by_cas_no(monkeypatch):
+    """CAS query works when index is declared ready (PATCH-03)."""
+    monkeypatch.setenv("KOSHA_MSDS_CAS_INDEX_READY", "true")
     client = _fake_os_client(["000042"], 1)
     ids, total = search_os(cas_no="71-43-2", limit=10, offset=0, client=client)
     assert ids == ["000042"]
@@ -110,6 +126,7 @@ def test_search_os_by_cas_no():
 
 
 def test_search_os_by_name_ko():
+    """name_ko uses Nori match on title (PATCH-05), sorted source_key ASC."""
     client = _fake_os_client(["000001", "000002"], 2)
     ids, total = search_os(name_ko="염산", limit=10, offset=0, client=client)
     assert ids == ["000001", "000002"]
@@ -117,16 +134,21 @@ def test_search_os_by_name_ko():
     body = client.search.call_args[1]["body"]
     assert "must" in body["query"]["bool"]
     must = body["query"]["bool"]["must"][0]
-    assert must["multi_match"]["query"] == "염산"
+    assert "match" in must
+    assert must["match"]["title"]["query"] == "염산"
+    # name_ko structural filter → deterministic order, not score-ranked
+    assert body["sort"] == [{"source_key": "asc"}]
 
 
 def test_search_os_by_q():
+    """q uses BM25 multi_match sorted by score DESC (PATCH-05)."""
     client = _fake_os_client(["000007"], 1)
     ids, total = search_os(q="벤젠", limit=5, offset=0, client=client)
     assert ids == ["000007"]
     body = client.search.call_args[1]["body"]
     must = body["query"]["bool"]["must"][0]
     assert must["multi_match"]["query"] == "벤젠"
+    assert body["sort"][0] == {"_score": "desc"}
 
 
 def test_search_os_pagination_params_forwarded():
@@ -165,10 +187,61 @@ def test_search_os_ke_no():
 
 
 # ---------------------------------------------------------------------------
-# S03  os_chem_available gate
+# S13  search_os failure contracts (PATCH-03/04/05/06)
 # ---------------------------------------------------------------------------
 
-from services.kosha_msds.opensearch_query import os_chem_available
+
+def test_search_os_cas_not_ready_raises():
+    """Default env (no CAS_INDEX_READY) → MsdsCasIndexNotReadyError (PATCH-03)."""
+    with pytest.raises(MsdsCasIndexNotReadyError):
+        search_os(cas_no="71-43-2", limit=10, offset=0, client=MagicMock())
+
+
+def test_search_os_cas_not_ready_env_false(monkeypatch):
+    """Explicit false value → still raises (PATCH-03)."""
+    monkeypatch.setenv("KOSHA_MSDS_CAS_INDEX_READY", "false")
+    with pytest.raises(MsdsCasIndexNotReadyError):
+        search_os(cas_no="71-43-2", limit=10, offset=0, client=MagicMock())
+
+
+def test_search_os_pagination_depth_exceeded():
+    """offset + limit > 9900 → MsdsPaginationDepthExceededError (PATCH-06)."""
+    client = _fake_os_client([], 0)
+    with pytest.raises(MsdsPaginationDepthExceededError):
+        search_os(name_ko="x", limit=100, offset=9_900, client=client)
+
+
+def test_search_os_pagination_at_limit_ok():
+    """offset + limit == 9900 → allowed (boundary ok)."""
+    client = _fake_os_client([], 0)
+    ids, total = search_os(name_ko="x", limit=100, offset=9_800, client=client)
+    assert total == 0
+
+
+def test_search_os_and_filter_multiple_params(monkeypatch):
+    """ke_no + name_ko → both appear as AND clauses (PATCH-04)."""
+    client = _fake_os_client(["000099"], 1)
+    ids, _ = search_os(ke_no="KE-12345", name_ko="염산", limit=10, offset=0, client=client)
+    body = client.search.call_args[1]["body"]
+    filters = body["query"]["bool"]["filter"]
+    assert any(f == {"term": {"aliases.raw": "KE-12345"}} for f in filters)
+    must_clauses = body["query"]["bool"]["must"]
+    assert any("match" in clause for clause in must_clauses)
+
+
+def test_search_os_chem_id_and_name_ko(monkeypatch):
+    """chem_id filter + name_ko must clause → coexist (PATCH-04)."""
+    client = _fake_os_client(["000001"], 1)
+    ids, _ = search_os(chem_id="000001", name_ko="염산", limit=10, offset=0, client=client)
+    body = client.search.call_args[1]["body"]
+    filters = body["query"]["bool"]["filter"]
+    assert any(f == {"term": {"source_key": "000001"}} for f in filters)
+    assert "must" in body["query"]["bool"]
+
+
+# ---------------------------------------------------------------------------
+# S03  os_chem_available gate (count-based, backwards-compat)
+# ---------------------------------------------------------------------------
 
 
 def test_os_chem_available_pass():
@@ -190,10 +263,85 @@ def test_os_chem_available_exception_returns_false():
 
 
 # ---------------------------------------------------------------------------
+# S03b  check_snapshot_gate (PATCH-02)
+# ---------------------------------------------------------------------------
+
+
+def _make_sb_count(n: int):
+    """Return a mock Supabase client that reports count=n for any query."""
+    sb = MagicMock()
+    r = MagicMock()
+    r.count = n
+    sb.table.return_value.select.return_value.limit.return_value.execute.return_value = r
+    return sb
+
+
+def test_check_snapshot_gate_pass():
+    _clear_snapshot_cache()
+    os_client = MagicMock()
+    os_client.count.return_value = {"count": 20_568}
+    sb = _make_sb_count(20_568)
+    check_snapshot_gate(client=os_client, sb=sb)  # should not raise
+
+
+def test_check_snapshot_gate_divergence_raises():
+    _clear_snapshot_cache()
+    os_client = MagicMock()
+    os_client.count.return_value = {"count": 100}   # far below DB count
+    sb = _make_sb_count(20_568)
+    with pytest.raises(MsdsSnapshotGateError):
+        check_snapshot_gate(client=os_client, sb=sb)
+
+
+def test_check_snapshot_gate_db_failure_raises():
+    _clear_snapshot_cache()
+    os_client = MagicMock()
+    os_client.count.return_value = {"count": 20_568}
+    sb = MagicMock()
+    sb.table.side_effect = Exception("DB unreachable")
+    with pytest.raises(MsdsSnapshotGateError):
+        check_snapshot_gate(client=os_client, sb=sb)
+
+
+def test_check_snapshot_gate_os_failure_raises():
+    _clear_snapshot_cache()
+    os_client = MagicMock()
+    os_client.count.side_effect = Exception("OS unreachable")
+    sb = _make_sb_count(20_568)
+    with pytest.raises(MsdsSnapshotGateError):
+        check_snapshot_gate(client=os_client, sb=sb)
+
+
+def test_check_snapshot_gate_cached_pass():
+    """Second call within TTL uses cache without re-querying."""
+    _clear_snapshot_cache()
+    os_client = MagicMock()
+    os_client.count.return_value = {"count": 20_568}
+    sb = _make_sb_count(20_568)
+    check_snapshot_gate(client=os_client, sb=sb)
+    check_snapshot_gate(client=os_client, sb=sb)
+    assert os_client.count.call_count == 1  # cached — only 1 real call
+
+
+def test_check_snapshot_gate_cached_fail():
+    """Cached failure re-raises without re-querying."""
+    _clear_snapshot_cache()
+    os_client = MagicMock()
+    os_client.count.side_effect = Exception("OS down")
+    sb = _make_sb_count(20_568)
+    with pytest.raises(MsdsSnapshotGateError):
+        check_snapshot_gate(client=os_client, sb=sb)
+    with pytest.raises(MsdsSnapshotGateError):
+        check_snapshot_gate(client=os_client, sb=sb)
+    assert os_client.count.call_count == 1  # cached — only 1 real call
+
+
+# ---------------------------------------------------------------------------
 # S04  MemoryMsdsReadStore.hydrate_chem_ids
 # ---------------------------------------------------------------------------
 
 from services.kosha_msds.read import MemoryMsdsReadStore
+from services.kosha_msds.contract import PUBLICATION_SCOPE_FULL, PUBLICATION_SCOPE_SEO_PREVIEW
 
 
 def _make_store():
@@ -301,6 +449,30 @@ def test_hydrate_chem_ids_last_date_attached():
     assert rows[0]["last_date"] == "2025-01-01"
 
 
+def test_hydrate_chem_ids_seo_preview_scope():
+    """Explicit SEO_PREVIEW scope → uses preview rows (PATCH-07)."""
+    store = _make_store()
+    rows = store.hydrate_chem_ids(["000001"], scope=PUBLICATION_SCOPE_SEO_PREVIEW)
+    assert len(rows) == 1
+    assert rows[0]["chem_id"] == "000001"
+
+
+def test_hydrate_chem_ids_full_scope_empty_when_no_full_rows():
+    """FULL scope with no full rows → empty result (PATCH-07)."""
+    store = _make_store()  # no current_rows seeded
+    rows = store.hydrate_chem_ids(["000001"], scope=PUBLICATION_SCOPE_FULL)
+    assert rows == []
+
+
+def test_hydrate_chem_ids_missing_warns(caplog):
+    """Missing chem_id logs a warning (PATCH-07)."""
+    import logging
+    store = _make_store()
+    with caplog.at_level(logging.WARNING, logger="services.kosha_msds.read"):
+        store.hydrate_chem_ids(["999999"])
+    assert any("999999" in r.message for r in caplog.records)
+
+
 # ---------------------------------------------------------------------------
 # S06  search_from_chem_ids
 # ---------------------------------------------------------------------------
@@ -333,6 +505,28 @@ def test_search_from_chem_ids_empty_chem_ids():
     assert result["total"] == 0
 
 
+def test_search_from_chem_ids_with_scope():
+    """scope kwarg passed through to hydrate_chem_ids (PATCH-07)."""
+    store = _make_store()
+    result = search_from_chem_ids(
+        store=store, chem_ids=["000001"], total=1, limit=10, offset=0,
+        scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+    )
+    assert len(result["items"]) == 1
+    assert result["items"][0]["chem_id"] == "000001"
+
+
+def test_search_from_chem_ids_full_scope_empty():
+    """FULL scope with no full rows → empty items (PATCH-07)."""
+    store = _make_store()
+    result = search_from_chem_ids(
+        store=store, chem_ids=["000001"], total=1, limit=10, offset=0,
+        scope=PUBLICATION_SCOPE_FULL,
+    )
+    assert result["items"] == []
+    assert result["total"] == 1  # total from OS, not hydration count
+
+
 # ---------------------------------------------------------------------------
 # S07  search_by_q_os — identifier detection
 # ---------------------------------------------------------------------------
@@ -351,7 +545,8 @@ def test_search_by_q_os_chem_id_exact():
     assert any(f == {"term": {"source_key": "000001"}} for f in filters)
 
 
-def test_search_by_q_os_cas_exact():
+def test_search_by_q_os_cas_exact(monkeypatch):
+    monkeypatch.setenv("KOSHA_MSDS_CAS_INDEX_READY", "true")
     client = _fake_os_client(["000042"], 1)
     ids, total, meta = search_by_q_os(q="71-43-2", limit=10, offset=0, client=client)
     assert meta["identifier_kind"] == "cas_no"
@@ -408,10 +603,6 @@ def _make_app(store, os_client):
     return app
 
 
-def _env_seo_preview(monkeypatch):
-    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
-
-
 @pytest.fixture
 def seo_store():
     return _make_store()
@@ -422,8 +613,9 @@ def test_router_os_name_ko_search(monkeypatch, seo_store):
     fake_client = _fake_os_client(["000001"], 1)
 
     app = _make_app(seo_store, fake_client)
-    with patch("routers.kosha_public_msds.search_os",
-               return_value=(["000001"], 1)) as mock_search:
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_os",
+               return_value=(["000001"], 1)):
         client = TestClient(app)
         resp = client.get("/public/kosha/msds?name_ko=염산")
     assert resp.status_code == 200
@@ -437,11 +629,16 @@ def test_router_os_q_search(monkeypatch, seo_store):
     monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
 
     app = _make_app(seo_store, None)
-    with patch("routers.kosha_public_msds.search_by_q_os",
-               return_value=(["000002"], 1, {"identifier_kind": None,
-                                              "normalized_query": "벤젠",
-                                              "compact_query": "벤젠",
-                                              "tokens": [], "expanded_terms": []})):
+    match_meta = {
+        "identifier_kind": None,
+        "normalized_query": "벤젠",
+        "compact_query": "벤젠",
+        "tokens": [],
+        "expanded_terms": [],
+    }
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_by_q_os",
+               return_value=(["000002"], 1, match_meta)):
         client = TestClient(app)
         resp = client.get("/public/kosha/msds?q=벤젠")
     assert resp.status_code == 200
@@ -451,23 +648,116 @@ def test_router_os_q_search(monkeypatch, seo_store):
     assert "match_metadata" in data
 
 
+def test_router_os_q_search_match_type_annotation(monkeypatch, seo_store):
+    """q-path items carry match_type and matched_term annotations (PATCH-05)."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+
+    app = _make_app(seo_store, None)
+    match_meta = {
+        "identifier_kind": None,
+        "normalized_query": "벤젠",
+        "compact_query": "벤젠",
+        "tokens": [],
+        "expanded_terms": [],
+    }
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_by_q_os",
+               return_value=(["000002"], 1, match_meta)):
+        client = TestClient(app)
+        resp = client.get("/public/kosha/msds?q=벤젠")
+    data = resp.json()
+    item = data["items"][0]
+    assert item["match_type"] == "BM25_NORI"
+    assert item["matched_term"] == "벤젠"
+
+
+def test_router_os_identifier_q_match_type(monkeypatch, seo_store):
+    """Identifier q-path items carry IDENTIFIER_EXACT match_type (PATCH-05)."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+
+    app = _make_app(seo_store, None)
+    match_meta = {
+        "identifier_kind": "chem_id",
+        "normalized_query": "000001",
+        "compact_query": "000001",
+        "tokens": [],
+        "expanded_terms": [],
+    }
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_by_q_os",
+               return_value=(["000001"], 1, match_meta)):
+        client = TestClient(app)
+        resp = client.get("/public/kosha/msds?q=000001")
+    data = resp.json()
+    item = data["items"][0]
+    assert item["match_type"] == "IDENTIFIER_EXACT"
+
+
 # ---------------------------------------------------------------------------
-# S10  router: OS exception → fallback to legacy search
+# S10  router: OS errors → 503 (PATCH-01: no legacy fallback)
 # ---------------------------------------------------------------------------
 
 
-def test_router_os_exception_falls_back_to_legacy(monkeypatch, seo_store):
+def test_router_os_exception_returns_503_not_fallback(monkeypatch, seo_store):
+    """Generic OS exception → 503 MSDS_SEARCH_UNAVAILABLE, no legacy search (PATCH-01)."""
     monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
     app = _make_app(seo_store, None)
 
-    with patch("routers.kosha_public_msds.search_os",
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_os",
                side_effect=Exception("OS down")), \
-         patch("routers.kosha_public_msds.search",
-               return_value={"items": [], "total": 0, "limit": 10, "offset": 0}) as mock_legacy:
+         patch("routers.kosha_public_msds.search") as mock_legacy:
         client = TestClient(app)
         resp = client.get("/public/kosha/msds?name_ko=염산")
-    assert resp.status_code == 200
-    mock_legacy.assert_called_once()
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "MSDS_SEARCH_UNAVAILABLE"
+    mock_legacy.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# S14  router: specific 503 error codes (PATCH-01/02/03/06)
+# ---------------------------------------------------------------------------
+
+
+def test_router_snapshot_gate_fail_503(monkeypatch, seo_store):
+    """Snapshot gate failure → 503 MSDS_SNAPSHOT_GATE_FAIL (PATCH-02)."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    app = _make_app(seo_store, None)
+
+    with patch("routers.kosha_public_msds.check_snapshot_gate",
+               side_effect=MsdsSnapshotGateError("stale")):
+        client = TestClient(app)
+        resp = client.get("/public/kosha/msds?name_ko=염산")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "MSDS_SNAPSHOT_GATE_FAIL"
+
+
+def test_router_cas_not_ready_503(monkeypatch, seo_store):
+    """CAS index not ready → 503 MSDS_CAS_INDEX_NOT_READY (PATCH-03)."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    app = _make_app(seo_store, None)
+
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_os",
+               side_effect=MsdsCasIndexNotReadyError("not ready")):
+        client = TestClient(app)
+        resp = client.get("/public/kosha/msds?cas_no=71-43-2")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "MSDS_CAS_INDEX_NOT_READY"
+
+
+def test_router_pagination_depth_503(monkeypatch, seo_store):
+    """Pagination too deep → 503 MSDS_PAGINATION_DEPTH_EXCEEDED (PATCH-06)."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    app = _make_app(seo_store, None)
+
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_os",
+               side_effect=MsdsPaginationDepthExceededError("too deep")):
+        client = TestClient(app)
+        resp = client.get("/public/kosha/msds?name_ko=x&limit=100&offset=9900")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "MSDS_PAGINATION_DEPTH_EXCEEDED"
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +775,7 @@ def test_extract_product_name_regression():
 
 
 # ---------------------------------------------------------------------------
-# S12  regression: section_fields no shared_search dep
+# S12  regression: section_fields has no shared_search dep
 # ---------------------------------------------------------------------------
 
 

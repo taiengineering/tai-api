@@ -277,6 +277,36 @@ def client(monkeypatch):
     monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "full")
     store = _store()
     monkeypatch.setattr(router_mod, "get_store", lambda: store)
+    # PATCH-02: check_snapshot_gate() is now called before every OS search.
+    monkeypatch.setattr(router_mod, "check_snapshot_gate", lambda **kw: None)
+
+    def _mock_search_by_q_os(*, q, limit=20, offset=0,
+                              dictionary_lookup=None, client=None):
+        from services.kosha_msds.search_adapter import build_search_plan
+        from services.kosha_msds.contract import PUBLICATION_SCOPE_FULL
+        plan = build_search_plan(q, dictionary_lookup=dictionary_lookup)
+        meta = {
+            "identifier_kind": plan.identifier_kind,
+            "normalized_query": plan.normalized_query,
+            "compact_query": plan.compact_query,
+            "tokens": list(plan.tokens),
+            "expanded_terms": list(plan.expanded_terms),
+        }
+        if plan.is_empty:
+            return [], 0, meta
+        if plan.identifier_kind is not None:
+            rows, total = store.search_current(
+                limit=limit, offset=offset, scope=PUBLICATION_SCOPE_FULL,
+                **{plan.identifier_kind: plan.identifier_value},
+            )
+        else:
+            rows, total = store.search_current(
+                name_ko=plan.normalized_query, limit=limit, offset=offset,
+                scope=PUBLICATION_SCOPE_FULL,
+            )
+        return [r["chem_id"] for r in rows], total, meta
+
+    monkeypatch.setattr(router_mod, "search_by_q_os", _mock_search_by_q_os)
     app = FastAPI()
     app.include_router(router_mod.router)
     with TestClient(app) as c:
