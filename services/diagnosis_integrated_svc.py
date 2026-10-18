@@ -382,6 +382,14 @@ def _build_unified_step1_body(
     # no 1.0 synthetic. Non-construction does not receive this bridge.
     if engine_sector == "CONSTRUCTION" and contract_amount_eok is not None:
         runtime_facts["contract_amount_eok"] = contract_amount_eok
+    # ART68 건수 필드 정수 경계 검증: form_data 경유 우회 입력 차단.
+    # SaaS는 SafeConstructionConsumerInput(StrictInt≥0) Pydantic 검증.
+    # 유료진단은 form_data(Dict[str,Any])로 수신 → 서버 경계에서 해당 필드 한정 검증.
+    if engine_sector == "CONSTRUCTION" and isinstance(_fd_alias_src, dict):
+        _count_val = _fd_alias_src.get("same_site_contracted_construction_work_count")
+        if _count_val is not None:
+            if not (isinstance(_count_val, int) and not isinstance(_count_val, bool) and _count_val >= 0):
+                raise HTTPException(status_code=422, detail="same_site_contracted_construction_work_count must be a non-negative integer")
     # WO-CST-SYNTHETIC-CONSTRUCTION-TYPE-HOTFIX-001: CST construction_type synthetic default 제거.
     #   소비자가 construction_type 을 입력하지 않으면 ABSENT 로 둔다(Unified "미입력=ABSENT" 계약).
     #   이전엔 "건축" 을 생성해 Unified/Facility 로 전달 → LEG 가 construction_type 을 ENUM 미등록으로
