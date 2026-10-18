@@ -60,22 +60,24 @@ def _get(url: str, params: dict, secret: str, timeout: float) -> Any:
             headers={"X-Internal-Secret": secret},
             timeout=timeout,
         )
-    except httpx.TimeoutException as exc:
-        # Do not include exc details — may contain internal URL or host info.
-        raise ChemicalSourceLoadError("CHEM request timeout") from exc
-    except httpx.RequestError as exc:
-        # Do not include exc details — may contain internal URL or host info.
-        raise ChemicalSourceLoadError("CHEM network error") from exc
+    except httpx.TimeoutException:
+        # `raise ... from None` suppresses the exception chain in tracebacks —
+        # original exc may contain internal URL or host info.
+        raise ChemicalSourceLoadError("CHEM request timeout") from None
+    except httpx.RequestError:
+        # Same: suppress chain to prevent internal URL/host from appearing in tracebacks.
+        raise ChemicalSourceLoadError("CHEM network error") from None
 
     if resp.status_code != 200:
-        # Do not include resp.text — CHEM error body may contain confidential content.
+        # resp.text omitted — CHEM error body may contain confidential content.
         raise ChemicalSourceLoadError(f"CHEM HTTP {resp.status_code}")
 
     try:
         return resp.json()
-    except Exception as exc:
-        # Do not include exc details — may contain partial response body with confidential content.
-        raise ChemicalSourceLoadError("CHEM invalid JSON response") from exc
+    except Exception:
+        # `raise ... from None` suppresses the chain — original exc may contain
+        # partial response body with confidential content.
+        raise ChemicalSourceLoadError("CHEM invalid JSON response") from None
 
 
 def _check_factory_id(data: Any, expected: str) -> None:
@@ -83,9 +85,8 @@ def _check_factory_id(data: Any, expected: str) -> None:
         raise ChemicalSourceLoadError("response is not a JSON object")
     returned = data.get("factory_id")
     if returned != expected:
-        raise ChemicalSourceLoadError(
-            f"factory_id mismatch: expected {expected!r}, got {returned!r}"
-        )
+        # Do not embed the CHEM-returned value — it is untrusted response data.
+        raise ChemicalSourceLoadError("factory_id mismatch")
 
 
 def load_chemical_facts(

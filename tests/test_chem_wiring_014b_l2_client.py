@@ -825,3 +825,93 @@ class TestP14B06LoadChemicalFactsRegression:
         with patch("clients.chem_internal_client.httpx.get", return_value=resp):
             with pytest.raises(ChemicalSourceLoadError, match="403"):
                 load_chemical_facts(_FAC, _CO)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P14B-07 — traceback에 기밀 원문 미노출 (PATCH-02)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestP14B07TracebackRedacted:
+
+    def test_p14b_07_json_exc_secret_not_in_traceback(self, monkeypatch):
+        import traceback as tb
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_active_components, ChemicalSourceLoadError
+        secret_in_body = "CLASSIFIED_JSON_CONTENT_XYZ"
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.side_effect = Exception(f"decode at pos 0: {secret_in_body}")
+        resp.text = secret_in_body
+        with patch("clients.chem_internal_client.httpx.get", return_value=resp):
+            try:
+                load_active_components(_FAC, _CO)
+            except ChemicalSourceLoadError as exc:
+                full_tb = "".join(tb.format_exception(type(exc), exc, exc.__traceback__))
+                assert secret_in_body not in full_tb, f"secret found in traceback: {full_tb[:300]}"
+
+    def test_p14b_07_network_exc_url_not_in_traceback(self, monkeypatch):
+        import traceback as tb
+        import httpx
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_active_components, ChemicalSourceLoadError
+        internal_host = "http://chem-internal-secret-host"
+        with patch("clients.chem_internal_client.httpx.get",
+                   side_effect=httpx.ConnectError(f"Connection refused: {internal_host}")):
+            try:
+                load_active_components(_FAC, _CO)
+            except ChemicalSourceLoadError as exc:
+                full_tb = "".join(tb.format_exception(type(exc), exc, exc.__traceback__))
+                assert internal_host not in full_tb, f"URL found in traceback: {full_tb[:300]}"
+
+    def test_p14b_07_timeout_exc_url_not_in_traceback(self, monkeypatch):
+        import traceback as tb
+        import httpx
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_consumption_lines, ChemicalSourceLoadError
+        internal_url = "http://chem-internal/factories/fac/consumption-lines?secret=leak"
+        with patch("clients.chem_internal_client.httpx.get",
+                   side_effect=httpx.TimeoutException(f"timed out: {internal_url}")):
+            try:
+                load_consumption_lines(_FAC, _CO, _FROM, _UNTIL)
+            except ChemicalSourceLoadError as exc:
+                full_tb = "".join(tb.format_exception(type(exc), exc, exc.__traceback__))
+                assert internal_url not in full_tb
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P14B-08 — factory_id 불일치 오류에 응답값 미포함 (PATCH-02)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestP14B08FactoryMismatchRedacted:
+
+    def test_p14b_08_mismatch_message_does_not_include_returned_value(self, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_active_components, ChemicalSourceLoadError
+        untrusted_returned_factory = "ATTACKER_CONTROLLED_FACTORY_ID"
+        resp = _make_resp(200, {"factory_id": untrusted_returned_factory, "components": []})
+        with patch("clients.chem_internal_client.httpx.get", return_value=resp):
+            with pytest.raises(ChemicalSourceLoadError) as exc_info:
+                load_active_components(_FAC, _CO)
+        assert untrusted_returned_factory not in str(exc_info.value)
+
+    def test_p14b_08_mismatch_message_does_not_include_expected_value(self, monkeypatch):
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_active_components, ChemicalSourceLoadError
+        resp = _make_resp(200, {"factory_id": "WRONG", "components": []})
+        with patch("clients.chem_internal_client.httpx.get", return_value=resp):
+            with pytest.raises(ChemicalSourceLoadError) as exc_info:
+                load_active_components(_FAC, _CO)
+        assert _FAC not in str(exc_info.value)
+
+    def test_p14b_08_mismatch_in_traceback_also_clean(self, monkeypatch):
+        import traceback as tb
+        _chem_env(monkeypatch)
+        from clients.chem_internal_client import load_issue_lines, ChemicalSourceLoadError
+        sensitive_id = "SENSITIVE_RETURNED_FACTORY_ID"
+        resp = _make_resp(200, {"factory_id": sensitive_id, "lines": []})
+        with patch("clients.chem_internal_client.httpx.get", return_value=resp):
+            try:
+                load_issue_lines(_FAC, _CO, _FROM, _UNTIL)
+            except ChemicalSourceLoadError as exc:
+                full_tb = "".join(tb.format_exception(type(exc), exc, exc.__traceback__))
+                assert sensitive_id not in full_tb
