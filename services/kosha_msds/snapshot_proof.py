@@ -110,7 +110,7 @@ def _scan_os_chem_ids(client) -> dict[str, str]:
 
     Uses search_after pagination — no 10k cap.
     Filter: object_type=CHEM, publication_status=PUBLISHED, visibility_scopes=PUBLIC.
-    Returns empty dict on failure (graceful).
+    Raises SnapshotProofScanError on any scan failure (fail-closed).
     """
     result: dict[str, str] = {}
     search_after = None
@@ -146,8 +146,9 @@ def _scan_os_chem_ids(client) -> dict[str, str]:
             if len(hits) < _OS_PAGE_SIZE:
                 break
     except Exception as exc:
-        logger.warning("snapshot_proof: OS scan failed: %s", exc)
-        return {}
+        raise SnapshotProofScanError(
+            f"snapshot_proof: OS scan failed: {exc}"
+        ) from exc
     return result
 
 
@@ -162,7 +163,7 @@ def _scan_db_chem_ids(sb, scope: str) -> dict[str, str]:
     SEO_PREVIEW -> kosha_msds_seo_preview_current
     FULL        -> kosha_msds_current
     Paginates with page_size=1000 on chem_id order.
-    Returns empty dict on failure (graceful).
+    Raises SnapshotProofScanError on any scan failure (fail-closed).
     """
     view = (
         SEO_PREVIEW_CURRENT_VIEW
@@ -189,8 +190,9 @@ def _scan_db_chem_ids(sb, scope: str) -> dict[str, str]:
                 break
             last_chem_id = str(rows[-1].get("chem_id") or "")
     except Exception as exc:
-        logger.warning("snapshot_proof: DB scan failed (scope=%s): %s", scope, exc)
-        return {}
+        raise SnapshotProofScanError(
+            f"snapshot_proof: DB scan failed (scope={scope}): {exc}"
+        ) from exc
     return result
 
 
@@ -265,25 +267,29 @@ def _get_rebuild_run_id(client, physical_index: str) -> str:
 
 
 def _get_outbox_watermark(sb) -> int:
-    """Get MAX event_id from search_index_outbox where status='COMPLETED'.
+    """Get MAX id from search_index_outbox where domain_name='CHEM' and status='COMPLETED'.
 
-    Returns 0 on error.
+    Raises SnapshotProofScanError on query failure (fail-closed).
+    Returns 0 when no COMPLETED CHEM events exist yet (valid empty state).
     """
     try:
         r = (
             sb.table("search_index_outbox")
-            .select("event_id")
+            .select("id")
             .eq("status", "COMPLETED")
-            .order("event_id", desc=True)
+            .eq("domain_name", "CHEM")
+            .order("id", desc=True)
             .limit(1)
             .execute()
         )
         rows = r.data or []
         if rows:
-            return int(rows[0].get("event_id") or 0)
+            return int(rows[0].get("id") or 0)
+        return 0
     except Exception as exc:
-        logger.warning("snapshot_proof: outbox watermark lookup failed: %s", exc)
-    return 0
+        raise SnapshotProofScanError(
+            f"snapshot_proof: outbox watermark lookup failed: {exc}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -361,22 +367,40 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
 
     # --- Pre-scan state ---
     snapshot_id_pre, snapshot_completed_at = _get_current_snapshot(sb, scope)
-    outbox_wm_pre = _get_outbox_watermark(sb)
+    outbox_wm_pre = _get_outbox_watermark(sb)  # raises SnapshotProofScanError on failure
     physical_index = _get_physical_index(client)
     rebuild_run_id = _get_rebuild_run_id(client, physical_index)
 
-    # --- Scans ---
-    db_map = _scan_db_chem_ids(sb, scope)
-    os_map = _scan_os_chem_ids(client)
+    # --- Scans (fail → FAIL proof, not exception) ---
+    scan_error: Optional[str] = None
+    db_map: dict[str, str] = {}
+    os_map: dict[str, str] = {}
 
-    # --- Post-scan state check ---
-    snapshot_id_post, _ = _get_current_snapshot(sb, scope)
-    outbox_wm_post = _get_outbox_watermark(sb)
+    try:
+        db_map = _scan_db_chem_ids(sb, scope)
+    except SnapshotProofScanError as exc:
+        scan_error = str(exc)
 
-    state_changed = (
-        snapshot_id_pre != snapshot_id_post
-        or outbox_wm_pre != outbox_wm_post
-    )
+    if scan_error is None:
+        try:
+            os_map = _scan_os_chem_ids(client)
+        except SnapshotProofScanError as exc:
+            scan_error = str(exc)
+
+    # --- Post-scan state check (skip if scans failed) ---
+    state_changed = False
+    snapshot_id_post: str = snapshot_id_pre
+    outbox_wm_post: int = outbox_wm_pre
+    if scan_error is None:
+        try:
+            snapshot_id_post, _ = _get_current_snapshot(sb, scope)
+            outbox_wm_post = _get_outbox_watermark(sb)
+        except SnapshotProofScanError:
+            pass  # can't verify state consistency; leave state_changed=False (scan_error takes precedence)
+        state_changed = (
+            snapshot_id_pre != snapshot_id_post
+            or outbox_wm_pre != outbox_wm_post
+        )
 
     # --- Compute SHA256 ---
     db_pairs: list[tuple[str, str]] = list(db_map.items())
@@ -396,7 +420,10 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
 
     # --- Determine status ---
     error_message: Optional[str] = None
-    if state_changed:
+    if scan_error is not None:
+        error_message = scan_error
+        verification_status = "FAIL"
+    elif state_changed:
         error_message = (
             f"State changed during scan: "
             f"snapshot_id {snapshot_id_pre!r} → {snapshot_id_post!r}, "

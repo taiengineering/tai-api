@@ -279,9 +279,9 @@ def _search_os_deep_page(
     (e.g., OS version does not support PIT).
     """
     try:
-        pit_resp = client.create_point_in_time(
-            index=CURRENT_ALIAS,
-            params={"keep_alive": _PIT_KEEP_ALIVE}
+        pit_resp = client.create_pit(
+            CURRENT_ALIAS,
+            params={"keep_alive": _PIT_KEEP_ALIVE},
         )
         pit_id = pit_resp.get("pit_id") or ""
     except Exception as exc:
@@ -331,7 +331,7 @@ def _search_os_deep_page(
         return collected[offset: offset + limit], total
     finally:
         try:
-            client.delete_point_in_time(body={"pit_id": pit_id})
+            client.delete_pit(body={"pit_id": pit_id})
         except Exception:
             pass
 
@@ -484,7 +484,28 @@ def search_os(
 # ---------------------------------------------------------------------------
 
 
-_MAX_CANDIDATE_LIMIT = 100  # per sub-query candidate collection limit (PATCH-003E)
+_CANDIDATE_PAGE_SIZE = 1_000  # per-term page size for full candidate enumeration
+
+
+def _collect_all_os(*, client, **kwargs) -> list[str]:
+    """Collect ALL matching chem_ids for a term, paginating until exhausted.
+
+    Uses _CANDIDATE_PAGE_SIZE per page. For results > _DEEP_PAGINATION_LIMIT,
+    search_os automatically routes to PIT internally.
+    """
+    all_ids: list[str] = []
+    page_off = 0
+    while True:
+        ids, total = search_os(
+            limit=_CANDIDATE_PAGE_SIZE, offset=page_off, client=client, **kwargs
+        )
+        all_ids.extend(ids)
+        if len(ids) < _CANDIDATE_PAGE_SIZE:
+            break
+        page_off += _CANDIDATE_PAGE_SIZE
+        if isinstance(total, int) and page_off >= total:
+            break
+    return all_ids
 
 
 def search_by_q_os(
@@ -498,23 +519,20 @@ def search_by_q_os(
     """OS-backed free-text search for MSDS.
 
     Returns (chem_ids_page, total, match_metadata). Uses identifier
-    detection for exact queries; for free text uses CHEM-09 priority
-    structure: BM25 → name_ko → name_en → expanded_terms → tokens,
-    with dedup preserving first-seen order (PATCH-003E).
+    detection for exact queries; for free text follows CHEM-09 priority:
+      NORMALIZED_EXACT → DICTIONARY_EXPANSION → KIWI_TOKEN
+    Each term is searched against name_ko AND name_en, with full
+    pagination per (term, field) pair (PATCH-004).
 
     P0: Identifier exact → single direct OS call (IDENTIFIER_EXACT).
     P1: Free-text priority collection:
-      1. BM25 multi_match (most relevant)
-      2. name_ko wildcard (title.raw)
-      3. name_en Nori match (summary)
-      4. Each expanded_term: name_ko + name_en
-      5. Each token: name_ko + name_en
+      1. normalized_query: name_ko + name_en (NORMALIZED_EXACT)
+      2. Each expanded_term: name_ko + name_en (DICTIONARY_EXPANSION)
+      3. Each token: name_ko + name_en (KIWI_TOKEN)
     Dedup by chem_id preserving first-seen order. Total = len(deduped).
     Page = deduped[off:off+lim].
 
-    Moved from services.kosha_msds.search_adapter (PATCH-02C) so that
-    search_adapter.py has no OpenSearch import and passes the
-    no_new_search_engine_dependency test contract.
+    Moved from services.kosha_msds.search_adapter (PATCH-02C).
     """
     from services.kosha_msds.search_adapter import (
         MATCH_BM25_NORI,
@@ -544,8 +562,8 @@ def search_by_q_os(
         match_meta["match_type"] = MATCH_IDENTIFIER_EXACT
         return chem_ids, total, match_meta
 
-    # P1: Free-text — collect candidates with dedup, then page
-    match_meta["match_type"] = MATCH_BM25_NORI
+    # P1: Free-text — CHEM-09 priority: NORMALIZED → DICTIONARY → KIWI_TOKEN
+    match_meta["match_type"] = MATCH_BM25_NORI  # best-effort label for free-text path
 
     seen: set[str] = set()
     all_deduped: list[str] = []
@@ -556,66 +574,18 @@ def search_by_q_os(
                 seen.add(cid)
                 all_deduped.append(cid)
 
-    # 1. BM25 free-text (most relevant)
-    bm25_ids, _ = search_os(
-        q=plan.normalized_query,
-        limit=_MAX_CANDIDATE_LIMIT,
-        offset=0,
-        client=client,
-    )
-    _collect(bm25_ids)
+    def _run_term(term: str) -> None:
+        if not term:
+            return
+        _collect(_collect_all_os(name_ko=term, client=client))
+        _collect(_collect_all_os(name_en=term, client=client))
 
-    # 2. name_ko exact match
-    ko_ids, _ = search_os(
-        name_ko=plan.normalized_query,
-        limit=_MAX_CANDIDATE_LIMIT,
-        offset=0,
-        client=client,
-    )
-    _collect(ko_ids)
-
-    # 3. name_en exact match
-    en_ids, _ = search_os(
-        name_en=plan.normalized_query,
-        limit=_MAX_CANDIDATE_LIMIT,
-        offset=0,
-        client=client,
-    )
-    _collect(en_ids)
-
-    # 4. expanded_terms
+    # Priority: normalized → dictionary expansions → kiwi tokens
+    _run_term(plan.normalized_query)
     for term in plan.expanded_terms:
-        t_ko, _ = search_os(
-            name_ko=term,
-            limit=_MAX_CANDIDATE_LIMIT,
-            offset=0,
-            client=client,
-        )
-        _collect(t_ko)
-        t_en, _ = search_os(
-            name_en=term,
-            limit=_MAX_CANDIDATE_LIMIT,
-            offset=0,
-            client=client,
-        )
-        _collect(t_en)
-
-    # 5. tokens
+        _run_term(term)
     for token in plan.tokens:
-        tok_ko, _ = search_os(
-            name_ko=token,
-            limit=_MAX_CANDIDATE_LIMIT,
-            offset=0,
-            client=client,
-        )
-        _collect(tok_ko)
-        tok_en, _ = search_os(
-            name_en=token,
-            limit=_MAX_CANDIDATE_LIMIT,
-            offset=0,
-            client=client,
-        )
-        _collect(tok_en)
+        _run_term(token)
 
     total = len(all_deduped)
     page = all_deduped[off: off + lim]

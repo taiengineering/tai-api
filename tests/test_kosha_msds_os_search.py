@@ -210,9 +210,9 @@ def test_search_os_cas_not_ready_env_false(monkeypatch):
 
 
 def test_search_os_pagination_depth_exceeded():
-    """offset + limit > 9900 → PIT path; PIT failure raises MsdsPaginationDepthExceededError (PATCH-003F)."""
+    """offset + limit > 9900 → PIT path; PIT failure raises MsdsPaginationDepthExceededError (PATCH-003F/004)."""
     client = MagicMock()
-    client.create_point_in_time.side_effect = Exception("PIT not supported")
+    client.create_pit.side_effect = Exception("PIT not supported")
     with pytest.raises(MsdsPaginationDepthExceededError):
         search_os(name_ko="x", limit=100, offset=9_900, client=client)
 
@@ -304,8 +304,9 @@ def _make_sb_proof_state(snap_id: str, outbox_wm: int):
             m.select.return_value.eq.return_value.limit.return_value.execute.return_value = r
         elif table_name == "search_index_outbox":
             r = MagicMock()
-            r.data = [{"event_id": outbox_wm}]
-            m.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = r
+            r.data = [{"id": outbox_wm}]
+            # chain: .select("id").eq("status","COMPLETED").eq("domain_name","CHEM").order(...).limit(1).execute()
+            m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = r
         else:
             raise RuntimeError(f"unexpected table: {table_name}")
         return m
@@ -694,19 +695,20 @@ def test_search_by_q_os_empty_returns_empty():
 
 
 def test_search_by_q_os_pagination():
-    """PATCH-003E: free-text collects all candidates then pages in memory.
+    """PATCH-004: free-text collects all candidates (full pagination) then pages in memory.
 
     total = len(deduped_candidates), page = deduped[off:off+lim].
-    Each sub-query uses limit=100, offset=0.
+    Each sub-query uses limit=_CANDIDATE_PAGE_SIZE (1000), offset=0.
     """
+    from services.kosha_msds.opensearch_query import _CANDIDATE_PAGE_SIZE
     client = _fake_os_client(["000010", "000011"], 2)
     ids, total, _ = search_by_q_os(q="산업", limit=2, offset=0, client=client)
     # total = number of unique candidates collected
     assert total == 2
     assert set(ids) == {"000010", "000011"}
-    # All sub-queries use limit=100, offset=0 (candidate collection)
+    # All sub-queries use limit=_CANDIDATE_PAGE_SIZE (full pagination), offset=0
     call_bodies = [call[1]["body"] for call in client.search.call_args_list]
-    assert all(b["size"] == 100 for b in call_bodies)
+    assert all(b["size"] == _CANDIDATE_PAGE_SIZE for b in call_bodies)
     assert all(b["from"] == 0 for b in call_bodies)
 
 
@@ -1267,7 +1269,7 @@ def test_T12_and_filter_combination():
 
 
 def test_T13_q_normalized_priority_used(monkeypatch):
-    """T13: normalized_query is sent to BM25 search_os (PATCH-003E)."""
+    """T13: CHEM-09 priority — normalized_query → name_ko first (PATCH-004: no BM25)."""
     from services.kosha_msds.opensearch_query import search_by_q_os
     calls = []
 
@@ -1280,9 +1282,12 @@ def test_T13_q_normalized_priority_used(monkeypatch):
         "services.kosha_msds.opensearch_query.search_os", _mock_search_os
     )
     chem_ids, total, meta = search_by_q_os(q="벤젠", limit=5, offset=0)
-    # P1: BM25 call must have q=normalized_query
+    # PATCH-004: no BM25 (q=) calls; first call must be name_ko=normalized_query
     bm25_calls = [c for c in calls if c["q"] is not None]
-    assert len(bm25_calls) >= 1
+    assert len(bm25_calls) == 0, "BM25 (q=) must not be called (CHEM-09 priority)"
+    # NORMALIZED_EXACT: first call is name_ko=normalized_query
+    ko_normalized_calls = [c for c in calls if c["name_ko"] == "벤젠"]
+    assert len(ko_normalized_calls) >= 1
     assert meta["normalized_query"] == "벤젠"
 
 
@@ -1334,11 +1339,11 @@ def test_T16_dedup_preserves_priority_order(monkeypatch):
     """T16: chem_id deduplication preserves first-seen (priority) order."""
     from services.kosha_msds.opensearch_query import search_by_q_os
     call_index = [0]
-    # P1 BM25 returns [A, B]; name_ko returns [B, C] — B is deduped
+    # P1 NORMALIZED: name_ko returns [A, B]; name_en returns [B, C] — B is deduped
     responses = [
-        (["000001", "000002"], 2),  # BM25 call
-        (["000002", "000003"], 2),  # name_ko call
-        ([], 0),                    # name_en call
+        (["000001", "000002"], 2),  # name_ko(normalized) call
+        (["000002", "000003"], 2),  # name_en(normalized) call
+        ([], 0),                    # further calls
     ]
 
     def _mock_search_os(*, q=None, name_ko=None, name_en=None, limit=20, offset=0, client=None,
@@ -1380,14 +1385,14 @@ def test_T17_pagination_200_items(monkeypatch):
     assert total == 200
     assert ids == all_ids[40:60]
     # Standard from/size — no PIT
-    client.create_point_in_time.assert_not_called()
+    client.create_pit.assert_not_called()
 
 
 def test_T18_deep_pagination_uses_pit():
-    """T18: offset+limit > 9,900 routes to PIT path (PATCH-003F)."""
+    """T18: offset+limit > 9,900 routes to PIT path (PATCH-004: create_pit/delete_pit)."""
     client = MagicMock()
-    client.create_point_in_time.return_value = {"pit_id": "pit-t18"}
-    client.delete_point_in_time.return_value = {}
+    client.create_pit.return_value = {"pit_id": "pit-t18"}
+    client.delete_pit.return_value = {}
 
     call_count = [0]
     def _pit_search(**kwargs):
@@ -1402,14 +1407,14 @@ def test_T18_deep_pagination_uses_pit():
     ids, total = search_os(limit=100, offset=9_901, client=client)
     assert ids == []
     assert total == 0
-    client.create_point_in_time.assert_called_once()
-    client.delete_point_in_time.assert_called_once()
+    client.create_pit.assert_called_once()
+    client.delete_pit.assert_called_once()
 
 
 def test_T18b_deep_pagination_pit_failure():
-    """T18b: PIT creation failure → MsdsPaginationDepthExceededError (PATCH-003F)."""
+    """T18b: PIT creation failure → MsdsPaginationDepthExceededError (PATCH-004)."""
     client = MagicMock()
-    client.create_point_in_time.side_effect = Exception("PIT not supported by cluster")
+    client.create_pit.side_effect = Exception("PIT not supported by cluster")
     with pytest.raises(MsdsPaginationDepthExceededError):
         search_os(limit=100, offset=9_901, client=client)
 
@@ -1546,3 +1551,276 @@ def test_compute_membership_sha256_differs_on_change():
     sha1 = compute_membership_sha256([("000001", "uuid-a")])
     sha2 = compute_membership_sha256([("000002", "uuid-b")])
     assert sha1 != sha2
+
+
+# ---------------------------------------------------------------------------
+# PATCH-004 G01-G16  WO-WWW-PERF-004-P0S-OS-PATCH-004
+# ---------------------------------------------------------------------------
+
+
+# ---- G01: Outbox watermark raises on DB failure ----------------------------
+
+
+def test_G01_outbox_watermark_raises_on_failure():
+    """G01: _get_outbox_watermark raises SnapshotProofScanError on DB failure (PATCH-004)."""
+    from services.kosha_msds.snapshot_proof import (
+        _get_outbox_watermark,
+        SnapshotProofScanError,
+    )
+    sb = MagicMock()
+    sb.table.side_effect = Exception("DB unreachable")
+    with pytest.raises(SnapshotProofScanError):
+        _get_outbox_watermark(sb)
+
+
+def test_G01b_outbox_watermark_uses_id_column():
+    """G01b: _get_outbox_watermark queries 'id' column and filters by domain_name='CHEM'."""
+    from services.kosha_msds.snapshot_proof import _get_outbox_watermark
+    r = MagicMock()
+    r.data = [{"id": 33527}]
+    sb = MagicMock()
+    # chain: .select("id").eq("status","COMPLETED").eq("domain_name","CHEM").order(...).limit(1).execute()
+    sb.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = r
+    wm = _get_outbox_watermark(sb)
+    assert wm == 33527
+    # Verify 'id' was queried (not 'event_id')
+    sb.table.return_value.select.assert_called_with("id")
+
+
+def test_G01c_outbox_watermark_zero_when_no_completed():
+    """G01c: No COMPLETED CHEM events → returns 0 (valid empty state, not error)."""
+    from services.kosha_msds.snapshot_proof import _get_outbox_watermark
+    r = MagicMock()
+    r.data = []  # no rows
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = r
+    assert _get_outbox_watermark(sb) == 0
+
+
+# ---- G02: Scan failure → FAIL proof ----------------------------------------
+
+
+def test_G02_db_scan_failure_returns_fail_proof():
+    """G02: DB scan failure → generate_proof_dry_run returns FAIL proof, not exception."""
+    from services.kosha_msds.snapshot_proof import generate_proof_dry_run, verify_proof
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+
+    sb = MagicMock()
+    # Pre-scan state succeeds
+    snap_r = MagicMock()
+    snap_r.data = [{"snapshot_id": "snap-g02"}]
+    snap_ts_r = MagicMock()
+    snap_ts_r.data = [{"completed_at": "2026-10-01T00:00:00+00:00"}]
+    outbox_r = MagicMock()
+    outbox_r.data = [{"id": 100}]
+
+    call_count = [0]
+    def _table(name):
+        m = MagicMock()
+        if name == "kosha_msds_seo_preview_current":
+            m.select.return_value.limit.return_value.execute.return_value = snap_r
+        elif name == "kosha_msds_snapshots":
+            m.select.return_value.eq.return_value.limit.return_value.execute.return_value = snap_ts_r
+        elif name == "search_index_outbox":
+            m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = outbox_r
+        else:
+            raise RuntimeError(f"unexpected table: {name}")
+        return m
+
+    sb.table.side_effect = _table
+
+    # DB scan itself fails via the view query (second call to seo_preview_current for pagination)
+    db_scan_call = [0]
+    original_side = sb.table.side_effect
+
+    def _table_fail(name):
+        if name == "kosha_msds_seo_preview_current":
+            db_scan_call[0] += 1
+            if db_scan_call[0] > 1:  # second call is the scan
+                raise Exception("DB scan timeout")
+        return original_side(name)
+
+    sb.table.side_effect = _table_fail
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {"tai-shared-search-v1-g02": {}}
+    os_client.search.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+
+    proof = generate_proof_dry_run(scope=PUBLICATION_SCOPE_SEO_PREVIEW, sb=sb, client=os_client)
+    assert proof.verification_status == "FAIL"
+    assert proof.error_message is not None
+
+
+def test_G02b_os_scan_failure_returns_fail_proof():
+    """G02b: OS scan failure → FAIL proof with error_message."""
+    from services.kosha_msds.snapshot_proof import generate_proof_dry_run
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+
+    sb = MagicMock()
+    snap_r = MagicMock()
+    snap_r.data = [{"snapshot_id": "snap-g02b"}]
+    snap_ts_r = MagicMock()
+    snap_ts_r.data = [{"completed_at": "2026-10-01T00:00:00+00:00"}]
+    outbox_r = MagicMock()
+    outbox_r.data = [{"id": 100}]
+    db_scan_r = MagicMock()
+    db_scan_r.data = []  # empty DB is fine → scan returns {}
+
+    def _table(name):
+        m = MagicMock()
+        if name == "kosha_msds_seo_preview_current":
+            m.select.return_value.limit.return_value.execute.return_value = snap_r
+            # For scan pagination: .select("chem_id,id").order(...).limit(1000).execute()
+            m.select.return_value.order.return_value.limit.return_value.execute.return_value = db_scan_r
+        elif name == "kosha_msds_snapshots":
+            m.select.return_value.eq.return_value.limit.return_value.execute.return_value = snap_ts_r
+        elif name == "search_index_outbox":
+            m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = outbox_r
+        return m
+
+    sb.table.side_effect = _table
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {"tai-shared-search-v1-g02b": {}}
+    os_client.search.side_effect = Exception("OS cluster unavailable")
+
+    proof = generate_proof_dry_run(scope=PUBLICATION_SCOPE_SEO_PREVIEW, sb=sb, client=os_client)
+    assert proof.verification_status == "FAIL"
+    assert proof.error_message is not None
+    assert "OS scan failed" in proof.error_message
+
+
+# ---- G09: PIT Client contract test -----------------------------------------
+
+
+def test_G09_pit_client_methods_exist():
+    """G09: opensearch-py client has create_pit and delete_pit — the official PIT API.
+
+    Note: create_point_in_time is a legacy method with a different parameter schema
+    (no allow_partial_pit_creation, different keep_alive contract). Our code uses
+    create_pit which is the correct method for OpenSearch 2.x PIT.
+    """
+    from opensearchpy import OpenSearch
+    import inspect
+    assert hasattr(OpenSearch, "create_pit"), (
+        "opensearch-py must expose create_pit method"
+    )
+    assert hasattr(OpenSearch, "delete_pit"), (
+        "opensearch-py must expose delete_pit method"
+    )
+    # Verify create_pit is the official method (has allow_partial_pit_creation param)
+    sig_src = inspect.getsource(OpenSearch.create_pit)
+    assert "allow_partial_pit_creation" in sig_src, (
+        "create_pit must be the official PIT method (has allow_partial_pit_creation)"
+    )
+
+
+# ---- G10: Deep page > 10,000 -----------------------------------------------
+
+
+def test_G10_deep_page_over_10000():
+    """G10: offset+limit > 9,900 → create_pit called (PIT deep pagination)."""
+    client = MagicMock()
+    client.create_pit.return_value = {"pit_id": "pit-g10"}
+    client.delete_pit.return_value = {}
+    client.search.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+
+    search_os(limit=100, offset=10_000, client=client)
+    client.create_pit.assert_called_once()
+    client.delete_pit.assert_called_once()
+
+
+# ---- G11: q candidate > _CANDIDATE_PAGE_SIZE → multiple calls per term -----
+
+
+def test_G11_q_candidate_full_pagination(monkeypatch):
+    """G11: When a term returns >= _CANDIDATE_PAGE_SIZE results, pagination continues."""
+    from services.kosha_msds.opensearch_query import (
+        search_by_q_os,
+        _CANDIDATE_PAGE_SIZE,
+    )
+    # First call returns exactly _CANDIDATE_PAGE_SIZE results → triggers second call
+    ids_page1 = [f"{i:06d}" for i in range(1, _CANDIDATE_PAGE_SIZE + 1)]
+    ids_page2 = [f"{i:06d}" for i in range(_CANDIDATE_PAGE_SIZE + 1, _CANDIDATE_PAGE_SIZE + 3)]
+
+    call_count = [0]
+
+    def _mock_search_os(*, name_ko=None, name_en=None, limit=20, offset=0, client=None,
+                        q=None, chem_id=None, cas_no=None, ke_no=None, en_no=None, un_no=None):
+        call_count[0] += 1
+        if name_ko is not None:
+            if offset == 0:
+                return ids_page1, len(ids_page1) + len(ids_page2)
+            else:
+                return ids_page2, len(ids_page1) + len(ids_page2)
+        return [], 0
+
+    monkeypatch.setattr(
+        "services.kosha_msds.opensearch_query.search_os", _mock_search_os
+    )
+    ids, total, _ = search_by_q_os(q="산", limit=10, offset=0)
+    # Should have paginated name_ko: offset=0 (page1) + offset=_CANDIDATE_PAGE_SIZE (page2)
+    name_ko_calls = call_count[0]
+    assert name_ko_calls >= 2, f"Expected >=2 calls for full pagination, got {name_ko_calls}"
+    # First page slice
+    assert ids == ids_page1[:10]
+
+
+# ---- G12: q dedup priority order -------------------------------------------
+
+
+def test_G12_q_dedup_priority_normalized_first(monkeypatch):
+    """G12: normalized_query results appear before dictionary expansion results."""
+    from services.kosha_msds.opensearch_query import search_by_q_os
+    call_order = []
+
+    def _mock_search_os(*, name_ko=None, name_en=None, limit=20, offset=0, client=None,
+                        q=None, chem_id=None, cas_no=None, ke_no=None, en_no=None, un_no=None):
+        if name_ko == "벤젠":
+            call_order.append("normalized_ko")
+            return ["000001"], 1
+        if name_en == "벤젠":
+            call_order.append("normalized_en")
+            return [], 0
+        if name_ko == "benzene":
+            call_order.append("expanded_ko")
+            return ["000002"], 1
+        return [], 0
+
+    monkeypatch.setattr(
+        "services.kosha_msds.opensearch_query.search_os", _mock_search_os
+    )
+
+    def _dict_lookup(q, limit=5, subject_type=None):
+        return {"items": [{"subject_key": "benzene", "matched_term": "benzene", "display_name": "benzene"}]}
+
+    ids, total, _ = search_by_q_os(q="벤젠", limit=10, offset=0, dictionary_lookup=_dict_lookup)
+    # 000001 from normalized must come before 000002 from dictionary expansion
+    assert "000001" in ids
+    assert "000002" in ids
+    idx1 = ids.index("000001")
+    idx2 = ids.index("000002")
+    assert idx1 < idx2, "Normalized results must precede dictionary expansion results"
+    # Verify call order
+    assert call_order.index("normalized_ko") < call_order.index("expanded_ko")
+
+
+# ---- G13: match_type annotation --------------------------------------------
+
+
+def test_G13_match_type_identifier_exact(monkeypatch):
+    """G13: Identifier q path sets match_type=IDENTIFIER_EXACT."""
+    from services.kosha_msds.opensearch_query import search_by_q_os
+    client = _fake_os_client(["000001"], 1)
+    _, _, meta = search_by_q_os(q="000001", limit=5, offset=0, client=client)
+    assert meta["match_type"] == "IDENTIFIER_EXACT"
+    assert meta["identifier_kind"] == "chem_id"
+
+
+def test_G13b_match_type_free_text(monkeypatch):
+    """G13b: Free-text q path sets match_type=BM25_NORI (free-text label)."""
+    from services.kosha_msds.opensearch_query import search_by_q_os
+    client = _fake_os_client([], 0)
+    _, _, meta = search_by_q_os(q="염산", limit=5, offset=0, client=client)
+    assert meta["match_type"] == "BM25_NORI"
+    assert meta["identifier_kind"] is None
