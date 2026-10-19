@@ -1,0 +1,78 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B10-BULK-BUILD-001",
+    "form_type": "RECORD",
+    "source_id": "GOV-04",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "안전보건 운영체계",
+    "work_trigger": "관리감독자 현장 안전활동 후 기록",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 관리감독자 현장 순찰·활동 내용·조치사항 기록지.",
+    "design_gate_ref": "WO-REF01-060-B10-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "관리감독자 현장 안전활동 기록지",
+    "doc_id": "TAI-FORM-GOV-04-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 활동 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "순찰일" },
+        { "id": "F03", "label": "관리감독자" },
+        { "id": "F04", "label": "소속부서" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 현장 안전활동 시간별 기록표.",
+      "default_row_count": 8,
+      "min_row_height_mm": 10,
+      "columns": [
+        { "id": "F01_TIME",     "label": "시간",              "width_mm": 20 },
+        { "id": "F02_ACTIVITY", "label": "순찰/활동 내용",    "width_mm": 90 },
+        { "id": "F03_ACTION",   "label": "조치사항",          "width_mm": 40 },
+        { "id": "F04_REMARK",   "label": "비고",              "width_mm": 20 }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 특이사항 및 지시사항 자유기재.",
+      "label": "특이사항 및 지시사항",
+      "min_height_mm": 25
+    },
+    {
+      "type": "approval",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "작성자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B10-BULK-BUILD-001",
+    "form_type": "RECORD",
+    "source_id": "P-02",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "일일 안전관리",
+    "work_trigger": "매일 안전관리 업무 종료 후 기록",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 일일 안전관리 업무 활동·지적사항·개선이력 기록 일지.",
+    "design_gate_ref": "WO-REF01-060-B10-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "일일 안전관리 업무일지",
+    "doc_id": "TAI-FORM-P-02-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 업무 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "작성일" },
+        { "id": "F03", "label": "안전담당자" }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 주요 안전활동 내역 자유기재.",
+      "label": "주요 안전활동 내역",
+      "min_height_mm": 35
+    },
+    {
+      "type": "repeat_table",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 지적·개선사항 반복 기록표.",
+      "default_row_count": 6,
+      "min_row_height_mm": 10,
+      "columns": [
+        { "id": "F01_NO",     "label": "번호",             "width_mm": 10 },
+        { "id": "F02_ITEM",   "label": "지적·개선 내용",   "width_mm": 80 },
+        { "id": "F03_DATE",   "label": "조치일",           "width_mm": 22 },
+        { "id": "F04_OWNER",  "label": "조치자",           "width_mm": 22 },
+        { "id": "F05_STATUS", "label": "완료여부(입력)",   "width_mm": 36 }
+      ]
+    },
+    {
+      "type": "approval",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "작성자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,125 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-059-B6-B1",
+    "form_type": "REPORT",
+    "source_id": "REF-C015",
+    "schema_version": "common-v1",
+    "legal_review_status": "PENDING",
+    "source_text_status": "NATIVE_PARAGRAPH_VERIFIED (WO-047 HWP-15 Para 1954-1973; HWP-15b Para 1974-1993)",
+    "source_visual_layout_status": "PDF_CROSSCHECK_VERIFIED (Page 115, WO-047)",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_checksum": "e94d8d8a271c148973111ff0c74b4d67ba2f9884aff59e87301e261b5794aefe",
+    "source_access": "OWNER_UPLOADED_HWP_TEXT_PARSED_PARTIAL",
+    "source_section": "HWP-15 Para 1954-1973; HWP-15b Para 1974-1993",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "layout_variant_note": "원본 동일 행(작업명+등급) 구조를 basic_info 2-field 행으로 재배치. 등급 분류기준 3열 표를 text_flow 단락으로 재배치. 기능·내용 보존.",
+    "naming_note": "blank = 기존 출력 명명 규칙 유지; 원본 예시 포함"
+  },
+  "document": {
+    "title": "아차 사고 보고서",
+    "doc_id": "TAI-FORM-C015-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "HWP-15 Para 1954-1973 원본 기본정보. 원본 동일 행(작업명+등급)을 basic_info 2-field로 재배치.",
+      "fields": [
+        { "id": "F01", "label": "작업명" },
+        { "id": "F02", "label": "등급 (A, B, C)" }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S02",
+      "label": "작업내용",
+      "min_height_mm": 16
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "label": "사고내용",
+      "min_height_mm": 20
+    },
+    {
+      "type": "freeform_area",
+      "id": "S04",
+      "label": "발생원인",
+      "min_height_mm": 20
+    },
+    {
+      "type": "freeform_area",
+      "id": "S05",
+      "label": "예방대책 (조치내용)",
+      "min_height_mm": 24
+    },
+    {
+      "type": "freeform_area",
+      "id": "S06",
+      "label": "작업현장 상황 설명 (사진, 도면)",
+      "min_height_mm": 40
+    },
+    {
+      "type": "text_flow",
+      "id": "S07",
+      "source_note": "HWP-15b Para 1974-1993 원본 등급 분류기준 (WO-047 PDF p.115 verified). 원본 3열 표를 단락으로 재배치. 원문 누락 없음.",
+      "paragraphs": [
+        {
+          "id": "G00",
+          "text": "아차 사고 등급 분류기준 예시",
+          "align": "center"
+        },
+        {
+          "id": "G01",
+          "text": "A등급 위험정도: 중대재해가 예상되는 경우",
+          "align": "left"
+        },
+        {
+          "id": "G01b",
+          "text": "  조치: -중대재해 발생과 동일시 / -조업 중단 후 사고조사 및 재발방지 대책 수립",
+          "align": "left"
+        },
+        {
+          "id": "G02",
+          "text": "B등급 위험정도: 재해(사고)발생 시 중상* 또는 시설물 부분 파손 및 조업의 지장이 예상되는 경우",
+          "align": "left"
+        },
+        {
+          "id": "G02b",
+          "text": "  조치: -산업재해 발생과 동일시 / -임시 조치 후 안전대책 수립·시행",
+          "align": "left"
+        },
+        {
+          "id": "G03",
+          "text": "C등급 위험정도: 재해(사고)발생 시 경상** 또는 당해 시설물의 파손이 예상되는 경우",
+          "align": "left"
+        },
+        {
+          "id": "G03b",
+          "text": "  조치: - 현 상태로 작업은 가능하나, 교육 시행 등의 안전관리 조치",
+          "align": "left"
+        },
+        {
+          "id": "N01",
+          "text": "* 중상: 하루 이상 입원 및 1개월 이상의 치료를 필요로 하는 부상이나, 신체활동 부분을 상실하거나 그 기능을 영구적으로 상실한 경우",
+          "align": "left"
+        },
+        {
+          "id": "N02",
+          "text": "** 경상: 사망, 중상을 제외한 부상",
+          "align": "left"
+        }
+      ]
+    }
+  ]
+}

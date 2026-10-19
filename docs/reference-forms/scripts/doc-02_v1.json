@@ -1,0 +1,101 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B9-REGISTER-BUILD-001",
+    "form_type": "REGISTER",
+    "source_id": "DOC-02",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "문서관리",
+    "work_trigger": "서식 배포/회수",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). INDEPENDENT_CANDIDATE. DOC-01(개정이력)과 구분: DOC-02는 특정 배포 대상에게 발행된 서식의 버전·회수 상태 추적. 수령확인·회수확인은 사용자 직접 기재. GPT 설계·렌더 검증 전 빌드 차단.",
+    "design_gate_ref": "WO-REF01-060-B9-REGISTER-BUILD-001"
+  },
+  "document": {
+    "title": "안전관리 서식 배포·회수 관리대장",
+    "doc_id": "TAI-FORM-DOC-02-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "landscape"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 관리 기본정보.",
+      "fields": [
+        {
+          "id": "F01",
+          "label": "사업장명"
+        },
+        {
+          "id": "F02",
+          "label": "관리 부서"
+        }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 서식 배포·회수 현황 반복 등록표. 수령확인·회수확인·상태는 사용자 직접 기재.",
+      "default_row_count": 10,
+      "min_row_height_mm": 10,
+      "columns": [
+        {
+          "id": "F01_DOCID",
+          "label": "문서ID/서식명",
+          "width_mm": 68
+        },
+        {
+          "id": "F02_VER",
+          "label": "버전",
+          "width_mm": 16
+        },
+        {
+          "id": "F03_DEST",
+          "label": "배포처",
+          "width_mm": 53
+        },
+        {
+          "id": "F04_DISTDATE",
+          "label": "배포일",
+          "width_mm": 22
+        },
+        {
+          "id": "F05_RECV",
+          "label": "수령확인(입력)",
+          "width_mm": 26
+        },
+        {
+          "id": "F06_RETDATE",
+          "label": "회수일",
+          "width_mm": 22
+        },
+        {
+          "id": "F07_RETCONF",
+          "label": "회수확인(입력)",
+          "width_mm": 26
+        },
+        {
+          "id": "F08_STATUS",
+          "label": "상태(입력)",
+          "width_mm": 24
+        }
+      ]
+    }
+  ]
+}

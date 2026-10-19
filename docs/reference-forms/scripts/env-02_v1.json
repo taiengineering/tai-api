@@ -1,0 +1,70 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B12-CONTENT-REPAIR-002",
+    "form_type": "CHECKLIST",
+    "source_id": "ENV-02",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "환경설비 운영관리",
+    "work_trigger": "폐수처리시설 정기 점검 및 개선 이행 확인 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 폐수처리시설 공정별 점검·이상·개선·완료확인 관리 서식.",
+    "design_gate_ref": "WO-REF01-060-B12-CONTENT-REPAIR-002"
+  },
+  "document": {
+    "title": "폐수처리시설 점검 및 개선관리대장",
+    "doc_id": "TAI-FORM-ENV-02-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "담당자" },
+        { "id": "F03", "label": "관리 기간" }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 공정별 점검·이상·개선 반복 기록표.",
+      "default_row_count": 15,
+      "min_row_height_mm": 8,
+      "columns": [
+        { "id": "F01_NO",      "label": "번호",              "width_mm": 10 },
+        { "id": "F02_PROCESS", "label": "공정/점검 구역",    "width_mm": 50 },
+        { "id": "F03_DATE",    "label": "점검일",            "width_mm": 22 },
+        { "id": "F04_ISSUE",   "label": "이상사항(입력)",    "width_mm": 34 },
+        { "id": "F05_ACTION",  "label": "개선 조치(입력)",   "width_mm": 36 },
+        { "id": "F06_CONFIRM", "label": "완료확인(입력)",    "width_mm": 18 }
+      ]
+    },
+    {
+      "type": "approval",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "작성자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}

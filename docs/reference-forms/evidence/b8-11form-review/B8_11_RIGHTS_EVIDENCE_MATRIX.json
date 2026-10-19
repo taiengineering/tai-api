@@ -1,0 +1,337 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-11FORM-LEGAL-RIGHTS-EVIDENCE-010",
+    "doc_type": "RIGHTS_EVIDENCE_MATRIX",
+    "date": "2026-10-10",
+    "base_head": "f32702d2950935c5312bbbd593acc69b327c0f05",
+    "case_classification": {
+      "CASE_A": "제3자 원본 콘텐츠 직접 복제 — KOSHA 또는 외부 저작물의 창작적 표현 직접 사용",
+      "CASE_B": "제3자 자료에 의존한 표현·구조의 파생 가능성 — 원본 확인 필요",
+      "CASE_C": "업무 개념과 사실 정보만 사용한 TAI 독립 작성 가능성 — 확인 필요"
+    },
+    "note": "CASE C 잠정 분류는 증거 없는 권리 검토 자동 PASS가 아님. 전문가 검토 없이 상업적 공개 불가."
+  },
+  "forms": [
+    {
+      "form_id": "C026",
+      "form_title": "위험성평가 기록표(3단계 판단법)",
+      "source_evidence_tag": "TAI_PROPOSED",
+      "field_content_analysis": {
+        "S01_fields": ["사업장명", "부서/공정명", "평가일", "작성자"],
+        "S02_columns": ["작업·공정", "위험요인", "현재 조치사항", "위험수준(입력)", "개선 대책", "담당자/기한", "개선 후 확인 결과", "재확인일/확인자"],
+        "field_nature": "사실 정보 및 업무 기재란 — 창작적 표현 없음",
+        "guidance_text": "TAI 작성 (사용자 기재 안내)"
+      },
+      "third_party_dependency": {
+        "external_content_copied": false,
+        "ghs_images": false,
+        "kosha_form_layout_copied": "UNVERIFIED — 원본 서식 미비교",
+        "kosha_24_matching_form": "없음 (KOSHA 24종에 3단계 판단법 대응 서식 직접 확인 없음)",
+        "verdict": "NO_THIRD_PARTY_COPY_FOUND_IN_REVIEWED_EVIDENCE"
+      },
+      "rights_analysis": {
+        "case": "CASE_C_CANDIDATE",
+        "basis": "3단계 판단법은 공지 개념. 입력 필드는 평가 사실 정보. 안내 문구는 TAI 작성.",
+        "risk": "LOW_IN_REVIEWED_SCOPE — 외부 유사 서식과 실물 비교 미실시",
+        "commercial_use": "PERMISSION_OR_EXPERT_REVIEW_REQUIRED"
+      },
+      "rights_status": "RIGHTS_UNVERIFIED",
+      "commercial_redistribution": "NOT_AUTHORIZED"
+    },
+    {
+      "form_id": "C027",
+      "form_title": "체크리스트형 위험성평가표",
+      "source_evidence_tag": "TAI_PROPOSED",
+      "field_content_analysis": {
+        "S01_fields": ["사업장명", "작업단위/공정", "평가일", "평가자"],
+        "S02_columns": ["번호", "점검항목", "결과(입력)", "부적합 내용", "개선 대책", "확인일"],
+        "field_nature": "사실 정보 및 업무 기재란. 점검항목은 사용자 직접 작성 — 사전 기재 없음.",
+        "guidance_text": "TAI 작성 (사용자 기재 안내)"
+      },
+      "third_party_dependency": {
+        "external_content_copied": false,
+        "ghs_images": false,
+        "kosha_form_layout_copied": "UNVERIFIED — 원본 서식 미비교",
+        "kosha_24_matching_form": "없음 (KOSHA 24종 직접 대응 미발견)",
+        "verdict": "NO_THIRD_PARTY_COPY_FOUND_IN_REVIEWED_EVIDENCE"
+      },
+      "rights_analysis": {
+        "case": "CASE_C_CANDIDATE",
+        "basis": "체크리스트형 평가는 공지 개념. 빈 체크리스트 구조 자체는 창작적 표현이 아님. 점검항목 미기재.",
+        "risk": "LOW_IN_REVIEWED_SCOPE",
+        "commercial_use": "PERMISSION_OR_EXPERT_REVIEW_REQUIRED"
+      },
+      "rights_status": "RIGHTS_UNVERIFIED",
+      "commercial_redistribution": "NOT_AUTHORIZED"
+    },
+    {
+      "form_id": "C028",
+      "form_title": "핵심요인 분석법(OPS) 위험성평가표",
+      "source_evidence_tag": "TAI_PROPOSED",
+      "field_content_analysis": {
+        "S01_fields": ["사업장명", "공정/작업명", "평가일", "평가자"],
+        "S02_columns": ["작업단위", "사고유형", "위험요인", "기존 조치사항", "추가 대책", "책임자/기한"],
+        "field_nature": "사실 정보 및 업무 기재란",
+        "guidance_text": "TAI 작성. 'OPS' 명칭 포함 — 소유권 미확인."
+      },
+      "third_party_dependency": {
+        "external_content_copied": false,
+        "ghs_images": false,
+        "kosha_form_layout_copied": "UNVERIFIED — 원본 서식 미비교",
+        "ops_methodology_owner": "UNVERIFIED — 'OPS' 약어 소유권·원저작자 미확인",
+        "verdict": "UNVERIFIED — OPS 명칭 소유권 미확인으로 완전 CASE_C 판단 불가"
+      },
+      "rights_analysis": {
+        "case": "CASE_C_CANDIDATE_WITH_CAVEAT",
+        "basis": "필드는 사실 정보. 그러나 OPS 방법론 명칭 소유권이 특정 기관·저자에게 귀속될 가능성 미확인.",
+        "risk": "MEDIUM — OPS 명칭 사용 소유권 불명",
+        "caveat": "OPS 약어 원출처 확인 필요. 유료 방법론 또는 특정 기관 전용 명칭일 경우 명칭 사용 권한 검토 필요.",
+        "commercial_use": "PERMISSION_OR_EXPERT_REVIEW_REQUIRED"
+      },
+      "rights_status": "RIGHTS_UNVERIFIED",
+      "commercial_redistribution": "NOT_AUTHORIZED"
+    },
+    {
+      "form_id": "C037",
+      "form_title": "종사자 위험개선 건의·조치대장",
+      "source_evidence_tag": "TAI_PROPOSED",
+      "field_content_analysis": {
+        "S01_fields": ["사업장명", "관리 부서"],
+        "S02_columns": ["접수일", "건의자", "위험요인", "건의 내용", "검토 결과", "회신 내용", "실행 상태(입력)", "확인일"],
+        "field_nature": "업무 흐름 기재란 — 사실 정보 및 입력 안내",
+        "guidance_text": "없음 (S03 없음)"
+      },
+      "third_party_dependency": {
+        "external_content_copied": false,
+        "ghs_images": false,
+        "kosha_form_layout_copied": "UNVERIFIED — 원본 서식 미비교",
+        "kosha_24_matching_form": "없음 (KOSHA 24종 직접 대응 미발견)",
+        "verdict": "NO_THIRD_PARTY_COPY_FOUND_IN_REVIEWED_EVIDENCE"
+      },
+      "rights_analysis": {
+        "case": "CASE_C_CANDIDATE",
+        "basis": "건의→검토→조치→확인 흐름은 업무 프로세스 개념. 필드는 사실 기재란. TAI 독자 설계.",
+        "risk": "LOW_IN_REVIEWED_SCOPE",
+        "commercial_use": "PERMISSION_OR_EXPERT_REVIEW_REQUIRED"
+      },
+      "rights_status": "RIGHTS_UNVERIFIED",
+      "commercial_redistribution": "NOT_AUTHORIZED"
+    },
+    {
+      "form_id": "GOV-01",
+      "form_title": "산업안전보건위원회 회의록",
+      "source_evidence_tag": "OFFICIAL_PROCESS_AND_TAI_HYPOTHESIS",
+      "field_content_analysis": {
+        "S01_fields": ["회의 일시", "장소", "사회자", "회의록 확인자"],
+        "S02": "참석자 및 구성 (freeform)",
+        "S03": "안건 및 논의·의결사항 (freeform)",
+        "S04_columns": ["안건번호", "의결사항", "이행담당자", "기한", "이행확인일", "서명/확인"],
+        "field_nature": "법 제24조 절차 기반 TAI 설계. 법정 별지 없음.",
+        "guidance_text": "없음"
+      },
+      "third_party_dependency": {
+        "external_content_copied": false,
+        "ghs_images": false,
+        "kosha_form_layout_copied": "UNVERIFIED — 원본 서식 미비교",
+        "kosha_24_matching_form": "없음 (KOSHA 24종에 직접 대응 없음)",
+        "existing_official_form": "법 제24조 회의록 법정 별지 없음 (연구 문서 확인)",
+        "verdict": "NO_THIRD_PARTY_COPY_FOUND_IN_REVIEWED_EVIDENCE"
+      },
+      "rights_analysis": {
+        "case": "CASE_C_CANDIDATE",
+        "basis": "법 제24조 회의록 의무에서 요구되는 회의 기본정보·안건·의결사항은 법적 절차 정보. TAI가 열 구조 독자 설계. 법정 별지 없으므로 복제 대상 없음.",
+        "risk": "LOW_IN_REVIEWED_SCOPE",
+        "commercial_use": "PERMISSION_OR_EXPERT_REVIEW_REQUIRED"
+      },
+      "rights_status": "RIGHTS_UNVERIFIED",
+      "commercial_redistribution": "NOT_AUTHORIZED"
+    },
+    {
+      "form_id": "C039",
+      "form_title": "사업장 화학물질 취급목록 관리대장",
+      "source_evidence_tag": "MIXED",
+      "field_content_analysis": {
+        "S01_fields": ["사업장명", "작성일", "작성자"],
+        "S02_columns": ["물질명", "제품명", "공급자", "CAS번호(확인 시)", "취급 공정", "사용량", "보관 장소", "MSDS 연결(입력)", "검토일"],
+        "field_nature": "사실 정보 기재란 — 물질 식별 정보(물질명/CAS번호)는 공개 데이터. 외부 DB 자동 연동 없음.",
+        "guidance_text": "없음"
+      },
+      "third_party_dependency": {
+        "external_content_copied": false,
+        "kosha_msds_content_included": false,
+        "msds_copy": "NO — 취급목록이며 MSDS 원본 아님",
+        "ghs_images": false,
+        "kosha_form_layout_copied": "UNVERIFIED — 원본 서식 미비교",
+        "verdict": "NO_THIRD_PARTY_COPY_FOUND_IN_REVIEWED_EVIDENCE"
+      },
+      "rights_analysis": {
+        "case": "CASE_C_CANDIDATE",
+        "basis": "물질명·CAS번호·취급공정 등은 사실 데이터 필드. MSDS 원본 콘텐츠 미포함. 취급목록 구조는 업무 관리 개념.",
+        "risk": "LOW_IN_REVIEWED_SCOPE",
+        "kosha_msds_warning_applies": "NO — MSDS 원본이 아니므로 직접 적용 없음 (WO-008A CASE C 분류 유지)",
+        "commercial_use": "PERMISSION_OR_EXPERT_REVIEW_REQUIRED"
+      },
+      "rights_status": "RIGHTS_UNVERIFIED",
+      "commercial_redistribution": "NOT_AUTHORIZED"
+    },
+    {
+      "form_id": "C040",
+      "form_title": "제품별 MSDS 수령·개정 이력대장",
+      "source_evidence_tag": "MIXED",
+      "field_content_analysis": {
+        "S01_fields": ["사업장명", "관리 부서"],
+        "S02_columns": ["공급사", "제품명", "수령일", "개정일", "문서 버전", "배포 상태(입력)", "재검토 예정일"],
+        "field_nature": "MSDS 관리 이력 기재란 — MSDS 원본 내용 미포함. 외부 MSDS DB 자동 연동 없음.",
+        "guidance_text": "없음"
+      },
+      "third_party_dependency": {
+        "external_content_copied": false,
+        "kosha_msds_content_included": false,
+        "msds_copy": "NO — MSDS 수령·이력 관리 대장, MSDS 원본 아님",
+        "ghs_images": false,
+        "kosha_form_layout_copied": "UNVERIFIED",
+        "verdict": "NO_THIRD_PARTY_COPY_FOUND_IN_REVIEWED_EVIDENCE"
+      },
+      "rights_analysis": {
+        "case": "CASE_C_CANDIDATE",
+        "basis": "공급사·수령일·개정일·버전 등은 MSDS 관리 행정 기재란. MSDS 원본 창작적 표현 미포함.",
+        "risk": "LOW_IN_REVIEWED_SCOPE",
+        "kosha_msds_warning_applies": "CASE_B_CANDIDATE — 원본 MSDS 직접 복사 여부 UNVERIFIED. 그러나 현재 JSON에 MSDS 원본 콘텐츠 없음.",
+        "commercial_use": "PERMISSION_OR_EXPERT_REVIEW_REQUIRED"
+      },
+      "rights_status": "RIGHTS_UNVERIFIED",
+      "commercial_redistribution": "NOT_AUTHORIZED"
+    },
+    {
+      "form_id": "C041",
+      "form_title": "화학물질 경고표지 확인 점검표",
+      "source_evidence_tag": "MIXED",
+      "field_content_analysis": {
+        "S01_fields": ["사업장명", "점검 구역", "점검일", "점검자"],
+        "S02_columns": ["용기·설비/위치", "라벨 유무(입력)", "식별성(입력)", "발견 사항", "시정 완료일"],
+        "field_nature": "경고표지 점검 기재란 — GHS 픽토그램·라벨 이미지 미포함",
+        "guidance_text": "TAI 작성 (GHS·화학물질관리법 요구사항 확인 아님 명시)"
+      },
+      "third_party_dependency": {
+        "external_content_copied": false,
+        "ghs_images": false,
+        "ghs_pictogram_reproduced": "NO — 라벨 유무·식별성 텍스트 입력란만 존재",
+        "kosha_msds_content_included": false,
+        "kosha_form_layout_copied": "UNVERIFIED",
+        "verdict": "NO_THIRD_PARTY_COPY_FOUND_IN_REVIEWED_EVIDENCE"
+      },
+      "rights_analysis": {
+        "case": "CASE_C_CANDIDATE",
+        "basis": "경고표지 부착 여부 확인은 실무 점검 개념. 라벨 유무/식별성은 현황 기재. GHS 표지 이미지 미포함.",
+        "risk": "LOW_IN_REVIEWED_SCOPE",
+        "kosha_msds_warning_applies": "NO — GHS 원본 이미지나 MSDS 콘텐츠 미포함",
+        "commercial_use": "PERMISSION_OR_EXPERT_REVIEW_REQUIRED"
+      },
+      "rights_status": "RIGHTS_UNVERIFIED",
+      "commercial_redistribution": "NOT_AUTHORIZED"
+    },
+    {
+      "form_id": "C042",
+      "form_title": "화학물질 저장구역 점검표",
+      "source_evidence_tag": "MIXED",
+      "field_content_analysis": {
+        "S01_fields": ["사업장명", "저장 구역", "점검일", "점검자"],
+        "S02_columns": ["저장구역", "물질군", "보관조건 확인(입력)", "혼재·누출·환기 확인(입력)", "조치 내용"],
+        "field_nature": "저장구역 점검 현황 기재란",
+        "guidance_text": "TAI 작성 (화학물질관리법 등 법령상 저장기준 확인 아님 명시)"
+      },
+      "third_party_dependency": {
+        "external_content_copied": false,
+        "ghs_images": false,
+        "kosha_msds_content_included": false,
+        "kosha_form_layout_copied": "UNVERIFIED",
+        "verdict": "NO_THIRD_PARTY_COPY_FOUND_IN_REVIEWED_EVIDENCE"
+      },
+      "rights_analysis": {
+        "case": "CASE_C_CANDIDATE",
+        "basis": "저장구역·물질군·보관조건 확인은 실무 점검 개념. 입력 안내가 법정 저장기준 주장 금지 명시.",
+        "risk": "LOW_IN_REVIEWED_SCOPE",
+        "kosha_msds_warning_applies": "NO — MSDS 콘텐츠 미포함",
+        "commercial_use": "PERMISSION_OR_EXPERT_REVIEW_REQUIRED"
+      },
+      "rights_status": "RIGHTS_UNVERIFIED",
+      "commercial_redistribution": "NOT_AUTHORIZED"
+    },
+    {
+      "form_id": "C043",
+      "form_title": "화학물질 누출 비상대응 훈련기록",
+      "source_evidence_tag": "MIXED",
+      "field_content_analysis": {
+        "S01_fields": ["훈련명", "훈련 일시", "장소", "담당자", "참여/명단참조"],
+        "S02": "훈련 시나리오 개요 (freeform — 사용자 작성)",
+        "S03": "대응단계별 실시 내용 (freeform — 사용자 작성)",
+        "S04_columns": ["문제점", "개선책", "담당자", "재확인일", "재확인 결과"],
+        "field_nature": "훈련 기본정보·기록란. 시나리오 내용은 사용자 작성."
+      },
+      "third_party_dependency": {
+        "external_content_copied": false,
+        "ghs_images": false,
+        "kosha_msds_content_included": false,
+        "scenario_content": "freeform — 외부 시나리오 텍스트 사전 미포함",
+        "kosha_form_layout_copied": "UNVERIFIED",
+        "verdict": "NO_THIRD_PARTY_COPY_FOUND_IN_REVIEWED_EVIDENCE"
+      },
+      "rights_analysis": {
+        "case": "CASE_C_CANDIDATE",
+        "basis": "비상대응 훈련 기록 구조는 TAI 독자 설계. 시나리오·대응단계 내용은 사용자 자유 기재. 외부 훈련 매뉴얼 텍스트 미포함.",
+        "risk": "LOW_IN_REVIEWED_SCOPE",
+        "kosha_msds_warning_applies": "NO — MSDS 콘텐츠 미포함",
+        "commercial_use": "PERMISSION_OR_EXPERT_REVIEW_REQUIRED"
+      },
+      "rights_status": "RIGHTS_UNVERIFIED",
+      "commercial_redistribution": "NOT_AUTHORIZED"
+    },
+    {
+      "form_id": "C044",
+      "form_title": "MSDS 교육·주지 확인 기록",
+      "source_evidence_tag": "MIXED",
+      "field_content_analysis": {
+        "S01_fields": ["물질명/제품명", "교육·주지 일시", "교육자(담당자)", "대상·적용 작업"],
+        "S02": "주지 핵심 위험정보 요약 (freeform — 사용자 작성)",
+        "S03_columns": ["번호", "성명", "소속/부서", "직책", "확인(서명)"],
+        "S04": "후속조치 내용 및 확인 (freeform)",
+        "field_nature": "교육 기본정보·참석자 기재란. 위험정보 요약은 사용자 작성."
+      },
+      "third_party_dependency": {
+        "external_content_copied": false,
+        "kosha_msds_content_included": false,
+        "msds_copy": "NO — 교육 기록지이며 MSDS 원본 아님. S02 위험정보 요약은 사용자 자유 기재.",
+        "ghs_images": false,
+        "kosha_form_layout_copied": "UNVERIFIED",
+        "verdict": "NO_THIRD_PARTY_COPY_FOUND_IN_REVIEWED_EVIDENCE"
+      },
+      "rights_analysis": {
+        "case": "CASE_C_CANDIDATE",
+        "basis": "MSDS 교육 기록지이며 MSDS 원본 미포함. 위험정보 요약은 사용자 자유 기재란. 교육 참석자 확인표 구조는 업무 관리 개념.",
+        "risk": "LOW_IN_REVIEWED_SCOPE",
+        "kosha_msds_warning_applies": "CASE_B_CANDIDATE_NOTE — 사용자가 KOSHA MSDS 텍스트를 S02에 직접 입력할 경우 저작권 문제 발생 가능. 서식 자체에는 MSDS 원본 콘텐츠 없음.",
+        "commercial_use": "PERMISSION_OR_EXPERT_REVIEW_REQUIRED"
+      },
+      "rights_status": "RIGHTS_UNVERIFIED",
+      "commercial_redistribution": "NOT_AUTHORIZED"
+    }
+  ],
+  "summary": {
+    "total_forms": 11,
+    "case_a_direct_copy": 0,
+    "case_b_derivative_risk": 0,
+    "case_c_candidate": 10,
+    "case_c_candidate_with_caveat": 1,
+    "third_party_copy_found": 0,
+    "third_party_copy_status": "NO_THIRD_PARTY_COPY_FOUND_IN_REVIEWED_EVIDENCE (11/11)",
+    "ghs_images_included": 0,
+    "kosha_msds_content_included": 0,
+    "rights_unverified": 11,
+    "commercial_redistribution_authorized": 0,
+    "residual_risks": [
+      "C028: OPS 방법론 명칭 소유권 미확인",
+      "C040/C044: 사용자가 서식 사용 시 KOSHA MSDS 콘텐츠를 직접 입력할 경우 저작권 문제 (서식 자체 위험 아님)",
+      "전체: 외부 유사 서식과의 실물 비교 미실시"
+    ]
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-059-B3-B",
+    "form_type": "FORM",
+    "source_id": "REF-C001",
+    "schema_version": "common-v1",
+    "legal_review_status": "PENDING",
+    "source_text_status": "NATIVE_PARAGRAPH_VERIFIED (B-3-A2)",
+    "source_visual_layout_status": "UNVERIFIED",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_checksum": "e94d8d8a271c148973111ff0c74b4d67ba2f9884aff59e87301e261b5794aefe",
+    "source_access": "OWNER_UPLOADED_HWP_TEXT_PARSED_PARTIAL",
+    "source_section": "HWP-01 Para 1-15",
+    "body_para_range": "4-15 (12 paragraphs)",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "naming_note": "blank = 기존 출력 명명 규칙 유지; 내부에는 원본 예시 본문 포함"
+  },
+  "document": {
+    "title": "안전보건경영방침",
+    "doc_id": "TAI-FORM-C001-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "text_flow",
+      "id": "S01",
+      "source_note": "HWP-01 Para 4-15 원본 텍스트 (B-3-A2 verified). 시각적 레이아웃 미검증. 날짜/서명 우측 정렬은 TAI 편집형 설계 선택.",
+      "paragraphs": [
+        {
+          "id": "P04",
+          "text": "○○기업은 경영활동 전반에 전 사원의 안전과 보건을 기업의 최우선 가치로 인식하고, 법규 및 기준을 준수하는 안전보건관리체계를 구축하여 전 직원이 안전하고 쾌적한 환경에서 근무할 수 있도록 최선을 다한다.",
+          "align": "left"
+        },
+        {
+          "id": "P05",
+          "text": "이를 위해 다음과 같은 안전보건활동을 통해 지속적으로 안전보건환경을 개선한다.",
+          "align": "left"
+        },
+        {
+          "id": "P06",
+          "text": "1. 경영책임자는 '근로자의 생명 보호'와 '안전한 작업환경 조성'을 기업경영활동의 최우선 목표로 삼는다.",
+          "align": "left"
+        },
+        {
+          "id": "P07",
+          "text": "2. 경영책임자는 사업장에 안전보건관리체계를 구축하여 사업장의 위험요인 제거·통제를 위한 충분한 인적·물적 자원을 제공한다.",
+          "align": "left"
+        },
+        {
+          "id": "P08",
+          "text": "3. 안전보건 목표를 설정하고, 이를 달성하기 위한 세부적인 실행계획을 수립하여 이행한다.",
+          "align": "left"
+        },
+        {
+          "id": "P09",
+          "text": "4. 안전보건 관계 법령 및 관련 규정을 준수하는 내부규정을 수립하여 충실히 이행한다.",
+          "align": "left"
+        },
+        {
+          "id": "P10",
+          "text": "5. 근로자의 참여를 통해 위험요인을 파악하고, 파악된 위험요인은 반드시 개선하고, 교육을 통해 공유한다.",
+          "align": "left"
+        },
+        {
+          "id": "P11",
+          "text": "6. 모든 구성원이 자신의 직무와 관련된 위험요인을 알도록 하고, 위험요인 제거·대체 및 통제기법에 관해 교육·훈련을 실시한다.",
+          "align": "left"
+        },
+        {
+          "id": "P12",
+          "text": "7. 모든 공급자와 계약자가 우리의 안전보건 방침과 안전 요구사항을 준수하도록 한다.",
+          "align": "left"
+        },
+        {
+          "id": "P13",
+          "text": "8. 모든 구성원은 안전보건활동에 대한 책임과 의무를 성실히 준수토록 한다.",
+          "align": "left"
+        },
+        {
+          "id": "P14",
+          "text": "○○○○년 ○○ 월 ○○ 일",
+          "align": "right"
+        },
+        {
+          "id": "P15",
+          "text": "○○ 기업 대표이사  (서명)",
+          "align": "right"
+        }
+      ]
+    }
+  ]
+}
