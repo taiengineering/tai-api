@@ -47,7 +47,7 @@ from services.shared_search.adapters.reference_form import cleared_form_ids as _
 from services.shared_search.source_reader import (
     SupabaseClient, paginate_supabase,
 )
-from services.kosha_msds.section_fields import extract_product_name
+from services.kosha_msds.section_fields import extract_cas_no, extract_product_name
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +215,21 @@ def _make_chem_adapter(client: SupabaseClient) -> ChemAdapter:
             out[str(cid)] = extract_product_name(sec.get("payload_json"))
         return out
 
+    def _section3_cas_nos() -> dict[str, Optional[str]]:
+        out: dict[str, Optional[str]] = {}
+        for sec in paginate_supabase(
+            client,
+            table="kosha_msds_sections",
+            select="chemical_id,section_no,payload_json",
+            apply_filters=lambda q: q.eq("section_no", 3),
+            order_column="chemical_id",
+        ):
+            cid = sec.get("chemical_id")
+            if not cid:
+                continue
+            out[str(cid)] = extract_cas_no(sec.get("payload_json"))
+        return out
+
     def _attach_product_name(row: dict, names: dict[str, Optional[str]]) -> dict:
         cid = row.get("id")
         if cid is not None:
@@ -225,6 +240,7 @@ def _make_chem_adapter(client: SupabaseClient) -> ChemAdapter:
         table = _pick_source()
         snapshot_completed: dict[str, Optional[str]] = {}
         names = _section1_product_names()
+        cas_nos = _section3_cas_nos()
         for row in paginate_supabase(
             client,
             table=table,
@@ -240,6 +256,7 @@ def _make_chem_adapter(client: SupabaseClient) -> ChemAdapter:
                     client, snapshot_table="kosha_msds_snapshots",
                     snapshot_id=sid)
             row["_snapshot_completed_at"] = snapshot_completed[sid]
+            row["_section3_cas_no"] = cas_nos.get(str(row.get("id")))
             yield _attach_product_name(row, names)
 
     def _by_id(chem_uuid: str) -> Optional[dict]:
@@ -257,15 +274,24 @@ def _make_chem_adapter(client: SupabaseClient) -> ChemAdapter:
                     row["_snapshot_completed_at"] = _snapshot_completed_at(
                         client, snapshot_table="kosha_msds_snapshots",
                         snapshot_id=row["snapshot_id"])
-                sec = _fetch_one(
+                sec1 = _fetch_one(
                     client, table="kosha_msds_sections",
                     select="chemical_id,section_no,payload_json",
                     key_column="chemical_id", key_value=chem_uuid,
                     extra_filters=lambda q: q.eq("section_no", 1),
                 )
-                if sec is not None:
+                if sec1 is not None:
                     row["product_name"] = extract_product_name(
-                        sec.get("payload_json"))
+                        sec1.get("payload_json"))
+                sec3 = _fetch_one(
+                    client, table="kosha_msds_sections",
+                    select="chemical_id,section_no,payload_json",
+                    key_column="chemical_id", key_value=chem_uuid,
+                    extra_filters=lambda q: q.eq("section_no", 3),
+                )
+                if sec3 is not None:
+                    row["_section3_cas_no"] = extract_cas_no(
+                        sec3.get("payload_json"))
                 return row
         return None
 

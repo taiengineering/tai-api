@@ -129,6 +129,47 @@ def preview_store():
 def preview_client(monkeypatch, preview_store):
     monkeypatch.setenv(PUBLIC_MODE_ENV_VAR, PUBLIC_MODE_SEO_PREVIEW)
     monkeypatch.setattr(router_mod, "get_store", lambda: preview_store)
+    # PATCH-02: check_snapshot_gate() is called before every OS search;
+    # PATCH-01: no legacy fallback — mock both OS search functions.
+    monkeypatch.setattr(router_mod, "check_snapshot_gate", lambda **kw: None)
+
+    def _mock_search_by_q_os(*, q, limit=20, offset=0,
+                              dictionary_lookup=None, client=None):
+        from services.kosha_msds.search_adapter import build_search_plan
+        plan = build_search_plan(q, dictionary_lookup=dictionary_lookup)
+        meta = {
+            "identifier_kind": plan.identifier_kind,
+            "normalized_query": plan.normalized_query,
+            "compact_query": plan.compact_query,
+            "tokens": list(plan.tokens),
+            "expanded_terms": list(plan.expanded_terms),
+        }
+        if plan.is_empty:
+            return [], 0, meta
+        if plan.identifier_kind is not None:
+            rows, total = preview_store.search_current(
+                limit=limit, offset=offset, scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+                **{plan.identifier_kind: plan.identifier_value},
+            )
+        else:
+            rows, total = preview_store.search_current(
+                name_ko=plan.normalized_query, limit=limit, offset=offset,
+                scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+            )
+        return [r["chem_id"] for r in rows], total, meta
+
+    def _mock_search_os(*, chem_id=None, cas_no=None, ke_no=None, en_no=None,
+                        un_no=None, name_ko=None, name_en=None, q=None,
+                        limit=20, offset=0, client=None):
+        rows, total = preview_store.search_current(
+            chem_id=chem_id, cas_no=cas_no, ke_no=ke_no, en_no=en_no,
+            un_no=un_no, name_ko=name_ko, name_en=name_en,
+            limit=limit, offset=offset, scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+        )
+        return [r["chem_id"] for r in rows], total
+
+    monkeypatch.setattr(router_mod, "search_by_q_os", _mock_search_by_q_os)
+    monkeypatch.setattr(router_mod, "search_os", _mock_search_os)
     app = FastAPI()
     app.include_router(router_mod.router)
     with TestClient(app) as c:
@@ -381,22 +422,25 @@ def test_P8_identifier_exact_preserves_behavior(preview_client):
 
 
 def test_P9_kiwi_terminology_adapter_reused_for_preview(preview_client, monkeypatch):
-    # No new adapter — search_by_q is the only entry point and it accepts scope.
+    # PATCH-01/05: router now routes through search_by_q_os (OS-backed).
+    # Verify that the OS adapter is invoked with the query unchanged.
     calls = []
-    orig = search_adapter.search_by_q
 
-    def spy(*args, **kwargs):
-        calls.append(kwargs)
-        return orig(*args, **kwargs)
+    def spy(*, q, limit=20, offset=0, dictionary_lookup=None, client=None):
+        calls.append({"q": q})
+        return [], 0, {
+            "identifier_kind": None,
+            "normalized_query": q,
+            "compact_query": q,
+            "tokens": [],
+            "expanded_terms": [],
+        }
 
-    monkeypatch.setattr(search_adapter, "search_by_q", spy)
-    # Re-import router's alias binding so the spy is visible.
-    monkeypatch.setattr(router_mod, "search_by_q", spy)
+    monkeypatch.setattr(router_mod, "search_by_q_os", spy)
     r = preview_client.get("/public/kosha/msds", params={"q": "메탄올"})
     assert r.status_code == 200
     assert len(calls) == 1
-    assert calls[0]["scope"] == PUBLICATION_SCOPE_SEO_PREVIEW, \
-        "router must forward SEO_PREVIEW scope to search_by_q"
+    assert calls[0]["q"] == "메탄올"
 
 
 # ---------------------------------------------------------------------------
