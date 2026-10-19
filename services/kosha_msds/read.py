@@ -26,7 +26,10 @@ non-current chemical are never returned.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Iterable, Optional
+
+logger = logging.getLogger(__name__)
 
 from services.kosha_msds.contract import (
     ALLOWED_PUBLICATION_SCOPES,
@@ -380,6 +383,54 @@ class MemoryMsdsReadStore:
                 return dict(s)
         return None
 
+    def hydrate_chem_ids(
+        self,
+        chem_ids: list[str],
+        *,
+        scope: str = PUBLICATION_SCOPE_SEO_PREVIEW,
+    ) -> list[dict]:
+        """Fetch + hydrate display fields for an ordered list of chem_ids.
+
+        Mirrors list_current() hydration but for an arbitrary set of
+        chem_ids (e.g., returned by OS search). Preserves input order.
+        Silently drops chem_ids not found in the scoped rows; logs a
+        warning so operators can detect OS/DB membership drift (PATCH-07).
+        """
+        if not chem_ids:
+            return []
+        source_rows = self._rows_for_scope(scope)
+        rows_by_chem_id: dict[str, dict] = {}
+        for row in source_rows:
+            cid = row.get("chem_id")
+            if cid in chem_ids:
+                rows_by_chem_id[cid] = dict(row)
+        missing = [cid for cid in chem_ids if cid not in rows_by_chem_id]
+        if missing:
+            logger.warning(
+                "hydrate_chem_ids: %d chem_id(s) not found in scope %s: %s",
+                len(missing), scope, missing[:5],
+            )
+        result = []
+        for cid in chem_ids:
+            row = rows_by_chem_id.get(cid)
+            if row is None:
+                continue
+            uuid_str = str(row.get("id", ""))
+            secs = [
+                s for s in self._sections
+                if str(s.get("chemical_id")) == uuid_str
+                and int(s.get("section_no") or 0) in _HYDRATION_SECTION_NOS
+            ]
+            last_date = (self._chemicals.get(uuid_str) or {}).get("last_date")
+            fields = _hydrate_from_sections(secs, last_date)
+            name_ko_fallback = fields.pop("chemical_name_ko_fallback")
+            cas_no_fallback = fields.pop("cas_no_fallback")
+            merged = {**row, **fields}
+            merged["chemical_name_ko"] = _coalesce_btrim(row.get("chemical_name_ko"), name_ko_fallback)
+            merged["cas_no"] = _coalesce_btrim(row.get("cas_no"), cas_no_fallback)
+            result.append(merged)
+        return result
+
 
 class SupabaseMsdsReadStore:
     """Supabase SELECT-only read store. No insert/update/delete methods.
@@ -422,6 +473,37 @@ class SupabaseMsdsReadStore:
         return int(getattr(r, "count", None) or 0)
 
     def get_current_by_chem_id(self, chem_id: str, *, scope: str = PUBLICATION_SCOPE_FULL) -> Optional[dict]:
+        if scope == PUBLICATION_SCOPE_SEO_PREVIEW:
+            r = (
+                self.sb.table(SEO_PREVIEW_CURRENT_VIEW)
+                .select(CURRENT_VIEW_SELECT)
+                .eq("chem_id", chem_id)
+                .limit(1)
+                .execute()
+            )
+            rows = r.data or []
+            if not rows:
+                return None
+            row = dict(rows[0])
+            chemical_id = str(row.get("id", ""))
+            if chemical_id:
+                sec_r = (
+                    self.sb.table(SECTIONS_TABLE)
+                    .select(_HYDRATION_SECTIONS_SELECT)
+                    .eq("chemical_id", chemical_id)
+                    .in_("section_no", list(_HYDRATION_SECTION_NOS))
+                    .execute()
+                )
+                sections = list(sec_r.data or [])
+            else:
+                sections = []
+            fields = _hydrate_from_sections(sections, last_date=None)
+            name_ko_fallback = fields.pop("chemical_name_ko_fallback")
+            cas_no_fallback = fields.pop("cas_no_fallback")
+            merged = {**row, **fields}
+            merged["chemical_name_ko"] = _coalesce_btrim(row.get("chemical_name_ko"), name_ko_fallback)
+            merged["cas_no"] = _coalesce_btrim(row.get("cas_no"), cas_no_fallback)
+            return merged
         r = (
             self.sb.table(_view_for_scope(scope))
             .select(_select_for_scope(scope))
@@ -575,6 +657,98 @@ class SupabaseMsdsReadStore:
         rows = r.data or []
         return dict(rows[0]) if rows else None
 
+    def hydrate_chem_ids(
+        self,
+        chem_ids: list[str],
+        *,
+        scope: str = PUBLICATION_SCOPE_SEO_PREVIEW,
+    ) -> list[dict]:
+        """Fetch + hydrate display fields for an ordered list of chem_ids.
+
+        Used by the OS-backed search path (WO-WWW-PERF-004-P0S) to hydrate
+        results returned by OpenSearch. Preserves input order; silently
+        drops chem_ids not found in the scoped view; logs a warning so
+        operators can detect OS/DB membership drift (PATCH-07).
+
+        3-query P0-A fast path: no display view, no CROSS JOIN LATERAL.
+        scope selects the membership view (PATCH-07):
+          SEO_PREVIEW → kosha_msds_seo_preview_current (default)
+          FULL        → kosha_msds_current
+        """
+        if not chem_ids:
+            return []
+        view = (
+            SEO_PREVIEW_CURRENT_VIEW
+            if scope == PUBLICATION_SCOPE_SEO_PREVIEW
+            else CURRENT_VIEW
+        )
+        r = (
+            self.sb.table(view)
+            .select(CURRENT_VIEW_SELECT)
+            .in_("chem_id", chem_ids)
+            .execute()
+        )
+        rows_by_chem_id: dict[str, dict] = {}
+        for row in (r.data or []):
+            cid = row.get("chem_id")
+            if cid:
+                rows_by_chem_id[cid] = row
+        missing = [cid for cid in chem_ids if cid not in rows_by_chem_id]
+        if missing:
+            logger.warning(
+                "hydrate_chem_ids: %d chem_id(s) not found in scope %s: %s",
+                len(missing), scope, missing[:5],
+            )
+
+        chemical_ids = [
+            str(rows_by_chem_id[cid]["id"])
+            for cid in chem_ids
+            if cid in rows_by_chem_id and rows_by_chem_id[cid].get("id")
+        ]
+        if not chemical_ids:
+            return []
+
+        sec_r = (
+            self.sb.table(SECTIONS_TABLE)
+            .select(_HYDRATION_SECTIONS_SELECT)
+            .in_("chemical_id", chemical_ids)
+            .in_("section_no", list(_HYDRATION_SECTION_NOS))
+            .execute()
+        )
+        sections_by_chem: dict[str, list] = {}
+        for s in (sec_r.data or []):
+            uuid_str = str(s.get("chemical_id", ""))
+            sections_by_chem.setdefault(uuid_str, []).append(s)
+
+        chem_r = (
+            self.sb.table(CHEMICALS_TABLE)
+            .select(CHEMICALS_EXTRA_SELECT)
+            .in_("id", chemical_ids)
+            .execute()
+        )
+        last_dates: dict[str, Optional[str]] = {
+            str(c["id"]): c.get("last_date")
+            for c in (chem_r.data or [])
+            if c.get("id")
+        }
+
+        result = []
+        for cid in chem_ids:
+            row = rows_by_chem_id.get(cid)
+            if row is None:
+                continue
+            uuid_str = str(row.get("id", ""))
+            fields = _hydrate_from_sections(
+                sections_by_chem.get(uuid_str, []), last_dates.get(uuid_str)
+            )
+            name_ko_fallback = fields.pop("chemical_name_ko_fallback")
+            cas_no_fallback = fields.pop("cas_no_fallback")
+            merged = {**row, **fields}
+            merged["chemical_name_ko"] = _coalesce_btrim(row.get("chemical_name_ko"), name_ko_fallback)
+            merged["cas_no"] = _coalesce_btrim(row.get("cas_no"), cas_no_fallback)
+            result.append(merged)
+        return result
+
 
 # ---------------------------------------------------------------------------
 # Service operations
@@ -701,6 +875,69 @@ def search(
         "items": [
             _current_row_to_contract(row, last_date=None) for row in rows
         ],
+        "total": int(total),
+        "limit": lim,
+        "offset": off,
+    }
+
+
+def search_from_chem_ids(
+    *,
+    store,
+    chem_ids: list[str],
+    total: int,
+    limit: int,
+    offset: int,
+    scope: Optional[str] = None,
+) -> dict:
+    """Hydrate and format results from an OS-returned (chem_ids, total) pair.
+
+    Used by the OpenSearch-backed search path (WO-WWW-PERF-004-P0S).
+    chem_ids is the page already sliced by OS (limit/offset applied there).
+    total is the OS-reported hit count (track_total_hits=true).
+    scope selects the membership view for hydration (PATCH-07); defaults
+    to PUBLICATION_SCOPE_SEO_PREVIEW when None.
+    """
+    lim = max(1, min(int(limit), MAX_LIMIT))
+    off = max(0, int(offset))
+    hydration_scope = (
+        PUBLICATION_SCOPE_SEO_PREVIEW if scope is None else scope
+    )
+    rows = store.hydrate_chem_ids(chem_ids, scope=hydration_scope)
+    # PATCH-02E/003H/P0-04: hard gate — OS/DB membership drift must not silently
+    # produce a short, mismatched, or duplicate page.
+    # Legitimate empty results (chem_ids=[]) are not affected.
+    if chem_ids:
+        from services.kosha_msds.opensearch_query import MsdsHydrationIntegrityError
+        # P0-04: duplicate OS input IDs (OS index anomaly)
+        if len(chem_ids) != len(set(chem_ids)):
+            dup_count = len(chem_ids) - len(set(chem_ids))
+            raise MsdsHydrationIntegrityError(
+                f"Duplicate chem_ids in OS result: {dup_count} duplicates in scope {hydration_scope!r}"
+            )
+        os_id_set = set(chem_ids)
+        hydrated_id_set = {row.get("chem_id") for row in rows}
+        if os_id_set != hydrated_id_set:
+            missing = os_id_set - hydrated_id_set
+            extra = hydrated_id_set - os_id_set
+            raise MsdsHydrationIntegrityError(
+                f"OS/DB ID mismatch: missing={len(missing)} extra={len(extra)} "
+                f"in scope {hydration_scope!r}"
+            )
+        # P0-04: duplicate hydrated IDs (DB view anomaly)
+        if len(rows) != len({row.get("chem_id") for row in rows}):
+            dup_count = len(rows) - len({row.get("chem_id") for row in rows})
+            raise MsdsHydrationIntegrityError(
+                f"Duplicate chem_ids in hydration result: {dup_count} duplicates in scope {hydration_scope!r}"
+            )
+        # CLOSURE-03: verify the store preserved OS rank order (list comparison, not set)
+        actual_order = [row.get("chem_id") for row in rows]
+        if actual_order != list(chem_ids):
+            raise MsdsHydrationIntegrityError(
+                f"Hydration order does not match OS input order in scope {hydration_scope!r}"
+            )
+    return {
+        "items": [_current_row_to_contract(row, last_date=None) for row in rows],
         "total": int(total),
         "limit": lim,
         "offset": off,

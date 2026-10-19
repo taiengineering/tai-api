@@ -220,6 +220,7 @@ MATCH_IDENTIFIER_EXACT = "IDENTIFIER_EXACT"
 MATCH_NORMALIZED_EXACT = "NORMALIZED_EXACT"
 MATCH_DICTIONARY = "DICTIONARY_EXPANSION"
 MATCH_KIWI_TOKEN = "KIWI_TOKEN"
+MATCH_BM25_NORI = "BM25_NORI"  # OS free-text path (PATCH-05)
 
 
 def _clamp_pagination(limit: int, offset: int) -> tuple[int, int]:
@@ -349,3 +350,5 @@ def search_by_q(
         "offset": off,
         "match_metadata": match_meta,
     }
+
+
