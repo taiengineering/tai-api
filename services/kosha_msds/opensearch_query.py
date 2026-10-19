@@ -58,10 +58,11 @@ _DEEP_PAGINATION_LIMIT = 9_900
 _SNAPSHOT_CACHE_TTL = 300        # 5 minutes (legacy count-based cache, kept for helpers)
 _SNAPSHOT_COUNT_TOLERANCE = 50   # allow ±50 docs during re-index window (legacy)
 _CAS_INDEX_ENV_VAR = "KOSHA_MSDS_CAS_INDEX_READY"
-_QUERY_OS_CALL_BUDGET = 200      # max actual client.search calls per q query (IMP-010D)
-# IMP-010D: budget_ref counts actual client.search calls (not search_os() invocations).
-# PIT create/delete are NOT counted. Each _collect_all_os_pit batch = 1 budget unit.
-# For 20,568 hits: 21 batches/term × 2 fields = 42 calls per normalized term — well within 200.
+_QUERY_OS_CALL_BUDGET = 200      # total network requests per q query (CLOSURE-A)
+# CLOSURE-A: total = 1 create_pit + ≤198 client.search + 1 delete_pit ≤ 200.
+# budget_ref is initialised to (_QUERY_OS_CALL_BUDGET - 2) to reserve the create+delete slots.
+# Each _collect_all_os_pit batch decrements budget_ref by 1.
+# For 20,568 hits: 21 batches/term × 2 fields = 42 search calls per term — well within 198.
 
 
 # ---------------------------------------------------------------------------
@@ -278,24 +279,20 @@ def _wildcard_escape(term: str) -> str:
     return term.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
 
 
-def _build_chem_term_query(
-    *,
-    name_ko: Optional[str] = None,
-    name_en: Optional[str] = None,
-) -> tuple[dict, list]:
-    """Build (query_body, sort) for a CHEM name/term search.
+def _name_must_clauses(
+    name_ko: Optional[str],
+    name_en: Optional[str],
+) -> list[dict]:
+    """Build must-clauses for name_ko / name_en name searches (CLOSURE-B).
 
-    IMP-010A: Extracted from search_os to share query construction with
-    _collect_all_os_pit. Returns (query_body_dict, sort_list); caller wraps
-    query_body_dict in {"query": ...} when assembling the full request body.
-    Only name_ko and name_en are supported — identifier/q fields are not.
+    Single source of truth used by both search_os() (structured filter path)
+    and _build_chem_term_query() (PIT candidate path) so the two paths are
+    always identical.
     """
-    filters: list[dict] = list(_CHEM_BASE_FILTER)
-    must_clauses: list[dict] = []
-
+    clauses: list[dict] = []
     if name_ko:
         escaped = _wildcard_escape(name_ko)
-        must_clauses.append({
+        clauses.append({
             "wildcard": {
                 "title.raw": {
                     "value": f"*{escaped}*",
@@ -304,11 +301,27 @@ def _build_chem_term_query(
             }
         })
     if name_en:
-        must_clauses.append({
+        clauses.append({
             "match": {
                 "summary": {"query": name_en, "analyzer": "tai_nori_search"}
             }
         })
+    return clauses
+
+
+def _build_chem_term_query(
+    *,
+    name_ko: Optional[str] = None,
+    name_en: Optional[str] = None,
+) -> tuple[dict, list]:
+    """Build (query_body, sort) for a CHEM name/term search.
+
+    IMP-010A / CLOSURE-B: delegates must-clause construction to
+    _name_must_clauses() so the PIT candidate path and search_os() share
+    an identical query shape for name_ko / name_en matching.
+    """
+    filters: list[dict] = list(_CHEM_BASE_FILTER)
+    must_clauses = _name_must_clauses(name_ko, name_en)
 
     if must_clauses:
         query_body = {"bool": {"filter": filters, "must": must_clauses}}
@@ -460,29 +473,9 @@ def search_os(
     if un_no:
         filters.append({"term": {"aliases.raw": un_no}})
 
-    # PATCH-003C/D: text must clauses
-    must_clauses: list[dict] = []
+    # PATCH-003C/D / CLOSURE-B: name must-clauses via shared helper
     text_q = (q or "").strip()
-
-    if name_ko:
-        # PATCH-003D: wildcard on title.raw for ILIKE semantics
-        escaped = _wildcard_escape(name_ko)
-        must_clauses.append({
-            "wildcard": {
-                "title.raw": {
-                    "value": f"*{escaped}*",
-                    "case_insensitive": True,
-                }
-            }
-        })
-    if name_en:
-        # PATCH-003C: chemical_name_en is stored in summary field (not title)
-        # summary.raw not indexed — use Nori match approximation
-        must_clauses.append({
-            "match": {
-                "summary": {"query": name_en, "analyzer": "tai_nori_search"}
-            }
-        })
+    must_clauses: list[dict] = _name_must_clauses(name_ko, name_en)
     if text_q:
         must_clauses.append({
             "multi_match": {
@@ -859,8 +852,8 @@ def search_by_q_os(
     seen: set[str] = set()
     all_deduped: list[str] = []
     item_meta: dict[str, dict] = {}  # chem_id → {match_type, matched_term} (first-seen wins)
-    # budget counts actual client.search calls across all terms (IMP-010D)
-    budget = [_QUERY_OS_CALL_BUDGET]
+    # CLOSURE-A: reserve 2 slots for create_pit+delete_pit; search budget = total-2
+    budget = [_QUERY_OS_CALL_BUDGET - 2]
 
     def _collect_with_meta(ids: list[str], mt: str, term: str) -> None:
         for cid in ids:
@@ -917,8 +910,11 @@ def search_by_q_os(
     finally:
         try:
             client.delete_pit(body={"pit_id": pit_id_ref[0]})
-        except Exception:
-            pass
+        except Exception as _del_exc:
+            logger.warning(
+                "PIT delete failed for free-text search (pit_id=%s): %s",
+                pit_id_ref[0], _del_exc,
+            )
 
     total = len(all_deduped)
     page = all_deduped[off: off + lim]

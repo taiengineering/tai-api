@@ -3431,7 +3431,7 @@ def test_L11_budget_exceeded_raises_incomplete():
 
 
 def test_L12_match_metadata_preserved_in_pit_path():
-    """L12: per_item_metadata match_type/matched_term are set in PIT free-text path (IMP-010B/C)."""
+    """L12: per_item_metadata always contains match_type/matched_term for result chem_id (CLOSURE-C)."""
     mock_client = MagicMock()
     mock_client.create_pit.return_value = {"pit_id": "pit-L12"}
     mock_client.search.return_value = _make_os_resp(["000001"], 1)
@@ -3440,10 +3440,42 @@ def test_L12_match_metadata_preserved_in_pit_path():
 
     assert "per_item_metadata" in meta
     assert isinstance(meta["per_item_metadata"], dict)
-    if "000001" in meta["per_item_metadata"]:
-        m = meta["per_item_metadata"]["000001"]
-        assert "match_type" in m
-        assert "matched_term" in m
+    assert "000001" in meta["per_item_metadata"], (
+        "per_item_metadata must contain the returned chem_id — annotation is mandatory"
+    )
+    m = meta["per_item_metadata"]["000001"]
+    assert "match_type" in m
+    assert "matched_term" in m
+    assert m["match_type"] == "NORMALIZED_EXACT"
+    assert m["matched_term"] == "염산"
+
+
+def test_L12b_match_priority_first_seen_wins():
+    """L12b: NORMALIZED_EXACT wins over KIWI_TOKEN when same chem_id matches both (CLOSURE-C)."""
+    import services.kosha_msds.opensearch_query as _osq
+
+    mock_client = MagicMock()
+    mock_client.create_pit.return_value = {"pit_id": "pit-L12b"}
+
+    def _mock_collect(*, name_ko=None, name_en=None, client=None,
+                      pit_id_ref=None, budget_ref=None):
+        if name_ko == "염산":
+            return ["000001"]
+        return []
+
+    original = _osq._collect_all_os_pit
+    _osq._collect_all_os_pit = _mock_collect
+    try:
+        _, _, meta = search_by_q_os(q="염산", limit=5, offset=0, client=mock_client)
+    finally:
+        _osq._collect_all_os_pit = original
+
+    assert "000001" in meta["per_item_metadata"]
+    m = meta["per_item_metadata"]["000001"]
+    assert m["match_type"] == "NORMALIZED_EXACT", (
+        f"Expected NORMALIZED_EXACT (first-seen wins), got {m['match_type']}"
+    )
+    assert m["matched_term"] == "염산"
 
 
 # ---- L13: Identifier path (P0) does not use PIT ----------------------------
