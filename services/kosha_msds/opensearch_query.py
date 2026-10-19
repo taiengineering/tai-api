@@ -58,7 +58,12 @@ _DEEP_PAGINATION_LIMIT = 9_900
 _SNAPSHOT_CACHE_TTL = 300        # 5 minutes (legacy count-based cache, kept for helpers)
 _SNAPSHOT_COUNT_TOLERANCE = 50   # allow ±50 docs during re-index window (legacy)
 _CAS_INDEX_ENV_VAR = "KOSHA_MSDS_CAS_INDEX_READY"
-_QUERY_OS_CALL_BUDGET = 200      # max search_os calls per q query across all terms (CLOSURE-04)
+_QUERY_OS_CALL_BUDGET = 200      # max search_os() calls per q query across all terms (CLOSURE-04)
+# FIX-03 NOTE: _QUERY_OS_CALL_BUDGET counts search_os() invocations, NOT actual OS client
+# requests.  Each search_os(offset+limit > 9900) creates a PIT and makes O(offset/1000)
+# client.search calls internally — so 200 budget ≠ 200 network requests.
+# PIT reuse across _collect_all_os pages is a structural change deferred for GPT design
+# review; current budget is a logical-call guard, not a network-cost guarantee.
 
 
 # ---------------------------------------------------------------------------
@@ -534,6 +539,15 @@ def _collect_all_os(*, client, budget_ref: Optional[list] = None, **kwargs) -> l
         # Query-level budget guard (CLOSURE-04)
         if budget_ref is not None:
             if budget_ref[0] <= 0:
+                # FIX-01/K01/K03: budget 0 before any OS call for this term →
+                # we have NOT searched it at all; returning [] would falsely
+                # report 0 results for unchecked candidates (K03).
+                if last_total is None:
+                    raise MsdsCandidateEnumerationIncompleteError(
+                        "Query-level OS call budget exhausted before first page "
+                        "for this term (unchecked candidates may have results — "
+                        "falsely reporting 0 is forbidden)"
+                    )
                 if isinstance(last_total, int) and len(all_ids) < last_total:
                     raise MsdsCandidateEnumerationIncompleteError(
                         f"Query-level OS call budget exhausted: "

@@ -428,8 +428,11 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
 
     # --- Post-scan state check (skip if scans failed) ---
     # CLOSURE-01/J03: also re-check physical_index to detect alias swap during scan.
+    # FIX-02/K04: re-check pending_count post-scan — new PENDING events during scan
+    # mean the proof is potentially dirty even if pre-scan state was clean.
     postscan_error: Optional[str] = None
     state_changed = False
+    postscan_pending: int = 0
     snapshot_id_post: str = snapshot_id_pre
     outbox_wm_post: int = outbox_wm_pre
     physical_index_post: str = physical_index
@@ -438,6 +441,7 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
             snapshot_id_post, _ = _get_current_snapshot(sb, scope)
             outbox_wm_post = _get_outbox_watermark(sb)
             physical_index_post = _get_physical_index(client)
+            postscan_pending = _get_outbox_pending_count(sb)
         except SnapshotProofScanError as exc:
             postscan_error = f"Post-scan state check failed: {exc}"
         state_changed = (
@@ -466,7 +470,9 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
     missing_count = len(db_keys - os_keys)   # in DB but not OS
     extra_count = len(os_keys - db_keys)      # in OS but not DB
 
-    # --- Determine status (priority: scan_error > postscan_error > empty_snapshot > pending > duplicate_db > duplicate_os > state_changed > membership > empty_run_id) ---
+    # --- Determine status (priority: scan_error > postscan_error > empty_snapshot
+    #     > pending_pre > postscan_pending > duplicate_db > duplicate_os
+    #     > state_changed > membership > empty_run_id) ---
     error_message: Optional[str] = None
     if scan_error is not None:
         error_message = scan_error
@@ -480,6 +486,13 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
     elif pending_count > 0:
         error_message = (
             f"Uncommitted CHEM events in outbox: pending_count={pending_count}"
+        )
+        verification_status = "FAIL"
+    elif postscan_pending > 0:
+        # FIX-02/K04: new PENDING events arrived during scan window
+        error_message = (
+            f"Uncommitted CHEM events in outbox (post-scan): "
+            f"postscan_pending={postscan_pending}"
         )
         verification_status = "FAIL"
     elif duplicate_db_count > 0:

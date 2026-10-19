@@ -2791,3 +2791,301 @@ def test_J10d_candidate_enumeration_integrity_503(monkeypatch, seo_store):
         resp = client.get("/public/kosha/msds?q=염산")
     assert resp.status_code == 503
     assert resp.json()["detail"]["code"] == "MSDS_CANDIDATE_ENUMERATION_INTEGRITY"
+
+
+# ===========================================================================
+# CLOSURE-008 — K01-K07
+# FIX-01 (K01-K03): budget 0 before first term page → INCOMPLETE (not falsely 0)
+# FIX-02 (K04-K06): post-scan pending check in generate_proof_dry_run
+# FIX-03 (K07):     actual OS request cost model (PIT creates per deep-page call)
+# ===========================================================================
+
+
+# ---- K01: budget 0 at start of second term → INCOMPLETE --------------------
+
+
+def test_K01_budget_zero_before_second_term_raises_incomplete():
+    """K01: Budget=1 consumed by first term (0 results); second term entry with budget=0
+    and last_total=None must raise INCOMPLETE — not falsely return [] (FIX-01)."""
+    from services.kosha_msds.opensearch_query import (
+        _collect_all_os,
+        MsdsCandidateEnumerationIncompleteError,
+    )
+
+    budget_ref = [1]
+    calls = [0]
+
+    def _mock_search_os(**kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            return [], 0  # first term: 0 results, budget 1→0
+        # If called again, this term has results — but budget is already 0
+        return ["000001", "000002"], 2
+
+    with patch("services.kosha_msds.opensearch_query.search_os", side_effect=_mock_search_os):
+        # First _collect_all_os: 0 results, budget decremented to 0
+        result = _collect_all_os(name_ko="테스트", client=MagicMock(), budget_ref=budget_ref)
+        assert result == []
+        assert budget_ref[0] == 0
+
+        # Second _collect_all_os: budget=0 at entry, last_total=None → INCOMPLETE
+        with pytest.raises(MsdsCandidateEnumerationIncompleteError):
+            _collect_all_os(name_en="테스트", client=MagicMock(), budget_ref=budget_ref)
+
+
+# ---- K02: budget hits 0 exactly after last term completes → PASS -----------
+
+
+def test_K02_budget_zero_after_completion_is_pass():
+    """K02: Single _collect_all_os call uses budget=1 and returns normally;
+    budget reaches 0 after the term completes — no INCOMPLETE raised (FIX-01)."""
+    from services.kosha_msds.opensearch_query import _collect_all_os
+
+    budget_ref = [1]
+
+    with patch("services.kosha_msds.opensearch_query.search_os",
+               return_value=(["000001", "000002"], 2)):
+        result = _collect_all_os(name_ko="테스트", client=MagicMock(), budget_ref=budget_ref)
+
+    assert result == ["000001", "000002"]
+    assert budget_ref[0] == 0  # budget fully consumed, but no error raised
+
+
+# ---- K03: budget already 0 at entry → INCOMPLETE (not falsely empty) -------
+
+
+def test_K03_budget_zero_at_entry_raises_incomplete():
+    """K03: Budget=0 at entry of _collect_all_os → raises INCOMPLETE before any OS call.
+
+    Prevents dictionary / Kiwi candidates from being silently skipped and
+    treated as 0 results when they would have actual matches (FIX-01)."""
+    from services.kosha_msds.opensearch_query import (
+        _collect_all_os,
+        MsdsCandidateEnumerationIncompleteError,
+    )
+
+    budget_ref = [0]  # already exhausted
+
+    with pytest.raises(MsdsCandidateEnumerationIncompleteError,
+                       match="before first page"):
+        _collect_all_os(name_ko="에탄올", client=MagicMock(), budget_ref=budget_ref)
+
+
+# ---- K04: new PENDING event during scan → FAIL proof (FIX-02) --------------
+
+
+def test_K04_postscan_pending_event_generates_fail_proof():
+    """K04: PENDING event arrives during scan window → post-scan check detects it → FAIL proof
+    (FIX-02: post-scan _get_outbox_pending_count added to generate_proof_dry_run)."""
+    from services.kosha_msds.snapshot_proof import generate_proof_dry_run
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+
+    pending_call_n = [0]
+
+    def _table(name):
+        m = MagicMock()
+        if name == "kosha_msds_seo_preview_current":
+            snap_r = MagicMock()
+            snap_r.data = [{"snapshot_id": "snap-k04"}]
+            m.select.return_value.limit.return_value.execute.return_value = snap_r
+            scan_r = MagicMock()
+            scan_r.data = []
+            m.select.return_value.order.return_value.limit.return_value.execute.return_value = scan_r
+        elif name == "kosha_msds_snapshots":
+            ts_r = MagicMock()
+            ts_r.data = [{"completed_at": "2026-10-01T00:00:00+00:00"}]
+            m.select.return_value.eq.return_value.limit.return_value.execute.return_value = ts_r
+        elif name == "search_index_outbox":
+            wm_r = MagicMock()
+            wm_r.data = [{"id": 100}]
+            m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = wm_r
+
+            def _pending_execute():
+                pending_call_n[0] += 1
+                r = MagicMock()
+                # Pre-scan call: pending=0; post-scan call: pending=1 (new event)
+                r.count = 0 if pending_call_n[0] == 1 else 1
+                return r
+
+            m.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.side_effect = _pending_execute
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {"tai-shared-search-v1-k04": {}}
+    os_client.search.return_value = {"hits": {"hits": []}}
+
+    proof = generate_proof_dry_run(scope=PUBLICATION_SCOPE_SEO_PREVIEW, sb=sb, client=os_client)
+    assert proof.verification_status == "FAIL"
+    assert "postscan_pending=1" in (proof.error_message or "")
+
+
+# ---- K05: post-scan pending count query fails → FAIL proof (FIX-02) --------
+
+
+def test_K05_postscan_pending_query_failure_generates_fail_proof():
+    """K05: Post-scan _get_outbox_pending_count raises → postscan_error set → FAIL proof
+    (FIX-02: post-scan failure is captured within the post-scan try block)."""
+    from services.kosha_msds.snapshot_proof import generate_proof_dry_run
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+
+    postscan_call_n = [0]
+
+    def _table(name):
+        m = MagicMock()
+        if name == "kosha_msds_seo_preview_current":
+            snap_r = MagicMock()
+            snap_r.data = [{"snapshot_id": "snap-k05"}]
+            m.select.return_value.limit.return_value.execute.return_value = snap_r
+            scan_r = MagicMock()
+            scan_r.data = []
+            m.select.return_value.order.return_value.limit.return_value.execute.return_value = scan_r
+        elif name == "kosha_msds_snapshots":
+            ts_r = MagicMock()
+            ts_r.data = [{"completed_at": "2026-10-01T00:00:00+00:00"}]
+            m.select.return_value.eq.return_value.limit.return_value.execute.return_value = ts_r
+        elif name == "search_index_outbox":
+            wm_r = MagicMock()
+            wm_r.data = [{"id": 100}]
+            m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = wm_r
+
+            def _pending_execute():
+                postscan_call_n[0] += 1
+                if postscan_call_n[0] == 1:
+                    r = MagicMock()
+                    r.count = 0  # pre-scan: clean
+                    return r
+                # Post-scan call: DB error
+                raise Exception("DB connection lost during post-scan pending check")
+
+            m.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.side_effect = _pending_execute
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {"tai-shared-search-v1-k05": {}}
+    os_client.search.return_value = {"hits": {"hits": []}}
+
+    proof = generate_proof_dry_run(scope=PUBLICATION_SCOPE_SEO_PREVIEW, sb=sb, client=os_client)
+    assert proof.verification_status == "FAIL"
+    assert "Post-scan state check failed" in (proof.error_message or "")
+
+
+# ---- K06: clean state pre and post → PASS proof (FIX-02 regression) --------
+
+
+def test_K06_clean_state_pre_and_post_generates_pass_proof():
+    """K06: Stable state pre/post scan and pending=0 both times → PASS proof.
+
+    Regression: FIX-02 post-scan pending check must not break the happy path.
+    """
+    from services.kosha_msds.snapshot_proof import generate_proof_dry_run, verify_proof
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+    from services.shared_search.opensearch_client import RUNS_INDEX
+
+    SNAP_ID = "snap-k06"
+    PHYS_IDX = "tai-shared-search-v1-k06"
+    OUTBOX_WM = 42
+
+    chem_id = "000001"
+    canonical_id = "uuid-k06"
+
+    def _table(name):
+        m = MagicMock()
+        if name == "kosha_msds_seo_preview_current":
+            snap_r = MagicMock()
+            snap_r.data = [{"snapshot_id": SNAP_ID}]
+            m.select.return_value.limit.return_value.execute.return_value = snap_r
+            scan_calls = [0]
+            def _scan_execute():
+                scan_calls[0] += 1
+                r = MagicMock()
+                r.data = [{"chem_id": chem_id, "id": canonical_id}] if scan_calls[0] == 1 else []
+                return r
+            m.select.return_value.order.return_value.limit.return_value.execute.side_effect = _scan_execute
+        elif name == "kosha_msds_snapshots":
+            ts_r = MagicMock()
+            ts_r.data = [{"completed_at": "2026-10-01T00:00:00+00:00"}]
+            m.select.return_value.eq.return_value.limit.return_value.execute.return_value = ts_r
+        elif name == "search_index_outbox":
+            wm_r = MagicMock()
+            wm_r.data = [{"id": OUTBOX_WM}]
+            pending_r = MagicMock()
+            pending_r.count = 0  # clean at all times
+            m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = wm_r
+            m.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value = pending_r
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    os_scan_calls = [0]
+    def _search_side_effect(**kwargs):
+        idx = kwargs.get("index", "")
+        if idx == RUNS_INDEX:
+            return {"hits": {"hits": [{"_source": {"run_id": "run-k06"}}]}}
+        os_scan_calls[0] += 1
+        if os_scan_calls[0] == 1:
+            return {
+                "hits": {
+                    "hits": [
+                        {"_source": {"source_key": chem_id, "canonical_id": canonical_id},
+                         "sort": [canonical_id]},
+                    ]
+                }
+            }
+        return {"hits": {"hits": []}}
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {PHYS_IDX: {}}
+    os_client.search.side_effect = _search_side_effect
+
+    proof = generate_proof_dry_run(scope=PUBLICATION_SCOPE_SEO_PREVIEW, sb=sb, client=os_client)
+    assert proof.verification_status == "PASS"
+    assert verify_proof(proof) is True
+    assert proof.db_membership_count == 1
+    assert proof.os_membership_count == 1
+
+
+# ---- K07: PIT is created per deep-page search_os call (FIX-03 cost model) --
+
+
+def test_K07_deep_pagination_creates_pit_per_search_os_call():
+    """K07: Each search_os call at offset+limit > 9900 creates a separate PIT.
+
+    Documents that _QUERY_OS_CALL_BUDGET counts search_os() invocations, not
+    actual OS client requests. PIT reuse across pages is deferred; this test
+    pins the current cost model so any future change is intentional (FIX-03).
+    """
+    from services.kosha_msds.opensearch_query import (
+        search_os,
+        _DEEP_PAGINATION_LIMIT,
+        _PIT_BATCH,
+    )
+
+    os_client = MagicMock()
+    os_client.create_pit.return_value = {"pit_id": "pit-k07"}
+    # PIT search: one batch with enough hits, then empty to stop
+    batch_hits = [
+        {"_source": {"source_key": f"{i:06d}"}, "sort": [f"key_{i}"]}
+        for i in range(_PIT_BATCH)
+    ]
+    os_client.search.side_effect = [
+        {"hits": {"total": {"value": 15000}, "hits": batch_hits}},
+        {"hits": {"total": {"value": 15000}, "hits": batch_hits}},
+        {"hits": {"total": {"value": 15000}, "hits": []}},  # terminate
+    ]
+
+    # Deep offset: offset+limit > _DEEP_PAGINATION_LIMIT → PIT activated
+    deep_offset = _DEEP_PAGINATION_LIMIT + 1
+    search_os(name_ko="염산", offset=deep_offset, limit=100, client=os_client)
+
+    # Verify PIT lifecycle: created once and deleted once per search_os call
+    assert os_client.create_pit.call_count == 1
+    assert os_client.delete_pit.call_count == 1
+    # Multiple client.search calls made for one search_os() call
+    assert os_client.search.call_count >= 2
