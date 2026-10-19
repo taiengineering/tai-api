@@ -58,12 +58,10 @@ _DEEP_PAGINATION_LIMIT = 9_900
 _SNAPSHOT_CACHE_TTL = 300        # 5 minutes (legacy count-based cache, kept for helpers)
 _SNAPSHOT_COUNT_TOLERANCE = 50   # allow ±50 docs during re-index window (legacy)
 _CAS_INDEX_ENV_VAR = "KOSHA_MSDS_CAS_INDEX_READY"
-_QUERY_OS_CALL_BUDGET = 200      # max search_os() calls per q query across all terms (CLOSURE-04)
-# FIX-03 NOTE: _QUERY_OS_CALL_BUDGET counts search_os() invocations, NOT actual OS client
-# requests.  Each search_os(offset+limit > 9900) creates a PIT and makes O(offset/1000)
-# client.search calls internally — so 200 budget ≠ 200 network requests.
-# PIT reuse across _collect_all_os pages is a structural change deferred for GPT design
-# review; current budget is a logical-call guard, not a network-cost guarantee.
+_QUERY_OS_CALL_BUDGET = 200      # max actual client.search calls per q query (IMP-010D)
+# IMP-010D: budget_ref counts actual client.search calls (not search_os() invocations).
+# PIT create/delete are NOT counted. Each _collect_all_os_pit batch = 1 budget unit.
+# For 20,568 hits: 21 batches/term × 2 fields = 42 calls per normalized term — well within 200.
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +276,46 @@ def os_chem_available(client=None) -> bool:
 def _wildcard_escape(term: str) -> str:
     """Escape OpenSearch wildcard special chars: *, ?, \\"""
     return term.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
+
+
+def _build_chem_term_query(
+    *,
+    name_ko: Optional[str] = None,
+    name_en: Optional[str] = None,
+) -> tuple[dict, list]:
+    """Build (query_body, sort) for a CHEM name/term search.
+
+    IMP-010A: Extracted from search_os to share query construction with
+    _collect_all_os_pit. Returns (query_body_dict, sort_list); caller wraps
+    query_body_dict in {"query": ...} when assembling the full request body.
+    Only name_ko and name_en are supported — identifier/q fields are not.
+    """
+    filters: list[dict] = list(_CHEM_BASE_FILTER)
+    must_clauses: list[dict] = []
+
+    if name_ko:
+        escaped = _wildcard_escape(name_ko)
+        must_clauses.append({
+            "wildcard": {
+                "title.raw": {
+                    "value": f"*{escaped}*",
+                    "case_insensitive": True,
+                }
+            }
+        })
+    if name_en:
+        must_clauses.append({
+            "match": {
+                "summary": {"query": name_en, "analyzer": "tai_nori_search"}
+            }
+        })
+
+    if must_clauses:
+        query_body = {"bool": {"filter": filters, "must": must_clauses}}
+    else:
+        query_body = {"bool": {"filter": filters}}
+
+    return query_body, [{"source_key": "asc"}]
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +648,149 @@ def _collect_all_os(*, client, budget_ref: Optional[list] = None, **kwargs) -> l
     return all_ids
 
 
+def _collect_all_os_pit(
+    *,
+    client,
+    pit_id_ref: list,
+    budget_ref: Optional[list] = None,
+    name_ko: Optional[str] = None,
+    name_en: Optional[str] = None,
+) -> list[str]:
+    """Collect ALL matching chem_ids via PIT + search_after (O(n) per term).
+
+    IMP-010B/C: Uses the caller-supplied PIT ID (pit_id_ref[0]) so all terms
+    in one search_by_q_os call share a single PIT (created once, deleted once
+    in the caller's finally block).
+
+    budget_ref: mutable [remaining_calls] counter; each actual client.search
+    call decrements it by 1 AFTER the call (IMP-010D). PIT create/delete are
+    NOT counted. Raises MsdsCandidateEnumerationIncompleteError when budget is
+    exhausted before collection is complete.
+
+    pit_id_ref: mutable [pit_id]; updated from resp.get("pit_id") on each
+    response to handle OpenSearch PIT-ID renewal.
+
+    CLOSURE-02 integrity checks identical to _collect_all_os:
+    - MsdsCandidateEnumerationIncompleteError: budget=0 before first page,
+      budget exhausted mid-collection, short page with total mismatch.
+    - MsdsCandidateEnumerationIntegrityError: total changed between pages,
+      over-collection, duplicate chem_ids in result set.
+    """
+    query_body, sort = _build_chem_term_query(name_ko=name_ko, name_en=name_en)
+
+    all_ids: list[str] = []
+    first_total: Optional[int] = None
+    last_total: Optional[int] = None
+    search_after = None
+
+    for _ in range(_CANDIDATE_MAX_PAGES):
+        # Budget guard (before search call)
+        if budget_ref is not None:
+            if budget_ref[0] <= 0:
+                if last_total is None:
+                    raise MsdsCandidateEnumerationIncompleteError(
+                        "Query-level OS call budget exhausted before first page "
+                        "for this term (unchecked candidates may have results — "
+                        "falsely reporting 0 is forbidden)"
+                    )
+                if isinstance(last_total, int) and len(all_ids) < last_total:
+                    raise MsdsCandidateEnumerationIncompleteError(
+                        f"Query-level OS call budget exhausted: "
+                        f"collected={len(all_ids)} os_total={last_total}"
+                    )
+                break
+
+        body: dict = {
+            "query": query_body,
+            "sort": sort,
+            "size": _CANDIDATE_PAGE_SIZE,
+            "track_total_hits": True,
+            "pit": {"id": pit_id_ref[0], "keep_alive": _PIT_KEEP_ALIVE},
+            "_source": ["source_key"],
+        }
+        if search_after is not None:
+            body["search_after"] = search_after
+
+        resp = client.search(body=body)
+
+        # PIT ID renewal (OpenSearch may return updated pit_id)
+        new_pit_id = resp.get("pit_id")
+        if new_pit_id:
+            pit_id_ref[0] = new_pit_id
+
+        # Budget decrement after each actual client.search call (IMP-010D)
+        if budget_ref is not None:
+            budget_ref[0] -= 1
+
+        hits_obj = resp.get("hits") or {}
+        total_raw = hits_obj.get("total") or {}
+        total = (
+            total_raw.get("value", 0)
+            if isinstance(total_raw, dict)
+            else int(total_raw or 0)
+        )
+        hits = hits_obj.get("hits") or []
+
+        # Cross-page total consistency (CLOSURE-02)
+        if first_total is None:
+            first_total = total
+        if isinstance(total, int) and isinstance(first_total, int) and total != first_total:
+            raise MsdsCandidateEnumerationIntegrityError(
+                f"OS total changed between pages: page_0_total={first_total} "
+                f"current_total={total} at len_collected={len(all_ids)} "
+                f"(index swap or concurrent reindex during candidate scan)"
+            )
+
+        last_total = total
+
+        for h in hits:
+            sk = (h.get("_source") or {}).get("source_key", "")
+            if sk:
+                all_ids.append(sk)
+
+        if len(hits) < _CANDIDATE_PAGE_SIZE:
+            break
+
+        if hits:
+            search_after = hits[-1].get("sort")
+
+        if isinstance(total, int) and total > 0 and len(all_ids) >= total:
+            break
+    else:
+        # Loop ran all _CANDIDATE_MAX_PAGES iterations without break
+        if isinstance(last_total, int) and len(all_ids) < last_total:
+            raise MsdsCandidateEnumerationIncompleteError(
+                f"Candidate enumeration budget exhausted: "
+                f"collected={len(all_ids)} os_total={last_total} "
+                f"(budget={_CANDIDATE_MAX_PAGES} pages × {_CANDIDATE_PAGE_SIZE})"
+            )
+
+    # Short-page incomplete (CLOSURE-02 J05 equivalent)
+    if isinstance(last_total, int) and last_total > 0 and len(all_ids) < last_total:
+        raise MsdsCandidateEnumerationIncompleteError(
+            f"Candidate enumeration incomplete: "
+            f"collected={len(all_ids)} os_total={last_total} "
+            f"(short page before full enumeration)"
+        )
+
+    # Over-collection
+    if isinstance(last_total, int) and last_total > 0 and len(all_ids) > last_total:
+        raise MsdsCandidateEnumerationIntegrityError(
+            f"Collected more IDs than OS total: collected={len(all_ids)} "
+            f"os_total={last_total} (duplicate page in OS response)"
+        )
+
+    # Duplicate chem_ids
+    if len(all_ids) != len(set(all_ids)):
+        dup_count = len(all_ids) - len(set(all_ids))
+        raise MsdsCandidateEnumerationIntegrityError(
+            f"Duplicate chem_ids in candidate set: {dup_count} duplicates "
+            f"(OS returned same document in multiple pages)"
+        )
+
+    return all_ids
+
+
 def search_by_q_os(
     *,
     q: str,
@@ -665,6 +846,10 @@ def search_by_q_os(
         return chem_ids, total, match_meta
 
     # P1: Free-text — CHEM-09 priority: NORMALIZED → DICTIONARY → KIWI_TOKEN
+    # IMP-010B: Resolve client here so create_pit can be called directly.
+    if client is None:
+        client = get_client()
+
     from services.kosha_msds.search_adapter import (
         MATCH_DICTIONARY,
         MATCH_KIWI_TOKEN,
@@ -674,7 +859,8 @@ def search_by_q_os(
     seen: set[str] = set()
     all_deduped: list[str] = []
     item_meta: dict[str, dict] = {}  # chem_id → {match_type, matched_term} (first-seen wins)
-    budget = [_QUERY_OS_CALL_BUDGET]  # mutable counter shared across all _collect_all_os calls
+    # budget counts actual client.search calls across all terms (IMP-010D)
+    budget = [_QUERY_OS_CALL_BUDGET]
 
     def _collect_with_meta(ids: list[str], mt: str, term: str) -> None:
         for cid in ids:
@@ -683,22 +869,56 @@ def search_by_q_os(
                 all_deduped.append(cid)
                 item_meta[cid] = {"match_type": mt, "matched_term": term}
 
-    def _run_term(term: str, mt: str) -> None:
-        if not term:
-            return
-        _collect_with_meta(
-            _collect_all_os(name_ko=term, client=client, budget_ref=budget), mt, term
+    # IMP-010B: Create 1 PIT for all terms (O(n) vs O(n²) offset re-scan)
+    try:
+        pit_resp = client.create_pit(
+            index=CURRENT_ALIAS,
+            params={"keep_alive": _PIT_KEEP_ALIVE},
         )
-        _collect_with_meta(
-            _collect_all_os(name_en=term, client=client, budget_ref=budget), mt, term
+        pit_id = pit_resp.get("pit_id") or ""
+    except Exception as exc:
+        raise MsdsPaginationDepthExceededError(
+            f"PIT creation failed for free-text search: {exc}"
+        ) from exc
+
+    if not pit_id:
+        raise MsdsPaginationDepthExceededError(
+            "PIT creation returned empty pit_id for free-text search"
         )
 
-    # Priority: normalized → dictionary expansions → kiwi tokens
-    _run_term(plan.normalized_query, MATCH_NORMALIZED_EXACT)
-    for term in plan.expanded_terms:
-        _run_term(term, MATCH_DICTIONARY)
-    for token in plan.tokens:
-        _run_term(token, MATCH_KIWI_TOKEN)
+    pit_id_ref = [pit_id]
+
+    try:
+        def _run_term(term: str, mt: str) -> None:
+            if not term:
+                return
+            _collect_with_meta(
+                _collect_all_os_pit(
+                    name_ko=term, client=client,
+                    pit_id_ref=pit_id_ref, budget_ref=budget,
+                ),
+                mt, term,
+            )
+            _collect_with_meta(
+                _collect_all_os_pit(
+                    name_en=term, client=client,
+                    pit_id_ref=pit_id_ref, budget_ref=budget,
+                ),
+                mt, term,
+            )
+
+        # Priority: normalized → dictionary expansions → kiwi tokens
+        _run_term(plan.normalized_query, MATCH_NORMALIZED_EXACT)
+        for term in plan.expanded_terms:
+            _run_term(term, MATCH_DICTIONARY)
+        for token in plan.tokens:
+            _run_term(token, MATCH_KIWI_TOKEN)
+
+    finally:
+        try:
+            client.delete_pit(body={"pit_id": pit_id_ref[0]})
+        except Exception:
+            pass
 
     total = len(all_deduped)
     page = all_deduped[off: off + lim]

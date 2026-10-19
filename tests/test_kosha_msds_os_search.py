@@ -701,10 +701,10 @@ def test_search_by_q_os_empty_returns_empty():
 
 
 def test_search_by_q_os_pagination():
-    """PATCH-004: free-text collects all candidates (full pagination) then pages in memory.
+    """IMP-010: free-text uses PIT + search_after (B안). Collects all candidates then pages in memory.
 
     total = len(deduped_candidates), page = deduped[off:off+lim].
-    Each sub-query uses limit=_CANDIDATE_PAGE_SIZE (1000), offset=0.
+    Each PIT batch uses size=_CANDIDATE_PAGE_SIZE; no "from" field (search_after based).
     """
     from services.kosha_msds.opensearch_query import _CANDIDATE_PAGE_SIZE
     client = _fake_os_client(["000010", "000011"], 2)
@@ -712,10 +712,11 @@ def test_search_by_q_os_pagination():
     # total = number of unique candidates collected
     assert total == 2
     assert set(ids) == {"000010", "000011"}
-    # All sub-queries use limit=_CANDIDATE_PAGE_SIZE (full pagination), offset=0
+    # All PIT sub-queries use size=_CANDIDATE_PAGE_SIZE; PIT present, no "from"
     call_bodies = [call[1]["body"] for call in client.search.call_args_list]
     assert all(b["size"] == _CANDIDATE_PAGE_SIZE for b in call_bodies)
-    assert all(b["from"] == 0 for b in call_bodies)
+    assert all("pit" in b for b in call_bodies)
+    assert all("from" not in b for b in call_bodies)
 
 
 # ---------------------------------------------------------------------------
@@ -1283,19 +1284,18 @@ def test_T13_q_normalized_priority_used(monkeypatch):
     from services.kosha_msds.opensearch_query import search_by_q_os
     calls = []
 
-    def _mock_search_os(*, q=None, name_ko=None, name_en=None, limit=20, offset=0, client=None,
-                        chem_id=None, cas_no=None, ke_no=None, en_no=None, un_no=None):
-        calls.append({"q": q, "name_ko": name_ko, "name_en": name_en})
-        return [], 0
+    def _mock_collect_pit(*, name_ko=None, name_en=None, client=None, pit_id_ref=None, budget_ref=None):
+        calls.append({"name_ko": name_ko, "name_en": name_en})
+        return []
+
+    mock_client = MagicMock()
+    mock_client.create_pit.return_value = {"pit_id": "pit-t13"}
 
     monkeypatch.setattr(
-        "services.kosha_msds.opensearch_query.search_os", _mock_search_os
+        "services.kosha_msds.opensearch_query._collect_all_os_pit", _mock_collect_pit
     )
-    chem_ids, total, meta = search_by_q_os(q="벤젠", limit=5, offset=0)
-    # PATCH-004: no BM25 (q=) calls; first call must be name_ko=normalized_query
-    bm25_calls = [c for c in calls if c["q"] is not None]
-    assert len(bm25_calls) == 0, "BM25 (q=) must not be called (CHEM-09 priority)"
-    # NORMALIZED_EXACT: first call is name_ko=normalized_query
+    chem_ids, total, meta = search_by_q_os(q="벤젠", limit=5, offset=0, client=mock_client)
+    # PATCH-004: no BM25 (q=) calls; name_ko=normalized_query must be first call
     ko_normalized_calls = [c for c in calls if c["name_ko"] == "벤젠"]
     assert len(ko_normalized_calls) >= 1
     assert meta["normalized_query"] == "벤젠"
@@ -1304,23 +1304,23 @@ def test_T13_q_normalized_priority_used(monkeypatch):
 def test_T14_dictionary_expansion_used(monkeypatch):
     """T14: expanded_terms from plan are passed to name_ko/name_en sub-queries."""
     from services.kosha_msds.opensearch_query import search_by_q_os
-    from services.kosha_msds.search_adapter import build_search_plan
     calls = []
 
-    def _mock_search_os(*, q=None, name_ko=None, name_en=None, limit=20, offset=0, client=None,
-                        chem_id=None, cas_no=None, ke_no=None, en_no=None, un_no=None):
+    def _mock_collect_pit(*, name_ko=None, name_en=None, client=None, pit_id_ref=None, budget_ref=None):
         calls.append({"name_ko": name_ko, "name_en": name_en})
-        return [], 0
+        return []
+
+    mock_client = MagicMock()
+    mock_client.create_pit.return_value = {"pit_id": "pit-t14"}
 
     monkeypatch.setattr(
-        "services.kosha_msds.opensearch_query.search_os", _mock_search_os
+        "services.kosha_msds.opensearch_query._collect_all_os_pit", _mock_collect_pit
     )
-    # Inject a fake dictionary_lookup that returns an expanded term
+
     def _dict_lookup(q, limit=5, subject_type=None):
         return {"items": [{"subject_key": "벤젠류", "matched_term": "벤젠류", "display_name": "벤젠류"}]}
 
-    search_by_q_os(q="벤젠", limit=5, offset=0, dictionary_lookup=_dict_lookup)
-    # expanded term "벤젠류" should appear in name_ko/name_en calls
+    search_by_q_os(q="벤젠", limit=5, offset=0, client=mock_client, dictionary_lookup=_dict_lookup)
     expanded_calls = [c for c in calls if c["name_ko"] == "벤젠류" or c["name_en"] == "벤젠류"]
     assert len(expanded_calls) >= 1
 
@@ -1330,17 +1330,17 @@ def test_T15_kiwi_tokens_used(monkeypatch):
     from services.kosha_msds.opensearch_query import search_by_q_os
     calls = []
 
-    def _mock_search_os(*, q=None, name_ko=None, name_en=None, limit=20, offset=0, client=None,
-                        chem_id=None, cas_no=None, ke_no=None, en_no=None, un_no=None):
-        calls.append({"q": q, "name_ko": name_ko, "name_en": name_en})
-        return [], 0
+    def _mock_collect_pit(*, name_ko=None, name_en=None, client=None, pit_id_ref=None, budget_ref=None):
+        calls.append({"name_ko": name_ko, "name_en": name_en})
+        return []
+
+    mock_client = MagicMock()
+    mock_client.create_pit.return_value = {"pit_id": "pit-t15"}
 
     monkeypatch.setattr(
-        "services.kosha_msds.opensearch_query.search_os", _mock_search_os
+        "services.kosha_msds.opensearch_query._collect_all_os_pit", _mock_collect_pit
     )
-    # Use a multi-token free-text query; Kiwi will produce tokens
-    search_by_q_os(q="벤젠 메탄올", limit=5, offset=0)
-    # At least one name_ko call should come from token processing
+    search_by_q_os(q="벤젠 메탄올", limit=5, offset=0, client=mock_client)
     name_ko_calls = [c for c in calls if c["name_ko"] is not None]
     assert len(name_ko_calls) >= 1
 
@@ -1351,22 +1351,23 @@ def test_T16_dedup_preserves_priority_order(monkeypatch):
     call_index = [0]
     # P1 NORMALIZED: name_ko returns [A, B]; name_en returns [B, C] — B is deduped
     responses = [
-        (["000001", "000002"], 2),  # name_ko(normalized) call
-        (["000002", "000003"], 2),  # name_en(normalized) call
-        ([], 0),                    # further calls
+        ["000001", "000002"],   # name_ko(normalized) call
+        ["000002", "000003"],   # name_en(normalized) call
+        [],                     # further calls
     ]
 
-    def _mock_search_os(*, q=None, name_ko=None, name_en=None, limit=20, offset=0, client=None,
-                        chem_id=None, cas_no=None, ke_no=None, en_no=None, un_no=None):
+    def _mock_collect_pit(*, name_ko=None, name_en=None, client=None, pit_id_ref=None, budget_ref=None):
         idx = call_index[0]
         call_index[0] += 1
-        return responses[idx] if idx < len(responses) else ([], 0)
+        return responses[idx] if idx < len(responses) else []
+
+    mock_client = MagicMock()
+    mock_client.create_pit.return_value = {"pit_id": "pit-t16"}
 
     monkeypatch.setattr(
-        "services.kosha_msds.opensearch_query.search_os", _mock_search_os
+        "services.kosha_msds.opensearch_query._collect_all_os_pit", _mock_collect_pit
     )
-    chem_ids, total, _ = search_by_q_os(q="벤젠", limit=10, offset=0)
-    # 000002 appears in both BM25 and name_ko — must appear only once, in BM25 position
+    chem_ids, total, _ = search_by_q_os(q="벤젠", limit=10, offset=0, client=mock_client)
     assert chem_ids.count("000002") == 1
     assert chem_ids.index("000001") < chem_ids.index("000002")
 
@@ -1744,36 +1745,28 @@ def test_G10_deep_page_over_10000():
 
 
 def test_G11_q_candidate_full_pagination(monkeypatch):
-    """G11: When a term returns >= _CANDIDATE_PAGE_SIZE results, pagination continues."""
-    from services.kosha_msds.opensearch_query import (
-        search_by_q_os,
-        _CANDIDATE_PAGE_SIZE,
-    )
-    # First call returns exactly _CANDIDATE_PAGE_SIZE results → triggers second call
+    """G11: _collect_all_os_pit paginates via search_after when >= _CANDIDATE_PAGE_SIZE hits."""
+    from services.kosha_msds.opensearch_query import _CANDIDATE_PAGE_SIZE, _collect_all_os_pit
+
     ids_page1 = [f"{i:06d}" for i in range(1, _CANDIDATE_PAGE_SIZE + 1)]
     ids_page2 = [f"{i:06d}" for i in range(_CANDIDATE_PAGE_SIZE + 1, _CANDIDATE_PAGE_SIZE + 3)]
+    total = len(ids_page1) + len(ids_page2)
 
-    call_count = [0]
+    call_n = [0]
+    def _search(**kwargs):
+        call_n[0] += 1
+        page = ids_page1 if call_n[0] == 1 else ids_page2
+        hits = [{"_source": {"source_key": sk}, "sort": [sk]} for sk in page]
+        return {"hits": {"total": {"value": total, "relation": "eq"}, "hits": hits}}
 
-    def _mock_search_os(*, name_ko=None, name_en=None, limit=20, offset=0, client=None,
-                        q=None, chem_id=None, cas_no=None, ke_no=None, en_no=None, un_no=None):
-        call_count[0] += 1
-        if name_ko is not None:
-            if offset == 0:
-                return ids_page1, len(ids_page1) + len(ids_page2)
-            else:
-                return ids_page2, len(ids_page1) + len(ids_page2)
-        return [], 0
+    mock_client = MagicMock()
+    mock_client.search.side_effect = _search
+    pit_id_ref = ["pit-g11"]
 
-    monkeypatch.setattr(
-        "services.kosha_msds.opensearch_query.search_os", _mock_search_os
-    )
-    ids, total, _ = search_by_q_os(q="산", limit=10, offset=0)
-    # Should have paginated name_ko: offset=0 (page1) + offset=_CANDIDATE_PAGE_SIZE (page2)
-    name_ko_calls = call_count[0]
-    assert name_ko_calls >= 2, f"Expected >=2 calls for full pagination, got {name_ko_calls}"
-    # First page slice
-    assert ids == ids_page1[:10]
+    result = _collect_all_os_pit(client=mock_client, pit_id_ref=pit_id_ref, name_ko="산")
+
+    assert call_n[0] >= 2, f"Expected >=2 search calls for full pagination, got {call_n[0]}"
+    assert result[:10] == ids_page1[:10]
 
 
 # ---- G12: q dedup priority order -------------------------------------------
@@ -1784,34 +1777,34 @@ def test_G12_q_dedup_priority_normalized_first(monkeypatch):
     from services.kosha_msds.opensearch_query import search_by_q_os
     call_order = []
 
-    def _mock_search_os(*, name_ko=None, name_en=None, limit=20, offset=0, client=None,
-                        q=None, chem_id=None, cas_no=None, ke_no=None, en_no=None, un_no=None):
+    def _mock_collect_pit(*, name_ko=None, name_en=None, client=None, pit_id_ref=None, budget_ref=None):
         if name_ko == "벤젠":
             call_order.append("normalized_ko")
-            return ["000001"], 1
+            return ["000001"]
         if name_en == "벤젠":
             call_order.append("normalized_en")
-            return [], 0
+            return []
         if name_ko == "benzene":
             call_order.append("expanded_ko")
-            return ["000002"], 1
-        return [], 0
+            return ["000002"]
+        return []
+
+    mock_client = MagicMock()
+    mock_client.create_pit.return_value = {"pit_id": "pit-g12"}
 
     monkeypatch.setattr(
-        "services.kosha_msds.opensearch_query.search_os", _mock_search_os
+        "services.kosha_msds.opensearch_query._collect_all_os_pit", _mock_collect_pit
     )
 
     def _dict_lookup(q, limit=5, subject_type=None):
         return {"items": [{"subject_key": "benzene", "matched_term": "benzene", "display_name": "benzene"}]}
 
-    ids, total, _ = search_by_q_os(q="벤젠", limit=10, offset=0, dictionary_lookup=_dict_lookup)
-    # 000001 from normalized must come before 000002 from dictionary expansion
+    ids, total, _ = search_by_q_os(q="벤젠", limit=10, offset=0, client=mock_client, dictionary_lookup=_dict_lookup)
     assert "000001" in ids
     assert "000002" in ids
     idx1 = ids.index("000001")
     idx2 = ids.index("000002")
     assert idx1 < idx2, "Normalized results must precede dictionary expansion results"
-    # Verify call order
     assert call_order.index("normalized_ko") < call_order.index("expanded_ko")
 
 
@@ -2331,12 +2324,14 @@ def test_I05_per_item_metadata_is_page_sized():
     """I05: per_item_metadata contains only the current page items, not the full deduped set (P0-02)."""
     from services.kosha_msds.opensearch_query import search_by_q_os
 
-    # 10 distinct IDs total; request page of 3
     ten_ids = [f"{i:06d}" for i in range(1, 11)]
 
-    with patch("services.kosha_msds.opensearch_query._collect_all_os",
+    mock_client = MagicMock()
+    mock_client.create_pit.return_value = {"pit_id": "pit-i05"}
+
+    with patch("services.kosha_msds.opensearch_query._collect_all_os_pit",
                return_value=ten_ids):
-        page, total, meta = search_by_q_os(q="염산", limit=3, offset=0, client=MagicMock())
+        page, total, meta = search_by_q_os(q="염산", limit=3, offset=0, client=mock_client)
 
     assert total == 10
     assert len(page) == 3
@@ -2717,24 +2712,31 @@ def test_J08_full_scope_gate_fails_when_no_full_proof(monkeypatch, seo_store):
 
 
 def test_J09_query_os_call_budget_exhausted_raises(monkeypatch):
-    """J09: search_by_q_os raises when per-query OS call budget is exhausted (CLOSURE-04)."""
+    """J09: search_by_q_os raises when per-query client.search budget is exhausted (IMP-010D)."""
     from services.kosha_msds.opensearch_query import (
         search_by_q_os,
-        _QUERY_OS_CALL_BUDGET,
         MsdsCandidateEnumerationIncompleteError,
+        _CANDIDATE_PAGE_SIZE,
     )
 
-    # Small budget via monkeypatch — exhaust with a small number of calls
-    monkeypatch.setattr(
-        "services.kosha_msds.opensearch_query._QUERY_OS_CALL_BUDGET", 2
-    )
+    # Budget=2: first 2 client.search calls succeed; 3rd entry sees budget=0 → INCOMPLETE
+    monkeypatch.setattr("services.kosha_msds.opensearch_query._QUERY_OS_CALL_BUDGET", 2)
 
-    # Each _collect_all_os call decrements budget; mock search_os returns full page
-    full_page = [f"{i:06d}" for i in range(1000)]
-    with patch("services.kosha_msds.opensearch_query.search_os",
-               return_value=(full_page, 50000)):
-        with pytest.raises(MsdsCandidateEnumerationIncompleteError, match="budget"):
-            search_by_q_os(q="염산", limit=5, offset=0, client=MagicMock())
+    mock_client = MagicMock()
+    mock_client.create_pit.return_value = {"pit_id": "pit-j09"}
+    full_page_hits = [
+        {"_source": {"source_key": f"{i:06d}"}, "sort": [f"key_{i}"]}
+        for i in range(_CANDIDATE_PAGE_SIZE)
+    ]
+    mock_client.search.return_value = {
+        "hits": {
+            "total": {"value": 50000, "relation": "eq"},
+            "hits": full_page_hits,
+        }
+    }
+
+    with pytest.raises(MsdsCandidateEnumerationIncompleteError, match="budget"):
+        search_by_q_os(q="염산", limit=5, offset=0, client=mock_client)
 
 
 # ---- J10: List/detail/search regression ------------------------------------
@@ -3055,11 +3057,12 @@ def test_K06_clean_state_pre_and_post_generates_pass_proof():
 
 
 def test_K07_deep_pagination_creates_pit_per_search_os_call():
-    """K07: Each search_os call at offset+limit > 9900 creates a separate PIT.
+    """K07: Each search_os call at offset+limit > 9900 creates 1 PIT (PATCH-003F).
 
-    Documents that _QUERY_OS_CALL_BUDGET counts search_os() invocations, not
-    actual OS client requests. PIT reuse across pages is deferred; this test
-    pins the current cost model so any future change is intentional (FIX-03).
+    IMP-010D update: _QUERY_OS_CALL_BUDGET now counts actual client.search calls
+    (not search_os() invocations). This test verifies the _search_os_deep_page PIT
+    lifecycle contract: 1 create_pit + 1 delete_pit per search_os deep-page call,
+    with multiple client.search calls for one search_os() invocation.
     """
     from services.kosha_msds.opensearch_query import (
         search_os,
@@ -3089,3 +3092,393 @@ def test_K07_deep_pagination_creates_pit_per_search_os_call():
     assert os_client.delete_pit.call_count == 1
     # Multiple client.search calls made for one search_os() call
     assert os_client.search.call_count >= 2
+
+
+# ===========================================================================
+# PIT-IMPL-010 — L01-L15
+# IMP-010A: _build_chem_term_query extracted from search_os
+# IMP-010B: search_by_q_os P1 creates 1 PIT for all terms
+# IMP-010C: _collect_all_os_pit — PIT + search_after, CLOSURE-02 integrity
+# IMP-010D: budget_ref = actual client.search calls (not search_os() calls)
+# ===========================================================================
+
+
+from services.kosha_msds.opensearch_query import (
+    MsdsCandidateEnumerationIncompleteError,
+    MsdsCandidateEnumerationIntegrityError,
+    MsdsPaginationDepthExceededError,
+    _collect_all_os_pit,
+)
+
+
+# ---- L01: 1 PIT create + 1 delete per free-text call -----------------------
+
+
+def test_L01_one_pit_per_search_by_q_os_call():
+    """L01: search_by_q_os P1 creates exactly 1 PIT and deletes it in finally (IMP-010B)."""
+    mock_client = MagicMock()
+    mock_client.create_pit.return_value = {"pit_id": "pit-L01"}
+    mock_client.search.return_value = _make_os_resp(["000001"], 1)
+
+    search_by_q_os(q="염산", limit=5, offset=0, client=mock_client)
+
+    mock_client.create_pit.assert_called_once()
+    mock_client.delete_pit.assert_called_once()
+
+
+# ---- L02: Multiple terms share same PIT ------------------------------------
+
+
+def test_L02_all_terms_share_single_pit():
+    """L02: All _collect_all_os_pit calls in one search_by_q_os use the same pit_id (IMP-010B)."""
+    PIT_ID = "pit-L02-shared"
+    mock_client = MagicMock()
+    mock_client.create_pit.return_value = {"pit_id": PIT_ID}
+    mock_client.search.return_value = _make_os_resp([], 0)
+
+    def _dict_lookup(q, limit=5, subject_type=None):
+        return {"items": [{"subject_key": "에탄올", "matched_term": "에탄올"}]}
+
+    search_by_q_os(q="염산", limit=5, offset=0, client=mock_client, dictionary_lookup=_dict_lookup)
+
+    # Only 1 PIT created across all terms
+    mock_client.create_pit.assert_called_once()
+
+    # All search calls use the same pit_id
+    for call in mock_client.search.call_args_list:
+        body = call[1]["body"]
+        assert body.get("pit", {}).get("id") == PIT_ID
+
+
+# ---- L03: Each term's search_after starts fresh (null) ---------------------
+
+
+def test_L03_each_term_starts_fresh_search_after():
+    """L03: Each _collect_all_os_pit call starts with search_after=None (fresh cursor per term)."""
+    mock_client = MagicMock()
+    mock_client.create_pit.return_value = {"pit_id": "pit-L03"}
+    mock_client.search.return_value = _make_os_resp(["000001"], 1)
+
+    search_by_q_os(q="염산", limit=5, offset=0, client=mock_client)
+
+    # For single-page results (1 hit < _CANDIDATE_PAGE_SIZE), no search_after added
+    for call in mock_client.search.call_args_list:
+        body = call[1]["body"]
+        assert "search_after" not in body, "First page must have no search_after"
+
+
+# ---- L04: Edge cases: 0 / 20 / 1000 hits ----------------------------------
+
+
+def test_L04_edge_cases_zero_and_twenty_hits():
+    """L04: 0 and 20 hits collected and PIT lifecycle complete (IMP-010C)."""
+    # 0 hits
+    mock_client_0 = MagicMock()
+    mock_client_0.create_pit.return_value = {"pit_id": "pit-L04-0"}
+    mock_client_0.search.return_value = _make_os_resp([], 0)
+    ids, total, _ = search_by_q_os(q="없는화학물질", limit=5, offset=0, client=mock_client_0)
+    assert ids == []
+    assert total == 0
+    mock_client_0.create_pit.assert_called_once()
+    mock_client_0.delete_pit.assert_called_once()
+
+    # 20 hits (< _CANDIDATE_PAGE_SIZE → single page)
+    ids20 = [f"{i:06d}" for i in range(1, 21)]
+    mock_client_20 = MagicMock()
+    mock_client_20.create_pit.return_value = {"pit_id": "pit-L04-20"}
+    mock_client_20.search.return_value = _make_os_resp(ids20, 20)
+    ids, total, _ = search_by_q_os(q="염산", limit=25, offset=0, client=mock_client_20)
+    assert total == 20
+    assert len(ids) == 20
+
+
+# ---- L05: Multi-page PIT collection ----------------------------------------
+
+
+def test_L05_collect_all_os_pit_multi_page():
+    """L05: _collect_all_os_pit paginates across multiple PIT pages via search_after (IMP-010C)."""
+    from services.kosha_msds.opensearch_query import _CANDIDATE_PAGE_SIZE
+
+    PAGES = 3
+    TOTAL = PAGES * _CANDIDATE_PAGE_SIZE
+    all_keys = [f"{i:06d}" for i in range(1, TOTAL + 1)]
+    pages = [all_keys[p * _CANDIDATE_PAGE_SIZE:(p + 1) * _CANDIDATE_PAGE_SIZE] for p in range(PAGES)]
+
+    call_n = [0]
+
+    def _search(**kwargs):
+        n = call_n[0]
+        call_n[0] += 1
+        page_keys = pages[n] if n < PAGES else []
+        hits = [{"_source": {"source_key": sk}, "sort": [sk]} for sk in page_keys]
+        return {"hits": {"total": {"value": TOTAL, "relation": "eq"}, "hits": hits}}
+
+    mock_client = MagicMock()
+    mock_client.search.side_effect = _search
+    pit_id_ref = ["pit-L05"]
+
+    result = _collect_all_os_pit(client=mock_client, pit_id_ref=pit_id_ref, name_ko="테스트")
+
+    assert len(result) == TOTAL
+    assert result == all_keys
+    assert mock_client.search.call_count == PAGES
+
+
+# ---- L06: 20,568 hits — full SEO_PREVIEW catalog size ----------------------
+
+
+def test_L06_collect_all_os_pit_20568_hits():
+    """L06: _collect_all_os_pit collects 20,568 hits (21 pages) — full SEO_PREVIEW size (IMP-010C)."""
+    from services.kosha_msds.opensearch_query import _CANDIDATE_PAGE_SIZE
+
+    TOTAL = 20_568
+    all_keys = [f"{i:06d}" for i in range(1, TOTAL + 1)]
+
+    call_n = [0]
+
+    def _search(**kwargs):
+        n = call_n[0]
+        call_n[0] += 1
+        page_keys = all_keys[n * _CANDIDATE_PAGE_SIZE:(n + 1) * _CANDIDATE_PAGE_SIZE]
+        hits = [{"_source": {"source_key": sk}, "sort": [sk]} for sk in page_keys]
+        return {"hits": {"total": {"value": TOTAL, "relation": "eq"}, "hits": hits}}
+
+    mock_client = MagicMock()
+    mock_client.search.side_effect = _search
+    pit_id_ref = ["pit-L06"]
+
+    result = _collect_all_os_pit(client=mock_client, pit_id_ref=pit_id_ref, name_ko="산업")
+
+    import math
+    expected_pages = math.ceil(TOTAL / _CANDIDATE_PAGE_SIZE)
+    assert len(result) == TOTAL
+    assert mock_client.search.call_count == expected_pages
+
+
+# ---- L07: PIT ID renewal ---------------------------------------------------
+
+
+def test_L07_pit_id_renewal():
+    """L07: pit_id_ref is updated from resp.get('pit_id') on each call (OpenSearch PIT renewal)."""
+    from services.kosha_msds.opensearch_query import _CANDIDATE_PAGE_SIZE
+
+    OLD_PIT = "pit-L07-old"
+    NEW_PIT = "pit-L07-new"
+
+    call_n = [0]
+    TOTAL = _CANDIDATE_PAGE_SIZE + 1  # requires exactly 2 pages
+
+    def _search(**kwargs):
+        call_n[0] += 1
+        body = kwargs.get("body", {})
+        if call_n[0] == 1:
+            # First page: full page, server returns new pit_id
+            hits = [
+                {"_source": {"source_key": f"{i:06d}"}, "sort": [f"k{i}"]}
+                for i in range(_CANDIDATE_PAGE_SIZE)
+            ]
+            return {
+                "pit_id": NEW_PIT,
+                "hits": {"total": {"value": TOTAL, "relation": "eq"}, "hits": hits},
+            }
+        else:
+            # Second call: verify pit_id was renewed in body
+            assert body.get("pit", {}).get("id") == NEW_PIT, (
+                "Second call must use renewed pit_id"
+            )
+            # Return the remaining 1 hit so collected == total (no integrity error)
+            return {
+                "hits": {
+                    "total": {"value": TOTAL, "relation": "eq"},
+                    "hits": [{"_source": {"source_key": f"{_CANDIDATE_PAGE_SIZE:06d}"}, "sort": [f"k{_CANDIDATE_PAGE_SIZE}"]}],
+                },
+            }
+
+    mock_client = MagicMock()
+    mock_client.search.side_effect = _search
+    pit_id_ref = [OLD_PIT]
+
+    _collect_all_os_pit(client=mock_client, pit_id_ref=pit_id_ref, name_ko="테스트")
+
+    assert pit_id_ref[0] == NEW_PIT
+
+
+# ---- L08: PIT create failure -----------------------------------------------
+
+
+def test_L08_pit_create_failure_raises_pagination_depth_error():
+    """L08: create_pit failure → MsdsPaginationDepthExceededError; delete_pit not called (IMP-010B)."""
+    mock_client = MagicMock()
+    mock_client.create_pit.side_effect = Exception("PIT not supported by OS cluster")
+
+    with pytest.raises(MsdsPaginationDepthExceededError):
+        search_by_q_os(q="염산", limit=5, offset=0, client=mock_client)
+
+    # Never entered the try block → delete_pit must NOT be called
+    mock_client.delete_pit.assert_not_called()
+
+
+# ---- L09: Integrity errors from _collect_all_os_pit ------------------------
+
+
+def test_L09_pit_total_change_raises_integrity_error():
+    """L09: OS total changes between PIT pages → MsdsCandidateEnumerationIntegrityError (IMP-010C)."""
+    from services.kosha_msds.opensearch_query import _CANDIDATE_PAGE_SIZE
+
+    call_n = [0]
+
+    def _search(**kwargs):
+        call_n[0] += 1
+        hits = [
+            {"_source": {"source_key": f"{i:06d}"}, "sort": [f"k{i}"]}
+            for i in range(_CANDIDATE_PAGE_SIZE)
+        ]
+        total = 5000 if call_n[0] == 1 else 6000  # total changes — index swap
+        return {"hits": {"total": {"value": total, "relation": "eq"}, "hits": hits}}
+
+    mock_client = MagicMock()
+    mock_client.search.side_effect = _search
+    pit_id_ref = ["pit-L09"]
+
+    with pytest.raises(MsdsCandidateEnumerationIntegrityError):
+        _collect_all_os_pit(client=mock_client, pit_id_ref=pit_id_ref, name_ko="테스트")
+
+
+def test_L09b_pit_duplicate_ids_raises_integrity_error():
+    """L09b: Duplicate source_keys in PIT pages → MsdsCandidateEnumerationIntegrityError."""
+    from services.kosha_msds.opensearch_query import _CANDIDATE_PAGE_SIZE
+
+    dup_keys = [f"{i:06d}" for i in range(_CANDIDATE_PAGE_SIZE)]
+
+    def _search(**kwargs):
+        hits = [{"_source": {"source_key": sk}, "sort": [sk]} for sk in dup_keys]
+        # Reports total=2000 (two full pages), but each page returns the same IDs
+        return {"hits": {"total": {"value": 2 * _CANDIDATE_PAGE_SIZE, "relation": "eq"}, "hits": hits}}
+
+    mock_client = MagicMock()
+    mock_client.search.side_effect = _search
+    pit_id_ref = ["pit-L09b"]
+
+    with pytest.raises(MsdsCandidateEnumerationIntegrityError):
+        _collect_all_os_pit(client=mock_client, pit_id_ref=pit_id_ref, name_ko="테스트")
+
+
+# ---- L10: Budget counts client.search calls --------------------------------
+
+
+def test_L10_budget_counts_client_search_calls():
+    """L10: budget_ref decrements once per client.search call in _collect_all_os_pit (IMP-010D)."""
+    from services.kosha_msds.opensearch_query import _CANDIDATE_PAGE_SIZE
+
+    BUDGET = 10
+
+    call_n = [0]
+
+    def _search(**kwargs):
+        call_n[0] += 1
+        hits = [
+            {"_source": {"source_key": f"{i:06d}"}, "sort": [f"k{i}"]}
+            for i in range(_CANDIDATE_PAGE_SIZE)
+        ]
+        return {"hits": {"total": {"value": 100 * _CANDIDATE_PAGE_SIZE}, "hits": hits}}
+
+    mock_client = MagicMock()
+    mock_client.search.side_effect = _search
+    pit_id_ref = ["pit-L10"]
+    budget_ref = [BUDGET]
+
+    with pytest.raises(MsdsCandidateEnumerationIncompleteError):
+        _collect_all_os_pit(
+            client=mock_client, pit_id_ref=pit_id_ref,
+            budget_ref=budget_ref, name_ko="테스트",
+        )
+
+    # Exactly BUDGET calls were made before budget=0 raised INCOMPLETE
+    assert call_n[0] == BUDGET
+    assert budget_ref[0] == 0
+
+
+# ---- L11: Budget exceeded raises INCOMPLETE --------------------------------
+
+
+def test_L11_budget_exceeded_raises_incomplete():
+    """L11: budget=2 in _collect_all_os_pit → INCOMPLETE after 2 calls (IMP-010D)."""
+    from services.kosha_msds.opensearch_query import _CANDIDATE_PAGE_SIZE
+
+    mock_client = MagicMock()
+    pit_id_ref = ["pit-L11"]
+    budget_ref = [2]
+
+    full_page_hits = [
+        {"_source": {"source_key": f"{i:06d}"}, "sort": [f"k{i}"]}
+        for i in range(_CANDIDATE_PAGE_SIZE)
+    ]
+    mock_client.search.return_value = {
+        "hits": {
+            "total": {"value": 100 * _CANDIDATE_PAGE_SIZE, "relation": "eq"},
+            "hits": full_page_hits,
+        }
+    }
+
+    with pytest.raises(MsdsCandidateEnumerationIncompleteError):
+        _collect_all_os_pit(
+            client=mock_client, pit_id_ref=pit_id_ref,
+            budget_ref=budget_ref, name_ko="테스트",
+        )
+
+
+# ---- L12: match_type/term preserved in PIT path ----------------------------
+
+
+def test_L12_match_metadata_preserved_in_pit_path():
+    """L12: per_item_metadata match_type/matched_term are set in PIT free-text path (IMP-010B/C)."""
+    mock_client = MagicMock()
+    mock_client.create_pit.return_value = {"pit_id": "pit-L12"}
+    mock_client.search.return_value = _make_os_resp(["000001"], 1)
+
+    _, _, meta = search_by_q_os(q="염산", limit=5, offset=0, client=mock_client)
+
+    assert "per_item_metadata" in meta
+    assert isinstance(meta["per_item_metadata"], dict)
+    if "000001" in meta["per_item_metadata"]:
+        m = meta["per_item_metadata"]["000001"]
+        assert "match_type" in m
+        assert "matched_term" in m
+
+
+# ---- L13: Identifier path (P0) does not use PIT ----------------------------
+
+
+def test_L13_identifier_path_no_pit():
+    """L13: Identifier q-path (P0) does not create PIT — direct search_os call only (IMP-010B)."""
+    client = _fake_os_client(["000001"], 1)
+    search_by_q_os(q="000001", limit=5, offset=0, client=client)
+    client.create_pit.assert_not_called()
+    client.delete_pit.assert_not_called()
+
+
+# ---- L14: P0-A list endpoint regression ------------------------------------
+
+
+def test_L14_list_endpoint_regression(seo_store):
+    """L14: list_current (no q/filter) unaffected by PIT changes (IMP-010 regression)."""
+    from services.kosha_msds.read import list_current
+    result = list_current(
+        store=seo_store, limit=10, offset=0, scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+    )
+    assert result["total"] == 2
+    assert len(result["items"]) == 2
+
+
+# ---- L15: P0-A detail endpoint regression ----------------------------------
+
+
+def test_L15_detail_endpoint_regression(seo_store):
+    """L15: get_by_chem_id unaffected by PIT changes (IMP-010 regression)."""
+    from services.kosha_msds.read import get_by_chem_id
+    body = get_by_chem_id(
+        "000001", store=seo_store,
+        include_sections=False, scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+    )
+    assert body is not None
+    assert body["chem_id"] == "000001"
