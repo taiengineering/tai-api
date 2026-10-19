@@ -80,6 +80,7 @@ class SnapshotProof:
     verification_status: str         # "PASS" or "FAIL"
     missing_count: int = 0
     extra_count: int = 0
+    duplicate_db_count: int = 0      # chem_id rows that collapsed under dedup (data anomaly)
     error_message: Optional[str] = None
 
 
@@ -157,12 +158,14 @@ def _scan_os_chem_ids(client) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _scan_db_chem_ids(sb, scope: str) -> dict[str, str]:
-    """Returns {chem_id: id (canonical_id)} from the published scope view.
+def _scan_db_chem_ids(sb, scope: str) -> tuple[dict[str, str], int]:
+    """Returns ({chem_id: canonical_id}, raw_row_count) from the published scope view.
 
     SEO_PREVIEW -> kosha_msds_seo_preview_current
     FULL        -> kosha_msds_current
     Paginates with page_size=1000 on chem_id order.
+    raw_row_count tracks total rows returned; if > len(result) there are
+    duplicate chem_id rows in the view (data anomaly).
     Raises SnapshotProofScanError on any scan failure (fail-closed).
     """
     view = (
@@ -171,6 +174,7 @@ def _scan_db_chem_ids(sb, scope: str) -> dict[str, str]:
         else _FULL_CURRENT_VIEW
     )
     result: dict[str, str] = {}
+    raw_row_count = 0
     try:
         last_chem_id: Optional[str] = None
         while True:
@@ -181,6 +185,7 @@ def _scan_db_chem_ids(sb, scope: str) -> dict[str, str]:
             rows = r.data or []
             if not rows:
                 break
+            raw_row_count += len(rows)
             for row in rows:
                 chem_id = str(row.get("chem_id") or "")
                 canonical_id = str(row.get("id") or "")
@@ -193,7 +198,7 @@ def _scan_db_chem_ids(sb, scope: str) -> dict[str, str]:
         raise SnapshotProofScanError(
             f"snapshot_proof: DB scan failed (scope={scope}): {exc}"
         ) from exc
-    return result
+    return result, raw_row_count
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +229,9 @@ def _get_physical_index(client) -> str:
 def _get_rebuild_run_id(client, physical_index: str) -> str:
     """Query RUNS_INDEX for the rebuild run that produced physical_index.
 
-    Searches for a doc with status=PROMOTED and matching index name,
-    or directly with physical_index field matching. Returns '' if not found.
+    Looks for a PROMOTED run whose candidate_index matches the current
+    physical index (candidate_index is set by begin_run; after promote it
+    becomes the live index). Returns '' if not found or on error.
     """
     if not physical_index:
         return ""
@@ -233,18 +239,10 @@ def _get_rebuild_run_id(client, physical_index: str) -> str:
         body = {
             "query": {
                 "bool": {
-                    "should": [
-                        {"term": {"physical_index": physical_index}},
-                        {
-                            "bool": {
-                                "filter": [
-                                    {"term": {"status": "PROMOTED"}},
-                                    {"term": {"index_name": physical_index}},
-                                ]
-                            }
-                        },
-                    ],
-                    "minimum_should_match": 1,
+                    "filter": [
+                        {"term": {"status": "PROMOTED"}},
+                        {"term": {"candidate_index": physical_index}},
+                    ]
                 }
             },
             "size": 1,
@@ -289,6 +287,35 @@ def _get_outbox_watermark(sb) -> int:
     except Exception as exc:
         raise SnapshotProofScanError(
             f"snapshot_proof: outbox watermark lookup failed: {exc}"
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Outbox pending guard
+# ---------------------------------------------------------------------------
+
+
+def _get_outbox_pending_count(sb) -> int:
+    """Count PENDING+CLAIMED CHEM events in search_index_outbox.
+
+    A non-zero count means there are uncommitted changes not yet applied to
+    OS — the proof state is potentially dirty.
+    Returns 0 when no uncommitted events exist.
+    Raises SnapshotProofScanError on query failure (fail-closed).
+    """
+    try:
+        r = (
+            sb.table("search_index_outbox")
+            .select("id", count="exact")
+            .eq("domain_name", "CHEM")
+            .in_("status", ["PENDING", "CLAIMED"])
+            .limit(0)
+            .execute()
+        )
+        return int(getattr(r, "count", None) or 0)
+    except Exception as exc:
+        raise SnapshotProofScanError(
+            f"snapshot_proof: outbox pending count failed: {exc}"
         ) from exc
 
 
@@ -368,16 +395,18 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
     # --- Pre-scan state ---
     snapshot_id_pre, snapshot_completed_at = _get_current_snapshot(sb, scope)
     outbox_wm_pre = _get_outbox_watermark(sb)  # raises SnapshotProofScanError on failure
+    pending_count = _get_outbox_pending_count(sb)  # raises SnapshotProofScanError on failure
     physical_index = _get_physical_index(client)
     rebuild_run_id = _get_rebuild_run_id(client, physical_index)
 
     # --- Scans (fail → FAIL proof, not exception) ---
     scan_error: Optional[str] = None
     db_map: dict[str, str] = {}
+    db_raw_count: int = 0
     os_map: dict[str, str] = {}
 
     try:
-        db_map = _scan_db_chem_ids(sb, scope)
+        db_map, db_raw_count = _scan_db_chem_ids(sb, scope)
     except SnapshotProofScanError as exc:
         scan_error = str(exc)
 
@@ -388,6 +417,7 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
             scan_error = str(exc)
 
     # --- Post-scan state check (skip if scans failed) ---
+    postscan_error: Optional[str] = None
     state_changed = False
     snapshot_id_post: str = snapshot_id_pre
     outbox_wm_post: int = outbox_wm_pre
@@ -395,12 +425,15 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
         try:
             snapshot_id_post, _ = _get_current_snapshot(sb, scope)
             outbox_wm_post = _get_outbox_watermark(sb)
-        except SnapshotProofScanError:
-            pass  # can't verify state consistency; leave state_changed=False (scan_error takes precedence)
+        except SnapshotProofScanError as exc:
+            postscan_error = f"Post-scan state check failed: {exc}"
         state_changed = (
             snapshot_id_pre != snapshot_id_post
             or outbox_wm_pre != outbox_wm_post
         )
+
+    # --- Duplicate detection ---
+    duplicate_db_count = db_raw_count - len(db_map)  # >0 → same chem_id appeared multiple times
 
     # --- Compute SHA256 ---
     db_pairs: list[tuple[str, str]] = list(db_map.items())
@@ -418,10 +451,23 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
     missing_count = len(db_keys - os_keys)   # in DB but not OS
     extra_count = len(os_keys - db_keys)      # in OS but not DB
 
-    # --- Determine status ---
+    # --- Determine status (priority: scan_error > postscan_error > pending > duplicate > state_changed > membership) ---
     error_message: Optional[str] = None
     if scan_error is not None:
         error_message = scan_error
+        verification_status = "FAIL"
+    elif postscan_error is not None:
+        error_message = postscan_error
+        verification_status = "FAIL"
+    elif pending_count > 0:
+        error_message = (
+            f"Uncommitted CHEM events in outbox: pending_count={pending_count}"
+        )
+        verification_status = "FAIL"
+    elif duplicate_db_count > 0:
+        error_message = (
+            f"Duplicate chem_id rows in DB view: duplicate_db_count={duplicate_db_count}"
+        )
         verification_status = "FAIL"
     elif state_changed:
         error_message = (
@@ -435,6 +481,9 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
             f"Membership mismatch: db_count={db_count} os_count={os_count} "
             f"missing={missing_count} extra={extra_count}"
         )
+        verification_status = "FAIL"
+    elif not rebuild_run_id:
+        error_message = "rebuild_run_id is empty — cannot verify OS index provenance"
         verification_status = "FAIL"
     else:
         verification_status = "PASS"
@@ -456,6 +505,7 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
         verification_status=verification_status,
         missing_count=missing_count,
         extra_count=extra_count,
+        duplicate_db_count=duplicate_db_count,
         error_message=error_message,
     )
 
@@ -469,6 +519,8 @@ def verify_proof(proof: SnapshotProof) -> bool:
     - db_membership_sha256 == os_membership_sha256
     - db_membership_count == os_membership_count
     - missing_count == 0 and extra_count == 0
+    - duplicate_db_count == 0
+    - rebuild_run_id is non-empty (OS index provenance must be known)
     """
     return (
         proof.proof_version == "1.0"
@@ -477,6 +529,8 @@ def verify_proof(proof: SnapshotProof) -> bool:
         and proof.db_membership_count == proof.os_membership_count
         and proof.missing_count == 0
         and proof.extra_count == 0
+        and proof.duplicate_db_count == 0
+        and bool(proof.rebuild_run_id)
     )
 
 

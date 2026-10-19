@@ -205,13 +205,19 @@ def list_or_search_msds(
                     store=store, chem_ids=chem_ids,
                     total=total, limit=limit, offset=offset, scope=scope,
                 )
-                # PATCH-05: per-item match type annotation
+                # PATCH-05: per-item CHEM-09 match type from per_item_metadata
+                per_item = match_meta.get("per_item_metadata") or {}
                 ident_kind = match_meta.get("identifier_kind")
                 for item in result["items"]:
-                    item["match_type"] = (
-                        MATCH_IDENTIFIER_EXACT if ident_kind else MATCH_BM25_NORI
-                    )
-                    item["matched_term"] = match_meta.get("normalized_query")
+                    cid = item.get("chem_id")
+                    if per_item and cid and cid in per_item:
+                        item["match_type"] = per_item[cid]["match_type"]
+                        item["matched_term"] = per_item[cid]["matched_term"]
+                    else:
+                        item["match_type"] = (
+                            MATCH_IDENTIFIER_EXACT if ident_kind else MATCH_BM25_NORI
+                        )
+                        item["matched_term"] = match_meta.get("normalized_query")
                 result["match_metadata"] = match_meta
                 return result
             else:

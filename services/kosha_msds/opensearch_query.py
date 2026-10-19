@@ -280,7 +280,7 @@ def _search_os_deep_page(
     """
     try:
         pit_resp = client.create_pit(
-            CURRENT_ALIAS,
+            index=CURRENT_ALIAS,
             params={"keep_alive": _PIT_KEEP_ALIVE},
         )
         pit_id = pit_resp.get("pit_id") or ""
@@ -484,18 +484,19 @@ def search_os(
 # ---------------------------------------------------------------------------
 
 
-_CANDIDATE_PAGE_SIZE = 1_000  # per-term page size for full candidate enumeration
+_CANDIDATE_PAGE_SIZE = 1_000   # per-term page size for full candidate enumeration
+_CANDIDATE_MAX_PAGES = 50     # budget: max 50,000 results per (term, field) pair
 
 
 def _collect_all_os(*, client, **kwargs) -> list[str]:
     """Collect ALL matching chem_ids for a term, paginating until exhausted.
 
-    Uses _CANDIDATE_PAGE_SIZE per page. For results > _DEEP_PAGINATION_LIMIT,
-    search_os automatically routes to PIT internally.
+    Uses _CANDIDATE_PAGE_SIZE per page, up to _CANDIDATE_MAX_PAGES pages.
+    For results > _DEEP_PAGINATION_LIMIT, search_os routes to PIT internally.
     """
     all_ids: list[str] = []
     page_off = 0
-    while True:
+    for _ in range(_CANDIDATE_MAX_PAGES):
         ids, total = search_os(
             limit=_CANDIDATE_PAGE_SIZE, offset=page_off, client=client, **kwargs
         )
@@ -563,29 +564,38 @@ def search_by_q_os(
         return chem_ids, total, match_meta
 
     # P1: Free-text — CHEM-09 priority: NORMALIZED → DICTIONARY → KIWI_TOKEN
-    match_meta["match_type"] = MATCH_BM25_NORI  # best-effort label for free-text path
+    from services.kosha_msds.search_adapter import (
+        MATCH_DICTIONARY,
+        MATCH_KIWI_TOKEN,
+        MATCH_NORMALIZED_EXACT,
+    )
 
     seen: set[str] = set()
     all_deduped: list[str] = []
+    item_meta: dict[str, dict] = {}  # chem_id → {match_type, matched_term} (first-seen wins)
 
-    def _collect(ids: list[str]) -> None:
+    def _collect_with_meta(ids: list[str], mt: str, term: str) -> None:
         for cid in ids:
             if cid not in seen:
                 seen.add(cid)
                 all_deduped.append(cid)
+                item_meta[cid] = {"match_type": mt, "matched_term": term}
 
-    def _run_term(term: str) -> None:
+    def _run_term(term: str, mt: str) -> None:
         if not term:
             return
-        _collect(_collect_all_os(name_ko=term, client=client))
-        _collect(_collect_all_os(name_en=term, client=client))
+        _collect_with_meta(_collect_all_os(name_ko=term, client=client), mt, term)
+        _collect_with_meta(_collect_all_os(name_en=term, client=client), mt, term)
 
     # Priority: normalized → dictionary expansions → kiwi tokens
-    _run_term(plan.normalized_query)
+    _run_term(plan.normalized_query, MATCH_NORMALIZED_EXACT)
     for term in plan.expanded_terms:
-        _run_term(term)
+        _run_term(term, MATCH_DICTIONARY)
     for token in plan.tokens:
-        _run_term(token)
+        _run_term(token, MATCH_KIWI_TOKEN)
+
+    match_meta["match_type"] = MATCH_BM25_NORI  # top-level label (free-text path)
+    match_meta["per_item_metadata"] = item_meta  # per-chem_id CHEM-09 match provenance
 
     total = len(all_deduped)
     page = all_deduped[off: off + lim]

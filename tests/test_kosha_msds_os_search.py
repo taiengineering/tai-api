@@ -1824,3 +1824,306 @@ def test_G13b_match_type_free_text(monkeypatch):
     _, _, meta = search_by_q_os(q="염산", limit=5, offset=0, client=client)
     assert meta["match_type"] == "BM25_NORI"
     assert meta["identifier_kind"] is None
+
+
+# ---------------------------------------------------------------------------
+# PATCH-005 H01-H08  WO-WWW-PERF-004-P0S-OS-PATCH-005
+# ---------------------------------------------------------------------------
+
+
+# ---- H01: Post-scan outbox failure → FAIL proof ----------------------------
+
+
+def test_H01_postscan_outbox_failure_returns_fail():
+    """H01: Post-scan _get_outbox_watermark failure → FAIL proof (PATCH-005B)."""
+    from services.kosha_msds.snapshot_proof import generate_proof_dry_run
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+
+    call_count = [0]
+
+    def _table(name):
+        m = MagicMock()
+        if name == "kosha_msds_seo_preview_current":
+            snap_r = MagicMock()
+            snap_r.data = [{"snapshot_id": "snap-h01"}]
+            m.select.return_value.limit.return_value.execute.return_value = snap_r
+            db_scan_r = MagicMock()
+            db_scan_r.data = []
+            m.select.return_value.order.return_value.limit.return_value.execute.return_value = db_scan_r
+        elif name == "kosha_msds_snapshots":
+            ts_r = MagicMock()
+            ts_r.data = [{"completed_at": "2026-10-01T00:00:00+00:00"}]
+            m.select.return_value.eq.return_value.limit.return_value.execute.return_value = ts_r
+        elif name == "search_index_outbox":
+            call_count[0] += 1
+            r = MagicMock()
+            if call_count[0] <= 2:
+                # Calls 1+2: _get_outbox_watermark pre-scan + _get_outbox_pending_count → succeed
+                r.data = [{"id": 100}]
+                r.count = 0
+                m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = r
+                m.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value = r
+            else:
+                # Call 3: _get_outbox_watermark post-scan → fails
+                m.select.side_effect = Exception("DB transient error")
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {"tai-shared-search-v1-h01": {}}
+    os_client.search.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+
+    proof = generate_proof_dry_run(scope=PUBLICATION_SCOPE_SEO_PREVIEW, sb=sb, client=os_client)
+    assert proof.verification_status == "FAIL"
+    assert proof.error_message is not None
+    assert "Post-scan state check failed" in proof.error_message
+
+
+# ---- H02: Duplicate chem_id rows in DB → FAIL proof ------------------------
+
+
+def test_H02_duplicate_chem_id_in_db_returns_fail():
+    """H02: DB view returns duplicate chem_id rows → FAIL with duplicate_db_count (PATCH-005B)."""
+    from services.kosha_msds.snapshot_proof import generate_proof_dry_run
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+
+    def _table(name):
+        m = MagicMock()
+        if name == "kosha_msds_seo_preview_current":
+            snap_r = MagicMock()
+            snap_r.data = [{"snapshot_id": "snap-h02"}]
+            m.select.return_value.limit.return_value.execute.return_value = snap_r
+            # DB scan returns duplicate chem_id "000001" twice (same key, different rows)
+            scan_r1 = MagicMock()
+            scan_r1.data = [
+                {"chem_id": "000001", "id": "uuid-001"},
+                {"chem_id": "000001", "id": "uuid-002"},  # duplicate
+            ]
+            scan_r2 = MagicMock()
+            scan_r2.data = []
+            _scan_calls = [0]
+            def _scan_execute():
+                _scan_calls[0] += 1
+                return scan_r1 if _scan_calls[0] == 1 else scan_r2
+            m.select.return_value.order.return_value.limit.return_value.execute.side_effect = _scan_execute
+        elif name == "kosha_msds_snapshots":
+            ts_r = MagicMock()
+            ts_r.data = [{"completed_at": "2026-10-01T00:00:00+00:00"}]
+            m.select.return_value.eq.return_value.limit.return_value.execute.return_value = ts_r
+        elif name == "search_index_outbox":
+            r = MagicMock()
+            r.data = [{"id": 100}]
+            r.count = 0
+            m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = r
+            m.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value = r
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {"tai-shared-search-v1-h02": {}}
+    os_client.search.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+
+    proof = generate_proof_dry_run(scope=PUBLICATION_SCOPE_SEO_PREVIEW, sb=sb, client=os_client)
+    assert proof.verification_status == "FAIL"
+    assert proof.duplicate_db_count == 1  # 2 rows → 1 dict entry → 1 duplicate
+    assert proof.error_message is not None
+    assert "Duplicate" in proof.error_message
+
+
+# ---- H03: Per-item match_type from CHEM-09 provenance ----------------------
+
+
+def test_H03_per_item_metadata_carried_through(monkeypatch, seo_store):
+    """H03: search_by_q_os per_item_metadata → router annotates each item correctly (PATCH-005C)."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    app = _make_app(seo_store, None)
+
+    # per_item_metadata: 000001→NORMALIZED_EXACT, 000002→KIWI_TOKEN
+    match_meta = {
+        "identifier_kind": None,
+        "normalized_query": "벤젠",
+        "compact_query": "벤젠",
+        "tokens": ["벤젠"],
+        "expanded_terms": [],
+        "match_type": "BM25_NORI",
+        "per_item_metadata": {
+            "000001": {"match_type": "NORMALIZED_EXACT", "matched_term": "벤젠"},
+            "000002": {"match_type": "KIWI_TOKEN", "matched_term": "벤젠"},
+        },
+    }
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_by_q_os",
+               return_value=(["000001", "000002"], 2, match_meta)):
+        client = TestClient(app)
+        resp = client.get("/public/kosha/msds?q=벤젠")
+    assert resp.status_code == 200
+    items = {i["chem_id"]: i for i in resp.json()["items"]}
+    assert items["000001"]["match_type"] == "NORMALIZED_EXACT"
+    assert items["000001"]["matched_term"] == "벤젠"
+    assert items["000002"]["match_type"] == "KIWI_TOKEN"
+    assert items["000002"]["matched_term"] == "벤젠"
+
+
+# ---- H04: PENDING events guard → FAIL proof --------------------------------
+
+
+def test_H04_pending_events_returns_fail():
+    """H04: Uncommitted PENDING CHEM events → FAIL proof (PATCH-005B pending guard)."""
+    from services.kosha_msds.snapshot_proof import generate_proof_dry_run
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+
+    def _table(name):
+        m = MagicMock()
+        if name == "kosha_msds_seo_preview_current":
+            snap_r = MagicMock()
+            snap_r.data = [{"snapshot_id": "snap-h04"}]
+            m.select.return_value.limit.return_value.execute.return_value = snap_r
+            scan_r = MagicMock()
+            scan_r.data = []
+            m.select.return_value.order.return_value.limit.return_value.execute.return_value = scan_r
+        elif name == "kosha_msds_snapshots":
+            ts_r = MagicMock()
+            ts_r.data = [{"completed_at": "2026-10-01T00:00:00+00:00"}]
+            m.select.return_value.eq.return_value.limit.return_value.execute.return_value = ts_r
+        elif name == "search_index_outbox":
+            wm_r = MagicMock()
+            wm_r.data = [{"id": 100}]
+            m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = wm_r
+            # Pending count query returns count=5 (5 uncommitted events)
+            pending_r = MagicMock()
+            pending_r.count = 5
+            m.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value = pending_r
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {"tai-shared-search-v1-h04": {}}
+    os_client.search.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+
+    proof = generate_proof_dry_run(scope=PUBLICATION_SCOPE_SEO_PREVIEW, sb=sb, client=os_client)
+    assert proof.verification_status == "FAIL"
+    assert proof.error_message is not None
+    assert "pending_count=5" in proof.error_message
+
+
+# ---- H05: verify_proof requires rebuild_run_id non-empty -------------------
+
+
+def test_H05_verify_proof_empty_rebuild_run_id_fails():
+    """H05: verify_proof returns False when rebuild_run_id is empty (PATCH-005B)."""
+    from services.kosha_msds.snapshot_proof import verify_proof, SnapshotProof
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+    from services.shared_search.opensearch_client import CURRENT_ALIAS
+    sha = "ab" * 32
+    proof = SnapshotProof(
+        proof_version="1.0",
+        publication_scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+        snapshot_id="snap-h05",
+        snapshot_completed_at="2026-10-01T00:00:00+00:00",
+        opensearch_alias=CURRENT_ALIAS,
+        physical_index="tai-shared-search-v1-h05",
+        rebuild_run_id="",  # empty → should fail
+        db_membership_count=5,
+        os_membership_count=5,
+        db_membership_sha256=sha,
+        os_membership_sha256=sha,
+        chem_outbox_high_watermark=100,
+        verified_at="2026-10-01T00:00:00+00:00",
+        verification_status="PASS",
+    )
+    assert verify_proof(proof) is False
+
+
+def test_H05b_verify_proof_with_rebuild_run_id_passes():
+    """H05b: verify_proof returns True with non-empty rebuild_run_id (PATCH-005B)."""
+    from services.kosha_msds.snapshot_proof import verify_proof
+    proof = _make_proof("snap-h05b", "tai-shared-search-v1-h05b", 100)
+    assert verify_proof(proof) is True
+
+
+# ---- H06: Router per_item_metadata fallback for identifier path ------------
+
+
+def test_H06_router_identifier_q_no_per_item_metadata(monkeypatch, seo_store):
+    """H06: Identifier q-path (no per_item_metadata) falls back to IDENTIFIER_EXACT (PATCH-005C)."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    app = _make_app(seo_store, None)
+
+    match_meta = {
+        "identifier_kind": "chem_id",
+        "normalized_query": "000001",
+        "compact_query": "000001",
+        "tokens": [],
+        "expanded_terms": [],
+        "match_type": "IDENTIFIER_EXACT",
+        # no per_item_metadata
+    }
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_by_q_os",
+               return_value=(["000001"], 1, match_meta)):
+        client = TestClient(app)
+        resp = client.get("/public/kosha/msds?q=000001")
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["match_type"] == "IDENTIFIER_EXACT"
+    assert item["matched_term"] == "000001"
+
+
+# ---- H07: _get_outbox_pending_count raises on DB failure -------------------
+
+
+def test_H07_outbox_pending_count_raises_on_failure():
+    """H07: _get_outbox_pending_count raises SnapshotProofScanError on DB failure (PATCH-005B)."""
+    from services.kosha_msds.snapshot_proof import (
+        _get_outbox_pending_count,
+        SnapshotProofScanError,
+    )
+    sb = MagicMock()
+    sb.table.side_effect = Exception("DB unreachable")
+    with pytest.raises(SnapshotProofScanError):
+        _get_outbox_pending_count(sb)
+
+
+def test_H07b_outbox_pending_count_zero_when_clean():
+    """H07b: _get_outbox_pending_count returns 0 when no uncommitted events."""
+    from services.kosha_msds.snapshot_proof import _get_outbox_pending_count
+    r = MagicMock()
+    r.count = 0
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value = r
+    assert _get_outbox_pending_count(sb) == 0
+
+
+# ---- H08: verify_proof duplicate_db_count -----------------------------------
+
+
+def test_H08_verify_proof_duplicate_db_count_fails():
+    """H08: verify_proof returns False when duplicate_db_count > 0 (PATCH-005B)."""
+    from services.kosha_msds.snapshot_proof import verify_proof, SnapshotProof
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+    from services.shared_search.opensearch_client import CURRENT_ALIAS
+    sha = "ab" * 32
+    proof = SnapshotProof(
+        proof_version="1.0",
+        publication_scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+        snapshot_id="snap-h08",
+        snapshot_completed_at="2026-10-01T00:00:00+00:00",
+        opensearch_alias=CURRENT_ALIAS,
+        physical_index="tai-shared-search-v1-h08",
+        rebuild_run_id="run-h08",
+        db_membership_count=4,
+        os_membership_count=4,
+        db_membership_sha256=sha,
+        os_membership_sha256=sha,
+        chem_outbox_high_watermark=100,
+        verified_at="2026-10-01T00:00:00+00:00",
+        verification_status="PASS",
+        duplicate_db_count=2,  # data anomaly
+    )
+    assert verify_proof(proof) is False
