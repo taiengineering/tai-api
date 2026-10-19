@@ -473,6 +473,37 @@ class SupabaseMsdsReadStore:
         return int(getattr(r, "count", None) or 0)
 
     def get_current_by_chem_id(self, chem_id: str, *, scope: str = PUBLICATION_SCOPE_FULL) -> Optional[dict]:
+        if scope == PUBLICATION_SCOPE_SEO_PREVIEW:
+            r = (
+                self.sb.table(SEO_PREVIEW_CURRENT_VIEW)
+                .select(CURRENT_VIEW_SELECT)
+                .eq("chem_id", chem_id)
+                .limit(1)
+                .execute()
+            )
+            rows = r.data or []
+            if not rows:
+                return None
+            row = dict(rows[0])
+            chemical_id = str(row.get("id", ""))
+            if chemical_id:
+                sec_r = (
+                    self.sb.table(SECTIONS_TABLE)
+                    .select(_HYDRATION_SECTIONS_SELECT)
+                    .eq("chemical_id", chemical_id)
+                    .in_("section_no", list(_HYDRATION_SECTION_NOS))
+                    .execute()
+                )
+                sections = list(sec_r.data or [])
+            else:
+                sections = []
+            fields = _hydrate_from_sections(sections, last_date=None)
+            name_ko_fallback = fields.pop("chemical_name_ko_fallback")
+            cas_no_fallback = fields.pop("cas_no_fallback")
+            merged = {**row, **fields}
+            merged["chemical_name_ko"] = _coalesce_btrim(row.get("chemical_name_ko"), name_ko_fallback)
+            merged["cas_no"] = _coalesce_btrim(row.get("cas_no"), cas_no_fallback)
+            return merged
         r = (
             self.sb.table(_view_for_scope(scope))
             .select(_select_for_scope(scope))

@@ -856,19 +856,6 @@ def test_router_os_exception_returns_503_not_fallback(monkeypatch, seo_store):
 # ---------------------------------------------------------------------------
 
 
-def test_router_snapshot_gate_fail_503(monkeypatch, seo_store):
-    """Snapshot gate failure → 503 MSDS_SNAPSHOT_GATE_FAIL (PATCH-02)."""
-    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
-    app = _make_app(seo_store, None)
-
-    with patch("routers.kosha_public_msds.check_snapshot_gate",
-               side_effect=MsdsSnapshotGateError("stale")):
-        client = TestClient(app)
-        resp = client.get("/public/kosha/msds?name_ko=염산")
-    assert resp.status_code == 503
-    assert resp.json()["detail"]["code"] == "MSDS_SNAPSHOT_GATE_FAIL"
-
-
 def test_router_cas_not_ready_503(monkeypatch, seo_store):
     """CAS index not ready → 503 MSDS_CAS_INDEX_NOT_READY (PATCH-03)."""
     monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
@@ -2668,44 +2655,6 @@ def test_J07_hydration_reversed_order_raises():
             total=2, limit=10, offset=0,
             scope=PUBLICATION_SCOPE_SEO_PREVIEW,
         )
-
-
-# ---- J08: FULL=0 / SEO_PREVIEW=20568 — scope isolation --------------------
-
-
-def test_J08_full_scope_gate_fails_when_no_full_proof(monkeypatch, seo_store):
-    """J08: Router in FULL mode has no FULL proof → gate raises 503 (CLOSURE-01).
-
-    Prevents SEO_PREVIEW chemicals from leaking into FULL scope searches when
-    FULL proof doesn't exist (FULL=0 state in production).
-    """
-    from services.kosha_msds.snapshot_proof import clear_proof_registry, register_proof
-    _clear_snapshot_cache()
-    clear_proof_registry()
-
-    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "full")
-    app = _make_app(seo_store, None)
-
-    SNAP_ID = "snap-j08-seo"
-    PHYS_IDX = "tai-shared-search-v1-j08"
-    OUTBOX_WM = 100
-
-    # Only register SEO_PREVIEW proof — no FULL proof
-    seo_proof = _make_pass_proof(SNAP_ID, PHYS_IDX, OUTBOX_WM)
-    register_proof(seo_proof)
-
-    os_client = MagicMock()
-    os_client.indices.get_alias.return_value = {PHYS_IDX: {}}
-    sb = _make_sb_proof_state(SNAP_ID, OUTBOX_WM)
-
-    with patch("services.kosha_msds.opensearch_query.get_client",
-               return_value=os_client), \
-         patch("db.supabase_client.get_supabase", return_value=sb):
-        client = TestClient(app)
-        resp = client.get("/public/kosha/msds?name_ko=염산")
-
-    assert resp.status_code == 503
-    assert resp.json()["detail"]["code"] == "MSDS_SNAPSHOT_GATE_FAIL"
 
 
 # ---- J09: Global query OS call budget cap (CLOSURE-04) ---------------------

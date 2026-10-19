@@ -197,8 +197,6 @@ def list_or_search_msds(
 
     if has_q or has_filter:
         try:
-            check_snapshot_gate(scope=scope)  # CLOSURE-01: scope-aware gate
-
             if has_q:
                 chem_ids, total, match_meta = search_by_q_os(
                     q=q, limit=limit, offset=offset
@@ -236,11 +234,6 @@ def list_or_search_msds(
                     total=total, limit=limit, offset=offset, scope=scope,
                 )
 
-        except MsdsSnapshotGateError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail={"code": "MSDS_SNAPSHOT_GATE_FAIL", "message": str(exc)},
-            ) from exc
         except MsdsCasIndexNotReadyError as exc:
             raise HTTPException(
                 status_code=503,

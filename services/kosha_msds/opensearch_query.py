@@ -49,9 +49,10 @@ from services.shared_search.opensearch_client import CURRENT_ALIAS, get_client
 logger = logging.getLogger(__name__)
 
 _CHEM_BASE_FILTER: list[dict] = [
+    {"term": {"object_type": "CHEM"}},
+    {"term": {"source_id": "KOSHA_MSDS"}},
     {"term": {"publication_status": "PUBLISHED"}},
     {"term": {"visibility_scopes": "PUBLIC"}},
-    {"term": {"object_type": "CHEM"}},
 ]
 
 _DEEP_PAGINATION_LIMIT = 9_900
