@@ -49,6 +49,8 @@ from services.kosha_msds.read import (
     search,
 )
 from services.kosha_msds.search_adapter import search_by_q
+from services.kosha_msds.opensearch_query import search_by_q_os
+from services.shared_search.opensearch_client import OpenSearchUnavailable
 
 router = APIRouter(
     prefix="/public/kosha/msds",
@@ -162,7 +164,16 @@ def list_or_search_msds(
     scope = _mode_to_scope(mode)
     store = get_store()
     if q is not None and q.strip():
-        return search_by_q(q=q, store=store, limit=limit, offset=offset, scope=scope)
+        try:
+            return search_by_q(
+                q=q, store=store, limit=limit, offset=offset, scope=scope,
+                os_search=search_by_q_os,
+            )
+        except OpenSearchUnavailable:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "MSDS_SEARCH_UNAVAILABLE", "message": "검색 서비스를 일시적으로 사용할 수 없습니다."},
+            )
     if _has_any_search_filter(chem_id, cas_no, ke_no, en_no, un_no, name_ko, name_en):
         return search(
             store=store,

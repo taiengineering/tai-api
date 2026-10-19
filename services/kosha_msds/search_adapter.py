@@ -236,6 +236,51 @@ def _clamp_pagination(limit: int, offset: int) -> tuple[int, int]:
     return lim, off
 
 
+def _search_free_text_via_os(
+    *,
+    plan,
+    store,
+    lim: int,
+    off: int,
+    scope,
+    match_meta: dict,
+    os_search: Callable,
+) -> dict:
+    """Delegate free-text search to an injected engine, then batch-hydrate from store.
+
+    Single engine call → batch Supabase lookup.
+    Non-current or out-of-scope chem_ids returned by the engine are silently
+    dropped; scoped membership is enforced by the store.
+    """
+    from services.kosha_msds import read
+
+    os_result = os_search(plan, limit=lim, offset=off, scope=scope)
+    hits = os_result.get("hits") or []
+    total = int(os_result.get("total") or 0)
+
+    chem_ids = [h["chem_id"] for h in hits if h.get("chem_id")]
+    rows_map = read.batch_current_by_chem_ids(store=store, chem_ids=chem_ids, scope=scope)
+
+    items: list[dict] = []
+    for h in hits:
+        cid = h.get("chem_id")
+        row = rows_map.get(cid)
+        if row is None:
+            continue
+        out = dict(row)
+        out["match_type"] = h.get("match_type", MATCH_KIWI_TOKEN)
+        out["matched_term"] = h.get("matched_term", plan.normalized_query)
+        items.append(out)
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": lim,
+        "offset": off,
+        "match_metadata": match_meta,
+    }
+
+
 def search_by_q(
     *,
     q: str,
@@ -244,6 +289,7 @@ def search_by_q(
     offset: int = 0,
     dictionary_lookup: Optional[Callable[..., dict]] = None,
     scope: Optional[str] = None,
+    os_search: Optional[Callable] = None,
 ) -> dict:
     """Free-text search entrypoint. Delegates to CHEM-06 read.search.
 
@@ -283,7 +329,14 @@ def search_by_q(
         result["match_metadata"] = match_meta
         return result
 
-    # Free-text: OR multiple candidates via multiple CHEM-06 search calls,
+    # Free-text: single engine call when available, else N×M CHEM-06 loop.
+    if os_search is not None:
+        return _search_free_text_via_os(
+            plan=plan, store=store, lim=lim, off=off,
+            scope=scope, match_meta=match_meta, os_search=os_search,
+        )
+
+    # Fallback: OR multiple candidates via multiple CHEM-06 search calls,
     # then de-dupe by chem_id preserving priority order.
     seen: set[str] = set()
     hits: list[dict] = []

@@ -367,6 +367,20 @@ class MemoryMsdsReadStore:
         total = len(matches)
         return matches[offset : offset + limit], total
 
+    def batch_current_by_chem_ids(
+        self,
+        chem_ids: list,
+        *,
+        scope: str = PUBLICATION_SCOPE_FULL,
+    ) -> dict:
+        """Return {chem_id: raw_row} for the given ids (scoped, in-memory lookup)."""
+        result: dict = {}
+        for cid in chem_ids:
+            row = self.get_current_by_chem_id(cid, scope=scope)
+            if row is not None:
+                result[cid] = row
+        return result
+
     def sections_for_chemical(self, chemical_id: str) -> list[dict]:
         rows = [
             dict(s) for s in self._sections if str(s.get("chemical_id")) == str(chemical_id)
@@ -553,6 +567,28 @@ class SupabaseMsdsReadStore:
         r = q.order("chem_id").range(offset, offset + limit - 1).execute()
         return list(r.data or []), int(r.count or 0)
 
+    def batch_current_by_chem_ids(
+        self,
+        chem_ids: list,
+        *,
+        scope: str = PUBLICATION_SCOPE_FULL,
+    ) -> dict:
+        """Return {chem_id: raw_row} for the given ids in a single Supabase query."""
+        if not chem_ids:
+            return {}
+        r = (
+            self.sb.table(_view_for_scope(scope))
+            .select(_select_for_scope(scope))
+            .in_("chem_id", chem_ids)
+            .execute()
+        )
+        result: dict = {}
+        for row in (r.data or []):
+            cid = row.get("chem_id")
+            if cid:
+                result[cid] = dict(row)
+        return result
+
     def sections_for_chemical(self, chemical_id: str) -> list[dict]:
         r = (
             self.sb.table(SECTIONS_TABLE)
@@ -704,4 +740,25 @@ def search(
         "total": int(total),
         "limit": lim,
         "offset": off,
+    }
+
+
+def batch_current_by_chem_ids(
+    *,
+    store,
+    chem_ids: list,
+    scope: Optional[str] = None,
+) -> dict:
+    """Return {chem_id: contract_dict} for the given ids (scoped).
+
+    Non-current or out-of-scope chem_ids are silently omitted.
+    Used by the OS-backed free-text search path to hydrate hits.
+    """
+    scope = _validate_scope(scope)
+    if not chem_ids:
+        return {}
+    raw = store.batch_current_by_chem_ids(chem_ids, scope=scope)
+    return {
+        cid: _current_row_to_contract(row, last_date=None)
+        for cid, row in raw.items()
     }
