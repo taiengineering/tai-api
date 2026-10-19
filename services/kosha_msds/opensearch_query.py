@@ -414,6 +414,84 @@ def _search_os_deep_page(
             pass
 
 
+def _free_text_deep_page(
+    *,
+    query_body: dict,
+    sort: list,
+    offset: int,
+    limit: int,
+    client,
+    default_term: str,
+) -> tuple[list[str], int, dict]:
+    """PIT + search_after for offset+limit > _DEEP_PAGINATION_LIMIT in P1 free-text (WO-023).
+
+    Like _search_os_deep_page but captures matched_queries for per-item
+    match_type attribution. Raises MsdsPaginationDepthExceededError on PIT failure.
+    """
+    try:
+        pit_resp = client.create_pit(
+            index=CURRENT_ALIAS,
+            params={"keep_alive": _PIT_KEEP_ALIVE},
+        )
+        pit_id = pit_resp.get("pit_id") or ""
+    except Exception as exc:
+        raise MsdsPaginationDepthExceededError(
+            f"PIT creation failed (OS may not support PIT): {exc}"
+        ) from exc
+
+    if not pit_id:
+        raise MsdsPaginationDepthExceededError("PIT creation returned empty pit_id")
+
+    try:
+        collected: list[tuple[str, list]] = []  # (chem_id, matched_queries)
+        search_after = None
+        total = 0
+        needed = offset + limit
+
+        while len(collected) < needed:
+            body: dict = {
+                **query_body,
+                "sort": sort,
+                "size": _PIT_BATCH,
+                "track_total_hits": True,
+                "pit": {"id": pit_id, "keep_alive": _PIT_KEEP_ALIVE},
+                "_source": ["source_key"],
+            }
+            if search_after:
+                body["search_after"] = search_after
+            resp = client.search(body=body)
+            hits_obj = resp.get("hits") or {}
+            total_raw = hits_obj.get("total") or {}
+            total = (
+                total_raw.get("value", 0)
+                if isinstance(total_raw, dict)
+                else int(total_raw or 0)
+            )
+            hits = hits_obj.get("hits") or []
+            if not hits:
+                break
+            for h in hits:
+                sk = (h.get("_source") or {}).get("source_key", "").strip()
+                if sk:
+                    collected.append((sk, h.get("matched_queries") or []))
+            search_after = hits[-1].get("sort")
+            if len(hits) < _PIT_BATCH:
+                break
+
+        page = collected[offset: offset + limit]
+        chem_ids = [cid for cid, _ in page]
+        item_meta: dict[str, dict] = {}
+        for cid, mqs in page:
+            mt, term = _best_match_from_queries(mqs, default_term)
+            item_meta[cid] = {"match_type": mt, "matched_term": term}
+        return chem_ids, total, item_meta
+    finally:
+        try:
+            client.delete_pit(body={"pit_id": pit_id})
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Search (PATCH-03..06 + PATCH-003C/D/F)
 # ---------------------------------------------------------------------------
@@ -937,13 +1015,30 @@ def search_by_q_os(
         match_meta["match_type"] = MATCH_IDENTIFIER_EXACT
         return chem_ids, total, match_meta
 
-    # P1: Free-text — single dis_max query (WO-023 optimization).
-    # NE(1000) > DE(100) > KW(10) via constant_score; OS-side from/size pagination.
-    # Named queries attribute match_type per hit; 1 OS call per page.
+    # P1: Free-text — dis_max query (WO-023 optimization).
+    # NE(1000) > DE(100) > KW(10) via constant_score; named queries for match attribution.
+    # Normal pages: 1 OS call with OS-side from/size.
+    # Deep pages (off+lim > _DEEP_PAGINATION_LIMIT): PIT + search_after (reuses existing
+    # infrastructure); raises MsdsPaginationDepthExceededError on PIT failure.
     if client is None:
         client = get_client()
 
     dsl = _build_free_text_dsl(plan, from_=off, size=lim)
+
+    if off + lim > _DEEP_PAGINATION_LIMIT:
+        # Deep pagination: PIT-based scan with match_type attribution.
+        chem_ids, total, item_meta = _free_text_deep_page(
+            query_body={"query": dsl["query"]},
+            sort=dsl.get("sort", [{"_score": "desc"}, {"source_key": "asc"}]),
+            offset=off,
+            limit=lim,
+            client=client,
+            default_term=plan.normalized_query,
+        )
+        match_meta["match_type"] = "CHEM_09"
+        match_meta["per_item_metadata"] = item_meta
+        return chem_ids, total, match_meta
+
     resp = client.search(index=CURRENT_ALIAS, body=dsl)
     hits_obj = resp.get("hits") or {}
     raw_hits: list = hits_obj.get("hits") or []

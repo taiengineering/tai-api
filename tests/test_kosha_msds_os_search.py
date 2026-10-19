@@ -3409,3 +3409,105 @@ def test_L15_detail_endpoint_regression(seo_store):
     )
     assert body is not None
     assert body["chem_id"] == "000001"
+
+
+# ===========================================================================
+# WO-023-DEEPPAGE  M01-M04 — Free-text P1 deep pagination boundary
+# _DEEP_PAGINATION_LIMIT routing; _free_text_deep_page PIT contract
+# ===========================================================================
+
+
+def test_M01_normal_page_no_pit():
+    """M01: offset+limit <= _DEEP_PAGINATION_LIMIT → single from/size call, no PIT."""
+    from services.kosha_msds.opensearch_query import search_by_q_os, _DEEP_PAGINATION_LIMIT
+    client = _fake_os_client(["000001"], 1)
+    normal_offset = _DEEP_PAGINATION_LIMIT - 20
+    search_by_q_os(q="염산", limit=20, offset=normal_offset, client=client)
+    assert client.search.call_count == 1
+    client.create_pit.assert_not_called()
+    body = client.search.call_args[1]["body"]
+    assert body["from"] == normal_offset
+    assert body["size"] == 20
+
+
+def test_M02_deep_page_triggers_pit():
+    """M02: offset+limit > _DEEP_PAGINATION_LIMIT → PIT lifecycle; correct ids/total/meta."""
+    from services.kosha_msds.opensearch_query import (
+        search_by_q_os, _DEEP_PAGINATION_LIMIT, _PIT_BATCH,
+    )
+
+    deep_offset = _DEEP_PAGINATION_LIMIT + 1
+    needed = deep_offset + 20
+    all_keys = [f"{i:06d}" for i in range(1, needed + 1)]
+
+    os_client = MagicMock()
+    os_client.create_pit.return_value = {"pit_id": "pit-m02"}
+    call_n = [0]
+
+    def _pit_search(**kwargs):
+        n = call_n[0]
+        call_n[0] += 1
+        page_keys = all_keys[n * _PIT_BATCH: (n + 1) * _PIT_BATCH]
+        hits = [
+            {"_source": {"source_key": sk}, "sort": [sk], "matched_queries": ["NE:염산"]}
+            for sk in page_keys
+        ]
+        return {"hits": {"total": {"value": len(all_keys)}, "hits": hits}}
+
+    os_client.search.side_effect = _pit_search
+
+    ids, total, meta = search_by_q_os(q="염산", limit=20, offset=deep_offset, client=os_client)
+
+    os_client.create_pit.assert_called_once()
+    os_client.delete_pit.assert_called_once()
+    assert total == len(all_keys)
+    assert len(ids) == 20
+    assert "per_item_metadata" in meta
+    assert len(meta["per_item_metadata"]) == 20
+
+
+def test_M03_deep_page_match_meta_from_named_queries():
+    """M03: Deep page — matched_queries in PIT hits drive per_item_metadata match_type."""
+    from services.kosha_msds.opensearch_query import (
+        search_by_q_os, _DEEP_PAGINATION_LIMIT, _PIT_BATCH,
+    )
+
+    deep_offset = _DEEP_PAGINATION_LIMIT + 1
+    needed = deep_offset + 5
+    all_keys = [f"{i:06d}" for i in range(1, needed + 1)]
+
+    os_client = MagicMock()
+    os_client.create_pit.return_value = {"pit_id": "pit-m03"}
+    call_n = [0]
+
+    def _pit_search(**kwargs):
+        n = call_n[0]
+        call_n[0] += 1
+        page_keys = all_keys[n * _PIT_BATCH: (n + 1) * _PIT_BATCH]
+        hits = [
+            {"_source": {"source_key": sk}, "sort": [sk], "matched_queries": ["NE:염산"]}
+            for sk in page_keys
+        ]
+        return {"hits": {"total": {"value": len(all_keys)}, "hits": hits}}
+
+    os_client.search.side_effect = _pit_search
+
+    ids, total, meta = search_by_q_os(q="염산", limit=5, offset=deep_offset, client=os_client)
+
+    assert len(meta["per_item_metadata"]) == 5
+    for cid in ids:
+        assert meta["per_item_metadata"][cid]["match_type"] == "NORMALIZED_EXACT"
+        assert meta["per_item_metadata"][cid]["matched_term"] == "염산"
+
+
+def test_M04_deep_page_pit_failure_raises():
+    """M04: Deep page PIT creation failure → MsdsPaginationDepthExceededError."""
+    from services.kosha_msds.opensearch_query import (
+        search_by_q_os, _DEEP_PAGINATION_LIMIT, MsdsPaginationDepthExceededError,
+    )
+
+    os_client = MagicMock()
+    os_client.create_pit.side_effect = Exception("PIT not supported")
+
+    with pytest.raises(MsdsPaginationDepthExceededError):
+        search_by_q_os(q="염산", limit=5, offset=_DEEP_PAGINATION_LIMIT + 1, client=os_client)
