@@ -283,14 +283,15 @@ def _make_sb_count(n: int):
     return sb
 
 
-def _make_sb_proof_state(snap_id: str, outbox_wm: int):
+def _make_sb_proof_state(snap_id: str, outbox_wm: int, *, pending_count: int = 0):
     """Mock Supabase client that satisfies the PATCH-003B proof-based gate.
 
     Routes by table name:
       kosha_msds_seo_preview_current → snapshot_id lookup
       kosha_msds_snapshots            → completed_at lookup
-      search_index_outbox             → watermark lookup
+      search_index_outbox             → watermark lookup + pending count lookup
     Other tables raise (fail-closed sentinel).
+    pending_count controls the uncached PENDING gate check (P0-01, default=0=clean).
     """
     def _table(table_name):
         m = MagicMock()
@@ -303,10 +304,14 @@ def _make_sb_proof_state(snap_id: str, outbox_wm: int):
             r.data = [{"completed_at": "2026-10-01T00:00:00+00:00"}]
             m.select.return_value.eq.return_value.limit.return_value.execute.return_value = r
         elif table_name == "search_index_outbox":
-            r = MagicMock()
-            r.data = [{"id": outbox_wm}]
-            # chain: .select("id").eq("status","COMPLETED").eq("domain_name","CHEM").order(...).limit(1).execute()
-            m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = r
+            wm_r = MagicMock()
+            wm_r.data = [{"id": outbox_wm}]
+            pending_r = MagicMock()
+            pending_r.count = pending_count
+            # watermark: .select("id").eq("status","COMPLETED").eq("domain_name","CHEM").order(...).limit(1).execute()
+            m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = wm_r
+            # pending: .select("id", count="exact").eq("domain_name","CHEM").in_("status",[...]).limit(0).execute()
+            m.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value = pending_r
         else:
             raise RuntimeError(f"unexpected table: {table_name}")
         return m
@@ -775,7 +780,7 @@ def test_router_os_q_search(monkeypatch, seo_store):
 
 
 def test_router_os_q_search_match_type_annotation(monkeypatch, seo_store):
-    """q-path items carry match_type and matched_term annotations (PATCH-05)."""
+    """q-path items carry match_type=CHEM_09 and matched_term annotations (P0-02)."""
     monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
 
     app = _make_app(seo_store, None)
@@ -785,6 +790,10 @@ def test_router_os_q_search_match_type_annotation(monkeypatch, seo_store):
         "compact_query": "벤젠",
         "tokens": [],
         "expanded_terms": [],
+        "match_type": "CHEM_09",
+        "per_item_metadata": {
+            "000002": {"match_type": "CHEM_09", "matched_term": "벤젠"},
+        },
     }
     with patch("routers.kosha_public_msds.check_snapshot_gate"), \
          patch("routers.kosha_public_msds.search_by_q_os",
@@ -793,7 +802,7 @@ def test_router_os_q_search_match_type_annotation(monkeypatch, seo_store):
         resp = client.get("/public/kosha/msds?q=벤젠")
     data = resp.json()
     item = data["items"][0]
-    assert item["match_type"] == "BM25_NORI"
+    assert item["match_type"] == "CHEM_09"
     assert item["matched_term"] == "벤젠"
 
 
@@ -1818,11 +1827,11 @@ def test_G13_match_type_identifier_exact(monkeypatch):
 
 
 def test_G13b_match_type_free_text(monkeypatch):
-    """G13b: Free-text q path sets match_type=BM25_NORI (free-text label)."""
+    """G13b: Free-text q path sets match_type=CHEM_09 (P0-02: BM25 not used)."""
     from services.kosha_msds.opensearch_query import search_by_q_os
     client = _fake_os_client([], 0)
     _, _, meta = search_by_q_os(q="염산", limit=5, offset=0, client=client)
-    assert meta["match_type"] == "BM25_NORI"
+    assert meta["match_type"] == "CHEM_09"
     assert meta["identifier_kind"] is None
 
 
@@ -2127,3 +2136,300 @@ def test_H08_verify_proof_duplicate_db_count_fails():
         duplicate_db_count=2,  # data anomaly
     )
     assert verify_proof(proof) is False
+
+
+# ---------------------------------------------------------------------------
+# PATCH-006 I01-I09  WO-WWW-PERF-004-P0S-OS-PATCH-006
+# ---------------------------------------------------------------------------
+
+
+# ---- I01: empty snapshot_id → FAIL proof + verify_proof False --------------
+
+
+def test_I01a_verify_proof_empty_snapshot_id_fails():
+    """I01a: verify_proof returns False when snapshot_id is empty (P0-01)."""
+    from services.kosha_msds.snapshot_proof import verify_proof, SnapshotProof
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+    from services.shared_search.opensearch_client import CURRENT_ALIAS
+    sha = "ab" * 32
+    proof = SnapshotProof(
+        proof_version="1.0",
+        publication_scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+        snapshot_id="",  # empty → must fail
+        snapshot_completed_at="2026-10-01T00:00:00+00:00",
+        opensearch_alias=CURRENT_ALIAS,
+        physical_index="tai-shared-search-v1-i01",
+        rebuild_run_id="run-i01",
+        db_membership_count=5,
+        os_membership_count=5,
+        db_membership_sha256=sha,
+        os_membership_sha256=sha,
+        chem_outbox_high_watermark=100,
+        verified_at="2026-10-01T00:00:00+00:00",
+        verification_status="PASS",  # would pass all other checks
+    )
+    assert verify_proof(proof) is False
+
+
+def test_I01b_generate_proof_empty_snapshot_returns_fail():
+    """I01b: generate_proof_dry_run with no active snapshot → FAIL proof (P0-01)."""
+    from services.kosha_msds.snapshot_proof import generate_proof_dry_run
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+
+    def _table(name):
+        m = MagicMock()
+        if name == "kosha_msds_seo_preview_current":
+            # snapshot lookup returns empty list → snapshot_id = ""
+            snap_r = MagicMock()
+            snap_r.data = []
+            m.select.return_value.limit.return_value.execute.return_value = snap_r
+            # DB scan: empty
+            scan_r = MagicMock()
+            scan_r.data = []
+            m.select.return_value.order.return_value.limit.return_value.execute.return_value = scan_r
+        elif name == "kosha_msds_snapshots":
+            ts_r = MagicMock()
+            ts_r.data = [{"completed_at": "2026-10-01T00:00:00+00:00"}]
+            m.select.return_value.eq.return_value.limit.return_value.execute.return_value = ts_r
+        elif name == "search_index_outbox":
+            wm_r = MagicMock()
+            wm_r.data = [{"id": 100}]
+            pending_r = MagicMock()
+            pending_r.count = 0
+            m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = wm_r
+            m.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value = pending_r
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {"tai-shared-search-v1-i01b": {}}
+    os_client.search.return_value = {"hits": {"hits": []}}
+
+    proof = generate_proof_dry_run(scope=PUBLICATION_SCOPE_SEO_PREVIEW, sb=sb, client=os_client)
+    assert proof.verification_status == "FAIL"
+    assert proof.snapshot_id == ""
+    assert "empty" in (proof.error_message or "").lower()
+
+
+# ---- I02: post-proof PENDING events → check_snapshot_gate raises -----------
+
+
+def test_I02_gate_rejects_pending_events_after_proof():
+    """I02: Uncached pending check detects new PENDING events not present at proof time (P0-01)."""
+    from services.kosha_msds.snapshot_proof import register_proof, clear_proof_registry
+    _clear_snapshot_cache()
+    clear_proof_registry()
+
+    SNAP_ID = "snap-i02"
+    PHYS_IDX = "tai-shared-search-v1-i02"
+    OUTBOX_WM = 500
+
+    proof = _make_pass_proof(SNAP_ID, PHYS_IDX, OUTBOX_WM)
+    register_proof(proof)
+
+    # State matches proof, but 3 PENDING events arrived after proof was generated
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {PHYS_IDX: {}}
+    sb = _make_sb_proof_state(SNAP_ID, OUTBOX_WM, pending_count=3)
+
+    with pytest.raises(MsdsSnapshotGateError, match="Uncommitted CHEM events"):
+        check_snapshot_gate(client=os_client, sb=sb)
+
+
+# ---- I03: OS duplicate source_key → FAIL proof + os_duplicate_count > 0 ----
+
+
+def test_I03_os_duplicate_source_key_returns_fail():
+    """I03: OS index with duplicate source_key → FAIL proof, os_duplicate_count > 0 (P0-01)."""
+    from services.kosha_msds.snapshot_proof import generate_proof_dry_run
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+    from services.shared_search.opensearch_client import RUNS_INDEX
+
+    def _table(name):
+        m = MagicMock()
+        if name == "kosha_msds_seo_preview_current":
+            snap_r = MagicMock()
+            snap_r.data = [{"snapshot_id": "snap-i03"}]
+            m.select.return_value.limit.return_value.execute.return_value = snap_r
+            scan_r = MagicMock()
+            scan_r.data = []
+            m.select.return_value.order.return_value.limit.return_value.execute.return_value = scan_r
+        elif name == "kosha_msds_snapshots":
+            ts_r = MagicMock()
+            ts_r.data = [{"completed_at": "2026-10-01T00:00:00+00:00"}]
+            m.select.return_value.eq.return_value.limit.return_value.execute.return_value = ts_r
+        elif name == "search_index_outbox":
+            wm_r = MagicMock()
+            wm_r.data = [{"id": 100}]
+            pending_r = MagicMock()
+            pending_r.count = 0
+            m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = wm_r
+            m.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value = pending_r
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    # OS client: _get_rebuild_run_id uses RUNS_INDEX; _scan_os_chem_ids uses physical_index
+    def _search_side_effect(**kwargs):
+        idx = kwargs.get("index", "")
+        if idx == RUNS_INDEX:
+            return {"hits": {"hits": [{"_source": {"run_id": "run-i03"}}]}}
+        # Physical index scan: return 2 hits with duplicate source_key "000001"
+        return {
+            "hits": {
+                "hits": [
+                    {"_source": {"source_key": "000001", "canonical_id": "uuid-a"}, "sort": ["uuid-a"]},
+                    {"_source": {"source_key": "000001", "canonical_id": "uuid-b"}, "sort": ["uuid-b"]},
+                ]
+            }
+        }
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {"tai-shared-search-v1-i03": {}}
+    os_client.search.side_effect = _search_side_effect
+
+    proof = generate_proof_dry_run(scope=PUBLICATION_SCOPE_SEO_PREVIEW, sb=sb, client=os_client)
+    assert proof.os_duplicate_count == 1  # 2 raw hits → 1 deduped → 1 duplicate
+    assert proof.verification_status == "FAIL"
+    assert "Duplicate source_key" in (proof.error_message or "")
+
+
+# ---- I04: _collect_all_os budget exhaustion → MsdsCandidateEnumerationIncompleteError
+
+
+def test_I04_collect_all_os_budget_exhausted_raises():
+    """I04: _collect_all_os raises MsdsCandidateEnumerationIncompleteError when
+    page budget is exhausted with results still remaining (P0-03)."""
+    from services.kosha_msds.opensearch_query import (
+        _collect_all_os,
+        _CANDIDATE_MAX_PAGES,
+        _CANDIDATE_PAGE_SIZE,
+        MsdsCandidateEnumerationIncompleteError,
+    )
+
+    # Always return full page with total much larger than budget
+    full_page = [f"{i:06d}" for i in range(_CANDIDATE_PAGE_SIZE)]
+    huge_total = _CANDIDATE_MAX_PAGES * _CANDIDATE_PAGE_SIZE + 1
+
+    with patch("services.kosha_msds.opensearch_query.search_os",
+               return_value=(full_page, huge_total)):
+        with pytest.raises(MsdsCandidateEnumerationIncompleteError) as exc_info:
+            _collect_all_os(name_ko="테스트", client=MagicMock())
+
+    assert "budget exhausted" in str(exc_info.value).lower()
+    assert f"os_total={huge_total}" in str(exc_info.value)
+
+
+# ---- I05: per_item_metadata page-scoped only (not full result set) ----------
+
+
+def test_I05_per_item_metadata_is_page_sized():
+    """I05: per_item_metadata contains only the current page items, not the full deduped set (P0-02)."""
+    from services.kosha_msds.opensearch_query import search_by_q_os
+
+    # 10 distinct IDs total; request page of 3
+    ten_ids = [f"{i:06d}" for i in range(1, 11)]
+
+    with patch("services.kosha_msds.opensearch_query._collect_all_os",
+               return_value=ten_ids):
+        page, total, meta = search_by_q_os(q="염산", limit=3, offset=0, client=MagicMock())
+
+    assert total == 10
+    assert len(page) == 3
+    assert "per_item_metadata" in meta
+    # per_item_metadata must be exactly the page items, not all 10
+    assert set(meta["per_item_metadata"].keys()) == set(page)
+    assert len(meta["per_item_metadata"]) == 3
+
+
+# ---- I06: search_by_q_os free-text sets match_type="CHEM_09" ----------------
+
+
+def test_I06_search_by_q_os_free_text_match_type_chem09():
+    """I06: Free-text search_by_q_os sets match_type='CHEM_09', not BM25 (P0-02)."""
+    from services.kosha_msds.opensearch_query import search_by_q_os
+
+    client = _fake_os_client(["000001"], 1)
+    page, total, meta = search_by_q_os(q="염산", limit=5, offset=0, client=client)
+
+    assert meta["match_type"] == "CHEM_09"
+    assert meta["identifier_kind"] is None
+    assert "per_item_metadata" in meta
+    assert isinstance(meta["per_item_metadata"], dict)
+
+
+# ---- I07: duplicate input chem_ids → MsdsHydrationIntegrityError → 503 -----
+
+
+def test_I07_duplicate_chem_ids_raises_hydration_error(seo_store):
+    """I07: search_from_chem_ids raises MsdsHydrationIntegrityError on duplicate OS input IDs (P0-04)."""
+    from services.kosha_msds.opensearch_query import MsdsHydrationIntegrityError
+    from services.kosha_msds.read import search_from_chem_ids
+
+    with pytest.raises(MsdsHydrationIntegrityError, match="Duplicate chem_ids in OS result"):
+        search_from_chem_ids(
+            store=seo_store, chem_ids=["000001", "000001"],  # duplicate
+            total=2, limit=10, offset=0,
+            scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+        )
+
+
+def test_I07b_router_duplicate_chem_ids_503(monkeypatch, seo_store):
+    """I07b: Router returns 503 MSDS_HYDRATION_INTEGRITY_FAIL when OS returns duplicate IDs (P0-04)."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    app = _make_app(seo_store, None)
+
+    match_meta = {
+        "identifier_kind": None,
+        "normalized_query": "벤젠",
+        "compact_query": "벤젠",
+        "tokens": [],
+        "expanded_terms": [],
+        "match_type": "CHEM_09",
+        "per_item_metadata": {},
+    }
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_by_q_os",
+               return_value=(["000001", "000001"], 2, match_meta)):
+        client = TestClient(app)
+        resp = client.get("/public/kosha/msds?q=벤젠")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "MSDS_HYDRATION_INTEGRITY_FAIL"
+
+
+# ---- I08: hydration order matches OS input order ----------------------------
+
+
+def test_I08_hydration_preserves_os_order(seo_store):
+    """I08: search_from_chem_ids returns items in the same order as chem_ids input (OS rank order)."""
+    from services.kosha_msds.read import search_from_chem_ids
+
+    result = search_from_chem_ids(
+        store=seo_store, chem_ids=["000002", "000001"],  # reversed from natural order
+        total=2, limit=10, offset=0,
+        scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+    )
+    assert len(result["items"]) == 2
+    assert result["items"][0]["chem_id"] == "000002"
+    assert result["items"][1]["chem_id"] == "000001"
+
+
+# ---- I09: router handles MsdsCandidateEnumerationIncompleteError → 503 -----
+
+
+def test_I09_router_candidate_enumeration_incomplete_503(monkeypatch, seo_store):
+    """I09: MsdsCandidateEnumerationIncompleteError → 503 MSDS_CANDIDATE_ENUMERATION_INCOMPLETE (P0-03)."""
+    from services.kosha_msds.opensearch_query import MsdsCandidateEnumerationIncompleteError
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    app = _make_app(seo_store, None)
+
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_by_q_os",
+               side_effect=MsdsCandidateEnumerationIncompleteError("budget exhausted")):
+        client = TestClient(app)
+        resp = client.get("/public/kosha/msds?q=염산")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "MSDS_CANDIDATE_ENUMERATION_INCOMPLETE"

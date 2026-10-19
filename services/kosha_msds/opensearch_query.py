@@ -91,6 +91,14 @@ class MsdsHydrationIntegrityError(MsdsOsError):
     """
 
 
+class MsdsCandidateEnumerationIncompleteError(MsdsOsError):
+    """_collect_all_os() exhausted its page budget with results still remaining.
+
+    Raised when collected < os_total after _CANDIDATE_MAX_PAGES pages. Prevents
+    returning a partial candidate set as if it were complete (P0-03).
+    """
+
+
 # ---------------------------------------------------------------------------
 # Snapshot gate (PATCH-02 → PATCH-003B proof-registry gate)
 # ---------------------------------------------------------------------------
@@ -223,6 +231,24 @@ def check_snapshot_gate(*, client=None, sb=None) -> None:
         raise MsdsSnapshotGateError(
             f"Registered proof failed verification: status={proof.verification_status} "
             f"error={proof.error_message!r}"
+        )
+
+    # Uncached PENDING check: detect new uncommitted events since proof was generated (P0-01).
+    # Not cached — ensures new PENDING events are detected on every gate call.
+    try:
+        from services.kosha_msds.snapshot_proof import _get_outbox_pending_count, SnapshotProofScanError
+        _sb = sb
+        if _sb is None:
+            from db.supabase_client import get_supabase
+            _sb = get_supabase()
+        pending_count = _get_outbox_pending_count(_sb)
+    except Exception as exc:
+        raise MsdsSnapshotGateError(
+            f"Pending event count check failed at gate: {exc}"
+        ) from exc
+    if pending_count > 0:
+        raise MsdsSnapshotGateError(
+            f"Uncommitted CHEM events at gate check time: pending_count={pending_count}"
         )
 
 
@@ -493,19 +519,32 @@ def _collect_all_os(*, client, **kwargs) -> list[str]:
 
     Uses _CANDIDATE_PAGE_SIZE per page, up to _CANDIDATE_MAX_PAGES pages.
     For results > _DEEP_PAGINATION_LIMIT, search_os routes to PIT internally.
+
+    Raises MsdsCandidateEnumerationIncompleteError when budget is exhausted
+    with more results still remaining in OS (P0-03: no silent truncation).
     """
     all_ids: list[str] = []
     page_off = 0
+    last_total: Optional[int] = None
     for _ in range(_CANDIDATE_MAX_PAGES):
         ids, total = search_os(
             limit=_CANDIDATE_PAGE_SIZE, offset=page_off, client=client, **kwargs
         )
+        last_total = total
         all_ids.extend(ids)
         if len(ids) < _CANDIDATE_PAGE_SIZE:
             break
         page_off += _CANDIDATE_PAGE_SIZE
         if isinstance(total, int) and page_off >= total:
             break
+    else:
+        # Loop ran all _CANDIDATE_MAX_PAGES iterations without break → budget exhausted
+        if isinstance(last_total, int) and len(all_ids) < last_total:
+            raise MsdsCandidateEnumerationIncompleteError(
+                f"Candidate enumeration budget exhausted: "
+                f"collected={len(all_ids)} os_total={last_total} "
+                f"(budget={_CANDIDATE_MAX_PAGES} pages × {_CANDIDATE_PAGE_SIZE})"
+            )
     return all_ids
 
 
@@ -594,9 +633,10 @@ def search_by_q_os(
     for token in plan.tokens:
         _run_term(token, MATCH_KIWI_TOKEN)
 
-    match_meta["match_type"] = MATCH_BM25_NORI  # top-level label (free-text path)
-    match_meta["per_item_metadata"] = item_meta  # per-chem_id CHEM-09 match provenance
-
     total = len(all_deduped)
     page = all_deduped[off: off + lim]
+    match_meta["match_type"] = "CHEM_09"  # actual search path: NORMALIZED→DICTIONARY→KIWI (not BM25)
+    match_meta["per_item_metadata"] = {  # page-sized only (P0-02: response proportional to page size)
+        cid: item_meta[cid] for cid in page if cid in item_meta
+    }
     return page, total, match_meta

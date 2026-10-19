@@ -44,6 +44,7 @@ from services.kosha_msds.contract import (
     PUBLIC_MODE_SEO_PREVIEW,
 )
 from services.kosha_msds.opensearch_query import (
+    MsdsCandidateEnumerationIncompleteError,
     MsdsCasIndexNotReadyError,
     MsdsHydrationIntegrityError,
     MsdsOsError,
@@ -205,7 +206,7 @@ def list_or_search_msds(
                     store=store, chem_ids=chem_ids,
                     total=total, limit=limit, offset=offset, scope=scope,
                 )
-                # PATCH-05: per-item CHEM-09 match type from per_item_metadata
+                # PATCH-05/P0-02: per-item CHEM-09 match type from page-scoped per_item_metadata
                 per_item = match_meta.get("per_item_metadata") or {}
                 ident_kind = match_meta.get("identifier_kind")
                 for item in result["items"]:
@@ -214,8 +215,10 @@ def list_or_search_msds(
                         item["match_type"] = per_item[cid]["match_type"]
                         item["matched_term"] = per_item[cid]["matched_term"]
                     else:
+                        # Fallback: identifier path → IDENTIFIER_EXACT; free-text → top-level match_type
                         item["match_type"] = (
-                            MATCH_IDENTIFIER_EXACT if ident_kind else MATCH_BM25_NORI
+                            MATCH_IDENTIFIER_EXACT if ident_kind
+                            else match_meta.get("match_type") or MATCH_BM25_NORI
                         )
                         item["matched_term"] = match_meta.get("normalized_query")
                 result["match_metadata"] = match_meta
@@ -251,6 +254,11 @@ def list_or_search_msds(
             raise HTTPException(
                 status_code=503,
                 detail={"code": "MSDS_HYDRATION_INTEGRITY_FAIL", "message": str(exc)},
+            ) from exc
+        except MsdsCandidateEnumerationIncompleteError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "MSDS_CANDIDATE_ENUMERATION_INCOMPLETE", "message": str(exc)},
             ) from exc
         except Exception as exc:
             logger.exception("MSDS OS search failed")

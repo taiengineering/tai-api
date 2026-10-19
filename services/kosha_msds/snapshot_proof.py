@@ -81,6 +81,7 @@ class SnapshotProof:
     missing_count: int = 0
     extra_count: int = 0
     duplicate_db_count: int = 0      # chem_id rows that collapsed under dedup (data anomaly)
+    os_duplicate_count: int = 0      # OS hits with duplicate source_key (index anomaly)
     error_message: Optional[str] = None
 
 
@@ -106,14 +107,20 @@ def compute_membership_sha256(pairs: list[tuple[str, str]]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _scan_os_chem_ids(client) -> dict[str, str]:
-    """Returns {source_key (chem_id): canonical_id} for all CHEM PUBLIC docs.
+def _scan_os_chem_ids(client, *, index: str = "") -> tuple[dict[str, str], int]:
+    """Returns ({source_key (chem_id): canonical_id}, raw_valid_hit_count) for all CHEM PUBLIC docs.
 
     Uses search_after pagination — no 10k cap.
     Filter: object_type=CHEM, publication_status=PUBLISHED, visibility_scopes=PUBLIC.
+    index: physical index to scan; defaults to CURRENT_ALIAS when empty (proof gen
+           should always pass physical_index to pin the scan to one generation).
+    raw_valid_hit_count tracks valid hits; if > len(result) there are duplicate
+    source_key values in the index (OS anomaly).
     Raises SnapshotProofScanError on any scan failure (fail-closed).
     """
+    scan_index = index if index else CURRENT_ALIAS
     result: dict[str, str] = {}
+    raw_valid_count = 0
     search_after = None
     try:
         while True:
@@ -133,7 +140,7 @@ def _scan_os_chem_ids(client) -> dict[str, str]:
             }
             if search_after:
                 body["search_after"] = search_after
-            resp = client.search(index=CURRENT_ALIAS, body=body)
+            resp = client.search(index=scan_index, body=body)
             hits = (resp.get("hits") or {}).get("hits") or []
             if not hits:
                 break
@@ -142,6 +149,7 @@ def _scan_os_chem_ids(client) -> dict[str, str]:
                 source_key = src.get("source_key") or ""
                 canonical_id = src.get("canonical_id") or ""
                 if source_key and canonical_id:
+                    raw_valid_count += 1
                     result[source_key] = canonical_id
             search_after = hits[-1].get("sort")
             if len(hits) < _OS_PAGE_SIZE:
@@ -150,7 +158,7 @@ def _scan_os_chem_ids(client) -> dict[str, str]:
         raise SnapshotProofScanError(
             f"snapshot_proof: OS scan failed: {exc}"
         ) from exc
-    return result
+    return result, raw_valid_count
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +412,7 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
     db_map: dict[str, str] = {}
     db_raw_count: int = 0
     os_map: dict[str, str] = {}
+    os_raw_count: int = 0
 
     try:
         db_map, db_raw_count = _scan_db_chem_ids(sb, scope)
@@ -412,7 +421,8 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
 
     if scan_error is None:
         try:
-            os_map = _scan_os_chem_ids(client)
+            # Pin scan to physical_index at proof-generation time (P0-01 index generation parity)
+            os_map, os_raw_count = _scan_os_chem_ids(client, index=physical_index)
         except SnapshotProofScanError as exc:
             scan_error = str(exc)
 
@@ -434,6 +444,7 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
 
     # --- Duplicate detection ---
     duplicate_db_count = db_raw_count - len(db_map)  # >0 → same chem_id appeared multiple times
+    os_duplicate_count = os_raw_count - len(os_map)   # >0 → same source_key in OS index
 
     # --- Compute SHA256 ---
     db_pairs: list[tuple[str, str]] = list(db_map.items())
@@ -451,13 +462,16 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
     missing_count = len(db_keys - os_keys)   # in DB but not OS
     extra_count = len(os_keys - db_keys)      # in OS but not DB
 
-    # --- Determine status (priority: scan_error > postscan_error > pending > duplicate > state_changed > membership) ---
+    # --- Determine status (priority: scan_error > postscan_error > empty_snapshot > pending > duplicate_db > duplicate_os > state_changed > membership > empty_run_id) ---
     error_message: Optional[str] = None
     if scan_error is not None:
         error_message = scan_error
         verification_status = "FAIL"
     elif postscan_error is not None:
         error_message = postscan_error
+        verification_status = "FAIL"
+    elif not snapshot_id_pre:
+        error_message = "No current snapshot: snapshot_id is empty — publication scope has no active snapshot"
         verification_status = "FAIL"
     elif pending_count > 0:
         error_message = (
@@ -467,6 +481,11 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
     elif duplicate_db_count > 0:
         error_message = (
             f"Duplicate chem_id rows in DB view: duplicate_db_count={duplicate_db_count}"
+        )
+        verification_status = "FAIL"
+    elif os_duplicate_count > 0:
+        error_message = (
+            f"Duplicate source_key in OS index: os_duplicate_count={os_duplicate_count}"
         )
         verification_status = "FAIL"
     elif state_changed:
@@ -506,6 +525,7 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
         missing_count=missing_count,
         extra_count=extra_count,
         duplicate_db_count=duplicate_db_count,
+        os_duplicate_count=os_duplicate_count,
         error_message=error_message,
     )
 
@@ -516,20 +536,23 @@ def verify_proof(proof: SnapshotProof) -> bool:
     Returns True iff:
     - proof_version == "1.0"
     - verification_status == "PASS"
+    - snapshot_id is non-empty
     - db_membership_sha256 == os_membership_sha256
     - db_membership_count == os_membership_count
     - missing_count == 0 and extra_count == 0
-    - duplicate_db_count == 0
+    - duplicate_db_count == 0 and os_duplicate_count == 0
     - rebuild_run_id is non-empty (OS index provenance must be known)
     """
     return (
         proof.proof_version == "1.0"
         and proof.verification_status == "PASS"
+        and bool(proof.snapshot_id)
         and proof.db_membership_sha256 == proof.os_membership_sha256
         and proof.db_membership_count == proof.os_membership_count
         and proof.missing_count == 0
         and proof.extra_count == 0
         and proof.duplicate_db_count == 0
+        and proof.os_duplicate_count == 0
         and bool(proof.rebuild_run_id)
     )
 

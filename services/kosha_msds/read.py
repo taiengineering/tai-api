@@ -873,11 +873,17 @@ def search_from_chem_ids(
         PUBLICATION_SCOPE_SEO_PREVIEW if scope is None else scope
     )
     rows = store.hydrate_chem_ids(chem_ids, scope=hydration_scope)
-    # PATCH-02E/003H: hard gate — OS/DB membership drift must not silently
-    # produce a short or mismatched page. Check both count AND ID set equality.
+    # PATCH-02E/003H/P0-04: hard gate — OS/DB membership drift must not silently
+    # produce a short, mismatched, or duplicate page.
     # Legitimate empty results (chem_ids=[]) are not affected.
     if chem_ids:
         from services.kosha_msds.opensearch_query import MsdsHydrationIntegrityError
+        # P0-04: duplicate OS input IDs (OS index anomaly)
+        if len(chem_ids) != len(set(chem_ids)):
+            dup_count = len(chem_ids) - len(set(chem_ids))
+            raise MsdsHydrationIntegrityError(
+                f"Duplicate chem_ids in OS result: {dup_count} duplicates in scope {hydration_scope!r}"
+            )
         os_id_set = set(chem_ids)
         hydrated_id_set = {row.get("chem_id") for row in rows}
         if os_id_set != hydrated_id_set:
@@ -886,6 +892,12 @@ def search_from_chem_ids(
             raise MsdsHydrationIntegrityError(
                 f"OS/DB ID mismatch: missing={len(missing)} extra={len(extra)} "
                 f"in scope {hydration_scope!r}"
+            )
+        # P0-04: duplicate hydrated IDs (DB view anomaly)
+        if len(rows) != len({row.get("chem_id") for row in rows}):
+            dup_count = len(rows) - len({row.get("chem_id") for row in rows})
+            raise MsdsHydrationIntegrityError(
+                f"Duplicate chem_ids in hydration result: {dup_count} duplicates in scope {hydration_scope!r}"
             )
     return {
         "items": [_current_row_to_contract(row, last_date=None) for row in rows],
