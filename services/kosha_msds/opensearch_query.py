@@ -414,6 +414,84 @@ def _search_os_deep_page(
             pass
 
 
+def _free_text_deep_page(
+    *,
+    query_body: dict,
+    sort: list,
+    offset: int,
+    limit: int,
+    client,
+    default_term: str,
+) -> tuple[list[str], int, dict]:
+    """PIT + search_after for offset+limit > _DEEP_PAGINATION_LIMIT in P1 free-text (WO-023).
+
+    Like _search_os_deep_page but captures matched_queries for per-item
+    match_type attribution. Raises MsdsPaginationDepthExceededError on PIT failure.
+    """
+    try:
+        pit_resp = client.create_pit(
+            index=CURRENT_ALIAS,
+            params={"keep_alive": _PIT_KEEP_ALIVE},
+        )
+        pit_id = pit_resp.get("pit_id") or ""
+    except Exception as exc:
+        raise MsdsPaginationDepthExceededError(
+            f"PIT creation failed (OS may not support PIT): {exc}"
+        ) from exc
+
+    if not pit_id:
+        raise MsdsPaginationDepthExceededError("PIT creation returned empty pit_id")
+
+    try:
+        collected: list[tuple[str, list]] = []  # (chem_id, matched_queries)
+        search_after = None
+        total = 0
+        needed = offset + limit
+
+        while len(collected) < needed:
+            body: dict = {
+                **query_body,
+                "sort": sort,
+                "size": _PIT_BATCH,
+                "track_total_hits": True,
+                "pit": {"id": pit_id, "keep_alive": _PIT_KEEP_ALIVE},
+                "_source": ["source_key"],
+            }
+            if search_after:
+                body["search_after"] = search_after
+            resp = client.search(body=body)
+            hits_obj = resp.get("hits") or {}
+            total_raw = hits_obj.get("total") or {}
+            total = (
+                total_raw.get("value", 0)
+                if isinstance(total_raw, dict)
+                else int(total_raw or 0)
+            )
+            hits = hits_obj.get("hits") or []
+            if not hits:
+                break
+            for h in hits:
+                sk = (h.get("_source") or {}).get("source_key", "").strip()
+                if sk:
+                    collected.append((sk, h.get("matched_queries") or []))
+            search_after = hits[-1].get("sort")
+            if len(hits) < _PIT_BATCH:
+                break
+
+        page = collected[offset: offset + limit]
+        chem_ids = [cid for cid, _ in page]
+        item_meta: dict[str, dict] = {}
+        for cid, mqs in page:
+            mt, term = _best_match_from_queries(mqs, default_term)
+            item_meta[cid] = {"match_type": mt, "matched_term": term}
+        return chem_ids, total, item_meta
+    finally:
+        try:
+            client.delete_pit(body={"pit_id": pit_id})
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Search (PATCH-03..06 + PATCH-003C/D/F)
 # ---------------------------------------------------------------------------
@@ -785,6 +863,104 @@ def _collect_all_os_pit(
     return all_ids
 
 
+# ---------------------------------------------------------------------------
+# WO-023: Single dis_max free-text query helpers
+# Replaces the N×M PIT enumeration in the P1 path of search_by_q_os().
+# ---------------------------------------------------------------------------
+
+_FREE_TEXT_MAX_CLAUSES = 30  # cap should-clauses to avoid query_too_large
+
+# Named-query prefixes (split on ":" to recover from matched_queries in response).
+_FT_PFX_NE = "NE"   # NORMALIZED_EXACT  boost 1000
+_FT_PFX_DE = "DE"   # DICTIONARY_EXPANSION boost 100
+_FT_PFX_KW = "KW"   # KIWI_TOKEN boost 10
+
+
+def _free_text_clause(term: str, name: str, boost: float) -> dict:
+    """constant_score clause matching term against title + aliases (KO/EN)."""
+    return {
+        "constant_score": {
+            "_name": name,
+            "filter": {
+                "bool": {
+                    "should": [
+                        {"term": {"title.raw": term}},
+                        {"match": {"title": {"query": term, "analyzer": "tai_nori_search"}}},
+                        {"term": {"aliases.raw": term}},
+                        {"match": {"aliases": {"query": term, "analyzer": "tai_nori_search"}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            "boost": boost,
+        }
+    }
+
+
+def _build_free_text_dsl(plan: object, *, from_: int, size: int) -> dict:
+    """Single dis_max DSL for CHEM-09 priority free-text search (WO-023).
+
+    Priority: NE(1000) > DE(100) > KW(10) via constant_score boosts.
+    Uses _CHEM_BASE_FILTER — includes source_id=KOSHA_MSDS.
+    Sorted _score DESC, source_key ASC (tie-break).
+    Named query markers enable per-hit match_type attribution via matched_queries.
+    """
+    clauses: list[dict] = []
+    seen_terms: set[str] = set()
+
+    def _add(term: str, pfx: str, boost: float) -> None:
+        t = (term or "").strip()
+        if not t or t in seen_terms or len(clauses) >= _FREE_TEXT_MAX_CLAUSES:
+            return
+        seen_terms.add(t)
+        clauses.append(_free_text_clause(t, f"{pfx}:{t[:50]}", boost))
+
+    _add(getattr(plan, "normalized_query", ""), _FT_PFX_NE, 1000.0)
+    for t in getattr(plan, "expanded_terms", ()) or ():
+        _add(t, _FT_PFX_DE, 100.0)
+    for t in getattr(plan, "tokens", ()) or ():
+        _add(t, _FT_PFX_KW, 10.0)
+
+    if not clauses:
+        return {
+            "query": {"match_none": {}},
+            "from": from_,
+            "size": size,
+            "track_total_hits": True,
+            "_source": ["source_key"],
+        }
+
+    return {
+        "query": {
+            "bool": {
+                "filter": list(_CHEM_BASE_FILTER),
+                "must": [{"dis_max": {"queries": clauses}}],
+            }
+        },
+        "sort": [{"_score": "desc"}, {"source_key": "asc"}],
+        "from": from_,
+        "size": size,
+        "track_total_hits": True,
+        "_source": ["source_key"],
+    }
+
+
+def _best_match_from_queries(matched_queries: list, default_term: str) -> tuple:
+    """Derive (match_type, matched_term) from OS named-query markers."""
+    best_type = "KIWI_TOKEN"
+    best_term = default_term
+    for mq in matched_queries or ():
+        parts = mq.split(":", 1)
+        if len(parts) != 2:
+            continue
+        pfx, term = parts
+        if pfx == _FT_PFX_NE:
+            return "NORMALIZED_EXACT", term
+        if pfx == _FT_PFX_DE and best_type == "KIWI_TOKEN":
+            best_type, best_term = "DICTIONARY_EXPANSION", term
+    return best_type, best_term
+
+
 def search_by_q_os(
     *,
     q: str,
@@ -839,88 +1015,53 @@ def search_by_q_os(
         match_meta["match_type"] = MATCH_IDENTIFIER_EXACT
         return chem_ids, total, match_meta
 
-    # P1: Free-text — CHEM-09 priority: NORMALIZED → DICTIONARY → KIWI_TOKEN
-    # IMP-010B: Resolve client here so create_pit can be called directly.
+    # P1: Free-text — dis_max query (WO-023 optimization).
+    # NE(1000) > DE(100) > KW(10) via constant_score; named queries for match attribution.
+    # Normal pages: 1 OS call with OS-side from/size.
+    # Deep pages (off+lim > _DEEP_PAGINATION_LIMIT): PIT + search_after (reuses existing
+    # infrastructure); raises MsdsPaginationDepthExceededError on PIT failure.
     if client is None:
         client = get_client()
 
-    from services.kosha_msds.search_adapter import (
-        MATCH_DICTIONARY,
-        MATCH_KIWI_TOKEN,
-        MATCH_NORMALIZED_EXACT,
+    dsl = _build_free_text_dsl(plan, from_=off, size=lim)
+
+    if off + lim > _DEEP_PAGINATION_LIMIT:
+        # Deep pagination: PIT-based scan with match_type attribution.
+        chem_ids, total, item_meta = _free_text_deep_page(
+            query_body={"query": dsl["query"]},
+            sort=dsl.get("sort", [{"_score": "desc"}, {"source_key": "asc"}]),
+            offset=off,
+            limit=lim,
+            client=client,
+            default_term=plan.normalized_query,
+        )
+        match_meta["match_type"] = "CHEM_09"
+        match_meta["per_item_metadata"] = item_meta
+        return chem_ids, total, match_meta
+
+    resp = client.search(index=CURRENT_ALIAS, body=dsl)
+    hits_obj = resp.get("hits") or {}
+    raw_hits: list = hits_obj.get("hits") or []
+    total_raw = hits_obj.get("total") or {}
+    total = (
+        int(total_raw.get("value", 0))
+        if isinstance(total_raw, dict)
+        else int(total_raw or 0)
     )
 
-    seen: set[str] = set()
-    all_deduped: list[str] = []
-    item_meta: dict[str, dict] = {}  # chem_id → {match_type, matched_term} (first-seen wins)
-    # CLOSURE-A: reserve 2 slots for create_pit+delete_pit; search budget = total-2
-    budget = [_QUERY_OS_CALL_BUDGET - 2]
-
-    def _collect_with_meta(ids: list[str], mt: str, term: str) -> None:
-        for cid in ids:
-            if cid not in seen:
-                seen.add(cid)
-                all_deduped.append(cid)
-                item_meta[cid] = {"match_type": mt, "matched_term": term}
-
-    # IMP-010B: Create 1 PIT for all terms (O(n) vs O(n²) offset re-scan)
-    try:
-        pit_resp = client.create_pit(
-            index=CURRENT_ALIAS,
-            params={"keep_alive": _PIT_KEEP_ALIVE},
+    page: list[str] = []
+    item_meta: dict[str, dict] = {}
+    for h in raw_hits:
+        src = h.get("_source") or {}
+        cid: str = (src.get("source_key") or "").strip()
+        if not cid:
+            continue
+        page.append(cid)
+        mt, term = _best_match_from_queries(
+            h.get("matched_queries") or [], plan.normalized_query
         )
-        pit_id = pit_resp.get("pit_id") or ""
-    except Exception as exc:
-        raise MsdsPaginationDepthExceededError(
-            f"PIT creation failed for free-text search: {exc}"
-        ) from exc
+        item_meta[cid] = {"match_type": mt, "matched_term": term}
 
-    if not pit_id:
-        raise MsdsPaginationDepthExceededError(
-            "PIT creation returned empty pit_id for free-text search"
-        )
-
-    pit_id_ref = [pit_id]
-
-    try:
-        def _run_term(term: str, mt: str) -> None:
-            if not term:
-                return
-            _collect_with_meta(
-                _collect_all_os_pit(
-                    name_ko=term, client=client,
-                    pit_id_ref=pit_id_ref, budget_ref=budget,
-                ),
-                mt, term,
-            )
-            _collect_with_meta(
-                _collect_all_os_pit(
-                    name_en=term, client=client,
-                    pit_id_ref=pit_id_ref, budget_ref=budget,
-                ),
-                mt, term,
-            )
-
-        # Priority: normalized → dictionary expansions → kiwi tokens
-        _run_term(plan.normalized_query, MATCH_NORMALIZED_EXACT)
-        for term in plan.expanded_terms:
-            _run_term(term, MATCH_DICTIONARY)
-        for token in plan.tokens:
-            _run_term(token, MATCH_KIWI_TOKEN)
-
-    finally:
-        try:
-            client.delete_pit(body={"pit_id": pit_id_ref[0]})
-        except Exception as _del_exc:
-            logger.warning(
-                "PIT delete failed for free-text search (pit_id=%s): %s",
-                pit_id_ref[0], _del_exc,
-            )
-
-    total = len(all_deduped)
-    page = all_deduped[off: off + lim]
-    match_meta["match_type"] = "CHEM_09"  # actual search path: NORMALIZED→DICTIONARY→KIWI (not BM25)
-    match_meta["per_item_metadata"] = {  # page-sized only (P0-02: response proportional to page size)
-        cid: item_meta[cid] for cid in page if cid in item_meta
-    }
+    match_meta["match_type"] = "CHEM_09"
+    match_meta["per_item_metadata"] = item_meta  # page-sized only (P0-02)
     return page, total, match_meta
