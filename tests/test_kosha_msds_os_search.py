@@ -3463,6 +3463,7 @@ def test_L12b_match_priority_first_seen_wins():
             return ["000001"]
         return []
 
+
     original = _osq._collect_all_os_pit
     _osq._collect_all_os_pit = _mock_collect
     try:
