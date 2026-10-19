@@ -899,6 +899,12 @@ def search_from_chem_ids(
             raise MsdsHydrationIntegrityError(
                 f"Duplicate chem_ids in hydration result: {dup_count} duplicates in scope {hydration_scope!r}"
             )
+        # CLOSURE-03: verify the store preserved OS rank order (list comparison, not set)
+        actual_order = [row.get("chem_id") for row in rows]
+        if actual_order != list(chem_ids):
+            raise MsdsHydrationIntegrityError(
+                f"Hydration order does not match OS input order in scope {hydration_scope!r}"
+            )
     return {
         "items": [_current_row_to_contract(row, last_date=None) for row in rows],
         "total": int(total),

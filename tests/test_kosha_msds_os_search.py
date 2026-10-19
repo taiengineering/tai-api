@@ -361,7 +361,7 @@ def test_check_snapshot_gate_pass():
     os_client.indices.get_alias.return_value = {PHYS_IDX: {}}
     sb = _make_sb_proof_state(SNAP_ID, OUTBOX_WM)
 
-    check_snapshot_gate(client=os_client, sb=sb)  # should not raise
+    check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)  # should not raise
 
 
 def test_check_snapshot_gate_divergence_raises():
@@ -379,7 +379,7 @@ def test_check_snapshot_gate_divergence_raises():
     sb = _make_sb_proof_state(SNAP_ID, OUTBOX_WM)
 
     with pytest.raises(MsdsSnapshotGateError):
-        check_snapshot_gate(client=os_client, sb=sb)
+        check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
 
 
 def test_check_snapshot_gate_db_failure_raises():
@@ -394,7 +394,7 @@ def test_check_snapshot_gate_db_failure_raises():
     sb.table.side_effect = Exception("DB unreachable")
 
     with pytest.raises(MsdsSnapshotGateError):
-        check_snapshot_gate(client=os_client, sb=sb)
+        check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
 
 
 def test_check_snapshot_gate_os_failure_raises():
@@ -408,17 +408,17 @@ def test_check_snapshot_gate_os_failure_raises():
     sb = _make_sb_proof_state("snap-os-fail", 100)
 
     with pytest.raises(MsdsSnapshotGateError):
-        check_snapshot_gate(client=os_client, sb=sb)
+        check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
 
 
-def test_check_snapshot_gate_cached_pass():
-    """State triple is cached for 60 s; second call within TTL skips OS/DB lookups."""
+def test_check_snapshot_gate_two_calls_both_pass():
+    """CLOSURE-01: state lookups are live (uncached); two valid calls both pass."""
     from services.kosha_msds.snapshot_proof import register_proof, clear_proof_registry
     _clear_snapshot_cache()
     clear_proof_registry()
 
-    SNAP_ID = "snap-cached-pass"
-    PHYS_IDX = "tai-shared-search-v1-cachedpass"
+    SNAP_ID = "snap-two-calls"
+    PHYS_IDX = "tai-shared-search-v1-twocalls"
     OUTBOX_WM = 200
 
     proof = _make_pass_proof(SNAP_ID, PHYS_IDX, OUTBOX_WM)
@@ -428,14 +428,15 @@ def test_check_snapshot_gate_cached_pass():
     os_client.indices.get_alias.return_value = {PHYS_IDX: {}}
     sb = _make_sb_proof_state(SNAP_ID, OUTBOX_WM)
 
-    check_snapshot_gate(client=os_client, sb=sb)
-    check_snapshot_gate(client=os_client, sb=sb)
-    # State triple cached — OS alias only resolved once
-    assert os_client.indices.get_alias.call_count == 1
+    # Both calls must pass — no stale cache can cause spurious failures
+    check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
+    check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
+    # With no cache, OS alias resolved on every call
+    assert os_client.indices.get_alias.call_count >= 2
 
 
-def test_check_snapshot_gate_cached_fail():
-    """State lookup failure is cached; second call within TTL re-raises without re-querying."""
+def test_check_snapshot_gate_repeated_failure_raises():
+    """CLOSURE-01: no cache — each failing call does a fresh live lookup."""
     from services.kosha_msds.snapshot_proof import clear_proof_registry
     _clear_snapshot_cache()
     clear_proof_registry()
@@ -446,11 +447,11 @@ def test_check_snapshot_gate_cached_fail():
     sb.table.side_effect = Exception("DB down")
 
     with pytest.raises(MsdsSnapshotGateError):
-        check_snapshot_gate(client=os_client, sb=sb)
+        check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
     with pytest.raises(MsdsSnapshotGateError):
-        check_snapshot_gate(client=os_client, sb=sb)
-    # State cache: failures are cached — OS alias only attempted once
-    assert os_client.indices.get_alias.call_count == 1
+        check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
+    # No cache — OS alias attempted on every call
+    assert os_client.indices.get_alias.call_count >= 2
 
 
 # ---------------------------------------------------------------------------
@@ -1116,7 +1117,7 @@ def test_T03_snapshot_changed_mid_scan():
     sb = _make_sb_proof_state(SNAP_ID, OUTBOX_WM)
 
     with pytest.raises(MsdsSnapshotGateError):
-        check_snapshot_gate(client=os_client, sb=sb)
+        check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
 
 
 def test_T04_alias_physical_index_swap():
@@ -1138,7 +1139,7 @@ def test_T04_alias_physical_index_swap():
     sb = _make_sb_proof_state(SNAP_ID, OUTBOX_WM)
 
     with pytest.raises(MsdsSnapshotGateError):
-        check_snapshot_gate(client=os_client, sb=sb)
+        check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
 
 
 def test_T05_outbox_new_chem_event():
@@ -1160,7 +1161,7 @@ def test_T05_outbox_new_chem_event():
     sb = _make_sb_proof_state(SNAP_ID, CURRENT_WM)  # watermark advanced
 
     with pytest.raises(MsdsSnapshotGateError):
-        check_snapshot_gate(client=os_client, sb=sb)
+        check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
 
 
 def test_T06_no_proof_registered():
@@ -1174,7 +1175,7 @@ def test_T06_no_proof_registered():
     sb = _make_sb_proof_state("snap-t06", 100)
 
     with pytest.raises(MsdsSnapshotGateError):
-        check_snapshot_gate(client=os_client, sb=sb)
+        check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
 
 
 # ---- T07: FULL scope = 0 ---------------------------------------------------
@@ -2235,7 +2236,7 @@ def test_I02_gate_rejects_pending_events_after_proof():
     sb = _make_sb_proof_state(SNAP_ID, OUTBOX_WM, pending_count=3)
 
     with pytest.raises(MsdsSnapshotGateError, match="Uncommitted CHEM events"):
-        check_snapshot_gate(client=os_client, sb=sb)
+        check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
 
 
 # ---- I03: OS duplicate source_key → FAIL proof + os_duplicate_count > 0 ----
@@ -2433,3 +2434,360 @@ def test_I09_router_candidate_enumeration_incomplete_503(monkeypatch, seo_store)
         resp = client.get("/public/kosha/msds?q=염산")
     assert resp.status_code == 503
     assert resp.json()["detail"]["code"] == "MSDS_CANDIDATE_ENUMERATION_INCOMPLETE"
+
+
+# ---------------------------------------------------------------------------
+# CLOSURE-007 J01-J10  WO-WWW-PERF-004-P0S-OS-CLOSURE-007
+# ---------------------------------------------------------------------------
+
+
+# ---- J01: Snapshot changed while no cache (CLOSURE-01) ---------------------
+
+
+def test_J01_snapshot_change_detected_live():
+    """J01: After snapshot changes, gate immediately rejects the old proof (no cache delay).
+
+    CLOSURE-01 removes the 60 s state cache so snapshot_id is checked live
+    every call. When snapshot_id changes, the old proof no longer matches
+    current state → gate raises MsdsSnapshotGateError.
+    """
+    from services.kosha_msds.snapshot_proof import register_proof, clear_proof_registry
+
+    _clear_snapshot_cache()
+    clear_proof_registry()
+
+    SNAP_ID_OLD = "snap-j01-old"
+    SNAP_ID_NEW = "snap-j01-new"
+    PHYS_IDX = "tai-shared-search-v1-j01"
+    OUTBOX_WM = 100
+
+    # Register proof for the OLD snapshot
+    proof = _make_pass_proof(SNAP_ID_OLD, PHYS_IDX, OUTBOX_WM)
+    register_proof(proof)
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {PHYS_IDX: {}}
+
+    # First call with old snapshot matches → should pass
+    sb_old = _make_sb_proof_state(SNAP_ID_OLD, OUTBOX_WM)
+    check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb_old)
+
+    # Snapshot now changed to NEW — no cache, so new live state is fetched immediately
+    sb_new = _make_sb_proof_state(SNAP_ID_NEW, OUTBOX_WM)
+    with pytest.raises(MsdsSnapshotGateError, match="state mismatch"):
+        check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb_new)
+
+
+# ---- J02: Scope mismatch — FULL gate with SEO_PREVIEW proof ----------------
+
+
+def test_J02_full_scope_gate_with_seo_preview_proof_fails():
+    """J02: Gate called with scope=FULL but only SEO_PREVIEW proof registered → fails.
+
+    CLOSURE-01 scope-keyed registry prevents a SEO_PREVIEW proof from
+    satisfying a FULL scope gate check (J08 in large-scale: FULL=0, SEO=20568).
+    """
+    from services.kosha_msds.snapshot_proof import register_proof, clear_proof_registry
+
+    _clear_snapshot_cache()
+    clear_proof_registry()
+
+    SNAP_ID = "snap-j02"
+    PHYS_IDX = "tai-shared-search-v1-j02"
+    OUTBOX_WM = 100
+
+    # Register proof only for SEO_PREVIEW
+    seo_proof = _make_pass_proof(SNAP_ID, PHYS_IDX, OUTBOX_WM)
+    register_proof(seo_proof)  # scope = SEO_PREVIEW
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {PHYS_IDX: {}}
+    sb = _make_sb_proof_state(SNAP_ID, OUTBOX_WM)
+
+    # SEO_PREVIEW gate should pass (proof registered)
+    check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
+
+    # FULL gate must fail — no FULL proof registered
+    with pytest.raises(MsdsSnapshotGateError, match="scope"):
+        check_snapshot_gate(scope=PUBLICATION_SCOPE_FULL, client=os_client, sb=sb)
+
+
+# ---- J03: Alias swap detected during proof generation ----------------------
+
+
+def test_J03_alias_swap_during_proof_generation():
+    """J03: Physical index changes between pre-scan and post-scan → FAIL proof.
+
+    CLOSURE-01 adds physical_index to the post-scan state check so an alias
+    swap (OS reindex promotion) during proof generation is caught.
+    """
+    from services.kosha_msds.snapshot_proof import generate_proof_dry_run
+    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
+
+    PHYS_IDX_PRE = "tai-shared-search-v1-j03-old"
+    PHYS_IDX_POST = "tai-shared-search-v1-j03-new"
+
+    def _table(name):
+        m = MagicMock()
+        if name == "kosha_msds_seo_preview_current":
+            snap_r = MagicMock()
+            snap_r.data = [{"snapshot_id": "snap-j03"}]
+            m.select.return_value.limit.return_value.execute.return_value = snap_r
+            scan_r = MagicMock()
+            scan_r.data = []
+            m.select.return_value.order.return_value.limit.return_value.execute.return_value = scan_r
+        elif name == "kosha_msds_snapshots":
+            ts_r = MagicMock()
+            ts_r.data = [{"completed_at": "2026-10-01T00:00:00+00:00"}]
+            m.select.return_value.eq.return_value.limit.return_value.execute.return_value = ts_r
+        elif name == "search_index_outbox":
+            wm_r = MagicMock()
+            wm_r.data = [{"id": 100}]
+            pending_r = MagicMock()
+            pending_r.count = 0
+            m.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = wm_r
+            m.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value = pending_r
+        return m
+
+    sb = MagicMock()
+    sb.table.side_effect = _table
+
+    from services.shared_search.opensearch_client import RUNS_INDEX
+    alias_calls = [0]
+
+    def _alias_side_effect(**kwargs):
+        alias_calls[0] += 1
+        # Pre-scan: old index; post-scan: new index (alias swapped mid-proof)
+        if alias_calls[0] == 1:
+            return {PHYS_IDX_PRE: {}}
+        return {PHYS_IDX_POST: {}}
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.side_effect = _alias_side_effect
+    os_client.search.return_value = {"hits": {"hits": []}}
+
+    proof = generate_proof_dry_run(scope=PUBLICATION_SCOPE_SEO_PREVIEW, sb=sb, client=os_client)
+    assert proof.verification_status == "FAIL"
+    assert "State changed" in (proof.error_message or "")
+
+
+# ---- J04: PENDING events added after post-scan watermark check -------------
+
+
+def test_J04_pending_events_at_gate_raises():
+    """J04: PENDING events present at gate-check time → MsdsSnapshotGateError.
+
+    Even when the proof was generated cleanly, new PENDING events that arrive
+    before the gate call trigger the uncached pending check (P0-01).
+    """
+    from services.kosha_msds.snapshot_proof import register_proof, clear_proof_registry
+
+    _clear_snapshot_cache()
+    clear_proof_registry()
+
+    SNAP_ID = "snap-j04"
+    PHYS_IDX = "tai-shared-search-v1-j04"
+    OUTBOX_WM = 100
+
+    proof = _make_pass_proof(SNAP_ID, PHYS_IDX, OUTBOX_WM)
+    register_proof(proof)
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {PHYS_IDX: {}}
+    # pending_count=2: two new events arrived after proof generation
+    sb = _make_sb_proof_state(SNAP_ID, OUTBOX_WM, pending_count=2)
+
+    with pytest.raises(MsdsSnapshotGateError, match="Uncommitted CHEM events"):
+        check_snapshot_gate(scope=PUBLICATION_SCOPE_SEO_PREVIEW, client=os_client, sb=sb)
+
+
+# ---- J05: Short page with total mismatch → INCOMPLETE error ----------------
+
+
+def test_J05_short_page_total_mismatch_raises():
+    """J05: search_os returns short page but total says more remain → INCOMPLETE (CLOSURE-02)."""
+    from services.kosha_msds.opensearch_query import (
+        _collect_all_os,
+        MsdsCandidateEnumerationIncompleteError,
+    )
+
+    # Short page (2 IDs) but OS reports total=100 → genuine INCOMPLETE
+    with patch("services.kosha_msds.opensearch_query.search_os",
+               return_value=(["000001", "000002"], 100)):
+        with pytest.raises(MsdsCandidateEnumerationIncompleteError):
+            _collect_all_os(name_ko="테스트", client=MagicMock())
+
+
+# ---- J06: Duplicate page from OS → INTEGRITY error -------------------------
+
+
+def test_J06_duplicate_page_raises_integrity_error():
+    """J06: OS returns the same IDs in two consecutive pages → INTEGRITY error (CLOSURE-02)."""
+    from services.kosha_msds.opensearch_query import (
+        _collect_all_os,
+        _CANDIDATE_PAGE_SIZE,
+        MsdsCandidateEnumerationIntegrityError,
+    )
+
+    # Page 1: full page [000001..001000] total=2000 (two pages expected)
+    # Page 2: same full page again (OS bug) → duplicates detected
+    full_page = [f"{i:06d}" for i in range(1, _CANDIDATE_PAGE_SIZE + 1)]
+    call_n = [0]
+
+    def _search_os(**kwargs):
+        call_n[0] += 1
+        return full_page, 2 * _CANDIDATE_PAGE_SIZE  # total=2000, forces second page
+
+    with patch("services.kosha_msds.opensearch_query.search_os", side_effect=_search_os):
+        with pytest.raises(MsdsCandidateEnumerationIntegrityError):
+            _collect_all_os(name_ko="테스트", client=MagicMock())
+
+
+# ---- J07: Same ID set, reversed order → Hydration integrity error ----------
+
+
+def test_J07_hydration_reversed_order_raises():
+    """J07: Store returns same IDs as chem_ids but in reverse order → MsdsHydrationIntegrityError.
+
+    CLOSURE-03 enforces that hydration result order must match OS input order.
+    """
+    from services.kosha_msds.read import search_from_chem_ids
+
+    class ReversedOrderStore:
+        """Mock store that returns rows in reverse chem_id order."""
+        def hydrate_chem_ids(self, chem_ids, *, scope=None):
+            rows = []
+            for cid in reversed(chem_ids):  # deliberately reversed
+                rows.append({"chem_id": cid, "id": f"uuid-{cid}",
+                             "chemical_name_ko": None, "chemical_name_en": None,
+                             "cas_no": None, "ke_no": None, "en_no": None, "un_no": None,
+                             "identity_status": "READY", "source_key": cid,
+                             "source_id": "KOSHA_MSDS", "source_dataset_url": "",
+                             "source_content_hash": "", "snapshot_id": "snap-j07"})
+            return rows
+
+    with pytest.raises(MsdsHydrationIntegrityError, match="order"):
+        search_from_chem_ids(
+            store=ReversedOrderStore(),
+            chem_ids=["000001", "000002"],
+            total=2, limit=10, offset=0,
+            scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+        )
+
+
+# ---- J08: FULL=0 / SEO_PREVIEW=20568 — scope isolation --------------------
+
+
+def test_J08_full_scope_gate_fails_when_no_full_proof(monkeypatch, seo_store):
+    """J08: Router in FULL mode has no FULL proof → gate raises 503 (CLOSURE-01).
+
+    Prevents SEO_PREVIEW chemicals from leaking into FULL scope searches when
+    FULL proof doesn't exist (FULL=0 state in production).
+    """
+    from services.kosha_msds.snapshot_proof import clear_proof_registry, register_proof
+    _clear_snapshot_cache()
+    clear_proof_registry()
+
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "full")
+    app = _make_app(seo_store, None)
+
+    SNAP_ID = "snap-j08-seo"
+    PHYS_IDX = "tai-shared-search-v1-j08"
+    OUTBOX_WM = 100
+
+    # Only register SEO_PREVIEW proof — no FULL proof
+    seo_proof = _make_pass_proof(SNAP_ID, PHYS_IDX, OUTBOX_WM)
+    register_proof(seo_proof)
+
+    os_client = MagicMock()
+    os_client.indices.get_alias.return_value = {PHYS_IDX: {}}
+    sb = _make_sb_proof_state(SNAP_ID, OUTBOX_WM)
+
+    with patch("services.kosha_msds.opensearch_query.get_client",
+               return_value=os_client), \
+         patch("db.supabase_client.get_supabase", return_value=sb):
+        client = TestClient(app)
+        resp = client.get("/public/kosha/msds?name_ko=염산")
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "MSDS_SNAPSHOT_GATE_FAIL"
+
+
+# ---- J09: Global query OS call budget cap (CLOSURE-04) ---------------------
+
+
+def test_J09_query_os_call_budget_exhausted_raises(monkeypatch):
+    """J09: search_by_q_os raises when per-query OS call budget is exhausted (CLOSURE-04)."""
+    from services.kosha_msds.opensearch_query import (
+        search_by_q_os,
+        _QUERY_OS_CALL_BUDGET,
+        MsdsCandidateEnumerationIncompleteError,
+    )
+
+    # Small budget via monkeypatch — exhaust with a small number of calls
+    monkeypatch.setattr(
+        "services.kosha_msds.opensearch_query._QUERY_OS_CALL_BUDGET", 2
+    )
+
+    # Each _collect_all_os call decrements budget; mock search_os returns full page
+    full_page = [f"{i:06d}" for i in range(1000)]
+    with patch("services.kosha_msds.opensearch_query.search_os",
+               return_value=(full_page, 50000)):
+        with pytest.raises(MsdsCandidateEnumerationIncompleteError, match="budget"):
+            search_by_q_os(q="염산", limit=5, offset=0, client=MagicMock())
+
+
+# ---- J10: List/detail/search regression ------------------------------------
+
+
+def test_J10_list_endpoint_unaffected_by_closures(monkeypatch, seo_store):
+    """J10: list_current path (no q or filters) still works after CLOSURE changes."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    app = _make_app(seo_store, None)
+
+    client = TestClient(app)
+    resp = client.get("/public/kosha/msds")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "items" in data
+    assert data["total"] == 2
+
+
+def test_J10b_detail_endpoint_unaffected(monkeypatch, seo_store):
+    """J10b: Get-by-chem_id detail endpoint still works after CLOSURE changes."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    app = _make_app(seo_store, None)
+
+    client = TestClient(app)
+    resp = client.get("/public/kosha/msds/000001")
+    assert resp.status_code == 200
+    assert resp.json()["chem_id"] == "000001"
+
+
+def test_J10c_os_search_filter_path_unaffected(monkeypatch, seo_store):
+    """J10c: Structured filter search (check_snapshot_gate + search_os path) still works."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    app = _make_app(seo_store, None)
+
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_os",
+               return_value=(["000001"], 1)):
+        client = TestClient(app)
+        resp = client.get("/public/kosha/msds?name_ko=벤젠")
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 1
+
+
+def test_J10d_candidate_enumeration_integrity_503(monkeypatch, seo_store):
+    """J10d: Router returns 503 MSDS_CANDIDATE_ENUMERATION_INTEGRITY on integrity error (CLOSURE-02)."""
+    from services.kosha_msds.opensearch_query import MsdsCandidateEnumerationIntegrityError
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    app = _make_app(seo_store, None)
+
+    with patch("routers.kosha_public_msds.check_snapshot_gate"), \
+         patch("routers.kosha_public_msds.search_by_q_os",
+               side_effect=MsdsCandidateEnumerationIntegrityError("total changed")):
+        client = TestClient(app)
+        resp = client.get("/public/kosha/msds?q=염산")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "MSDS_CANDIDATE_ENUMERATION_INTEGRITY"

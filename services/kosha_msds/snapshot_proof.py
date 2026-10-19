@@ -427,19 +427,23 @@ def generate_proof_dry_run(*, scope: str, sb=None, client=None) -> SnapshotProof
             scan_error = str(exc)
 
     # --- Post-scan state check (skip if scans failed) ---
+    # CLOSURE-01/J03: also re-check physical_index to detect alias swap during scan.
     postscan_error: Optional[str] = None
     state_changed = False
     snapshot_id_post: str = snapshot_id_pre
     outbox_wm_post: int = outbox_wm_pre
+    physical_index_post: str = physical_index
     if scan_error is None:
         try:
             snapshot_id_post, _ = _get_current_snapshot(sb, scope)
             outbox_wm_post = _get_outbox_watermark(sb)
+            physical_index_post = _get_physical_index(client)
         except SnapshotProofScanError as exc:
             postscan_error = f"Post-scan state check failed: {exc}"
         state_changed = (
             snapshot_id_pre != snapshot_id_post
             or outbox_wm_pre != outbox_wm_post
+            or physical_index != physical_index_post
         )
 
     # --- Duplicate detection ---
@@ -562,28 +566,24 @@ def verify_proof(proof: SnapshotProof) -> bool:
 # ---------------------------------------------------------------------------
 
 _registry_lock = threading.Lock()
-_registered_proof: Optional[SnapshotProof] = None
-_registered_state: Optional[tuple] = None  # (snapshot_id, physical_index, outbox_wm)
+# CLOSURE-01: scope-keyed registry — SEO_PREVIEW and FULL proofs are independent.
+# Prevents a SEO_PREVIEW proof from passing a FULL scope gate.
+_registered_proofs: dict[str, SnapshotProof] = {}
 
 
 def register_proof(proof: SnapshotProof) -> None:
-    """Register a proof for use by the runtime gate."""
-    global _registered_proof, _registered_state
-    state = (proof.snapshot_id, proof.physical_index, proof.chem_outbox_high_watermark)
+    """Register a proof keyed by publication_scope."""
     with _registry_lock:
-        _registered_proof = proof
-        _registered_state = state
+        _registered_proofs[proof.publication_scope] = proof
 
 
-def get_registered_proof() -> Optional[SnapshotProof]:
-    """Return the currently registered proof, or None."""
+def get_registered_proof(scope: str) -> Optional[SnapshotProof]:
+    """Return the registered proof for the given scope, or None."""
     with _registry_lock:
-        return _registered_proof
+        return _registered_proofs.get(scope)
 
 
 def clear_proof_registry() -> None:
     """Reset the registry. For tests only."""
-    global _registered_proof, _registered_state
     with _registry_lock:
-        _registered_proof = None
-        _registered_state = None
+        _registered_proofs.clear()

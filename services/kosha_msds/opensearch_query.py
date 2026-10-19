@@ -41,7 +41,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
-import time
+
 from typing import Optional
 
 from services.shared_search.opensearch_client import CURRENT_ALIAS, get_client
@@ -57,8 +57,8 @@ _CHEM_BASE_FILTER: list[dict] = [
 _DEEP_PAGINATION_LIMIT = 9_900
 _SNAPSHOT_CACHE_TTL = 300        # 5 minutes (legacy count-based cache, kept for helpers)
 _SNAPSHOT_COUNT_TOLERANCE = 50   # allow ±50 docs during re-index window (legacy)
-_STATE_CACHE_TTL = 60            # 60 s TTL for gate-state cache (PATCH-003B)
 _CAS_INDEX_ENV_VAR = "KOSHA_MSDS_CAS_INDEX_READY"
+_QUERY_OS_CALL_BUDGET = 200      # max search_os calls per q query across all terms (CLOSURE-04)
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +99,14 @@ class MsdsCandidateEnumerationIncompleteError(MsdsOsError):
     """
 
 
+class MsdsCandidateEnumerationIntegrityError(MsdsOsError):
+    """_collect_all_os() collected more IDs than OS reported, or the OS total
+    changed between pages (index generation swap during candidate scan).
+
+    Raised on COLLECTED > TOTAL or cross-page total inconsistency (CLOSURE-02).
+    """
+
+
 # ---------------------------------------------------------------------------
 # Snapshot gate (PATCH-02 → PATCH-003B proof-registry gate)
 # ---------------------------------------------------------------------------
@@ -106,10 +114,9 @@ class MsdsCandidateEnumerationIncompleteError(MsdsOsError):
 _snapshot_cache_lock = threading.Lock()
 _snapshot_cache: dict = {}
 
-# State cache (PATCH-003B): caches (snapshot_id, physical_index, outbox_wm)
-# for _STATE_CACHE_TTL seconds to avoid hitting DB/OS on every request.
-_state_cache_lock = threading.Lock()
-_state_cache: dict = {}
+# CLOSURE-01: state cache removed — the 60 s TTL could miss snapshot or
+# physical-index generation changes between proof registration and gate check.
+# All state lookups are now live (uncached) on every gate invocation.
 
 
 def _cas_index_ready() -> bool:
@@ -151,21 +158,22 @@ def _get_os_chem_count(client=None) -> Optional[int]:
         return None
 
 
-def _get_current_gate_state(client, sb) -> tuple[str, str, int]:
-    """Return (snapshot_id, physical_index, outbox_wm) — the state triple.
+def _get_current_gate_state(client, sb, scope: str) -> tuple[str, str, int]:
+    """Return (snapshot_id, physical_index, outbox_wm) for the given scope.
 
     Used to match against a registered SnapshotProof. Returns ('', '', 0)
     when any sub-lookup fails (fail-closed: caller raises MsdsSnapshotGateError).
+    CLOSURE-01: scope-specific snapshot lookup prevents SEO_PREVIEW proof
+    from passing a FULL scope gate check.
     """
     from services.kosha_msds.snapshot_proof import (
         _get_current_snapshot,
         _get_outbox_watermark,
         _get_physical_index,
     )
-    from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
 
     try:
-        snapshot_id, _ = _get_current_snapshot(sb, PUBLICATION_SCOPE_SEO_PREVIEW)
+        snapshot_id, _ = _get_current_snapshot(sb, scope)
         physical_index = _get_physical_index(client)
         outbox_wm = _get_outbox_watermark(sb)
         return (snapshot_id, physical_index, outbox_wm)
@@ -174,18 +182,21 @@ def _get_current_gate_state(client, sb) -> tuple[str, str, int]:
         return ("", "", 0)
 
 
-def check_snapshot_gate(*, client=None, sb=None) -> None:
+def check_snapshot_gate(*, scope: str, client=None, sb=None) -> None:
     """Verify a registered SnapshotProof covers the current system state.
 
+    scope must match the publication scope being served (SEO_PREVIEW or FULL).
     Raises MsdsSnapshotGateError when:
     - Current state lookup fails (fail-closed)
-    - No proof is registered
+    - No proof is registered for the given scope
     - Registered proof does not match the current state triple
       (snapshot_id, physical_index, outbox_wm)
     - verify_proof(proof) returns False
+    - Uncommitted PENDING CHEM events exist (uncached check every invocation)
 
-    The current state triple is cached for _STATE_CACHE_TTL seconds (60 s).
-    Call _clear_snapshot_cache() in tests to force a re-check.
+    CLOSURE-01: state lookups are live (uncached) on every call — the 60 s
+    TTL previously cached the state triple and could miss snapshot or
+    physical-index generation changes between proof registration and gate check.
     """
     from services.kosha_msds.snapshot_proof import get_registered_proof, verify_proof
 
@@ -195,29 +206,20 @@ def check_snapshot_gate(*, client=None, sb=None) -> None:
         from db.supabase_client import get_supabase
         sb = get_supabase()
 
-    now = time.monotonic()
-
-    # Check state cache first
-    with _state_cache_lock:
-        cached_state = dict(_state_cache)
-
-    if cached_state and (now - cached_state.get("ts", 0)) < _STATE_CACHE_TTL:
-        current_state = cached_state.get("state")
-    else:
-        current_state = _get_current_gate_state(client, sb)
-        with _state_cache_lock:
-            _state_cache.update({"state": current_state, "ts": now})
+    # Live state lookup — no cache (CLOSURE-01)
+    current_state = _get_current_gate_state(client, sb, scope)
 
     if not current_state or current_state == ("", "", 0):
         raise MsdsSnapshotGateError(
             "Snapshot gate state lookup failed (fail-closed)"
         )
 
-    proof = get_registered_proof()
+    proof = get_registered_proof(scope)
 
     if proof is None:
         raise MsdsSnapshotGateError(
-            "No snapshot proof registered; gate is closed until a valid proof is loaded"
+            f"No snapshot proof registered for scope {scope!r}; "
+            "gate is closed until a valid proof is loaded"
         )
 
     # Check that proof covers current state
@@ -234,14 +236,9 @@ def check_snapshot_gate(*, client=None, sb=None) -> None:
         )
 
     # Uncached PENDING check: detect new uncommitted events since proof was generated (P0-01).
-    # Not cached — ensures new PENDING events are detected on every gate call.
     try:
-        from services.kosha_msds.snapshot_proof import _get_outbox_pending_count, SnapshotProofScanError
-        _sb = sb
-        if _sb is None:
-            from db.supabase_client import get_supabase
-            _sb = get_supabase()
-        pending_count = _get_outbox_pending_count(_sb)
+        from services.kosha_msds.snapshot_proof import _get_outbox_pending_count
+        pending_count = _get_outbox_pending_count(sb)
     except Exception as exc:
         raise MsdsSnapshotGateError(
             f"Pending event count check failed at gate: {exc}"
@@ -253,11 +250,9 @@ def check_snapshot_gate(*, client=None, sb=None) -> None:
 
 
 def _clear_snapshot_cache() -> None:
-    """Reset both snapshot gate caches. For tests only."""
+    """Reset legacy count-based snapshot cache. For tests only."""
     with _snapshot_cache_lock:
         _snapshot_cache.clear()
-    with _state_cache_lock:
-        _state_cache.clear()
 
 
 def os_chem_available(client=None) -> bool:
@@ -514,24 +509,56 @@ _CANDIDATE_PAGE_SIZE = 1_000   # per-term page size for full candidate enumerati
 _CANDIDATE_MAX_PAGES = 50     # budget: max 50,000 results per (term, field) pair
 
 
-def _collect_all_os(*, client, **kwargs) -> list[str]:
+def _collect_all_os(*, client, budget_ref: Optional[list] = None, **kwargs) -> list[str]:
     """Collect ALL matching chem_ids for a term, paginating until exhausted.
 
     Uses _CANDIDATE_PAGE_SIZE per page, up to _CANDIDATE_MAX_PAGES pages.
     For results > _DEEP_PAGINATION_LIMIT, search_os routes to PIT internally.
 
-    Raises MsdsCandidateEnumerationIncompleteError when budget is exhausted
-    with more results still remaining in OS (P0-03: no silent truncation).
+    budget_ref: mutable [remaining_calls] counter shared across all terms in
+    one search_by_q_os call (CLOSURE-04). When exhausted, raises INCOMPLETE.
+
+    CLOSURE-02 integrity checks:
+    - Raises MsdsCandidateEnumerationIncompleteError when collected < os_total
+      (budget exhausted, short page with total mismatch, or query-level budget).
+    - Raises MsdsCandidateEnumerationIntegrityError when collected > os_total
+      or when os_total changes between pages (index swap during candidate scan)
+      or when duplicate chem_ids appear across pages.
     """
     all_ids: list[str] = []
     page_off = 0
+    first_total: Optional[int] = None
     last_total: Optional[int] = None
+
     for _ in range(_CANDIDATE_MAX_PAGES):
+        # Query-level budget guard (CLOSURE-04)
+        if budget_ref is not None:
+            if budget_ref[0] <= 0:
+                if isinstance(last_total, int) and len(all_ids) < last_total:
+                    raise MsdsCandidateEnumerationIncompleteError(
+                        f"Query-level OS call budget exhausted: "
+                        f"collected={len(all_ids)} os_total={last_total}"
+                    )
+                break
+            budget_ref[0] -= 1
+
         ids, total = search_os(
             limit=_CANDIDATE_PAGE_SIZE, offset=page_off, client=client, **kwargs
         )
+
+        # Detect OS total changing between pages (index generation swap mid-scan) — J05/J06
+        if first_total is None:
+            first_total = total
+        if isinstance(total, int) and isinstance(first_total, int) and total != first_total:
+            raise MsdsCandidateEnumerationIntegrityError(
+                f"OS total changed between pages: page_0_total={first_total} "
+                f"current_total={total} at page_off={page_off} "
+                f"(index swap or concurrent reindex during candidate scan)"
+            )
+
         last_total = total
         all_ids.extend(ids)
+
         if len(ids) < _CANDIDATE_PAGE_SIZE:
             break
         page_off += _CANDIDATE_PAGE_SIZE
@@ -545,6 +572,27 @@ def _collect_all_os(*, client, **kwargs) -> list[str]:
                 f"collected={len(all_ids)} os_total={last_total} "
                 f"(budget={_CANDIDATE_MAX_PAGES} pages × {_CANDIDATE_PAGE_SIZE})"
             )
+
+    # Short-page incomplete: break fired before all pages were consumed (J05)
+    if isinstance(last_total, int) and last_total > 0 and len(all_ids) < last_total:
+        raise MsdsCandidateEnumerationIncompleteError(
+            f"Candidate enumeration incomplete: "
+            f"collected={len(all_ids)} os_total={last_total} "
+            f"(short page before full enumeration)"
+        )
+
+    # Post-loop integrity: over-collection or duplicate pages
+    if isinstance(last_total, int) and last_total > 0 and len(all_ids) > last_total:
+        raise MsdsCandidateEnumerationIntegrityError(
+            f"Collected more IDs than OS total: collected={len(all_ids)} "
+            f"os_total={last_total} (duplicate page in OS response)"
+        )
+    if len(all_ids) != len(set(all_ids)):
+        dup_count = len(all_ids) - len(set(all_ids))
+        raise MsdsCandidateEnumerationIntegrityError(
+            f"Duplicate chem_ids in candidate set: {dup_count} duplicates "
+            f"(OS returned same document in multiple pages)"
+        )
     return all_ids
 
 
@@ -612,6 +660,7 @@ def search_by_q_os(
     seen: set[str] = set()
     all_deduped: list[str] = []
     item_meta: dict[str, dict] = {}  # chem_id → {match_type, matched_term} (first-seen wins)
+    budget = [_QUERY_OS_CALL_BUDGET]  # mutable counter shared across all _collect_all_os calls
 
     def _collect_with_meta(ids: list[str], mt: str, term: str) -> None:
         for cid in ids:
@@ -623,8 +672,12 @@ def search_by_q_os(
     def _run_term(term: str, mt: str) -> None:
         if not term:
             return
-        _collect_with_meta(_collect_all_os(name_ko=term, client=client), mt, term)
-        _collect_with_meta(_collect_all_os(name_en=term, client=client), mt, term)
+        _collect_with_meta(
+            _collect_all_os(name_ko=term, client=client, budget_ref=budget), mt, term
+        )
+        _collect_with_meta(
+            _collect_all_os(name_en=term, client=client, budget_ref=budget), mt, term
+        )
 
     # Priority: normalized → dictionary expansions → kiwi tokens
     _run_term(plan.normalized_query, MATCH_NORMALIZED_EXACT)

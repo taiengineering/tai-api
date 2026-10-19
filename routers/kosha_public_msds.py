@@ -45,6 +45,7 @@ from services.kosha_msds.contract import (
 )
 from services.kosha_msds.opensearch_query import (
     MsdsCandidateEnumerationIncompleteError,
+    MsdsCandidateEnumerationIntegrityError,
     MsdsCasIndexNotReadyError,
     MsdsHydrationIntegrityError,
     MsdsOsError,
@@ -196,7 +197,7 @@ def list_or_search_msds(
 
     if has_q or has_filter:
         try:
-            check_snapshot_gate()  # PATCH-02: fail-closed freshness guard
+            check_snapshot_gate(scope=scope)  # CLOSURE-01: scope-aware gate
 
             if has_q:
                 chem_ids, total, match_meta = search_by_q_os(
@@ -259,6 +260,11 @@ def list_or_search_msds(
             raise HTTPException(
                 status_code=503,
                 detail={"code": "MSDS_CANDIDATE_ENUMERATION_INCOMPLETE", "message": str(exc)},
+            ) from exc
+        except MsdsCandidateEnumerationIntegrityError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "MSDS_CANDIDATE_ENUMERATION_INTEGRITY", "message": str(exc)},
             ) from exc
         except Exception as exc:
             logger.exception("MSDS OS search failed")
