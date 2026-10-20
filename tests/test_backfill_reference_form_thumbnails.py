@@ -1,15 +1,19 @@
 """
-WO-WWW-SS-THUMBNAIL-001 P3-R2 — Backfill script unit tests.
+WO-WWW-SS-THUMBNAIL-001 P3-R3 — Backfill script unit tests.
 
 B1  Concurrent claim: only 1 of 2 simultaneous claims succeeds
 B2  QA_PASS not overwritten by concurrent process
 B3  Signed URL failure releases PENDING claim → QA_FAIL
 B4  Download failure releases PENDING claim → QA_FAIL
-B5  PENDING crash recovery: --reset-pending → NULL → re-claimable
-B6  Storage success / DB failure → Storage rollback + QA_FAIL
+B5  PENDING crash recovery: --reset-pending --pa-id → NULL → re-claimable
+B6  Storage success / DB failure (exception) → Storage rollback + QA_FAIL
 B7  Dry-run before migration: survey-only, DB/Storage writes = 0
-B8  Approval revocation during backfill → skipped
+B8  Approval revocation causes backfill skip
 B9  Partial failure → non-zero exit code (sys.exit(2))
+B10 Upload conflict + SHA256 match → reuse existing object → generated
+B11 Upload conflict + SHA256 mismatch → fail:upload_conflict
+B12 DB update returns empty data (ownership lost) → Storage rollback, NO release
+B13 --reset-pending without --pa-id → sys.exit(1)
 """
 from __future__ import annotations
 
@@ -97,7 +101,7 @@ def _make_target(**overrides):
 
 def _make_sb(
     *,
-    update_claim_data=None,   # data returned by _atomic_claim UPDATE
+    update_claim_data=None,
     release_data=None,
     authority_view=True,
     authority_sources=True,
@@ -154,14 +158,13 @@ def _make_sb(
         _VIEW_TABLE:     _view_row,
         _SOURCES_TABLE:  _src_rows,
         _APPROVAL_TABLE: _appr_row,
-        _PREVIEW_TABLE:  [{"thumbnail_qa_status": None}],  # current status check
+        _PREVIEW_TABLE:  [{"thumbnail_qa_status": None}],
     }
 
     update_call_count = {"n": 0}
 
     def _side_effect(name):
         if name == _PREVIEW_TABLE:
-            # First update call is atomic claim → use claim data
             return _make_chain(
                 [],
                 is_update=True,
@@ -200,7 +203,6 @@ def _make_generate_fn(bytes_=WEBP_1PX):
 def test_B1_concurrent_claim_only_one_succeeds():
     m = _import_backfill()
 
-    # First atomic_claim call returns data (success), second returns empty (lost)
     call_count = {"n": 0}
 
     def _make_chain_for_preview():
@@ -223,9 +225,7 @@ def test_B1_concurrent_claim_only_one_succeeds():
     sb = MagicMock()
     sb.table.side_effect = lambda name: _make_chain_for_preview()
 
-    # First claim: NULL → PENDING
     result1 = m["_atomic_claim"](sb, _PA_ID)
-    # Second claim: NULL failed, QA_FAIL also fails → False
     result2 = m["_atomic_claim"](sb, _PA_ID)
 
     assert result1 is True,  "First claim should succeed"
@@ -239,10 +239,9 @@ def test_B1_concurrent_claim_only_one_succeeds():
 def test_B2_qa_pass_not_overwritten():
     m = _import_backfill()
 
-    # Simulate: all UPDATE attempts return [] (QA_PASS row can't be claimed)
     chain = MagicMock()
     result = MagicMock()
-    result.data = []  # QA_PASS doesn't match NULL or QA_FAIL conditions
+    result.data = []
     chain.execute.return_value = result
     for method in ("select", "update", "eq", "is_", "in_", "limit", "order"):
         getattr(chain, method).return_value = chain
@@ -261,7 +260,6 @@ def test_B2_qa_pass_not_overwritten():
 # ===========================================================================
 
 def test_B3_signed_url_failure_releases_claim():
-    """Patch _atomic_claim and _release_claim directly to verify release is called."""
     m = _import_backfill()
 
     with (
@@ -283,7 +281,6 @@ def test_B3_signed_url_failure_releases_claim():
 # ===========================================================================
 
 def test_B4_download_failure_releases_claim():
-    """Patch _atomic_claim and _release_claim directly to verify release is called."""
     m = _import_backfill()
 
     with (
@@ -305,7 +302,7 @@ def test_B4_download_failure_releases_claim():
 
 
 # ===========================================================================
-# B5 — Crash recovery: --reset-pending moves PENDING → NULL
+# B5 — Crash recovery: --reset-pending --pa-id moves PENDING → NULL
 # ===========================================================================
 
 def test_B5_reset_pending_enables_retry():
@@ -325,16 +322,15 @@ def test_B5_reset_pending_enables_retry():
     sb = MagicMock()
     sb.table.return_value = tbl
 
-    count = m["_reset_pending_claims"](sb)
-    assert count == len(reset_data), f"Should reset {len(reset_data)} PENDING rows, got {count}"
+    count = m["_reset_pending_claims"](sb, pa_ids=[_PA_ID])
+    assert count == len(reset_data), f"Should reset {len(reset_data)} PENDING row(s), got {count}"
 
 
 # ===========================================================================
-# B6 — Storage success / DB failure → Storage rollback + QA_FAIL
+# B6 — Storage success / DB failure (exception) → Storage rollback + QA_FAIL
 # ===========================================================================
 
 def test_B6_storage_success_db_failure_rollback():
-    """DB update raises → Storage remove is called + _release_claim."""
     m = _import_backfill()
 
     storage_remove_calls = []
@@ -356,7 +352,7 @@ def test_B6_storage_success_db_failure_rollback():
         sb.storage.from_.return_value.upload.return_value = MagicMock()
         sb.storage.from_.return_value.remove.side_effect = _track_remove
 
-        # DB update fails
+        # DB update raises
         db_chain = MagicMock()
         db_chain.eq.return_value = db_chain
         db_chain.execute.side_effect = Exception("DB write failed")
@@ -454,8 +450,6 @@ def test_B8_approval_revocation_skips_form():
 # ===========================================================================
 
 def test_B9_partial_failure_exits_nonzero():
-    """main() must call sys.exit(2) when any form fails."""
-    import importlib
     import scripts.backfill_reference_form_thumbnails as mod
 
     def _mock_collect(sb):
@@ -475,3 +469,175 @@ def test_B9_partial_failure_exits_nonzero():
         mod.main()
 
     assert exc_info.value.code == 2, f"Expected exit code 2, got {exc_info.value.code}"
+
+
+# ===========================================================================
+# B10 — Upload conflict + SHA256 match → reuse existing → generated
+# ===========================================================================
+
+def test_B10_upload_conflict_sha256_match_reuses_existing():
+    m = _import_backfill()
+
+    generate_fn = _make_generate_fn()  # returns WEBP_1PX
+    # SHA256 of the generated WebP
+    expected_output_sha256 = generate_fn.return_value.output_sha256
+
+    with (
+        patch("scripts.backfill_reference_form_thumbnails._atomic_claim", return_value=True),
+        patch("scripts.backfill_reference_form_thumbnails._recheck_authority", return_value=None),
+        patch("scripts.backfill_reference_form_thumbnails._release_claim") as mock_release,
+    ):
+        signed = MagicMock()
+        signed.get = lambda k, d=None: (
+            "https://example.com/signed" if k in ("signedURL", "signedUrl") else d
+        )
+
+        sb = MagicMock()
+        sb.storage.from_.return_value.create_signed_url.return_value = signed
+        # Upload fails (conflict)
+        sb.storage.from_.return_value.upload.side_effect = Exception("duplicate key value")
+
+        # DB update succeeds
+        db_chain = MagicMock()
+        db_chain.eq.return_value = db_chain
+        db_res = MagicMock()
+        db_res.data = [{"id": _PA_ID}]
+        db_chain.execute.return_value = db_res
+        sb.table.return_value.update.return_value = db_chain
+
+        call_count = {"n": 0}
+
+        def _httpx_side_effect(url, **kwargs):
+            r = MagicMock()
+            r.status_code = 200
+            r.raise_for_status = lambda: None
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                r.content = b"PNG_PREVIEW"  # Step 5: preview download
+            else:
+                r.content = WEBP_1PX  # Step 7: conflict check — same SHA256
+            return r
+
+        with patch("httpx.get", side_effect=_httpx_side_effect):
+            result = m["_process_one"](sb, _make_target(), generate_fn, dry_run=False)
+
+    assert result == "generated", f"Got: {result}"
+    mock_release.assert_not_called()
+
+
+# ===========================================================================
+# B11 — Upload conflict + SHA256 mismatch → fail:upload_conflict
+# ===========================================================================
+
+def test_B11_upload_conflict_sha256_mismatch_fails():
+    m = _import_backfill()
+
+    generate_fn = _make_generate_fn()  # returns WEBP_1PX
+
+    with (
+        patch("scripts.backfill_reference_form_thumbnails._atomic_claim", return_value=True),
+        patch("scripts.backfill_reference_form_thumbnails._recheck_authority", return_value=None),
+        patch("scripts.backfill_reference_form_thumbnails._release_claim") as mock_release,
+    ):
+        signed = MagicMock()
+        signed.get = lambda k, d=None: (
+            "https://example.com/signed" if k in ("signedURL", "signedUrl") else d
+        )
+
+        sb = MagicMock()
+        sb.storage.from_.return_value.create_signed_url.return_value = signed
+        # Upload fails
+        sb.storage.from_.return_value.upload.side_effect = Exception("duplicate key value")
+
+        call_count = {"n": 0}
+
+        def _httpx_side_effect(url, **kwargs):
+            r = MagicMock()
+            r.status_code = 200
+            r.raise_for_status = lambda: None
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                r.content = b"PNG_PREVIEW"  # preview
+            else:
+                r.content = b"COMPLETELY_DIFFERENT_WEBP_CONTENT"  # different SHA256
+            return r
+
+        with patch("httpx.get", side_effect=_httpx_side_effect):
+            result = m["_process_one"](sb, _make_target(), generate_fn, dry_run=False)
+
+    assert result == "failed:upload_conflict", f"Got: {result}"
+    mock_release.assert_called_once_with(sb, _PA_ID)
+
+
+# ===========================================================================
+# B12 — DB update returns empty data (ownership lost) → Storage rollback, NO release
+# ===========================================================================
+
+def test_B12_db_update_ownership_lost_rolls_back_no_release():
+    """
+    When DB update returns data=[] (row no longer PENDING), Storage must be
+    rolled back but _release_claim must NOT be called — the row may be
+    PENDING under another process's ownership.
+    """
+    m = _import_backfill()
+
+    storage_remove_calls = []
+
+    with (
+        patch("scripts.backfill_reference_form_thumbnails._atomic_claim", return_value=True),
+        patch("scripts.backfill_reference_form_thumbnails._recheck_authority", return_value=None),
+        patch("scripts.backfill_reference_form_thumbnails._release_claim") as mock_release,
+    ):
+        signed = MagicMock()
+        signed.get = lambda k, d=None: (
+            "https://example.com/signed" if k in ("signedURL", "signedUrl") else d
+        )
+
+        def _track_remove(paths):
+            storage_remove_calls.extend(paths)
+            return MagicMock()
+
+        sb = MagicMock()
+        sb.storage.from_.return_value.create_signed_url.return_value = signed
+        sb.storage.from_.return_value.upload.return_value = MagicMock()
+        sb.storage.from_.return_value.remove.side_effect = _track_remove
+
+        # DB update returns empty data — ownership lost
+        db_chain = MagicMock()
+        db_chain.eq.return_value = db_chain
+        db_res = MagicMock()
+        db_res.data = []
+        db_chain.execute.return_value = db_res
+        sb.table.return_value.update.return_value = db_chain
+
+        generate_fn = _make_generate_fn()
+
+        with patch("httpx.get") as mock_get:
+            mock_get.return_value = MagicMock(
+                status_code=200, content=b"PNG_PREVIEW",
+                headers={}, raise_for_status=lambda: None,
+            )
+            result = m["_process_one"](sb, _make_target(), generate_fn, dry_run=False)
+
+    assert result == "failed:db_update_ownership_lost", f"Got: {result}"
+    assert len(storage_remove_calls) >= 1, "Storage must be rolled back on ownership loss"
+    mock_release.assert_not_called()  # MUST NOT call release — could corrupt another process's claim
+
+
+# ===========================================================================
+# B13 — --reset-pending without --pa-id → sys.exit(1)
+# ===========================================================================
+
+def test_B13_reset_pending_requires_pa_id():
+    """main() must exit(1) when --reset-pending is used without --pa-id."""
+    import scripts.backfill_reference_form_thumbnails as mod
+
+    with (
+        patch.object(mod, "_require_deps", return_value=None),
+        patch.object(mod, "_get_supabase", return_value=MagicMock()),
+        patch("sys.argv", ["backfill", "--reset-pending"]),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        mod.main()
+
+    assert exc_info.value.code == 1, f"Expected exit code 1, got {exc_info.value.code}"

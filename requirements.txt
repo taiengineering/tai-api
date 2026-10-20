@@ -53,5 +53,5 @@ google-auth>=2.23.0
 
 # === WO-WWW-SS-THUMBNAIL-001 — Reference Form WebP thumbnail generation (2026-10-21) ===
 # PNG → WebP resize/convert. MAX_IMAGE_PIXELS guard applied in reference_form_thumbnail_svc.py.
-# 10.x line: avoids Pillow 11 breaking changes; security patch track active.
-Pillow==10.4.0
+# 12.2.0: fixes CVE-2026-42311 (10.3.0 이상 12.2.0 미만 취약). Python 3.11 호환 확인.
+Pillow==12.2.0

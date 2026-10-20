@@ -8,7 +8,7 @@ for --execute.  --dry-run works without the migration (shows a read-only survey)
 Usage:
     python scripts/backfill_reference_form_thumbnails.py --dry-run   # default
     python scripts/backfill_reference_form_thumbnails.py --execute   # write to DB + Storage
-    python scripts/backfill_reference_form_thumbnails.py --reset-pending  # crash recovery
+    python scripts/backfill_reference_form_thumbnails.py --reset-pending --pa-id <PA_ID>
 
 Production Backfill requires separate Owner approval (G4 gate).
 
@@ -19,15 +19,19 @@ Concurrency model:
 Claim lifecycle:
   NULL / QA_FAIL → (atomic claim) → PENDING → QA_PASS  (success)
                                             → QA_FAIL   (failure, via _release_claim)
-  After a process crash, PENDING rows remain.  Use --reset-pending to
-  move them back to NULL before retrying.
+  After a process crash, PENDING rows remain.  Use --reset-pending --pa-id <PA_ID>
+  to move specific stuck rows back to NULL before retrying.
+  (Run --dry-run first — it logs pa_id for every PENDING row.)
 
 Safety:
   - Detects missing migration columns before --execute
   - Atomic DB claim prevents duplicate processing across concurrent runs
+  - Hash-based Storage path (input_sha256[:16]) enables idempotent re-upload:
+    on conflict, existing object is re-used only if SHA256 matches
+  - QA_PASS update guarded by thumbnail_qa_status=PENDING to prevent
+    overwriting another process's completed result (FIX-01)
   - All failure paths release PENDING back to QA_FAIL (retry-safe)
-  - Re-verifies PUBLISHED, sources CLEARED, approval binding before generating
-  - No upsert — refuses to overwrite an existing Storage object
+    EXCEPT ownership-lost path — to avoid corrupting a concurrent claim
   - Rolls back Storage upload on DB update failure
   - Never modifies reference_form_files or original preview artifacts
 """
@@ -129,7 +133,7 @@ def _check_migration_applied(sb) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Atomic claim / release helpers (FIX-01, FIX-02)
+# Atomic claim / release helpers
 # ---------------------------------------------------------------------------
 
 def _atomic_claim(sb, pa_id: str) -> bool:
@@ -187,17 +191,29 @@ def _release_claim(sb, pa_id: str) -> None:
         log.error("Claim release failed for pa_id=%s: %s", pa_id, exc)
 
 
-def _reset_pending_claims(sb) -> int:
+def _reset_pending_claims(sb, pa_ids: list[str]) -> int:
     """
-    Crash recovery: reset all PENDING rows back to NULL.
-    Call this after a process crash before retrying.
+    Crash recovery: reset the specified PENDING preview artifacts back to NULL.
+
+    Requires an explicit list of preview artifact IDs — unrestricted bulk reset
+    is prohibited because another process may currently hold a PENDING claim.
+
     Returns the count of rows reset.
+    Run --dry-run first to obtain the pa_id for stuck PENDING rows.
     """
+    if not pa_ids:
+        log.error(
+            "reset_pending_claims requires at least one pa_id; "
+            "unrestricted bulk reset is prohibited. "
+            "Run --dry-run to identify stuck PENDING rows and their pa_ids."
+        )
+        return 0
     try:
         res = (
             sb.table(_PREVIEW)
             .update({"thumbnail_qa_status": None})
             .eq("thumbnail_qa_status", "PENDING")
+            .in_("id", pa_ids)
             .execute()
         )
         return len(res.data or [])
@@ -454,8 +470,14 @@ def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
       1. Re-verify authority (PUBLISHED / CLEARED / approval).
       2. Atomic claim: NULL or QA_FAIL → PENDING.
          If claim fails another process owns it → 'skipped:claim_lost'.
-      3. Download preview PNG, generate WebP, upload to Storage, update DB.
-      4. On any failure: release claim (PENDING → QA_FAIL) for retry-safety.
+      3. Download preview PNG, generate WebP.
+      4. Upload to Storage using hash-based path for idempotency.
+         On upload conflict, verify existing object SHA256 — reuse if match,
+         fail with 'upload_conflict' if mismatch.
+      5. DB update with thumbnail_qa_status=PENDING guard (FIX-01).
+         If update returns no rows (ownership lost), roll back Storage without
+         calling _release_claim (row may be claimed by another process).
+      6. On any other failure: release claim (PENDING → QA_FAIL) for retry-safety.
     """
     import httpx
 
@@ -491,7 +513,7 @@ def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
     except ValueError as exc:
         return _fail(f"bad_preview_ref:{exc}")
 
-    # Step 4: get signed URL
+    # Step 4: get signed URL for preview
     try:
         signed = sb.storage.from_(THUMBNAIL_BUCKET).create_signed_url(
             preview_path, expires_in=120
@@ -518,28 +540,65 @@ def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
     except Exception as exc:
         return _fail(f"generate:{exc}")
 
-    # Step 7: upload to Storage — no upsert, refuse to overwrite existing object
-    thumb_storage_path = f"{THUMBNAIL_PREFIX}/{target.form_id}-v1.webp"
+    # Step 7: upload to Storage — hash-based path for idempotency; no upsert.
+    # Same input + same generation version → same path → safe to detect duplicates.
+    thumb_storage_path = f"{THUMBNAIL_PREFIX}/{target.form_id}-{input_sha256[:16]}.webp"
     try:
         sb.storage.from_(THUMBNAIL_BUCKET).upload(
             path=thumb_storage_path,
             file=result.webp_bytes,
             file_options={"content-type": "image/webp", "upsert": "false"},
         )
-    except Exception as exc:
-        return _fail(f"upload:{exc}")
+    except Exception as upload_exc:
+        # Upload failed — check whether an identical object already exists.
+        # This can occur when a previous run uploaded but the DB update failed
+        # before Storage rollback executed.
+        log.debug("  %s — upload failed (%s); checking for existing object",
+                  target.slug, upload_exc)
+        try:
+            check_signed = sb.storage.from_(THUMBNAIL_BUCKET).create_signed_url(
+                thumb_storage_path, expires_in=60
+            )
+            check_url = (
+                check_signed.get("signedURL") or check_signed.get("signedUrl") or ""
+            )
+            if not check_url:
+                return _fail(f"upload:{upload_exc}")
+            check_r = httpx.get(check_url, follow_redirects=True, timeout=30)
+            check_r.raise_for_status()
+            existing_sha256 = hashlib.sha256(check_r.content).hexdigest()
+            if existing_sha256 != result.output_sha256:
+                log.error(
+                    "  %s — upload conflict: existing object SHA256 mismatch "
+                    "(expected=%s… got=%s…)",
+                    target.slug, result.output_sha256[:12], existing_sha256[:12],
+                )
+                return _fail("upload_conflict")
+            log.info(
+                "  %s — reusing existing Storage object (SHA256 match)", target.slug
+            )
+        except Exception as check_exc:
+            return _fail(f"upload:{upload_exc} conflict_check_failed:{check_exc}")
 
-    # Step 8: DB update — on failure roll back Storage upload
+    # Step 8: DB update — guarded by thumbnail_qa_status=PENDING (FIX-01).
+    # If the row is no longer PENDING (ownership lost), roll back Storage without
+    # calling _release_claim — the row may be claimed by another process.
     thumbnail_ref = f"storage://{THUMBNAIL_BUCKET}/{thumb_storage_path}"
     try:
-        sb.table(_PREVIEW).update({
-            "thumbnail_ref":                thumbnail_ref,
-            "thumbnail_sha256":             result.output_sha256,
-            "thumbnail_input_sha256":       input_sha256,
-            "thumbnail_generation_version": result.generation_version,
-            "thumbnail_qa_status":          "QA_PASS",
-            "thumbnail_bytes":              result.byte_count,
-        }).eq("id", target.preview_artifact_id).execute()
+        db_res = (
+            sb.table(_PREVIEW)
+            .update({
+                "thumbnail_ref":                thumbnail_ref,
+                "thumbnail_sha256":             result.output_sha256,
+                "thumbnail_input_sha256":       input_sha256,
+                "thumbnail_generation_version": result.generation_version,
+                "thumbnail_qa_status":          "QA_PASS",
+                "thumbnail_bytes":              result.byte_count,
+            })
+            .eq("id", target.preview_artifact_id)
+            .eq("thumbnail_qa_status", "PENDING")
+            .execute()
+        )
     except Exception as exc:
         try:
             sb.storage.from_(THUMBNAIL_BUCKET).remove([thumb_storage_path])
@@ -548,6 +607,23 @@ def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
             log.error("  %s — Storage rollback failed (orphan file %s): %s",
                       target.slug, thumb_storage_path, rm_exc)
         return _fail(f"db_update:{exc}")
+
+    if not db_res.data:
+        # Row is no longer PENDING — ownership was lost after we uploaded.
+        # Do NOT call _release_claim: the row may be PENDING under another
+        # process's ownership, and releasing it would corrupt that claim.
+        try:
+            sb.storage.from_(THUMBNAIL_BUCKET).remove([thumb_storage_path])
+            log.warning("  %s — rolled back Storage after ownership loss", target.slug)
+        except Exception as rm_exc:
+            log.error("  %s — Storage rollback failed (orphan file %s): %s",
+                      target.slug, thumb_storage_path, rm_exc)
+        log.warning(
+            "  %s — ownership lost: thumbnail_qa_status is no longer PENDING "
+            "(concurrent --reset-pending or claim race).",
+            target.slug,
+        )
+        return "failed:db_update_ownership_lost"
 
     log.info("  OK %s — %d B WebP (sha256=%s…)",
              target.slug, result.byte_count, result.output_sha256[:12])
@@ -573,20 +649,39 @@ def main() -> None:
     )
     mode_group.add_argument(
         "--reset-pending", dest="mode", action="store_const", const="reset_pending",
-        help="Crash recovery: reset stuck PENDING rows back to NULL"
+        help="Crash recovery: reset stuck PENDING rows back to NULL (requires --pa-id)"
+    )
+    parser.add_argument(
+        "--pa-id", dest="pa_ids", action="append", metavar="PA_ID",
+        help=(
+            "Preview artifact ID to target (repeatable). "
+            "Required for --reset-pending. "
+            "Obtain from --dry-run output (pa_id= field on PENDING rows)."
+        ),
     )
     args = parser.parse_args()
 
     _require_deps()
-    from services.reference_form_thumbnail_svc import generate_thumbnail, GENERATION_VERSION
-
     sb = _get_supabase()
 
     # --- reset-pending mode ---
     if args.mode == "reset_pending":
-        n = _reset_pending_claims(sb)
-        log.info("Reset %d PENDING rows to NULL. Re-run with --execute to retry.", n)
+        if not args.pa_ids:
+            log.error(
+                "--reset-pending requires at least one --pa-id PA_ID argument to "
+                "scope the reset. Run --dry-run first to identify stuck PENDING rows "
+                "and their pa_ids."
+            )
+            sys.exit(1)
+        n = _reset_pending_claims(sb, pa_ids=args.pa_ids)
+        log.info(
+            "Reset %d PENDING row(s) to NULL for %d pa_id(s). "
+            "Re-run with --execute to retry.",
+            n, len(args.pa_ids),
+        )
         return
+
+    from services.reference_form_thumbnail_svc import generate_thumbnail, GENERATION_VERSION
 
     migration_ok = _check_migration_applied(sb)
 
@@ -596,17 +691,22 @@ def main() -> None:
             _dry_run_pre_migration(sb)
             return
         targets = _collect_targets(sb)
-        already_done  = sum(1 for t in targets if t.existing_thumbnail_status == "QA_PASS")
         pending_stuck = sum(1 for t in targets if t.existing_thumbnail_status == "PENDING")
         log.info("=== Thumbnail Backfill DRY-RUN === eligible=%d version=%s",
                  len(targets), GENERATION_VERSION)
         for t in targets:
-            log.info("  %s  (status=%s)", t.slug, t.existing_thumbnail_status)
-        log.info("Summary: eligible=%d already_pass=%d pending_stuck=%d",
-                 len(targets), already_done, pending_stuck)
+            if t.existing_thumbnail_status == "PENDING":
+                log.info("  %s  status=PENDING  pa_id=%s  [use --reset-pending --pa-id %s]",
+                         t.slug, t.preview_artifact_id, t.preview_artifact_id)
+            else:
+                log.info("  %s  status=%s  pa_id=%s",
+                         t.slug, t.existing_thumbnail_status, t.preview_artifact_id)
         if pending_stuck:
-            log.warning("  %d PENDING rows detected — use --reset-pending for crash recovery",
-                        pending_stuck)
+            log.warning(
+                "  %d PENDING row(s) detected. To recover after a crash: "
+                "--reset-pending --pa-id <PA_ID> (one --pa-id per stuck row)",
+                pending_stuck,
+            )
         log.info("Re-run with --execute to generate (requires Owner G4 approval).")
         return
 
