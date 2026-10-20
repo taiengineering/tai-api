@@ -137,7 +137,7 @@ def _fetch_saas_docs(
     in_val = "in.(" + ",".join(codes) + ")"
     rows = client.select(
         "document_forms",
-        columns="id,doc_id,doc_name,sector,category,doc_format,file_url",
+        columns="id,doc_id,doc_name,sector,category,doc_format,file_url,is_active",
         filters={"doc_id": in_val},
     )
     return {r["doc_id"]: r for r in rows}
@@ -218,13 +218,31 @@ _STATE_PRIORITY = {"APPROVED": 3, "UNDER_REVIEW": 2, "PROPOSED": 1}
 
 
 def _summarise_links(links: list[dict]) -> tuple[Optional[str], int]:
-    """Return (current_link_status, active_link_count) from a list of link rows."""
+    """Return (current_link_status, active_link_count) from a list of link rows.
+
+    current_link_status:
+      - Highest active state (APPROVED > UNDER_REVIEW > PROPOSED) if any active link exists.
+      - Latest terminal state (REJECTED/RETIRED) if no active links but terminal history exists.
+      - None only when no link history at all (link_status filter NONE matches this).
+    active_link_count: count of PROPOSED/UNDER_REVIEW/APPROVED rows only.
+    Tiebreak on equal priority is deterministic: secondary sort by updated_at desc.
+    """
     active = [lk for lk in links if lk["review_state"] in _ACTIVE_STATES]
     count = len(active)
-    if not active:
+    if active:
+        best = max(
+            active,
+            key=lambda lk: (
+                _STATE_PRIORITY.get(lk["review_state"], 0),
+                lk.get("updated_at") or "",
+            ),
+        )
+        return best["review_state"], count
+    terminal = [lk for lk in links if lk["review_state"] in _TERMINAL_STATES]
+    if not terminal:
         return None, 0
-    best = max(active, key=lambda lk: _STATE_PRIORITY.get(lk["review_state"], 0))
-    return best["review_state"], count
+    latest = max(terminal, key=lambda lk: lk.get("updated_at") or "")
+    return latest["review_state"], 0
 
 
 def _build_summary(
@@ -235,14 +253,31 @@ def _build_summary(
 ) -> CandidateSummary:
     saas_exists = saas_row is not None
     ref_exists = ref_row is not None
-    stale = not saas_exists or not ref_exists
-    stale_reason: Optional[str] = None
-    if not saas_exists and not ref_exists:
-        stale_reason = "SAAS 문서 및 참고서식 모두 원본 미확인"
-    elif not saas_exists:
-        stale_reason = f"SAAS 문서 {row['saas_source_code']} 원본 미확인"
-    elif not ref_exists:
-        stale_reason = f"참고서식 {row['ref_source_code']} 원본 미확인"
+
+    stale_reasons: list[str] = []
+
+    if not saas_exists:
+        stale_reasons.append(f"SAAS 문서 {row['saas_source_code']} 원본 미확인")
+    else:
+        if saas_row.get("is_active") is False:
+            stale_reasons.append(f"SAAS 문서 {row['saas_source_code']} 비활성화")
+        db_saas_title = (saas_row.get("doc_name") or "").strip()
+        if db_saas_title and db_saas_title != row["saas_title"]:
+            stale_reasons.append(
+                f"SaaS 제목 불일치: CSV='{row['saas_title']}' DB='{db_saas_title}'"
+            )
+
+    if not ref_exists:
+        stale_reasons.append(f"참고서식 {row['ref_source_code']} 원본 미확인")
+    else:
+        db_ref_title = (ref_row.get("title") or "").strip()
+        if db_ref_title and db_ref_title != row["ref_title"]:
+            stale_reasons.append(
+                f"참고서식 제목 불일치: CSV='{row['ref_title']}' DB='{db_ref_title}'"
+            )
+
+    stale = bool(stale_reasons)
+    stale_reason: Optional[str] = "; ".join(stale_reasons) if stale_reasons else None
 
     current_status, active_count = _summarise_links(links)
 

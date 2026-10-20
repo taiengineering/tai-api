@@ -33,15 +33,21 @@ from services.document_link_review_read import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
-def _make_saas_row(doc_id: str = "DOC-OSH-058", uuid: str | None = None) -> dict[str, Any]:
+def _make_saas_row(
+    doc_id: str = "DOC-OSH-058",
+    uuid: str | None = None,
+    is_active: bool = True,
+    doc_name: str | None = None,
+) -> dict[str, Any]:
     return {
         "id": uuid or f"uuid-{doc_id}",
         "doc_id": doc_id,
-        "doc_name": f"[test] {doc_id}",
+        "doc_name": doc_name if doc_name is not None else f"[test] {doc_id}",
         "sector": "COMMON",
         "category": "회의",
         "doc_format": "DIGITAL_OK",
         "file_url": "https://www.law.go.kr/test",
+        "is_active": is_active,
     }
 
 
@@ -234,9 +240,12 @@ class TestA05StaleSource(unittest.TestCase):
         self.assertTrue(detail.stale_source)
         self.assertIn("ref-gov-01", detail.stale_reason or "")
 
-    def test_not_stale_when_both_exist(self):
-        saas = [_make_saas_row("DOC-OSH-058")]
+    def test_not_stale_when_both_exist_with_matching_titles(self):
+        # CORR-B: stale requires either missing OR title mismatch OR inactive.
+        # Use exact CSV titles to confirm a clean (non-stale) pair.
+        saas = [_make_saas_row("DOC-OSH-058", doc_name="산업안전보건위원회 회의록")]
         ref = [_make_ref_row("ref-gov-01")]
+        ref[0]["title"] = "산업안전보건위원회 회의록"
         client = _make_mock_client(saas_rows=saas, ref_rows=ref)
         detail = get_candidate_detail(client, "DOC-OSH-058__ref-gov-01")
         self.assertIsNotNone(detail)
@@ -435,17 +444,21 @@ class TestA09TerminalStateHistory(unittest.TestCase):
         self.assertIn("PROPOSED", states)
 
     def test_terminal_states_not_counted_as_active(self):
+        # CORR-A: terminal states (REJECTED/RETIRED) now returned as current_link_status
+        # when no active links exist, but active_link_count stays 0.
         saas = [_make_saas_row("DOC-OSH-058", "uuid-s1")]
         ref = [_make_ref_row("ref-gov-01", "uuid-r1")]
-        links = [
-            _make_link("uuid-s1", "uuid-r1", "REJECTED"),
-            _make_link("uuid-s1", "uuid-r1", "RETIRED"),
-        ]
-        links[1]["id"] = "link-retired"
+        rejected = _make_link("uuid-s1", "uuid-r1", "REJECTED")
+        rejected["updated_at"] = "2026-10-20T00:00:00Z"
+        retired = _make_link("uuid-s1", "uuid-r1", "RETIRED")
+        retired["id"] = "link-retired"
+        retired["updated_at"] = "2026-10-21T00:00:00Z"  # more recent
+        links = [rejected, retired]
         client = _make_mock_client(saas, ref, links)
         detail = get_candidate_detail(client, "DOC-OSH-058__ref-gov-01")
         assert detail is not None
-        self.assertIsNone(detail.current_link_status)
+        # latest terminal = RETIRED (updated_at more recent)
+        self.assertEqual(detail.current_link_status, "RETIRED")
         self.assertEqual(detail.active_link_count, 0)
 
     def test_multiple_historical_links_preserved(self):
@@ -619,6 +632,335 @@ class TestA14NoDbWrite(unittest.TestCase):
         client = _make_mock_client()
         result = get_candidate_detail(client, "NONEXISTENT__CANDIDATE")
         self.assertIsNone(result)
+
+
+# ---------------------------------------------------------------------------
+# Corr-001 — T01-T11
+# ---------------------------------------------------------------------------
+
+class TestT01RejectedFilter(unittest.TestCase):
+    """T01: REJECTED 단독 → current_link_status=REJECTED, link_status 필터 작동."""
+
+    def test_rejected_only_returns_rejected_status(self):
+        # One candidate with a REJECTED link (no active links)
+        saas = _make_saas_row()
+        ref = _make_ref_row()
+        link = _make_link(saas["id"], ref["id"], state="REJECTED")
+        link["updated_at"] = "2026-10-20T12:00:00Z"
+        client = _make_mock_client(saas_rows=[saas], ref_rows=[ref], link_rows=[link])
+        result = get_candidates(client)
+        # Find our pair
+        item = next(
+            (i for i in result.items if i.saas_source_code == "DOC-OSH-058"), None
+        )
+        self.assertIsNotNone(item)
+        self.assertEqual(item.current_link_status, "REJECTED")
+        self.assertEqual(item.active_link_count, 0)
+
+    def test_link_status_rejected_filter_matches(self):
+        saas = _make_saas_row()
+        ref = _make_ref_row()
+        link = _make_link(saas["id"], ref["id"], state="REJECTED")
+        link["updated_at"] = "2026-10-20T12:00:00Z"
+        client = _make_mock_client(saas_rows=[saas], ref_rows=[ref], link_rows=[link])
+        result = get_candidates(client, link_status="REJECTED")
+        self.assertGreater(result.total, 0)
+        for item in result.items:
+            self.assertEqual(item.current_link_status, "REJECTED")
+
+
+class TestT02RetiredFilter(unittest.TestCase):
+    """T02: RETIRED 단독 → current_link_status=RETIRED, link_status 필터 작동."""
+
+    def test_retired_only_returns_retired_status(self):
+        saas = _make_saas_row()
+        ref = _make_ref_row()
+        link = _make_link(saas["id"], ref["id"], state="RETIRED")
+        link["updated_at"] = "2026-10-20T12:00:00Z"
+        client = _make_mock_client(saas_rows=[saas], ref_rows=[ref], link_rows=[link])
+        result = get_candidates(client)
+        item = next(
+            (i for i in result.items if i.saas_source_code == "DOC-OSH-058"), None
+        )
+        self.assertIsNotNone(item)
+        self.assertEqual(item.current_link_status, "RETIRED")
+        self.assertEqual(item.active_link_count, 0)
+
+    def test_link_status_retired_filter_matches(self):
+        saas = _make_saas_row()
+        ref = _make_ref_row()
+        link = _make_link(saas["id"], ref["id"], state="RETIRED")
+        link["updated_at"] = "2026-10-20T12:00:00Z"
+        client = _make_mock_client(saas_rows=[saas], ref_rows=[ref], link_rows=[link])
+        result = get_candidates(client, link_status="RETIRED")
+        self.assertGreater(result.total, 0)
+        for item in result.items:
+            self.assertEqual(item.current_link_status, "RETIRED")
+
+
+class TestT03ActiveAndHistory(unittest.TestCase):
+    """T03: 활성 링크 + 과거 이력 동시 존재 → 활성 상태 우선, 이력은 보존."""
+
+    def test_approved_wins_over_rejected_history(self):
+        saas = _make_saas_row()
+        ref = _make_ref_row()
+        active_link = _make_link(saas["id"], ref["id"], state="APPROVED")
+        active_link["updated_at"] = "2026-10-21T00:00:00Z"
+        hist_link = _make_link(saas["id"], ref["id"], state="REJECTED")
+        hist_link["id"] = "link-old"
+        hist_link["updated_at"] = "2026-10-19T00:00:00Z"
+        client = _make_mock_client(
+            saas_rows=[saas], ref_rows=[ref],
+            link_rows=[active_link, hist_link],
+        )
+        result = get_candidates(client)
+        item = next(
+            (i for i in result.items if i.saas_source_code == "DOC-OSH-058"), None
+        )
+        self.assertIsNotNone(item)
+        self.assertEqual(item.current_link_status, "APPROVED")
+        self.assertEqual(item.active_link_count, 1)
+
+    def test_detail_all_links_preserved(self):
+        saas = _make_saas_row()
+        ref = _make_ref_row()
+        active_link = _make_link(saas["id"], ref["id"], state="APPROVED")
+        active_link["updated_at"] = "2026-10-21T00:00:00Z"
+        hist_link = dict(active_link)
+        hist_link["id"] = "link-old"
+        hist_link["review_state"] = "REJECTED"
+        hist_link["updated_at"] = "2026-10-19T00:00:00Z"
+        client = _make_mock_client(
+            saas_rows=[saas], ref_rows=[ref],
+            link_rows=[active_link, hist_link],
+        )
+        # Use first CSV row with DOC-OSH-058
+        csv_rows = _load_csv()
+        row = next(r for r in csv_rows if r["saas_source_code"] == "DOC-OSH-058")
+        detail = get_candidate_detail(client, row["candidate_id"])
+        self.assertIsNotNone(detail)
+        self.assertEqual(len(detail.all_links), 2)
+
+
+class TestT04NoLinkHistory(unittest.TestCase):
+    """T04: 연결 이력 없음(NONE) → current_link_status=None."""
+
+    def test_no_links_returns_none_status(self):
+        saas = _make_saas_row()
+        ref = _make_ref_row()
+        client = _make_mock_client(saas_rows=[saas], ref_rows=[ref], link_rows=[])
+        result = get_candidates(client)
+        item = next(
+            (i for i in result.items if i.saas_source_code == "DOC-OSH-058"), None
+        )
+        self.assertIsNotNone(item)
+        self.assertIsNone(item.current_link_status)
+        self.assertEqual(item.active_link_count, 0)
+
+    def test_link_status_none_filter_matches(self):
+        saas = _make_saas_row()
+        ref = _make_ref_row()
+        client = _make_mock_client(saas_rows=[saas], ref_rows=[ref], link_rows=[])
+        result = get_candidates(client, link_status="NONE")
+        for item in result.items:
+            self.assertIsNone(item.current_link_status)
+
+
+class TestT05SaasTitleMismatch(unittest.TestCase):
+    """T05: SaaS 제목 변경 감지 — DB doc_name ≠ CSV saas_title."""
+
+    def test_title_mismatch_marks_stale(self):
+        # CSV has the original title; we simulate DB having a different doc_name
+        csv_rows = _load_csv()
+        row = next(r for r in csv_rows if r["saas_source_code"] == "DOC-OSH-058")
+        csv_title = row["saas_title"]
+        # DB title is different
+        saas = _make_saas_row(doc_name=csv_title + " [수정됨]")
+        ref = _make_ref_row()
+        client = _make_mock_client(saas_rows=[saas], ref_rows=[ref], link_rows=[])
+        result = get_candidates(client)
+        item = next(
+            (i for i in result.items if i.saas_source_code == "DOC-OSH-058"), None
+        )
+        self.assertIsNotNone(item)
+        self.assertTrue(item.stale_source)
+        self.assertIn("제목 불일치", item.stale_reason or "")
+        self.assertIn("SaaS", item.stale_reason or "")
+
+    def test_same_title_not_stale(self):
+        csv_rows = _load_csv()
+        row = next(r for r in csv_rows if r["saas_source_code"] == "DOC-OSH-058")
+        # DB title matches CSV exactly
+        saas = _make_saas_row(doc_name=row["saas_title"])
+        # Ref title also matches
+        ref = _make_ref_row()
+        ref["title"] = row["ref_title"]
+        client = _make_mock_client(saas_rows=[saas], ref_rows=[ref], link_rows=[])
+        result = get_candidates(client)
+        item = next(
+            (i for i in result.items if i.saas_source_code == "DOC-OSH-058"), None
+        )
+        self.assertIsNotNone(item)
+        self.assertFalse(item.stale_source)
+
+
+class TestT06RefTitleMismatch(unittest.TestCase):
+    """T06: 참고서식 제목 변경 감지 — DB title ≠ CSV ref_title."""
+
+    def test_ref_title_mismatch_marks_stale(self):
+        csv_rows = _load_csv()
+        row = next(r for r in csv_rows if r["saas_source_code"] == "DOC-OSH-058")
+        csv_ref_title = row["ref_title"]
+        saas = _make_saas_row(doc_name=row["saas_title"])  # SaaS title matches
+        ref = _make_ref_row()
+        ref["title"] = csv_ref_title + " [개정]"  # Ref title changed
+        client = _make_mock_client(saas_rows=[saas], ref_rows=[ref], link_rows=[])
+        result = get_candidates(client)
+        item = next(
+            (i for i in result.items if i.saas_source_code == "DOC-OSH-058"), None
+        )
+        self.assertIsNotNone(item)
+        self.assertTrue(item.stale_source)
+        self.assertIn("참고서식 제목 불일치", item.stale_reason or "")
+
+
+class TestT07InactiveSaasDoc(unittest.TestCase):
+    """T07: SaaS 비활성화 감지 — is_active=False."""
+
+    def test_inactive_doc_marks_stale(self):
+        saas = _make_saas_row(is_active=False)
+        ref = _make_ref_row()
+        client = _make_mock_client(saas_rows=[saas], ref_rows=[ref], link_rows=[])
+        result = get_candidates(client)
+        item = next(
+            (i for i in result.items if i.saas_source_code == "DOC-OSH-058"), None
+        )
+        self.assertIsNotNone(item)
+        self.assertTrue(item.stale_source)
+        self.assertIn("비활성화", item.stale_reason or "")
+
+    def test_active_doc_not_stale_due_to_activity(self):
+        saas = _make_saas_row(is_active=True)
+        ref = _make_ref_row()
+        client = _make_mock_client(saas_rows=[saas], ref_rows=[ref], link_rows=[])
+        result = get_candidates(client)
+        item = next(
+            (i for i in result.items if i.saas_source_code == "DOC-OSH-058"), None
+        )
+        self.assertIsNotNone(item)
+        # is_active=True alone shouldn't cause stale (title still mismatches in fixture
+        # unless we set titles to match — check stale reason doesn't include "비활성화")
+        self.assertNotIn("비활성화", item.stale_reason or "")
+
+
+class TestT08ApprovedLinksInCatalog(unittest.TestCase):
+    """T08: APPROVED SAME_DOCUMENT_VERIFIED 연결은 카탈로그 상세에 노출."""
+
+    def test_approved_link_exposed_in_catalog(self):
+        from services.catalog_aggregator import get_approved_links_for_catalog
+
+        client = MagicMock()
+        saas_uuid = "uuid-saas-001"
+        ref_uuid = "uuid-ref-001"
+
+        def _select(table, **kwargs):
+            filters = kwargs.get("filters", {})
+            if table == "unified_document_link":
+                return [{
+                    "id": "link-001",
+                    "reference_form_id": ref_uuid,
+                    "relation_type": "SAME_DOCUMENT_VERIFIED",
+                    "review_state": "APPROVED",
+                }]
+            if table == "reference_form_public_view":
+                return [{
+                    "id": ref_uuid,
+                    "canonical_slug": "ref-gov-01",
+                    "title": "안전보건관리 참고서식",
+                }]
+            return []
+
+        client.select.side_effect = _select
+        links = get_approved_links_for_catalog(client, saas_uuid, "SAAS")
+        self.assertEqual(len(links), 1)
+        self.assertEqual(links[0]["relation_type"], "SAME_DOCUMENT_VERIFIED")
+        self.assertEqual(links[0]["linked_key"], "REF:ref-gov-01")
+
+
+class TestT09UnapprovedLinksNotInCatalog(unittest.TestCase):
+    """T09: PROPOSED/UNDER_REVIEW 연결은 카탈로그에 노출되지 않음."""
+
+    def test_proposed_link_not_in_catalog(self):
+        from services.catalog_aggregator import get_approved_links_for_catalog
+
+        client = MagicMock()
+
+        def _select(table, **kwargs):
+            # unified_document_link returns nothing (filter is APPROVED only)
+            return []
+
+        client.select.side_effect = _select
+        links = get_approved_links_for_catalog(client, "uuid-001", "SAAS")
+        self.assertEqual(links, [])
+
+    def test_under_review_link_not_in_catalog(self):
+        from services.catalog_aggregator import get_approved_links_for_catalog
+
+        client = MagicMock()
+        client.select.return_value = []
+        links = get_approved_links_for_catalog(client, "uuid-001", "SAAS")
+        self.assertEqual(links, [])
+
+
+class TestT10RelatedFormNotSameDoc(unittest.TestCase):
+    """T10: RELATED_FORM 관계는 동일 문서로 표시하지 않음."""
+
+    def test_related_form_excluded_from_catalog_links(self):
+        from services.catalog_aggregator import get_approved_links_for_catalog
+
+        client = MagicMock()
+
+        def _select(table, **kwargs):
+            # If filter includes relation_type=SAME_DOCUMENT_VERIFIED, no results
+            return []
+
+        client.select.side_effect = _select
+        links = get_approved_links_for_catalog(client, "uuid-001", "SAAS")
+        # RELATED_FORM should not appear since we query only SAME_DOCUMENT_VERIFIED
+        self.assertEqual(links, [])
+        # Verify the query included relation_type filter
+        call_args = client.select.call_args_list[0]
+        filters = call_args.kwargs.get("filters", {})
+        self.assertIn("relation_type", filters)
+        self.assertEqual(filters["relation_type"], "eq.SAME_DOCUMENT_VERIFIED")
+
+
+class TestT11ChannelStateUnchanged(unittest.TestCase):
+    """T11: 채널 상태 불변 — CORR-001 이후에도 SAAS_AUTO_FILL은 BLOCKED."""
+
+    def test_saas_auto_fill_still_blocked(self):
+        from services.catalog_aggregator import compute_channel_state
+        result = compute_channel_state(
+            record_type="SAAS",
+            schema_status="APPROVED_FOR_RUNTIME_USE",
+            file_count=0,
+            file_url="https://www.law.go.kr/test",
+            rights_state="DIGITAL_OK",
+        )
+        self.assertEqual(result.SAAS_AUTO_FILL.state, "BLOCKED")
+
+    def test_reference_cms_channel_states_unchanged(self):
+        from services.catalog_aggregator import compute_channel_state
+        result = compute_channel_state(
+            record_type="REFERENCE_CMS",
+            schema_status=None,
+            file_count=2,
+            file_url=None,
+            rights_state=None,
+        )
+        self.assertEqual(result.REFERENCE_DOWNLOAD.state, "READY")
+        self.assertEqual(result.WEB_EDIT.state, "NOT_APPLICABLE")
+        self.assertEqual(result.SAAS_AUTO_FILL.state, "NOT_APPLICABLE")
 
 
 if __name__ == "__main__":
