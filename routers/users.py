@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Users 라우터 - 회원 관리 v2.6.0
+TAI Users 라우터 - 회원 관리 v2.7.0
 
+v2.7.0: R4-SCHEMA-FIX 운영 스키마 정합성 + 조직 일관성 보완 (WO-TAI-API-SEC-DATA-READ-001-R4-SCHEMA-FIX)
+  - FIX-01: _assert_team_belongs_to_factory teams.company_id 없음 → teams→factories 경로 사용
+  - FIX-02: PATCH /{id} factory 변경 시 기존 team_id 정합성 재검증, 관리자 company_id 변경 후 기준 검증
 v2.6.0: R4 잔여 결함 종결 (WO-TAI-API-SEC-DATA-READ-001-R4)
   - PATCH /{id}: 고권한 대상(002~033) 수정 최고관리자만 허용 (FIX-A)
   - GET /work-permits: requester_id 분기에도 company_id 범위 강제 (FIX-B, worker_permits.py)
@@ -39,7 +42,7 @@ from services.document_signature_svc import (
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-VERSION = "2.5.0"
+VERSION = "2.7.0"
 
 DEACTIVATE_STATUSES = {"INACTIVE", "DELETED", "SUSPENDED"}
 
@@ -207,20 +210,42 @@ def _assert_factory_belongs_to_company(supabase, factory_id: str, company_id: st
 
 
 def _assert_team_belongs_to_factory(supabase, team_id: str, factory_id: str, company_id: str) -> None:
-    """team_id가 factory_id(또는 company_id) 소속인지 검증. 불일치 시 403, 미존재 시 422."""
+    """team_id 소속 검증. 운영 DB 계약: teams.company_id 없음 — teams→factories 경로 사용.
+
+    factory_id 일치: teams.factory_id == factory_id (요청값, 둘 다 있을 때)
+    company_id 일치: teams.factory_id → factories.company_id == company_id
+    소속 확인 불가(팀 미존재·공장 없음) 시 FAIL-CLOSE (403/422).
+    """
     if not team_id:
         return
+    # Step 1: teams에서 factory_id만 조회 (company_id 컬럼 없음)
     try:
-        row = supabase.table("teams").select("factory_id,company_id").eq("id", team_id).limit(1).execute()
+        row = supabase.table("teams").select("factory_id").eq("id", team_id).limit(1).execute()
     except Exception:
         raise HTTPException(status_code=422, detail={"error": "INVALID_TEAM", "message": "팀을 조회할 수 없습니다"})
     if not row.data:
         raise HTTPException(status_code=422, detail={"error": "INVALID_TEAM", "message": "유효하지 않은 팀입니다"})
-    t = row.data[0]
-    if company_id and str(t.get("company_id") or "") != company_id:
-        raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "team_id가 회사 소속이 아닙니다"})
-    if factory_id and t.get("factory_id") and str(t.get("factory_id") or "") != factory_id:
+
+    team_fid = str(row.data[0].get("factory_id") or "")
+
+    # Step 2: factory_id 일치 검증 (둘 다 지정된 경우)
+    if factory_id and team_fid and team_fid != factory_id:
         raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "team_id가 factory_id 소속이 아닙니다"})
+
+    # Step 3: company_id 검증 — teams.factory_id → factories.company_id 경로
+    if company_id:
+        effective_fid = factory_id or team_fid
+        if not effective_fid:
+            # 팀의 factory_id 없고 검증할 공장도 없음 → FAIL-CLOSE
+            raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "팀 소속 공장을 확인할 수 없습니다"})
+        try:
+            frow = supabase.table("factories").select("company_id").eq("id", effective_fid).limit(1).execute()
+        except Exception:
+            raise HTTPException(status_code=422, detail={"error": "INVALID_FACTORY", "message": "팀 소속 공장을 조회할 수 없습니다"})
+        if not frow.data:
+            raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "팀 소속 공장을 찾을 수 없습니다"})
+        if str(frow.data[0].get("company_id") or "") != company_id:
+            raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "team_id가 회사 소속이 아닙니다"})
 
 
 # ============================================================
@@ -505,7 +530,7 @@ def update_user(user_id: str, req: UserUpdate, current_user: dict = Depends(get_
         )
 
     existing = supabase.table("users").select(
-        "id,company_id,factory_id,role_code"
+        "id,company_id,factory_id,team_id,role_code"
     ).eq("id", user_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
@@ -522,15 +547,28 @@ def update_user(user_id: str, req: UserUpdate, current_user: dict = Depends(get_
     if not is_admin:
         update_data.pop("company_id", None)
 
-    # 조직 계층 검증 — factory/team 변경 시 회사 소속 확인 (FIX-D)
-    effective_cid = existing.data.get("company_id")
+    # 조직 계층 검증 — factory/team 변경 시 회사 소속 + 일관성 확인 (FIX-D + FIX-02)
+    # 최고관리자의 company_id 변경도 포함 — 변경 후 값 기준 검증
+    effective_cid = update_data.get("company_id") or existing.data.get("company_id") or ""
     new_fid = update_data.get("factory_id")
     new_tid = update_data.get("team_id")
+    existing_fid = existing.data.get("factory_id") or ""
+    existing_tid = existing.data.get("team_id") or ""
+
+    # 실제 사용할 factory_id: 요청 새 값 또는 기존 값
+    eff_new_fid = new_fid or existing_fid
+
     if new_fid and effective_cid:
         _assert_factory_belongs_to_company(supabase, new_fid, effective_cid)
+    elif not new_fid and existing_fid and effective_cid and update_data.get("company_id"):
+        # company_id만 변경 + 기존 factory_id 유지 → 기존 factory가 새 company 소속인지 확인
+        _assert_factory_belongs_to_company(supabase, existing_fid, effective_cid)
+
     if new_tid and effective_cid:
-        eff_fid = new_fid or existing.data.get("factory_id") or ""
-        _assert_team_belongs_to_factory(supabase, new_tid, eff_fid, effective_cid)
+        _assert_team_belongs_to_factory(supabase, new_tid, eff_new_fid, effective_cid)
+    elif new_fid and not new_tid and existing_tid and effective_cid:
+        # factory_id 변경 + team_id 미변경 → 기존 team이 새 factory와 일치하는지 검증
+        _assert_team_belongs_to_factory(supabase, existing_tid, new_fid, effective_cid)
 
     update_data["updated_at"] = serialize_business_datetime(now_kst())
     res = supabase.table("users").update(update_data).eq("id", user_id).execute()

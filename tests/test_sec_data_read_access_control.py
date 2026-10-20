@@ -54,6 +54,19 @@
   SEC-R4-13  정상 회사·공장·팀 계층 허용 (FIX-D)
   SEC-R4-14  allow-list 회귀 PASS (소스 정적)
   SEC-R4-15  작업자 OR 조건 requester_id 분기에 company_id 포함 (소스 정적)
+
+  SEC-R4S-01  소스 정적: _assert_team_belongs_to_factory teams.factory_id만 조회 (company_id 없음)
+  SEC-R4S-02  정상 factory_id + team_id + company_id 계층 허용 (teams→factories 경로)
+  SEC-R4S-03  team_id만 지정 시 teams→factories 경로로 회사 검증
+  SEC-R4S-04  다른 회사 팀 지정 → 차단 (teams→factories company_id 불일치)
+  SEC-R4S-05  다른 공장 팀 지정 → 차단 (teams.factory_id 불일치)
+  SEC-R4S-06  존재하지 않는 팀 → 차단 (422)
+  SEC-R4S-07  공장 없는 팀 (factory_id=None) → FAIL-CLOSE (403)
+  SEC-R4S-08  PATCH factory_id만 변경 시 기존 team_id 정합성 재검증 → 차단
+  SEC-R4S-09  PATCH 관리자 company_id + factory_id 동시 변경 정상 조합 → 허용
+  SEC-R4S-10  PATCH 관리자 company_id 변경 후 기존 factory_id 타사 → 차단
+  SEC-R4S-11  company_id 없는 작업자 GET /work-permits → 빈 결과 (FAIL-CLOSE)
+  SEC-R4S-12  company_id 있는 작업자 본인 기록 조회 → 기존 동작 유지
 """
 from __future__ import annotations
 
@@ -1458,18 +1471,22 @@ def test_SEC_R3_E_04_patch_user_response_no_push_token():
 
 
 # ════════════════════════════════════════════════════════════════
-# SEC-R3-E-05: 작업자 user_id 있으면 본인 기록 조회 허용
+# SEC-R3-E-05: company_id 없는 작업자 → FAIL-CLOSE 빈 결과
 # ════════════════════════════════════════════════════════════════
 
-def test_SEC_R3_E_05_worker_with_user_id_gets_own_records():
-    """작업자 경로: user_id가 있으면 requester_id 필터 또는 OR 쿼리로 본인 기록 조회."""
+def test_SEC_R3_E_05_worker_without_company_gets_empty_result():
+    """작업자 경로: company_id 없으면 FAIL-CLOSE — work_permits 쿼리 없이 빈 결과 반환.
+
+    FIX-03: requester_id 단독 노출은 겸직·이동 시 타사 기록 접근 허용 위험.
+    company_id 미확정 상태에서는 회사 경계를 확인할 수 없으므로 빈 결과로 안전 차단.
+    """
     os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
     os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
     os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
     worker = {
         "id": "uid-worker-r3e05",
-        "company_id": None,   # company_id 없는 작업자
+        "company_id": None,   # company_id 없는 작업자 → FAIL-CLOSE
         "role_code": "014",
         "status_code": "ACTIVE",
         "is_active": True,
@@ -1495,12 +1512,6 @@ def test_SEC_R3_E_05_worker_with_user_id_gets_own_records():
     permits_r.data = [{"id": "wp-r3e05", "requester_id": "uid-worker-r3e05"}]
     permits_mock.execute.return_value = permits_r
 
-    eq_calls = []
-    def capture_eq(col, val):
-        eq_calls.append((col, val))
-        return permits_mock
-    permits_mock.eq.side_effect = capture_eq
-
     default_mock = _chain()
     def_r = MagicMock(); def_r.data = []
     default_mock.execute.return_value = def_r
@@ -1524,9 +1535,15 @@ def test_SEC_R3_E_05_worker_with_user_id_gets_own_records():
             client = TestClient(app, raise_server_exceptions=False)
             resp = client.get("/work-permits")
             assert resp.status_code == 200, f"작업자 GET /work-permits가 {resp.status_code}. body={resp.text}"
-            # eq("requester_id", user_id) 가 적용되어야 함 (phone/company 없으면 eq만 사용)
-            assert ("requester_id", "uid-worker-r3e05") in eq_calls, (
-                f"requester_id 필터가 없음. eq_calls={eq_calls}"
+            body = resp.json()
+            # FIX-03: company_id 없는 작업자 → FAIL-CLOSE 빈 결과
+            assert body["data"]["items"] == [], (
+                f"company_id 없는 작업자가 빈 결과가 아님: items={body['data']['items']}"
+            )
+            assert body["data"]["total"] == 0, f"total이 0이 아님: {body['data']['total']}"
+            # FAIL-CLOSE 경로에서 work_permits 테이블 execute 미호출 확인
+            assert not permits_mock.execute.called, (
+                "FAIL-CLOSE 경로에서 work_permits 쿼리가 실행됨 — company 경계 없이 조회 차단 실패"
             )
         finally:
             app.dependency_overrides.clear()
@@ -2385,8 +2402,8 @@ def test_SEC_R4_05_legacy_null_requester_has_company_scope():
 # SEC-R4-06: company_id 없는 작업자 전체 조회 차단 (FIX-B)
 # ════════════════════════════════════════════════════════════════
 
-def test_SEC_R4_06_worker_without_company_id_uses_id_only_filter():
-    """company_id 없는 작업자: OR 조건 미사용, requester_id 단독 필터 적용."""
+def test_SEC_R4_06_worker_without_company_id_returns_empty():
+    """company_id 없는 작업자: 회사 소속 미확정 → FAIL-CLOSE (빈 결과, work_permits 미조회)."""
     os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
     os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
     os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
@@ -2443,14 +2460,17 @@ def test_SEC_R4_06_worker_without_company_id_uses_id_only_filter():
             client = TestClient(app, raise_server_exceptions=False)
             resp = client.get("/work-permits")
             assert resp.status_code == 200, f"무회사 작업자 조회가 {resp.status_code}"
-            # company_id 없으면 OR 조건 미사용 (단독 requester_id 필터)
-            assert not wp_mock.or_.called, (
-                "company_id 없는 작업자에서 or_ 호출됨 — 의도치 않은 phone 노출 위험"
+            body = resp.json()
+            # FIX-03: company_id 없으면 빈 결과 반환 (work_permits 쿼리 미실행)
+            assert body["data"]["items"] == [], (
+                f"무회사 작업자에게 기록이 반환됨 — 타사 기록 노출 위험. items={body['data']['items']}"
             )
-            # requester_id 단독 eq 필터 확인
-            eq_calls = [str(c) for c in wp_mock.eq.call_args_list]
-            assert any("uid-worker-no-cid" in c for c in eq_calls), (
-                f"requester_id 필터 없음. eq 호출 목록: {eq_calls}"
+            assert body["data"]["total"] == 0
+            assert not wp_mock.execute.called, (
+                "company_id 없는 작업자에서 work_permits 쿼리 실행됨 — FAIL-CLOSE 미적용"
+            )
+            assert not wp_mock.or_.called, (
+                "company_id 없는 작업자에서 or_ 호출됨"
             )
         finally:
             app.dependency_overrides.clear()
@@ -2826,9 +2846,9 @@ def test_SEC_R4_12_create_user_with_mismatched_team_blocked():
     factory_r = MagicMock(); factory_r.data = [{"company_id": "cid-alpha"}]
     factory_mock.execute.return_value = factory_r
 
-    # team "tid-b"는 "fid-c" 소속 (fid-a와 불일치)
+    # team "tid-b"는 "fid-c" 소속 (fid-a와 불일치) — 운영 DB 계약: factory_id만 존재
     team_mock = _chain()
-    team_r = MagicMock(); team_r.data = [{"factory_id": "fid-c", "company_id": "cid-alpha"}]
+    team_r = MagicMock(); team_r.data = [{"factory_id": "fid-c"}]
     team_mock.execute.return_value = team_r
 
     default_mock = _chain()
@@ -2902,9 +2922,9 @@ def test_SEC_R4_13_create_user_with_valid_hierarchy_allowed():
     factory_r = MagicMock(); factory_r.data = [{"company_id": "cid-alpha"}]
     factory_mock.execute.return_value = factory_r
 
-    # team "tid-a" → "fid-a" + "cid-alpha" (OK)
+    # team "tid-a" → factory_id="fid-a" (운영 DB 계약: company_id 없음, teams→factories 경로)
     team_mock = _chain()
-    team_r = MagicMock(); team_r.data = [{"factory_id": "fid-a", "company_id": "cid-alpha"}]
+    team_r = MagicMock(); team_r.data = [{"factory_id": "fid-a"}]
     team_mock.execute.return_value = team_r
 
     # users: dup 없음, insert 성공
@@ -3020,3 +3040,840 @@ def test_SEC_R4_15_worker_or_requester_id_branch_has_company_id_in_source():
     assert bare_pattern is None, (
         "취약 패턴 발견: requester_id 단독 OR (company_id 없이) — FIX-B 미적용"
     )
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-01: 소스 정적 — teams 조회 컬럼 계약 (factory_id만, company_id 없음)
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_01_teams_select_contract_factory_id_only():
+    """_assert_team_belongs_to_factory 가 teams.factory_id만 조회 (company_id 없음) 확인."""
+    # 함수 정의 이후 소스에서 teams select 패턴 확인
+    after_def = _USERS_SRC.split("def _assert_team_belongs_to_factory(")[1]
+    # teams.select 에서 company_id가 포함되지 않아야 함
+    teams_select = re.search(r'\.select\("([^"]*)"[^)]*\)', after_def)
+    assert teams_select, "_assert_team_belongs_to_factory에서 teams select 패턴 못 찾음"
+    select_cols = teams_select.group(1)
+    assert "company_id" not in select_cols, (
+        f"teams.select에 company_id 포함됨 — 운영 DB 계약 위반 (컬럼 없음): {select_cols}"
+    )
+    assert "factory_id" in select_cols, (
+        f"teams.select에 factory_id 없음: {select_cols}"
+    )
+    # 함수 내에 factories 테이블 2차 조회가 있어야 함 (company_id 검증 경로)
+    assert '"factories"' in after_def.split("def _assert_factory_belongs_to_company")[0], (
+        "_assert_team_belongs_to_factory에서 factories 2차 조회 없음 — company_id 검증 경로 누락"
+    )
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-02: 정상 factory_id + team_id + company_id → 허용 (teams→factories 경로)
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_02_valid_team_factory_company_hierarchy_allowed():
+    """POST /users: 유효한 factory+team 계층 (teams→factories 경로) → 200."""
+    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+    os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
+    admin = _active_user(role_code="002", company_id="cid-a", user_id="uid-mgr-s02")
+
+    def _chain():
+        t = MagicMock()
+        for m in ("select", "eq", "neq", "order", "range", "limit",
+                  "in_", "or_", "single", "update", "insert"):
+            getattr(t, m).return_value = t
+        return t
+
+    perm_mock = _chain()
+    perm_r = MagicMock(); perm_r.data = [{"id": "perm-1"}]
+    perm_mock.execute.return_value = perm_r
+
+    scope_mock = _chain()
+    scope_r = MagicMock(); scope_r.data = [{"scope_type": "COMPANY"}]
+    scope_mock.execute.return_value = scope_r
+
+    # factories: fid-x → cid-a (두 번 조회됨: factory 직접 + team→factory)
+    factory_mock = _chain()
+    factory_r = MagicMock(); factory_r.data = [{"company_id": "cid-a"}]
+    factory_mock.execute.return_value = factory_r
+
+    # teams: factory_id만 존재 (운영 DB 계약)
+    team_mock = _chain()
+    team_r = MagicMock(); team_r.data = [{"factory_id": "fid-x"}]
+    team_mock.execute.return_value = team_r
+
+    users_mock = _chain()
+    users_calls = [0]
+
+    def users_exec():
+        users_calls[0] += 1
+        r = MagicMock()
+        if users_calls[0] == 1:
+            r.data = []  # no dup
+        else:
+            r.data = [{"id": "uid-new-s02", "email": "s02@test.com"}]
+        return r
+
+    users_mock.execute.side_effect = users_exec
+
+    default_mock = _chain()
+    def_r = MagicMock(); def_r.data = []; def_r.count = 0
+    default_mock.execute.return_value = def_r
+
+    tables = {
+        "role_permissions": perm_mock, "role_data_scope": scope_mock,
+        "factories": factory_mock, "teams": team_mock, "users": users_mock,
+    }
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = lambda name: tables.get(name, default_mock)
+
+    with patch("db.supabase_client.get_supabase", return_value=mock_sb):
+        for mod in list(sys.modules.keys()):
+            if mod in ("main",) or mod.startswith(("routers.", "services.")):
+                del sys.modules[mod]
+        from main import app
+        from routers.auth import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: admin
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.post("/users", json={
+                "email": "s02@test.com", "name": "S02사용자",
+                "factory_id": "fid-x", "team_id": "tid-x",
+            })
+            assert resp.status_code == 200, (
+                f"유효 계층 생성 실패: {resp.status_code}. body={resp.text}"
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-03: team_id만 지정 → teams→factories 경로로 회사 검증
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_03_team_id_only_validates_via_factories():
+    """POST /users에 team_id만 지정 (factory_id 없음) → teams→factories 경유 회사 검증 → 200."""
+    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+    os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
+    admin = _active_user(role_code="002", company_id="cid-a", user_id="uid-mgr-s03")
+
+    def _chain():
+        t = MagicMock()
+        for m in ("select", "eq", "neq", "order", "range", "limit",
+                  "in_", "or_", "single", "update", "insert"):
+            getattr(t, m).return_value = t
+        return t
+
+    perm_mock = _chain()
+    perm_r = MagicMock(); perm_r.data = [{"id": "perm-1"}]
+    perm_mock.execute.return_value = perm_r
+
+    scope_mock = _chain()
+    scope_r = MagicMock(); scope_r.data = [{"scope_type": "COMPANY"}]
+    scope_mock.execute.return_value = scope_r
+
+    # team tid-y → factory fid-y (teams.factory_id만)
+    team_mock = _chain()
+    team_r = MagicMock(); team_r.data = [{"factory_id": "fid-y"}]
+    team_mock.execute.return_value = team_r
+
+    # factories fid-y → cid-a (회사 소속 확인)
+    factory_mock = _chain()
+    factory_r = MagicMock(); factory_r.data = [{"company_id": "cid-a"}]
+    factory_mock.execute.return_value = factory_r
+
+    users_mock = _chain()
+    users_calls = [0]
+
+    def users_exec():
+        users_calls[0] += 1
+        r = MagicMock()
+        if users_calls[0] == 1:
+            r.data = []
+        else:
+            r.data = [{"id": "uid-new-s03", "email": "s03@test.com"}]
+        return r
+
+    users_mock.execute.side_effect = users_exec
+
+    default_mock = _chain()
+    def_r = MagicMock(); def_r.data = []; def_r.count = 0
+    default_mock.execute.return_value = def_r
+
+    tables = {
+        "role_permissions": perm_mock, "role_data_scope": scope_mock,
+        "factories": factory_mock, "teams": team_mock, "users": users_mock,
+    }
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = lambda name: tables.get(name, default_mock)
+
+    with patch("db.supabase_client.get_supabase", return_value=mock_sb):
+        for mod in list(sys.modules.keys()):
+            if mod in ("main",) or mod.startswith(("routers.", "services.")):
+                del sys.modules[mod]
+        from main import app
+        from routers.auth import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: admin
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.post("/users", json={
+                "email": "s03@test.com", "name": "S03사용자",
+                "team_id": "tid-y",  # factory_id 없음
+            })
+            assert resp.status_code == 200, (
+                f"team_id만 지정 시 teams→factories 경로 검증 실패: {resp.status_code}. body={resp.text}"
+            )
+            # teams 테이블이 실제로 조회됐는지 확인
+            assert team_mock.execute.called, "teams 테이블 미조회 — 계층 검증 누락"
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-04: 다른 회사 팀 지정 → 차단 (teams→factories company_id 불일치)
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_04_team_from_different_company_blocked():
+    """팀의 factories.company_id가 JWT company_id와 다를 때 → 403."""
+    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+    os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
+    admin = _active_user(role_code="002", company_id="cid-a", user_id="uid-mgr-s04")
+
+    def _chain():
+        t = MagicMock()
+        for m in ("select", "eq", "neq", "order", "range", "limit",
+                  "in_", "or_", "single", "update", "insert"):
+            getattr(t, m).return_value = t
+        return t
+
+    perm_mock = _chain()
+    perm_r = MagicMock(); perm_r.data = [{"id": "perm-1"}]
+    perm_mock.execute.return_value = perm_r
+
+    scope_mock = _chain()
+    scope_r = MagicMock(); scope_r.data = [{"scope_type": "COMPANY"}]
+    scope_mock.execute.return_value = scope_r
+
+    # factory_mock: req.factory_id 없으므로 _assert_factory_belongs_to_company 미호출
+    # factory_mock: teams→factories 경로에서 사용 → cid-b (타사)
+    factory_mock = _chain()
+    factory_r = MagicMock(); factory_r.data = [{"company_id": "cid-b"}]
+    factory_mock.execute.return_value = factory_r
+
+    # team → factory fid-z (타사 소속)
+    team_mock = _chain()
+    team_r = MagicMock(); team_r.data = [{"factory_id": "fid-z"}]
+    team_mock.execute.return_value = team_r
+
+    default_mock = _chain()
+    def_r = MagicMock(); def_r.data = []; def_r.count = 0
+    default_mock.execute.return_value = def_r
+
+    tables = {
+        "role_permissions": perm_mock, "role_data_scope": scope_mock,
+        "factories": factory_mock, "teams": team_mock,
+    }
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = lambda name: tables.get(name, default_mock)
+
+    with patch("db.supabase_client.get_supabase", return_value=mock_sb):
+        for mod in list(sys.modules.keys()):
+            if mod in ("main",) or mod.startswith(("routers.", "services.")):
+                del sys.modules[mod]
+        from main import app
+        from routers.auth import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: admin
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.post("/users", json={
+                "email": "s04@test.com", "name": "S04사용자",
+                "team_id": "tid-z",
+            })
+            assert resp.status_code == 403, (
+                f"타사 팀 차단 실패: {resp.status_code}. body={resp.text}"
+            )
+            body = resp.json()
+            assert body.get("detail", {}).get("error") == "ORG_HIERARCHY_VIOLATION"
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-05: 다른 공장 팀 지정 → 차단 (teams.factory_id 불일치)
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_05_team_from_different_factory_blocked():
+    """요청 factory_id와 teams.factory_id가 다를 때 → 403."""
+    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+    os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
+    admin = _active_user(role_code="002", company_id="cid-a", user_id="uid-mgr-s05")
+
+    def _chain():
+        t = MagicMock()
+        for m in ("select", "eq", "neq", "order", "range", "limit",
+                  "in_", "or_", "single", "update", "insert"):
+            getattr(t, m).return_value = t
+        return t
+
+    perm_mock = _chain()
+    perm_r = MagicMock(); perm_r.data = [{"id": "perm-1"}]
+    perm_mock.execute.return_value = perm_r
+
+    scope_mock = _chain()
+    scope_r = MagicMock(); scope_r.data = [{"scope_type": "COMPANY"}]
+    scope_mock.execute.return_value = scope_r
+
+    # factory "fid-req" → cid-a (OK for factory check)
+    factory_mock = _chain()
+    factory_r = MagicMock(); factory_r.data = [{"company_id": "cid-a"}]
+    factory_mock.execute.return_value = factory_r
+
+    # team tid-s5 → factory "fid-other" (fid-req와 불일치)
+    team_mock = _chain()
+    team_r = MagicMock(); team_r.data = [{"factory_id": "fid-other"}]
+    team_mock.execute.return_value = team_r
+
+    default_mock = _chain()
+    def_r = MagicMock(); def_r.data = []; def_r.count = 0
+    default_mock.execute.return_value = def_r
+
+    tables = {
+        "role_permissions": perm_mock, "role_data_scope": scope_mock,
+        "factories": factory_mock, "teams": team_mock,
+    }
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = lambda name: tables.get(name, default_mock)
+
+    with patch("db.supabase_client.get_supabase", return_value=mock_sb):
+        for mod in list(sys.modules.keys()):
+            if mod in ("main",) or mod.startswith(("routers.", "services.")):
+                del sys.modules[mod]
+        from main import app
+        from routers.auth import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: admin
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.post("/users", json={
+                "email": "s05@test.com", "name": "S05사용자",
+                "factory_id": "fid-req", "team_id": "tid-s5",
+            })
+            assert resp.status_code == 403, (
+                f"공장 불일치 팀 차단 실패: {resp.status_code}. body={resp.text}"
+            )
+            body = resp.json()
+            assert body.get("detail", {}).get("error") == "ORG_HIERARCHY_VIOLATION"
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-06: 존재하지 않는 팀 → 차단 (422)
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_06_nonexistent_team_blocked():
+    """POST /users에 존재하지 않는 team_id 지정 시 → 422 INVALID_TEAM."""
+    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+    os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
+    admin = _active_user(role_code="002", company_id="cid-a", user_id="uid-mgr-s06")
+
+    def _chain():
+        t = MagicMock()
+        for m in ("select", "eq", "neq", "order", "range", "limit",
+                  "in_", "or_", "single", "update", "insert"):
+            getattr(t, m).return_value = t
+        return t
+
+    perm_mock = _chain()
+    perm_r = MagicMock(); perm_r.data = [{"id": "perm-1"}]
+    perm_mock.execute.return_value = perm_r
+
+    scope_mock = _chain()
+    scope_r = MagicMock(); scope_r.data = [{"scope_type": "COMPANY"}]
+    scope_mock.execute.return_value = scope_r
+
+    factory_mock = _chain()
+    factory_r = MagicMock(); factory_r.data = [{"company_id": "cid-a"}]
+    factory_mock.execute.return_value = factory_r
+
+    # 존재하지 않는 팀 → empty
+    team_mock = _chain()
+    team_r = MagicMock(); team_r.data = []
+    team_mock.execute.return_value = team_r
+
+    default_mock = _chain()
+    def_r = MagicMock(); def_r.data = []; def_r.count = 0
+    default_mock.execute.return_value = def_r
+
+    tables = {
+        "role_permissions": perm_mock, "role_data_scope": scope_mock,
+        "factories": factory_mock, "teams": team_mock,
+    }
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = lambda name: tables.get(name, default_mock)
+
+    with patch("db.supabase_client.get_supabase", return_value=mock_sb):
+        for mod in list(sys.modules.keys()):
+            if mod in ("main",) or mod.startswith(("routers.", "services.")):
+                del sys.modules[mod]
+        from main import app
+        from routers.auth import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: admin
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.post("/users", json={
+                "email": "s06@test.com", "name": "S06사용자",
+                "factory_id": "fid-req", "team_id": "tid-nonexist",
+            })
+            assert resp.status_code == 422, (
+                f"미존재 팀 422 아님: {resp.status_code}. body={resp.text}"
+            )
+            body = resp.json()
+            assert body.get("detail", {}).get("error") == "INVALID_TEAM"
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-07: factory_id 없는 팀 (FAIL-CLOSE) → 403
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_07_team_without_factory_id_fail_close():
+    """teams.factory_id=None인 팀 (소속 확인 불가) → 403 FAIL-CLOSE."""
+    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+    os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
+    admin = _active_user(role_code="002", company_id="cid-a", user_id="uid-mgr-s07")
+
+    def _chain():
+        t = MagicMock()
+        for m in ("select", "eq", "neq", "order", "range", "limit",
+                  "in_", "or_", "single", "update", "insert"):
+            getattr(t, m).return_value = t
+        return t
+
+    perm_mock = _chain()
+    perm_r = MagicMock(); perm_r.data = [{"id": "perm-1"}]
+    perm_mock.execute.return_value = perm_r
+
+    scope_mock = _chain()
+    scope_r = MagicMock(); scope_r.data = [{"scope_type": "COMPANY"}]
+    scope_mock.execute.return_value = scope_r
+
+    # team tid-nofactory → factory_id=None (소속 공장 미배정)
+    # factory_id 요청 없음 → effective_fid = None → FAIL-CLOSE
+    team_mock = _chain()
+    team_r = MagicMock(); team_r.data = [{"factory_id": None}]
+    team_mock.execute.return_value = team_r
+
+    default_mock = _chain()
+    def_r = MagicMock(); def_r.data = []; def_r.count = 0
+    default_mock.execute.return_value = def_r
+
+    tables = {
+        "role_permissions": perm_mock, "role_data_scope": scope_mock,
+        "teams": team_mock,
+    }
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = lambda name: tables.get(name, default_mock)
+
+    with patch("db.supabase_client.get_supabase", return_value=mock_sb):
+        for mod in list(sys.modules.keys()):
+            if mod in ("main",) or mod.startswith(("routers.", "services.")):
+                del sys.modules[mod]
+        from main import app
+        from routers.auth import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: admin
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.post("/users", json={
+                "email": "s07@test.com", "name": "S07사용자",
+                "team_id": "tid-nofactory",
+            })
+            assert resp.status_code == 403, (
+                f"factory_id 없는 팀 FAIL-CLOSE 실패: {resp.status_code}. body={resp.text}"
+            )
+            body = resp.json()
+            assert body.get("detail", {}).get("error") == "ORG_HIERARCHY_VIOLATION"
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-08: PATCH factory_id만 변경 시 기존 team_id 정합성 재검증 → 차단
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_08_patch_factory_change_invalidates_existing_team():
+    """PATCH: factory_id만 변경해 기존 team_id와 불일치 → 403."""
+    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+    os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
+    admin = _active_user(role_code="002", company_id="cid-a", user_id="uid-mgr-s08")
+
+    def _chain():
+        t = MagicMock()
+        for m in ("select", "eq", "neq", "order", "range", "limit",
+                  "in_", "or_", "single", "update", "insert"):
+            getattr(t, m).return_value = t
+        return t
+
+    perm_mock = _chain()
+    perm_r = MagicMock(); perm_r.data = [{"id": "perm-1"}]
+    perm_mock.execute.return_value = perm_r
+
+    scope_mock = _chain()
+    scope_r = MagicMock(); scope_r.data = [{"scope_type": "COMPANY"}]
+    scope_mock.execute.return_value = scope_r
+
+    # 기존 사용자: factory_id="fid-old", team_id="tid-old"
+    users_mock = _chain()
+    users_r = MagicMock()
+    users_r.data = {"id": "uid-tgt", "company_id": "cid-a",
+                    "factory_id": "fid-old", "team_id": "tid-old", "role_code": "010"}
+    users_mock.execute.return_value = users_r
+
+    # 새 factory "fid-new" → cid-a (OK)
+    factory_mock = _chain()
+    factory_r = MagicMock(); factory_r.data = [{"company_id": "cid-a"}]
+    factory_mock.execute.return_value = factory_r
+
+    # 기존 team "tid-old" → 아직 "fid-old" 소속 (fid-new와 불일치)
+    team_mock = _chain()
+    team_r = MagicMock(); team_r.data = [{"factory_id": "fid-old"}]
+    team_mock.execute.return_value = team_r
+
+    default_mock = _chain()
+    def_r = MagicMock(); def_r.data = []; def_r.count = 0
+    default_mock.execute.return_value = def_r
+
+    tables = {
+        "role_permissions": perm_mock, "role_data_scope": scope_mock,
+        "users": users_mock, "factories": factory_mock, "teams": team_mock,
+    }
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = lambda name: tables.get(name, default_mock)
+
+    with patch("db.supabase_client.get_supabase", return_value=mock_sb):
+        for mod in list(sys.modules.keys()):
+            if mod in ("main",) or mod.startswith(("routers.", "services.")):
+                del sys.modules[mod]
+        from main import app
+        from routers.auth import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: admin
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            # factory_id만 변경 (team_id 미변경) — 기존 team이 새 factory와 불일치
+            resp = client.patch("/users/uid-tgt", json={"factory_id": "fid-new"})
+            assert resp.status_code == 403, (
+                f"factory 변경 후 기존 team 정합성 검증 실패: {resp.status_code}. body={resp.text}"
+            )
+            body = resp.json()
+            assert body.get("detail", {}).get("error") == "ORG_HIERARCHY_VIOLATION"
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-09: PATCH 관리자 company_id + factory_id 동시 변경 정상 조합 → 허용
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_09_admin_patch_company_and_factory_valid_combination_allowed():
+    """001 관리자가 company_id + factory_id 동시 변경 (정상 조합) → 200."""
+    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+    os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
+    superadmin = _active_user(role_code="001", company_id="cid-a", user_id="uid-super-s09")
+
+    def _chain():
+        t = MagicMock()
+        for m in ("select", "eq", "neq", "order", "range", "limit",
+                  "in_", "or_", "single", "update", "insert"):
+            getattr(t, m).return_value = t
+        return t
+
+    perm_mock = _chain()
+    perm_r = MagicMock(); perm_r.data = [{"id": "perm-1"}]
+    perm_mock.execute.return_value = perm_r
+
+    # 001 → ALL scope
+    scope_mock = _chain()
+    scope_r = MagicMock(); scope_r.data = [{"scope_type": "ALL"}]
+    scope_mock.execute.return_value = scope_r
+
+    # 기존 사용자: cid-a, fid-a, no team
+    users_mock = _chain()
+    users_calls = [0]
+
+    def users_exec():
+        users_calls[0] += 1
+        r = MagicMock()
+        if users_calls[0] == 1:
+            r.data = {"id": "uid-tgt-s09", "company_id": "cid-a",
+                      "factory_id": "fid-a", "team_id": None, "role_code": "010"}
+        else:
+            r.data = [{"id": "uid-tgt-s09"}]
+        return r
+
+    users_mock.execute.side_effect = users_exec
+
+    # 새 factory "fid-b" → 새 회사 cid-b (정합성 OK)
+    factory_mock = _chain()
+    factory_r = MagicMock(); factory_r.data = [{"company_id": "cid-b"}]
+    factory_mock.execute.return_value = factory_r
+
+    default_mock = _chain()
+    def_r = MagicMock(); def_r.data = []; def_r.count = 0
+    default_mock.execute.return_value = def_r
+
+    tables = {
+        "role_permissions": perm_mock, "role_data_scope": scope_mock,
+        "users": users_mock, "factories": factory_mock,
+    }
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = lambda name: tables.get(name, default_mock)
+
+    with patch("db.supabase_client.get_supabase", return_value=mock_sb):
+        for mod in list(sys.modules.keys()):
+            if mod in ("main",) or mod.startswith(("routers.", "services.")):
+                del sys.modules[mod]
+        from main import app
+        from routers.auth import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: superadmin
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            # 관리자가 회사+공장 동시 변경 (새 factory가 새 company 소속)
+            resp = client.patch("/users/uid-tgt-s09", json={
+                "company_id": "cid-b", "factory_id": "fid-b",
+            })
+            assert resp.status_code == 200, (
+                f"관리자 company+factory 동시 변경 허용 실패: {resp.status_code}. body={resp.text}"
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-10: PATCH 관리자 company_id 변경 후 기존 factory_id 타사 → 차단
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_10_admin_patch_company_change_with_mismatched_factory_blocked():
+    """001 관리자가 company_id 변경 + 기존 factory_id가 새 company 소속 아님 → 403."""
+    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+    os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
+    superadmin = _active_user(role_code="001", company_id="cid-a", user_id="uid-super-s10")
+
+    def _chain():
+        t = MagicMock()
+        for m in ("select", "eq", "neq", "order", "range", "limit",
+                  "in_", "or_", "single", "update", "insert"):
+            getattr(t, m).return_value = t
+        return t
+
+    perm_mock = _chain()
+    perm_r = MagicMock(); perm_r.data = [{"id": "perm-1"}]
+    perm_mock.execute.return_value = perm_r
+
+    scope_mock = _chain()
+    scope_r = MagicMock(); scope_r.data = [{"scope_type": "ALL"}]
+    scope_mock.execute.return_value = scope_r
+
+    # 기존 사용자: cid-a, fid-a (cid-a 소속)
+    users_mock = _chain()
+    users_r = MagicMock()
+    users_r.data = {"id": "uid-tgt-s10", "company_id": "cid-a",
+                    "factory_id": "fid-a", "team_id": None, "role_code": "010"}
+    users_mock.execute.return_value = users_r
+
+    # fid-a → cid-a (기존 company 소속, 새 company cid-b와 불일치)
+    factory_mock = _chain()
+    factory_r = MagicMock(); factory_r.data = [{"company_id": "cid-a"}]
+    factory_mock.execute.return_value = factory_r
+
+    default_mock = _chain()
+    def_r = MagicMock(); def_r.data = []; def_r.count = 0
+    default_mock.execute.return_value = def_r
+
+    tables = {
+        "role_permissions": perm_mock, "role_data_scope": scope_mock,
+        "users": users_mock, "factories": factory_mock,
+    }
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = lambda name: tables.get(name, default_mock)
+
+    with patch("db.supabase_client.get_supabase", return_value=mock_sb):
+        for mod in list(sys.modules.keys()):
+            if mod in ("main",) or mod.startswith(("routers.", "services.")):
+                del sys.modules[mod]
+        from main import app
+        from routers.auth import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: superadmin
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            # company_id만 변경 (factory_id 미변경) — 기존 factory가 새 company 소속 아님
+            resp = client.patch("/users/uid-tgt-s10", json={"company_id": "cid-b"})
+            assert resp.status_code == 403, (
+                f"company 변경 후 기존 factory 검증 실패: {resp.status_code}. body={resp.text}"
+            )
+            body = resp.json()
+            assert body.get("detail", {}).get("error") == "ORG_HIERARCHY_VIOLATION"
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-11: company_id 없는 작업자 GET /work-permits → 빈 결과 (FAIL-CLOSE)
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_11_worker_no_company_id_get_permits_fail_close():
+    """company_id 없는 작업자 GET /work-permits → 200 빈 결과 (work_permits 미쿼리)."""
+    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+    os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
+    worker = {
+        "id": "uid-worker-s11",
+        "company_id": None,
+        "role_code": "014",
+        "phone": "01077778888",
+        "status_code": "ACTIVE",
+        "is_active": True,
+        "name": "S11무회사작업자",
+    }
+
+    def _chain():
+        t = MagicMock()
+        for m in ("select", "eq", "neq", "order", "range", "limit",
+                  "in_", "or_", "single"):
+            getattr(t, m).return_value = t
+        return t
+
+    perm_no_mock = _chain()
+    perm_no_r = MagicMock(); perm_no_r.data = []
+    perm_no_mock.execute.return_value = perm_no_r
+
+    scope_mock = _chain()
+    scope_r = MagicMock(); scope_r.data = [{"scope_type": "COMPANY"}]
+    scope_mock.execute.return_value = scope_r
+
+    wp_mock = _chain()
+    wp_r = MagicMock(); wp_r.data = []
+    wp_mock.execute.return_value = wp_r
+
+    default_mock = _chain()
+    def_r = MagicMock(); def_r.data = []; def_r.count = 0
+    default_mock.execute.return_value = def_r
+
+    tables = {
+        "role_permissions": perm_no_mock,
+        "role_data_scope": scope_mock,
+        "work_permits": wp_mock,
+    }
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = lambda name: tables.get(name, default_mock)
+
+    with patch("db.supabase_client.get_supabase", return_value=mock_sb):
+        for mod in list(sys.modules.keys()):
+            if mod in ("main",) or mod.startswith(("routers.", "services.")):
+                del sys.modules[mod]
+        from main import app
+        from routers.auth import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: worker
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get("/work-permits")
+            assert resp.status_code == 200, f"S11 조회가 {resp.status_code}"
+            body = resp.json()
+            assert body["data"]["items"] == [], "company_id 없는 작업자에게 기록 반환됨"
+            assert body["data"]["total"] == 0
+            # work_permits 테이블 실제 쿼리 미실행 확인 (FAIL-CLOSE)
+            assert not wp_mock.execute.called, "work_permits execute 호출됨 — FAIL-CLOSE 미적용"
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-12: company_id 있는 작업자 본인 기록 조회 → 기존 동작 유지
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_12_worker_with_company_id_normal_query():
+    """company_id 있는 작업자 GET /work-permits → OR 조건으로 정상 쿼리."""
+    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+    os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
+    worker = {
+        "id": "uid-worker-s12",
+        "company_id": "cid-x",
+        "role_code": "014",
+        "phone": "01088889999",
+        "status_code": "ACTIVE",
+        "is_active": True,
+        "name": "S12정상작업자",
+    }
+
+    def _chain():
+        t = MagicMock()
+        for m in ("select", "eq", "neq", "order", "range", "limit",
+                  "in_", "or_", "single"):
+            getattr(t, m).return_value = t
+        return t
+
+    perm_no_mock = _chain()
+    perm_no_r = MagicMock(); perm_no_r.data = []
+    perm_no_mock.execute.return_value = perm_no_r
+
+    scope_mock = _chain()
+    scope_r = MagicMock(); scope_r.data = [{"scope_type": "COMPANY"}]
+    scope_mock.execute.return_value = scope_r
+
+    wp_mock = _chain()
+    wp_r = MagicMock()
+    wp_r.data = [{"id": "wp-s12", "requester_id": "uid-worker-s12", "company_id": "cid-x"}]
+    wp_mock.execute.return_value = wp_r
+
+    default_mock = _chain()
+    def_r = MagicMock(); def_r.data = []; def_r.count = 0
+    default_mock.execute.return_value = def_r
+
+    tables = {
+        "role_permissions": perm_no_mock,
+        "role_data_scope": scope_mock,
+        "work_permits": wp_mock,
+    }
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = lambda name: tables.get(name, default_mock)
+
+    with patch("db.supabase_client.get_supabase", return_value=mock_sb):
+        for mod in list(sys.modules.keys()):
+            if mod in ("main",) or mod.startswith(("routers.", "services.")):
+                del sys.modules[mod]
+        from main import app
+        from routers.auth import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: worker
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get("/work-permits")
+            assert resp.status_code == 200, f"S12 조회가 {resp.status_code}"
+            body = resp.json()
+            assert body["data"]["total"] >= 1, "S12 작업자 기록 반환 실패"
+            # company_id 있으면 OR 조건 (phone+cid) 또는 eq(id+cid) — 쿼리 실행됨
+            assert wp_mock.execute.called, "work_permits execute 미호출 — 정상 쿼리 누락"
+            # OR 조건에 company_id 포함 확인
+            assert wp_mock.or_.called, "company_id 있는 작업자에서 or_ 미호출"
+            call_arg = wp_mock.or_.call_args[0][0]
+            assert "company_id.eq.cid-x" in call_arg
+        finally:
+            app.dependency_overrides.clear()
