@@ -563,30 +563,25 @@ class TestT21DecisionApprove(_DecisionTestBase):
 
 
 class TestT22DecisionReject(_DecisionTestBase):
-    def test_reject_returns_200_rejected(self):
-        rejected_row = {**_PROPOSED_ROW, "review_state": "REJECTED"}
-        with patch("routers.document_link_review.get_supabase"), \
-             patch("routers.document_link_review.transition_link",
-                   return_value=rejected_row):
-            resp = self._client().post(
-                f"/api/document-link-review/links/{_LINK_ID}/decision",
-                json={"action": "REJECT"},
-            )
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["review_state"], "REJECTED")
+    def test_reject_returns_403_owner_gate_blocked(self):
+        """CORR-002: REJECT is now FAIL-CLOSED — Owner decision path not established."""
+        resp = self._client().post(
+            f"/api/document-link-review/links/{_LINK_ID}/decision",
+            json={"action": "REJECT"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
 
 
-class TestT23DecisionGuardRejected(_DecisionTestBase):
-    def test_guard_rejected_returns_409(self):
-        exc = DocumentLinkWriteError("GUARD_REJECTED", "state transition refused by DB guard")
-        with patch("routers.document_link_review.get_supabase"), \
-             patch("routers.document_link_review.transition_link", side_effect=exc):
-            resp = self._client().post(
-                f"/api/document-link-review/links/{_LINK_ID}/decision",
-                json={"action": "REJECT"},
-            )
-        self.assertEqual(resp.status_code, 409)
-        self.assertEqual(resp.json()["detail"]["code"], "GUARD_REJECTED")
+class TestT23DecisionRetireBlocked(_DecisionTestBase):
+    def test_retire_returns_403_owner_gate_blocked(self):
+        """CORR-002: RETIRE is now FAIL-CLOSED — all Owner decision paths blocked."""
+        resp = self._client().post(
+            f"/api/document-link-review/links/{_LINK_ID}/decision",
+            json={"action": "RETIRE"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
 
 
 # ---------------------------------------------------------------------------
@@ -700,22 +695,16 @@ class TestCORR02RetireFromApprovedBlocked(_CorrTestBase):
         self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
 
 
-class TestCORR03RetireFromRejectedAllowed(_CorrTestBase):
-    """RETIRE on a REJECTED link must still succeed (CORR-E does not affect this path)."""
+class TestCORR03RetireIsAlwaysBlocked(_CorrTestBase):
+    """CORR-002: RETIRE is FAIL-CLOSED for all states — Owner decision path not established."""
 
-    def test_retire_rejected_link_succeeds(self):
-        rejected_link = {**_PROPOSED_ROW, "review_state": "REJECTED"}
-        retired_row = {**_PROPOSED_ROW, "review_state": "RETIRED"}
-        with patch("routers.document_link_review.SupabaseRestClient") as MockClient, \
-             patch("routers.document_link_review.get_supabase"), \
-             patch("routers.document_link_review.transition_link", return_value=retired_row):
-            MockClient.return_value.select.return_value = [rejected_link]
-            resp = self._client().post(
-                f"/api/document-link-review/links/{_LINK_ID}/decision",
-                json={"action": "RETIRE"},
-            )
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["review_state"], "RETIRED")
+    def test_retire_rejected_link_blocked(self):
+        resp = self._client().post(
+            f"/api/document-link-review/links/{_LINK_ID}/decision",
+            json={"action": "RETIRE"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
 
 
 class TestCORR04InvalidCandidateId(_CorrTestBase):
@@ -760,19 +749,16 @@ class TestCORR05StaleCandidateBlocked(_CorrTestBase):
         self.assertEqual(resp.json()["detail"]["code"], "CANDIDATE_STALE")
 
 
-class TestCORR06RejectStillWorks(_CorrTestBase):
-    """REJECT must still work — only APPROVE and RETIRE-from-APPROVED are blocked."""
+class TestCORR06RejectIsNowBlocked(_CorrTestBase):
+    """CORR-002: REJECT is now FAIL-CLOSED — all three decision actions blocked."""
 
-    def test_reject_proposed_returns_200(self):
-        rejected_row = {**_PROPOSED_ROW, "review_state": "REJECTED"}
-        with patch("routers.document_link_review.get_supabase"), \
-             patch("routers.document_link_review.transition_link", return_value=rejected_row):
-            resp = self._client().post(
-                f"/api/document-link-review/links/{_LINK_ID}/decision",
-                json={"action": "REJECT"},
-            )
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["review_state"], "REJECTED")
+    def test_reject_returns_403_owner_gate_blocked(self):
+        resp = self._client().post(
+            f"/api/document-link-review/links/{_LINK_ID}/decision",
+            json={"action": "REJECT"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
 
 
 class TestCORR07CandidateUuidsFromServer(_CorrTestBase):
@@ -804,6 +790,78 @@ class TestCORR07CandidateUuidsFromServer(_CorrTestBase):
             )
         self.assertEqual(captured.get("saas_catalog_id"), server_saas)
         self.assertEqual(captured.get("reference_form_id"), server_ref)
+
+
+# ---------------------------------------------------------------------------
+# CORR-002: All Owner decision paths blocked, actor_id gate, propose/review open
+# ---------------------------------------------------------------------------
+
+class TestCORR08AllDecisionsBlocked(_CorrTestBase):
+    """CORR-002: APPROVE, REJECT, RETIRE all return 403 OWNER_GATE_BLOCKED."""
+
+    def test_approve_blocked(self):
+        resp = self._client().post(
+            f"/api/document-link-review/links/{_LINK_ID}/decision",
+            json={"action": "APPROVE", "owner_approval_ref": "WO-FAKE"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
+
+    def test_reject_blocked(self):
+        resp = self._client().post(
+            f"/api/document-link-review/links/{_LINK_ID}/decision",
+            json={"action": "REJECT"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
+
+    def test_retire_blocked(self):
+        resp = self._client().post(
+            f"/api/document-link-review/links/{_LINK_ID}/decision",
+            json={"action": "RETIRE"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
+
+
+class TestCORR09ProposeAndReviewStillOpen(_CorrTestBase):
+    """CORR-002: POST /links and /submit-review must remain unblocked."""
+
+    def test_propose_still_returns_201(self):
+        with patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.validate_candidate_for_propose",
+                   return_value=(_SAAS_UUID, _REF_UUID)), \
+             patch("routers.document_link_review.propose_link", return_value=_PROPOSED_ROW):
+            resp = self._client().post(
+                "/api/document-link-review/links",
+                json={
+                    "candidate_id":  _CANDIDATE_ID,
+                    "relation_type": "SAME_DOCUMENT_CANDIDATE",
+                    "evidence_note": "evidence",
+                },
+            )
+        self.assertEqual(resp.status_code, 201)
+
+    def test_submit_review_still_returns_200(self):
+        from fastapi import FastAPI
+        from routers.document_link_review import router, get_current_user
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: {
+            "id": "u1-uuid", "role_code": "001", "is_active": True
+        }
+        under_review_row = {**_PROPOSED_ROW, "review_state": "UNDER_REVIEW"}
+        from fastapi.testclient import TestClient
+        with patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.transition_link",
+                   return_value=under_review_row):
+            resp = TestClient(app, raise_server_exceptions=False).post(
+                f"/api/document-link-review/links/{_LINK_ID}/submit-review"
+            )
+        app.dependency_overrides.clear()
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["review_state"], "UNDER_REVIEW")
 
 
 if __name__ == "__main__":

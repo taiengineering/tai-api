@@ -338,62 +338,22 @@ def decision(
 ) -> dict[str, Any]:
     """
     Make a decision on a link.
-    APPROVE: FAIL-CLOSED (403 OWNER_GATE_BLOCKED) — no Owner identity/approval SoT.
-    REJECT:  PROPOSED/UNDER_REVIEW → REJECTED.
-    RETIRE:  REJECTED → RETIRED only. APPROVED→RETIRED is FAIL-CLOSED (403 OWNER_GATE_BLOCKED).
+    APPROVE, REJECT, RETIRE: all FAIL-CLOSED (403 OWNER_GATE_BLOCKED).
+    Owner identity and approval evidence SoT are not established.
+    Only PROPOSE and UNDER_REVIEW (submit-review) remain open.
     actor is bound from JWT id.
-    409 if transition is invalid or guard rejects. 404 if link not found.
     """
-    # CORR-A/B/D: APPROVE is FAIL-CLOSED — no Owner identity or approval evidence SoT
-    if body.action == "APPROVE":
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": "OWNER_GATE_BLOCKED",
-                "message": "APPROVE 전환은 차단되어 있습니다. Owner 승인 시스템이 구축되지 않은 상태입니다.",
-            },
-        )
-
-    actor_id = _get_actor_id(admin)
-
-    # CORR-E: RETIRE from APPROVED is FAIL-CLOSED — same reason as APPROVE
-    if body.action == "RETIRE":
-        rest_client = SupabaseRestClient()
-        try:
-            link = get_link_by_id(rest_client, link_id)
-        except Exception as exc:
-            log.error("decision state-check error link_id=%r: %s", link_id, exc)
-            raise HTTPException(status_code=503, detail="Document link service unavailable")
-        if link is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "LINK_NOT_FOUND", "message": f"링크를 찾을 수 없습니다: {link_id}"},
-            )
-        if link.get("review_state") == "APPROVED":
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "code": "OWNER_GATE_BLOCKED",
-                    "message": "APPROVED 링크의 RETIRE는 차단되어 있습니다. Owner 승인 시스템이 구축되지 않은 상태입니다.",
-                },
-            )
-
-    state_map = {"APPROVE": "APPROVED", "REJECT": "REJECTED", "RETIRE": "RETIRED"}
-    new_state = state_map[body.action]
-    try:
-        row = transition_link(
-            get_supabase(),
-            actor_id=actor_id,
-            link_id=link_id,
-            new_state=new_state,
-            owner_approval_ref=body.owner_approval_ref,
-        )
-    except DocumentLinkWriteError as exc:
-        raise _write_exc(exc)
-    except Exception as exc:
-        log.error("decision error link_id=%r action=%r: %s", link_id, body.action, exc)
-        raise HTTPException(status_code=503, detail="Document link service unavailable")
-    return row
+    # CORR-A/B/D + CORR-002: all Owner decision actions are FAIL-CLOSED
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "code": "OWNER_GATE_BLOCKED",
+            "message": (
+                f"{body.action} 전환은 차단되어 있습니다. "
+                "Owner 신원·승인 증거 SoT가 구축되지 않은 상태입니다."
+            ),
+        },
+    )
 
 
 @router.get("/links/{link_id}", status_code=200)
