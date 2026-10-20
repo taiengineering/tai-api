@@ -31,4 +31,5 @@ ROUTERS = [
     {"module": "routers.helpcenter"},  # help.taieng.co.kr 헬프센터 조회 (/helpcenter/*) — 서버 종결 게이팅
     {"module": "routers.search_dictionary"},  # MASTER-WO-TAI-SEARCH-DICT-001: /search-dict/{lookup,health,census}
     {"module": "routers.reference_forms"},  # WO-REF05-REF09-CMS: /reference-forms/{slug} public detail + preview + download
+    {"module": "routers.document_catalog"},  # WO-TAI-DOC-UNIFIED-CATALOG-IMPLEMENT-001: /api/document-catalog list + detail
 ]
