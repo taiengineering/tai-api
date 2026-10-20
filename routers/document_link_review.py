@@ -12,10 +12,12 @@ DB writes: 0.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
+from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.catalog_aggregator import SupabaseRestClient
 from services.document_link_review_read import (
@@ -25,6 +27,13 @@ from services.document_link_review_read import (
     get_candidates,
     get_candidate_detail,
     get_csv_class_counts,
+    get_link_by_id,
+    get_link_audit_history,
+)
+from services.document_link_review_write import (
+    DocumentLinkWriteError,
+    propose_link,
+    transition_link,
 )
 
 log = logging.getLogger(__name__)
@@ -42,6 +51,18 @@ _VALID_LINK_STATUSES = frozenset({
 _VALID_RELATION_TYPES = frozenset({
     "SAME_DOCUMENT_CANDIDATE", "AMBIGUOUS", "RELATED_WORKFLOW", "VARIANT",
 })
+_DB_RELATION_TYPES = frozenset({
+    "SAME_DOCUMENT_VERIFIED", "SAME_DOCUMENT_CANDIDATE", "RELATED_FORM",
+    "SUPERSEDES", "SUPERSEDED_BY",
+})
+_WRITE_ERROR_HTTP: dict[str, int] = {
+    "DUPLICATE_ACTIVE_PAIR":   409,
+    "CONSTRAINT_VIOLATION":    409,
+    "GUARD_REJECTED":          409,
+    "INVALID_TRANSITION":      409,
+    "LINK_NOT_FOUND":          404,
+    "MALFORMED_RESPONSE":      503,
+}
 _VALID_SORT_FIELDS = frozenset({
     "similarity_score", "saas_title", "ref_title", "relation_type",
 })
@@ -174,3 +195,178 @@ def get_candidate(
         )
 
     return _serialise_detail(detail)
+
+
+# ---------------------------------------------------------------------------
+# Request models — Write endpoints
+# ---------------------------------------------------------------------------
+
+class ProposeLinkRequest(BaseModel):
+    saas_catalog_id:   str = Field(..., description="UUID of the SAAS document_forms row")
+    reference_form_id: str = Field(..., description="UUID of the reference_forms row")
+    relation_type:     str = Field(..., description="Must be a valid DB relation_type")
+    evidence_note:     str = Field(..., min_length=1, description="Evidence supporting this link")
+
+
+class DecisionRequest(BaseModel):
+    action: Literal["APPROVE", "REJECT", "RETIRE"] = Field(
+        ..., description="APPROVE=UNDER_REVIEW→APPROVED, REJECT=→REJECTED, RETIRE=→RETIRED"
+    )
+    owner_approval_ref: Optional[str] = Field(
+        None,
+        description="Required for APPROVE (and RETIRE from APPROVED). "
+                    "Provide a WO number or authorisation reference.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helper: convert DocumentLinkWriteError to HTTPException
+# ---------------------------------------------------------------------------
+
+def _write_exc(exc: DocumentLinkWriteError) -> HTTPException:
+    status = _WRITE_ERROR_HTTP.get(exc.error_code, 422)
+    return HTTPException(
+        status_code=status,
+        detail={"code": exc.error_code, "message": exc.detail or exc.error_code},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Write endpoints
+# ---------------------------------------------------------------------------
+
+@router.post("/links", status_code=201)
+def create_link(
+    body: ProposeLinkRequest,
+    admin: dict = Depends(_require_admin),
+) -> dict[str, Any]:
+    """
+    Propose a new document link. Creates a PROPOSED row in unified_document_link.
+    actor is bound from JWT user_id (never from request body).
+    Auth: 401 no token, 403 role != 001.
+    422 if evidence_note is empty or relation_type is invalid.
+    409 if an active pair already exists.
+    """
+    if body.relation_type not in _DB_RELATION_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INVALID_RELATION_TYPE",
+                "message": f"relation_type must be one of {sorted(_DB_RELATION_TYPES)}",
+            },
+        )
+    actor_id: str = admin.get("user_id") or admin.get("id") or ""
+    try:
+        row = propose_link(
+            get_supabase(),
+            actor_id=actor_id,
+            saas_catalog_id=body.saas_catalog_id,
+            reference_form_id=body.reference_form_id,
+            relation_type=body.relation_type,
+            evidence_note=body.evidence_note,
+        )
+    except DocumentLinkWriteError as exc:
+        raise _write_exc(exc)
+    except Exception as exc:
+        log.error("propose_link error: %s", exc)
+        raise HTTPException(status_code=503, detail="Document link service unavailable")
+    return row
+
+
+@router.post("/links/{link_id}/submit-review", status_code=200)
+def submit_review(
+    link_id: str,
+    admin: dict = Depends(_require_admin),
+) -> dict[str, Any]:
+    """
+    Advance a PROPOSED link to UNDER_REVIEW.
+    actor is bound from JWT user_id.
+    409 if link is not in PROPOSED state or guard rejects.
+    404 if link not found.
+    """
+    actor_id: str = admin.get("user_id") or admin.get("id") or ""
+    try:
+        row = transition_link(
+            get_supabase(),
+            actor_id=actor_id,
+            link_id=link_id,
+            new_state="UNDER_REVIEW",
+        )
+    except DocumentLinkWriteError as exc:
+        raise _write_exc(exc)
+    except Exception as exc:
+        log.error("submit_review error link_id=%r: %s", link_id, exc)
+        raise HTTPException(status_code=503, detail="Document link service unavailable")
+    return row
+
+
+@router.post("/links/{link_id}/decision", status_code=200)
+def decision(
+    link_id: str,
+    body: DecisionRequest,
+    admin: dict = Depends(_require_admin),
+) -> dict[str, Any]:
+    """
+    Make a decision on a link.
+    APPROVE: UNDER_REVIEW → APPROVED (owner_approval_ref required).
+    REJECT:  PROPOSED/UNDER_REVIEW → REJECTED.
+    RETIRE:  APPROVED/REJECTED → RETIRED (APPROVED→RETIRED requires new owner_approval_ref).
+    actor is bound from JWT user_id.
+    409 if transition is invalid or guard rejects. 404 if link not found.
+    """
+    if body.action == "APPROVE" and not body.owner_approval_ref:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "OWNER_APPROVAL_REF_REQUIRED",
+                "message": "owner_approval_ref는 APPROVE 결정에 필수입니다.",
+            },
+        )
+    state_map = {"APPROVE": "APPROVED", "REJECT": "REJECTED", "RETIRE": "RETIRED"}
+    new_state = state_map[body.action]
+    actor_id: str = admin.get("user_id") or admin.get("id") or ""
+    try:
+        row = transition_link(
+            get_supabase(),
+            actor_id=actor_id,
+            link_id=link_id,
+            new_state=new_state,
+            owner_approval_ref=body.owner_approval_ref,
+        )
+    except DocumentLinkWriteError as exc:
+        raise _write_exc(exc)
+    except Exception as exc:
+        log.error("decision error link_id=%r action=%r: %s", link_id, body.action, exc)
+        raise HTTPException(status_code=503, detail="Document link service unavailable")
+    return row
+
+
+@router.get("/links/{link_id}", status_code=200)
+def get_link_detail(
+    link_id: str,
+    admin: dict = Depends(_require_admin),
+) -> dict[str, Any]:
+    """
+    Return a unified_document_link row with its full audit history.
+    404 if link not found.
+    """
+    client = SupabaseRestClient()
+    try:
+        link = get_link_by_id(client, link_id)
+    except Exception as exc:
+        log.error("get_link_detail fetch error link_id=%r: %s", link_id, exc)
+        raise HTTPException(status_code=503, detail="Document link service unavailable")
+
+    if link is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "LINK_NOT_FOUND", "message": f"링크를 찾을 수 없습니다: {link_id}"},
+        )
+
+    try:
+        audit = get_link_audit_history(client, link_id)
+    except Exception as exc:
+        log.error("get_link_detail audit error link_id=%r: %s", link_id, exc)
+        raise HTTPException(status_code=503, detail="Document link service unavailable")
+
+    return {**link, "audit_history": audit}

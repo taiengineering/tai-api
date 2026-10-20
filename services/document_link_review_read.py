@@ -411,6 +411,30 @@ def get_candidates(
     )
 
 
+def get_link_by_id(
+    client: Any,
+    link_id: str,
+) -> Optional[dict[str, Any]]:
+    """Return a single unified_document_link row by UUID, or None if not found."""
+    rows = client.select(
+        "unified_document_link",
+        columns="id,saas_catalog_id,reference_form_id,relation_type,review_state,"
+                "evidence_note,reviewed_by,reviewed_at,owner_approval_ref,version,"
+                "created_at,updated_at",
+        filters={"id": f"eq.{link_id}"},
+        limit=1,
+    )
+    return rows[0] if rows else None
+
+
+def get_link_audit_history(
+    client: Any,
+    link_id: str,
+) -> list[dict[str, Any]]:
+    """Return unified_document_link_audit rows for a link, newest first."""
+    return _fetch_audit_for_links(client, [link_id])
+
+
 def get_candidate_detail(
     client: Any,
     candidate_id: str,
