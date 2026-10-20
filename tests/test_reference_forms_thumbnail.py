@@ -2,7 +2,7 @@
 WO-WWW-SS-THUMBNAIL-001 — Thumbnail endpoint + service contract tests.
 Scope-reduced: no DB columns; Storage path thumbnails/{form_id}-{sha256[:16]}.webp.
 
-Endpoint tests (T1-T10):
+Endpoint tests (T1-T12):
   T1  All gates pass → 200 image/webp
   T2  No file with has_preview → 404
   T3  Form not published (view empty) → 404
@@ -13,15 +13,17 @@ Endpoint tests (T1-T10):
   T8  Storage proxy fetch fails → 502
   T9  Fetched content oversized (> 70KB) → 500
   T10 Fetched content missing WebP signature → 500
+  T11 File inactive (Gate-3a) → 404
+  T12 Preview artifact not published (Gate-3b) → 404
 
-Service tests (T11-T16, T16b):
-  T11 PNG → WebP, output ≤ 70KB, long edge ≤ 320px
-  T12 RGBA PNG gets white background (no transparency in output)
-  T13 Input larger than MAX_INPUT_BYTES raises ThumbnailInputError
-  T14 Oversized image triggers decompression bomb guard
-  T14b Empty bytes raise ThumbnailInputError
-  T15 Corrupt bytes raise ThumbnailInputError
-  T16 SHA256 in ThumbnailResult is consistent
+Service tests (T13-T18, T16b):
+  T13 PNG → WebP, output ≤ 70KB, long edge ≤ 320px
+  T14 RGBA PNG gets white background (no transparency in output)
+  T15 Input larger than MAX_INPUT_BYTES raises ThumbnailInputError
+  T16 Oversized image triggers decompression bomb guard
+  T16b Empty bytes raise ThumbnailInputError
+  T17 Corrupt bytes raise ThumbnailInputError
+  T18 SHA256 in ThumbnailResult is consistent
 """
 from __future__ import annotations
 
@@ -42,6 +44,7 @@ from routers.reference_forms import router
 _FORM_ID = "aaaa0000-0000-0000-0000-000000000001"
 _SLUG    = "safety-training-record"
 _FILE_ID = "bbbb0000-0000-0000-0000-000000000002"
+_PA_ID   = "cccc0000-0000-0000-0000-000000000003"
 _SHA256  = "abcdef1234567890" * 4   # 64-char fake hex
 
 _VIEW_ROW = {
@@ -73,6 +76,22 @@ _APPROVAL_ROW = {
     "approved_file_hashes": [{"file_id": _FILE_ID, "sha256": _SHA256}]
 }
 
+_FILE_ROW = {
+    "id":                  _FILE_ID,
+    "form_id":             _FORM_ID,
+    "sha256":              _SHA256,
+    "preview_artifact_id": _PA_ID,
+    "is_active":           True,
+    "qa_status":           "QA_PASS",
+}
+
+_PA_ROW = {
+    "form_id":             _FORM_ID,
+    "source_file_sha256":  _SHA256,
+    "is_published":        True,
+    "qa_status":           "QA_PASS",
+}
+
 WEBP_1PX = (
     b"RIFF$\x00\x00\x00WEBPVP8 "
     b"\x18\x00\x00\x000\x01\x00\x9d\x01*"
@@ -84,17 +103,21 @@ def _sb_mock(
     view=_VIEW_ROW,
     sources=_SOURCE_ROW,
     approval=_APPROVAL_ROW,
+    file_row=_FILE_ROW,
+    pa_row=_PA_ROW,
 ):
     """
-    Build a Supabase mock for the simplified thumbnail endpoint.
-    Only view, sources, and approvals tables are queried — no files or preview_artifacts.
+    Build a Supabase mock for the thumbnail endpoint.
+    Gates 3a (files) and 3b (preview_artifacts) are also exercised.
     """
     sb = MagicMock()
 
     _data = {
-        "reference_form_public_view": [view] if view else [],
-        "reference_form_sources":     [sources] if sources else [],
-        "reference_form_approvals":   [approval] if approval else [],
+        "reference_form_public_view":         [view]     if view     else [],
+        "reference_form_sources":             [sources]  if sources  else [],
+        "reference_form_approvals":           [approval] if approval else [],
+        "reference_form_files":               [file_row] if file_row else [],
+        "reference_form_preview_artifacts":   [pa_row]   if pa_row   else [],
     }
 
     def _make_chain(data_list):
@@ -292,6 +315,30 @@ def test_T10_webp_signature_invalid_500():
     assert resp.status_code == 500
 
 
+# ---------------------------------------------------------------------------
+# T11 — file row inactive (Gate-3a) → 404
+# ---------------------------------------------------------------------------
+
+def test_T11_file_inactive_404():
+    inactive_file = {**_FILE_ROW, "is_active": False}
+    sb = _sb_mock(file_row=inactive_file)
+    app = _make_app(sb)
+    resp = TestClient(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# T12 — preview artifact not published (Gate-3b) → 404
+# ---------------------------------------------------------------------------
+
+def test_T12_preview_unpublished_404():
+    unpublished_pa = {**_PA_ROW, "is_published": False}
+    sb = _sb_mock(pa_row=unpublished_pa)
+    app = _make_app(sb)
+    resp = TestClient(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert resp.status_code == 404
+
+
 # ===========================================================================
 # Service tests
 # ===========================================================================
@@ -319,10 +366,10 @@ def _make_rgba_png(w: int = 200, h: int = 300) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# T11 — PNG → WebP, output ≤ 70KB, long edge ≤ 320px
+# T13 — PNG → WebP, output ≤ 70KB, long edge ≤ 320px
 # ---------------------------------------------------------------------------
 
-def test_T11_png_to_webp_within_limits():
+def test_T13_png_to_webp_within_limits():
     try:
         from services.reference_form_thumbnail_svc import generate_thumbnail, MAX_OUTPUT_BYTES, MAX_LONG_EDGE
     except ImportError:
@@ -341,10 +388,10 @@ def test_T11_png_to_webp_within_limits():
 
 
 # ---------------------------------------------------------------------------
-# T12 — RGBA PNG → white background, no alpha channel
+# T14 — RGBA PNG → white background, no alpha channel
 # ---------------------------------------------------------------------------
 
-def test_T12_rgba_white_background():
+def test_T14_rgba_white_background():
     try:
         from services.reference_form_thumbnail_svc import generate_thumbnail
         from PIL import Image as PILImage
@@ -357,10 +404,10 @@ def test_T12_rgba_white_background():
 
 
 # ---------------------------------------------------------------------------
-# T13 — input > MAX_INPUT_BYTES raises ThumbnailInputError
+# T15 — input > MAX_INPUT_BYTES raises ThumbnailInputError
 # ---------------------------------------------------------------------------
 
-def test_T13_oversized_input_raises():
+def test_T15_oversized_input_raises():
     try:
         from services.reference_form_thumbnail_svc import generate_thumbnail, ThumbnailInputError, MAX_INPUT_BYTES
     except ImportError:
@@ -371,10 +418,10 @@ def test_T13_oversized_input_raises():
 
 
 # ---------------------------------------------------------------------------
-# T14 — oversized image (> MAX_INPUT_PIXELS) raises ThumbnailInputError
+# T16 — oversized image (> MAX_INPUT_PIXELS) raises ThumbnailInputError
 # ---------------------------------------------------------------------------
 
-def test_T14_decompression_bomb_raises():
+def test_T16_decompression_bomb_raises():
     try:
         from services.reference_form_thumbnail_svc import (
             generate_thumbnail, ThumbnailInputError
@@ -397,10 +444,10 @@ def test_T14_decompression_bomb_raises():
 
 
 # ---------------------------------------------------------------------------
-# T14b — empty bytes raise ThumbnailInputError
+# T16b — empty bytes raise ThumbnailInputError
 # ---------------------------------------------------------------------------
 
-def test_T14b_empty_input_raises():
+def test_T16b_empty_input_raises():
     try:
         from services.reference_form_thumbnail_svc import generate_thumbnail, ThumbnailInputError
     except ImportError:
@@ -410,10 +457,10 @@ def test_T14b_empty_input_raises():
 
 
 # ---------------------------------------------------------------------------
-# T15 — corrupt bytes raise ThumbnailInputError
+# T17 — corrupt bytes raise ThumbnailInputError
 # ---------------------------------------------------------------------------
 
-def test_T15_corrupt_bytes_raises():
+def test_T17_corrupt_bytes_raises():
     try:
         from services.reference_form_thumbnail_svc import generate_thumbnail, ThumbnailInputError
     except ImportError:
@@ -423,10 +470,10 @@ def test_T15_corrupt_bytes_raises():
 
 
 # ---------------------------------------------------------------------------
-# T16 — SHA256 in ThumbnailResult is consistent
+# T18 — SHA256 in ThumbnailResult is consistent
 # ---------------------------------------------------------------------------
 
-def test_T16_sha256_consistent():
+def test_T18_sha256_consistent():
     try:
         from services.reference_form_thumbnail_svc import generate_thumbnail
     except ImportError:

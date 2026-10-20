@@ -538,6 +538,58 @@ def get_reference_form_thumbnail(slug: str, sb: Client = Depends(get_supabase)):
     file_id        = str(rep_file["file_id"])
     approved_sha256 = rep_file.get("sha256", "")
 
+    # Gate-3a: verify file is still active and QA_PASS in DB (has_preview in view may be stale)
+    try:
+        fr = (
+            sb.table("reference_form_files")
+            .select("id,form_id,sha256,preview_artifact_id,is_active,qa_status")
+            .eq("id", file_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log.error("File query failed id=%s: %s", file_id, exc)
+        raise HTTPException(status_code=503, detail="THUMBNAIL_UNAVAILABLE")
+
+    if not fr.data:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    file_row = fr.data[0]
+    if (
+        not file_row.get("is_active")
+        or file_row.get("qa_status") != "QA_PASS"
+        or str(file_row.get("form_id", "")) != form_id
+        or file_row.get("sha256") != approved_sha256
+    ):
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    pa_id = file_row.get("preview_artifact_id")
+    if not pa_id:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    # Gate-3b: verify preview artifact is currently published and QA_PASS
+    try:
+        par = (
+            sb.table("reference_form_preview_artifacts")
+            .select("form_id,source_file_sha256,is_published,qa_status")
+            .eq("id", str(pa_id))
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log.error("Preview artifact query failed id=%s: %s", pa_id, exc)
+        raise HTTPException(status_code=503, detail="THUMBNAIL_UNAVAILABLE")
+
+    if not par.data:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    pa = par.data[0]
+    if (
+        not pa.get("is_published")
+        or pa.get("qa_status") != "QA_PASS"
+        or str(pa.get("form_id", "")) != form_id
+        or pa.get("source_file_sha256") != approved_sha256
+    ):
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
     # Gate-4: TOCTOU approval binding (re-read from DB)
     _verify_approval_binding(sb, form_id, file_id, approved_sha256)
 
