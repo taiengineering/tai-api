@@ -132,6 +132,9 @@ def compute_channel_state(
     file_count: int,
     file_url: Optional[str],
     rights_state: Optional[str],
+    *,
+    factory_scope_verified: bool = False,
+    active_instance_exists: bool = False,
 ) -> CatalogChannels:
     """
     record_type: 'SAAS' | 'REFERENCE_CMS'
@@ -139,6 +142,8 @@ def compute_channel_state(
     file_count: len(qa_pass_files) for REF records
     file_url: document_forms.file_url for SAAS records
     rights_state: document_forms.doc_format for SAAS records
+    factory_scope_verified: True only when caller confirms factory-level access (default False → BLOCKED)
+    active_instance_exists: True only when caller confirms an active document instance exists
     """
     if record_type == "REFERENCE_CMS":
         ref_download = (
@@ -197,10 +202,17 @@ def compute_channel_state(
             reason="file_url present but binary fetch and version confirmation required",
         )
 
-    if schema_status == "APPROVED_FOR_RUNTIME_USE":
+    # WEB_EDIT: requires APPROVED schema AND confirmed factory scope.
+    # Catalog context cannot confirm factory scope → fail-closed (BLOCKED) unless explicitly verified.
+    if schema_status == "APPROVED_FOR_RUNTIME_USE" and factory_scope_verified:
         web_edit = ChannelState(
             state="READY",
-            reason="Schema approved for runtime use",
+            reason="Schema approved for runtime use; factory scope verified",
+        )
+    elif schema_status == "APPROVED_FOR_RUNTIME_USE":
+        web_edit = ChannelState(
+            state="BLOCKED",
+            reason="Schema approved but factory scope not verified in catalog context",
         )
     else:
         web_edit = ChannelState(
@@ -208,15 +220,17 @@ def compute_channel_state(
             reason="schema status=CANDIDATE; requires APPROVED_FOR_RUNTIME_USE + factory scope",
         )
 
-    if web_edit.state == "READY":
+    # SAAS_EXPORT: requires WEB_EDIT=READY AND active document instance.
+    # Catalog context cannot confirm active instance → fail-closed unless explicitly verified.
+    if web_edit.state == "READY" and active_instance_exists:
         saas_export = ChannelState(
             state="READY",
-            reason="Web edit ready; export available",
+            reason="Web edit ready; active document instance exists",
         )
     else:
         saas_export = ChannelState(
             state="BLOCKED",
-            reason="web edit not ready; export requires active document",
+            reason="web edit not ready or active document instance not confirmed",
         )
 
     auto_fill = ChannelState(
@@ -277,7 +291,7 @@ def _build_ref_item(row: dict[str, Any]) -> CatalogItem:
         rights_state=None,
     )
     if channels.REFERENCE_DOWNLOAD.state == "READY":
-        channels.REFERENCE_DOWNLOAD.action_url = f"/api/reference-forms/{slug}"
+        channels.REFERENCE_DOWNLOAD.action_url = f"/reference-forms/{slug}"
     return CatalogItem(
         provisional_key=provisional_key,
         source_system="REFERENCE_CMS",
@@ -296,19 +310,41 @@ def _build_ref_item(row: dict[str, Any]) -> CatalogItem:
 # Aggregation
 # ---------------------------------------------------------------------------
 
+def _matches_channel_filter(item: CatalogItem, channel_filter: str) -> bool:
+    """
+    channel_filter format: 'CHANNEL_NAME:STATE', e.g. 'WEB_EDIT:READY'.
+    Empty string means no filter (all pass).
+    """
+    if not channel_filter:
+        return True
+    if ":" not in channel_filter:
+        return True
+    ch_name, ch_state = channel_filter.split(":", 1)
+    ch = getattr(item.channels, ch_name.strip(), None)
+    if ch is None:
+        return True
+    return ch.state == ch_state.strip()
+
+
 def get_unified_catalog(
     client: SupabaseRestClient,
     page: int = 1,
     per_page: int = 50,
     q: str = "",
     sector: str = "",
+    category: str = "",
+    status: str = "",
+    channel_filter: str = "",
     source_system: str = "ALL",
 ) -> CatalogPage:
     """
     Paginated unified catalog from existing tables. No DB writes.
     source_system: 'ALL' | 'SAAS' | 'REFERENCE_CMS'
+    category: filter by document_forms.category (SAAS records only)
+    status: filter by schema_status ('CANDIDATE' | 'APPROVED_FOR_RUNTIME_USE') — SAAS only
+    channel_filter: 'CHANNEL_NAME:STATE', e.g. 'WEB_EDIT:READY' — post-fetch filter
     per_page silently capped at 200.
-    REF records: sector/category filter not applied (not in view).
+    REF records: sector/category/status filter not applied (not in view).
     """
     if per_page > 200:
         per_page = 200
@@ -321,6 +357,8 @@ def get_unified_catalog(
         saas_filters: dict[str, str] = {"is_active": "eq.true"}
         if sector:
             saas_filters["sector"] = f"eq.{sector}"
+        if category:
+            saas_filters["category"] = f"eq.{category}"
         if q:
             saas_filters["doc_name"] = f"ilike.*{q}*"
         saas_rows = client.select(
@@ -343,6 +381,9 @@ def get_unified_catalog(
                 pass
             for row in saas_rows:
                 row["schema_status"] = schema_map.get(row["id"], "CANDIDATE")
+                # status filter (schema_status) — applied after lookup
+                if status and row["schema_status"] != status:
+                    continue
                 saas_items.append(_build_saas_item(row))
 
     if source_system in ("ALL", "REFERENCE_CMS"):
@@ -358,6 +399,11 @@ def get_unified_catalog(
             ref_items.append(_build_ref_item(row))
 
     all_items = saas_items + ref_items
+
+    # channel_filter is a post-fetch filter applied to computed channel states
+    if channel_filter:
+        all_items = [item for item in all_items if _matches_channel_filter(item, channel_filter)]
+
     total = len(all_items)
     page_items = all_items[offset: offset + per_page]
 

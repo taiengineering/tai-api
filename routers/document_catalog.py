@@ -1,21 +1,21 @@
 """
 routers/document_catalog.py
-WO-TAI-DOC-UNIFIED-CATALOG-IMPLEMENT-001 — Phase 1
+WO-TAI-DOC-UNIFIED-CATALOG-IMPLEMENT-001 — Phase 1 (CORR-001)
 
 GET /api/document-catalog        — unified document list (SAAS + REFERENCE_CMS)
 GET /api/document-catalog/{key}  — single document detail by provisional key
 
+Auth: Bearer token required (same pattern as admin_audit). Anonymous/unauthenticated → 401.
 Status: PROPOSED — not deployed
 Source/DB mutations: 0
 """
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 
 from services.catalog_aggregator import (
     CatalogItem,
@@ -27,6 +27,15 @@ from services.catalog_aggregator import (
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/document-catalog", tags=["Document catalog"])
+
+
+# ---------------------------------------------------------------------------
+# Auth guard — admin-only; mirrors admin_audit pattern
+# ---------------------------------------------------------------------------
+
+def _require_bearer(authorization: Optional[str]) -> None:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="인증이 필요합니다.")
 
 
 # ---------------------------------------------------------------------------
@@ -76,10 +85,20 @@ def _get_rest_client() -> SupabaseRestClient:
 
 @router.get("")
 def list_document_catalog(
+    authorization: Optional[str] = Header(None),
     page: int = Query(default=1, ge=1, description="1-based page number"),
     per_page: int = Query(default=50, ge=1, le=200, description="Items per page (max 200)"),
     q: str = Query(default="", description="Full-text search on title / doc_name"),
     sector: str = Query(default="", description="Filter by sector (SAAS records only)"),
+    category: str = Query(default="", description="Filter by category (SAAS records only)"),
+    status: str = Query(
+        default="",
+        description="Filter by schema_status: CANDIDATE | APPROVED_FOR_RUNTIME_USE (SAAS only)",
+    ),
+    channel: str = Query(
+        default="",
+        description="Filter by channel state, e.g. WEB_EDIT:READY or REFERENCE_DOWNLOAD:BLOCKED",
+    ),
     source_system: str = Query(
         default="ALL",
         pattern="^(ALL|SAAS|REFERENCE_CMS)$",
@@ -88,13 +107,17 @@ def list_document_catalog(
 ):
     """
     Returns a unified paginated catalog from document_forms (SAAS) and
-    reference_form_public_view (REFERENCE_CMS).
+    reference_form_public_view (REFERENCE_CMS). Requires Bearer token.
 
+    - Auth: Bearer required → 401 if missing.
     - No DB writes.
-    - per_page is silently capped at 200.
-    - sector filter applies to SAAS records only; REF records are always included.
+    - per_page silently capped at 200.
+    - sector/category/status filters apply to SAAS records only.
+    - channel filter (e.g. WEB_EDIT:READY) applied after capability computation.
+    - WEB_EDIT and SAAS_EXPORT are fail-closed in catalog context (factory scope unverified).
     - links[] is always empty at this phase (unified_document_link table not applied).
     """
+    _require_bearer(authorization)
     try:
         client = _get_rest_client()
         result = get_unified_catalog(
@@ -103,6 +126,9 @@ def list_document_catalog(
             per_page=per_page,
             q=q,
             sector=sector,
+            category=category,
+            status=status,
+            channel_filter=channel,
             source_system=source_system,
         )
     except RuntimeError as exc:
@@ -121,14 +147,19 @@ def list_document_catalog(
 
 
 @router.get("/{key:path}")
-def get_catalog_item(key: str):
+def get_catalog_item(
+    key: str,
+    authorization: Optional[str] = Header(None),
+):
     """
-    Returns a single catalog item by provisional key.
+    Returns a single catalog item by provisional key. Requires Bearer token.
 
     key: DOC:<doc_id> for SAAS records, REF:<canonical_slug> for REFERENCE_CMS records.
-    Returns 404 if not found or key format is invalid.
+    Returns 401 if unauthenticated, 404 if not found or key format invalid.
     links[] is always empty at this phase.
     """
+    _require_bearer(authorization)
+
     if not (key.startswith("DOC:") or key.startswith("REF:")):
         raise HTTPException(
             status_code=404,

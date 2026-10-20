@@ -239,11 +239,12 @@ class T8_PaginationRespected(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# T9: APPROVED_FOR_RUNTIME_USE → WEB_EDIT=READY
+# T9: APPROVED_FOR_RUNTIME_USE without factory_scope → WEB_EDIT still BLOCKED (fail-close)
 # ---------------------------------------------------------------------------
 
-class T9_SaasApprovedSchemaWebEditReady(unittest.TestCase):
-    def test(self):
+class T9_SaasApprovedSchemaWebEditBlockedWithoutFactoryScope(unittest.TestCase):
+    def test_approved_no_factory_scope_blocked(self):
+        # CORR-001: catalog context cannot verify factory scope → BLOCKED even if schema approved
         channels = compute_channel_state(
             record_type="SAAS",
             schema_status="APPROVED_FOR_RUNTIME_USE",
@@ -251,7 +252,33 @@ class T9_SaasApprovedSchemaWebEditReady(unittest.TestCase):
             file_url=None,
             rights_state="DIGITAL_OK",
         )
+        self.assertEqual(channels.WEB_EDIT.state, "BLOCKED",
+                         "factory scope not verified → BLOCKED even if schema approved")
+        self.assertEqual(channels.SAAS_EXPORT.state, "BLOCKED")
+
+    def test_approved_with_factory_scope_ready(self):
+        # When caller explicitly confirms factory scope → READY
+        channels = compute_channel_state(
+            record_type="SAAS",
+            schema_status="APPROVED_FOR_RUNTIME_USE",
+            file_count=0,
+            file_url=None,
+            rights_state="DIGITAL_OK",
+            factory_scope_verified=True,
+        )
         self.assertEqual(channels.WEB_EDIT.state, "READY")
+
+    def test_export_ready_only_with_active_instance(self):
+        # SAAS_EXPORT needs both factory scope AND active instance
+        channels = compute_channel_state(
+            record_type="SAAS",
+            schema_status="APPROVED_FOR_RUNTIME_USE",
+            file_count=0,
+            file_url=None,
+            rights_state="DIGITAL_OK",
+            factory_scope_verified=True,
+            active_instance_exists=True,
+        )
         self.assertEqual(channels.SAAS_EXPORT.state, "READY")
 
 
@@ -376,26 +403,44 @@ class T14_RefFileCountFromQaPassFiles(unittest.TestCase):
 # Router endpoint tests
 # ---------------------------------------------------------------------------
 
-class T15_RouterListEndpointStructure(unittest.TestCase):
-    """FastAPI endpoint returns expected response structure."""
+_BEARER = "Bearer test-admin-token"
+_NO_BEARER = None
 
-    def _run_list(self, **params):
+
+class T15_RouterListEndpointStructure(unittest.TestCase):
+    """FastAPI endpoint returns expected response structure with auth."""
+
+    def _make_tc(self):
         from fastapi.testclient import TestClient
         from fastapi import FastAPI
         from routers.document_catalog import router
-
         app = FastAPI()
         app.include_router(router)
-        return TestClient(app).get("/api/document-catalog", params=params)
+        return TestClient(app, raise_server_exceptions=False)
 
-    def test_empty_response_is_200(self):
+    def _run_list(self, headers=None, client_mock=None, **params):
         import unittest.mock as mock
+        if client_mock is None:
+            client_mock = _make_mock_client()
+        tc = self._make_tc()
+        effective_headers = headers if headers is not None else {"Authorization": _BEARER}
         with mock.patch(
             "routers.document_catalog._get_rest_client",
-            return_value=_make_mock_client(),
+            return_value=client_mock,
         ):
-            resp = self._run_list()
+            return tc.get("/api/document-catalog", params=params,
+                          headers=effective_headers)
+
+    def test_no_auth_returns_401(self):
+        resp = self._run_list(headers={})
+        self.assertEqual(resp.status_code, 401)
+
+    def test_bearer_returns_200(self):
+        resp = self._run_list()
         self.assertEqual(resp.status_code, 200)
+
+    def test_empty_response_is_200(self):
+        resp = self._run_list()
         data = resp.json()
         self.assertIn("total", data)
         self.assertIn("page", data)
@@ -404,15 +449,10 @@ class T15_RouterListEndpointStructure(unittest.TestCase):
         self.assertEqual(data["items"], [])
 
     def test_items_have_required_fields(self):
-        import unittest.mock as mock
-        with mock.patch(
-            "routers.document_catalog._get_rest_client",
-            return_value=_make_mock_client(
-                saas_rows=[_make_saas_row()],
-                schema_rows=[],
-            ),
-        ):
-            resp = self._run_list(source_system="SAAS")
+        resp = self._run_list(
+            client_mock=_make_mock_client(saas_rows=[_make_saas_row()], schema_rows=[]),
+            source_system="SAAS",
+        )
         self.assertEqual(resp.status_code, 200)
         items = resp.json()["items"]
         self.assertEqual(len(items), 1)
@@ -421,47 +461,98 @@ class T15_RouterListEndpointStructure(unittest.TestCase):
             self.assertIn(f, item, f"Missing field: {f}")
         self.assertEqual(item["links"], [])
 
-    def test_no_raw_storage_paths_in_response(self):
-        import unittest.mock as mock
-        with mock.patch(
-            "routers.document_catalog._get_rest_client",
-            return_value=_make_mock_client(
-                saas_rows=[_make_saas_row()],
+    def test_web_edit_blocked_in_catalog_context(self):
+        # CORR-001: WEB_EDIT always BLOCKED in catalog (factory scope unverified)
+        resp = self._run_list(
+            client_mock=_make_mock_client(
+                saas_rows=[_make_saas_row(schema_status="APPROVED_FOR_RUNTIME_USE")],
                 schema_rows=[],
             ),
-        ):
-            resp = self._run_list(source_system="SAAS")
+            source_system="SAAS",
+        )
+        self.assertEqual(resp.status_code, 200)
+        item = resp.json()["items"][0]
+        self.assertEqual(item["channels"]["WEB_EDIT"]["state"], "BLOCKED",
+                         "WEB_EDIT must be BLOCKED in catalog — factory scope not verified")
+        self.assertEqual(item["channels"]["SAAS_EXPORT"]["state"], "BLOCKED")
+
+    def test_ref_action_url_no_api_prefix(self):
+        # CORR-001: action_url must be /reference-forms/{slug}, not /api/reference-forms/{slug}
+        resp = self._run_list(
+            client_mock=_make_mock_client(ref_rows=[_make_ref_row("ref-gov-01", file_count=1)]),
+            source_system="REFERENCE_CMS",
+        )
+        self.assertEqual(resp.status_code, 200)
+        items = resp.json()["items"]
+        self.assertEqual(len(items), 1)
+        action = items[0]["channels"]["REFERENCE_DOWNLOAD"].get("action_url", "")
+        self.assertTrue(action.startswith("/reference-forms/"),
+                        f"action_url must start with /reference-forms/, got: {action!r}")
+        self.assertFalse(action.startswith("/api/"),
+                         f"action_url must NOT have /api/ prefix, got: {action!r}")
+
+    def test_no_raw_storage_paths_in_response(self):
+        resp = self._run_list(
+            client_mock=_make_mock_client(saas_rows=[_make_saas_row()], schema_rows=[]),
+            source_system="SAAS",
+        )
         self.assertNotIn("storage://", resp.text)
         self.assertNotIn("supabase.co/storage", resp.text)
 
+    def test_category_filter_passed_to_aggregator(self):
+        calls: list[dict] = []
 
-class T16_RouterDetailEndpointStructure(unittest.TestCase):
-    """Detail endpoint returns 200 on hit, 404 on miss, 404 on invalid key."""
+        def _select(table, columns="*", filters=None, **_):
+            if table == "document_forms":
+                calls.append({"filters": dict(filters) if filters else {}})
+            return []
 
-    def _run_detail(self, key: str, client_mock=None):
         import unittest.mock as mock
         from fastapi.testclient import TestClient
         from fastapi import FastAPI
         from routers.document_catalog import router
+        app = FastAPI()
+        app.include_router(router)
+        tc = TestClient(app, raise_server_exceptions=False)
+        mock_client = MagicMock(spec=SupabaseRestClient)
+        mock_client.select.side_effect = _select
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=mock_client):
+            tc.get("/api/document-catalog",
+                   params={"source_system": "SAAS", "category": "회의"},
+                   headers={"Authorization": _BEARER})
+        if calls:
+            self.assertEqual(calls[0]["filters"].get("category"), "eq.회의")
 
+
+class T16_RouterDetailEndpointStructure(unittest.TestCase):
+    """Detail endpoint returns 200 on hit, 404 on miss, 404 on invalid key, 401 without Bearer."""
+
+    def _run_detail(self, key: str, client_mock=None, headers=None):
+        import unittest.mock as mock
+        from fastapi.testclient import TestClient
+        from fastapi import FastAPI
+        from routers.document_catalog import router
         app = FastAPI()
         app.include_router(router)
         tc = TestClient(app, raise_server_exceptions=False)
         if client_mock is None:
             client_mock = _make_mock_client()
+        effective_headers = headers if headers is not None else {"Authorization": _BEARER}
         with mock.patch(
             "routers.document_catalog._get_rest_client",
             return_value=client_mock,
         ):
-            return tc.get(f"/api/document-catalog/{key}")
+            return tc.get(f"/api/document-catalog/{key}",
+                          headers=effective_headers)
+
+    def test_no_auth_returns_401(self):
+        resp = self._run_detail("DOC:DOC-OSH-058", headers={})
+        self.assertEqual(resp.status_code, 401)
 
     def test_doc_key_hit(self):
         resp = self._run_detail(
             "DOC:DOC-OSH-058",
-            _make_mock_client(
-                saas_rows=[_make_saas_row("DOC-OSH-058")],
-                schema_rows=[],
-            ),
+            _make_mock_client(saas_rows=[_make_saas_row("DOC-OSH-058")], schema_rows=[]),
         )
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
@@ -486,6 +577,40 @@ class T16_RouterDetailEndpointStructure(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# T17: New filter params — channel_filter, status
+# ---------------------------------------------------------------------------
+
+class T17_ChannelAndStatusFilters(unittest.TestCase):
+    def test_status_filter_excludes_non_matching(self):
+        rows = [
+            _make_saas_row("DOC-001", schema_status="CANDIDATE"),
+            _make_saas_row("DOC-002", schema_status="APPROVED_FOR_RUNTIME_USE"),
+        ]
+        schema_rows = [
+            {"catalog_document_id": "uuid-DOC-001", "status": "CANDIDATE"},
+            {"catalog_document_id": "uuid-DOC-002", "status": "APPROVED_FOR_RUNTIME_USE"},
+        ]
+        client = _make_mock_client(saas_rows=rows, schema_rows=schema_rows)
+        result = get_unified_catalog(client, source_system="SAAS",
+                                     status="APPROVED_FOR_RUNTIME_USE")
+        codes = [item.source_code for item in result.items]
+        self.assertNotIn("DOC-001", codes)
+        self.assertIn("DOC-002", codes)
+
+    def test_channel_filter_keeps_matching(self):
+        rows = [
+            _make_ref_row("ref-with-files", file_count=2),
+            _make_ref_row("ref-no-files", file_count=0),
+        ]
+        client = _make_mock_client(ref_rows=rows)
+        result = get_unified_catalog(client, source_system="REFERENCE_CMS",
+                                     channel_filter="REFERENCE_DOWNLOAD:READY")
+        codes = [item.source_code for item in result.items]
+        self.assertIn("ref-with-files", codes)
+        self.assertNotIn("ref-no-files", codes)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -496,13 +621,14 @@ if __name__ == "__main__":
     test_classes = [
         T1_SaasCandidateSchemaWebEditBlocked,
         T2_RefFormWithFilesReferenceDownloadReady,
+
         T3_LawGoKrUrlOfficialOriginalUnverified,
         T4_NoFileUrl,
         T5_AutoFillAlwaysBlocked,
         T6_DocKeyResolvesSaasRecord,
         T7_RefKeyResolvesRefRecord,
         T8_PaginationRespected,
-        T9_SaasApprovedSchemaWebEditReady,
+        T9_SaasApprovedSchemaWebEditBlockedWithoutFactoryScope,
         T10_RefFormNoFilesBlocked,
         T11_SaasQueryUsesIsActiveFilter,
         T12_SaasQuerySelectsCorrectColumns,
@@ -510,6 +636,7 @@ if __name__ == "__main__":
         T14_RefFileCountFromQaPassFiles,
         T15_RouterListEndpointStructure,
         T16_RouterDetailEndpointStructure,
+        T17_ChannelAndStatusFilters,
     ]
 
     for tc in test_classes:
