@@ -48,6 +48,7 @@ from services.company_scope import (
     _ensure_own_company,
     _ensure_factory_own,
     _forced_company_id,
+    _require_admin,
     _tier,
     require_scope_ids,
     scoped_filter,
@@ -476,14 +477,24 @@ def list_generated(doc_id: str, current_user: dict = Depends(get_current_user)):
 # ═══════════════════════════════════════════════════════
 
 @router.get("/metrics")
-def get_metrics():
-    """전체 Runtime 메트릭"""
+def get_metrics(current_user: dict = Depends(get_current_user)):
+    """전체 Runtime 메트릭 — ALL 스코프 전용"""
+    sb = get_supabase()
+    _require_admin(current_user, sb)
     return {"status": "success", "data": svc.get_metrics()}
 
 
 @router.get("/metrics/factory/{factory_id}")
-def get_factory_metrics(factory_id: str):
-    """시설별 메트릭"""
+def get_factory_metrics(factory_id: str, current_user: dict = Depends(get_current_user)):
+    """시설별 메트릭 — 인증 + 회사/시설 스코프 검증"""
+    sb = get_supabase()
+    f = sb.table("factories").select("company_id").eq("id", factory_id).limit(1).execute()
+    if not f.data:
+        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
+    _ensure_own_company(
+        f.data[0]["company_id"], current_user, sb, "시설을 찾을 수 없습니다",
+        resource_factory_id=factory_id,
+    )
     return {
         "status": "success",
         "data": svc.get_metrics_by_factory(factory_id),

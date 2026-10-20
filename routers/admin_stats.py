@@ -6,9 +6,11 @@ prefix: /admin
   GET  /admin/stats         대시보드 통계 (dashboard_stats MV)
   POST /admin/stats/refresh MV 수동 갱신
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from datetime import datetime, timezone
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _require_admin
 from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/admin", tags=["어드민통계"])
@@ -24,12 +26,13 @@ def _now_iso() -> str:
 # GET /admin/stats  대시보드 통계 (MV 기반)
 # ─────────────────────────────────────────────────────
 @router.get("/stats")
-async def get_dashboard_stats():
+async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     """
-    dashboard_stats Materialized View 기반 통계 조회.
+    dashboard_stats Materialized View 기반 통계 조회 — ALL 스코프 전용.
     빠른 응답 보장 (MV 직접 조회).
     """
     supabase = get_supabase()
+    _require_admin(current_user, supabase)
     try:
         res = supabase.table("dashboard_stats").select("*").limit(1).execute()
         rows = res.data or []
@@ -67,9 +70,10 @@ async def get_dashboard_stats():
 # POST /admin/stats/refresh  MV 수동 갱신
 # ─────────────────────────────────────────────────────
 @router.post("/stats/refresh")
-async def refresh_dashboard_stats():
-    """dashboard_stats MV 수동 갱신"""
+async def refresh_dashboard_stats(current_user: dict = Depends(get_current_user)):
+    """dashboard_stats MV 수동 갱신 — ALL 스코프 전용"""
     supabase = get_supabase()
+    _require_admin(current_user, supabase)
     try:
         supabase.rpc("refresh_dashboard_stats").execute()
         return {
