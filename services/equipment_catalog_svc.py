@@ -44,7 +44,9 @@ def run_list_equipment_master(supabase, search, category, top_band, needs_review
     }
 
 
-def run_refresh_engine_equipment(supabase):
+def run_refresh_engine_equipment(supabase, current: dict):
+    from services.company_scope import _require_admin
+    _require_admin(current, supabase)
     supabase.rpc("refresh_engine_equipment_summary").execute()
     return {"status": "success", "message": "MV가 갱신됐습니다.", "data": {"refreshed_at": _now_iso()}}
 
@@ -91,7 +93,9 @@ def run_get_equipment_detail(supabase, facility_name: str):
     }
 
 
-def run_update_equipment_master(supabase, facility_name: str, body: dict):
+def run_update_equipment_master(supabase, facility_name: str, body: dict, current: dict):
+    from services.company_scope import _require_admin
+    _require_admin(current, supabase)
     allowed = {"source_facility_category", "category_path", "needs_review", "equipment_role"}
     update_data = {k: v for k, v in body.items() if k in allowed}
     if not update_data:
@@ -104,7 +108,9 @@ def run_update_equipment_master(supabase, facility_name: str, body: dict):
     }
 
 
-def run_bulk_approve_review(supabase, body: dict):
+def run_bulk_approve_review(supabase, body: dict, current: dict):
+    from services.company_scope import _require_admin
+    _require_admin(current, supabase)
     names = body.get("facility_names", [])
     if not names:
         raise ValueError("facility_names가 필요합니다.")
@@ -154,7 +160,9 @@ def run_get_model_detail(supabase, model_id: str):
     return {"status": "success", "data": rows[0]}
 
 
-def run_update_model(supabase, model_id: str, body: dict):
+def run_update_model(supabase, model_id: str, body: dict, current: dict):
+    from services.company_scope import _require_admin
+    _require_admin(current, supabase)
     allowed = {
         "manufacturer",
         "model_name",

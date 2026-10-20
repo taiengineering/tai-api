@@ -4,11 +4,15 @@ from datetime import date
 from typing import Optional
 
 from dateutil.relativedelta import relativedelta
+from fastapi import HTTPException
 
 from services.equipment_helpers import CATEGORY_MAP, DELTA_MAP, _build_schedules_for_repair, _enrich_asset_row, _now_iso
 
 
-def run_get_equipment_stats(supabase, version: str):
+def run_get_equipment_stats(supabase, version: str, current: dict):
+    from services.company_scope import _require_admin
+    _require_admin(current, supabase)
+
     res = supabase.table("engine_equipment_summary").select(
         "source_facility_category, top_band, needs_review, process_count"
     ).execute()
@@ -68,6 +72,56 @@ def run_get_equipment_stats(supabase, version: str):
     }
 
 
+def _empty_asset_page(page: int, page_size: int) -> dict:
+    return {
+        "status": "success",
+        "data": {"items": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0},
+    }
+
+
+def _resolve_asset_scope(supabase, current: dict):
+    """equipment_assets(factory_id 전용) 스코프 필터 결정.
+
+    반환:
+      None          → ALL, 필터 없음
+      {"factory_id": id}      → 단일 factory
+      {"factory_id__in": [...]} → 여러 factory
+      "DENY"        → 빈 결과 반환
+
+    FACTORY/TEAM/ASSIGNED: 토큰 factory_id가 자기 회사 소속인지 교차검증.
+    PLATFORM 및 미정의 scope: 전사 조회 금지 → DENY.
+    """
+    from services.company_scope import _scope, _is_admin, _via_factory, DENY
+
+    tier = _scope(supabase, current.get("role_code"))
+
+    if _is_admin(tier):
+        return None
+
+    cid = current.get("company_id")
+    if not cid:
+        return "DENY"
+
+    if tier == "COMPANY":
+        filt = _via_factory(supabase, cid)
+        if filt is DENY:
+            return "DENY"
+        return filt  # {"factory_id__in": [...]}
+
+    if tier in ("FACTORY", "TEAM", "ASSIGNED"):
+        fid = current.get("factory_id")
+        if not fid:
+            return "DENY"
+        # factory가 자기 company 소속인지 교차검증
+        f = supabase.table("factories").select("company_id").eq("id", fid).limit(1).execute()
+        if not f.data or f.data[0].get("company_id") != cid:
+            return "DENY"
+        return {"factory_id": fid}
+
+    # PLATFORM(031/032/033) 및 미정의 → 전사 조회 금지
+    return "DENY"
+
+
 def run_list_assets(
     supabase,
     page: int,
@@ -77,8 +131,21 @@ def run_list_assets(
     no_inspection: Optional[bool],
     is_legal_target: Optional[bool],
     equipment_type_code: Optional[str],
+    current: dict,
 ):
+    scope = _resolve_asset_scope(supabase, current)
+    if scope == "DENY":
+        return _empty_asset_page(page, page_size)
+
     def _apply_filters(q):
+        # 테넌트 스코프 필터 (최우선)
+        if scope is not None:
+            for col, val in scope.items():
+                if col.endswith("__in"):
+                    q = q.in_(col[:-4], val)
+                else:
+                    q = q.eq(col, val)
+        # 기존 검색·필터
         if search:
             q = q.ilike("asset_name", f"%{search.strip()}%")
         if has_model is True:
@@ -114,7 +181,49 @@ def run_list_assets(
     }
 
 
-def run_patch_asset(supabase, asset_id: str, body):
+def run_patch_asset(supabase, asset_id: str, body, current: dict):
+    from services.company_scope import _scope, _is_admin
+    from services.permission_guard import has_permission
+
+    # 1. 작업권한 확인 (DB 조회 전)
+    if not has_permission(current.get("role_code"), "EQUIPMENT_UPDATE"):
+        raise HTTPException(status_code=403, detail="권한이 없습니다")
+
+    # 2. 자산 조회 (소유권 검증용)
+    asset_check = (
+        supabase.table("equipment_assets")
+        .select("id, factory_id")
+        .eq("id", asset_id)
+        .limit(1)
+        .execute()
+    )
+    if not asset_check.data:
+        raise LookupError("자산을 찾을 수 없습니다.")
+
+    checked_factory_id = asset_check.data[0].get("factory_id")
+
+    # 3. 소유권 검증
+    tier = _scope(supabase, current.get("role_code"))
+    if not _is_admin(tier):
+        if not checked_factory_id:
+            # factory_id 없는 자산 — 비-ALL 수정 불가
+            raise HTTPException(status_code=404, detail="자산을 찾을 수 없습니다")
+        # factory의 회사 소속 확인
+        f_res = (
+            supabase.table("factories")
+            .select("company_id")
+            .eq("id", checked_factory_id)
+            .limit(1)
+            .execute()
+        )
+        if not f_res.data or f_res.data[0].get("company_id") != current.get("company_id"):
+            raise HTTPException(status_code=404, detail="자산을 찾을 수 없습니다")
+        # FACTORY/TEAM/ASSIGNED: 자기 factory만
+        if tier in ("FACTORY", "TEAM", "ASSIGNED"):
+            if checked_factory_id != current.get("factory_id"):
+                raise HTTPException(status_code=404, detail="자산을 찾을 수 없습니다")
+
+    # 4. 업데이트 데이터 구성
     update_data = {}
     if body.last_inspection_date is not None:
         update_data["last_inspection_date"] = body.last_inspection_date.isoformat()
@@ -133,7 +242,13 @@ def run_patch_asset(supabase, asset_id: str, body):
         raise ValueError("수정할 항목이 없습니다.")
 
     update_data["updated_at"] = _now_iso()
-    res = supabase.table("equipment_assets").update(update_data).eq("id", asset_id).execute()
+
+    # 5. TOCTOU 방어: 검증된 factory_id를 UPDATE 조건에 포함
+    update_q = supabase.table("equipment_assets").update(update_data).eq("id", asset_id)
+    if checked_factory_id:
+        update_q = update_q.eq("factory_id", checked_factory_id)
+    res = update_q.execute()
+
     if not res.data:
         raise LookupError("자산을 찾을 수 없습니다.")
 
@@ -197,4 +312,3 @@ def run_patch_asset(supabase, asset_id: str, body):
         except Exception:
             pass
     return {"status": "success", "data": {**asset, "repair_result": repair_result}}
-
