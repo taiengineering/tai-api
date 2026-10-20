@@ -187,7 +187,7 @@ def _collect_targets(sb) -> list[FormTarget]:
             file_id=file_id,
             file_sha256=file_sha,
             preview_ref=preview_ref,
-            thumb_path=f"thumbnails/{form_id}.webp",
+            thumb_path=f"thumbnails/{form_id}-{file_sha[:16]}.webp",
         ))
 
     return targets
