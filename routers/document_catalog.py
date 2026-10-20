@@ -77,7 +77,13 @@ def _normalise_channel(channel: str) -> str:
 
 def _require_admin(current_user: dict = Depends(get_current_user)) -> dict:
     if current_user.get("role_code") not in _ADMIN_ROLES:
-        raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "DOCUMENT_CATALOG_FORBIDDEN",
+                "message": "관리자만 접근 가능합니다.",
+            },
+        )
     return current_user
 
 

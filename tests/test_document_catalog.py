@@ -481,6 +481,16 @@ class T15_RouterListEndpointStructure(unittest.TestCase):
             resp = tc.get("/api/document-catalog")
         self.assertEqual(resp.status_code, 403)
 
+    def test_403_response_body_has_catalog_code(self):
+        # CORR-005: 403 body must carry DOCUMENT_CATALOG_FORBIDDEN so the UI can
+        # distinguish permission errors from generic server errors
+        import unittest.mock as mock
+        tc = _make_router_app(auth_override=lambda: _REGULAR_USER)
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=_make_mock_client()):
+            resp = tc.get("/api/document-catalog")
+        detail = resp.json().get("detail", {})
+        self.assertEqual(detail.get("code"), "DOCUMENT_CATALOG_FORBIDDEN")
+
     def test_inactive_account_returns_403(self):
         # Simulates inactive/suspended account (403 from get_current_user)
         import unittest.mock as mock
