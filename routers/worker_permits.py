@@ -458,20 +458,24 @@ def list_work_permits(
             else:
                 return {"status": "success", "data": {"items": [], "total": 0}}
     else:
-        # 작업자 경로: 본인 기록만 (requester_id 또는 requester_phone)
+        # 작업자 경로: 본인 기록만 (requester_id + 레거시 NULL 기록은 phone+company 함께)
         user_id = str(current_user.get("id") or "")
         user_phone = _clean_phone(current_user.get("phone") or "")
+        user_cid = current_user.get("company_id") or ""
 
-        if user_id and user_phone:
-            # OR 조건: id로 신청한 것 + phone으로 신청한 것 모두 포함
-            q = q.or_(f"requester_id.eq.{user_id},requester_phone.eq.{user_phone}")
-        elif user_id:
-            q = q.eq("requester_id", user_id)
-        elif user_phone:
-            q = q.eq("requester_phone", user_phone)
-        else:
-            # 신원 확인 불가 → 빈 결과 (fail-close)
+        if not user_id:
+            # id 없으면 빈 결과 — phone 단독 조회는 타사 기록 노출 위험
             return {"status": "success", "data": {"items": [], "total": 0}}
+
+        if user_phone and user_cid:
+            # id로 신청한 것 + requester_id IS NULL 레거시(phone+company 일치)
+            q = q.or_(
+                f"requester_id.eq.{user_id},"
+                f"and(requester_id.is.null,requester_phone.eq.{user_phone}"
+                f",company_id.eq.{user_cid})"
+            )
+        else:
+            q = q.eq("requester_id", user_id)
 
         # 작업자 경로에서 타인 phone 필터 파라미터는 무시 (본인 범위 고정)
 

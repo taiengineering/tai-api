@@ -54,6 +54,16 @@ _USER_PUBLIC_COLS = (
     "address_sigungu,address_dong,zipcode,social_provider"
 )
 
+# allow-list 집합 — INSERT/UPDATE 응답 필터링에 사용
+_PUBLIC_COLS_SET = frozenset(c.strip() for c in _USER_PUBLIC_COLS.split(","))
+
+
+def _strip_to_public(row: dict) -> dict:
+    """INSERT/UPDATE 응답에서 허용 목록(_PUBLIC_COLS_SET) 외 컬럼 제거 (allow-list)."""
+    if not row:
+        return {}
+    return {k: v for k, v in row.items() if k in _PUBLIC_COLS_SET}
+
 
 # ============================================================
 # 스키마
@@ -161,6 +171,19 @@ def _assert_user_company(target_company_id, current_user: dict, supabase) -> Non
     jwt_company_id = current_user.get("company_id")
     if not jwt_company_id or target_company_id != jwt_company_id:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
+
+
+def _assert_target_not_privileged(target_role_code, current_user: dict, supabase) -> None:
+    """대상 사용자가 고권한 역할(_HIGH_PRIVILEGE_ROLES)이면 최고관리자(001)만 조작 가능."""
+    if target_role_code not in _HIGH_PRIVILEGE_ROLES:
+        return
+    if _is_platform_admin(supabase, current_user.get("role_code")):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "TARGET_PRIVILEGE_DENIED",
+                "message": "고권한 계정은 최고관리자만 수정·삭제할 수 있습니다"},
+    )
 
 
 # ============================================================
@@ -393,12 +416,7 @@ def create_user(req: UserCreate, current_user: dict = Depends(get_current_user))
     res = supabase.table("users").insert(data).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="회원 등록 실패")
-    # INSERT 응답에서도 민감 컬럼 제거
-    row = res.data[0]
-    for col in ("password_hash", "email_verify_token", "auth_id",
-                "raw_app_meta_data", "raw_user_meta_data", "identity_ci"):
-        row.pop(col, None)
-    return {"status": "success", "message": "회원이 등록됐습니다", "data": row}
+    return {"status": "success", "message": "회원이 등록됐습니다", "data": _strip_to_public(res.data[0])}
 
 
 # ============================================================
@@ -462,10 +480,7 @@ def update_user(user_id: str, req: UserUpdate, current_user: dict = Depends(get_
     update_data["updated_at"] = serialize_business_datetime(now_kst())
     res = supabase.table("users").update(update_data).eq("id", user_id).execute()
     row = res.data[0] if res.data else {}
-    for col in ("password_hash", "email_verify_token", "auth_id",
-                "raw_app_meta_data", "raw_user_meta_data", "identity_ci"):
-        row.pop(col, None)
-    return {"status": "success", "message": "회원 정보가 수정됐습니다", "data": row}
+    return {"status": "success", "message": "회원 정보가 수정됐습니다", "data": _strip_to_public(row)}
 
 
 # ============================================================
@@ -485,13 +500,15 @@ def delete_user(user_id: str, current_user: dict = Depends(get_current_user)):
         )
 
     existing = supabase.table("users").select(
-        "id,company_id"
+        "id,company_id,role_code"
     ).eq("id", user_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
 
     # 타사 접근 차단
     _assert_user_company(existing.data.get("company_id"), current_user, supabase)
+    # 고권한 대상 보호
+    _assert_target_not_privileged(existing.data.get("role_code"), current_user, supabase)
 
     supabase.table("users").update({
         "is_active":   False,
@@ -519,13 +536,15 @@ def update_user_status(user_id: str, req: StatusUpdate, current_user: dict = Dep
         )
 
     existing = supabase.table("users").select(
-        "id,company_id"
+        "id,company_id,role_code"
     ).eq("id", user_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
 
     # 타사 접근 차단
     _assert_user_company(existing.data.get("company_id"), current_user, supabase)
+    # 고권한 대상 보호
+    _assert_target_not_privileged(existing.data.get("role_code"), current_user, supabase)
 
     is_active = (req.status_code == "ACTIVE")
     supabase.table("users").update({
@@ -593,6 +612,8 @@ async def update_user_role(user_id: str, req: RoleUpdate, current_user: dict = D
 
     # 타사 접근 차단
     _assert_user_company(user_res.data.get("company_id"), current_user, supabase)
+    # 고권한 대상 보호 (기존 역할이 고권한이면 최고관리자만 변경 가능)
+    _assert_target_not_privileged(user_res.data.get("role_code"), current_user, supabase)
 
     valid = supabase.table("system_codes").select("code").eq(
         "category", "user_role"
