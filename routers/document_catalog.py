@@ -20,7 +20,7 @@ Source/DB mutations: 0
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -28,6 +28,7 @@ from routers.auth import get_current_user
 from services.catalog_aggregator import (
     CatalogItem,
     SupabaseRestClient,
+    get_approved_links_for_catalog,
     get_document_detail,
     get_unified_catalog,
 )
@@ -98,7 +99,10 @@ def _channel_to_dict(ch: Any) -> dict[str, Any]:
     return d
 
 
-def _item_to_dict(item: CatalogItem) -> dict[str, Any]:
+def _item_to_dict(
+    item: CatalogItem,
+    links: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
     return {
         "provisional_key": item.provisional_key,
         "source_system": item.source_system,
@@ -116,7 +120,8 @@ def _item_to_dict(item: CatalogItem) -> dict[str, Any]:
             "SAAS_EXPORT": _channel_to_dict(item.channels.SAAS_EXPORT),
             "SAAS_AUTO_FILL": _channel_to_dict(item.channels.SAAS_AUTO_FILL),
         },
-        "links": [],  # populated only after unified_document_link table is approved + applied
+        # links: APPROVED SAME_DOCUMENT_VERIFIED only (populated in detail endpoint)
+        "links": links if links is not None else [],
     }
 
 
@@ -230,4 +235,12 @@ def get_catalog_item(
     if item is None:
         raise HTTPException(status_code=404, detail=f"Document not found: {key}")
 
-    return _item_to_dict(item)
+    links: list[dict[str, Any]] = []
+    if item.db_uuid:
+        try:
+            links = get_approved_links_for_catalog(client, item.db_uuid, item.source_system)
+        except Exception as exc:
+            log.error("[document-catalog] link fetch error key=%r: %s", key, exc)
+            raise HTTPException(status_code=503, detail="Catalog link service unavailable")
+
+    return _item_to_dict(item, links=links)
