@@ -240,6 +240,7 @@ def get_catalog_item(
         try:
             links = get_approved_links_for_catalog(client, item.db_uuid, item.source_system)
         except Exception as exc:
-            log.warning("[document-catalog] link fetch error key=%r: %s", key, exc)
+            log.error("[document-catalog] link fetch error key=%r: %s", key, exc)
+            raise HTTPException(status_code=503, detail="Catalog link service unavailable")
 
     return _item_to_dict(item, links=links)

@@ -935,6 +935,86 @@ class TestT10RelatedFormNotSameDoc(unittest.TestCase):
         self.assertEqual(filters["relation_type"], "eq.SAME_DOCUMENT_VERIFIED")
 
 
+class TestCorr002A_LawRef(unittest.TestCase):
+    """CORR-002-A: law_ref/regulation_ref 조회 포함."""
+
+    def test_law_ref_fetched_when_present(self):
+        """saas_document에 law_ref 필드가 포함돼야 한다."""
+        csv_rows = _load_csv()
+        row = next(r for r in csv_rows if r["saas_source_code"] == "DOC-OSH-058")
+        saas = _make_saas_row(doc_name=row["saas_title"])
+        saas["law_ref"] = "산업안전보건법 제24조"
+        saas["regulation_ref"] = None
+        ref = _make_ref_row()
+        ref["title"] = row["ref_title"]
+        client = _make_mock_client(saas_rows=[saas], ref_rows=[ref])
+        detail = get_candidate_detail(client, row["candidate_id"])
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertIsNotNone(detail.saas_document)
+        self.assertEqual(detail.saas_document["law_ref"], "산업안전보건법 제24조")
+        self.assertIsNone(detail.saas_document["regulation_ref"])
+
+    def test_empty_law_ref_preserved_as_none(self):
+        """law_ref가 없는 경우 None으로 그대로 전달돼야 한다."""
+        csv_rows = _load_csv()
+        row = next(r for r in csv_rows if r["saas_source_code"] == "DOC-OSH-058")
+        saas = _make_saas_row(doc_name=row["saas_title"])
+        saas["law_ref"] = None
+        saas["regulation_ref"] = None
+        ref = _make_ref_row()
+        ref["title"] = row["ref_title"]
+        client = _make_mock_client(saas_rows=[saas], ref_rows=[ref])
+        detail = get_candidate_detail(client, row["candidate_id"])
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertIsNone(detail.saas_document["law_ref"])
+
+    def test_db_query_includes_law_ref_column(self):
+        """DB 조회 컬럼에 law_ref, regulation_ref가 포함돼야 한다."""
+        client = _make_mock_client()
+        get_candidates(client)
+        for call in client.select.call_args_list:
+            if call.args[0] == "document_forms":
+                cols = call.kwargs.get("columns", "")
+                self.assertIn("law_ref", cols)
+                self.assertIn("regulation_ref", cols)
+                break
+
+
+class TestCorr002C_LinkFetchError(unittest.TestCase):
+    """CORR-002-C: DB 조회 실패 시 빈 목록과 구분 가능한 오류."""
+
+    def test_get_approved_links_raises_on_db_error(self):
+        """DB 오류 발생 시 RuntimeError가 전파돼야 한다."""
+        from services.catalog_aggregator import get_approved_links_for_catalog
+
+        client = MagicMock()
+        client.select.side_effect = Exception("DB connection failed")
+
+        with self.assertRaises(Exception):
+            get_approved_links_for_catalog(client, "uuid-saas", "SAAS")
+
+    def test_approved_zero_results_returns_empty_list(self):
+        """실제 0건 조회는 빈 목록을 반환해야 한다 (예외 없음)."""
+        from services.catalog_aggregator import get_approved_links_for_catalog
+
+        client = MagicMock()
+        client.select.return_value = []
+        result = get_approved_links_for_catalog(client, "uuid-saas", "SAAS")
+        self.assertEqual(result, [])
+
+    def test_ref_cms_db_error_also_raises(self):
+        """REFERENCE_CMS 측 DB 오류도 전파돼야 한다."""
+        from services.catalog_aggregator import get_approved_links_for_catalog
+
+        client = MagicMock()
+        client.select.side_effect = RuntimeError("network timeout")
+
+        with self.assertRaises(Exception):
+            get_approved_links_for_catalog(client, "uuid-ref", "REFERENCE_CMS")
+
+
 class TestT11ChannelStateUnchanged(unittest.TestCase):
     """T11: 채널 상태 불변 — CORR-001 이후에도 SAAS_AUTO_FILL은 BLOCKED."""
 

@@ -427,70 +427,69 @@ def get_approved_links_for_catalog(
     Only SAME_DOCUMENT_VERIFIED + APPROVED rows are included.
     RELATED_FORM and unapproved states are excluded.
     Audit history and internal evidence are not exposed.
-    Returns empty list on any fetch error (fail-open for catalog display).
+
+    Returns [] for a successful 0-result query.
+    Raises RuntimeError on DB access failure so the caller can return 503.
     """
-    try:
-        if source_system == "SAAS":
-            link_rows = client.select(
-                "unified_document_link",
-                columns="id,reference_form_id,relation_type,review_state",
-                filters={
-                    "saas_catalog_id": f"eq.{db_uuid}",
-                    "review_state": "eq.APPROVED",
-                    "relation_type": "eq.SAME_DOCUMENT_VERIFIED",
-                },
-            )
-            if not link_rows:
-                return []
-            ref_uuids = [r["reference_form_id"] for r in link_rows]
-            ref_rows = client.select(
-                "reference_form_public_view",
-                columns="id,canonical_slug,title",
-                filters={"id": f"in.({','.join(ref_uuids)})"},
-            )
-            ref_by_id = {r["id"]: r for r in ref_rows}
-            result = []
-            for lk in link_rows:
-                ref = ref_by_id.get(lk["reference_form_id"])
-                if ref:
-                    result.append({
-                        "relation_type": lk["relation_type"],
-                        "linked_key": f"REF:{ref['canonical_slug']}",
-                        "linked_title": ref["title"],
-                    })
-            return result
-        else:
-            # REFERENCE_CMS: look up by reference_form_id
-            link_rows = client.select(
-                "unified_document_link",
-                columns="id,saas_catalog_id,relation_type,review_state",
-                filters={
-                    "reference_form_id": f"eq.{db_uuid}",
-                    "review_state": "eq.APPROVED",
-                    "relation_type": "eq.SAME_DOCUMENT_VERIFIED",
-                },
-            )
-            if not link_rows:
-                return []
-            saas_uuids = [r["saas_catalog_id"] for r in link_rows]
-            saas_rows = client.select(
-                "document_forms",
-                columns="id,doc_id,doc_name",
-                filters={"id": f"in.({','.join(saas_uuids)})"},
-            )
-            saas_by_id = {r["id"]: r for r in saas_rows}
-            result = []
-            for lk in link_rows:
-                saas = saas_by_id.get(lk["saas_catalog_id"])
-                if saas:
-                    result.append({
-                        "relation_type": lk["relation_type"],
-                        "linked_key": f"DOC:{saas['doc_id']}",
-                        "linked_title": saas["doc_name"],
-                    })
-            return result
-    except Exception:
-        return []
+    if source_system == "SAAS":
+        link_rows = client.select(
+            "unified_document_link",
+            columns="id,reference_form_id,relation_type,review_state",
+            filters={
+                "saas_catalog_id": f"eq.{db_uuid}",
+                "review_state": "eq.APPROVED",
+                "relation_type": "eq.SAME_DOCUMENT_VERIFIED",
+            },
+        )
+        if not link_rows:
+            return []
+        ref_uuids = [r["reference_form_id"] for r in link_rows]
+        ref_rows = client.select(
+            "reference_form_public_view",
+            columns="id,canonical_slug,title",
+            filters={"id": f"in.({','.join(ref_uuids)})"},
+        )
+        ref_by_id = {r["id"]: r for r in ref_rows}
+        result = []
+        for lk in link_rows:
+            ref = ref_by_id.get(lk["reference_form_id"])
+            if ref:
+                result.append({
+                    "relation_type": lk["relation_type"],
+                    "linked_key": f"REF:{ref['canonical_slug']}",
+                    "linked_title": ref["title"],
+                })
+        return result
+    else:
+        # REFERENCE_CMS: look up by reference_form_id
+        link_rows = client.select(
+            "unified_document_link",
+            columns="id,saas_catalog_id,relation_type,review_state",
+            filters={
+                "reference_form_id": f"eq.{db_uuid}",
+                "review_state": "eq.APPROVED",
+                "relation_type": "eq.SAME_DOCUMENT_VERIFIED",
+            },
+        )
+        if not link_rows:
+            return []
+        saas_uuids = [r["saas_catalog_id"] for r in link_rows]
+        saas_rows = client.select(
+            "document_forms",
+            columns="id,doc_id,doc_name",
+            filters={"id": f"in.({','.join(saas_uuids)})"},
+        )
+        saas_by_id = {r["id"]: r for r in saas_rows}
+        result = []
+        for lk in link_rows:
+            saas = saas_by_id.get(lk["saas_catalog_id"])
+            if saas:
+                result.append({
+                    "relation_type": lk["relation_type"],
+                    "linked_key": f"DOC:{saas['doc_id']}",
+                    "linked_title": saas["doc_name"],
+                })
+        return result
 
 
 def get_document_detail(

@@ -137,7 +137,7 @@ def _fetch_saas_docs(
     in_val = "in.(" + ",".join(codes) + ")"
     rows = client.select(
         "document_forms",
-        columns="id,doc_id,doc_name,sector,category,doc_format,file_url,is_active",
+        columns="id,doc_id,doc_name,sector,category,doc_format,file_url,is_active,law_ref,regulation_ref",
         filters={"doc_id": in_val},
     )
     return {r["doc_id"]: r for r in rows}
