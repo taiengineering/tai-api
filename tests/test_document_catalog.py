@@ -1,16 +1,17 @@
 """
 tests/test_document_catalog.py
-WO-TAI-DOC-UNIFIED-CATALOG-IMPLEMENT-001 — Phase 1
+WO-TAI-DOC-UNIFIED-CATALOG-IMPLEMENT-001 — Phase 1 (CORR-003)
 
 Contract tests for services/catalog_aggregator.py and routers/document_catalog.py.
 No live DB; all REST calls are mocked.
 
-Auth pattern (CORR-002):
+Auth pattern (CORR-003): role_code "001" only (platform admin).
   - No Authorization header → 401 (real get_current_user, no Supabase needed)
   - Invalid token → 401 (dependency_overrides raises HTTPException 401)
-  - Regular user (role_code != 001/002) → 403 (_require_admin raises 403)
+  - Regular user (role_code != "001") → 403 (_require_admin raises 403)
+  - role_code "002" (안전관리자, safety manager) → 403 (not platform admin)
   - Inactive account → 403 (dependency_overrides raises HTTPException 403)
-  - Admin role_code 001/002 → 200
+  - Admin role_code "001" → 200
 
 Production schema contract:
   document_forms:             doc_id, doc_name, is_active=true
@@ -493,9 +494,10 @@ class T15_RouterListEndpointStructure(unittest.TestCase):
         resp = self._run_list(auth_user=_ADMIN_USER)
         self.assertEqual(resp.status_code, 200)
 
-    def test_admin_role_002_returns_200(self):
+    def test_admin_role_002_returns_403(self):
+        # CORR-003: "002" is 안전관리자 (safety manager), not platform admin → 403
         resp = self._run_list(auth_user=_ADMIN_USER_002)
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 403)
 
     def test_empty_response_is_200(self):
         resp = self._run_list()

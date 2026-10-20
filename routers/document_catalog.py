@@ -1,16 +1,18 @@
 """
 routers/document_catalog.py
-WO-TAI-DOC-UNIFIED-CATALOG-IMPLEMENT-001 — Phase 1 (CORR-001 + CORR-002)
+WO-TAI-DOC-UNIFIED-CATALOG-IMPLEMENT-001 — Phase 1 (CORR-001 + CORR-002 + CORR-003)
 
 GET /api/document-catalog        — unified document list (SAAS + REFERENCE_CMS)
 GET /api/document-catalog/{key}  — single document detail by provisional key
 
-Auth: get_current_user (Supabase JWT validation) + role_code in {001, 002}.
+Auth: get_current_user (Supabase JWT validation) + role_code == "001" (platform admin only).
   - Missing token / no Authorization header → 401 (raised by get_current_user)
   - Invalid token → 401 (raised by get_current_user after Supabase rejection)
-  - Valid user, role_code not in admin set → 403 (raised by _require_admin)
+  - Valid user, role_code != "001" → 403 (raised by _require_admin)
   - Inactive/suspended account → 403 (raised by get_current_user)
-  - Admin role_code 001 or 002 → 200
+  - Admin role_code 001 → 200
+  Note: role_code "002" is 안전관리자 (safety manager), not platform admin.
+        All other admin endpoints use "001" only; this endpoint matches that pattern.
 Status: PROPOSED — not deployed
 Source/DB mutations: 0
 """
@@ -34,7 +36,7 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/document-catalog", tags=["Document catalog"])
 
-_ADMIN_ROLES = frozenset({"001", "002"})
+_ADMIN_ROLES = frozenset({"001"})
 
 
 def _require_admin(current_user: dict = Depends(get_current_user)) -> dict:
@@ -114,7 +116,7 @@ def list_document_catalog(
     Returns a unified paginated catalog from document_forms (SAAS) and
     reference_form_public_view (REFERENCE_CMS).
 
-    Auth: Bearer JWT required → 401 if missing/invalid; 403 if not role 001/002.
+    Auth: Bearer JWT required → 401 if missing/invalid; 403 if not role 001.
     No DB writes. per_page silently capped at 200.
     sector/category/status filters apply to SAAS records only.
     channel filter (e.g. WEB_EDIT:READY) applied after capability computation.
@@ -158,7 +160,7 @@ def get_catalog_item(
     Returns a single catalog item by provisional key.
 
     key: DOC:<doc_id> for SAAS records, REF:<canonical_slug> for REFERENCE_CMS records.
-    Auth: Bearer JWT required → 401 if missing/invalid; 403 if not role 001/002.
+    Auth: Bearer JWT required → 401 if missing/invalid; 403 if not role 001.
     Returns 404 if not found or key format invalid.
     links[] is always empty at this phase.
     """
