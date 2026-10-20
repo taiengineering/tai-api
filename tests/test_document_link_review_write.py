@@ -53,7 +53,12 @@ _PROPOSED_ROW = {
     "updated_at":          "2026-10-21T00:00:00Z",
 }
 
-_UNDER_REVIEW_ROW = {**_PROPOSED_ROW, "review_state": "UNDER_REVIEW", "reviewed_by": _ACTOR_ID}
+_UNDER_REVIEW_ROW = {
+    **_PROPOSED_ROW,
+    "review_state": "UNDER_REVIEW",
+    "reviewed_by": _ACTOR_ID,
+    "evidence_note": "test evidence\n[REVIEWED:user-001:20261021T000000Z] 검토 완료 — 동일 문서 확인",
+}
 _APPROVED_ROW = {**_PROPOSED_ROW, "review_state": "APPROVED", "reviewed_by": _ACTOR_ID, "owner_approval_ref": "SYS-UDL-PREV"}
 _REJECTED_ROW = {**_PROPOSED_ROW, "review_state": "REJECTED"}
 
@@ -490,15 +495,24 @@ class TestT19SubmitReviewSuccess(unittest.TestCase):
 
     def test_submit_review_returns_200(self):
         from fastapi.testclient import TestClient
-        under_review_row = {**_PROPOSED_ROW, "review_state": "UNDER_REVIEW"}
+        under_review_row = {**_UNDER_REVIEW_ROW}
         with patch("routers.document_link_review.get_supabase"), \
              patch("routers.document_link_review.transition_link",
                    return_value=under_review_row):
             resp = TestClient(self.app, raise_server_exceptions=False).post(
-                f"/api/document-link-review/links/{_LINK_ID}/submit-review"
+                f"/api/document-link-review/links/{_LINK_ID}/submit-review",
+                json={"review_note": "검토 완료 — 동일 문서 확인"},
             )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["review_state"], "UNDER_REVIEW")
+
+    def test_submit_review_missing_review_note_returns_422(self):
+        from fastapi.testclient import TestClient
+        resp = TestClient(self.app, raise_server_exceptions=False).post(
+            f"/api/document-link-review/links/{_LINK_ID}/submit-review",
+            json={},
+        )
+        self.assertEqual(resp.status_code, 422)
 
 
 class TestT20SubmitReviewNotFound(unittest.TestCase):
@@ -520,7 +534,8 @@ class TestT20SubmitReviewNotFound(unittest.TestCase):
         with patch("routers.document_link_review.get_supabase"), \
              patch("routers.document_link_review.transition_link", side_effect=exc):
             resp = TestClient(self.app, raise_server_exceptions=False).post(
-                f"/api/document-link-review/links/{_LINK_ID}/submit-review"
+                f"/api/document-link-review/links/{_LINK_ID}/submit-review",
+                json={"review_note": "검토 완료"},
             )
         self.assertEqual(resp.status_code, 404)
         self.assertEqual(resp.json()["detail"]["code"], "LINK_NOT_FOUND")
@@ -857,13 +872,14 @@ class TestCORR09ProposeAndReviewStillOpen(_CorrTestBase):
         app.dependency_overrides[get_current_user] = lambda: {
             "id": "u1-uuid", "role_code": "001", "is_active": True
         }
-        under_review_row = {**_PROPOSED_ROW, "review_state": "UNDER_REVIEW"}
+        under_review_row = {**_UNDER_REVIEW_ROW}
         from fastapi.testclient import TestClient
         with patch("routers.document_link_review.get_supabase"), \
              patch("routers.document_link_review.transition_link",
                    return_value=under_review_row):
             resp = TestClient(app, raise_server_exceptions=False).post(
-                f"/api/document-link-review/links/{_LINK_ID}/submit-review"
+                f"/api/document-link-review/links/{_LINK_ID}/submit-review",
+                json={"review_note": "검토 완료"},
             )
         app.dependency_overrides.clear()
         self.assertEqual(resp.status_code, 200)
@@ -932,8 +948,7 @@ class TestSIMP02OwnerApproveSuccess(_OwnerTestBase):
                         "owner_approval_ref": "SYS-UDL-20261021T000000Z-ABCD1234"}
         with patch("routers.document_link_review.SupabaseRestClient"), \
              patch("routers.document_link_review.get_link_by_id",
-                   return_value={**_PROPOSED_ROW, "review_state": "UNDER_REVIEW",
-                                 "relation_type": "SAME_DOCUMENT_VERIFIED"}), \
+                   return_value={**_UNDER_REVIEW_ROW, "relation_type": "SAME_DOCUMENT_VERIFIED"}), \
              patch("routers.document_link_review.get_supabase"), \
              patch("routers.document_link_review.transition_link",
                    return_value=approved_row):
@@ -956,8 +971,7 @@ class TestSIMP03ApproveGeneratesServerRef(_OwnerTestBase):
 
         with patch("routers.document_link_review.SupabaseRestClient"), \
              patch("routers.document_link_review.get_link_by_id",
-                   return_value={**_PROPOSED_ROW, "review_state": "UNDER_REVIEW",
-                                 "relation_type": "SAME_DOCUMENT_VERIFIED"}), \
+                   return_value={**_UNDER_REVIEW_ROW, "relation_type": "SAME_DOCUMENT_VERIFIED"}), \
              patch("routers.document_link_review.get_supabase"), \
              patch("routers.document_link_review.transition_link",
                    side_effect=_mock_transition):
@@ -987,8 +1001,7 @@ class TestSIMP04ApproveCandidateRequiresFinalType(_OwnerTestBase):
                         "relation_type": "SAME_DOCUMENT_VERIFIED"}
         with patch("routers.document_link_review.SupabaseRestClient"), \
              patch("routers.document_link_review.get_link_by_id",
-                   return_value={**_PROPOSED_ROW, "review_state": "UNDER_REVIEW",
-                                 "relation_type": "SAME_DOCUMENT_CANDIDATE"}), \
+                   return_value={**_UNDER_REVIEW_ROW, "relation_type": "SAME_DOCUMENT_CANDIDATE"}), \
              patch("routers.document_link_review.get_supabase"), \
              patch("routers.document_link_review.transition_link",
                    return_value=approved_row):
@@ -1112,6 +1125,53 @@ class TestSIMP08OwnerStatusEndpoint(unittest.TestCase):
         app2.dependency_overrides.clear()
         self.assertEqual(resp.status_code, 200)
         self.assertFalse(resp.json()["is_owner"])
+
+
+class TestSIMP09ApproveWithoutReviewEvidence(_OwnerTestBase):
+    """APPROVE is blocked if evidence_note has no [REVIEWED: marker (submit-review not yet run)."""
+    def test_approve_without_review_evidence_returns_422(self):
+        link_no_evidence = {**_PROPOSED_ROW, "review_state": "UNDER_REVIEW",
+                            "reviewed_by": _ACTOR_ID, "relation_type": "SAME_DOCUMENT_VERIFIED"}
+        with patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.get_link_by_id",
+                   return_value=link_no_evidence):
+            resp = self._client().post(
+                f"/api/document-link-review/links/{_LINK_ID}/decision",
+                json={"action": "APPROVE"},
+            )
+        self.assertEqual(resp.status_code, 422)
+        self.assertEqual(resp.json()["detail"]["code"], "REVIEW_EVIDENCE_REQUIRED")
+
+
+class TestSIMP10SubmitReviewRequiresNote(unittest.TestCase):
+    """submit-review rejects missing or empty review_note."""
+    def setUp(self):
+        from fastapi import FastAPI
+        from routers.document_link_review import router, get_current_user
+        self.app = FastAPI()
+        self.app.include_router(router)
+        self.app.dependency_overrides[get_current_user] = lambda: {
+            "id": "u1-uuid", "role_code": "001", "is_active": True
+        }
+
+    def tearDown(self):
+        self.app.dependency_overrides.clear()
+
+    def test_missing_review_note_returns_422(self):
+        from fastapi.testclient import TestClient
+        resp = TestClient(self.app, raise_server_exceptions=False).post(
+            f"/api/document-link-review/links/{_LINK_ID}/submit-review",
+            json={},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    def test_empty_review_note_returns_422(self):
+        from fastapi.testclient import TestClient
+        resp = TestClient(self.app, raise_server_exceptions=False).post(
+            f"/api/document-link-review/links/{_LINK_ID}/submit-review",
+            json={"review_note": ""},
+        )
+        self.assertEqual(resp.status_code, 422)
 
 
 if __name__ == "__main__":

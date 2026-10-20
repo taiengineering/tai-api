@@ -1,15 +1,18 @@
 -- ============================================================
 -- Migration: 20261021000003_udl_transition_owner_gate_open.sql
 -- WO-TAI-DOC-WP03B-SIMPLIFY-001 작업 B — Owner 승인 경로 활성화
+-- WO-TAI-DOC-WP03B-FINAL-GATE-001 — review_note 검토 근거 append
 --
--- 변경: fn_udl_transition 4-param → 5-param (p_final_relation_type 추가)
+-- 변경: fn_udl_transition 4-param → 6-param
+--        p_final_relation_type (5번): APPROVE 시 관계 유형 재지정
+--        p_review_note          (6번): PROPOSED→UNDER_REVIEW 시 evidence_note에 append
 --      Owner 결정 전환 활성화 (OWNER_GATE_BLOCKED 제거)
---      API 레이어가 Owner 신원을 확인한 후 호출.
+--      API 레이어가 Owner 신원 + 검토 근거 존재 여부를 확인한 후 호출.
 --
 -- 운영 적용: 별도 Owner 승인 필요 (작업 A 운영 확인 후)
 -- ============================================================
 
--- 기존 4-param 버전 제거 (5-param 버전으로 교체)
+-- 기존 4-param 버전 제거 (6-param 버전으로 교체)
 DROP FUNCTION IF EXISTS public.fn_udl_transition(TEXT, UUID, TEXT, TEXT);
 
 CREATE OR REPLACE FUNCTION public.fn_udl_transition(
@@ -17,7 +20,8 @@ CREATE OR REPLACE FUNCTION public.fn_udl_transition(
     p_link_id             UUID,
     p_new_state           TEXT,
     p_owner_approval_ref  TEXT DEFAULT NULL,
-    p_final_relation_type TEXT DEFAULT NULL
+    p_final_relation_type TEXT DEFAULT NULL,
+    p_review_note         TEXT DEFAULT NULL
 )
 RETURNS JSON
 LANGUAGE plpgsql
@@ -53,7 +57,11 @@ BEGIN
             UPDATE public.unified_document_link
             SET review_state = 'UNDER_REVIEW',
                 reviewed_by  = p_actor_id,
-                reviewed_at  = now()
+                reviewed_at  = now(),
+                evidence_note = evidence_note
+                    || E'\n[REVIEWED:' || p_actor_id
+                    || ':' || to_char(now(), 'YYYYMMDD"T"HH24MISS"Z"') || '] '
+                    || COALESCE(trim(p_review_note), '')
             WHERE id = p_link_id
             RETURNING * INTO v_row;
 
@@ -124,5 +132,5 @@ BEGIN
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION public.fn_udl_transition(TEXT, UUID, TEXT, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
-GRANT  EXECUTE ON FUNCTION public.fn_udl_transition(TEXT, UUID, TEXT, TEXT, TEXT) TO service_role;
+REVOKE EXECUTE ON FUNCTION public.fn_udl_transition(TEXT, UUID, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.fn_udl_transition(TEXT, UUID, TEXT, TEXT, TEXT, TEXT) TO service_role;

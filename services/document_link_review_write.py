@@ -77,12 +77,14 @@ def transition_link(
     new_state: str,
     owner_approval_ref: Optional[str] = None,
     final_relation_type: Optional[str] = None,
+    review_note: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Transition a unified_document_link to new_state.
     actor_id is bound to the audit trail via app.actor session variable.
     owner_approval_ref is required for UNDER_REVIEW→APPROVED and APPROVED→RETIRED transitions.
     final_relation_type optionally overrides relation_type on APPROVED transition.
+    review_note is appended to evidence_note on PROPOSED→UNDER_REVIEW transition.
     Raises DocumentLinkWriteError on domain errors; lets other exceptions propagate.
     """
     params = {
@@ -91,6 +93,7 @@ def transition_link(
         "p_new_state":           new_state,
         "p_owner_approval_ref":  owner_approval_ref,
         "p_final_relation_type": final_relation_type,
+        "p_review_note":         review_note,
     }
     resp = supabase.rpc("fn_udl_transition", params).execute()
     data = _extract(resp)

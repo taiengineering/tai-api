@@ -255,6 +255,13 @@ class ProposeLinkRequest(BaseModel):
     evidence_note: str = Field(..., min_length=1, description="Evidence supporting this link")
 
 
+class SubmitReviewRequest(BaseModel):
+    review_note: str = Field(
+        ..., min_length=1,
+        description="검토 근거 — evidence_note에 [REVIEWED:actor:ts] 마커로 append됨.",
+    )
+
+
 class DecisionRequest(BaseModel):
     action: Literal["APPROVE", "REJECT", "RETIRE"] = Field(
         ..., description="APPROVE=UNDER_REVIEW→APPROVED, REJECT=→REJECTED, RETIRE=→RETIRED"
@@ -342,10 +349,12 @@ def create_link(
 @router.post("/links/{link_id}/submit-review", status_code=200)
 def submit_review(
     link_id: str,
+    body: SubmitReviewRequest,
     admin: dict = Depends(_require_admin),
 ) -> dict[str, Any]:
     """
     Advance a PROPOSED link to UNDER_REVIEW.
+    body.review_note is required and is appended to evidence_note as [REVIEWED:actor:ts] marker.
     actor is bound from JWT user_id.
     409 if link is not in PROPOSED state or guard rejects.
     404 if link not found.
@@ -357,6 +366,7 @@ def submit_review(
             actor_id=actor_id,
             link_id=link_id,
             new_state="UNDER_REVIEW",
+            review_note=body.review_note.strip(),
         )
     except DocumentLinkWriteError as exc:
         raise _write_exc(exc)
@@ -431,6 +441,15 @@ def decision(
                 detail={
                     "code": "INVALID_RELATION_TYPE",
                     "message": f"final_relation_type은 {sorted(_APPROVE_VALID_RELATION_TYPES)} 중 하나여야 합니다.",
+                },
+            )
+        evidence = link.get("evidence_note") or ""
+        if "[REVIEWED:" not in evidence:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "REVIEW_EVIDENCE_REQUIRED",
+                    "message": "심사 접수 시 기록된 검토 근거가 없습니다. submit-review를 먼저 실행하세요.",
                 },
             )
         owner_ref = _generate_owner_approval_ref(actor_id)
