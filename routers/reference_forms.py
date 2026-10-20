@@ -2,10 +2,12 @@
 Reference Form public API — WO-REF05-REF09-CMS-FILE-INTEGRATION-006
 P0 repair: WO-REF05-REF09-INTEGRATION-P0-REPAIR-007
 Final P0:  WO-REF05-REF09-INTEGRATION-FINAL-P0-008
+Thumbnail: WO-WWW-SS-THUMBNAIL-001 (no new DB columns required)
 
 GET /reference-forms/{slug}                         — public detail (PUBLISHED + CLEARED)
 GET /reference-forms/{slug}/preview/{file_id}       — anonymous preview (no-store)
 GET /reference-forms/{slug}/files/{file_id}/download — member download (auth, server proxy)
+GET /reference-forms/{slug}/thumbnail               — pre-generated WebP thumbnail (no-store)
 
 DB contract: PR #594 (20261011120000/1/2 migrations)
 - View field: canonical_slug  (not slug)
@@ -14,6 +16,7 @@ DB contract: PR #594 (20261011120000/1/2 migrations)
 - Preview:    reference_form_preview_artifacts.preview_ref  (storage://bucket/path format)
 - Preview SHA: reference_form_preview_artifacts.source_file_sha256
 - Approval:   reference_form_approvals.approved_file_hashes  [{file_id, sha256}]
+- Thumbnail:  Storage only — thumbnails/{form_id}.webp (no DB column)
 
 Security gates enforced at every request (not only at publish time):
   1. PUBLISHED + content_hash = approved_content_hash  (view WHERE clause)
@@ -497,4 +500,137 @@ def download_reference_form_file(
             "Cache-Control": "no-store",
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /reference-forms/{slug}/thumbnail
+# ---------------------------------------------------------------------------
+
+@router.get("/{slug}/thumbnail")
+def get_reference_form_thumbnail(slug: str, sb: Client = Depends(get_supabase)):
+    """
+    Pre-generated WebP thumbnail for search result cards.
+    WO-WWW-SS-THUMBNAIL-001 — no new DB columns required.
+
+    Gates (per request):
+      1. PUBLISHED + content_hash approved         (_load_view_row)
+      2. All active sources CLEARED                (_check_sources_cleared)
+      3. Representative file with has_preview found (qa_pass_files scan)
+      4. file_id + SHA256 in current approval      (_verify_approval_binding — TOCTOU)
+      5. Thumbnail exists at thumbnails/{form_id}-{sha256[:16]}.webp in Storage
+      6. Fetched bytes: WebP signature + ≤70KB
+    Returns 404 if thumbnail has not been generated yet
+    (frontend shows document icon as fallback).
+    Storage paths are never returned to callers.
+    SHA prefix in path ensures stale thumbnails are not served after file replacement.
+    """
+    view_row = _load_view_row(sb, slug)
+    form_id = str(view_row["id"])
+    _check_sources_cleared(sb, form_id)
+
+    # Gate-3: find the approved file that has a linked preview
+    qa_files = view_row.get("qa_pass_files") or []
+    rep_file = next((f for f in qa_files if f.get("has_preview") is True), None)
+    if not rep_file:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    file_id        = str(rep_file["file_id"])
+    approved_sha256 = rep_file.get("sha256", "")
+
+    # Gate-3a: verify file is still active and QA_PASS in DB (has_preview in view may be stale)
+    try:
+        fr = (
+            sb.table("reference_form_files")
+            .select("id,form_id,sha256,preview_artifact_id,is_active,qa_status")
+            .eq("id", file_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log.error("File query failed id=%s: %s", file_id, exc)
+        raise HTTPException(status_code=503, detail="THUMBNAIL_UNAVAILABLE")
+
+    if not fr.data:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    file_row = fr.data[0]
+    if (
+        not file_row.get("is_active")
+        or file_row.get("qa_status") != "QA_PASS"
+        or str(file_row.get("form_id", "")) != form_id
+        or file_row.get("sha256") != approved_sha256
+    ):
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    pa_id = file_row.get("preview_artifact_id")
+    if not pa_id:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    # Gate-3b: verify preview artifact is currently published and QA_PASS
+    try:
+        par = (
+            sb.table("reference_form_preview_artifacts")
+            .select("form_id,source_file_sha256,is_published,qa_status")
+            .eq("id", str(pa_id))
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log.error("Preview artifact query failed id=%s: %s", pa_id, exc)
+        raise HTTPException(status_code=503, detail="THUMBNAIL_UNAVAILABLE")
+
+    if not par.data:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    pa = par.data[0]
+    if (
+        not pa.get("is_published")
+        or pa.get("qa_status") != "QA_PASS"
+        or str(pa.get("form_id", "")) != form_id
+        or pa.get("source_file_sha256") != approved_sha256
+    ):
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    # Gate-4: TOCTOU approval binding (re-read from DB)
+    _verify_approval_binding(sb, form_id, file_id, approved_sha256)
+
+    # SHA prefix in path prevents stale thumbnail after approved file replacement.
+    # 404 means not yet generated; frontend shows document icon.
+    thumb_path = f"thumbnails/{form_id}-{approved_sha256[:16]}.webp"
+
+    try:
+        signed = sb.storage.from_("reference-forms-preview").create_signed_url(
+            thumb_path, expires_in=30
+        )
+        signed_url = signed.get("signedURL") or signed.get("signedUrl") or ""
+        if not signed_url:
+            raise ValueError("empty signed URL")
+    except Exception as exc:
+        log.error("Thumbnail signed URL failed path=%s: %s", thumb_path, exc)
+        raise HTTPException(status_code=503, detail="THUMBNAIL_UNAVAILABLE")
+
+    try:
+        r = httpx.get(signed_url, follow_redirects=True, timeout=30)
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+        r.raise_for_status()
+        content = r.content
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("Thumbnail fetch failed path=%s: %s", thumb_path, exc)
+        raise HTTPException(status_code=502, detail="THUMBNAIL_FETCH_FAILED")
+
+    # Gate-6: basic integrity — WebP signature + size limit
+    _WEBP_MAX_BYTES = 70 * 1024
+    if len(content) > _WEBP_MAX_BYTES:
+        log.error("Thumbnail oversized %d bytes path=%s", len(content), thumb_path)
+        raise HTTPException(status_code=500, detail="THUMBNAIL_CORRUPT")
+    if len(content) < 12 or content[:4] != b"RIFF" or content[8:12] != b"WEBP":
+        log.error("Thumbnail missing WebP signature path=%s", thumb_path)
+        raise HTTPException(status_code=500, detail="THUMBNAIL_CORRUPT")
+
+    return Response(
+        content=content,
+        media_type="image/webp",
+        headers={"Cache-Control": "no-store"},
     )
