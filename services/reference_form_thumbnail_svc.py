@@ -102,6 +102,14 @@ def generate_thumbnail(
             f"Unsupported format {img.format!r}. Allowed: {sorted(_ALLOWED_FORMATS)}"
         )
 
+    # Explicit pixel count guard — independent of Pillow's module-level DecompressionBomb
+    # check so that callers get a ThumbnailInputError regardless of PIL warning settings.
+    if img.width * img.height > MAX_INPUT_PIXELS:
+        raise ThumbnailInputError(
+            f"Image {img.width}×{img.height} = {img.width * img.height} pixels "
+            f"exceeds limit {MAX_INPUT_PIXELS}"
+        )
+
     # Flatten alpha / palette to RGB with white background
     if img.mode == "P":
         img = img.convert("RGBA")

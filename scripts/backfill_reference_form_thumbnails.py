@@ -12,11 +12,14 @@ Dry-run prints a plan with target count, estimated storage, and per-form status.
 Production Backfill requires separate Owner approval (G4 gate).
 
 Safety:
-  - Skips forms that already have thumbnail_qa_status = QA_PASS (no duplicate work)
-  - Skips forms whose preview does not match current approved file (stale preview)
+  - Detects missing migration columns before proceeding
+  - Skips forms that already have thumbnail_qa_status = QA_PASS or PENDING
+  - Re-verifies PUBLISHED, sources CLEARED, approval binding immediately before processing
+  - Marks target as PENDING before processing to prevent concurrent duplicate work
+  - No upsert — refuses to overwrite an existing Storage object
+  - Rolls back Storage upload on DB update failure
   - Records QA_FAIL on generation error without touching other rows
   - Never modifies reference_form_files or original preview artifacts
-  - Concurrency limited to 4 (configurable via --concurrency)
 """
 from __future__ import annotations
 
@@ -109,6 +112,15 @@ def _get_supabase():
         sys.exit(1)
     from supabase import create_client
     return create_client(url, key)
+
+
+def _check_migration_applied(sb) -> bool:
+    """Return True if migration 20261021000001 thumbnail columns exist."""
+    try:
+        sb.table(_PREVIEW).select("thumbnail_qa_status").limit(1).execute()
+        return True
+    except Exception:
+        return False
 
 
 def _collect_targets(sb) -> list[FormTarget]:
@@ -246,9 +258,108 @@ def _parse_storage_ref(raw_ref: str, expected_bucket: str) -> str:
     return path
 
 
+def _recheck_authority(sb, target: FormTarget) -> Optional[str]:
+    """
+    Re-verify all authority gates immediately before processing.
+    Returns None if OK, or an error string explaining why to skip.
+
+    Checks performed (mirrors API endpoint gates 1–4/8):
+      1. Form still published (view row exists)
+      2. All active sources still CLEARED
+      3. Approval binding still valid (TOCTOU — fresh read)
+    """
+    # Gate 1: form still published
+    try:
+        vr = (
+            sb.table(_VIEW)
+            .select("id,qa_pass_files")
+            .eq("id", target.form_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        return f"precheck_view_error:{exc}"
+    if not vr.data:
+        return "form_unpublished"
+
+    # Gate 2: sources CLEARED
+    try:
+        sr = (
+            sb.table(_SOURCES)
+            .select("source_name,rights_status")
+            .eq("form_id", target.form_id)
+            .eq("is_active", True)
+            .execute()
+        )
+    except Exception as exc:
+        return f"precheck_sources_error:{exc}"
+    sources = sr.data or []
+    if not sources:
+        return "no_active_sources"
+    if any(s.get("rights_status") != "CLEARED" for s in sources):
+        return "sources_not_cleared"
+
+    # Gate 3: approval binding
+    try:
+        ar = (
+            sb.table(_APPROVALS)
+            .select("approved_file_hashes")
+            .eq("form_id", target.form_id)
+            .eq("is_current", True)
+            .eq("approval_status", "APPROVED")
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        return f"precheck_approval_error:{exc}"
+    if not ar.data:
+        return "no_current_approval"
+    hashes = ar.data[0].get("approved_file_hashes") or []
+    match = next(
+        (h for h in hashes
+         if str(h.get("file_id")) == target.file_id and h.get("sha256") == target.file_sha256),
+        None,
+    )
+    if not match:
+        return "approval_binding_failed"
+
+    return None
+
+
 def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
-    """Process one form. Returns 'generated', 'skipped', or 'failed:<reason>'."""
+    """Process one form. Returns 'generated', 'dry_run', 'skipped:<reason>', or 'failed:<reason>'."""
     import httpx
+
+    # Pre-processing: re-verify authority (FIX-03)
+    auth_err = _recheck_authority(sb, target)
+    if auth_err:
+        log.info("  %s — skip (authority recheck): %s", target.slug, auth_err)
+        return f"skipped:{auth_err}"
+
+    # Re-check thumbnail_qa_status to prevent concurrent duplicate execution (FIX-03)
+    try:
+        pa_now = (
+            sb.table(_PREVIEW)
+            .select("thumbnail_qa_status")
+            .eq("id", target.preview_artifact_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        return f"failed:precheck_pa:{exc}"
+    if pa_now.data:
+        current_status = pa_now.data[0].get("thumbnail_qa_status")
+        if current_status in ("QA_PASS", "PENDING"):
+            return f"skipped:thumbnail_already_{current_status}"
+
+    # Mark as PENDING before downloading to prevent concurrent execution (FIX-03)
+    if not dry_run:
+        try:
+            sb.table(_PREVIEW).update({
+                "thumbnail_qa_status": "PENDING",
+            }).eq("id", target.preview_artifact_id).execute()
+        except Exception as exc:
+            return f"failed:pending_mark:{exc}"
 
     # Download preview PNG
     try:
@@ -284,7 +395,6 @@ def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
     try:
         result = generate_fn(preview_bytes)
     except Exception as exc:
-        # Record QA_FAIL in DB
         try:
             sb.table(_PREVIEW).update({
                 "thumbnail_qa_status": "QA_FAIL",
@@ -293,13 +403,13 @@ def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
             pass
         return f"failed:generate:{exc}"
 
-    # Upload to storage
+    # Upload to Storage — no upsert to prevent overwriting an existing object (FIX-03)
     thumb_storage_path = f"{THUMBNAIL_PREFIX}/{target.form_id}-v1.webp"
     try:
         sb.storage.from_(THUMBNAIL_BUCKET).upload(
             path=thumb_storage_path,
             file=result.webp_bytes,
-            file_options={"content-type": "image/webp", "upsert": "true"},
+            file_options={"content-type": "image/webp", "upsert": "false"},
         )
     except Exception as exc:
         try:
@@ -310,7 +420,7 @@ def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
             pass
         return f"failed:upload:{exc}"
 
-    # Update preview artifact row
+    # Update preview artifact row — on failure roll back the Storage upload (FIX-03)
     thumbnail_ref = f"storage://{THUMBNAIL_BUCKET}/{thumb_storage_path}"
     try:
         sb.table(_PREVIEW).update({
@@ -322,6 +432,18 @@ def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
             "thumbnail_bytes":              result.byte_count,
         }).eq("id", target.preview_artifact_id).execute()
     except Exception as exc:
+        # Storage object uploaded but DB update failed — remove orphan file
+        try:
+            sb.storage.from_(THUMBNAIL_BUCKET).remove([thumb_storage_path])
+            log.warning("  %s — rolled back Storage upload after DB failure", target.slug)
+        except Exception as rm_exc:
+            log.error("  %s — Storage rollback failed (orphan): %s", target.slug, rm_exc)
+        try:
+            sb.table(_PREVIEW).update({
+                "thumbnail_qa_status": "QA_FAIL",
+            }).eq("id", target.preview_artifact_id).execute()
+        except Exception:
+            pass
         return f"failed:db_update:{exc}"
 
     log.info("  OK %s — %d B WebP (sha256=%s…)", target.slug, result.byte_count, result.output_sha256[:12])
@@ -339,7 +461,6 @@ def main() -> None:
                        help="Print plan only — do not write (default)")
     group.add_argument("--execute",  dest="dry_run",  action="store_false",
                        help="Actually generate and store thumbnails")
-    parser.add_argument("--concurrency", type=int, default=4)
     args = parser.parse_args()
 
     _require_deps()
@@ -348,6 +469,15 @@ def main() -> None:
     )
 
     sb = _get_supabase()
+
+    # FIX-04: verify migration is applied before reading thumbnail columns
+    if not _check_migration_applied(sb):
+        log.error(
+            "Migration 20261021000001 not applied — thumbnail columns missing on "
+            "reference_form_preview_artifacts. Apply the migration first."
+        )
+        sys.exit(1)
+
     targets = _collect_targets(sb)
     stats = BackfillStats(total=len(targets))
 
@@ -366,11 +496,13 @@ def main() -> None:
         log.info("Re-run with --execute to generate thumbnails (requires Owner G4 approval).")
         return
 
-    # Execute mode
+    # Execute mode — sequential processing
     for t in targets:
         result = _process_one(sb, t, generate_thumbnail, dry_run=False)
         if result == "generated":
             stats.generated += 1
+        elif result.startswith("skipped:"):
+            stats.skipped += 1
         elif result.startswith("failed:"):
             stats.failed += 1
             stats.errors.append((t.slug, result))

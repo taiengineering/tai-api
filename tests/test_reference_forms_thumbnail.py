@@ -49,7 +49,7 @@ _SHA256     = "abcdef1234567890" * 4   # 64-char fake hex
 _PA_ID      = "cccc0000-0000-0000-0000-000000000003"
 _OTHER_FORM = "dddd0000-0000-0000-0000-000000000004"
 _THUMB_REF  = "storage://reference-forms-preview/thumbnails/aaaa0000-0000-0000-0000-000000000001-v1.webp"
-_THUMB_SHA  = "thumb" + "a" * 59
+_THUMB_SHA  = "a8e1378cd74e08b2553bf313f676885cc7a6d590cfe79ca1b5f9d49215b5efa3"  # sha256(WEBP_1PX)
 _INPUT_SHA  = "input" + "b" * 59
 
 _VIEW_ROW = {
@@ -95,7 +95,7 @@ _PA_ROW = {
     "thumbnail_sha256":             _THUMB_SHA,
     "thumbnail_input_sha256":       _INPUT_SHA,
     "thumbnail_qa_status":          "QA_PASS",
-    "thumbnail_bytes":              12_000,
+    "thumbnail_bytes":              44,   # len(WEBP_1PX)
 }
 
 _APPROVAL_ROW = {
@@ -415,10 +415,38 @@ def test_T16_oversized_input_raises():
 
 
 # ---------------------------------------------------------------------------
-# T17 — empty bytes raise ThumbnailInputError
+# T17 — oversized image (> MAX_INPUT_PIXELS) raises ThumbnailInputError
 # ---------------------------------------------------------------------------
 
-def test_T17_empty_input_raises():
+def test_T17_decompression_bomb_raises():
+    try:
+        from services.reference_form_thumbnail_svc import (
+            generate_thumbnail, ThumbnailInputError
+        )
+        import services.reference_form_thumbnail_svc as _svc
+    except ImportError:
+        pytest.skip("Pillow not installed")
+
+    # Patch both the module constant and Pillow's PIL limit so the explicit pixel
+    # guard fires on a small test image without needing a real 50 MP file.
+    original_max_pixels = _svc.MAX_INPUT_PIXELS
+    original_pil_limit  = _svc.Image.MAX_IMAGE_PIXELS
+    _svc.MAX_INPUT_PIXELS       = 100 * 100  # 10 000 pixels
+    _svc.Image.MAX_IMAGE_PIXELS = 100 * 100
+    try:
+        oversized_png = _make_png(101, 101)  # 10 201 pixels — exceeds patched limit
+        with pytest.raises(ThumbnailInputError):
+            generate_thumbnail(oversized_png)
+    finally:
+        _svc.MAX_INPUT_PIXELS       = original_max_pixels
+        _svc.Image.MAX_IMAGE_PIXELS = original_pil_limit
+
+
+# ---------------------------------------------------------------------------
+# T17b — empty bytes raise ThumbnailInputError
+# ---------------------------------------------------------------------------
+
+def test_T17b_empty_input_raises():
     try:
         from services.reference_form_thumbnail_svc import generate_thumbnail, ThumbnailInputError
     except ImportError:
@@ -454,3 +482,86 @@ def test_T19_sha256_consistent():
     assert r.output_sha256 == hashlib.sha256(r.webp_bytes).hexdigest()
     assert r.byte_count == len(r.webp_bytes)
     assert r.generation_version.startswith("v1-pillow")
+
+
+# ===========================================================================
+# Integrity gate tests (endpoint — FIX-01 verifications)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# T20 — SHA256 in DB does not match fetched bytes → 500
+# ---------------------------------------------------------------------------
+
+def test_T20_sha256_mismatch_500():
+    pa = {**_PA_ROW, "thumbnail_sha256": "0" * 64}  # wrong hash
+    sb = _sb_mock(pa=pa)
+    app = _make_app(sb)
+
+    with patch("httpx.get") as mock_get:
+        mock_get.return_value = MagicMock(
+            status_code=200, content=WEBP_1PX,
+            headers={"content-type": "image/webp"},
+            raise_for_status=lambda: None,
+        )
+        resp = TestClient(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+
+    assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# T21 — thumbnail_bytes in DB does not match fetched size → 500
+# ---------------------------------------------------------------------------
+
+def test_T21_size_mismatch_500():
+    # DB says thumbnail_bytes=99999 but we'll return WEBP_1PX (much smaller)
+    pa = {**_PA_ROW, "thumbnail_bytes": 99999}
+    sb = _sb_mock(pa=pa)
+    app = _make_app(sb)
+
+    with patch("httpx.get") as mock_get:
+        mock_get.return_value = MagicMock(
+            status_code=200, content=WEBP_1PX,
+            headers={"content-type": "image/webp"},
+            raise_for_status=lambda: None,
+        )
+        resp = TestClient(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+
+    assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# T22 — fetched bytes have no WebP signature → 500
+# ---------------------------------------------------------------------------
+
+def test_T22_webp_signature_invalid_500():
+    fake_content = b"NOT_A_WEBP_FILE" + b"\x00" * 20
+    fake_sha = hashlib.sha256(fake_content).hexdigest()
+    pa = {
+        **_PA_ROW,
+        "thumbnail_sha256": fake_sha,
+        "thumbnail_bytes": len(fake_content),
+    }
+    sb = _sb_mock(pa=pa)
+    app = _make_app(sb)
+
+    with patch("httpx.get") as mock_get:
+        mock_get.return_value = MagicMock(
+            status_code=200, content=fake_content,
+            headers={"content-type": "image/webp"},
+            raise_for_status=lambda: None,
+        )
+        resp = TestClient(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+
+    assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# T23 — thumbnail_sha256 missing in DB → 404
+# ---------------------------------------------------------------------------
+
+def test_T23_thumbnail_sha256_missing_404():
+    pa = {**_PA_ROW, "thumbnail_sha256": None}
+    sb = _sb_mock(pa=pa)
+    app = _make_app(sb)
+    resp = TestClient(app).get(f"/reference-forms/{_SLUG}/thumbnail")
+    assert resp.status_code == 404

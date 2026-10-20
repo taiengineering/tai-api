@@ -33,6 +33,7 @@ Storage paths and approval IDs are never returned to callers.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 
@@ -524,8 +525,9 @@ def get_reference_form_thumbnail(slug: str, sb: Client = Depends(get_supabase)):
       6. SHA256 match (file_row vs approved_sha256)
       7. Preview artifact: is_published + QA_PASS
       8. source_file_sha256 matches approved_sha256 (preview links to current file)
-      9. thumbnail_qa_status = QA_PASS + thumbnail_ref + thumbnail_input_sha256 present
+      9. thumbnail_qa_status = QA_PASS + thumbnail_ref/input_sha256/sha256 present
      10. Storage ref parsed and bucket validated    (_parse_storage_ref)
+     11. Fetched bytes: WebP signature + ≤70KB + size match + SHA256 match (FIX-01)
 
     Returns pre-generated WebP only — never generates on-the-fly.
     Returns 404 if thumbnail has not yet been generated (backfill pending).
@@ -604,20 +606,27 @@ def get_reference_form_thumbnail(slug: str, sb: Client = Depends(get_supabase)):
     # Gate-8: preview source links to the current approved file
     if pa.get("source_file_sha256") != approved_sha256:
         raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
-    # Gate-9: thumbnail must be QA_PASS with storage ref and input hash
+    # Gate-9: thumbnail must be QA_PASS with storage ref, input hash, and sha256
     if pa.get("thumbnail_qa_status") != "QA_PASS":
         raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
     if not pa.get("thumbnail_ref"):
         raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
     if not pa.get("thumbnail_input_sha256"):
+        # thumbnail_input_sha256 = SHA256 of the Preview PNG processed by backfill.
+        # Combined with source_file_sha256==approved_sha256 chain (Gate-8), it anchors
+        # thumbnail provenance without a live preview re-download per request.
         raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    expected_sha256 = pa.get("thumbnail_sha256")
+    if not expected_sha256:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    expected_bytes = pa.get("thumbnail_bytes")
 
     # Gate-10: parse and validate storage ref
     thumb_path = _parse_storage_ref(pa["thumbnail_ref"], "reference-forms-preview")
 
     try:
         signed = sb.storage.from_("reference-forms-preview").create_signed_url(
-            thumb_path, expires_in=60
+            thumb_path, expires_in=30
         )
         signed_url = signed.get("signedURL") or signed.get("signedUrl") or ""
         if not signed_url:
@@ -629,12 +638,30 @@ def get_reference_form_thumbnail(slug: str, sb: Client = Depends(get_supabase)):
     try:
         r = httpx.get(signed_url, follow_redirects=True, timeout=30)
         r.raise_for_status()
+        content = r.content
     except Exception as exc:
         log.error("Thumbnail fetch failed path=%s: %s", thumb_path, exc)
         raise HTTPException(status_code=502, detail="THUMBNAIL_FETCH_FAILED")
 
+    # Gate-11: integrity — verify fetched bytes match DB-recorded metadata (FIX-01)
+    _WEBP_MAX_BYTES = 70 * 1024
+    if len(content) > _WEBP_MAX_BYTES:
+        log.error("Thumbnail oversized %d bytes path=%s", len(content), thumb_path)
+        raise HTTPException(status_code=500, detail="THUMBNAIL_CORRUPT")
+    if len(content) < 12 or content[:4] != b"RIFF" or content[8:12] != b"WEBP":
+        log.error("Thumbnail missing WebP signature path=%s", thumb_path)
+        raise HTTPException(status_code=500, detail="THUMBNAIL_CORRUPT")
+    if expected_bytes is not None and len(content) != expected_bytes:
+        log.error("Thumbnail size mismatch expected=%s actual=%d path=%s",
+                  expected_bytes, len(content), thumb_path)
+        raise HTTPException(status_code=500, detail="THUMBNAIL_CORRUPT")
+    actual_sha256 = hashlib.sha256(content).hexdigest()
+    if actual_sha256 != expected_sha256:
+        log.error("Thumbnail SHA256 mismatch path=%s", thumb_path)
+        raise HTTPException(status_code=500, detail="THUMBNAIL_CORRUPT")
+
     return Response(
-        content=r.content,
+        content=content,
         media_type="image/webp",
         headers={"Cache-Control": "no-store"},
     )
