@@ -8,18 +8,19 @@ from fastapi import HTTPException
 
 from services.equipment_helpers import CATEGORY_MAP, DELTA_MAP, _build_schedules_for_repair, _enrich_asset_row, _now_iso
 
+# FIX-C1: EE 허용 Scope (PLATFORM 제외)
+_VALID_EE_SCOPES = frozenset({"ALL", "COMPANY", "FACTORY", "TEAM", "ASSIGNED"})
+
 
 def _ee_scope(supabase, role_code):
-    """EE 전용 스코프 조회. 미등록·조회실패 시 None 반환(Fail-Close).
+    """EE 전용 Scope — role_data_scope 단일 조회, 허용 Scope 검증, Fail-Close.
 
-    공통 _scope()는 미등록 역할을 'TEAM' 기본값으로 처리하므로,
-    실제 role_data_scope 등록 여부를 추가 검증한다.
-    테스트에서 services.company_scope._scope 패치로 제어 가능.
+    허용: ALL / COMPANY / FACTORY / TEAM / ASSIGNED
+    PLATFORM, 미등록, 조회실패, role_code 누락 → None (DENY)
+    공통 _scope()와 달리 기본값 'TEAM' 폴백 없음.
     """
-    from services.company_scope import _scope
     if not role_code:
         return None
-    tier = _scope(supabase, role_code)
     try:
         r = (
             supabase.table("role_data_scope")
@@ -28,9 +29,10 @@ def _ee_scope(supabase, role_code):
             .limit(1)
             .execute()
         )
-        if r.data and r.data[0].get("scope_type"):
-            return tier
-        return None  # 미등록
+        if not r.data:
+            return None  # 미등록
+        scope = r.data[0].get("scope_type")
+        return scope if scope in _VALID_EE_SCOPES else None  # PLATFORM 등 → None
     except Exception:
         return None  # 조회실패
 
@@ -109,17 +111,20 @@ def _resolve_asset_scope(supabase, current: dict):
     """equipment_assets(factory_id 전용) 스코프 필터 결정.
 
     반환:
-      None          → ALL, 필터 없음
-      {"factory_id": id}      → 단일 factory
+      None                      → ALL, 필터 없음
+      {"factory_id": id}        → 단일 factory
       {"factory_id__in": [...]} → 여러 factory
-      "DENY"        → 빈 결과 반환
+      "DENY"                    → 빈 결과 반환
 
-    FIX-B1: _ee_scope()로 미등록 역할 Fail-Close.
-    PLATFORM 및 미정의 scope: 전사 조회 금지 → DENY.
+    FIX-C1: _ee_scope() 단일 조회 — ALL/COMPANY/FACTORY/TEAM/ASSIGNED 전 분기 동일 검증.
+    PLATFORM, 미등록, 조회실패 → DENY.
     """
-    from services.company_scope import _scope, _is_admin, _via_factory, DENY
+    from services.company_scope import _is_admin, _via_factory, DENY
 
-    tier = _scope(supabase, current.get("role_code"))
+    # FIX-C1: role_data_scope 단일 조회 (ALL/COMPANY 포함 전 분기)
+    tier = _ee_scope(supabase, current.get("role_code"))
+    if tier is None:
+        return "DENY"
 
     if _is_admin(tier):
         return None
@@ -135,9 +140,6 @@ def _resolve_asset_scope(supabase, current: dict):
         return filt  # {"factory_id__in": [...]}
 
     if tier in ("FACTORY", "TEAM", "ASSIGNED"):
-        # FIX-B1: 미등록 역할(_scope 기본값 "TEAM") Fail-Close — FACTORY/TEAM/ASSIGNED 진입 시 검증
-        if _ee_scope(supabase, current.get("role_code")) is None:
-            return "DENY"
         fid = current.get("factory_id")
         if not fid:
             return "DENY"
@@ -218,7 +220,7 @@ def run_patch_asset(supabase, asset_id: str, body, current: dict):
     if not has_permission(current.get("role_code"), "EQUIPMENT_UPDATE"):
         raise HTTPException(status_code=403, detail="권한이 없습니다")
 
-    # 1.5 FIX-B1: EE 전용 엄격 스코프 (미등록 역할 Fail-Close)
+    # 1.5 FIX-C1: EE 전용 단일 조회 Scope 검증 (미등록·PLATFORM Fail-Close)
     tier = _ee_scope(supabase, current.get("role_code"))
     if tier is None:
         raise HTTPException(status_code=403, detail="권한이 없습니다")
@@ -236,7 +238,7 @@ def run_patch_asset(supabase, asset_id: str, body, current: dict):
 
     checked_factory_id = asset_check.data[0].get("factory_id")
 
-    # 3. 소유권 검증 + FIX-B2: verified_company_id 결정 (관리자 포함)
+    # 3. 소유권 검증 + verified_company_id 결정 (관리자 포함 FIX-C2용)
     verified_company_id = None
     if not _is_admin(tier):
         if not checked_factory_id:
@@ -258,7 +260,7 @@ def run_patch_asset(supabase, asset_id: str, body, current: dict):
             if checked_factory_id != current.get("factory_id"):
                 raise HTTPException(status_code=404, detail="자산을 찾을 수 없습니다")
     else:
-        # FIX-B2: 관리자도 수리 일정 회사 경계에 asset factory 기준 적용
+        # FIX-C2: 관리자도 수리 일정 경계를 asset factory 기준 company_id로 결정
         if checked_factory_id:
             try:
                 f_res = (
@@ -293,34 +295,34 @@ def run_patch_asset(supabase, asset_id: str, body, current: dict):
 
     update_data["updated_at"] = _now_iso()
 
-    # 4.5 FIX-B2: 수리 후 일정 사전 검증 (자산 UPDATE 전 — 모든 보안 검증 선행)
+    # 4.5 FIX-C2: 수리 후 일정 사전 검증 — asset UPDATE 이전, DB 오류 Fail-Close
     pre_validated_sets = []
     _repair_date = None
     _end_date = None
-    if body.is_operating is True and body.repair_date and checked_factory_id and verified_company_id:
-        try:
-            _repair_date = date.fromisoformat(body.repair_date)
-            _end_date = _repair_date + relativedelta(years=1)
-            sets_res = (
-                supabase.table("inspection_sets")
-                .select("id, factory_id, company_id, cycle_value, cycle_unit, inspection_set_name, inspection_category")
-                .eq("factory_id", checked_factory_id)
-                .eq("company_id", verified_company_id)
-                .eq("source", "MANUAL")
-                .eq("status_code", "ACTIVE")
-                .eq("is_active", True)
-                .execute()
-            )
-            for iset in (sets_res.data or []):
-                if iset.get("company_id") != verified_company_id:
-                    raise HTTPException(status_code=403, detail="점검세트 회사 경계 불일치")
-                if iset.get("factory_id") != checked_factory_id:
-                    raise HTTPException(status_code=403, detail="점검세트 사업장 경계 불일치")
-                pre_validated_sets.append(iset)
-        except HTTPException:
-            raise  # 보안 검증 실패 — 예외 삼킴 금지
-        except Exception:
-            pass  # 사전 조회 실패 → 일정 처리 건너뜀
+    if body.is_operating is True and body.repair_date and checked_factory_id:
+        # factory가 있는 자산만 일정 재생성 대상
+        if not verified_company_id:
+            # factory는 있는데 company 정보를 가져오지 못한 경우 (admin + factory 조회 실패)
+            raise HTTPException(status_code=500, detail="회사 정보를 확인할 수 없습니다")
+        _repair_date = date.fromisoformat(body.repair_date)
+        _end_date = _repair_date + relativedelta(years=1)
+        # FIX-C2: factory_id만으로 조회 → company_id 불일치 탐지 가능 (company_id 선필터 제거)
+        # FIX-C2: DB 오류는 except 삼킴 없이 전파 (Fail-Close)
+        sets_res = (
+            supabase.table("inspection_sets")
+            .select("id, factory_id, company_id, cycle_value, cycle_unit, inspection_set_name, inspection_category")
+            .eq("factory_id", checked_factory_id)
+            .eq("source", "MANUAL")
+            .eq("status_code", "ACTIVE")
+            .eq("is_active", True)
+            .execute()
+        )
+        for iset in (sets_res.data or []):
+            if iset.get("company_id") != verified_company_id:
+                raise HTTPException(status_code=403, detail="점검세트 회사 경계 불일치")
+            if iset.get("factory_id") != checked_factory_id:
+                raise HTTPException(status_code=403, detail="점검세트 사업장 경계 불일치")
+            pre_validated_sets.append(iset)
 
     # 5. TOCTOU 방어: 검증된 factory_id를 UPDATE 조건에 포함
     update_q = supabase.table("equipment_assets").update(update_data).eq("id", asset_id)
@@ -341,7 +343,8 @@ def run_patch_asset(supabase, asset_id: str, body, current: dict):
                     supabase.table("work_schedules")
                     .delete()
                     .eq("inspection_set_id", iset["id"])
-                    .eq("company_id", iset["company_id"])
+                    .eq("company_id", verified_company_id)
+                    .eq("factory_id", checked_factory_id)
                     .eq("status_code", "SCHEDULED")
                     .execute()
                 )

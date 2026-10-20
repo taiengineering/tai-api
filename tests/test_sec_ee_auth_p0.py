@@ -411,7 +411,7 @@ def test_ee_unit_02_patch_cross_tenant_asset():
     sb.table.side_effect = _table_side_effect
 
     with patch("services.permission_guard.has_permission", return_value=True):
-        with patch("services.company_scope._scope", return_value="COMPANY"):
+        with patch("services.equipment_engine_svc._ee_scope", return_value="COMPANY"):
             with pytest.raises(HTTPException) as exc:
                 run_patch_asset(sb, "asset-x", body, _current(role_code="002", company_id="cid-A"))
     assert exc.value.status_code == 404
@@ -451,7 +451,7 @@ def test_ee_unit_03_patch_factory_tier_wrong_factory():
     sb.table.side_effect = _table_se
 
     with patch("services.permission_guard.has_permission", return_value=True):
-        with patch("services.company_scope._scope", return_value="FACTORY"):
+        with patch("services.equipment_engine_svc._ee_scope", return_value="FACTORY"):
             with pytest.raises(HTTPException) as exc:
                 run_patch_asset(
                     sb, "asset-y", body,
@@ -487,7 +487,7 @@ def test_ee_unit_04_patch_null_factory_non_admin():
     sb.table.side_effect = _table_se
 
     with patch("services.permission_guard.has_permission", return_value=True):
-        with patch("services.company_scope._scope", return_value="COMPANY"):
+        with patch("services.equipment_engine_svc._ee_scope", return_value="COMPANY"):
             with pytest.raises(HTTPException) as exc:
                 run_patch_asset(
                     sb, "asset-null", body,
@@ -503,7 +503,7 @@ def test_ee_unit_05_list_assets_platform_denied():
     from services.equipment_engine_svc import run_list_assets
 
     sb = MagicMock()
-    with patch("services.company_scope._scope", return_value="PLATFORM"):
+    with patch("services.equipment_engine_svc._ee_scope", return_value=None):
         result = run_list_assets(
             sb, 1, 50, None, None, None, None, None,
             _current(role_code="031"),
@@ -523,7 +523,7 @@ def test_ee_unit_06_list_assets_no_company():
     user = _current()
     user["company_id"] = None
 
-    with patch("services.company_scope._scope", return_value="COMPANY"):
+    with patch("services.equipment_engine_svc._ee_scope", return_value="COMPANY"):
         result = run_list_assets(sb, 1, 50, None, None, None, None, None, user)
     assert result["data"]["total"] == 0
     sb.table.assert_not_called()
@@ -638,7 +638,7 @@ def test_ee_unit_13_list_assets_all_no_filter():
     from services.equipment_engine_svc import _resolve_asset_scope
 
     sb = MagicMock()
-    with patch("services.company_scope._scope", return_value="ALL"):
+    with patch("services.equipment_engine_svc._ee_scope", return_value="ALL"):
         result = _resolve_asset_scope(sb, _current(role_code="001"))
     assert result is None, f"ALL tier인데 필터가 적용됨: {result}"
 
@@ -662,7 +662,7 @@ def test_ee_unit_14_resolve_scope_factory_cross_validation_fail():
 
     sb.table.side_effect = _table_se
 
-    with patch("services.company_scope._scope", return_value="FACTORY"):
+    with patch("services.equipment_engine_svc._ee_scope", return_value="FACTORY"):
         result = _resolve_asset_scope(
             sb,
             _current(role_code="012", company_id="cid-A", factory_id="fid-mine"),
@@ -693,11 +693,10 @@ def test_ee_b1_unregistered_role_list_assets_denied():
         return t
     sb.table.side_effect = _table_se
 
-    with patch("services.company_scope._scope", return_value="TEAM"):
-        result = run_list_assets(
-            sb, 1, 50, None, None, None, None, None,
-            {"role_code": "UNREGISTERED-999", "company_id": "cid-A", "factory_id": "fid-A"},
-        )
+    result = run_list_assets(
+        sb, 1, 50, None, None, None, None, None,
+        {"role_code": "UNREGISTERED-999", "company_id": "cid-A", "factory_id": "fid-A"},
+    )
     assert result["data"]["total"] == 0
     assert result["data"]["items"] == []
     # equipment_assets 조회 미발생 확인
@@ -717,11 +716,10 @@ def test_ee_b1_db_failure_list_assets_denied():
         return t
     sb.table.side_effect = _table_se
 
-    with patch("services.company_scope._scope", return_value="TEAM"):
-        result = run_list_assets(
-            sb, 1, 50, None, None, None, None, None,
-            {"role_code": "ERR-ROLE", "company_id": "cid-A", "factory_id": "fid-A"},
-        )
+    result = run_list_assets(
+        sb, 1, 50, None, None, None, None, None,
+        {"role_code": "ERR-ROLE", "company_id": "cid-A", "factory_id": "fid-A"},
+    )
     assert result["data"]["total"] == 0
     called_tables = [c[0][0] for c in sb.table.call_args_list]
     assert "equipment_assets" not in called_tables, "DB 실패 후 equipment_assets 조회됨"
@@ -752,9 +750,8 @@ def test_ee_b1_unregistered_role_patch_asset_403():
     body.equipment_model_id = None
 
     with patch("services.permission_guard.has_permission", return_value=True):
-        with patch("services.company_scope._scope", return_value="TEAM"):
-            with pytest.raises(HTTPException) as exc:
-                run_patch_asset(sb, "asset-x", body, {"role_code": "UNREGISTERED-999", "company_id": "cid-A"})
+        with pytest.raises(HTTPException) as exc:
+            run_patch_asset(sb, "asset-x", body, {"role_code": "UNREGISTERED-999", "company_id": "cid-A"})
     assert exc.value.status_code == 403
     assert not asset_update_called, "미등록 역할인데 UPDATE가 호출됨"
 
@@ -763,9 +760,9 @@ def test_ee_b1_team_assigned_no_factory_denied():
     """EE-B1-04: TEAM/ASSIGNED scope에 factory_id 없음 → DENY"""
     from services.equipment_engine_svc import _resolve_asset_scope
 
-    sb = MagicMock()  # role_data_scope 조회 → truthy (기본 MagicMock)
+    sb = MagicMock()
 
-    with patch("services.company_scope._scope", return_value="TEAM"):
+    with patch("services.equipment_engine_svc._ee_scope", return_value="TEAM"):
         result = _resolve_asset_scope(
             sb,
             {"role_code": "004", "company_id": "cid-A", "factory_id": None},
@@ -789,44 +786,54 @@ def test_ee_b1_company_scope_returns_factory_filter():
         return t
     sb.table.side_effect = _table_se
 
-    with patch("services.company_scope._scope", return_value="COMPANY"):
+    with patch("services.equipment_engine_svc._ee_scope", return_value="COMPANY"):
         result = _resolve_asset_scope(
             sb,
             {"role_code": "002", "company_id": "cid-A"},
         )
-    # 필터 또는 DENY — factories가 있으면 factory_id__in 필터
-    assert result != "DENY" or result == "DENY"  # 결과 형식 확인
-    # 핵심: _ee_scope None 반환 시 이 시점에 도달 못함을 간접 확인
-    # (MagicMock role_data_scope → truthy → None 아님 → DENY 아님 or COMPANY 처리)
+    # FIX-C4: 실질적인 단언 — factories 있으면 factory_id__in 필터 dict 반환
+    assert result != "DENY", f"factories 있는 COMPANY scope → DENY 아니어야 함, 실제: {result}"
+    assert isinstance(result, dict), f"factory filter dict여야 함, 실제: {result}"
+    assert "factory_id__in" in result, f"factory_id__in 키 없음: {result}"
 
 
 # ── EE-B2: FIX-B2 수리 후 일정 회사 경계 ──────────────────────────────────
 
 
 def test_ee_b2_src_inspection_sets_query_company_filter():
-    """EE-B2-SRC-01: inspection_sets 조회에 company_id 필터 적용"""
+    """EE-B2-SRC-01: inspection_sets SELECT는 factory_id 전용 — company_id 루프 검증 (FIX-C2)"""
     src = _engine_src()
     func_pat = re.compile(r"def run_patch_asset\s*\(.*?(?=\ndef |\Z)", re.DOTALL)
     m = func_pat.search(src)
     assert m, "run_patch_asset 없음"
     block = m.group(0)
-    # inspection_sets 조회에 verified_company_id eq 포함
-    assert re.search(r'table\("inspection_sets"\).*?\.eq\(.*?company_id.*?verified_company_id', block, re.DOTALL), \
-        "inspection_sets 조회에 company_id 필터 없음"
+    # FIX-C2: inspection_sets SELECT에 factory_id 필터 있음
+    assert re.search(
+        r'table\("inspection_sets"\).*?\.eq\(.*?factory_id.*?checked_factory_id',
+        block, re.DOTALL
+    ), "inspection_sets 조회에 factory_id 필터 없음"
+    # FIX-C2: company_id는 SELECT 필터가 아닌 루프에서 검증
+    assert re.search(r'iset\.get\(["\']company_id', block), \
+        "루프 내 company_id 검증 없음 — FIX-C2 미적용"
 
 
 def test_ee_b2_src_work_schedules_delete_company_filter():
-    """EE-B2-SRC-02: work_schedules DELETE에 company_id 조건 포함"""
+    """EE-B2-SRC-02: work_schedules DELETE에 company_id + factory_id 조건 포함 (FIX-C3)"""
     src = _engine_src()
     func_pat = re.compile(r"def run_patch_asset\s*\(.*?(?=\ndef |\Z)", re.DOTALL)
     m = func_pat.search(src)
     assert m
     block = m.group(0)
-    # work_schedules DELETE 블록에 company_id eq 존재
+    # company_id 조건
     assert re.search(
         r'table\("work_schedules"\).*?\.delete\(\).*?\.eq\(.*?company_id',
         block, re.DOTALL
     ), "work_schedules DELETE에 company_id 조건 없음"
+    # FIX-C3: factory_id 조건
+    assert re.search(
+        r'table\("work_schedules"\).*?\.delete\(\).*?\.eq\(.*?factory_id.*?checked_factory_id',
+        block, re.DOTALL
+    ), "work_schedules DELETE에 factory_id 조건 없음 — FIX-C3 미적용"
 
 
 def test_ee_b2_src_inspection_sets_update_scope_conditions():
@@ -910,7 +917,7 @@ def test_ee_b2_iset_company_mismatch_raises_403_no_asset_update():
     body.equipment_model_id = None
 
     with patch("services.permission_guard.has_permission", return_value=True):
-        with patch("services.company_scope._scope", return_value="COMPANY"):
+        with patch("services.equipment_engine_svc._ee_scope", return_value="COMPANY"):
             with pytest.raises(HTTPException) as exc:
                 run_patch_asset(
                     sb, "asset-1", body,
@@ -967,7 +974,7 @@ def test_ee_b2_iset_factory_mismatch_raises_403_no_asset_update():
     body.equipment_model_id = None
 
     with patch("services.permission_guard.has_permission", return_value=True):
-        with patch("services.company_scope._scope", return_value="COMPANY"):
+        with patch("services.equipment_engine_svc._ee_scope", return_value="COMPANY"):
             with pytest.raises(HTTPException) as exc:
                 run_patch_asset(
                     sb, "asset-2", body,
@@ -1047,6 +1054,57 @@ def test_ee_b4_service_not_called_when_auth_fails():
         resp = client.get("/engine-equipment/stats")
     assert resp.status_code == 401
     mock_svc.assert_not_called()
+
+
+def test_ee_c2_iset_db_error_no_asset_update():
+    """EE-C2-01: inspection_sets DB 조회 오류 → Fail-Close, equipment_assets UPDATE 미호출"""
+    from services.equipment_engine_svc import run_patch_asset
+
+    sb = MagicMock()
+    asset_update_calls = []
+
+    asset_data = MagicMock()
+    asset_data.data = [{"id": "asset-3", "factory_id": "fid-A"}]
+
+    factory_data = MagicMock()
+    factory_data.data = [{"company_id": "cid-A"}]
+
+    def _table_se(name):
+        t = MagicMock()
+        if name == "equipment_assets":
+            t.select.return_value.eq.return_value.limit.return_value.execute.return_value = asset_data
+            def _track(*a, **kw):
+                asset_update_calls.append(True)
+                return MagicMock()
+            t.update.side_effect = _track
+        elif name == "factories":
+            t.select.return_value.eq.return_value.limit.return_value.execute.return_value = factory_data
+        elif name == "inspection_sets":
+            iset_chain = MagicMock()
+            iset_chain.eq.return_value = iset_chain
+            iset_chain.execute.side_effect = Exception("DB 장애")
+            t.select.return_value = iset_chain
+        return t
+
+    sb.table.side_effect = _table_se
+
+    body = MagicMock()
+    body.last_inspection_date = None
+    body.next_inspection_date = None
+    body.is_legal_target = True
+    body.is_operating = True
+    body.repair_date = "2026-11-01"
+    body.model_id = None
+    body.equipment_model_id = None
+
+    with patch("services.permission_guard.has_permission", return_value=True):
+        with patch("services.equipment_engine_svc._ee_scope", return_value="COMPANY"):
+            with pytest.raises(Exception):
+                run_patch_asset(
+                    sb, "asset-3", body,
+                    _current(role_code="002", company_id="cid-A"),
+                )
+    assert not asset_update_calls, "inspection_sets DB 오류인데 equipment_assets UPDATE 호출됨"
 
 
 def test_ee_b4_non_all_refresh_returns_403():
