@@ -101,10 +101,14 @@ def load_chemical_facts(
     contract_gaps are stripped — not LEG input facts.
     Raises ChemicalSourceLoadError on any failure (fail-closed).
     """
+    # Delta-1: identity validation parity with L2 Readers.
+    _require_identifiers(factory_id, company_id)
     base, secret = _require_env()
 
     url = f"{base}/internal/factories/{factory_id}/leg-input-facts"
     data = _get(url, {"company_id": company_id}, secret, timeout)
+    # Delta-1: verify returned factory_id matches requested factory_id.
+    _check_factory_id(data, factory_id)
 
     raw_facts: Dict[str, Any] = data.get("facts", {}) if isinstance(data, dict) else {}
 
