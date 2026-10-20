@@ -1,18 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Users 라우터 - 회원 관리 v2.3.1
+TAI Users 라우터 - 회원 관리 v2.8.0
 
+v2.8.0: R4S-HOTFIX 팀 공장 미배정 우회 차단 (WO-TAI-API-SEC-DATA-READ-001-R4S-HOTFIX)
+  - _assert_team_belongs_to_factory: teams.factory_id NULL → 즉시 403 FAIL-CLOSE
+  - company 검증에 팀의 실제 factory_id만 사용 (요청자 제공 factory_id 보충 금지)
+  - 운영 DB: teams.factory_id NULL 4개 확인 — 미배정 팀을 정상 공장에 연결 불가
+v2.7.0: R4-SCHEMA-FIX 운영 스키마 정합성 + 조직 일관성 보완 (WO-TAI-API-SEC-DATA-READ-001-R4-SCHEMA-FIX)
+  - FIX-01: _assert_team_belongs_to_factory teams.company_id 없음 → teams→factories 경로 사용
+  - FIX-02: PATCH /{id} factory 변경 시 기존 team_id 정합성 재검증, 관리자 company_id 변경 후 기준 검증
+v2.6.0: R4 잔여 결함 종결 (WO-TAI-API-SEC-DATA-READ-001-R4)
+  - PATCH /{id}: 고권한 대상(002~033) 수정 최고관리자만 허용 (FIX-A)
+  - GET /work-permits: requester_id 분기에도 company_id 범위 강제 (FIX-B, worker_permits.py)
+  - 002 역할 _HIGH_PRIVILEGE_ROLES 편입 — 부여·변경 001만 허용 (FIX-C)
+  - POST/PATCH /users: factory_id·team_id 조직 계층 검증 (FIX-D)
+v2.5.0: 인가·회사범위·민감정보 통제 강화 (WO-TAI-API-SEC-DATA-READ-001-R2)
+  - role_permissions DB 기반 USER_VIEW/CREATE/UPDATE/DELETE 인가 검증
+  - 비어드민: JWT company_id 강제 (타사 접근 404 차단, company_id=None → 빈결과)
+  - PATCH /role: 고권한 역할(_HIGH_PRIVILEGE_ROLES) 변경 최고관리자(001)만 허용
+                 자기 역할 상승 금지
+  - POST /users: 비어드민 company_id 강제, 고권한 role 부여 금지
+  - PATCH /{id}: 비어드민 company_id 필드 변경 차단
+  - wildcard-select 제거 → _USER_PUBLIC_COLS (password_hash 등 민감 컬럼 제외)
+v2.4.0: 전 엔드포인트 인증 의무화 + JWT 기반 회사 범위 강제 (WO-TAI-API-SEC-DATA-READ-001)
 v2.3.1: get_users 데모제외를 어드민 전체목록에만 적용
-  - factory_id 지정 조회(담당자 드롭다운)에서 company_id 없을 때 데모 사용자가 neq 제외되던 결함 수정
 v2.3.0: 목록 size 상한 100→500 (LEDGER §68)
-  - 대시보드 담당자 목록이 GET /users?size=200 을 보내 le=100 위반으로 422 → 담당자 열·배정
-    셀렉트가 빈다. factory_id 로 좁힌 목록이라 테넌트당 인원이 유한하므로 상한만 상향.
-v2.2.0: 어드민 전체목록(get_users, company_id 미지정)에서 데모(체험) 테넌트 사용자 제외
-  - 데모 회사(is_demo) 소속 사용자 id 를 조회해 목록에서 neq 로 제외(회사 스코프 조회 시엔 유지)
+v2.2.0: 어드민 전체목록에서 데모(체험) 테넌트 사용자 제외
 v2.1.0: APPOINTMENT 이벤트 트리거 추가
-  - PATCH /users/{id}/role 에서 role_code='002' 설정 시 + factory_id 있으면
-    trigger_event_schedules(APPOINTMENT) 자동 호출
 v2.0.0: 퍼사자 일정 미배정 처리
 """
 
@@ -31,9 +46,36 @@ from services.document_signature_svc import (
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-VERSION = "2.3.1"
+VERSION = "2.8.0"
 
 DEACTIVATE_STATUSES = {"INACTIVE", "DELETED", "SUSPENDED"}
+
+# 고권한 역할 코드 — 최고관리자(001)만 부여·변경·조작 가능
+# 002(회사관리자): USER_* 전권 + COMPANY scope 보유 — 일반 관리자 위임 전 보수적 잠금
+_HIGH_PRIVILEGE_ROLES = frozenset({"001", "002", "031", "032", "033"})
+
+# API 응답에 포함되는 안전한 공개 컬럼
+# 제외: password_hash, email_verify_token, auth_id,
+#       raw_app_meta_data, raw_user_meta_data, identity_ci
+_USER_PUBLIC_COLS = (
+    "id,email,name,phone,username,role_code,company_id,factory_id,team_id,"
+    "status_code,is_active,department,position,profile_image_url,"
+    "allow_push,allow_sms,allow_email,allow_kakao,"
+    "user_code,sector,last_login_at,created_at,updated_at,"
+    "identity_verified,identity_name,identity_phone,identity_birth,"
+    "address_road,address_jibun,address_detail,address_sido,"
+    "address_sigungu,address_dong,zipcode,social_provider"
+)
+
+# allow-list 집합 — INSERT/UPDATE 응답 필터링에 사용
+_PUBLIC_COLS_SET = frozenset(c.strip() for c in _USER_PUBLIC_COLS.split(","))
+
+
+def _strip_to_public(row: dict) -> dict:
+    """INSERT/UPDATE 응답에서 허용 목록(_PUBLIC_COLS_SET) 외 컬럼 제거 (allow-list)."""
+    if not row:
+        return {}
+    return {k: v for k, v in row.items() if k in _PUBLIC_COLS_SET}
 
 
 # ============================================================
@@ -94,6 +136,121 @@ class StatusUpdate(BaseModel):
 
 class RoleUpdate(BaseModel):
     role_code: str
+
+
+# ============================================================
+# 보안 헬퍼
+# ============================================================
+
+def _has_permission(supabase, role_code: str, permission_code: str) -> bool:
+    """role_permissions 테이블에서 권한 보유 여부 확인. 실패 시 False(fail-close)."""
+    if not role_code:
+        return False
+    try:
+        res = (
+            supabase.table("role_permissions")
+            .select("id")
+            .eq("role_code", role_code)
+            .eq("permission_code", permission_code)
+            .limit(1)
+            .execute()
+        )
+        return bool(res.data)
+    except Exception:
+        return False
+
+
+def _is_platform_admin(supabase, role_code: str) -> bool:
+    """role_data_scope.scope_type == 'ALL'이면 플랫폼 전체 관리자."""
+    if not role_code:
+        return False
+    try:
+        r = (
+            supabase.table("role_data_scope")
+            .select("scope_type")
+            .eq("role_code", role_code)
+            .limit(1)
+            .execute()
+        )
+        return bool(r.data) and r.data[0].get("scope_type") == "ALL"
+    except Exception:
+        return False
+
+
+def _assert_user_company(target_company_id, current_user: dict, supabase) -> None:
+    """비어드민이 타사 사용자에 접근하면 404(존재 숨김)."""
+    if _is_platform_admin(supabase, current_user.get("role_code")):
+        return
+    jwt_company_id = current_user.get("company_id")
+    if not jwt_company_id or target_company_id != jwt_company_id:
+        raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
+
+
+def _assert_target_not_privileged(target_role_code, current_user: dict, supabase) -> None:
+    """대상 사용자가 고권한 역할(_HIGH_PRIVILEGE_ROLES)이면 최고관리자(001)만 조작 가능."""
+    if target_role_code not in _HIGH_PRIVILEGE_ROLES:
+        return
+    if _is_platform_admin(supabase, current_user.get("role_code")):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "TARGET_PRIVILEGE_DENIED",
+                "message": "고권한 계정은 최고관리자만 수정·삭제할 수 있습니다"},
+    )
+
+
+def _assert_factory_belongs_to_company(supabase, factory_id: str, company_id: str) -> None:
+    """factory_id가 company_id 소속인지 검증. 불일치 시 403, 미존재 시 422."""
+    if not factory_id or not company_id:
+        return
+    try:
+        row = supabase.table("factories").select("company_id").eq("id", factory_id).limit(1).execute()
+    except Exception:
+        raise HTTPException(status_code=422, detail={"error": "INVALID_FACTORY", "message": "시설을 조회할 수 없습니다"})
+    if not row.data:
+        raise HTTPException(status_code=422, detail={"error": "INVALID_FACTORY", "message": "유효하지 않은 시설입니다"})
+    if str(row.data[0].get("company_id") or "") != company_id:
+        raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "factory_id가 회사 소속이 아닙니다"})
+
+
+def _assert_team_belongs_to_factory(supabase, team_id: str, factory_id: str, company_id: str) -> None:
+    """team_id 소속 검증. 운영 DB 계약: teams.company_id 없음 — teams→factories 경로 사용.
+
+    팀의 실제 teams.factory_id 만 소속 증명으로 사용.
+    요청자가 제공한 factory_id 로 미배정 팀의 공장을 보충하거나 추정하지 않는다.
+    소속 확인 불가(팀 미존재·공장 미배정·공장 불일치) 시 FAIL-CLOSE (403/422).
+    """
+    if not team_id:
+        return
+    # Step 1: teams에서 factory_id만 조회 (company_id 컬럼 없음)
+    try:
+        row = supabase.table("teams").select("factory_id").eq("id", team_id).limit(1).execute()
+    except Exception:
+        raise HTTPException(status_code=422, detail={"error": "INVALID_TEAM", "message": "팀을 조회할 수 없습니다"})
+    if not row.data:
+        raise HTTPException(status_code=422, detail={"error": "INVALID_TEAM", "message": "유효하지 않은 팀입니다"})
+
+    team_fid = str(row.data[0].get("factory_id") or "")
+
+    # Step 2: 팀의 실제 factory_id NULL → 즉시 FAIL-CLOSE (요청값으로 보충 불가)
+    # 운영 DB: teams.factory_id NULL 4개 확인 — 미배정 팀 소속 증명 불가
+    if not team_fid:
+        raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "팀에 공장이 배정되지 않아 소속을 확인할 수 없습니다"})
+
+    # Step 3: 요청 factory_id가 있으면 팀의 실제 공장과 일치 확인
+    if factory_id and team_fid != factory_id:
+        raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "team_id가 factory_id 소속이 아닙니다"})
+
+    # Step 4: company_id 검증 — 팀의 실제 factory_id 경유 (요청값 사용 금지)
+    if company_id:
+        try:
+            frow = supabase.table("factories").select("company_id").eq("id", team_fid).limit(1).execute()
+        except Exception:
+            raise HTTPException(status_code=422, detail={"error": "INVALID_FACTORY", "message": "팀 소속 공장을 조회할 수 없습니다"})
+        if not frow.data:
+            raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "팀 소속 공장을 찾을 수 없습니다"})
+        if str(frow.data[0].get("company_id") or "") != company_id:
+            raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "team_id가 회사 소속이 아닙니다"})
 
 
 # ============================================================
@@ -204,8 +361,6 @@ def _enrich_user_rows(supabase, items: list) -> list:
 
 # ============================================================
 # 1. 회원 목록
-#    company_id·factory_id 둘 다 미지정(어드민 전체목록)이면 데모 테넌트 사용자 제외.
-#    NULL company_id(내부 계정 등) 보존 위해 company_id 필터 대신 사용자 id neq 사용.
 # ============================================================
 
 @router.get("")
@@ -217,18 +372,43 @@ def get_users(
     factory_id:  Optional[str] = Query(default=None),
     role_code:   Optional[str] = Query(default=None),
     status_code: Optional[str] = Query(default=None),
-    # admin-vue3 member-list 호환 별칭. canonical 파라미터가 있으면 canonical 우선.
     keyword:     Optional[str] = Query(default=None),
     role:        Optional[str] = Query(default=None),
     status:      Optional[str] = Query(default=None),
+    current_user: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    user_role = current_user.get("role_code")
+
+    # USER_VIEW 권한 확인
+    if not _has_permission(supabase, user_role, "USER_VIEW"):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "PERMISSION_DENIED", "required": "USER_VIEW"},
+        )
+
+    is_admin = _is_platform_admin(supabase, user_role)
+    jwt_company_id = current_user.get("company_id")
+
+    # 비어드민: JWT company_id 강제 (클라이언트 파라미터 무시)
+    if not is_admin:
+        if not jwt_company_id:
+            # 비어드민이면서 회사 없음 → 빈 결과
+            return {
+                "status": "success",
+                "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0},
+            }
+        company_id = jwt_company_id
+    else:
+        # 어드민: 본인 회사가 있고 클라 파라미터 없으면 본인 회사 범위 유지
+        if jwt_company_id and not company_id:
+            company_id = jwt_company_id
 
     effective_search = search or keyword
     effective_role = role_code or role
     effective_status = status_code or status
 
-    query = supabase.table("users").select("*", count="exact")
+    query = supabase.table("users").select(_USER_PUBLIC_COLS, count="exact")
     if not company_id and not factory_id:
         for uid in _demo_user_ids(supabase):
             query = query.neq("id", uid)
@@ -258,8 +438,38 @@ def get_users(
 # ============================================================
 
 @router.post("")
-def create_user(req: UserCreate):
+def create_user(req: UserCreate, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    user_role = current_user.get("role_code")
+
+    # USER_CREATE 권한 확인
+    if not _has_permission(supabase, user_role, "USER_CREATE"):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "PERMISSION_DENIED", "required": "USER_CREATE"},
+        )
+
+    is_admin = _is_platform_admin(supabase, user_role)
+    jwt_company_id = current_user.get("company_id")
+
+    # 비어드민: company_id 강제, 고권한 역할 부여 금지
+    if not is_admin:
+        if not jwt_company_id:
+            raise HTTPException(status_code=403, detail="회사 등록이 필요합니다")
+        req.company_id = jwt_company_id  # 클라이언트 값 무시
+        if req.role_code in _HIGH_PRIVILEGE_ROLES:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "ROLE_PRIVILEGE_DENIED",
+                        "message": "고권한 역할은 최고관리자만 부여할 수 있습니다"},
+            )
+
+    # 조직 계층 검증 — factory/team이 지정 company 소속인지 확인
+    if req.factory_id and req.company_id:
+        _assert_factory_belongs_to_company(supabase, req.factory_id, req.company_id)
+    if req.team_id and req.company_id:
+        _assert_team_belongs_to_factory(supabase, req.team_id, req.factory_id or "", req.company_id)
+
     dup = supabase.table("users").select("id").eq("email", req.email).limit(1).execute()
     if dup.data:
         raise HTTPException(status_code=400, detail="이미 등록된 이메일입니다")
@@ -279,7 +489,7 @@ def create_user(req: UserCreate):
     res = supabase.table("users").insert(data).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="회원 등록 실패")
-    return {"status": "success", "message": "회원이 등록됐습니다", "data": res.data[0]}
+    return {"status": "success", "message": "회원이 등록됐습니다", "data": _strip_to_public(res.data[0])}
 
 
 # ============================================================
@@ -287,11 +497,24 @@ def create_user(req: UserCreate):
 # ============================================================
 
 @router.get("/{user_id}")
-def get_user(user_id: str):
+def get_user(user_id: str, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
-    res = supabase.table("users").select("*").eq("id", user_id).single().execute()
+    user_role = current_user.get("role_code")
+
+    # USER_VIEW 권한 확인
+    if not _has_permission(supabase, user_role, "USER_VIEW"):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "PERMISSION_DENIED", "required": "USER_VIEW"},
+        )
+
+    res = supabase.table("users").select(_USER_PUBLIC_COLS).eq("id", user_id).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
+
+    # 타사 접근 차단
+    _assert_user_company(res.data.get("company_id"), current_user, supabase)
+
     return {"status": "success", "data": res.data}
 
 
@@ -300,15 +523,62 @@ def get_user(user_id: str):
 # ============================================================
 
 @router.patch("/{user_id}")
-def update_user(user_id: str, req: UserUpdate):
+def update_user(user_id: str, req: UserUpdate, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
-    existing = supabase.table("users").select("id").eq("id", user_id).single().execute()
+    user_role = current_user.get("role_code")
+
+    # USER_UPDATE 권한 확인
+    if not _has_permission(supabase, user_role, "USER_UPDATE"):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "PERMISSION_DENIED", "required": "USER_UPDATE"},
+        )
+
+    existing = supabase.table("users").select(
+        "id,company_id,factory_id,team_id,role_code"
+    ).eq("id", user_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
+
+    # 타사 접근 차단
+    _assert_user_company(existing.data.get("company_id"), current_user, supabase)
+    # 고권한 대상 보호 (FIX-A)
+    _assert_target_not_privileged(existing.data.get("role_code"), current_user, supabase)
+
     update_data = {k: v for k, v in req.dict().items() if v is not None}
+
+    # 비어드민: company_id 변경 차단 (테넌트 이동 방지)
+    is_admin = _is_platform_admin(supabase, user_role)
+    if not is_admin:
+        update_data.pop("company_id", None)
+
+    # 조직 계층 검증 — factory/team 변경 시 회사 소속 + 일관성 확인 (FIX-D + FIX-02)
+    # 최고관리자의 company_id 변경도 포함 — 변경 후 값 기준 검증
+    effective_cid = update_data.get("company_id") or existing.data.get("company_id") or ""
+    new_fid = update_data.get("factory_id")
+    new_tid = update_data.get("team_id")
+    existing_fid = existing.data.get("factory_id") or ""
+    existing_tid = existing.data.get("team_id") or ""
+
+    # 실제 사용할 factory_id: 요청 새 값 또는 기존 값
+    eff_new_fid = new_fid or existing_fid
+
+    if new_fid and effective_cid:
+        _assert_factory_belongs_to_company(supabase, new_fid, effective_cid)
+    elif not new_fid and existing_fid and effective_cid and update_data.get("company_id"):
+        # company_id만 변경 + 기존 factory_id 유지 → 기존 factory가 새 company 소속인지 확인
+        _assert_factory_belongs_to_company(supabase, existing_fid, effective_cid)
+
+    if new_tid and effective_cid:
+        _assert_team_belongs_to_factory(supabase, new_tid, eff_new_fid, effective_cid)
+    elif new_fid and not new_tid and existing_tid and effective_cid:
+        # factory_id 변경 + team_id 미변경 → 기존 team이 새 factory와 일치하는지 검증
+        _assert_team_belongs_to_factory(supabase, existing_tid, new_fid, effective_cid)
+
     update_data["updated_at"] = serialize_business_datetime(now_kst())
     res = supabase.table("users").update(update_data).eq("id", user_id).execute()
-    return {"status": "success", "message": "회원 정보가 수정됐습니다", "data": res.data[0] if res.data else {}}
+    row = res.data[0] if res.data else {}
+    return {"status": "success", "message": "회원 정보가 수정됐습니다", "data": _strip_to_public(row)}
 
 
 # ============================================================
@@ -316,11 +586,28 @@ def update_user(user_id: str, req: UserUpdate):
 # ============================================================
 
 @router.delete("/{user_id}")
-def delete_user(user_id: str):
+def delete_user(user_id: str, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
-    existing = supabase.table("users").select("id").eq("id", user_id).single().execute()
+    user_role = current_user.get("role_code")
+
+    # USER_DELETE 권한 확인
+    if not _has_permission(supabase, user_role, "USER_DELETE"):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "PERMISSION_DENIED", "required": "USER_DELETE"},
+        )
+
+    existing = supabase.table("users").select(
+        "id,company_id,role_code"
+    ).eq("id", user_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
+
+    # 타사 접근 차단
+    _assert_user_company(existing.data.get("company_id"), current_user, supabase)
+    # 고권한 대상 보호
+    _assert_target_not_privileged(existing.data.get("role_code"), current_user, supabase)
+
     supabase.table("users").update({
         "is_active":   False,
         "status_code": "DELETED",
@@ -335,11 +622,28 @@ def delete_user(user_id: str):
 # ============================================================
 
 @router.patch("/{user_id}/status")
-def update_user_status(user_id: str, req: StatusUpdate):
+def update_user_status(user_id: str, req: StatusUpdate, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
-    existing = supabase.table("users").select("id").eq("id", user_id).single().execute()
+    user_role = current_user.get("role_code")
+
+    # USER_UPDATE 권한 확인
+    if not _has_permission(supabase, user_role, "USER_UPDATE"):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "PERMISSION_DENIED", "required": "USER_UPDATE"},
+        )
+
+    existing = supabase.table("users").select(
+        "id,company_id,role_code"
+    ).eq("id", user_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
+
+    # 타사 접근 차단
+    _assert_user_company(existing.data.get("company_id"), current_user, supabase)
+    # 고권한 대상 보호
+    _assert_target_not_privileged(existing.data.get("role_code"), current_user, supabase)
+
     is_active = (req.status_code == "ACTIVE")
     supabase.table("users").update({
         "status_code": req.status_code,
@@ -361,18 +665,53 @@ def update_user_status(user_id: str, req: StatusUpdate):
 # ============================================================
 
 @router.patch("/{user_id}/role")
-async def update_user_role(user_id: str, req: RoleUpdate):
+async def update_user_role(user_id: str, req: RoleUpdate, current_user: dict = Depends(get_current_user)):
     """
+    v2.5.0: 역할 변경 인가 강화
+      - USER_UPDATE 권한 필수
+      - 자기 역할 변경 금지
+      - 고권한 역할(_HIGH_PRIVILEGE_ROLES) 변경은 최고관리자(001)만
+      - 타사 대상 변경 차단
+
     v2.1.0: role_code='002'(안전관리자) 설정 시 factory_id 있으면
     APPOINTMENT 이벤트 트리거 자동 호출.
     """
     supabase = get_supabase()
+    user_role = current_user.get("role_code")
+
+    # USER_UPDATE 권한 확인
+    if not _has_permission(supabase, user_role, "USER_UPDATE"):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "PERMISSION_DENIED", "required": "USER_UPDATE"},
+        )
+
+    # 자기 역할 변경 금지
+    if user_id == str(current_user.get("id") or ""):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "SELF_ROLE_CHANGE_FORBIDDEN",
+                    "message": "본인의 역할은 직접 변경할 수 없습니다"},
+        )
+
+    # 고권한 역할 변경은 최고관리자(001)만
+    if req.role_code in _HIGH_PRIVILEGE_ROLES and user_role != "001":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "INSUFFICIENT_PRIVILEGE",
+                    "message": "고권한 역할 변경은 최고관리자만 가능합니다"},
+        )
 
     user_res = supabase.table("users").select(
-        "id, role_code, factory_id"
+        "id,role_code,factory_id,company_id"
     ).eq("id", user_id).single().execute()
     if not user_res.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
+
+    # 타사 접근 차단
+    _assert_user_company(user_res.data.get("company_id"), current_user, supabase)
+    # 고권한 대상 보호 (기존 역할이 고권한이면 최고관리자만 변경 가능)
+    _assert_target_not_privileged(user_res.data.get("role_code"), current_user, supabase)
 
     valid = supabase.table("system_codes").select("code").eq(
         "category", "user_role"
@@ -407,13 +746,26 @@ async def update_user_role(user_id: str, req: RoleUpdate):
 # ============================================================
 
 @router.get("/{user_id}/factories")
-def get_user_factories(user_id: str):
+def get_user_factories(user_id: str, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    user_role = current_user.get("role_code")
+
+    # USER_VIEW 권한 확인
+    if not _has_permission(supabase, user_role, "USER_VIEW"):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "PERMISSION_DENIED", "required": "USER_VIEW"},
+        )
+
     user = supabase.table("users").select(
         "factory_id, company_id"
     ).eq("id", user_id).single().execute()
     if not user.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
+
+    # 타사 접근 차단
+    _assert_user_company(user.data.get("company_id"), current_user, supabase)
+
     company_id = user.data.get("company_id")
     if not company_id:
         return {"status": "success", "data": {"items": [], "total": 0}}
