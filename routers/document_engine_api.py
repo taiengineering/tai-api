@@ -48,6 +48,7 @@ from services.company_scope import (
     _ensure_own_company,
     _ensure_factory_own,
     _forced_company_id,
+    _require_admin,
     _tier,
     require_scope_ids,
     scoped_filter,
@@ -476,14 +477,75 @@ def list_generated(doc_id: str, current_user: dict = Depends(get_current_user)):
 # ═══════════════════════════════════════════════════════
 
 @router.get("/metrics")
-def get_metrics():
-    """전체 Runtime 메트릭"""
+def get_metrics(current_user: dict = Depends(get_current_user)):
+    """전체 Runtime 메트릭 — ALL 스코프 전용"""
+    sb = get_supabase()
+    _require_admin(current_user, sb)
     return {"status": "success", "data": svc.get_metrics()}
 
 
 @router.get("/metrics/factory/{factory_id}")
-def get_factory_metrics(factory_id: str):
-    """시설별 메트릭"""
+def get_factory_metrics(factory_id: str, current_user: dict = Depends(get_current_user)):
+    """시설별 메트릭 — 명시적 스코프 매트릭스 (FIX-R1).
+
+    허용 매트릭스:
+      ALL      → 인증된 최고관리자 범위
+      COMPANY  → 회사 ID 일치
+      FACTORY  → 회사 ID + 공장 ID 일치
+      TEAM     → 회사 ID + 배정 공장 ID 일치
+      ASSIGNED → 기본 거부 (별도 배정 검증 계약 없음)
+      PLATFORM → 기본 거부 (별도 허용 계약 없음)
+      기타/실패 → FAIL-CLOSED 거부
+    """
+    import uuid as _uuid
+    try:
+        _uuid.UUID(factory_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="factory_id는 UUID 형식이어야 합니다")
+
+    sb = get_supabase()
+
+    f = sb.table("factories").select("company_id").eq("id", factory_id).limit(1).execute()
+    if not f.data:
+        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
+    factory_company_id = f.data[0].get("company_id")
+    if not factory_company_id:
+        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
+
+    role_code = current_user.get("role_code")
+    try:
+        scope_res = (
+            sb.table("role_data_scope")
+            .select("scope_type")
+            .eq("role_code", role_code)
+            .limit(1)
+            .execute()
+        )
+        if not scope_res.data or not scope_res.data[0].get("scope_type"):
+            raise HTTPException(status_code=403, detail="권한이 없습니다")
+        scope = scope_res.data[0]["scope_type"]
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="권한이 없습니다")
+
+    token_cid = current_user.get("company_id")
+    token_fid = current_user.get("factory_id")
+
+    if scope == "ALL":
+        pass
+    elif scope == "COMPANY":
+        if not token_cid or factory_company_id != token_cid:
+            raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
+    elif scope in ("FACTORY", "TEAM"):
+        if not token_cid or factory_company_id != token_cid:
+            raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
+        if not token_fid or factory_id != token_fid:
+            raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
+    else:
+        # ASSIGNED, PLATFORM, UNKNOWN → FAIL-CLOSED
+        raise HTTPException(status_code=403, detail="권한이 없습니다")
+
     return {
         "status": "success",
         "data": svc.get_metrics_by_factory(factory_id),
