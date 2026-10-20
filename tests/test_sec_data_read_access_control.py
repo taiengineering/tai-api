@@ -67,6 +67,8 @@
   SEC-R4S-10  PATCH 관리자 company_id 변경 후 기존 factory_id 타사 → 차단
   SEC-R4S-11  company_id 없는 작업자 GET /work-permits → 빈 결과 (FAIL-CLOSE)
   SEC-R4S-12  company_id 있는 작업자 본인 기록 조회 → 기존 동작 유지
+  SEC-R4S-13  정상 factory_id + 실제 factory_id NULL 팀 → 403 (우회 차단)
+  SEC-R4S-14  PATCH 기존 미배정 팀 + 새 factory_id 조합 → 403 (HOTFIX)
 """
 from __future__ import annotations
 
@@ -3875,5 +3877,182 @@ def test_SEC_R4S_12_worker_with_company_id_normal_query():
             assert wp_mock.or_.called, "company_id 있는 작업자에서 or_ 미호출"
             call_arg = wp_mock.or_.call_args[0][0]
             assert "company_id.eq.cid-x" in call_arg
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-13: 정상 factory_id + 실제 teams.factory_id NULL 팀 → 403
+# R4S-HOTFIX 핵심 케이스: 요청 factory_id로 미배정 팀 소속 보충 우회 차단
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_13_valid_factory_with_null_team_factory_blocked():
+    """POST /users: 유효한 factory_id 제공 + 팀의 실제 factory_id=NULL → 403.
+
+    공격 경로: admin이 자기 회사 factory_id를 지정하면서 미배정 팀(factory_id=NULL)을
+    함께 지정. 이전 코드는 요청 factory_id로 회사 검증을 통과시켜 우회 가능.
+    수정 후: teams.factory_id NULL → Step2에서 즉시 403 (요청값 무시).
+    """
+    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+    os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
+    admin = _active_user(role_code="002", company_id="cid-a", user_id="uid-mgr-s13")
+
+    def _chain():
+        t = MagicMock()
+        for m in ("select", "eq", "neq", "order", "range", "limit",
+                  "in_", "or_", "single", "update", "insert"):
+            getattr(t, m).return_value = t
+        return t
+
+    perm_mock = _chain()
+    perm_r = MagicMock(); perm_r.data = [{"id": "perm-1"}]
+    perm_mock.execute.return_value = perm_r
+
+    scope_mock = _chain()
+    scope_r = MagicMock(); scope_r.data = [{"scope_type": "COMPANY"}]
+    scope_mock.execute.return_value = scope_r
+
+    # factory fid-valid → 정상, cid-a 소속
+    factory_mock = _chain()
+    factory_r = MagicMock(); factory_r.data = [{"company_id": "cid-a"}]
+    factory_mock.execute.return_value = factory_r
+
+    # team tid-null-factory → teams.factory_id = NULL (공장 미배정)
+    team_mock = _chain()
+    team_r = MagicMock(); team_r.data = [{"factory_id": None}]
+    team_mock.execute.return_value = team_r
+
+    default_mock = _chain()
+    def_r = MagicMock(); def_r.data = []; def_r.count = 0
+    default_mock.execute.return_value = def_r
+
+    tables = {
+        "role_permissions": perm_mock, "role_data_scope": scope_mock,
+        "factories": factory_mock, "teams": team_mock,
+    }
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = lambda name: tables.get(name, default_mock)
+
+    with patch("db.supabase_client.get_supabase", return_value=mock_sb):
+        for mod in list(sys.modules.keys()):
+            if mod in ("main",) or mod.startswith(("routers.", "services.")):
+                del sys.modules[mod]
+        from main import app
+        from routers.auth import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: admin
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.post("/users", json={
+                "email": "s13@test.com", "name": "S13우회시도",
+                "factory_id": "fid-valid",    # 정상 factory (cid-a 소속)
+                "team_id": "tid-null-factory", # teams.factory_id = NULL
+            })
+            assert resp.status_code == 403, (
+                f"R4S-HOTFIX: 미배정 팀 우회 차단 실패. status={resp.status_code} body={resp.text}"
+            )
+            body = resp.json()
+            assert body.get("detail", {}).get("error") == "ORG_HIERARCHY_VIOLATION", (
+                f"오류 코드 불일치: {body.get('detail')}"
+            )
+            # factory 검증에서가 아닌 team NULL 단계에서 차단됐는지 확인
+            assert "배정되지 않아" in body.get("detail", {}).get("message", ""), (
+                f"팀 미배정 메시지 누락: {body.get('detail')}"
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ════════════════════════════════════════════════════════════════
+# SEC-R4S-14: PATCH 기존 미배정 팀 + 새 factory_id 조합 → 403
+# ════════════════════════════════════════════════════════════════
+
+def test_SEC_R4S_14_patch_new_factory_with_existing_null_team_blocked():
+    """PATCH /users/{id}: 새 factory_id 변경 + 기존 team.factory_id=NULL → 403.
+
+    기존 사용자에게 team_id는 그대로 두고 factory_id만 변경할 때,
+    기존 team의 factory_id가 NULL이면 재검증에서 차단돼야 한다.
+    """
+    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+    os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+
+    admin = _active_user(role_code="001", company_id="cid-a", user_id="uid-super-s14")
+
+    def _chain():
+        t = MagicMock()
+        for m in ("select", "eq", "neq", "order", "range", "limit",
+                  "in_", "or_", "single", "update", "insert"):
+            getattr(t, m).return_value = t
+        return t
+
+    perm_mock = _chain()
+    perm_r = MagicMock(); perm_r.data = [{"id": "perm-1"}]
+    perm_mock.execute.return_value = perm_r
+
+    scope_mock = _chain()
+    scope_r = MagicMock(); scope_r.data = [{"scope_type": "ALL"}]
+    scope_mock.execute.return_value = scope_r
+
+    # 대상 사용자: 기존에 team_id="tid-null-fac" 배정, factory_id 없음
+    target_user_r = MagicMock()
+    target_user_r.data = {
+        "id": "uid-target-s14",
+        "company_id": "cid-a",
+        "factory_id": None,
+        "team_id": "tid-null-fac",
+        "role_code": "014",
+    }
+
+    users_mock = _chain()
+    users_mock.single.return_value = users_mock
+    users_mock.execute.return_value = target_user_r
+
+    # factory fid-new → cid-a 소속 (정상 공장)
+    factory_mock = _chain()
+    factory_r = MagicMock(); factory_r.data = [{"company_id": "cid-a"}]
+    factory_mock.execute.return_value = factory_r
+
+    # team tid-null-fac → teams.factory_id = NULL (공장 미배정)
+    team_mock = _chain()
+    team_r = MagicMock(); team_r.data = [{"factory_id": None}]
+    team_mock.execute.return_value = team_r
+
+    default_mock = _chain()
+    def_r = MagicMock(); def_r.data = []; def_r.count = 0
+    default_mock.execute.return_value = def_r
+
+    tables = {
+        "role_permissions": perm_mock, "role_data_scope": scope_mock,
+        "users": users_mock,
+        "factories": factory_mock,
+        "teams": team_mock,
+    }
+    mock_sb = MagicMock()
+    mock_sb.table.side_effect = lambda name: tables.get(name, default_mock)
+
+    with patch("db.supabase_client.get_supabase", return_value=mock_sb):
+        for mod in list(sys.modules.keys()):
+            if mod in ("main",) or mod.startswith(("routers.", "services.")):
+                del sys.modules[mod]
+        from main import app
+        from routers.auth import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: admin
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            # factory_id만 변경 — 기존 team_id는 그대로 (미지정)
+            resp = client.patch("/users/uid-target-s14", json={
+                "factory_id": "fid-new",  # 새 factory (cid-a 소속)
+                # team_id 미포함 — 기존 tid-null-fac 유지
+            })
+            assert resp.status_code == 403, (
+                f"R4S-HOTFIX PATCH: 미배정 기존 팀 우회 차단 실패. "
+                f"status={resp.status_code} body={resp.text}"
+            )
+            body = resp.json()
+            assert body.get("detail", {}).get("error") == "ORG_HIERARCHY_VIOLATION", (
+                f"오류 코드 불일치: {body.get('detail')}"
+            )
         finally:
             app.dependency_overrides.clear()

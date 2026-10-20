@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Users 라우터 - 회원 관리 v2.7.0
+TAI Users 라우터 - 회원 관리 v2.8.0
 
+v2.8.0: R4S-HOTFIX 팀 공장 미배정 우회 차단 (WO-TAI-API-SEC-DATA-READ-001-R4S-HOTFIX)
+  - _assert_team_belongs_to_factory: teams.factory_id NULL → 즉시 403 FAIL-CLOSE
+  - company 검증에 팀의 실제 factory_id만 사용 (요청자 제공 factory_id 보충 금지)
+  - 운영 DB: teams.factory_id NULL 4개 확인 — 미배정 팀을 정상 공장에 연결 불가
 v2.7.0: R4-SCHEMA-FIX 운영 스키마 정합성 + 조직 일관성 보완 (WO-TAI-API-SEC-DATA-READ-001-R4-SCHEMA-FIX)
   - FIX-01: _assert_team_belongs_to_factory teams.company_id 없음 → teams→factories 경로 사용
   - FIX-02: PATCH /{id} factory 변경 시 기존 team_id 정합성 재검증, 관리자 company_id 변경 후 기준 검증
@@ -42,7 +46,7 @@ from services.document_signature_svc import (
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-VERSION = "2.7.0"
+VERSION = "2.8.0"
 
 DEACTIVATE_STATUSES = {"INACTIVE", "DELETED", "SUSPENDED"}
 
@@ -212,9 +216,9 @@ def _assert_factory_belongs_to_company(supabase, factory_id: str, company_id: st
 def _assert_team_belongs_to_factory(supabase, team_id: str, factory_id: str, company_id: str) -> None:
     """team_id 소속 검증. 운영 DB 계약: teams.company_id 없음 — teams→factories 경로 사용.
 
-    factory_id 일치: teams.factory_id == factory_id (요청값, 둘 다 있을 때)
-    company_id 일치: teams.factory_id → factories.company_id == company_id
-    소속 확인 불가(팀 미존재·공장 없음) 시 FAIL-CLOSE (403/422).
+    팀의 실제 teams.factory_id 만 소속 증명으로 사용.
+    요청자가 제공한 factory_id 로 미배정 팀의 공장을 보충하거나 추정하지 않는다.
+    소속 확인 불가(팀 미존재·공장 미배정·공장 불일치) 시 FAIL-CLOSE (403/422).
     """
     if not team_id:
         return
@@ -228,18 +232,19 @@ def _assert_team_belongs_to_factory(supabase, team_id: str, factory_id: str, com
 
     team_fid = str(row.data[0].get("factory_id") or "")
 
-    # Step 2: factory_id 일치 검증 (둘 다 지정된 경우)
-    if factory_id and team_fid and team_fid != factory_id:
+    # Step 2: 팀의 실제 factory_id NULL → 즉시 FAIL-CLOSE (요청값으로 보충 불가)
+    # 운영 DB: teams.factory_id NULL 4개 확인 — 미배정 팀 소속 증명 불가
+    if not team_fid:
+        raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "팀에 공장이 배정되지 않아 소속을 확인할 수 없습니다"})
+
+    # Step 3: 요청 factory_id가 있으면 팀의 실제 공장과 일치 확인
+    if factory_id and team_fid != factory_id:
         raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "team_id가 factory_id 소속이 아닙니다"})
 
-    # Step 3: company_id 검증 — teams.factory_id → factories.company_id 경로
+    # Step 4: company_id 검증 — 팀의 실제 factory_id 경유 (요청값 사용 금지)
     if company_id:
-        effective_fid = factory_id or team_fid
-        if not effective_fid:
-            # 팀의 factory_id 없고 검증할 공장도 없음 → FAIL-CLOSE
-            raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "팀 소속 공장을 확인할 수 없습니다"})
         try:
-            frow = supabase.table("factories").select("company_id").eq("id", effective_fid).limit(1).execute()
+            frow = supabase.table("factories").select("company_id").eq("id", team_fid).limit(1).execute()
         except Exception:
             raise HTTPException(status_code=422, detail={"error": "INVALID_FACTORY", "message": "팀 소속 공장을 조회할 수 없습니다"})
         if not frow.data:
