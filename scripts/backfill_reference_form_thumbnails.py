@@ -2,23 +2,33 @@
 
 Generates WebP thumbnails for all currently PUBLISHED reference forms.
 
-Requires migration 20261021000001 (thumbnail columns) to be applied first.
+Requires migration 20261021000001 (thumbnail columns) to be applied first
+for --execute.  --dry-run works without the migration (shows a read-only survey).
 
 Usage:
     python scripts/backfill_reference_form_thumbnails.py --dry-run   # default
     python scripts/backfill_reference_form_thumbnails.py --execute   # write to DB + Storage
+    python scripts/backfill_reference_form_thumbnails.py --reset-pending  # crash recovery
 
-Dry-run prints a plan with target count, estimated storage, and per-form status.
 Production Backfill requires separate Owner approval (G4 gate).
 
+Concurrency model:
+  Designed for a single operator run.  Concurrent execution is safe but each run
+  competes for an atomic PENDING claim — only the winner proceeds per form.
+
+Claim lifecycle:
+  NULL / QA_FAIL → (atomic claim) → PENDING → QA_PASS  (success)
+                                            → QA_FAIL   (failure, via _release_claim)
+  After a process crash, PENDING rows remain.  Use --reset-pending to
+  move them back to NULL before retrying.
+
 Safety:
-  - Detects missing migration columns before proceeding
-  - Skips forms that already have thumbnail_qa_status = QA_PASS or PENDING
-  - Re-verifies PUBLISHED, sources CLEARED, approval binding immediately before processing
-  - Marks target as PENDING before processing to prevent concurrent duplicate work
+  - Detects missing migration columns before --execute
+  - Atomic DB claim prevents duplicate processing across concurrent runs
+  - All failure paths release PENDING back to QA_FAIL (retry-safe)
+  - Re-verifies PUBLISHED, sources CLEARED, approval binding before generating
   - No upsert — refuses to overwrite an existing Storage object
   - Rolls back Storage upload on DB update failure
-  - Records QA_FAIL on generation error without touching other rows
   - Never modifies reference_form_files or original preview artifacts
 """
 from __future__ import annotations
@@ -42,27 +52,18 @@ log = logging.getLogger("thumbnail_backfill")
 # Imports (deferred to allow --dry-run without all deps installed)
 # ---------------------------------------------------------------------------
 
-def _require_deps() -> tuple:
-    """Import heavy deps only when needed."""
+def _require_deps() -> None:
+    for pkg, name in (("httpx", "httpx"), ("supabase", "supabase")):
+        try:
+            __import__(pkg)
+        except ImportError:
+            log.error("%s not installed", name)
+            sys.exit(1)
     try:
-        import httpx
-    except ImportError:
-        log.error("httpx not installed")
-        sys.exit(1)
-    try:
-        from supabase import create_client, Client
-    except ImportError:
-        log.error("supabase not installed")
-        sys.exit(1)
-    try:
-        from services.reference_form_thumbnail_svc import (
-            generate_thumbnail, ThumbnailInputError, ThumbnailSizeError,
-            GENERATION_VERSION,
-        )
+        from services.reference_form_thumbnail_svc import generate_thumbnail  # noqa
     except ImportError as e:
         log.error("reference_form_thumbnail_svc not importable: %s", e)
         sys.exit(1)
-    return httpx, create_client, generate_thumbnail, ThumbnailInputError, ThumbnailSizeError, GENERATION_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +79,7 @@ class FormTarget:
     preview_artifact_id: str
     preview_ref: str
     source_file_sha256: str
-    existing_thumbnail_status: Optional[str]  # NULL / PENDING / QA_PASS / QA_FAIL
+    existing_thumbnail_status: Optional[str]  # None / PENDING / QA_PASS / QA_FAIL
 
 
 @dataclass
@@ -91,7 +92,7 @@ class BackfillStats:
 
 
 # ---------------------------------------------------------------------------
-# Supabase helpers
+# Table / bucket constants
 # ---------------------------------------------------------------------------
 
 _VIEW      = "reference_form_public_view"
@@ -103,6 +104,10 @@ _APPROVALS = "reference_form_approvals"
 THUMBNAIL_BUCKET = "reference-forms-preview"
 THUMBNAIL_PREFIX = "thumbnails"
 
+
+# ---------------------------------------------------------------------------
+# Supabase client
+# ---------------------------------------------------------------------------
 
 def _get_supabase():
     url = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
@@ -123,15 +128,97 @@ def _check_migration_applied(sb) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Atomic claim / release helpers (FIX-01, FIX-02)
+# ---------------------------------------------------------------------------
+
+def _atomic_claim(sb, pa_id: str) -> bool:
+    """
+    Atomically transition thumbnail_qa_status NULL→PENDING or QA_FAIL→PENDING.
+
+    Uses two separate conditional UPDATEs.  PostgreSQL row-level locking
+    ensures that if two processes run simultaneously, at most one succeeds
+    per transition: the first UPDATE that wins the lock changes the status,
+    the second finds no matching row and returns data=[].
+
+    Returns True if this call successfully claimed the row.
+    """
+    # Claim from NULL (never processed)
+    try:
+        res = (
+            sb.table(_PREVIEW)
+            .update({"thumbnail_qa_status": "PENDING"})
+            .eq("id", pa_id)
+            .is_("thumbnail_qa_status", "null")
+            .execute()
+        )
+        if res.data:
+            return True
+    except Exception:
+        pass
+
+    # Claim from QA_FAIL (retry after previous failure)
+    try:
+        res = (
+            sb.table(_PREVIEW)
+            .update({"thumbnail_qa_status": "PENDING"})
+            .eq("id", pa_id)
+            .eq("thumbnail_qa_status", "QA_FAIL")
+            .execute()
+        )
+        if res.data:
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def _release_claim(sb, pa_id: str) -> None:
+    """
+    Release a PENDING claim back to QA_FAIL on failure.
+    Only transitions from PENDING — will not touch QA_PASS rows.
+    """
+    try:
+        sb.table(_PREVIEW).update({"thumbnail_qa_status": "QA_FAIL"}).eq(
+            "id", pa_id
+        ).eq("thumbnail_qa_status", "PENDING").execute()
+    except Exception as exc:
+        log.error("Claim release failed for pa_id=%s: %s", pa_id, exc)
+
+
+def _reset_pending_claims(sb) -> int:
+    """
+    Crash recovery: reset all PENDING rows back to NULL.
+    Call this after a process crash before retrying.
+    Returns the count of rows reset.
+    """
+    try:
+        res = (
+            sb.table(_PREVIEW)
+            .update({"thumbnail_qa_status": None})
+            .eq("thumbnail_qa_status", "PENDING")
+            .execute()
+        )
+        return len(res.data or [])
+    except Exception as exc:
+        log.error("reset_pending failed: %s", exc)
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# Target collection
+# ---------------------------------------------------------------------------
+
 def _collect_targets(sb) -> list[FormTarget]:
     """
     Query all PUBLISHED forms and find those eligible for thumbnail generation.
 
-    A form is eligible when:
-      - It has at least one QA_PASS file with a linked preview artifact
-      - The preview artifact: is_published=true, qa_status=QA_PASS,
-        source_file_sha256 matches file sha256
-      - thumbnail_qa_status is NULL or QA_FAIL (not already QA_PASS or PENDING)
+    Eligible when:
+      - QA_PASS file with has_preview=True and a linked preview artifact
+      - Preview: is_published=true, qa_status=QA_PASS, source_file_sha256 matches
+      - thumbnail_qa_status is NOT QA_PASS (NULL, QA_FAIL, and PENDING are eligible)
+        PENDING is included so crashed runs can be re-claimed after --reset-pending.
     """
     log.info("Querying published forms …")
     try:
@@ -155,10 +242,9 @@ def _collect_targets(sb) -> list[FormTarget]:
             log.debug("  %s — skip: no file with has_preview", slug)
             continue
 
-        file_id   = str(rep_file["file_id"])
-        file_sha  = rep_file.get("sha256", "")
+        file_id  = str(rep_file["file_id"])
+        file_sha = rep_file.get("sha256", "")
 
-        # Load file row to get preview_artifact_id
         try:
             fr = (
                 sb.table(_FILES)
@@ -188,7 +274,6 @@ def _collect_targets(sb) -> list[FormTarget]:
             log.debug("  %s — skip: no preview_artifact_id", slug)
             continue
 
-        # Load preview artifact
         try:
             par = (
                 sb.table(_PREVIEW)
@@ -216,11 +301,14 @@ def _collect_targets(sb) -> list[FormTarget]:
             log.debug("  %s — skip: preview source_file_sha256 mismatch", slug)
             continue
 
-        existing_status = pa.get("thumbnail_qa_status")  # None / 'PENDING' / 'QA_PASS' / 'QA_FAIL'
+        existing_status = pa.get("thumbnail_qa_status")
 
-        if existing_status in ("QA_PASS", "PENDING"):
-            log.debug("  %s — skip: thumbnail already %s", slug, existing_status)
+        if existing_status == "QA_PASS":
+            log.debug("  %s — skip: thumbnail already QA_PASS", slug)
             continue
+        # PENDING and QA_FAIL are eligible:
+        # - QA_FAIL: previous attempt failed → retry
+        # - PENDING: previous process may have crashed → retry after --reset-pending
 
         preview_ref = pa.get("preview_ref", "")
         if not preview_ref:
@@ -241,6 +329,41 @@ def _collect_targets(sb) -> list[FormTarget]:
     return targets
 
 
+def _dry_run_pre_migration(sb) -> None:
+    """
+    Read-only survey of eligible forms when migration is not yet applied.
+    Queries only columns that exist before migration 20261021000001.
+    """
+    log.info("--- Pre-migration dry-run survey (read-only) ---")
+    log.info("Migration 20261021000001 not applied — thumbnail columns unavailable.")
+    log.info("Showing form eligibility based on existing preview data.")
+
+    try:
+        view_res = sb.table(_VIEW).select("id,canonical_slug,qa_pass_files").execute()
+    except Exception as exc:
+        log.error("View query failed: %s", exc)
+        return
+
+    rows = view_res.data or []
+    total = len(rows)
+    eligible = 0
+
+    for row in rows:
+        slug    = str(row.get("canonical_slug", ""))
+        qa_files = row.get("qa_pass_files") or []
+        has_preview = any(f.get("has_preview") is True for f in qa_files)
+        if has_preview:
+            eligible += 1
+            log.info("  eligible: %s", slug)
+
+    log.info("--- Survey complete: total=%d eligible_with_preview=%d ---", total, eligible)
+    log.info("Apply migration 20261021000001 then re-run with --dry-run or --execute.")
+
+
+# ---------------------------------------------------------------------------
+# Authority recheck
+# ---------------------------------------------------------------------------
+
 def _parse_storage_ref(raw_ref: str, expected_bucket: str) -> str:
     prefix = "storage://"
     if not raw_ref.startswith(prefix):
@@ -260,15 +383,9 @@ def _parse_storage_ref(raw_ref: str, expected_bucket: str) -> str:
 
 def _recheck_authority(sb, target: FormTarget) -> Optional[str]:
     """
-    Re-verify all authority gates immediately before processing.
-    Returns None if OK, or an error string explaining why to skip.
-
-    Checks performed (mirrors API endpoint gates 1–4/8):
-      1. Form still published (view row exists)
-      2. All active sources still CLEARED
-      3. Approval binding still valid (TOCTOU — fresh read)
+    Re-verify PUBLISHED + CLEARED + approval binding immediately before processing.
+    Returns None if all gates pass, or an error reason string.
     """
-    # Gate 1: form still published
     try:
         vr = (
             sb.table(_VIEW)
@@ -282,7 +399,6 @@ def _recheck_authority(sb, target: FormTarget) -> Optional[str]:
     if not vr.data:
         return "form_unpublished"
 
-    # Gate 2: sources CLEARED
     try:
         sr = (
             sb.table(_SOURCES)
@@ -299,7 +415,6 @@ def _recheck_authority(sb, target: FormTarget) -> Optional[str]:
     if any(s.get("rights_status") != "CLEARED" for s in sources):
         return "sources_not_cleared"
 
-    # Gate 3: approval binding
     try:
         ar = (
             sb.table(_APPROVALS)
@@ -326,47 +441,57 @@ def _recheck_authority(sb, target: FormTarget) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Process one form
+# ---------------------------------------------------------------------------
+
 def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
-    """Process one form. Returns 'generated', 'dry_run', 'skipped:<reason>', or 'failed:<reason>'."""
+    """
+    Process one form.
+    Returns 'generated', 'dry_run', 'skipped:<reason>', or 'failed:<reason>'.
+
+    In execute mode:
+      1. Re-verify authority (PUBLISHED / CLEARED / approval).
+      2. Atomic claim: NULL or QA_FAIL → PENDING.
+         If claim fails another process owns it → 'skipped:claim_lost'.
+      3. Download preview PNG, generate WebP, upload to Storage, update DB.
+      4. On any failure: release claim (PENDING → QA_FAIL) for retry-safety.
+    """
     import httpx
 
-    # Pre-processing: re-verify authority (FIX-03)
+    # Step 1: authority recheck (both modes)
     auth_err = _recheck_authority(sb, target)
     if auth_err:
-        log.info("  %s — skip (authority recheck): %s", target.slug, auth_err)
+        log.info("  %s — skip (authority): %s", target.slug, auth_err)
         return f"skipped:{auth_err}"
 
-    # Re-check thumbnail_qa_status to prevent concurrent duplicate execution (FIX-03)
-    try:
-        pa_now = (
-            sb.table(_PREVIEW)
-            .select("thumbnail_qa_status")
-            .eq("id", target.preview_artifact_id)
-            .limit(1)
-            .execute()
-        )
-    except Exception as exc:
-        return f"failed:precheck_pa:{exc}"
-    if pa_now.data:
-        current_status = pa_now.data[0].get("thumbnail_qa_status")
-        if current_status in ("QA_PASS", "PENDING"):
-            return f"skipped:thumbnail_already_{current_status}"
-
-    # Mark as PENDING before downloading to prevent concurrent execution (FIX-03)
-    if not dry_run:
+    # Dry-run: no DB/Storage writes
+    if dry_run:
         try:
-            sb.table(_PREVIEW).update({
-                "thumbnail_qa_status": "PENDING",
-            }).eq("id", target.preview_artifact_id).execute()
-        except Exception as exc:
-            return f"failed:pending_mark:{exc}"
+            _parse_storage_ref(target.preview_ref, THUMBNAIL_BUCKET)
+        except ValueError as exc:
+            return f"skipped:bad_preview_ref:{exc}"
+        log.info("  [DRY-RUN] %s — eligible (existing_status=%s)",
+                 target.slug, target.existing_thumbnail_status)
+        return "dry_run"
 
-    # Download preview PNG
+    # Step 2: atomic claim (execute mode only)
+    if not _atomic_claim(sb, target.preview_artifact_id):
+        log.info("  %s — skip: claim_lost (already claimed by another process)", target.slug)
+        return "skipped:claim_lost"
+
+    # Helper: release claim on any failure from here on.
+    def _fail(reason: str) -> str:
+        _release_claim(sb, target.preview_artifact_id)
+        return f"failed:{reason}"
+
+    # Step 3: parse storage ref
     try:
         preview_path = _parse_storage_ref(target.preview_ref, THUMBNAIL_BUCKET)
     except ValueError as exc:
-        return f"failed:bad_preview_ref:{exc}"
+        return _fail(f"bad_preview_ref:{exc}")
 
+    # Step 4: get signed URL
     try:
         signed = sb.storage.from_(THUMBNAIL_BUCKET).create_signed_url(
             preview_path, expires_in=120
@@ -375,35 +500,25 @@ def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
         if not signed_url:
             raise ValueError("empty signed URL")
     except Exception as exc:
-        return f"failed:signed_url:{exc}"
+        return _fail(f"signed_url:{exc}")
 
+    # Step 5: download preview
     try:
         r = httpx.get(signed_url, follow_redirects=True, timeout=60)
         r.raise_for_status()
         preview_bytes = r.content
     except Exception as exc:
-        return f"failed:download:{exc}"
+        return _fail(f"download:{exc}")
 
     input_sha256 = hashlib.sha256(preview_bytes).hexdigest()
 
-    if dry_run:
-        log.info("  [DRY-RUN] %s — would generate thumbnail (preview %d B, input_sha256=%s…)",
-                 target.slug, len(preview_bytes), input_sha256[:12])
-        return "dry_run"
-
-    # Generate thumbnail
+    # Step 6: generate WebP
     try:
         result = generate_fn(preview_bytes)
     except Exception as exc:
-        try:
-            sb.table(_PREVIEW).update({
-                "thumbnail_qa_status": "QA_FAIL",
-            }).eq("id", target.preview_artifact_id).execute()
-        except Exception:
-            pass
-        return f"failed:generate:{exc}"
+        return _fail(f"generate:{exc}")
 
-    # Upload to Storage — no upsert to prevent overwriting an existing object (FIX-03)
+    # Step 7: upload to Storage — no upsert, refuse to overwrite existing object
     thumb_storage_path = f"{THUMBNAIL_PREFIX}/{target.form_id}-v1.webp"
     try:
         sb.storage.from_(THUMBNAIL_BUCKET).upload(
@@ -412,15 +527,9 @@ def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
             file_options={"content-type": "image/webp", "upsert": "false"},
         )
     except Exception as exc:
-        try:
-            sb.table(_PREVIEW).update({
-                "thumbnail_qa_status": "QA_FAIL",
-            }).eq("id", target.preview_artifact_id).execute()
-        except Exception:
-            pass
-        return f"failed:upload:{exc}"
+        return _fail(f"upload:{exc}")
 
-    # Update preview artifact row — on failure roll back the Storage upload (FIX-03)
+    # Step 8: DB update — on failure roll back Storage upload
     thumbnail_ref = f"storage://{THUMBNAIL_BUCKET}/{thumb_storage_path}"
     try:
         sb.table(_PREVIEW).update({
@@ -432,21 +541,16 @@ def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
             "thumbnail_bytes":              result.byte_count,
         }).eq("id", target.preview_artifact_id).execute()
     except Exception as exc:
-        # Storage object uploaded but DB update failed — remove orphan file
         try:
             sb.storage.from_(THUMBNAIL_BUCKET).remove([thumb_storage_path])
-            log.warning("  %s — rolled back Storage upload after DB failure", target.slug)
+            log.warning("  %s — rolled back Storage after DB failure", target.slug)
         except Exception as rm_exc:
-            log.error("  %s — Storage rollback failed (orphan): %s", target.slug, rm_exc)
-        try:
-            sb.table(_PREVIEW).update({
-                "thumbnail_qa_status": "QA_FAIL",
-            }).eq("id", target.preview_artifact_id).execute()
-        except Exception:
-            pass
-        return f"failed:db_update:{exc}"
+            log.error("  %s — Storage rollback failed (orphan file %s): %s",
+                      target.slug, thumb_storage_path, rm_exc)
+        return _fail(f"db_update:{exc}")
 
-    log.info("  OK %s — %d B WebP (sha256=%s…)", target.slug, result.byte_count, result.output_sha256[:12])
+    log.info("  OK %s — %d B WebP (sha256=%s…)",
+             target.slug, result.byte_count, result.output_sha256[:12])
     return "generated"
 
 
@@ -455,48 +559,75 @@ def _process_one(sb, target: FormTarget, generate_fn, dry_run: bool) -> str:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Backfill WebP thumbnails for reference forms")
-    group  = parser.add_mutually_exclusive_group()
-    group.add_argument("--dry-run",  dest="dry_run",  action="store_true",  default=True,
-                       help="Print plan only — do not write (default)")
-    group.add_argument("--execute",  dest="dry_run",  action="store_false",
-                       help="Actually generate and store thumbnails")
+    parser = argparse.ArgumentParser(
+        description="Backfill WebP thumbnails for reference forms"
+    )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--dry-run", dest="mode", action="store_const", const="dry_run", default="dry_run",
+        help="Print plan only — no writes (default; works before migration)"
+    )
+    mode_group.add_argument(
+        "--execute", dest="mode", action="store_const", const="execute",
+        help="Generate and store thumbnails (requires migration + Owner G4)"
+    )
+    mode_group.add_argument(
+        "--reset-pending", dest="mode", action="store_const", const="reset_pending",
+        help="Crash recovery: reset stuck PENDING rows back to NULL"
+    )
     args = parser.parse_args()
 
     _require_deps()
-    from services.reference_form_thumbnail_svc import (
-        generate_thumbnail, GENERATION_VERSION,
-    )
+    from services.reference_form_thumbnail_svc import generate_thumbnail, GENERATION_VERSION
 
     sb = _get_supabase()
 
-    # FIX-04: verify migration is applied before reading thumbnail columns
-    if not _check_migration_applied(sb):
+    # --- reset-pending mode ---
+    if args.mode == "reset_pending":
+        n = _reset_pending_claims(sb)
+        log.info("Reset %d PENDING rows to NULL. Re-run with --execute to retry.", n)
+        return
+
+    migration_ok = _check_migration_applied(sb)
+
+    # --- dry-run mode ---
+    if args.mode == "dry_run":
+        if not migration_ok:
+            _dry_run_pre_migration(sb)
+            return
+        targets = _collect_targets(sb)
+        already_done  = sum(1 for t in targets if t.existing_thumbnail_status == "QA_PASS")
+        pending_stuck = sum(1 for t in targets if t.existing_thumbnail_status == "PENDING")
+        log.info("=== Thumbnail Backfill DRY-RUN === eligible=%d version=%s",
+                 len(targets), GENERATION_VERSION)
+        for t in targets:
+            log.info("  %s  (status=%s)", t.slug, t.existing_thumbnail_status)
+        log.info("Summary: eligible=%d already_pass=%d pending_stuck=%d",
+                 len(targets), already_done, pending_stuck)
+        if pending_stuck:
+            log.warning("  %d PENDING rows detected — use --reset-pending for crash recovery",
+                        pending_stuck)
+        log.info("Re-run with --execute to generate (requires Owner G4 approval).")
+        return
+
+    # --- execute mode ---
+    if not migration_ok:
         log.error(
-            "Migration 20261021000001 not applied — thumbnail columns missing on "
-            "reference_form_preview_artifacts. Apply the migration first."
+            "Migration 20261021000001 not applied — thumbnail columns missing. "
+            "Apply the migration first."
         )
         sys.exit(1)
 
     targets = _collect_targets(sb)
     stats = BackfillStats(total=len(targets))
 
-    mode = "DRY-RUN" if args.dry_run else "EXECUTE"
-    log.info("=== Thumbnail Backfill %s === targets=%d version=%s",
-             mode, len(targets), GENERATION_VERSION)
+    log.info("=== Thumbnail Backfill EXECUTE === targets=%d version=%s",
+             len(targets), GENERATION_VERSION)
 
     if not targets:
         log.info("No eligible forms found — nothing to do.")
         return
 
-    if args.dry_run:
-        log.info("Dry-run: listing %d target forms:", len(targets))
-        for t in targets:
-            log.info("  %s  (existing_status=%s)", t.slug, t.existing_thumbnail_status)
-        log.info("Re-run with --execute to generate thumbnails (requires Owner G4 approval).")
-        return
-
-    # Execute mode — sequential processing
     for t in targets:
         result = _process_one(sb, t, generate_thumbnail, dry_run=False)
         if result == "generated":
@@ -516,6 +647,9 @@ def main() -> None:
         log.warning("Failures:")
         for slug, reason in stats.errors:
             log.warning("  %s: %s", slug, reason)
+
+    if stats.failed:
+        sys.exit(2)  # partial failure — non-zero exit code
 
 
 if __name__ == "__main__":
