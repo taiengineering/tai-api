@@ -1,19 +1,21 @@
 """
-작업자 위험성평가 참여 / 출퇴근 / 작업허가서 API — v1.0.0
+작업자 위험성평가 참여 / 출퇴근 / 작업허가서 API — v1.1.0
 
-작업자 PWA 가 호출하지만 서버에 부재해 404 로 실패하던 마지막 3개 경로를 신설한다.
-대응 테이블은 2026-08-10 마이그레이션으로 생성했다.
+v1.1.0: GET /work-permits 인증 필수화 + 역할 기반 범위 강제
+        (WO-TAI-API-SEC-DATA-READ-001-R2)
+  - _optional_auth → get_current_user (전화번호만으로 타인 기록 조회 불가)
+  - 작업자 경로: requester_id/requester_phone 본인 범위만 조회
+  - 관리자 경로: JWT company_id 범위 강제, NULL company_id 전체조회 차단
+  - company_id 없는 인증 사용자는 본인 기록만 (플랫폼 관리자 제외)
 
-API:
-  POST /risk-assessments/{assessment_id}/participate  위험성평가 참여·서명 (risk.html)
-  GET  /risk-assessments/{assessment_id}/participants 참여자 목록 (관리자)
-  POST /attendance                                    출퇴근·현장출입 (attendance.html / qr_scan.html)
-  GET  /attendance                                    본인 출입 이력
-  POST /work-permits                                  작업허가 신청 (work_request.html)
-  GET  /work-permits                                  허가 목록
+v1.0.0: 서버에 부재해 404로 실패하던 마지막 3개 경로 신설
+  - POST/GET /risk-assessments/{id}/participate·participants
+  - POST/GET /attendance
+  - POST/GET /work-permits
 
-인증은 worker_check.py 관례를 따른다 — Authorization 이 있으면 검증하고 없으면 phone 기반.
-현장 작업자가 토큰 만료 상태에서도 법정 의무를 이행할 수 있어야 하기 때문이다.
+인증은 worker_check.py 관례를 따른다 — Authorization이 있으면 검증하고 없으면
+phone 기반. 현장 작업자가 토큰 만료 상태에서도 법정 의무를 이행할 수 있어야 하기
+때문이다. (쓰기 경로 POST는 기존 방식 유지. 읽기 경로 GET은 R2로 강화)
 """
 import logging
 import random
@@ -25,6 +27,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
 from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
@@ -32,9 +35,12 @@ router = APIRouter(tags=["WorkerPermits"])
 
 SIGNATURE_BUCKET = "company-docs"
 
+# 관리자 권한 코드 (work-permits 전체 범위 조회 허용)
+_WORK_PERMIT_ADMIN_PERMISSION = "USER_VIEW"
+
 
 def _optional_auth(authorization: Optional[str] = Header(None)) -> Optional[dict]:
-    """Authorization이 있으면 검증, 없으면 None 반환. (worker_check.py 와 동일 관례)"""
+    """Authorization이 있으면 검증, 없으면 None 반환. (쓰기 경로용)"""
     if not authorization or not authorization.startswith("Bearer "):
         return None
     token = authorization.replace("Bearer ", "")
@@ -58,10 +64,7 @@ def _clean_phone(phone: str) -> str:
 
 
 def _resolve_worker(phone: str):
-    """전화번호로 users → worker_registry 순서로 조회. (worker_check.py 와 동일 관례)
-
-    users.phone 은 하이픈 유무가 섞여 있어 양쪽 형식으로 조회한다.
-    """
+    """전화번호로 users → worker_registry 순서로 조회. (worker_check.py 와 동일 관례)"""
     supabase = get_supabase()
     clean = _clean_phone(phone)
     if not clean:
@@ -79,10 +82,7 @@ def _resolve_worker(phone: str):
 
 
 def _save_signature(signature_data: str, prefix: str) -> Optional[str]:
-    """base64 dataURL 서명을 Storage 에 저장하고 public URL 을 돌려준다.
-
-    실패해도 예외를 올리지 않는다 — 서명 보관 실패가 참여 기록 자체를 막아서는 안 된다.
-    """
+    """base64 dataURL 서명을 Storage에 저장하고 public URL을 돌려준다."""
     if not signature_data:
         return None
     try:
@@ -100,13 +100,48 @@ def _save_signature(signature_data: str, prefix: str) -> Optional[str]:
         return None
 
 
+def _has_work_permit_admin(supabase, role_code: str) -> bool:
+    """role_permissions DB에서 작업허가 관리자 권한 보유 여부 확인."""
+    if not role_code:
+        return False
+    try:
+        res = (
+            supabase.table("role_permissions")
+            .select("id")
+            .eq("role_code", role_code)
+            .eq("permission_code", _WORK_PERMIT_ADMIN_PERMISSION)
+            .limit(1)
+            .execute()
+        )
+        return bool(res.data)
+    except Exception:
+        return False
+
+
+def _is_platform_admin(supabase, role_code: str) -> bool:
+    """role_data_scope.scope_type == 'ALL'이면 플랫폼 전체 관리자."""
+    if not role_code:
+        return False
+    try:
+        r = (
+            supabase.table("role_data_scope")
+            .select("scope_type")
+            .eq("role_code", role_code)
+            .limit(1)
+            .execute()
+        )
+        return bool(r.data) and r.data[0].get("scope_type") == "ALL"
+    except Exception:
+        return False
+
+
 # ══════════════════════════════════════════
 # 위험성평가 참여 — ra_participation
 # ══════════════════════════════════════════
 
 class RaParticipateBody(BaseModel):
     phone: str
-    assess_id: Optional[str] = None      # 경로 파라미터와 중복되나 프론트가 함께 보낸다
+    assess_id: Optional[str] = None
     worker_id: Optional[str] = None
     agreed_risks: Optional[List[str]] = None
     extra_risks: Optional[List[str]] = None
@@ -123,7 +158,6 @@ def participate_risk_assessment(
     """위험성평가 참여·서명 (산안법 제36조).
 
     같은 평가에 같은 작업자가 다시 서명하면 기존 행을 갱신한다.
-    (assessment_id, phone) 유니크 인덱스가 중복 행을 막는다.
     """
     supabase = get_supabase()
     clean = _clean_phone(body.phone)
@@ -158,7 +192,6 @@ def participate_risk_assessment(
         .eq("assessment_id", assessment_id).eq("phone", clean).limit(1).execute()
 
     if prev.data:
-        # 재서명 — 기존 행 갱신. 검토 상태는 다시 PENDING 으로 되돌린다.
         row["updated_at"] = serialize_external_utc(now_kst())
         res = supabase.table("ra_participation").update(row).eq("id", prev.data[0]["id"]).execute()
         saved_id = prev.data[0]["id"]
@@ -199,8 +232,8 @@ def list_ra_participants(
 
 class AttendanceBody(BaseModel):
     phone: str
-    entry_type: str                       # IN | OUT
-    method: Optional[str] = "GPS"         # GPS | QR | MANUAL
+    entry_type: str
+    method: Optional[str] = "GPS"
     worker_id: Optional[str] = None
     worker_name: Optional[str] = None
     company_id: Optional[str] = None
@@ -293,7 +326,7 @@ def list_attendance(
 
 class WorkPermitBody(BaseModel):
     phone: str
-    work_type: str                        # height|fire|confined|electric|crane|other
+    work_type: str
     description: str
     requester_id: Optional[str] = None
     requester_name: Optional[str] = None
@@ -375,40 +408,72 @@ def create_work_permit(
 
 @router.get("/work-permits")
 def list_work_permits(
-    phone: Optional[str] = Query(None, description="신청자 전화번호"),
+    phone: Optional[str] = Query(None, description="신청자 전화번호 (관리자 필터용)"),
     factory_id: Optional[str] = Query(None),
     site_id: Optional[str] = Query(None),
     status: Optional[str] = Query(None, description="CSV 다중값 허용"),
     limit: int = Query(50, le=200),
-    current_user: Optional[dict] = Depends(_optional_auth),
+    current_user: dict = Depends(get_current_user),
 ):
-    """작업허가 목록. 작업자는 본인 신청 이력을, 관리자는 승인 대기 건을 조회한다.
+    """작업허가 목록. 인증 필수.
 
-    FAIL-CLOSE: 인증 토큰 없이 phone 미지정 요청은 401.
-    - 인증 있음: JWT company_id로 범위 고정 (factory_id 추가 필터 허용)
-    - 인증 없음+phone: 해당 phone의 기록만 조회 (작업자 본인 이력)
+    관리자(USER_VIEW 권한 보유): JWT company_id 범위 강제.
+    작업자(USER_VIEW 권한 없음): 본인 requester_id 또는 requester_phone 기록만.
+
+    FAIL-CLOSE:
+    - 미인증 → 401 (get_current_user 가 처리)
+    - 인증 있으나 company_id 없는 비어드민 → 본인 기록만
+    - 인증 있으나 company_id 없는 플랫폼 어드민 → 전체 조회 허용
     """
-    # FAIL-CLOSE: auth 없고 phone도 없으면 차단
-    if current_user is None and not phone:
-        raise HTTPException(status_code=401, detail={"error": "AUTH_REQUIRED"})
-
     supabase = get_supabase()
+    user_role = current_user.get("role_code")
+    is_admin = _has_work_permit_admin(supabase, user_role)
+    is_platform_admin = _is_platform_admin(supabase, user_role)
+    jwt_company_id = current_user.get("company_id")
+
     q = supabase.table("work_permits").select("*")
 
-    if current_user is not None:
-        # 인증된 사용자: JWT 기반 회사 범위 강제
-        jwt_company_id = current_user.get("company_id")
+    if is_admin:
+        # 관리자 경로: JWT company_id 범위 강제
         if jwt_company_id:
             q = q.eq("company_id", jwt_company_id)
             if factory_id:
                 q = q.eq("factory_id", factory_id)
-        else:
-            # 플랫폼 관리자: 명시적 factory_id 필터 허용
+            if phone:
+                q = q.eq("requester_phone", _clean_phone(phone))
+        elif is_platform_admin:
+            # 플랫폼 전체 관리자 (scope=ALL + company_id 없음): 파라미터 범위 허용
             if factory_id:
                 q = q.eq("factory_id", factory_id)
+            if phone:
+                q = q.eq("requester_phone", _clean_phone(phone))
+        else:
+            # 관리자 권한이 있으나 회사 없음 → 본인 기록만 (안전 폴백)
+            user_id = str(current_user.get("id") or "")
+            user_phone = _clean_phone(current_user.get("phone") or "")
+            if user_id:
+                q = q.eq("requester_id", user_id)
+            elif user_phone:
+                q = q.eq("requester_phone", user_phone)
+            else:
+                return {"status": "success", "data": {"items": [], "total": 0}}
     else:
-        # 미인증 + phone: 해당 전화번호 기록만 (작업자 본인 이력)
-        q = q.eq("requester_phone", _clean_phone(phone))
+        # 작업자 경로: 본인 기록만 (requester_id 또는 requester_phone)
+        user_id = str(current_user.get("id") or "")
+        user_phone = _clean_phone(current_user.get("phone") or "")
+
+        if user_id and user_phone:
+            # OR 조건: id로 신청한 것 + phone으로 신청한 것 모두 포함
+            q = q.or_(f"requester_id.eq.{user_id},requester_phone.eq.{user_phone}")
+        elif user_id:
+            q = q.eq("requester_id", user_id)
+        elif user_phone:
+            q = q.eq("requester_phone", user_phone)
+        else:
+            # 신원 확인 불가 → 빈 결과 (fail-close)
+            return {"status": "success", "data": {"items": [], "total": 0}}
+
+        # 작업자 경로에서 타인 phone 필터 파라미터는 무시 (본인 범위 고정)
 
     if site_id:
         q = q.eq("site_id", site_id)
