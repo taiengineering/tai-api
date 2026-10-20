@@ -670,6 +670,95 @@ class T17_ChannelAndStatusFilters(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# T18: per_page > 200 — silently capped, not 422 (CORR-004)
+# ---------------------------------------------------------------------------
+
+class T18_PerPageCappedAt200(unittest.TestCase):
+    def _make_tc(self):
+        import unittest.mock as mock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers.document_catalog import router
+        from routers.auth import get_current_user
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: _ADMIN_USER
+        return TestClient(app, raise_server_exceptions=False), mock
+
+    def test_per_page_300_returns_200_not_422(self):
+        tc, mock = self._make_tc()
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=_make_mock_client()):
+            resp = tc.get("/api/document-catalog", params={"per_page": 300})
+        self.assertEqual(resp.status_code, 200,
+                         "per_page > 200 must be silently capped, not rejected with 422")
+
+    def test_per_page_300_response_per_page_le_200(self):
+        tc, mock = self._make_tc()
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=_make_mock_client()):
+            resp = tc.get("/api/document-catalog", params={"per_page": 300})
+        self.assertLessEqual(resp.json()["per_page"], 200)
+
+
+# ---------------------------------------------------------------------------
+# T19: channel filter enhancements (CORR-004)
+#   - name-only (e.g. REFERENCE_DOWNLOAD) → implicit READY
+#   - invalid channel name → 422
+#   - invalid channel state → 422
+# ---------------------------------------------------------------------------
+
+class T19_ChannelFilterEnhancements(unittest.TestCase):
+    def _make_tc(self):
+        import unittest.mock as mock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers.document_catalog import router
+        from routers.auth import get_current_user
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: _ADMIN_USER
+        return TestClient(app, raise_server_exceptions=False), mock
+
+    def test_name_only_matches_same_as_name_colon_ready(self):
+        rows = [
+            _make_ref_row("ref-with-files", file_count=2),
+            _make_ref_row("ref-no-files", file_count=0),
+        ]
+        client = _make_mock_client(ref_rows=rows)
+        result_name = get_unified_catalog(client, source_system="REFERENCE_CMS",
+                                          channel_filter="REFERENCE_DOWNLOAD")
+        result_explicit = get_unified_catalog(client, source_system="REFERENCE_CMS",
+                                              channel_filter="REFERENCE_DOWNLOAD:READY")
+        self.assertEqual(
+            {i.source_code for i in result_name.items},
+            {i.source_code for i in result_explicit.items},
+        )
+
+    def test_invalid_channel_name_returns_422(self):
+        tc, mock = self._make_tc()
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=_make_mock_client()):
+            resp = tc.get("/api/document-catalog", params={"channel": "INVALID_CHANNEL"})
+        self.assertEqual(resp.status_code, 422)
+
+    def test_invalid_channel_state_returns_422(self):
+        tc, mock = self._make_tc()
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=_make_mock_client()):
+            resp = tc.get("/api/document-catalog", params={"channel": "WEB_EDIT:INVALID_STATE"})
+        self.assertEqual(resp.status_code, 422)
+
+    def test_valid_name_colon_state_returns_200(self):
+        tc, mock = self._make_tc()
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=_make_mock_client()):
+            resp = tc.get("/api/document-catalog", params={"channel": "WEB_EDIT:BLOCKED"})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_name_only_returns_200(self):
+        tc, mock = self._make_tc()
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=_make_mock_client()):
+            resp = tc.get("/api/document-catalog", params={"channel": "WEB_EDIT"})
+        self.assertEqual(resp.status_code, 200)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -695,6 +784,8 @@ if __name__ == "__main__":
         T15_RouterListEndpointStructure,
         T16_RouterDetailEndpointStructure,
         T17_ChannelAndStatusFilters,
+        T18_PerPageCappedAt200,
+        T19_ChannelFilterEnhancements,
     ]
 
     for tc in test_classes:

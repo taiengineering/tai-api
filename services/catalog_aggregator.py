@@ -312,17 +312,21 @@ def _build_ref_item(row: dict[str, Any]) -> CatalogItem:
 
 def _matches_channel_filter(item: CatalogItem, channel_filter: str) -> bool:
     """
-    channel_filter format: 'CHANNEL_NAME:STATE', e.g. 'WEB_EDIT:READY'.
-    Empty string means no filter (all pass).
+    channel_filter: 'CHANNEL_NAME:STATE' (e.g. 'WEB_EDIT:READY') or
+                    'CHANNEL_NAME' alone (implicit READY).
+    Empty string → no filter (all pass).
+    Unknown channel name or state → no match (returns False).
+    Router validates input before calling; this function is the post-fetch gate.
     """
     if not channel_filter:
         return True
-    if ":" not in channel_filter:
-        return True
-    ch_name, ch_state = channel_filter.split(":", 1)
+    if ":" in channel_filter:
+        ch_name, ch_state = channel_filter.split(":", 1)
+    else:
+        ch_name, ch_state = channel_filter, "READY"
     ch = getattr(item.channels, ch_name.strip(), None)
     if ch is None:
-        return True
+        return False
     return ch.state == ch_state.strip()
 
 

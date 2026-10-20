@@ -38,6 +38,42 @@ router = APIRouter(prefix="/api/document-catalog", tags=["Document catalog"])
 
 _ADMIN_ROLES = frozenset({"001"})
 
+_VALID_CHANNEL_NAMES = frozenset({
+    "REFERENCE_DOWNLOAD", "OFFICIAL_ORIGINAL", "WEB_EDIT", "SAAS_EXPORT", "SAAS_AUTO_FILL"
+})
+_VALID_CHANNEL_STATES = frozenset({"READY", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"})
+
+
+def _normalise_channel(channel: str) -> str:
+    """
+    Accepts 'CHANNEL_NAME' (→ implicit READY) or 'CHANNEL_NAME:STATE'.
+    Returns normalised 'CHANNEL_NAME:STATE'.
+    Raises HTTPException 422 on unknown channel name or state.
+    """
+    if not channel:
+        return channel
+    if ":" in channel:
+        ch_name, ch_state = channel.split(":", 1)
+    else:
+        ch_name, ch_state = channel, "READY"
+    if ch_name not in _VALID_CHANNEL_NAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"유효하지 않은 채널명: {ch_name!r}. "
+                f"허용값: {sorted(_VALID_CHANNEL_NAMES)}"
+            ),
+        )
+    if ch_state not in _VALID_CHANNEL_STATES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"유효하지 않은 채널 상태: {ch_state!r}. "
+                f"허용값: {sorted(_VALID_CHANNEL_STATES)}"
+            ),
+        )
+    return f"{ch_name}:{ch_state}"
+
 
 def _require_admin(current_user: dict = Depends(get_current_user)) -> dict:
     if current_user.get("role_code") not in _ADMIN_ROLES:
@@ -94,7 +130,7 @@ def _get_rest_client() -> SupabaseRestClient:
 def list_document_catalog(
     _admin: dict = Depends(_require_admin),
     page: int = Query(default=1, ge=1, description="1-based page number"),
-    per_page: int = Query(default=50, ge=1, le=200, description="Items per page (max 200)"),
+    per_page: int = Query(default=50, ge=1, description="Items per page (silently capped at 200)"),
     q: str = Query(default="", description="Full-text search on title / doc_name"),
     sector: str = Query(default="", description="Filter by sector (SAAS records only)"),
     category: str = Query(default="", description="Filter by category (SAAS records only)"),
@@ -104,7 +140,11 @@ def list_document_catalog(
     ),
     channel: str = Query(
         default="",
-        description="Filter by channel state, e.g. WEB_EDIT:READY or REFERENCE_DOWNLOAD:BLOCKED",
+        description=(
+            "Filter by channel. "
+            "Name only (e.g. WEB_EDIT) → READY. "
+            "Name:State (e.g. WEB_EDIT:BLOCKED) → explicit state."
+        ),
     ),
     source_system: str = Query(
         default="ALL",
@@ -117,12 +157,13 @@ def list_document_catalog(
     reference_form_public_view (REFERENCE_CMS).
 
     Auth: Bearer JWT required → 401 if missing/invalid; 403 if not role 001.
-    No DB writes. per_page silently capped at 200.
+    No DB writes. per_page silently capped at 200 (no error above 200).
     sector/category/status filters apply to SAAS records only.
-    channel filter (e.g. WEB_EDIT:READY) applied after capability computation.
+    channel: 'WEB_EDIT' → READY; 'WEB_EDIT:BLOCKED' → explicit; unknown name/state → 422.
     WEB_EDIT and SAAS_EXPORT are fail-closed in catalog context (factory scope unverified).
     links[] is always empty at this phase (unified_document_link table not applied).
     """
+    channel_normalised = _normalise_channel(channel)
     try:
         client = _get_rest_client()
         result = get_unified_catalog(
@@ -133,7 +174,7 @@ def list_document_catalog(
             sector=sector,
             category=category,
             status=status,
-            channel_filter=channel,
+            channel_filter=channel_normalised,
             source_system=source_system,
         )
     except RuntimeError as exc:
