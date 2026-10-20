@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Users 라우터 - 회원 관리 v2.3.1
+TAI Users 라우터 - 회원 관리 v2.4.0
 
+v2.4.0: 전 엔드포인트 인증 의무화 + JWT 기반 회사 범위 강제 (WO-TAI-API-SEC-DATA-READ-001)
+  - get_users/get_user/create_user/update_user/delete_user/update_user_status/
+    update_user_role/get_user_factories 에 Depends(get_current_user) 추가
+  - get_users: JWT company_id가 있으면 클라이언트 파라미터를 덮어써 교차 테넌트 목록 방지
+  - 플랫폼 관리자(company_id=None) 기존 전체 조회 유지
 v2.3.1: get_users 데모제외를 어드민 전체목록에만 적용
   - factory_id 지정 조회(담당자 드롭다운)에서 company_id 없을 때 데모 사용자가 neq 제외되던 결함 수정
 v2.3.0: 목록 size 상한 100→500 (LEDGER §68)
@@ -221,8 +226,15 @@ def get_users(
     keyword:     Optional[str] = Query(default=None),
     role:        Optional[str] = Query(default=None),
     status:      Optional[str] = Query(default=None),
+    current_user: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+
+    # JWT 기반 회사 범위 강제: company_id가 있는 사용자는 자사 범위로 고정
+    # 플랫폼 관리자(company_id=None)는 기존 전체 조회 유지
+    jwt_company_id = current_user.get("company_id")
+    if jwt_company_id:
+        company_id = jwt_company_id
 
     effective_search = search or keyword
     effective_role = role_code or role
@@ -258,7 +270,7 @@ def get_users(
 # ============================================================
 
 @router.post("")
-def create_user(req: UserCreate):
+def create_user(req: UserCreate, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
     dup = supabase.table("users").select("id").eq("email", req.email).limit(1).execute()
     if dup.data:
@@ -287,7 +299,7 @@ def create_user(req: UserCreate):
 # ============================================================
 
 @router.get("/{user_id}")
-def get_user(user_id: str):
+def get_user(user_id: str, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
     res = supabase.table("users").select("*").eq("id", user_id).single().execute()
     if not res.data:
@@ -300,7 +312,7 @@ def get_user(user_id: str):
 # ============================================================
 
 @router.patch("/{user_id}")
-def update_user(user_id: str, req: UserUpdate):
+def update_user(user_id: str, req: UserUpdate, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
     existing = supabase.table("users").select("id").eq("id", user_id).single().execute()
     if not existing.data:
@@ -316,7 +328,7 @@ def update_user(user_id: str, req: UserUpdate):
 # ============================================================
 
 @router.delete("/{user_id}")
-def delete_user(user_id: str):
+def delete_user(user_id: str, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
     existing = supabase.table("users").select("id").eq("id", user_id).single().execute()
     if not existing.data:
@@ -335,7 +347,7 @@ def delete_user(user_id: str):
 # ============================================================
 
 @router.patch("/{user_id}/status")
-def update_user_status(user_id: str, req: StatusUpdate):
+def update_user_status(user_id: str, req: StatusUpdate, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
     existing = supabase.table("users").select("id").eq("id", user_id).single().execute()
     if not existing.data:
@@ -361,7 +373,7 @@ def update_user_status(user_id: str, req: StatusUpdate):
 # ============================================================
 
 @router.patch("/{user_id}/role")
-async def update_user_role(user_id: str, req: RoleUpdate):
+async def update_user_role(user_id: str, req: RoleUpdate, current_user: dict = Depends(get_current_user)):
     """
     v2.1.0: role_code='002'(안전관리자) 설정 시 factory_id 있으면
     APPOINTMENT 이벤트 트리거 자동 호출.
@@ -407,7 +419,7 @@ async def update_user_role(user_id: str, req: RoleUpdate):
 # ============================================================
 
 @router.get("/{user_id}/factories")
-def get_user_factories(user_id: str):
+def get_user_factories(user_id: str, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
     user = supabase.table("users").select(
         "factory_id, company_id"

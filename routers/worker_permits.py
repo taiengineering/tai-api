@@ -380,15 +380,36 @@ def list_work_permits(
     site_id: Optional[str] = Query(None),
     status: Optional[str] = Query(None, description="CSV 다중값 허용"),
     limit: int = Query(50, le=200),
+    current_user: Optional[dict] = Depends(_optional_auth),
 ):
-    """작업허가 목록. 작업자는 본인 신청 이력을, 관리자는 승인 대기 건을 조회한다."""
-    supabase = get_supabase()
+    """작업허가 목록. 작업자는 본인 신청 이력을, 관리자는 승인 대기 건을 조회한다.
 
+    FAIL-CLOSE: 인증 토큰 없이 phone 미지정 요청은 401.
+    - 인증 있음: JWT company_id로 범위 고정 (factory_id 추가 필터 허용)
+    - 인증 없음+phone: 해당 phone의 기록만 조회 (작업자 본인 이력)
+    """
+    # FAIL-CLOSE: auth 없고 phone도 없으면 차단
+    if current_user is None and not phone:
+        raise HTTPException(status_code=401, detail={"error": "AUTH_REQUIRED"})
+
+    supabase = get_supabase()
     q = supabase.table("work_permits").select("*")
-    if phone:
+
+    if current_user is not None:
+        # 인증된 사용자: JWT 기반 회사 범위 강제
+        jwt_company_id = current_user.get("company_id")
+        if jwt_company_id:
+            q = q.eq("company_id", jwt_company_id)
+            if factory_id:
+                q = q.eq("factory_id", factory_id)
+        else:
+            # 플랫폼 관리자: 명시적 factory_id 필터 허용
+            if factory_id:
+                q = q.eq("factory_id", factory_id)
+    else:
+        # 미인증 + phone: 해당 전화번호 기록만 (작업자 본인 이력)
         q = q.eq("requester_phone", _clean_phone(phone))
-    if factory_id:
-        q = q.eq("factory_id", factory_id)
+
     if site_id:
         q = q.eq("site_id", site_id)
     if status:
