@@ -256,15 +256,19 @@ class TestT11TransitionInvalidTransition(unittest.TestCase):
 # T12: actor_id binding — taken from JWT, not from body
 # ---------------------------------------------------------------------------
 
+_CANDIDATE_ID = "SaaS-FORM-001__REF-FORM-001"
+
+
 class TestT12ActorBinding(unittest.TestCase):
-    def test_actor_id_from_jwt_injected_into_rpc(self):
+    def test_actor_id_from_jwt_id_injected_into_rpc(self):
+        """actor_id must come from JWT 'id' field (UUID PK), not from request body."""
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         from routers.document_link_review import router, get_current_user
 
         app = FastAPI()
         app.include_router(router)
-        jwt_user = {"user_id": "jwt-actor-id", "role_code": "001", "is_active": True}
+        jwt_user = {"id": "jwt-uuid-actor", "role_code": "001", "is_active": True}
         app.dependency_overrides[get_current_user] = lambda: jwt_user
 
         captured: dict = {}
@@ -274,16 +278,18 @@ class TestT12ActorBinding(unittest.TestCase):
             return _PROPOSED_ROW
 
         with patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.validate_candidate_for_propose",
+                   return_value=(_SAAS_UUID, _REF_UUID)), \
              patch("routers.document_link_review.propose_link", side_effect=_mock_propose):
             client = TestClient(app, raise_server_exceptions=False)
             client.post("/api/document-link-review/links", json={
-                "saas_catalog_id":   _SAAS_UUID,
-                "reference_form_id": _REF_UUID,
-                "relation_type":     "SAME_DOCUMENT_CANDIDATE",
-                "evidence_note":     "evidence",
+                "candidate_id":  _CANDIDATE_ID,
+                "relation_type": "SAME_DOCUMENT_CANDIDATE",
+                "evidence_note": "evidence",
             })
 
-        self.assertEqual(captured.get("actor_id"), "jwt-actor-id")
+        self.assertEqual(captured.get("actor_id"), "jwt-uuid-actor")
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +307,7 @@ class TestT13PostLinksNoAuth(unittest.TestCase):
         from fastapi.testclient import TestClient
         resp = TestClient(self.app, raise_server_exceptions=False).post(
             "/api/document-link-review/links",
-            json={"saas_catalog_id": _SAAS_UUID, "reference_form_id": _REF_UUID,
+            json={"candidate_id": _CANDIDATE_ID,
                   "relation_type": "SAME_DOCUMENT_CANDIDATE", "evidence_note": "e"},
         )
         self.assertEqual(resp.status_code, 401)
@@ -314,7 +320,7 @@ class TestT14PostLinksNonAdmin(unittest.TestCase):
         self.app = FastAPI()
         self.app.include_router(router)
         self.app.dependency_overrides[get_current_user] = lambda: {
-            "user_id": "u2", "role_code": "002", "is_active": True
+            "id": "u2", "role_code": "002", "is_active": True
         }
 
     def tearDown(self):
@@ -324,7 +330,7 @@ class TestT14PostLinksNonAdmin(unittest.TestCase):
         from fastapi.testclient import TestClient
         resp = TestClient(self.app, raise_server_exceptions=False).post(
             "/api/document-link-review/links",
-            json={"saas_catalog_id": _SAAS_UUID, "reference_form_id": _REF_UUID,
+            json={"candidate_id": _CANDIDATE_ID,
                   "relation_type": "SAME_DOCUMENT_CANDIDATE", "evidence_note": "e"},
         )
         self.assertEqual(resp.status_code, 403)
@@ -338,7 +344,7 @@ class TestT15PostLinksSuccess(unittest.TestCase):
         self.app = FastAPI()
         self.app.include_router(router)
         self.app.dependency_overrides[get_current_user] = lambda: {
-            "user_id": "u1", "role_code": "001", "is_active": True
+            "id": "u1-uuid", "role_code": "001", "is_active": True
         }
 
     def tearDown(self):
@@ -347,14 +353,16 @@ class TestT15PostLinksSuccess(unittest.TestCase):
     def test_valid_payload_returns_201(self):
         from fastapi.testclient import TestClient
         with patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.validate_candidate_for_propose",
+                   return_value=(_SAAS_UUID, _REF_UUID)), \
              patch("routers.document_link_review.propose_link", return_value=_PROPOSED_ROW):
             resp = TestClient(self.app, raise_server_exceptions=False).post(
                 "/api/document-link-review/links",
                 json={
-                    "saas_catalog_id":   _SAAS_UUID,
-                    "reference_form_id": _REF_UUID,
-                    "relation_type":     "SAME_DOCUMENT_CANDIDATE",
-                    "evidence_note":     "test evidence",
+                    "candidate_id":  _CANDIDATE_ID,
+                    "relation_type": "SAME_DOCUMENT_CANDIDATE",
+                    "evidence_note": "test evidence",
                 },
             )
         self.assertEqual(resp.status_code, 201)
@@ -369,7 +377,7 @@ class TestT16PostLinksMissingEvidenceNote(unittest.TestCase):
         self.app = FastAPI()
         self.app.include_router(router)
         self.app.dependency_overrides[get_current_user] = lambda: {
-            "user_id": "u1", "role_code": "001", "is_active": True
+            "id": "u1-uuid", "role_code": "001", "is_active": True
         }
 
     def tearDown(self):
@@ -380,9 +388,8 @@ class TestT16PostLinksMissingEvidenceNote(unittest.TestCase):
         resp = TestClient(self.app, raise_server_exceptions=False).post(
             "/api/document-link-review/links",
             json={
-                "saas_catalog_id":   _SAAS_UUID,
-                "reference_form_id": _REF_UUID,
-                "relation_type":     "SAME_DOCUMENT_CANDIDATE",
+                "candidate_id":  _CANDIDATE_ID,
+                "relation_type": "SAME_DOCUMENT_CANDIDATE",
             },
         )
         self.assertEqual(resp.status_code, 422)
@@ -392,36 +399,34 @@ class TestT16PostLinksMissingEvidenceNote(unittest.TestCase):
         resp = TestClient(self.app, raise_server_exceptions=False).post(
             "/api/document-link-review/links",
             json={
-                "saas_catalog_id":   _SAAS_UUID,
-                "reference_form_id": _REF_UUID,
-                "relation_type":     "SAME_DOCUMENT_CANDIDATE",
-                "evidence_note":     "",
+                "candidate_id":  _CANDIDATE_ID,
+                "relation_type": "SAME_DOCUMENT_CANDIDATE",
+                "evidence_note": "",
             },
         )
         self.assertEqual(resp.status_code, 422)
 
 
-class TestT17PostLinksMissingSaasId(unittest.TestCase):
+class TestT17PostLinksMissingCandidateId(unittest.TestCase):
     def setUp(self):
         from fastapi import FastAPI
         from routers.document_link_review import router, get_current_user
         self.app = FastAPI()
         self.app.include_router(router)
         self.app.dependency_overrides[get_current_user] = lambda: {
-            "user_id": "u1", "role_code": "001", "is_active": True
+            "id": "u1-uuid", "role_code": "001", "is_active": True
         }
 
     def tearDown(self):
         self.app.dependency_overrides.clear()
 
-    def test_missing_saas_catalog_id_returns_422(self):
+    def test_missing_candidate_id_returns_422(self):
         from fastapi.testclient import TestClient
         resp = TestClient(self.app, raise_server_exceptions=False).post(
             "/api/document-link-review/links",
             json={
-                "reference_form_id": _REF_UUID,
-                "relation_type":     "SAME_DOCUMENT_CANDIDATE",
-                "evidence_note":     "evidence",
+                "relation_type": "SAME_DOCUMENT_CANDIDATE",
+                "evidence_note": "evidence",
             },
         )
         self.assertEqual(resp.status_code, 422)
@@ -434,7 +439,7 @@ class TestT18PostLinksDuplicateConflict(unittest.TestCase):
         self.app = FastAPI()
         self.app.include_router(router)
         self.app.dependency_overrides[get_current_user] = lambda: {
-            "user_id": "u1", "role_code": "001", "is_active": True
+            "id": "u1-uuid", "role_code": "001", "is_active": True
         }
 
     def tearDown(self):
@@ -444,14 +449,16 @@ class TestT18PostLinksDuplicateConflict(unittest.TestCase):
         from fastapi.testclient import TestClient
         exc = DocumentLinkWriteError("DUPLICATE_ACTIVE_PAIR", "unique constraint")
         with patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.validate_candidate_for_propose",
+                   return_value=(_SAAS_UUID, _REF_UUID)), \
              patch("routers.document_link_review.propose_link", side_effect=exc):
             resp = TestClient(self.app, raise_server_exceptions=False).post(
                 "/api/document-link-review/links",
                 json={
-                    "saas_catalog_id":   _SAAS_UUID,
-                    "reference_form_id": _REF_UUID,
-                    "relation_type":     "SAME_DOCUMENT_CANDIDATE",
-                    "evidence_note":     "evidence",
+                    "candidate_id":  _CANDIDATE_ID,
+                    "relation_type": "SAME_DOCUMENT_CANDIDATE",
+                    "evidence_note": "evidence",
                 },
             )
         self.assertEqual(resp.status_code, 409)
@@ -469,7 +476,7 @@ class TestT19SubmitReviewSuccess(unittest.TestCase):
         self.app = FastAPI()
         self.app.include_router(router)
         self.app.dependency_overrides[get_current_user] = lambda: {
-            "user_id": "u1", "role_code": "001", "is_active": True
+            "id": "u1-uuid", "role_code": "001", "is_active": True
         }
 
     def tearDown(self):
@@ -495,7 +502,7 @@ class TestT20SubmitReviewNotFound(unittest.TestCase):
         self.app = FastAPI()
         self.app.include_router(router)
         self.app.dependency_overrides[get_current_user] = lambda: {
-            "user_id": "u1", "role_code": "001", "is_active": True
+            "id": "u1-uuid", "role_code": "001", "is_active": True
         }
 
     def tearDown(self):
@@ -524,7 +531,7 @@ class _DecisionTestBase(unittest.TestCase):
         self.app = FastAPI()
         self.app.include_router(router)
         self.app.dependency_overrides[get_current_user] = lambda: {
-            "user_id": "u1", "role_code": "001", "is_active": True
+            "id": "u1-uuid", "role_code": "001", "is_active": True
         }
 
     def tearDown(self):
@@ -536,26 +543,23 @@ class _DecisionTestBase(unittest.TestCase):
 
 
 class TestT21DecisionApprove(_DecisionTestBase):
-    def test_approve_returns_200_approved(self):
-        approved_row = {**_PROPOSED_ROW, "review_state": "APPROVED",
-                        "owner_approval_ref": _APPROVAL}
-        with patch("routers.document_link_review.get_supabase"), \
-             patch("routers.document_link_review.transition_link",
-                   return_value=approved_row):
-            resp = self._client().post(
-                f"/api/document-link-review/links/{_LINK_ID}/decision",
-                json={"action": "APPROVE", "owner_approval_ref": _APPROVAL},
-            )
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["review_state"], "APPROVED")
+    def test_approve_returns_403_owner_gate_blocked(self):
+        """APPROVE is FAIL-CLOSED: no Owner identity/approval SoT exists."""
+        resp = self._client().post(
+            f"/api/document-link-review/links/{_LINK_ID}/decision",
+            json={"action": "APPROVE", "owner_approval_ref": _APPROVAL},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
 
-    def test_approve_without_owner_approval_ref_returns_422(self):
+    def test_approve_without_ref_also_returns_403(self):
+        """APPROVE fails immediately regardless of owner_approval_ref presence."""
         resp = self._client().post(
             f"/api/document-link-review/links/{_LINK_ID}/decision",
             json={"action": "APPROVE"},
         )
-        self.assertEqual(resp.status_code, 422)
-        self.assertEqual(resp.json()["detail"]["code"], "OWNER_APPROVAL_REF_REQUIRED")
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
 
 
 class TestT22DecisionReject(_DecisionTestBase):
@@ -596,7 +600,7 @@ class TestT24GetLinkDetail(unittest.TestCase):
         self.app = FastAPI()
         self.app.include_router(router)
         self.app.dependency_overrides[get_current_user] = lambda: {
-            "user_id": "u1", "role_code": "001", "is_active": True
+            "id": "u1-uuid", "role_code": "001", "is_active": True
         }
 
     def tearDown(self):
@@ -637,6 +641,169 @@ class TestT24GetLinkDetail(unittest.TestCase):
             )
         self.assertEqual(resp.status_code, 404)
         self.assertEqual(resp.json()["detail"]["code"], "LINK_NOT_FOUND")
+
+
+# ---------------------------------------------------------------------------
+# CORR-001: Defect-fix regression tests
+# ---------------------------------------------------------------------------
+
+class _CorrTestBase(unittest.TestCase):
+    def setUp(self):
+        from fastapi import FastAPI
+        from routers.document_link_review import router, get_current_user
+        self.app = FastAPI()
+        self.app.include_router(router)
+        self.app.dependency_overrides[get_current_user] = lambda: {
+            "id": "u1-uuid", "role_code": "001", "is_active": True
+        }
+
+    def tearDown(self):
+        self.app.dependency_overrides.clear()
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        return TestClient(self.app, raise_server_exceptions=False)
+
+
+class TestCORR01ApproveIsAlwaysBlocked(_CorrTestBase):
+    """CORR-A/B/D: APPROVE returns 403 OWNER_GATE_BLOCKED regardless of payload."""
+
+    def test_approve_with_ref_blocked(self):
+        resp = self._client().post(
+            f"/api/document-link-review/links/{_LINK_ID}/decision",
+            json={"action": "APPROVE", "owner_approval_ref": "WO-FAKE-001"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
+
+    def test_approve_without_ref_blocked(self):
+        resp = self._client().post(
+            f"/api/document-link-review/links/{_LINK_ID}/decision",
+            json={"action": "APPROVE"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
+
+
+class TestCORR02RetireFromApprovedBlocked(_CorrTestBase):
+    """CORR-E: RETIRE on an APPROVED link returns 403 OWNER_GATE_BLOCKED."""
+
+    def test_retire_approved_link_blocked(self):
+        approved_link = {**_PROPOSED_ROW, "review_state": "APPROVED"}
+        with patch("routers.document_link_review.SupabaseRestClient") as MockClient:
+            MockClient.return_value.select.return_value = [approved_link]
+            resp = self._client().post(
+                f"/api/document-link-review/links/{_LINK_ID}/decision",
+                json={"action": "RETIRE"},
+            )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
+
+
+class TestCORR03RetireFromRejectedAllowed(_CorrTestBase):
+    """RETIRE on a REJECTED link must still succeed (CORR-E does not affect this path)."""
+
+    def test_retire_rejected_link_succeeds(self):
+        rejected_link = {**_PROPOSED_ROW, "review_state": "REJECTED"}
+        retired_row = {**_PROPOSED_ROW, "review_state": "RETIRED"}
+        with patch("routers.document_link_review.SupabaseRestClient") as MockClient, \
+             patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.transition_link", return_value=retired_row):
+            MockClient.return_value.select.return_value = [rejected_link]
+            resp = self._client().post(
+                f"/api/document-link-review/links/{_LINK_ID}/decision",
+                json={"action": "RETIRE"},
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["review_state"], "RETIRED")
+
+
+class TestCORR04InvalidCandidateId(_CorrTestBase):
+    """CORR-C: candidate_id not in CSV → 404 CANDIDATE_NOT_FOUND."""
+
+    def test_unknown_candidate_id_returns_404(self):
+        from services.document_link_review_read import CandidateValidationError
+        exc = CandidateValidationError("CANDIDATE_NOT_FOUND", "후보를 찾을 수 없습니다.")
+        with patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.validate_candidate_for_propose",
+                   side_effect=exc):
+            resp = self._client().post(
+                "/api/document-link-review/links",
+                json={
+                    "candidate_id":  "NONEXISTENT__ID",
+                    "relation_type": "SAME_DOCUMENT_CANDIDATE",
+                    "evidence_note": "evidence",
+                },
+            )
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.json()["detail"]["code"], "CANDIDATE_NOT_FOUND")
+
+
+class TestCORR05StaleCandidateBlocked(_CorrTestBase):
+    """CORR-C: stale candidate → 422 CANDIDATE_STALE."""
+
+    def test_stale_candidate_returns_422(self):
+        from services.document_link_review_read import CandidateValidationError
+        exc = CandidateValidationError("CANDIDATE_STALE", "SaaS 문서가 비활성 상태입니다.")
+        with patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.validate_candidate_for_propose",
+                   side_effect=exc):
+            resp = self._client().post(
+                "/api/document-link-review/links",
+                json={
+                    "candidate_id":  _CANDIDATE_ID,
+                    "relation_type": "SAME_DOCUMENT_CANDIDATE",
+                    "evidence_note": "evidence",
+                },
+            )
+        self.assertEqual(resp.status_code, 422)
+        self.assertEqual(resp.json()["detail"]["code"], "CANDIDATE_STALE")
+
+
+class TestCORR06RejectStillWorks(_CorrTestBase):
+    """REJECT must still work — only APPROVE and RETIRE-from-APPROVED are blocked."""
+
+    def test_reject_proposed_returns_200(self):
+        rejected_row = {**_PROPOSED_ROW, "review_state": "REJECTED"}
+        with patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.transition_link", return_value=rejected_row):
+            resp = self._client().post(
+                f"/api/document-link-review/links/{_LINK_ID}/decision",
+                json={"action": "REJECT"},
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["review_state"], "REJECTED")
+
+
+class TestCORR07CandidateUuidsFromServer(_CorrTestBase):
+    """CORR-C: UUIDs used for propose must come from validate_candidate_for_propose, not client."""
+
+    def test_server_resolved_uuids_sent_to_rpc(self):
+        server_saas = "ffffffff-0000-0000-0000-000000000001"
+        server_ref  = "ffffffff-0000-0000-0000-000000000002"
+        captured: dict = {}
+
+        def _mock_propose(sb, *, saas_catalog_id, reference_form_id, **kwargs):
+            captured["saas_catalog_id"] = saas_catalog_id
+            captured["reference_form_id"] = reference_form_id
+            return _PROPOSED_ROW
+
+        with patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.validate_candidate_for_propose",
+                   return_value=(server_saas, server_ref)), \
+             patch("routers.document_link_review.propose_link",
+                   side_effect=_mock_propose):
+            self._client().post(
+                "/api/document-link-review/links",
+                json={
+                    "candidate_id":  _CANDIDATE_ID,
+                    "relation_type": "SAME_DOCUMENT_CANDIDATE",
+                    "evidence_note": "evidence",
+                },
+            )
+        self.assertEqual(captured.get("saas_catalog_id"), server_saas)
+        self.assertEqual(captured.get("reference_form_id"), server_ref)
 
 
 if __name__ == "__main__":

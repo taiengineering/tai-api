@@ -1,12 +1,19 @@
 """
 routers/document_link_review.py
-WO-TAI-DOC-WP03A-LINK-REVIEW-WORKBENCH-001
+WO-TAI-DOC-WP03A-LINK-REVIEW-WORKBENCH-001 (read)
+WO-TAI-DOC-WP03B-IMPLEMENT-001 (write, CORR-001 applied)
 
-GET /api/document-link-review/candidates
-GET /api/document-link-review/candidates/{candidate_id}
+GET  /api/document-link-review/candidates
+GET  /api/document-link-review/candidates/{candidate_id}
+POST /api/document-link-review/links
+POST /api/document-link-review/links/{id}/submit-review
+POST /api/document-link-review/links/{id}/decision
+GET  /api/document-link-review/links/{id}
 
 Auth: get_current_user + role_code "001" (platform admin only).
-DB writes: 0.
+OWNER_GATE_BLOCKED: APPROVE and APPROVED→RETIRED are FAIL-CLOSED
+  — no Owner identity / approval evidence SoT exists in the system.
+DB writes: via RPC only. No direct INSERT/UPDATE.
 """
 
 from __future__ import annotations
@@ -24,11 +31,13 @@ from services.document_link_review_read import (
     CandidateDetail,
     CandidatePage,
     CandidateSummary,
+    CandidateValidationError,
     get_candidates,
     get_candidate_detail,
     get_csv_class_counts,
     get_link_by_id,
     get_link_audit_history,
+    validate_candidate_for_propose,
 )
 from services.document_link_review_write import (
     DocumentLinkWriteError,
@@ -62,6 +71,9 @@ _WRITE_ERROR_HTTP: dict[str, int] = {
     "INVALID_TRANSITION":      409,
     "LINK_NOT_FOUND":          404,
     "MALFORMED_RESPONSE":      503,
+    "CANDIDATE_NOT_FOUND":     404,
+    "CANDIDATE_STALE":         422,
+    "OWNER_GATE_BLOCKED":      403,
 }
 _VALID_SORT_FIELDS = frozenset({
     "similarity_score", "saas_title", "ref_title", "relation_type",
@@ -202,10 +214,9 @@ def get_candidate(
 # ---------------------------------------------------------------------------
 
 class ProposeLinkRequest(BaseModel):
-    saas_catalog_id:   str = Field(..., description="UUID of the SAAS document_forms row")
-    reference_form_id: str = Field(..., description="UUID of the reference_forms row")
-    relation_type:     str = Field(..., description="Must be a valid DB relation_type")
-    evidence_note:     str = Field(..., min_length=1, description="Evidence supporting this link")
+    candidate_id:  str = Field(..., description="CSV candidate_id ({saas_source_code}__{ref_source_code})")
+    relation_type: str = Field(..., description="Must be a valid DB relation_type")
+    evidence_note: str = Field(..., min_length=1, description="Evidence supporting this link")
 
 
 class DecisionRequest(BaseModel):
@@ -214,14 +225,20 @@ class DecisionRequest(BaseModel):
     )
     owner_approval_ref: Optional[str] = Field(
         None,
-        description="Required for APPROVE (and RETIRE from APPROVED). "
-                    "Provide a WO number or authorisation reference.",
+        description="Reserved field; APPROVE and APPROVED→RETIRE are FAIL-CLOSED (OWNER_GATE_BLOCKED).",
     )
 
 
 # ---------------------------------------------------------------------------
 # Helper: convert DocumentLinkWriteError to HTTPException
 # ---------------------------------------------------------------------------
+
+def _get_actor_id(admin: dict) -> str:
+    actor_id = admin.get("id") or ""
+    if not actor_id:
+        raise HTTPException(status_code=503, detail="Actor identity not available")
+    return actor_id
+
 
 def _write_exc(exc: DocumentLinkWriteError) -> HTTPException:
     status = _WRITE_ERROR_HTTP.get(exc.error_code, 422)
@@ -242,9 +259,10 @@ def create_link(
 ) -> dict[str, Any]:
     """
     Propose a new document link. Creates a PROPOSED row in unified_document_link.
-    actor is bound from JWT user_id (never from request body).
+    candidate_id is validated against the CSV snapshot; UUIDs are resolved server-side.
+    actor is bound from JWT id (never from request body).
     Auth: 401 no token, 403 role != 001.
-    422 if evidence_note is empty or relation_type is invalid.
+    404 if candidate_id not in CSV, 422 if stale/invalid relation_type/empty evidence.
     409 if an active pair already exists.
     """
     if body.relation_type not in _DB_RELATION_TYPES:
@@ -255,13 +273,25 @@ def create_link(
                 "message": f"relation_type must be one of {sorted(_DB_RELATION_TYPES)}",
             },
         )
-    actor_id: str = admin.get("user_id") or admin.get("id") or ""
+    actor_id = _get_actor_id(admin)
+    rest_client = SupabaseRestClient()
+    try:
+        saas_uuid, ref_uuid = validate_candidate_for_propose(rest_client, body.candidate_id)
+    except CandidateValidationError as exc:
+        status = _WRITE_ERROR_HTTP.get(exc.error_code, 422)
+        raise HTTPException(
+            status_code=status,
+            detail={"code": exc.error_code, "message": exc.message},
+        )
+    except RuntimeError as exc:
+        log.error("validate_candidate error: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
     try:
         row = propose_link(
             get_supabase(),
             actor_id=actor_id,
-            saas_catalog_id=body.saas_catalog_id,
-            reference_form_id=body.reference_form_id,
+            saas_catalog_id=saas_uuid,
+            reference_form_id=ref_uuid,
             relation_type=body.relation_type,
             evidence_note=body.evidence_note,
         )
@@ -284,7 +314,7 @@ def submit_review(
     409 if link is not in PROPOSED state or guard rejects.
     404 if link not found.
     """
-    actor_id: str = admin.get("user_id") or admin.get("id") or ""
+    actor_id = _get_actor_id(admin)
     try:
         row = transition_link(
             get_supabase(),
@@ -308,23 +338,48 @@ def decision(
 ) -> dict[str, Any]:
     """
     Make a decision on a link.
-    APPROVE: UNDER_REVIEW → APPROVED (owner_approval_ref required).
+    APPROVE: FAIL-CLOSED (403 OWNER_GATE_BLOCKED) — no Owner identity/approval SoT.
     REJECT:  PROPOSED/UNDER_REVIEW → REJECTED.
-    RETIRE:  APPROVED/REJECTED → RETIRED (APPROVED→RETIRED requires new owner_approval_ref).
-    actor is bound from JWT user_id.
+    RETIRE:  REJECTED → RETIRED only. APPROVED→RETIRED is FAIL-CLOSED (403 OWNER_GATE_BLOCKED).
+    actor is bound from JWT id.
     409 if transition is invalid or guard rejects. 404 if link not found.
     """
-    if body.action == "APPROVE" and not body.owner_approval_ref:
+    # CORR-A/B/D: APPROVE is FAIL-CLOSED — no Owner identity or approval evidence SoT
+    if body.action == "APPROVE":
         raise HTTPException(
-            status_code=422,
+            status_code=403,
             detail={
-                "code": "OWNER_APPROVAL_REF_REQUIRED",
-                "message": "owner_approval_ref는 APPROVE 결정에 필수입니다.",
+                "code": "OWNER_GATE_BLOCKED",
+                "message": "APPROVE 전환은 차단되어 있습니다. Owner 승인 시스템이 구축되지 않은 상태입니다.",
             },
         )
+
+    actor_id = _get_actor_id(admin)
+
+    # CORR-E: RETIRE from APPROVED is FAIL-CLOSED — same reason as APPROVE
+    if body.action == "RETIRE":
+        rest_client = SupabaseRestClient()
+        try:
+            link = get_link_by_id(rest_client, link_id)
+        except Exception as exc:
+            log.error("decision state-check error link_id=%r: %s", link_id, exc)
+            raise HTTPException(status_code=503, detail="Document link service unavailable")
+        if link is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "LINK_NOT_FOUND", "message": f"링크를 찾을 수 없습니다: {link_id}"},
+            )
+        if link.get("review_state") == "APPROVED":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "OWNER_GATE_BLOCKED",
+                    "message": "APPROVED 링크의 RETIRE는 차단되어 있습니다. Owner 승인 시스템이 구축되지 않은 상태입니다.",
+                },
+            )
+
     state_map = {"APPROVE": "APPROVED", "REJECT": "REJECTED", "RETIRE": "RETIRED"}
     new_state = state_map[body.action]
-    actor_id: str = admin.get("user_id") or admin.get("id") or ""
     try:
         row = transition_link(
             get_supabase(),
