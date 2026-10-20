@@ -9,6 +9,32 @@ from fastapi import HTTPException
 from services.equipment_helpers import CATEGORY_MAP, DELTA_MAP, _build_schedules_for_repair, _enrich_asset_row, _now_iso
 
 
+def _ee_scope(supabase, role_code):
+    """EE 전용 스코프 조회. 미등록·조회실패 시 None 반환(Fail-Close).
+
+    공통 _scope()는 미등록 역할을 'TEAM' 기본값으로 처리하므로,
+    실제 role_data_scope 등록 여부를 추가 검증한다.
+    테스트에서 services.company_scope._scope 패치로 제어 가능.
+    """
+    from services.company_scope import _scope
+    if not role_code:
+        return None
+    tier = _scope(supabase, role_code)
+    try:
+        r = (
+            supabase.table("role_data_scope")
+            .select("scope_type")
+            .eq("role_code", role_code)
+            .limit(1)
+            .execute()
+        )
+        if r.data and r.data[0].get("scope_type"):
+            return tier
+        return None  # 미등록
+    except Exception:
+        return None  # 조회실패
+
+
 def run_get_equipment_stats(supabase, version: str, current: dict):
     from services.company_scope import _require_admin
     _require_admin(current, supabase)
@@ -88,7 +114,7 @@ def _resolve_asset_scope(supabase, current: dict):
       {"factory_id__in": [...]} → 여러 factory
       "DENY"        → 빈 결과 반환
 
-    FACTORY/TEAM/ASSIGNED: 토큰 factory_id가 자기 회사 소속인지 교차검증.
+    FIX-B1: _ee_scope()로 미등록 역할 Fail-Close.
     PLATFORM 및 미정의 scope: 전사 조회 금지 → DENY.
     """
     from services.company_scope import _scope, _is_admin, _via_factory, DENY
@@ -109,6 +135,9 @@ def _resolve_asset_scope(supabase, current: dict):
         return filt  # {"factory_id__in": [...]}
 
     if tier in ("FACTORY", "TEAM", "ASSIGNED"):
+        # FIX-B1: 미등록 역할(_scope 기본값 "TEAM") Fail-Close — FACTORY/TEAM/ASSIGNED 진입 시 검증
+        if _ee_scope(supabase, current.get("role_code")) is None:
+            return "DENY"
         fid = current.get("factory_id")
         if not fid:
             return "DENY"
@@ -182,11 +211,16 @@ def run_list_assets(
 
 
 def run_patch_asset(supabase, asset_id: str, body, current: dict):
-    from services.company_scope import _scope, _is_admin
+    from services.company_scope import _is_admin
     from services.permission_guard import has_permission
 
     # 1. 작업권한 확인 (DB 조회 전)
     if not has_permission(current.get("role_code"), "EQUIPMENT_UPDATE"):
+        raise HTTPException(status_code=403, detail="권한이 없습니다")
+
+    # 1.5 FIX-B1: EE 전용 엄격 스코프 (미등록 역할 Fail-Close)
+    tier = _ee_scope(supabase, current.get("role_code"))
+    if tier is None:
         raise HTTPException(status_code=403, detail="권한이 없습니다")
 
     # 2. 자산 조회 (소유권 검증용)
@@ -202,8 +236,8 @@ def run_patch_asset(supabase, asset_id: str, body, current: dict):
 
     checked_factory_id = asset_check.data[0].get("factory_id")
 
-    # 3. 소유권 검증
-    tier = _scope(supabase, current.get("role_code"))
+    # 3. 소유권 검증 + FIX-B2: verified_company_id 결정 (관리자 포함)
+    verified_company_id = None
     if not _is_admin(tier):
         if not checked_factory_id:
             # factory_id 없는 자산 — 비-ALL 수정 불가
@@ -218,10 +252,26 @@ def run_patch_asset(supabase, asset_id: str, body, current: dict):
         )
         if not f_res.data or f_res.data[0].get("company_id") != current.get("company_id"):
             raise HTTPException(status_code=404, detail="자산을 찾을 수 없습니다")
+        verified_company_id = current.get("company_id")
         # FACTORY/TEAM/ASSIGNED: 자기 factory만
         if tier in ("FACTORY", "TEAM", "ASSIGNED"):
             if checked_factory_id != current.get("factory_id"):
                 raise HTTPException(status_code=404, detail="자산을 찾을 수 없습니다")
+    else:
+        # FIX-B2: 관리자도 수리 일정 회사 경계에 asset factory 기준 적용
+        if checked_factory_id:
+            try:
+                f_res = (
+                    supabase.table("factories")
+                    .select("company_id")
+                    .eq("id", checked_factory_id)
+                    .limit(1)
+                    .execute()
+                )
+                if f_res.data:
+                    verified_company_id = f_res.data[0].get("company_id")
+            except Exception:
+                pass
 
     # 4. 업데이트 데이터 구성
     update_data = {}
@@ -243,6 +293,35 @@ def run_patch_asset(supabase, asset_id: str, body, current: dict):
 
     update_data["updated_at"] = _now_iso()
 
+    # 4.5 FIX-B2: 수리 후 일정 사전 검증 (자산 UPDATE 전 — 모든 보안 검증 선행)
+    pre_validated_sets = []
+    _repair_date = None
+    _end_date = None
+    if body.is_operating is True and body.repair_date and checked_factory_id and verified_company_id:
+        try:
+            _repair_date = date.fromisoformat(body.repair_date)
+            _end_date = _repair_date + relativedelta(years=1)
+            sets_res = (
+                supabase.table("inspection_sets")
+                .select("id, factory_id, company_id, cycle_value, cycle_unit, inspection_set_name, inspection_category")
+                .eq("factory_id", checked_factory_id)
+                .eq("company_id", verified_company_id)
+                .eq("source", "MANUAL")
+                .eq("status_code", "ACTIVE")
+                .eq("is_active", True)
+                .execute()
+            )
+            for iset in (sets_res.data or []):
+                if iset.get("company_id") != verified_company_id:
+                    raise HTTPException(status_code=403, detail="점검세트 회사 경계 불일치")
+                if iset.get("factory_id") != checked_factory_id:
+                    raise HTTPException(status_code=403, detail="점검세트 사업장 경계 불일치")
+                pre_validated_sets.append(iset)
+        except HTTPException:
+            raise  # 보안 검증 실패 — 예외 삼킴 금지
+        except Exception:
+            pass  # 사전 조회 실패 → 일정 처리 건너뜀
+
     # 5. TOCTOU 방어: 검증된 factory_id를 UPDATE 조건에 포함
     update_q = supabase.table("equipment_assets").update(update_data).eq("id", asset_id)
     if checked_factory_id:
@@ -254,61 +333,47 @@ def run_patch_asset(supabase, asset_id: str, body, current: dict):
 
     asset = res.data[0]
     repair_result = {"schedules_reset": 0, "sets_processed": 0}
-    if body.is_operating is True and body.repair_date:
-        try:
-            repair_date = date.fromisoformat(body.repair_date)
-            end_date = repair_date + relativedelta(years=1)
-            factory_id = asset.get("factory_id")
-            if factory_id:
-                sets_res = (
-                    supabase.table("inspection_sets")
-                    .select("id, factory_id, company_id, cycle_value, cycle_unit, inspection_set_name, inspection_category")
-                    .eq("factory_id", factory_id)
-                    .eq("source", "MANUAL")
-                    .eq("status_code", "ACTIVE")
-                    .eq("is_active", True)
+    if pre_validated_sets and _repair_date and _end_date:
+        total_created = 0
+        for iset in pre_validated_sets:
+            try:
+                (
+                    supabase.table("work_schedules")
+                    .delete()
+                    .eq("inspection_set_id", iset["id"])
+                    .eq("company_id", iset["company_id"])
+                    .eq("status_code", "SCHEDULED")
                     .execute()
                 )
-                sets = sets_res.data or []
-                total_created = 0
-                for iset in sets:
-                    try:
-                        (
-                            supabase.table("work_schedules")
-                            .delete()
-                            .eq("inspection_set_id", iset["id"])
-                            .eq("status_code", "SCHEDULED")
-                            .execute()
-                        )
-                        rows = _build_schedules_for_repair(iset, repair_date, end_date)
-                        next_date = repair_date + (
-                            DELTA_MAP.get((iset.get("cycle_unit") or "year").lower(), lambda v: relativedelta(years=v))(
-                                int(iset.get("cycle_value") or 1)
-                            )
-                        )
-                        (
-                            supabase.table("inspection_sets")
-                            .update(
-                                {
-                                    "schedule_anchor_date": repair_date.isoformat(),
-                                    "schedule_end_date": end_date.isoformat(),
-                                    "next_planned_date": next_date.isoformat(),
-                                }
-                            )
-                            .eq("id", iset["id"])
-                            .execute()
-                        )
-                        for i in range(0, len(rows), 20):
-                            r = supabase.table("work_schedules").insert(rows[i : i + 20]).execute()
-                            total_created += len(r.data or [])
-                    except Exception:
-                        pass
-                repair_result = {
-                    "schedules_reset": total_created,
-                    "sets_processed": len(sets),
-                    "repair_date": repair_date.isoformat(),
-                    "end_date": end_date.isoformat(),
-                }
-        except Exception:
-            pass
+                rows = _build_schedules_for_repair(iset, _repair_date, _end_date)
+                next_date = _repair_date + (
+                    DELTA_MAP.get((iset.get("cycle_unit") or "year").lower(), lambda v: relativedelta(years=v))(
+                        int(iset.get("cycle_value") or 1)
+                    )
+                )
+                (
+                    supabase.table("inspection_sets")
+                    .update(
+                        {
+                            "schedule_anchor_date": _repair_date.isoformat(),
+                            "schedule_end_date": _end_date.isoformat(),
+                            "next_planned_date": next_date.isoformat(),
+                        }
+                    )
+                    .eq("id", iset["id"])
+                    .eq("company_id", verified_company_id)
+                    .eq("factory_id", checked_factory_id)
+                    .execute()
+                )
+                for i in range(0, len(rows), 20):
+                    r = supabase.table("work_schedules").insert(rows[i : i + 20]).execute()
+                    total_created += len(r.data or [])
+            except Exception:
+                pass
+        repair_result = {
+            "schedules_reset": total_created,
+            "sets_processed": len(pre_validated_sets),
+            "repair_date": _repair_date.isoformat(),
+            "end_date": _end_date.isoformat(),
+        }
     return {"status": "success", "data": {**asset, "repair_result": repair_result}}
