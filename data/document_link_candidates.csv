@@ -1,0 +1,83 @@
+﻿saas_source_code,saas_title,ref_source_code,ref_title,similarity_score,relation_type,match_basis,notes
+DOC-OSH-058,산업안전보건위원회 회의록,ref-gov-01,산업안전보건위원회 회의록,1.000,SAME_DOCUMENT_CANDIDATE,EXACT_NORMALIZED_TITLE,Manual review required before APPROVED
+DOC-OSH-045,보호구 지급대장,ref-c023,안전보호구 지급대장,0.875,SAME_DOCUMENT_CANDIDATE,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-047,밀폐공간 작업허가서,ref-conf-01,밀폐공간 출입·작업허가서,0.857,SAME_DOCUMENT_CANDIDATE,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-011,안전보건협의체 회의록(건설),ref-gov-06,안전보건협의체 회의록(도급사업),0.786,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-037,안전보건교육 실시기록부,ref-c031,안전보건교육 실시일지,0.762,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-BLD-009,전기설비 점검기록부,ref-c052,전기설비 일상 점검기록표,0.762,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-037,밀폐공간 작업허가서(건설),ref-conf-01,밀폐공간 출입·작업허가서,0.750,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-041,작업중지 및 재개 기록,ref-p-14,작업중지·재개 승인기록,0.727,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-036,용접작업 허가서,ref-c012,안전작업 허가서,0.714,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-036,용접작업 허가서,ref-c025,위험작업 허가서,0.714,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-023,굴착공사 작업계획서,ref-equip-05,굴착기 작업계획서,0.706,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-006,안전보건교육일지,ref-c031,안전보건교육 실시일지,0.706,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-SERA-006,안전보건교육 실시 결과기록,ref-c031,안전보건교육 실시일지,0.696,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-049,작업허가서(위험작업),ref-c025,위험작업 허가서,0.667,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-029,철근 작업계획서,ref-equip-01,지게차 작업계획서,0.667,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-029,철근 작업계획서,ref-equip-05,굴착기 작업계획서,0.667,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-015,안전보건협의체회의록,ref-gov-06,안전보건협의체 회의록(도급사업),0.667,AMBIGUOUS,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-075,근골격계부담작업 유해요인조사표,ref-c073,근골격계 부담작업 유해요인 개선관리표,0.647,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-SERA-003,유해위험요인 확인 개선기록,ref-gov-12,유해위험요인 개선조치 종결확인서,0.643,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-LAW-011,정밀안전점검 결과보고서,ref-gov-11,안전보건 내부점검 결과보고서,0.640,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-LAW-010,정기안전점검 결과보고서,ref-gov-11,안전보건 내부점검 결과보고서,0.640,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-LAW-012,긴급안전점검 결과보고서,ref-gov-11,안전보건 내부점검 결과보고서,0.640,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-043,화학물질 관리대장,ref-c039,사업장 화학물질 취급목록 관리대장,0.640,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-038,고소작업 계획서,ref-equip-03,고소작업대 작업계획서,0.625,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-029,철근 작업계획서,ref-equip-03,고소작업대 작업계획서,0.625,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-038,안전점검 기록부,ref-c067,현장 일일 안전점검 기록표,0.600,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-BLD-017,시설물 안전점검 결과보고서,ref-gov-11,안전보건 내부점검 결과보고서,0.593,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-023,굴착공사 작업계획서,ref-equip-01,지게차 작업계획서,0.588,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-FAC-004,가스사고 보고서,ref-c015,아차사고 보고서 서식,0.588,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-048,밀폐공간 산소농도 측정기록,ref-conf-02,밀폐공간 산소·유해가스 측정 기록부,0.581,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-033,양중작업계획서,ref-equip-01,지게차 작업계획서,0.571,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-033,양중작업계획서,ref-equip-05,굴착기 작업계획서,0.571,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-038,안전점검 기록부,ref-lab-01,연구실 일상 안전점검 기록표,0.571,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-039,밀폐공간 작업기록부,ref-conf-01,밀폐공간 출입·작업허가서,0.571,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-059,기계설비 점검기록부,ref-c052,전기설비 일상 점검기록표,0.571,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-058,산업안전보건위원회 회의록,ref-gov-02,산업안전보건위원회 의결사항 이행관리대장,0.562,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-058,산업안전보건위원회 회의록,ref-lab-03,연구실안전관리위원회 회의록,0.560,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-023,굴착공사 작업계획서,ref-equip-03,고소작업대 작업계획서,0.556,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-BLD-009,전기설비 점검기록부,ref-h2-01,수소설비 운전·점검 기록부,0.545,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-039,밀폐공간 작업기록부,ref-conf-03,밀폐공간 출입·감시 기록부,0.545,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-059,기계설비 점검기록부,ref-h2-01,수소설비 운전·점검 기록부,0.545,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-033,양중작업계획서,ref-equip-03,고소작업대 작업계획서,0.533,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-055,안전보건점검 체크리스트,ref-p-21,산업안전보건관리비 지출증빙 체크리스트,0.533,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-034,작업환경측정 결과보고서 제출서,ref-c070,작업환경측정 결과 개선관리대장,0.533,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-FAC-010,위험물 사고 보고서,ref-c015,아차사고 보고서 서식,0.526,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-BLD-013,승강기 사고 보고서,ref-c015,아차사고 보고서 서식,0.526,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-FAC-015,보일러 사고 보고서,ref-c015,아차사고 보고서 서식,0.526,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-038,안전점검 기록부,ref-lpg-01,LPG 사용시설 안전점검 기록표,0.522,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-BLD-009,전기설비 점검기록부,ref-c053,전기설비 정전·복전 작업기록부,0.522,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-FAC-016,냉동기 설비 점검기록부,ref-c052,전기설비 일상 점검기록표,0.522,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-004,작업환경측정결과서,ref-c070,작업환경측정 결과 개선관리대장,0.522,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-052,비상훈련 실시기록,ref-c047,비상대피훈련 실시 및 개선기록,0.522,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-LAW-015,건설공사 안전관리 이행기록,ref-c033,도급업체 안전관리 이행점검표,0.519,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-BLD-001,소방시설 자체점검 결과보고서,ref-gov-11,안전보건 내부점검 결과보고서,0.500,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-BLD-016,석면점검 기록부,ref-h2-01,수소설비 운전·점검 기록부,0.500,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-SERA-007,도급용역위탁 안전보건 확보기록,ref-c011,도급·용역·위탁 업체 안전보건 수준 평가,0.500,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-FAC-016,냉동기 설비 점검기록부,ref-h2-01,수소설비 운전·점검 기록부,0.500,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-FAC-018,냉동설비 사고 보고서,ref-c015,아차사고 보고서 서식,0.500,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-014,밀폐공간작업계획서,ref-equip-01,지게차 작업계획서,0.500,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-014,밀폐공간작업계획서,ref-equip-05,굴착기 작업계획서,0.500,RELATED_WORKFLOW,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-SERA-008,협력업체 안전보건관리 점검기록,ref-c033,도급업체 안전관리 이행점검표,0.483,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-021,작업환경측정결과보고서,ref-c070,작업환경측정 결과 개선관리대장,0.480,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-054,협력업체 안전관리평가서,ref-c033,도급업체 안전관리 이행점검표,0.480,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-037,안전보건교육 실시기록부,ref-c016,연간 안전보건교육 수립 서식,0.480,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-011,안전보건협의체 회의록(건설),ref-gov-01,산업안전보건위원회 회의록,0.480,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-LAW-014,안전점검 실시기록,ref-c067,현장 일일 안전점검 기록표,0.476,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-049,작업허가서(위험작업),ref-p-06,통합 위험작업 허가관리대장,0.476,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-006,안전보건교육일지,ref-c016,연간 안전보건교육 수립 서식,0.476,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-031,타워크레인 설치계획서,ref-equip-04,이동식크레인 작업계획서,0.476,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-015,안전보건협의체회의록,ref-gov-01,산업안전보건위원회 회의록,0.476,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-008,작업계획서(고위험작업),ref-equip-01,지게차 작업계획서,0.471,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-008,작업계획서(고위험작업),ref-equip-05,굴착기 작업계획서,0.471,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-CON-015,굴착작업 안전계획서,ref-equip-05,굴착기 작업계획서,0.471,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-FAC-004,가스사고 보고서,ref-c013,사고조사 보고서 서식,0.471,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-FAC-004,가스사고 보고서,ref-p-15,사고 최초 상황보고서,0.471,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-002,위험성평가서,ref-c027,체크리스트형 위험성평가표,0.471,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-002,위험성평가서,ref-c029,빈도·강도법 위험성평가표,0.471,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-014,밀폐공간작업계획서,ref-equip-03,고소작업대 작업계획서,0.471,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-BLD-018,시설물 정밀안전진단 보고서,ref-lab-02,연구실 정밀안전진단 개선조치 대장,0.467,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-BLD-032,승강기 중대한 고장 보고서,ref-c056,승강기 고장·조치 이력대장,0.462,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-007,안전점검일지,ref-equip-06,지게차 안전점검표,0.462,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
+DOC-OSH-007,안전점검일지,ref-equip-07,크레인 안전점검표,0.462,VARIANT,BIGRAM_SIMILARITY,Candidate only — manual title/purpose/field review required before any approval
