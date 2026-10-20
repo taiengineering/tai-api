@@ -1,11 +1,16 @@
 """
 routers/document_catalog.py
-WO-TAI-DOC-UNIFIED-CATALOG-IMPLEMENT-001 — Phase 1 (CORR-001)
+WO-TAI-DOC-UNIFIED-CATALOG-IMPLEMENT-001 — Phase 1 (CORR-001 + CORR-002)
 
 GET /api/document-catalog        — unified document list (SAAS + REFERENCE_CMS)
 GET /api/document-catalog/{key}  — single document detail by provisional key
 
-Auth: Bearer token required (same pattern as admin_audit). Anonymous/unauthenticated → 401.
+Auth: get_current_user (Supabase JWT validation) + role_code in {001, 002}.
+  - Missing token / no Authorization header → 401 (raised by get_current_user)
+  - Invalid token → 401 (raised by get_current_user after Supabase rejection)
+  - Valid user, role_code not in admin set → 403 (raised by _require_admin)
+  - Inactive/suspended account → 403 (raised by get_current_user)
+  - Admin role_code 001 or 002 → 200
 Status: PROPOSED — not deployed
 Source/DB mutations: 0
 """
@@ -13,10 +18,11 @@ Source/DB mutations: 0
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from routers.auth import get_current_user
 from services.catalog_aggregator import (
     CatalogItem,
     SupabaseRestClient,
@@ -28,14 +34,13 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/document-catalog", tags=["Document catalog"])
 
+_ADMIN_ROLES = frozenset({"001", "002"})
 
-# ---------------------------------------------------------------------------
-# Auth guard — admin-only; mirrors admin_audit pattern
-# ---------------------------------------------------------------------------
 
-def _require_bearer(authorization: Optional[str]) -> None:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="인증이 필요합니다.")
+def _require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    if current_user.get("role_code") not in _ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
+    return current_user
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +90,7 @@ def _get_rest_client() -> SupabaseRestClient:
 
 @router.get("")
 def list_document_catalog(
-    authorization: Optional[str] = Header(None),
+    _admin: dict = Depends(_require_admin),
     page: int = Query(default=1, ge=1, description="1-based page number"),
     per_page: int = Query(default=50, ge=1, le=200, description="Items per page (max 200)"),
     q: str = Query(default="", description="Full-text search on title / doc_name"),
@@ -107,17 +112,15 @@ def list_document_catalog(
 ):
     """
     Returns a unified paginated catalog from document_forms (SAAS) and
-    reference_form_public_view (REFERENCE_CMS). Requires Bearer token.
+    reference_form_public_view (REFERENCE_CMS).
 
-    - Auth: Bearer required → 401 if missing.
-    - No DB writes.
-    - per_page silently capped at 200.
-    - sector/category/status filters apply to SAAS records only.
-    - channel filter (e.g. WEB_EDIT:READY) applied after capability computation.
-    - WEB_EDIT and SAAS_EXPORT are fail-closed in catalog context (factory scope unverified).
-    - links[] is always empty at this phase (unified_document_link table not applied).
+    Auth: Bearer JWT required → 401 if missing/invalid; 403 if not role 001/002.
+    No DB writes. per_page silently capped at 200.
+    sector/category/status filters apply to SAAS records only.
+    channel filter (e.g. WEB_EDIT:READY) applied after capability computation.
+    WEB_EDIT and SAAS_EXPORT are fail-closed in catalog context (factory scope unverified).
+    links[] is always empty at this phase (unified_document_link table not applied).
     """
-    _require_bearer(authorization)
     try:
         client = _get_rest_client()
         result = get_unified_catalog(
@@ -149,17 +152,16 @@ def list_document_catalog(
 @router.get("/{key:path}")
 def get_catalog_item(
     key: str,
-    authorization: Optional[str] = Header(None),
+    _admin: dict = Depends(_require_admin),
 ):
     """
-    Returns a single catalog item by provisional key. Requires Bearer token.
+    Returns a single catalog item by provisional key.
 
     key: DOC:<doc_id> for SAAS records, REF:<canonical_slug> for REFERENCE_CMS records.
-    Returns 401 if unauthenticated, 404 if not found or key format invalid.
+    Auth: Bearer JWT required → 401 if missing/invalid; 403 if not role 001/002.
+    Returns 404 if not found or key format invalid.
     links[] is always empty at this phase.
     """
-    _require_bearer(authorization)
-
     if not (key.startswith("DOC:") or key.startswith("REF:")):
         raise HTTPException(
             status_code=404,

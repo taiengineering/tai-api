@@ -5,6 +5,13 @@ WO-TAI-DOC-UNIFIED-CATALOG-IMPLEMENT-001 — Phase 1
 Contract tests for services/catalog_aggregator.py and routers/document_catalog.py.
 No live DB; all REST calls are mocked.
 
+Auth pattern (CORR-002):
+  - No Authorization header → 401 (real get_current_user, no Supabase needed)
+  - Invalid token → 401 (dependency_overrides raises HTTPException 401)
+  - Regular user (role_code != 001/002) → 403 (_require_admin raises 403)
+  - Inactive account → 403 (dependency_overrides raises HTTPException 403)
+  - Admin role_code 001/002 → 200
+
 Production schema contract:
   document_forms:             doc_id, doc_name, is_active=true
   runtime_form_schema:        catalog_document_id, status
@@ -18,6 +25,8 @@ import os
 import unittest
 from typing import Any
 from unittest.mock import MagicMock
+
+from fastapi import HTTPException
 
 # ─── ensure services/ is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -88,6 +97,21 @@ def _make_mock_client(saas_rows=None, ref_rows=None, schema_rows=None):
 
     client.select.side_effect = _select
     return client
+
+
+# ---------------------------------------------------------------------------
+# Auth helpers for router tests (CORR-002)
+# ---------------------------------------------------------------------------
+
+_ADMIN_USER = {"id": "admin-uuid", "role_code": "001", "is_active": True}
+_ADMIN_USER_002 = {"id": "admin2-uuid", "role_code": "002", "is_active": True}
+_REGULAR_USER = {"id": "user-uuid", "role_code": "003", "is_active": True}
+
+
+def _make_exc_raiser(exc: HTTPException):
+    def _raise():
+        raise exc
+    return _raise
 
 
 # ---------------------------------------------------------------------------
@@ -400,43 +424,77 @@ class T14_RefFileCountFromQaPassFiles(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Router endpoint tests
+# Router endpoint tests — auth via dependency_overrides (CORR-002)
 # ---------------------------------------------------------------------------
 
-_BEARER = "Bearer test-admin-token"
-_NO_BEARER = None
+def _make_router_app(auth_override=None):
+    """
+    Returns a FastAPI TestClient with the catalog router.
+    auth_override: None (real get_current_user), callable (override), or HTTPException (raised).
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers.document_catalog import router
+    from routers.auth import get_current_user
+
+    app = FastAPI()
+    app.include_router(router)
+    if callable(auth_override):
+        app.dependency_overrides[get_current_user] = auth_override
+    return TestClient(app, raise_server_exceptions=False)
 
 
 class T15_RouterListEndpointStructure(unittest.TestCase):
-    """FastAPI endpoint returns expected response structure with auth."""
+    """FastAPI endpoint returns expected response structure with correct auth."""
 
-    def _make_tc(self):
-        from fastapi.testclient import TestClient
-        from fastapi import FastAPI
-        from routers.document_catalog import router
-        app = FastAPI()
-        app.include_router(router)
-        return TestClient(app, raise_server_exceptions=False)
-
-    def _run_list(self, headers=None, client_mock=None, **params):
+    def _run_list(self, auth_user=None, client_mock=None, **params):
         import unittest.mock as mock
         if client_mock is None:
             client_mock = _make_mock_client()
-        tc = self._make_tc()
-        effective_headers = headers if headers is not None else {"Authorization": _BEARER}
-        with mock.patch(
-            "routers.document_catalog._get_rest_client",
-            return_value=client_mock,
-        ):
-            return tc.get("/api/document-catalog", params=params,
-                          headers=effective_headers)
+        user = auth_user if auth_user is not None else _ADMIN_USER
+        tc = _make_router_app(auth_override=lambda: user)
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=client_mock):
+            return tc.get("/api/document-catalog", params=params)
 
     def test_no_auth_returns_401(self):
-        resp = self._run_list(headers={})
+        # Real get_current_user: no Authorization header → 401 immediately, no Supabase needed
+        import unittest.mock as mock
+        tc = _make_router_app(auth_override=None)
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=_make_mock_client()):
+            resp = tc.get("/api/document-catalog")
         self.assertEqual(resp.status_code, 401)
 
-    def test_bearer_returns_200(self):
-        resp = self._run_list()
+    def test_invalid_bearer_returns_401(self):
+        # Simulates invalid token rejection from Supabase (token validation fails)
+        import unittest.mock as mock
+        exc = HTTPException(status_code=401, detail="유효하지 않은 토큰")
+        tc = _make_router_app(auth_override=_make_exc_raiser(exc))
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=_make_mock_client()):
+            resp = tc.get("/api/document-catalog")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_regular_user_returns_403(self):
+        import unittest.mock as mock
+        tc = _make_router_app(auth_override=lambda: _REGULAR_USER)
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=_make_mock_client()):
+            resp = tc.get("/api/document-catalog")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_inactive_account_returns_403(self):
+        # Simulates inactive/suspended account (403 from get_current_user)
+        import unittest.mock as mock
+        exc = HTTPException(status_code=403, detail={"code": "ACCOUNT_INACTIVE", "message": "비활성 상태"})
+        tc = _make_router_app(auth_override=_make_exc_raiser(exc))
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=_make_mock_client()):
+            resp = tc.get("/api/document-catalog")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_admin_role_001_returns_200(self):
+        resp = self._run_list(auth_user=_ADMIN_USER)
+        self.assertEqual(resp.status_code, 200)
+
+    def test_admin_role_002_returns_200(self):
+        resp = self._run_list(auth_user=_ADMIN_USER_002)
         self.assertEqual(resp.status_code, 200)
 
     def test_empty_response_is_200(self):
@@ -508,46 +566,45 @@ class T15_RouterListEndpointStructure(unittest.TestCase):
             return []
 
         import unittest.mock as mock
-        from fastapi.testclient import TestClient
         from fastapi import FastAPI
+        from fastapi.testclient import TestClient
         from routers.document_catalog import router
+        from routers.auth import get_current_user
         app = FastAPI()
         app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: _ADMIN_USER
         tc = TestClient(app, raise_server_exceptions=False)
         mock_client = MagicMock(spec=SupabaseRestClient)
         mock_client.select.side_effect = _select
         with mock.patch("routers.document_catalog._get_rest_client", return_value=mock_client):
             tc.get("/api/document-catalog",
-                   params={"source_system": "SAAS", "category": "회의"},
-                   headers={"Authorization": _BEARER})
+                   params={"source_system": "SAAS", "category": "회의"})
         if calls:
             self.assertEqual(calls[0]["filters"].get("category"), "eq.회의")
 
 
 class T16_RouterDetailEndpointStructure(unittest.TestCase):
-    """Detail endpoint returns 200 on hit, 404 on miss, 404 on invalid key, 401 without Bearer."""
+    """Detail endpoint: 200 on hit, 404 on miss, 404 on invalid key, 401/403 on bad auth."""
 
-    def _run_detail(self, key: str, client_mock=None, headers=None):
+    def _run_detail(self, key: str, client_mock=None, auth_user=None):
         import unittest.mock as mock
-        from fastapi.testclient import TestClient
-        from fastapi import FastAPI
-        from routers.document_catalog import router
-        app = FastAPI()
-        app.include_router(router)
-        tc = TestClient(app, raise_server_exceptions=False)
         if client_mock is None:
             client_mock = _make_mock_client()
-        effective_headers = headers if headers is not None else {"Authorization": _BEARER}
-        with mock.patch(
-            "routers.document_catalog._get_rest_client",
-            return_value=client_mock,
-        ):
-            return tc.get(f"/api/document-catalog/{key}",
-                          headers=effective_headers)
+        user = auth_user if auth_user is not None else _ADMIN_USER
+        tc = _make_router_app(auth_override=lambda: user)
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=client_mock):
+            return tc.get(f"/api/document-catalog/{key}")
 
     def test_no_auth_returns_401(self):
-        resp = self._run_detail("DOC:DOC-OSH-058", headers={})
+        import unittest.mock as mock
+        tc = _make_router_app(auth_override=None)
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=_make_mock_client()):
+            resp = tc.get("/api/document-catalog/DOC:DOC-OSH-058")
         self.assertEqual(resp.status_code, 401)
+
+    def test_regular_user_returns_403(self):
+        resp = self._run_detail("DOC:DOC-OSH-058", auth_user=_REGULAR_USER)
+        self.assertEqual(resp.status_code, 403)
 
     def test_doc_key_hit(self):
         resp = self._run_detail(
@@ -621,7 +678,6 @@ if __name__ == "__main__":
     test_classes = [
         T1_SaasCandidateSchemaWebEditBlocked,
         T2_RefFormWithFilesReferenceDownloadReady,
-
         T3_LawGoKrUrlOfficialOriginalUnverified,
         T4_NoFileUrl,
         T5_AutoFillAlwaysBlocked,
