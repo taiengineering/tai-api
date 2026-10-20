@@ -2,23 +2,27 @@
 routers/document_link_review.py
 WO-TAI-DOC-WP03A-LINK-REVIEW-WORKBENCH-001 (read)
 WO-TAI-DOC-WP03B-IMPLEMENT-001 (write, CORR-001 applied)
+WO-TAI-DOC-WP03B-SIMPLIFY-001 (Owner gate activation)
 
 GET  /api/document-link-review/candidates
 GET  /api/document-link-review/candidates/{candidate_id}
 POST /api/document-link-review/links
 POST /api/document-link-review/links/{id}/submit-review
 POST /api/document-link-review/links/{id}/decision
+GET  /api/document-link-review/owner-status
 GET  /api/document-link-review/links/{id}
 
 Auth: get_current_user + role_code "001" (platform admin only).
-OWNER_GATE_BLOCKED: APPROVE and APPROVED→RETIRED are FAIL-CLOSED
-  — no Owner identity / approval evidence SoT exists in the system.
+Owner gate: TAI_DOC_OWNER_USER_ID env var must be set and match JWT id.
 DB writes: via RPC only. No direct INSERT/UPDATE.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import uuid as _uuid_mod
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -65,16 +69,48 @@ _DB_RELATION_TYPES = frozenset({
     "SUPERSEDES", "SUPERSEDED_BY",
 })
 _WRITE_ERROR_HTTP: dict[str, int] = {
-    "DUPLICATE_ACTIVE_PAIR":   409,
-    "CONSTRAINT_VIOLATION":    409,
-    "GUARD_REJECTED":          409,
-    "INVALID_TRANSITION":      409,
-    "LINK_NOT_FOUND":          404,
-    "MALFORMED_RESPONSE":      503,
-    "CANDIDATE_NOT_FOUND":     404,
-    "CANDIDATE_STALE":         422,
-    "OWNER_GATE_BLOCKED":      403,
+    "DUPLICATE_ACTIVE_PAIR":          409,
+    "CONSTRAINT_VIOLATION":           409,
+    "GUARD_REJECTED":                 409,
+    "INVALID_TRANSITION":             409,
+    "LINK_NOT_FOUND":                 404,
+    "MALFORMED_RESPONSE":             503,
+    "CANDIDATE_NOT_FOUND":            404,
+    "CANDIDATE_STALE":                422,
+    "CANDIDATE_CANNOT_BE_APPROVED":   422,
+    "OWNER_GATE_BLOCKED":             403,
 }
+
+_APPROVE_VALID_RELATION_TYPES = frozenset({
+    "SAME_DOCUMENT_VERIFIED",
+    "RELATED_FORM",
+    "SUPERSEDES",
+    "SUPERSEDED_BY",
+})
+
+
+def _get_owner_user_id() -> str:
+    return os.environ.get("TAI_DOC_OWNER_USER_ID", "").strip()
+
+
+def _require_owner(user: dict) -> None:
+    owner_id = _get_owner_user_id()
+    if not owner_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "OWNER_GATE_BLOCKED", "message": "Owner ID가 설정되지 않았습니다."},
+        )
+    if user.get("id") != owner_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "OWNER_GATE_BLOCKED", "message": "Owner 전용 기능입니다."},
+        )
+
+
+def _generate_owner_approval_ref(actor_id: str) -> str:
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    uid = _uuid_mod.uuid4().hex[:8].upper()
+    return f"SYS-UDL-{ts}-{uid}"
 _VALID_SORT_FIELDS = frozenset({
     "similarity_score", "saas_title", "ref_title", "relation_type",
 })
@@ -223,9 +259,9 @@ class DecisionRequest(BaseModel):
     action: Literal["APPROVE", "REJECT", "RETIRE"] = Field(
         ..., description="APPROVE=UNDER_REVIEW→APPROVED, REJECT=→REJECTED, RETIRE=→RETIRED"
     )
-    owner_approval_ref: Optional[str] = Field(
+    final_relation_type: Optional[str] = Field(
         None,
-        description="Reserved field; APPROVE and APPROVED→RETIRE are FAIL-CLOSED (OWNER_GATE_BLOCKED).",
+        description="APPROVE 시 최종 관계 유형. SAME_DOCUMENT_CANDIDATE인 경우 필수.",
     )
 
 
@@ -330,6 +366,15 @@ def submit_review(
     return row
 
 
+@router.get("/owner-status", status_code=200)
+def owner_status(
+    admin: dict = Depends(_require_admin),
+) -> dict[str, bool]:
+    """Returns whether the authenticated admin is the designated Owner."""
+    owner_id = _get_owner_user_id()
+    return {"is_owner": bool(owner_id) and admin.get("id") == owner_id}
+
+
 @router.post("/links/{link_id}/decision", status_code=200)
 def decision(
     link_id: str,
@@ -337,23 +382,121 @@ def decision(
     admin: dict = Depends(_require_admin),
 ) -> dict[str, Any]:
     """
-    Make a decision on a link.
-    APPROVE, REJECT, RETIRE: all FAIL-CLOSED (403 OWNER_GATE_BLOCKED).
-    Owner identity and approval evidence SoT are not established.
-    Only PROPOSE and UNDER_REVIEW (submit-review) remain open.
-    actor is bound from JWT id.
+    Make a decision on a link. Owner-only (TAI_DOC_OWNER_USER_ID must be set and match JWT id).
+    APPROVE: UNDER_REVIEW → APPROVED. Requires final_relation_type if current is SAME_DOCUMENT_CANDIDATE.
+    REJECT: PROPOSED or UNDER_REVIEW → REJECTED.
+    RETIRE: APPROVED → RETIRED, or REJECTED → RETIRED.
+    owner_approval_ref is server-generated; not accepted from client.
     """
-    # CORR-A/B/D + CORR-002: all Owner decision actions are FAIL-CLOSED
-    raise HTTPException(
-        status_code=403,
-        detail={
-            "code": "OWNER_GATE_BLOCKED",
-            "message": (
-                f"{body.action} 전환은 차단되어 있습니다. "
-                "Owner 신원·승인 증거 SoT가 구축되지 않은 상태입니다."
-            ),
-        },
-    )
+    _require_owner(admin)
+    actor_id = _get_actor_id(admin)
+
+    rest_client = SupabaseRestClient()
+    try:
+        link = get_link_by_id(rest_client, link_id)
+    except Exception as exc:
+        log.error("decision fetch link error link_id=%r: %s", link_id, exc)
+        raise HTTPException(status_code=503, detail="Document link service unavailable")
+
+    if link is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "LINK_NOT_FOUND", "message": f"링크를 찾을 수 없습니다: {link_id}"},
+        )
+
+    current_state = link.get("review_state", "")
+
+    if body.action == "APPROVE":
+        if current_state != "UNDER_REVIEW":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "INVALID_TRANSITION",
+                    "message": f"APPROVE는 UNDER_REVIEW 상태에서만 가능합니다. 현재: {current_state}",
+                },
+            )
+        current_rt = link.get("relation_type", "")
+        effective_rt = body.final_relation_type or current_rt
+        if effective_rt == "SAME_DOCUMENT_CANDIDATE":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "CANDIDATE_CANNOT_BE_APPROVED",
+                    "message": "SAME_DOCUMENT_CANDIDATE는 APPROVED 상태로 직접 확정할 수 없습니다. final_relation_type을 지정하세요.",
+                },
+            )
+        if effective_rt not in _APPROVE_VALID_RELATION_TYPES:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "INVALID_RELATION_TYPE",
+                    "message": f"final_relation_type은 {sorted(_APPROVE_VALID_RELATION_TYPES)} 중 하나여야 합니다.",
+                },
+            )
+        owner_ref = _generate_owner_approval_ref(actor_id)
+        try:
+            row = transition_link(
+                get_supabase(),
+                actor_id=actor_id,
+                link_id=link_id,
+                new_state="APPROVED",
+                owner_approval_ref=owner_ref,
+                final_relation_type=body.final_relation_type,
+            )
+        except DocumentLinkWriteError as exc:
+            raise _write_exc(exc)
+        except Exception as exc:
+            log.error("decision approve error link_id=%r: %s", link_id, exc)
+            raise HTTPException(status_code=503, detail="Document link service unavailable")
+        return row
+
+    elif body.action == "REJECT":
+        if current_state not in ("PROPOSED", "UNDER_REVIEW"):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "INVALID_TRANSITION",
+                    "message": f"REJECT는 PROPOSED 또는 UNDER_REVIEW 상태에서만 가능합니다. 현재: {current_state}",
+                },
+            )
+        try:
+            row = transition_link(
+                get_supabase(),
+                actor_id=actor_id,
+                link_id=link_id,
+                new_state="REJECTED",
+            )
+        except DocumentLinkWriteError as exc:
+            raise _write_exc(exc)
+        except Exception as exc:
+            log.error("decision reject error link_id=%r: %s", link_id, exc)
+            raise HTTPException(status_code=503, detail="Document link service unavailable")
+        return row
+
+    else:  # RETIRE
+        if current_state not in ("APPROVED", "REJECTED"):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "INVALID_TRANSITION",
+                    "message": f"RETIRE는 APPROVED 또는 REJECTED 상태에서만 가능합니다. 현재: {current_state}",
+                },
+            )
+        owner_ref = _generate_owner_approval_ref(actor_id) if current_state == "APPROVED" else None
+        try:
+            row = transition_link(
+                get_supabase(),
+                actor_id=actor_id,
+                link_id=link_id,
+                new_state="RETIRED",
+                owner_approval_ref=owner_ref,
+            )
+        except DocumentLinkWriteError as exc:
+            raise _write_exc(exc)
+        except Exception as exc:
+            log.error("decision retire error link_id=%r: %s", link_id, exc)
+            raise HTTPException(status_code=503, detail="Document link service unavailable")
+        return row
 
 
 @router.get("/links/{link_id}", status_code=200)

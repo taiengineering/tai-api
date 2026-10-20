@@ -1,9 +1,10 @@
 """
 tests/test_document_link_review_write.py
 WO-TAI-DOC-WP03B-IMPLEMENT-001
+WO-TAI-DOC-WP03B-SIMPLIFY-001
 
-Contract tests: T01-T24
-Write-path coverage: propose / submit-review / decision / get-link-detail
+Contract tests: T01-T24, SIMP-001~SIMP-008
+Write-path coverage: propose / submit-review / decision / get-link-detail / owner-status
 No live DB. supabase-py client is mocked.
 DB writes: 0
 """
@@ -35,6 +36,7 @@ _LINK_ID   = "cccccccc-0000-0000-0000-000000000003"
 _ACTOR_ID  = "user-001"
 _APPROVAL  = "WO-TAI-DOC-WP03B-APPROVE-001"
 _RETIRE    = "WO-TAI-DOC-WP03B-RETIRE-001"
+_OWNER_ID  = "owner-uuid-001"
 
 _PROPOSED_ROW = {
     "id":                  _LINK_ID,
@@ -50,6 +52,10 @@ _PROPOSED_ROW = {
     "created_at":          "2026-10-21T00:00:00Z",
     "updated_at":          "2026-10-21T00:00:00Z",
 }
+
+_UNDER_REVIEW_ROW = {**_PROPOSED_ROW, "review_state": "UNDER_REVIEW", "reviewed_by": _ACTOR_ID}
+_APPROVED_ROW = {**_PROPOSED_ROW, "review_state": "APPROVED", "reviewed_by": _ACTOR_ID, "owner_approval_ref": "SYS-UDL-PREV"}
+_REJECTED_ROW = {**_PROPOSED_ROW, "review_state": "REJECTED"}
 
 
 def _ok(data: dict) -> MagicMock:
@@ -862,6 +868,250 @@ class TestCORR09ProposeAndReviewStillOpen(_CorrTestBase):
         app.dependency_overrides.clear()
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["review_state"], "UNDER_REVIEW")
+
+
+# ---------------------------------------------------------------------------
+# _OwnerTestBase — sets TAI_DOC_OWNER_USER_ID env var for Owner gate tests
+# ---------------------------------------------------------------------------
+
+class _OwnerTestBase(unittest.TestCase):
+    def setUp(self):
+        from fastapi import FastAPI
+        from routers.document_link_review import router, get_current_user
+        self.app = FastAPI()
+        self.app.include_router(router)
+        self.app.dependency_overrides[get_current_user] = lambda: {
+            "id": _OWNER_ID, "role_code": "001", "is_active": True,
+            "status_code": "ACTIVE",
+        }
+        os.environ["TAI_DOC_OWNER_USER_ID"] = _OWNER_ID
+
+    def tearDown(self):
+        self.app.dependency_overrides.clear()
+        os.environ.pop("TAI_DOC_OWNER_USER_ID", None)
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        return TestClient(self.app, raise_server_exceptions=False)
+
+
+# ---------------------------------------------------------------------------
+# SIMP-001 ~ SIMP-008: SIMPLIFY-001 Owner gate activation tests
+# ---------------------------------------------------------------------------
+
+class TestSIMP01NonOwnerAdminBlocked(unittest.TestCase):
+    """Non-owner admin (wrong id) returns 403 OWNER_GATE_BLOCKED."""
+    def setUp(self):
+        from fastapi import FastAPI
+        from routers.document_link_review import router, get_current_user
+        self.app = FastAPI()
+        self.app.include_router(router)
+        self.app.dependency_overrides[get_current_user] = lambda: {
+            "id": "non-owner-id", "role_code": "001", "is_active": True
+        }
+        os.environ["TAI_DOC_OWNER_USER_ID"] = "different-owner-id"
+
+    def tearDown(self):
+        self.app.dependency_overrides.clear()
+        os.environ.pop("TAI_DOC_OWNER_USER_ID", None)
+
+    def test_non_owner_approve_blocked(self):
+        from fastapi.testclient import TestClient
+        resp = TestClient(self.app, raise_server_exceptions=False).post(
+            f"/api/document-link-review/links/{_LINK_ID}/decision",
+            json={"action": "APPROVE"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["detail"]["code"], "OWNER_GATE_BLOCKED")
+
+
+class TestSIMP02OwnerApproveSuccess(_OwnerTestBase):
+    def test_owner_can_approve_under_review_link(self):
+        approved_row = {**_PROPOSED_ROW, "review_state": "APPROVED",
+                        "relation_type": "SAME_DOCUMENT_VERIFIED",
+                        "owner_approval_ref": "SYS-UDL-20261021T000000Z-ABCD1234"}
+        with patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.get_link_by_id",
+                   return_value={**_PROPOSED_ROW, "review_state": "UNDER_REVIEW",
+                                 "relation_type": "SAME_DOCUMENT_VERIFIED"}), \
+             patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.transition_link",
+                   return_value=approved_row):
+            resp = self._client().post(
+                f"/api/document-link-review/links/{_LINK_ID}/decision",
+                json={"action": "APPROVE"},
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["review_state"], "APPROVED")
+
+
+class TestSIMP03ApproveGeneratesServerRef(_OwnerTestBase):
+    """owner_approval_ref must be server-generated (SYS-UDL- prefix), not from client."""
+    def test_server_generates_approval_ref(self):
+        captured: dict = {}
+
+        def _mock_transition(sb, *, owner_approval_ref, **kwargs):
+            captured["ref"] = owner_approval_ref
+            return {**_PROPOSED_ROW, "review_state": "APPROVED", "owner_approval_ref": owner_approval_ref}
+
+        with patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.get_link_by_id",
+                   return_value={**_PROPOSED_ROW, "review_state": "UNDER_REVIEW",
+                                 "relation_type": "SAME_DOCUMENT_VERIFIED"}), \
+             patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.transition_link",
+                   side_effect=_mock_transition):
+            self._client().post(
+                f"/api/document-link-review/links/{_LINK_ID}/decision",
+                json={"action": "APPROVE"},
+            )
+        ref = captured.get("ref", "")
+        self.assertTrue(ref.startswith("SYS-UDL-"), f"Expected SYS-UDL- prefix, got: {ref}")
+
+
+class TestSIMP04ApproveCandidateRequiresFinalType(_OwnerTestBase):
+    def test_candidate_without_final_type_returns_422(self):
+        with patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.get_link_by_id",
+                   return_value={**_PROPOSED_ROW, "review_state": "UNDER_REVIEW",
+                                 "relation_type": "SAME_DOCUMENT_CANDIDATE"}):
+            resp = self._client().post(
+                f"/api/document-link-review/links/{_LINK_ID}/decision",
+                json={"action": "APPROVE"},
+            )
+        self.assertEqual(resp.status_code, 422)
+        self.assertEqual(resp.json()["detail"]["code"], "CANDIDATE_CANNOT_BE_APPROVED")
+
+    def test_candidate_with_valid_final_type_succeeds(self):
+        approved_row = {**_PROPOSED_ROW, "review_state": "APPROVED",
+                        "relation_type": "SAME_DOCUMENT_VERIFIED"}
+        with patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.get_link_by_id",
+                   return_value={**_PROPOSED_ROW, "review_state": "UNDER_REVIEW",
+                                 "relation_type": "SAME_DOCUMENT_CANDIDATE"}), \
+             patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.transition_link",
+                   return_value=approved_row):
+            resp = self._client().post(
+                f"/api/document-link-review/links/{_LINK_ID}/decision",
+                json={"action": "APPROVE", "final_relation_type": "SAME_DOCUMENT_VERIFIED"},
+            )
+        self.assertEqual(resp.status_code, 200)
+
+
+class TestSIMP05OwnerRejectSuccess(_OwnerTestBase):
+    def test_reject_proposed_link(self):
+        rejected_row = {**_PROPOSED_ROW, "review_state": "REJECTED"}
+        with patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.get_link_by_id",
+                   return_value=_PROPOSED_ROW), \
+             patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.transition_link",
+                   return_value=rejected_row):
+            resp = self._client().post(
+                f"/api/document-link-review/links/{_LINK_ID}/decision",
+                json={"action": "REJECT"},
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["review_state"], "REJECTED")
+
+    def test_reject_under_review_link(self):
+        rejected_row = {**_PROPOSED_ROW, "review_state": "REJECTED"}
+        with patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.get_link_by_id",
+                   return_value={**_PROPOSED_ROW, "review_state": "UNDER_REVIEW"}), \
+             patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.transition_link",
+                   return_value=rejected_row):
+            resp = self._client().post(
+                f"/api/document-link-review/links/{_LINK_ID}/decision",
+                json={"action": "REJECT"},
+            )
+        self.assertEqual(resp.status_code, 200)
+
+
+class TestSIMP06OwnerRetireSuccess(_OwnerTestBase):
+    def test_retire_approved_link(self):
+        retired_row = {**_PROPOSED_ROW, "review_state": "RETIRED"}
+        with patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.get_link_by_id",
+                   return_value={**_PROPOSED_ROW, "review_state": "APPROVED",
+                                 "owner_approval_ref": "SYS-UDL-OLD"}), \
+             patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.transition_link",
+                   return_value=retired_row):
+            resp = self._client().post(
+                f"/api/document-link-review/links/{_LINK_ID}/decision",
+                json={"action": "RETIRE"},
+            )
+        self.assertEqual(resp.status_code, 200)
+
+    def test_retire_rejected_link(self):
+        retired_row = {**_PROPOSED_ROW, "review_state": "RETIRED"}
+        with patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.get_link_by_id",
+                   return_value={**_PROPOSED_ROW, "review_state": "REJECTED"}), \
+             patch("routers.document_link_review.get_supabase"), \
+             patch("routers.document_link_review.transition_link",
+                   return_value=retired_row):
+            resp = self._client().post(
+                f"/api/document-link-review/links/{_LINK_ID}/decision",
+                json={"action": "RETIRE"},
+            )
+        self.assertEqual(resp.status_code, 200)
+
+
+class TestSIMP07ApproveWrongState(_OwnerTestBase):
+    def test_approve_proposed_returns_409(self):
+        with patch("routers.document_link_review.SupabaseRestClient"), \
+             patch("routers.document_link_review.get_link_by_id",
+                   return_value=_PROPOSED_ROW):
+            resp = self._client().post(
+                f"/api/document-link-review/links/{_LINK_ID}/decision",
+                json={"action": "APPROVE"},
+            )
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.json()["detail"]["code"], "INVALID_TRANSITION")
+
+
+class TestSIMP08OwnerStatusEndpoint(unittest.TestCase):
+    def setUp(self):
+        from fastapi import FastAPI
+        from routers.document_link_review import router, get_current_user
+        self.app = FastAPI()
+        self.app.include_router(router)
+        self.app.dependency_overrides[get_current_user] = lambda: {
+            "id": _OWNER_ID, "role_code": "001", "is_active": True
+        }
+        os.environ["TAI_DOC_OWNER_USER_ID"] = _OWNER_ID
+
+    def tearDown(self):
+        self.app.dependency_overrides.clear()
+        os.environ.pop("TAI_DOC_OWNER_USER_ID", None)
+
+    def test_owner_is_true(self):
+        from fastapi.testclient import TestClient
+        resp = TestClient(self.app, raise_server_exceptions=False).get(
+            "/api/document-link-review/owner-status"
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["is_owner"])
+
+    def test_non_owner_is_false(self):
+        from fastapi import FastAPI
+        from routers.document_link_review import router, get_current_user
+        app2 = FastAPI()
+        app2.include_router(router)
+        app2.dependency_overrides[get_current_user] = lambda: {
+            "id": "other-admin-id", "role_code": "001", "is_active": True
+        }
+        from fastapi.testclient import TestClient
+        resp = TestClient(app2, raise_server_exceptions=False).get(
+            "/api/document-link-review/owner-status"
+        )
+        app2.dependency_overrides.clear()
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.json()["is_owner"])
 
 
 if __name__ == "__main__":
