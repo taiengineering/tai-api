@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Users 라우터 - 회원 관리 v2.5.0
+TAI Users 라우터 - 회원 관리 v2.6.0
 
+v2.6.0: R4 잔여 결함 종결 (WO-TAI-API-SEC-DATA-READ-001-R4)
+  - PATCH /{id}: 고권한 대상(002~033) 수정 최고관리자만 허용 (FIX-A)
+  - GET /work-permits: requester_id 분기에도 company_id 범위 강제 (FIX-B, worker_permits.py)
+  - 002 역할 _HIGH_PRIVILEGE_ROLES 편입 — 부여·변경 001만 허용 (FIX-C)
+  - POST/PATCH /users: factory_id·team_id 조직 계층 검증 (FIX-D)
 v2.5.0: 인가·회사범위·민감정보 통제 강화 (WO-TAI-API-SEC-DATA-READ-001-R2)
   - role_permissions DB 기반 USER_VIEW/CREATE/UPDATE/DELETE 인가 검증
   - 비어드민: JWT company_id 강제 (타사 접근 404 차단, company_id=None → 빈결과)
@@ -38,8 +43,9 @@ VERSION = "2.5.0"
 
 DEACTIVATE_STATUSES = {"INACTIVE", "DELETED", "SUSPENDED"}
 
-# 고권한 역할 코드 — 최고관리자(001)만 부여·변경 가능
-_HIGH_PRIVILEGE_ROLES = frozenset({"001", "031", "032", "033"})
+# 고권한 역할 코드 — 최고관리자(001)만 부여·변경·조작 가능
+# 002(회사관리자): USER_* 전권 + COMPANY scope 보유 — 일반 관리자 위임 전 보수적 잠금
+_HIGH_PRIVILEGE_ROLES = frozenset({"001", "002", "031", "032", "033"})
 
 # API 응답에 포함되는 안전한 공개 컬럼
 # 제외: password_hash, email_verify_token, auth_id,
@@ -184,6 +190,37 @@ def _assert_target_not_privileged(target_role_code, current_user: dict, supabase
         detail={"error": "TARGET_PRIVILEGE_DENIED",
                 "message": "고권한 계정은 최고관리자만 수정·삭제할 수 있습니다"},
     )
+
+
+def _assert_factory_belongs_to_company(supabase, factory_id: str, company_id: str) -> None:
+    """factory_id가 company_id 소속인지 검증. 불일치 시 403, 미존재 시 422."""
+    if not factory_id or not company_id:
+        return
+    try:
+        row = supabase.table("factories").select("company_id").eq("id", factory_id).limit(1).execute()
+    except Exception:
+        raise HTTPException(status_code=422, detail={"error": "INVALID_FACTORY", "message": "시설을 조회할 수 없습니다"})
+    if not row.data:
+        raise HTTPException(status_code=422, detail={"error": "INVALID_FACTORY", "message": "유효하지 않은 시설입니다"})
+    if str(row.data[0].get("company_id") or "") != company_id:
+        raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "factory_id가 회사 소속이 아닙니다"})
+
+
+def _assert_team_belongs_to_factory(supabase, team_id: str, factory_id: str, company_id: str) -> None:
+    """team_id가 factory_id(또는 company_id) 소속인지 검증. 불일치 시 403, 미존재 시 422."""
+    if not team_id:
+        return
+    try:
+        row = supabase.table("teams").select("factory_id,company_id").eq("id", team_id).limit(1).execute()
+    except Exception:
+        raise HTTPException(status_code=422, detail={"error": "INVALID_TEAM", "message": "팀을 조회할 수 없습니다"})
+    if not row.data:
+        raise HTTPException(status_code=422, detail={"error": "INVALID_TEAM", "message": "유효하지 않은 팀입니다"})
+    t = row.data[0]
+    if company_id and str(t.get("company_id") or "") != company_id:
+        raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "team_id가 회사 소속이 아닙니다"})
+    if factory_id and t.get("factory_id") and str(t.get("factory_id") or "") != factory_id:
+        raise HTTPException(status_code=403, detail={"error": "ORG_HIERARCHY_VIOLATION", "message": "team_id가 factory_id 소속이 아닙니다"})
 
 
 # ============================================================
@@ -397,6 +434,12 @@ def create_user(req: UserCreate, current_user: dict = Depends(get_current_user))
                         "message": "고권한 역할은 최고관리자만 부여할 수 있습니다"},
             )
 
+    # 조직 계층 검증 — factory/team이 지정 company 소속인지 확인
+    if req.factory_id and req.company_id:
+        _assert_factory_belongs_to_company(supabase, req.factory_id, req.company_id)
+    if req.team_id and req.company_id:
+        _assert_team_belongs_to_factory(supabase, req.team_id, req.factory_id or "", req.company_id)
+
     dup = supabase.table("users").select("id").eq("email", req.email).limit(1).execute()
     if dup.data:
         raise HTTPException(status_code=400, detail="이미 등록된 이메일입니다")
@@ -462,13 +505,15 @@ def update_user(user_id: str, req: UserUpdate, current_user: dict = Depends(get_
         )
 
     existing = supabase.table("users").select(
-        "id,company_id"
+        "id,company_id,factory_id,role_code"
     ).eq("id", user_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
 
     # 타사 접근 차단
     _assert_user_company(existing.data.get("company_id"), current_user, supabase)
+    # 고권한 대상 보호 (FIX-A)
+    _assert_target_not_privileged(existing.data.get("role_code"), current_user, supabase)
 
     update_data = {k: v for k, v in req.dict().items() if v is not None}
 
@@ -476,6 +521,16 @@ def update_user(user_id: str, req: UserUpdate, current_user: dict = Depends(get_
     is_admin = _is_platform_admin(supabase, user_role)
     if not is_admin:
         update_data.pop("company_id", None)
+
+    # 조직 계층 검증 — factory/team 변경 시 회사 소속 확인 (FIX-D)
+    effective_cid = existing.data.get("company_id")
+    new_fid = update_data.get("factory_id")
+    new_tid = update_data.get("team_id")
+    if new_fid and effective_cid:
+        _assert_factory_belongs_to_company(supabase, new_fid, effective_cid)
+    if new_tid and effective_cid:
+        eff_fid = new_fid or existing.data.get("factory_id") or ""
+        _assert_team_belongs_to_factory(supabase, new_tid, eff_fid, effective_cid)
 
     update_data["updated_at"] = serialize_business_datetime(now_kst())
     res = supabase.table("users").update(update_data).eq("id", user_id).execute()

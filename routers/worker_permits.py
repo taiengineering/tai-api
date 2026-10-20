@@ -1,6 +1,9 @@
 """
-작업자 위험성평가 참여 / 출퇴근 / 작업허가서 API — v1.1.0
+작업자 위험성평가 참여 / 출퇴근 / 작업허가서 API — v1.2.0
 
+v1.2.0: 작업자 경로 OR 조건 전체에 company_id 범위 강제 (WO-TAI-API-SEC-DATA-READ-001-R4)
+  - requester_id 분기에도 company_id 필터 추가 (겸직·사업장 이동 시 타사 기록 차단)
+  - company_id 없으면 requester_id 단독 필터 (기존 폴백 유지)
 v1.1.0: GET /work-permits 인증 필수화 + 역할 기반 범위 강제
         (WO-TAI-API-SEC-DATA-READ-001-R2)
   - _optional_auth → get_current_user (전화번호만으로 타인 기록 조회 불가)
@@ -467,14 +470,18 @@ def list_work_permits(
             # id 없으면 빈 결과 — phone 단독 조회는 타사 기록 노출 위험
             return {"status": "success", "data": {"items": [], "total": 0}}
 
-        if user_phone and user_cid:
-            # id로 신청한 것 + requester_id IS NULL 레거시(phone+company 일치)
-            q = q.or_(
-                f"requester_id.eq.{user_id},"
-                f"and(requester_id.is.null,requester_phone.eq.{user_phone}"
-                f",company_id.eq.{user_cid})"
-            )
+        if user_cid:
+            # company_id 있으면 모든 분기에 회사 범위 강제 (겸직·이동 시 타사 기록 차단)
+            if user_phone:
+                q = q.or_(
+                    f"and(requester_id.eq.{user_id},company_id.eq.{user_cid}),"
+                    f"and(requester_id.is.null,requester_phone.eq.{user_phone}"
+                    f",company_id.eq.{user_cid})"
+                )
+            else:
+                q = q.eq("requester_id", user_id).eq("company_id", user_cid)
         else:
+            # company_id 없으면 requester_id 단독 (가장 좁은 범위)
             q = q.eq("requester_id", user_id)
 
         # 작업자 경로에서 타인 phone 필터 파라미터는 무시 (본인 범위 고정)
