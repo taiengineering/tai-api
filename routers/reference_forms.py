@@ -2,10 +2,12 @@
 Reference Form public API — WO-REF05-REF09-CMS-FILE-INTEGRATION-006
 P0 repair: WO-REF05-REF09-INTEGRATION-P0-REPAIR-007
 Final P0:  WO-REF05-REF09-INTEGRATION-FINAL-P0-008
+Thumbnail: WO-WWW-SS-THUMBNAIL-001 P2 (migration 20261021000001)
 
 GET /reference-forms/{slug}                         — public detail (PUBLISHED + CLEARED)
 GET /reference-forms/{slug}/preview/{file_id}       — anonymous preview (no-store)
 GET /reference-forms/{slug}/files/{file_id}/download — member download (auth, server proxy)
+GET /reference-forms/{slug}/thumbnail               — pre-generated WebP thumbnail (no-store)
 
 DB contract: PR #594 (20261011120000/1/2 migrations)
 - View field: canonical_slug  (not slug)
@@ -14,6 +16,7 @@ DB contract: PR #594 (20261011120000/1/2 migrations)
 - Preview:    reference_form_preview_artifacts.preview_ref  (storage://bucket/path format)
 - Preview SHA: reference_form_preview_artifacts.source_file_sha256
 - Approval:   reference_form_approvals.approved_file_hashes  [{file_id, sha256}]
+- Thumbnail:  reference_form_preview_artifacts.thumbnail_ref (migration 20261021000001)
 
 Security gates enforced at every request (not only at publish time):
   1. PUBLISHED + content_hash = approved_content_hash  (view WHERE clause)
@@ -24,6 +27,8 @@ Security gates enforced at every request (not only at publish time):
   6. Preview: is_published=true, QA_PASS, SHA match     (preview artifact checks)
   7. file_id + SHA256 in current approved_file_hashes   (_verify_approval_binding — TOCTOU guard)
   8. Storage ref stripped and bucket validated           (_parse_storage_ref)
+  [thumbnail only]
+  9. thumbnail_qa_status = QA_PASS + thumbnail_ref/input_sha256 not null
 Storage paths and approval IDs are never returned to callers.
 """
 from __future__ import annotations
@@ -497,4 +502,139 @@ def download_reference_form_file(
             "Cache-Control": "no-store",
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /reference-forms/{slug}/thumbnail
+# ---------------------------------------------------------------------------
+
+@router.get("/{slug}/thumbnail")
+def get_reference_form_thumbnail(slug: str, sb: Client = Depends(get_supabase)):
+    """
+    Pre-generated WebP thumbnail for search result cards.
+    WO-WWW-SS-THUMBNAIL-001 P2 — requires migration 20261021000001.
+
+    Gates (per request):
+      1. PUBLISHED + content_hash approved         (_load_view_row)
+      2. All active sources CLEARED                (_check_sources_cleared)
+      3. Representative file with has_preview found (qa_pass_files scan)
+      4. file_id + SHA256 in current approval      (_verify_approval_binding — TOCTOU)
+      5. File row: QA_PASS + active + form_id match + preview_artifact_id present
+      6. SHA256 match (file_row vs approved_sha256)
+      7. Preview artifact: is_published + QA_PASS
+      8. source_file_sha256 matches approved_sha256 (preview links to current file)
+      9. thumbnail_qa_status = QA_PASS + thumbnail_ref + thumbnail_input_sha256 present
+     10. Storage ref parsed and bucket validated    (_parse_storage_ref)
+
+    Returns pre-generated WebP only — never generates on-the-fly.
+    Returns 404 if thumbnail has not yet been generated (backfill pending).
+    Storage paths and approval IDs are never returned to callers.
+    """
+    view_row = _load_view_row(sb, slug)
+    form_id = str(view_row["id"])
+    _check_sources_cleared(sb, form_id)
+
+    # Gate-3: first approved file that has a linked preview artifact
+    qa_files = view_row.get("qa_pass_files") or []
+    rep_file = next((f for f in qa_files if f.get("has_preview") is True), None)
+    if not rep_file:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    file_id       = str(rep_file["file_id"])
+    approved_sha256 = rep_file.get("sha256", "")
+
+    # Gate-4: TOCTOU approval binding
+    _verify_approval_binding(sb, form_id, file_id, approved_sha256)
+
+    # Gate-5-6: load file row
+    try:
+        file_res = (
+            sb.table(_FILES)
+            .select("id,form_id,sha256,preview_artifact_id,is_active,qa_status")
+            .eq("id", file_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log.error("File query failed file_id=%s: %s", file_id, exc)
+        raise HTTPException(status_code=503, detail="THUMBNAIL_UNAVAILABLE")
+
+    if not file_res.data:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    file_row = file_res.data[0]
+    if str(file_row.get("form_id", "")) != form_id:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    if not file_row.get("is_active") or file_row.get("qa_status") != "QA_PASS":
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    if file_row.get("sha256") != approved_sha256:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    preview_artifact_id = file_row.get("preview_artifact_id")
+    if not preview_artifact_id:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    # Gate-7-9: load preview artifact + thumbnail gates
+    try:
+        pa_res = (
+            sb.table(_PREVIEW)
+            .select(
+                "form_id,source_file_sha256,is_published,qa_status,"
+                "thumbnail_ref,thumbnail_sha256,thumbnail_input_sha256,"
+                "thumbnail_qa_status,thumbnail_bytes"
+            )
+            .eq("id", str(preview_artifact_id))
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log.error("Thumbnail artifact query failed id=%s: %s", preview_artifact_id, exc)
+        raise HTTPException(status_code=503, detail="THUMBNAIL_UNAVAILABLE")
+
+    if not pa_res.data:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    pa = pa_res.data[0]
+    if str(pa.get("form_id", "")) != form_id:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    # Gate-7: preview must be published and QA_PASS
+    if not pa.get("is_published") or pa.get("qa_status") != "QA_PASS":
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    # Gate-8: preview source links to the current approved file
+    if pa.get("source_file_sha256") != approved_sha256:
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    # Gate-9: thumbnail must be QA_PASS with storage ref and input hash
+    if pa.get("thumbnail_qa_status") != "QA_PASS":
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    if not pa.get("thumbnail_ref"):
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+    if not pa.get("thumbnail_input_sha256"):
+        raise HTTPException(status_code=404, detail="THUMBNAIL_NOT_FOUND")
+
+    # Gate-10: parse and validate storage ref
+    thumb_path = _parse_storage_ref(pa["thumbnail_ref"], "reference-forms-preview")
+
+    try:
+        signed = sb.storage.from_("reference-forms-preview").create_signed_url(
+            thumb_path, expires_in=60
+        )
+        signed_url = signed.get("signedURL") or signed.get("signedUrl") or ""
+        if not signed_url:
+            raise ValueError("empty signed URL")
+    except Exception as exc:
+        log.error("Thumbnail signed URL failed path=%s: %s", thumb_path, exc)
+        raise HTTPException(status_code=503, detail="THUMBNAIL_UNAVAILABLE")
+
+    try:
+        r = httpx.get(signed_url, follow_redirects=True, timeout=30)
+        r.raise_for_status()
+    except Exception as exc:
+        log.error("Thumbnail fetch failed path=%s: %s", thumb_path, exc)
+        raise HTTPException(status_code=502, detail="THUMBNAIL_FETCH_FAILED")
+
+    return Response(
+        content=r.content,
+        media_type="image/webp",
+        headers={"Cache-Control": "no-store"},
     )
