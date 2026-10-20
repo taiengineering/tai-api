@@ -795,6 +795,8 @@ def test_ee_b1_company_scope_returns_factory_filter():
     assert result != "DENY", f"factories 있는 COMPANY scope → DENY 아니어야 함, 실제: {result}"
     assert isinstance(result, dict), f"factory filter dict여야 함, 실제: {result}"
     assert "factory_id__in" in result, f"factory_id__in 키 없음: {result}"
+    assert set(result["factory_id__in"]) == {"fid-1", "fid-2"}, \
+        f"허용 factory_id 목록 불일치: {result['factory_id__in']}"
 
 
 # ── EE-B2: FIX-B2 수리 후 일정 회사 경계 ──────────────────────────────────
@@ -1099,12 +1101,16 @@ def test_ee_c2_iset_db_error_no_asset_update():
 
     with patch("services.permission_guard.has_permission", return_value=True):
         with patch("services.equipment_engine_svc._ee_scope", return_value="COMPANY"):
-            with pytest.raises(Exception):
+            with pytest.raises(Exception, match="DB 장애"):
                 run_patch_asset(
                     sb, "asset-3", body,
                     _current(role_code="002", company_id="cid-A"),
                 )
     assert not asset_update_calls, "inspection_sets DB 오류인데 equipment_assets UPDATE 호출됨"
+    # work_schedules DELETE/INSERT 미호출 확인
+    called_tables = [c[0][0] for c in sb.table.call_args_list]
+    assert "work_schedules" not in called_tables, \
+        "inspection_sets DB 오류인데 work_schedules 호출됨"
 
 
 def test_ee_b4_non_all_refresh_returns_403():
@@ -1131,3 +1137,171 @@ def test_ee_b4_non_all_refresh_returns_403():
 
     assert resp.status_code == 403
     mock_sb.rpc.assert_not_called()
+
+
+# ── EE-C5: FIX-C5 수리요청 NULL factory 차단 + 실제 인증 테스트 ──────────────
+
+
+def test_ee_c5_null_factory_repair_blocked():
+    """EE-C5-01: factory_id=NULL 자산 + 수리 요청 → 첫 Write 이전 차단 (FIX-C5-01)"""
+    from services.equipment_engine_svc import run_patch_asset
+
+    sb = MagicMock()
+    asset_update_calls = []
+
+    asset_data = MagicMock()
+    asset_data.data = [{"id": "asset-null-repair", "factory_id": None}]
+
+    def _table_se(name):
+        t = MagicMock()
+        if name == "equipment_assets":
+            t.select.return_value.eq.return_value.limit.return_value.execute.return_value = asset_data
+            def _track(*a, **kw):
+                asset_update_calls.append(True)
+                return MagicMock()
+            t.update.side_effect = _track
+        return t
+
+    sb.table.side_effect = _table_se
+
+    body = MagicMock()
+    body.last_inspection_date = None
+    body.next_inspection_date = None
+    body.is_legal_target = True
+    body.is_operating = True
+    body.repair_date = "2026-11-01"
+    body.model_id = None
+    body.equipment_model_id = None
+
+    with patch("services.permission_guard.has_permission", return_value=True):
+        with patch("services.equipment_engine_svc._ee_scope", return_value="ALL"):
+            with pytest.raises(ValueError, match="factory_id"):
+                run_patch_asset(
+                    sb, "asset-null-repair", body,
+                    _current(role_code="001"),
+                )
+    assert not asset_update_calls, "factory_id NULL 수리 요청인데 equipment_assets UPDATE 호출됨"
+
+
+def test_ee_c5_admin_company_fail_repair_blocked():
+    """EE-C5-02: 관리자 + factory 조회 실패 + 수리 요청 → HTTPException(500), UPDATE 미호출"""
+    from services.equipment_engine_svc import run_patch_asset
+
+    sb = MagicMock()
+    asset_update_calls = []
+
+    asset_data = MagicMock()
+    asset_data.data = [{"id": "asset-admin-nofactory", "factory_id": "fid-X"}]
+
+    def _table_se(name):
+        t = MagicMock()
+        if name == "equipment_assets":
+            t.select.return_value.eq.return_value.limit.return_value.execute.return_value = asset_data
+            def _track(*a, **kw):
+                asset_update_calls.append(True)
+                return MagicMock()
+            t.update.side_effect = _track
+        elif name == "factories":
+            t.select.return_value.eq.return_value.limit.return_value.execute.side_effect = Exception("DB 오류")
+        return t
+
+    sb.table.side_effect = _table_se
+
+    body = MagicMock()
+    body.last_inspection_date = None
+    body.next_inspection_date = None
+    body.is_legal_target = True
+    body.is_operating = True
+    body.repair_date = "2026-11-01"
+    body.model_id = None
+    body.equipment_model_id = None
+
+    with patch("services.permission_guard.has_permission", return_value=True):
+        with patch("services.equipment_engine_svc._ee_scope", return_value="ALL"):
+            with pytest.raises(HTTPException) as exc:
+                run_patch_asset(
+                    sb, "asset-admin-nofactory", body,
+                    _current(role_code="001"),
+                )
+    assert exc.value.status_code == 500
+    assert not asset_update_calls, "관리자 factory 조회 실패인데 equipment_assets UPDATE 호출됨"
+
+
+def test_ee_c5_repair_valid_factory_proceeds():
+    """EE-C5-03: factory_id 있는 자산 + 정상 수리 요청 → 사전검증 진행 (regression)"""
+    from services.equipment_engine_svc import run_patch_asset
+
+    sb = MagicMock()
+
+    asset_data = MagicMock()
+    asset_data.data = [{"id": "asset-repair-ok", "factory_id": "fid-A"}]
+
+    factory_data = MagicMock()
+    factory_data.data = [{"company_id": "cid-A"}]
+
+    iset_chain = MagicMock()
+    iset_chain.eq.return_value = iset_chain
+    iset_chain.execute.return_value.data = []
+
+    def _table_se(name):
+        t = MagicMock()
+        if name == "equipment_assets":
+            t.select.return_value.eq.return_value.limit.return_value.execute.return_value = asset_data
+            t.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+                {"id": "asset-repair-ok", "factory_id": "fid-A", "is_operating": True}
+            ]
+        elif name == "factories":
+            t.select.return_value.eq.return_value.limit.return_value.execute.return_value = factory_data
+        elif name == "inspection_sets":
+            t.select.return_value = iset_chain
+        return t
+
+    sb.table.side_effect = _table_se
+
+    body = MagicMock()
+    body.last_inspection_date = None
+    body.next_inspection_date = None
+    body.is_legal_target = True
+    body.is_operating = True
+    body.repair_date = "2026-11-01"
+    body.model_id = None
+    body.equipment_model_id = None
+
+    with patch("services.permission_guard.has_permission", return_value=True):
+        with patch("services.equipment_engine_svc._ee_scope", return_value="COMPANY"):
+            result = run_patch_asset(
+                sb, "asset-repair-ok", body,
+                _current(role_code="002", company_id="cid-A"),
+            )
+    called_tables = [c[0][0] for c in sb.table.call_args_list]
+    assert "inspection_sets" in called_tables, "repair 요청인데 inspection_sets 사전검증 미진행"
+    assert result["status"] == "success"
+
+
+@pytest.mark.parametrize("method,path,body", [
+    ("get",   "/engine-equipment/stats",                None),
+    ("get",   "/engine-equipment/assets-list",          None),
+    ("patch", "/engine-equipment/assets/test-asset-id", {}),
+    ("get",   "/engine-equipment/list",                 None),
+    ("post",  "/engine-equipment/refresh",              {}),
+    ("get",   "/engine-equipment/detail/test-facility", None),
+    ("patch", "/engine-equipment/update/test-facility", {}),
+    ("post",  "/engine-equipment/review/approve",       {}),
+    ("get",   "/engine-equipment/models",               None),
+    ("get",   "/engine-equipment/models/test-model-id", None),
+    ("patch", "/engine-equipment/models/test-model-id", {}),
+])
+def test_ee_c5_real_no_header_returns_401(method, path, body):
+    """EE-C5-04~14: 실제 get_current_user — Authorization 헤더 없음 → 401 (Override 없음)"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers.engine_equipment import router as _ee_router
+
+    app = FastAPI()
+    app.include_router(_ee_router)
+    client = TestClient(app)
+
+    kwargs = {"json": body} if body is not None else {}
+    resp = getattr(client, method)(path, **kwargs)
+    assert resp.status_code == 401, \
+        f"{method.upper()} {path}: expected 401, got {resp.status_code}"

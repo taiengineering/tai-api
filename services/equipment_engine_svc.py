@@ -295,12 +295,14 @@ def run_patch_asset(supabase, asset_id: str, body, current: dict):
 
     update_data["updated_at"] = _now_iso()
 
-    # 4.5 FIX-C2: 수리 후 일정 사전 검증 — asset UPDATE 이전, DB 오류 Fail-Close
+    # 4.5 FIX-C2/C5: 수리 후 일정 사전 검증 — asset UPDATE 이전, DB 오류 Fail-Close
     pre_validated_sets = []
     _repair_date = None
     _end_date = None
-    if body.is_operating is True and body.repair_date and checked_factory_id:
-        # factory가 있는 자산만 일정 재생성 대상
+    if body.is_operating is True and body.repair_date:
+        # FIX-C5-01: factory_id 없는 자산 수리 요청 → 첫 Write 이전 차단
+        if not checked_factory_id:
+            raise ValueError("수리 일정 재생성은 factory_id가 있는 자산만 가능합니다.")
         if not verified_company_id:
             # factory는 있는데 company 정보를 가져오지 못한 경우 (admin + factory 조회 실패)
             raise HTTPException(status_code=500, detail="회사 정보를 확인할 수 없습니다")
