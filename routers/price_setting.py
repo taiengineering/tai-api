@@ -2,9 +2,11 @@
 # v2.0.0 (2026-05-16): features/target/is_recommended/is_custom + 진단 새 필드 추가
 from datetime import datetime
 from typing import Optional, List, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _require_admin
 from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/price-setting", tags=["가격 설정"])
@@ -149,8 +151,9 @@ def _log_changes(sb, table_name: str, record_id: str, old: dict, new: dict, chan
 # ── SaaS 요금제 ──────────────────────────────────────────
 
 @router.get("/saas-plans")
-def list_saas_plans(sector: str = None, is_active: bool = None):
+def list_saas_plans(sector: str = None, is_active: bool = None, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     q = sb.table("price_saas_plan").select("*")
     if sector:
         q = q.eq("sector_code", sector.upper())
@@ -161,8 +164,9 @@ def list_saas_plans(sector: str = None, is_active: bool = None):
 
 
 @router.get("/saas-plans/{plan_id}")
-def get_saas_plan(plan_id: str):
+def get_saas_plan(plan_id: str, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     res = sb.table("price_saas_plan").select("*").eq("id", plan_id).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="요금제를 찾을 수 없습니다")
@@ -170,8 +174,9 @@ def get_saas_plan(plan_id: str):
 
 
 @router.patch("/saas-plans/{plan_id}")
-def update_saas_plan(plan_id: str, body: SaasPlanUpdate):
+def update_saas_plan(plan_id: str, body: SaasPlanUpdate, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     old_res = sb.table("price_saas_plan").select("*").eq("id", plan_id).single().execute()
     if not old_res.data:
         raise HTTPException(status_code=404, detail="요금제를 찾을 수 없습니다")
@@ -190,9 +195,10 @@ def update_saas_plan(plan_id: str, body: SaasPlanUpdate):
 
 
 @router.post("/saas-plans")
-def create_saas_plan(body: SaasPlanUpdate):
+def create_saas_plan(body: SaasPlanUpdate, current: dict = Depends(get_current_user)):
     """SaaS 플랜 신규 생성."""
     sb = get_supabase()
+    _require_admin(current, sb)
     row = {k: v for k, v in body.dict().items() if v is not None and k != "updated_by"}
     row["created_at"] = serialize_business_datetime(now_kst())
     row["updated_at"] = serialize_business_datetime(now_kst())
@@ -203,8 +209,9 @@ def create_saas_plan(body: SaasPlanUpdate):
 # ── 진단 보고서 가격 ────────────────────────────────────
 
 @router.get("/diagnosis-reports")
-def list_diagnosis_reports(price_version: str = None):
+def list_diagnosis_reports(price_version: str = None, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     q = sb.table("price_diagnosis_report").select("*")
     if price_version:
         q = q.eq("price_version", price_version)
@@ -213,8 +220,9 @@ def list_diagnosis_reports(price_version: str = None):
 
 
 @router.patch("/diagnosis-reports/{report_id}")
-def update_diagnosis_report(report_id: str, body: DiagnosisReportUpdate):
+def update_diagnosis_report(report_id: str, body: DiagnosisReportUpdate, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     old_res = sb.table("price_diagnosis_report").select("*").eq("id", report_id).single().execute()
     if not old_res.data:
         raise HTTPException(status_code=404, detail="보고서 가격을 찾을 수 없습니다")
@@ -232,8 +240,9 @@ def update_diagnosis_report(report_id: str, body: DiagnosisReportUpdate):
 # ── 변경 이력 ─────────────────────────────────────────────
 
 @router.get("/change-logs")
-def list_change_logs(table_name: str = None, record_id: str = None, page: int = 1, page_size: int = 50):
+def list_change_logs(table_name: str = None, record_id: str = None, page: int = 1, page_size: int = 50, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     q = sb.table("price_change_log").select("*")
     if table_name:
         q = q.eq("table_name", table_name)
@@ -247,15 +256,17 @@ def list_change_logs(table_name: str = None, record_id: str = None, page: int = 
 # ── 수리중개 수수료 ────────────────────────────────────
 
 @router.get("/repair-brokerage")
-def list_repair_brokerage():
+def list_repair_brokerage(current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     res = sb.table("price_repair_brokerage").select("*").order("repair_type_code").execute()
     return {"status": "success", "data": res.data}
 
 
 @router.patch("/repair-brokerage/{item_id}")
-def update_repair_brokerage(item_id: str, body: RepairBrokerageUpdate):
+def update_repair_brokerage(item_id: str, body: RepairBrokerageUpdate, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     old_res = sb.table("price_repair_brokerage").select("*").eq("id", item_id).single().execute()
     if not old_res.data:
         raise HTTPException(status_code=404, detail="수리중개 요금을 찾을 수 없습니다")
@@ -271,15 +282,17 @@ def update_repair_brokerage(item_id: str, body: RepairBrokerageUpdate):
 # ── 안전관리 대행 ───────────────────────────────────────
 
 @router.get("/safety-management")
-def list_safety_management():
+def list_safety_management(current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     res = sb.table("price_safety_management").select("*").order("worker_count_from").execute()
     return {"status": "success", "data": res.data}
 
 
 @router.patch("/safety-management/{item_id}")
-def update_safety_management(item_id: str, body: SafetyManagementUpdate):
+def update_safety_management(item_id: str, body: SafetyManagementUpdate, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     old_res = sb.table("price_safety_management").select("*").eq("id", item_id).single().execute()
     if not old_res.data:
         raise HTTPException(status_code=404, detail="안전관리 요금을 찾을 수 없습니다")
@@ -295,15 +308,17 @@ def update_safety_management(item_id: str, body: SafetyManagementUpdate):
 # ── 콘설팅 ────────────────────────────────────────────
 
 @router.get("/consulting")
-def list_consulting():
+def list_consulting(current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     res = sb.table("price_consulting").select("*").order("consulting_type_code").execute()
     return {"status": "success", "data": res.data}
 
 
 @router.patch("/consulting/{item_id}")
-def update_consulting(item_id: str, body: ConsultingUpdate):
+def update_consulting(item_id: str, body: ConsultingUpdate, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     old_res = sb.table("price_consulting").select("*").eq("id", item_id).single().execute()
     if not old_res.data:
         raise HTTPException(status_code=404, detail="콘설팅 요금을 찾을 수 없습니다")

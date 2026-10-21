@@ -4,9 +4,11 @@
 #   가격 카드(public_pricing)가 참조하는 단일 SSOT를 이 API로 입력/수정/생성한다.
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _require_admin
 from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/price-master", tags=["가격 통합관리"])
@@ -44,8 +46,9 @@ class FeatureUpsert(BaseModel):
 # ── price_master CRUD ────────────────────────────────────────
 
 @router.get("")
-def list_prices(service_type: str = None, sector: str = None, is_active: bool = None):
+def list_prices(service_type: str = None, sector: str = None, is_active: bool = None, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     q = sb.table("price_master").select("*")
     if service_type:
         q = q.eq("service_type", service_type.upper())
@@ -70,8 +73,9 @@ def list_prices(service_type: str = None, sector: str = None, is_active: bool = 
 
 
 @router.get("/{price_id}")
-def get_price(price_id: str):
+def get_price(price_id: str, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     res = sb.table("price_master").select("*").eq("id", price_id).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="가격 항목을 찾을 수 없습니다")
@@ -85,9 +89,10 @@ def get_price(price_id: str):
 
 
 @router.post("")
-def create_price(body: PriceMasterUpsert):
+def create_price(body: PriceMasterUpsert, current: dict = Depends(get_current_user)):
     """신규 가격 항목 생성."""
     sb = get_supabase()
+    _require_admin(current, sb)
     row = {k: v for k, v in body.dict().items() if v is not None}
     for req in ("service_type", "tier_code"):
         if not row.get(req):
@@ -100,8 +105,9 @@ def create_price(body: PriceMasterUpsert):
 
 
 @router.patch("/{price_id}")
-def update_price(price_id: str, body: PriceMasterUpsert):
+def update_price(price_id: str, body: PriceMasterUpsert, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     old = sb.table("price_master").select("*").eq("id", price_id).single().execute()
     if not old.data:
         raise HTTPException(status_code=404, detail="가격 항목을 찾을 수 없습니다")
@@ -118,9 +124,10 @@ def update_price(price_id: str, body: PriceMasterUpsert):
 
 
 @router.delete("/{price_id}")
-def deactivate_price(price_id: str):
+def deactivate_price(price_id: str, current: dict = Depends(get_current_user)):
     """비활성화(soft). 물리 삭제 안 함."""
     sb = get_supabase()
+    _require_admin(current, sb)
     res = (
         sb.table("price_master")
         .update({"is_active": False, "updated_at": serialize_business_datetime(now_kst())})
@@ -132,9 +139,10 @@ def deactivate_price(price_id: str):
 # ── feature CRUD ─────────────────────────────────────────────
 
 @router.put("/{price_id}/features")
-def replace_features(price_id: str, items: List[FeatureUpsert]):
+def replace_features(price_id: str, items: List[FeatureUpsert], current: dict = Depends(get_current_user)):
     """해당 가격의 노출 서비스 항목 전체 교체."""
     sb = get_supabase()
+    _require_admin(current, sb)
     owner = sb.table("price_master").select("id").eq("id", price_id).single().execute()
     if not owner.data:
         raise HTTPException(status_code=404, detail="가격 항목을 찾을 수 없습니다")

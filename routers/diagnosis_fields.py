@@ -10,7 +10,7 @@
 from collections import defaultdict
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
-from db.database import get_supabase
+from db.supabase_client import get_supabase
 from constants.sectors import VALID_SECTORS, sector_codes_for_query
 from services.legal_rules import normalize_sector_db
 

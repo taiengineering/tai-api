@@ -11,8 +11,9 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from db.database import get_supabase
+from db.supabase_client import get_supabase
 from routers.auth import get_current_user
+from services.company_scope import _require_admin
 from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/admin", tags=["관리자 가격"])
@@ -42,6 +43,7 @@ def list_pricing_keys(
 ):
     """지원되는 pricing key 목록 조회."""
     sb = get_supabase()
+    _require_admin(current_user, sb)
     res = sb.table("pricing_key_map").select(
         "key, table_name, field_name, label, is_active"
     ).eq("is_active", True).order("key").execute()
@@ -73,6 +75,7 @@ def patch_pricing(
         raise HTTPException(status_code=400, detail="updates가 비어있습니다")
 
     sb = get_supabase()
+    _require_admin(current_user, sb)
     results = []
     errors  = []
     changed_by = current_user.get("id")
