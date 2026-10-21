@@ -1,4 +1,5 @@
 # routers/price_setting.py — 가격 설정 관리 API
+# v2.0.2 (2026-10-21): replace .single() with .limit(1) to avoid PGRST116 on nonexistent UUID
 # v2.0.1 (2026-10-21): UUID path parameter validation for saas-plans/{plan_id}
 # v2.0.0 (2026-05-16): features/target/is_recommended/is_custom + 진단 새 필드 추가
 from datetime import datetime
@@ -169,10 +170,18 @@ def list_saas_plans(sector: str = None, is_active: bool = None, current: dict = 
 def get_saas_plan(plan_id: UUID, current: dict = Depends(get_current_user)):
     sb = get_supabase()
     _require_admin(current, sb)
-    res = sb.table("price_saas_plan").select("*").eq("id", str(plan_id)).single().execute()
-    if not res.data:
+    res = (
+        sb.table("price_saas_plan")
+        .select("*")
+        .eq("id", str(plan_id))
+        .limit(1)
+        .execute()
+    )
+    rows = res.data or []
+    if not rows:
         raise HTTPException(status_code=404, detail="요금제를 찾을 수 없습니다")
-    return {"status": "success", "data": res.data}
+    row = rows[0]
+    return {"status": "success", "data": row}
 
 
 @router.patch("/saas-plans/{plan_id}")
@@ -180,9 +189,17 @@ def update_saas_plan(plan_id: UUID, body: SaasPlanUpdate, current: dict = Depend
     sb = get_supabase()
     _require_admin(current, sb)
     plan_id_str = str(plan_id)
-    old_res = sb.table("price_saas_plan").select("*").eq("id", plan_id_str).single().execute()
-    if not old_res.data:
+    old_res = (
+        sb.table("price_saas_plan")
+        .select("*")
+        .eq("id", plan_id_str)
+        .limit(1)
+        .execute()
+    )
+    old_rows = old_res.data or []
+    if not old_rows:
         raise HTTPException(status_code=404, detail="요금제를 찾을 수 없습니다")
+    old_row = old_rows[0]
 
     update_data = {k: v for k, v in body.dict().items() if v is not None and k != "updated_by"}
     if not update_data:
@@ -192,7 +209,7 @@ def update_saas_plan(plan_id: UUID, body: SaasPlanUpdate, current: dict = Depend
     if body.updated_by:
         update_data["updated_by"] = body.updated_by
 
-    changed = _log_changes(sb, "price_saas_plan", plan_id_str, old_res.data, update_data, body.updated_by)
+    changed = _log_changes(sb, "price_saas_plan", plan_id_str, old_row, update_data, body.updated_by)
     res = sb.table("price_saas_plan").update(update_data).eq("id", plan_id_str).execute()
     return {"status": "success", "data": res.data[0] if res.data else None, "changes_logged": changed}
 

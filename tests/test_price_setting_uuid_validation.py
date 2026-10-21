@@ -1,8 +1,9 @@
-"""WO-TAI-API-SENTRY-STABILIZATION-001 WP-C
+"""WO-TAI-API-SENTRY-STABILIZATION-001-R1 WP-C
 UUID path parameter validation for /price-setting/saas-plans/{plan_id}
 
-PYTHON-FASTAPI-5B: GET /price-setting/saas-plans/nonexistent 에서 발생하는
-malformed UUID → DB 쿼리 미실행 + 422 반환 검증.
+R1 변경: .single() → .limit(1).execute() 계약 반영.
+FakeSingle 제거; FakeQ.execute()가 select 시 배열을 직접 반환하므로
+nonexistent UUID에서 빈 배열 [] → 404 계약이 실제 PostgREST 동작과 일치.
 
 테스트 목록:
   UV-01  GET malformed UUID → 422 (DB 쿼리 미실행)
@@ -26,16 +27,9 @@ import routers.price_setting as _ps_mod
 from routers.auth import get_current_user
 
 # ── Fake Supabase ──────────────────────────────────────────────────────────────
-
-
-class _FakeSingle:
-    """Simulates .single().execute() chain."""
-
-    def __init__(self, rows: list):
-        self._rows = rows
-
-    def execute(self):
-        return _FakeResp(self._rows[0] if self._rows else None)
+# R1: _FakeSingle 제거. 라우터가 .single() 대신 .limit(1).execute()를 사용하므로
+# execute()가 항상 배열을 반환한다. nonexistent UUID → [] → 404 계약이
+# 실제 PostgREST 동작(.limit(1) 0건 → 빈 배열)과 일치한다.
 
 
 class _FakeResp:
@@ -76,13 +70,6 @@ class _FakeQ:
     def limit(self, _):
         return self
 
-    def single(self):
-        rows = list(self._sb.tables.get(self._name, []))
-        for col, val in self._filters:
-            rows = [r for r in rows if r.get(col) == val]
-        self._sb.queries.append({"table": self._name, "op": self._op, "filters": list(self._filters)})
-        return _FakeSingle(rows)
-
     def execute(self):
         self._sb.queries.append({"table": self._name, "op": self._op, "filters": list(self._filters)})
         if self._op == "insert":
@@ -96,6 +83,7 @@ class _FakeQ:
             self._sb.updates.append({"table": self._name, "filters": list(self._filters)})
             # Supabase PostgREST UPDATE returns a list — mimic that
             return _FakeResp(rows)
+        # select: always return a list ([] when no rows — matches .limit(1) empty result)
         return _FakeResp(rows)
 
 
