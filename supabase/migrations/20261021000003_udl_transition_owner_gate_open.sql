@@ -41,6 +41,15 @@ BEGIN
         );
     END IF;
 
+    -- PROPOSED→UNDER_REVIEW 시 p_review_note 공백 거부 (API 레이어 방어 이중화)
+    IF p_new_state = 'UNDER_REVIEW' AND trim(COALESCE(p_review_note, '')) = '' THEN
+        RETURN json_build_object(
+            'ok',     false,
+            'error',  'REVIEW_NOTE_REQUIRED',
+            'detail', 'p_review_note must not be null or blank for PROPOSED→UNDER_REVIEW'
+        );
+    END IF;
+
     PERFORM set_config('app.actor', p_actor_id, true);
 
     SELECT * INTO v_old FROM public.unified_document_link WHERE id = p_link_id FOR UPDATE;

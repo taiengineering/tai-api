@@ -1173,6 +1173,14 @@ class TestSIMP10SubmitReviewRequiresNote(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 422)
 
+    def test_whitespace_only_review_note_returns_422(self):
+        from fastapi.testclient import TestClient
+        resp = TestClient(self.app, raise_server_exceptions=False).post(
+            f"/api/document-link-review/links/{_LINK_ID}/submit-review",
+            json={"review_note": "   "},
+        )
+        self.assertEqual(resp.status_code, 422)
+
 
 if __name__ == "__main__":
     unittest.main()

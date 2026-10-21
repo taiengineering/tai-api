@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
@@ -258,8 +258,15 @@ class ProposeLinkRequest(BaseModel):
 class SubmitReviewRequest(BaseModel):
     review_note: str = Field(
         ..., min_length=1,
-        description="검토 근거 — evidence_note에 [REVIEWED:actor:ts] 마커로 append됨.",
+        description="검토 근거 — evidence_note에 [REVIEWED:actor:ts] 마커로 append됨. 공백만 있는 값은 거부됩니다.",
     )
+
+    @field_validator("review_note")
+    @classmethod
+    def review_note_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("review_note must not be blank or whitespace-only")
+        return v
 
 
 class DecisionRequest(BaseModel):
@@ -354,7 +361,9 @@ def submit_review(
 ) -> dict[str, Any]:
     """
     Advance a PROPOSED link to UNDER_REVIEW.
-    body.review_note is required and is appended to evidence_note as [REVIEWED:actor:ts] marker.
+    body.review_note (required, non-blank) is appended to evidence_note as [REVIEWED:actor:ts] marker.
+    This records the reviewer's basis — it does NOT constitute GPT independent verification.
+    GPT 독립검증은 별도 외부 프로세스이며, 이 필드는 관리자 검토 근거 기록용입니다.
     actor is bound from JWT user_id.
     409 if link is not in PROPOSED state or guard rejects.
     404 if link not found.
