@@ -41,11 +41,12 @@ FETCHER_MAP = {"inspection": InspectionFetcher, "tbm": TbmFetcher}
 | EDU | 교육일지 | education | NEW_NEEDED |
 
 **정정된 결론**:
-- EXISTING fetcher: TBM + INSP + CHK + EQUIP + PPE — 5종, 신규 개발 불요
-- `routers/document_engine_api.py`는 `source_type=INSPECTION|TBM`으로 INSP·CHK·EQUIP·PPE·TBM 전부 라우팅
+- Registry EXISTING fetcher: TBM + INSP + CHK + EQUIP + PPE — 5종, 코드 재개발 불요
+- 자동작성 API 직접 라우팅(`routers/document_engine_api.py`): **INSP**(`source_type=INSPECTION`) + **TBM**(`source_type=TBM`) — 현재 2종만 엔드포인트 노출
+- CHK·EQUIP·PPE: Registry에 `fetcher_status=EXISTING`으로 등록됐으나, 현재 `/auto-documents/.../preview`·`/pdf` API에서 `source_type` 파라미터로 직접 호출 불가 (미노출). 생성 기반 코드는 존재, 사용자 API 활성화는 별도 Owner 승인 필요
 - CONLOG(공사일지)·EDU(교육일지)만 신규 fetcher 필요 (`fetcher_status=NEW_NEEDED`)
 - APPT(선임보고)는 입력폼 기반, 운영 데이터 소스 없음 (`fetcher_status=NO_SOURCE`)
-- **신규 개발 금지 원칙 유지**: EXISTING 5종 재사용, NEW_NEEDED 2종 개발 미승인
+- **신규 개발 금지 원칙 유지**: EXISTING 5종 재개발 금지. NEW_NEEDED 2종 개발 미승인
 
 ---
 
@@ -108,7 +109,7 @@ FETCHER_MAP = {"inspection": InspectionFetcher, "tbm": TbmFetcher}
 | 68 | DOC-OSH-006 | ref-c016 | 연간교육계획 → 교육일지 (순차) |
 | 74 | DOC-FAC-004 | ref-c013 | 가스사고 vs 사고조사보고서 (동일 도메인) |
 | 75 | DOC-FAC-004 | ref-p-15 | 사고 최초 상황보고서 → 법정신고 (순차) |
-| 79 | DOC-BLD-018 | ref-lab-02 | 시설물/연구실 정밀안전진단 (관련 도메인) |
+| 79 | DOC-BLD-018 | ref-lab-02 | 시설물/연구실 정밀안전진단 (관련 도메인) — **법령·업무 관계 근거 미확정. RELATED_WORKFLOW 최종 승인 대상 아님** |
 | 80 | DOC-BLD-032 | ref-c056 | 승강기 중대고장 보고서 → 이력대장 (순차) |
 | 73 | DOC-CON-015 | ref-equip-05 | 굴착작업 안전계획(공정) vs 굴착기 계획(장비) — 동일 굴착 도메인 |
 
@@ -119,19 +120,19 @@ FETCHER_MAP = {"inspection": InspectionFetcher, "tbm": TbmFetcher}
 | 65 | DOC-CON-011 (안전보건협의체 회의록-건설) | ref-gov-01 (산업안전보건위원회 회의록) | 협의체(산안법 제64조) vs 위원회(산안법 제24조) — 다른 법정 기구, 다른 조문 |
 | 70 | DOC-OSH-015 (안전보건협의체회의록) | ref-gov-01 (산업안전보건위원회 회의록) | 협의체 vs 위원회 — 동일 문제(#65와 같음) |
 | 69 | DOC-CON-031 (타워크레인 설치계획서) | ref-equip-04 (이동식크레인 작업계획서) | 타워크레인(고정식·설치단계) vs 이동식크레인(작업단계) — 유형·단계 모두 다름 |
-| 71 | DOC-CON-008 (작업계획서-고위험작업) | ref-equip-01 (지게차 작업계획서) | 일반 고위험 계획서 vs 지게차 특화 — VARIANT 경계이나 출처 법령 상이(산안법 제42조 vs 미기재) |
+| 78 | DOC-OSH-014 (밀폐공간작업계획서) | ref-equip-03 (고소작업대 작업계획서) | 밀폐공간 vs 고소작업대 — 작업 유형 완전 상이 (orig=VARIANT, title_match=DIFFERENT, E-02 제외 대상 중복) |
 
 > **비고 — #71·#72 경계 사례**: `작업계획서(고위험작업)` ↔ `지게차/굴착기 작업계획서`는  
-> VARIANT(일반→특화) 해석도 가능하나 출처 법령 확인 미완료. Owner 판단 필요.
+> VARIANT(일반→특화) 해석도 가능하나 출처 법령 확인 미완료(산안법 제42조 vs Ref 미기재). Owner 판단 필요.
 
 ---
 
 ## E-04. 다중 매핑 — DB 제약과 의미 허용 가능성 구분
 
 ### DB 제약 사실
-`unified_document_link` 테이블에는 `(saas_doc_id, ref_id)` 쌍 유일성 제약이 있다.  
-→ **동일 참고서식에 여러 SaaS 문서가 각각 독립 연결(PROPOSED) 가능.**  
-→ 같은 (saas_doc_id, ref_id) 쌍의 중복 APPROVED는 불가.
+`unified_document_link` 테이블에는 `(saas_catalog_id, reference_form_id)` 쌍 유일성 제약이 있다.  
+→ **동일 참고서식(`reference_form_id`)에 여러 SaaS 문서(`saas_catalog_id`)가 각각 독립 연결(PROPOSED) 가능.**  
+→ 같은 `(saas_catalog_id, reference_form_id)` 쌍의 중복 등록은 불가.
 
 원본 EVIDENCE.md의 "이중 APPROVED 불가" 표현은 DB 제약과 불일치했음. 정정: 쌍별 중복 등록 방지이지, 1:N 연결 차단이 아님.
 
