@@ -192,46 +192,86 @@ def test_rpc_s01_consumer_uses_service_role():
 def test_rpc_s02_api_refresh_requires_auth_and_admin():
     """RPC-S02: POST /engine-equipment/refresh 인증 및 관리자 권한 계약 확인
 
-    SEC-03(PR #667) 완료 후 갱신된 계약:
-    1. POST /refresh 엔드포인트 존재
-    2. Depends(get_current_user) 명시
-    3. run_refresh_engine_equipment 호출
-    4. 해당 Service 내 _require_admin() 존재
-    5. _require_admin() 이 RPC 실행보다 먼저 발생
+    SEC-03(PR #667) 완료 후 갱신된 계약 (AST 기반):
+    1. POST /refresh 핸들러에 Depends(get_current_user) 파라미터 존재
+    2. 핸들러 AST에서 run_refresh_engine_equipment 실제 호출 존재
+    3. run_refresh_engine_equipment 함수 본문에 _require_admin() 실제 호출 존재
+    4. _require_admin() 호출이 RPC 실행보다 앞에 위치
+
+    Negative Control 보장:
+    NC-01: Depends(get_current_user) 제거 (주석 유지) → FAIL
+    NC-02: 서비스 호출 제거 (주석 유지) → FAIL
+    NC-03: _require_admin() 호출 제거 (import 유지) → FAIL
+    NC-04: _require_admin() 호출을 RPC 뒤로 이동 → FAIL
     """
+    import ast as _ast
+
     router_src = (_ROOT / "routers" / "engine_equipment.py").read_text(encoding="utf-8")
     svc_src = (_ROOT / "services" / "equipment_catalog_svc.py").read_text(encoding="utf-8")
 
-    # 1. POST /refresh 엔드포인트 블록 추출
-    refresh_block = re.search(
-        r'@router\.post\("/refresh"\).*?(?=@router|\Z)',
-        router_src, re.DOTALL,
-    )
-    assert refresh_block is not None, "POST /refresh 엔드포인트를 찾을 수 없습니다"
-    block_text = refresh_block.group(0)
+    # ── Router 검증 (F03) ──────────────────────────────────────────────────────
 
-    # 2. Depends(get_current_user) 필수
-    assert "get_current_user" in block_text, (
-        "POST /refresh 에 Depends(get_current_user) 없음 — 인증 누락"
+    # 1. POST /refresh 핸들러 AST 노드 추출
+    router_tree = _ast.parse(router_src)
+    refresh_handler = None
+    for node in _ast.walk(router_tree):
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            if node.name == "refresh_engine_equipment":
+                refresh_handler = node
+                break
+    assert refresh_handler is not None, "POST /refresh 핸들러 함수를 찾을 수 없습니다"
+
+    # 2. Depends(get_current_user) — AST 파라미터 기본값 검사 (NC-01: 주석 유지해도 FAIL)
+    has_auth_dep = any(
+        isinstance(d, _ast.Call)
+        and isinstance(d.func, _ast.Name) and d.func.id == "Depends"
+        and d.args
+        and isinstance(d.args[0], _ast.Name) and d.args[0].id == "get_current_user"
+        for d in refresh_handler.args.defaults
+    )
+    assert has_auth_dep, (
+        "POST /refresh 핸들러에 Depends(get_current_user) 없음 — 인증 누락"
     )
 
-    # 3. run_refresh_engine_equipment 호출 필수
-    assert "run_refresh_engine_equipment" in block_text, (
-        "POST /refresh 가 run_refresh_engine_equipment 를 호출하지 않음"
+    # 3. run_refresh_engine_equipment AST Call 검사 (NC-02: 주석 유지해도 FAIL)
+    has_svc_call = any(
+        isinstance(node, _ast.Call)
+        and isinstance(node.func, _ast.Attribute)
+        and node.func.attr == "run_refresh_engine_equipment"
+        for node in _ast.walk(refresh_handler)
+    )
+    assert has_svc_call, (
+        "POST /refresh 핸들러가 run_refresh_engine_equipment 를 호출하지 않음"
     )
 
-    # 4+5. Service 내 _require_admin → RPC 순서 확인
-    svc_block = re.search(
-        r'def run_refresh_engine_equipment\(.*?\n(?=def |\Z)',
-        svc_src, re.DOTALL,
+    # ── Service 검증 (F01/F02) ─────────────────────────────────────────────────
+
+    # 4. run_refresh_engine_equipment 함수 AST 노드 추출
+    svc_tree = _ast.parse(svc_src)
+    svc_func = None
+    for node in _ast.walk(svc_tree):
+        if isinstance(node, _ast.FunctionDef) and node.name == "run_refresh_engine_equipment":
+            svc_func = node
+            break
+    assert svc_func is not None, "run_refresh_engine_equipment 함수를 찾을 수 없습니다"
+
+    # 함수 본문 텍스트 (라인 범위 추출 — import 라인 포함하지만 '(' 유무로 call 구분)
+    svc_lines = svc_src.splitlines()
+    func_body_src = "\n".join(svc_lines[svc_func.lineno - 1 : svc_func.end_lineno])
+
+    # 5. _require_admin() 실제 호출 확인 (NC-03: import만 남기면 FAIL — import에는 '(' 없음)
+    admin_call = re.search(r"_require_admin\(", func_body_src)
+    assert admin_call is not None, (
+        "run_refresh_engine_equipment 에 _require_admin() 호출 없음 — 관리자 검사 누락"
     )
-    assert svc_block is not None, "run_refresh_engine_equipment 를 찾을 수 없습니다"
-    svc_text = svc_block.group(0)
-    assert "_require_admin" in svc_text, (
-        "run_refresh_engine_equipment 에 _require_admin 없음 — 관리자 검사 누락"
+
+    # 6. RPC 호출 확인
+    rpc_call = re.search(r"refresh_engine_equipment_summary", func_body_src)
+    assert rpc_call is not None, (
+        "run_refresh_engine_equipment 에 refresh_engine_equipment_summary RPC 호출 없음"
     )
-    admin_pos = svc_text.index("_require_admin")
-    rpc_pos = svc_text.index("refresh_engine_equipment_summary")
-    assert admin_pos < rpc_pos, (
-        "_require_admin 이 RPC 호출보다 나중에 위치 — 권한 검사 순서 위반"
+
+    # 7. _require_admin() 호출이 RPC 호출보다 앞에 위치 (NC-04: 순서 역전 시 FAIL)
+    assert admin_call.start() < rpc_call.start(), (
+        "_require_admin() 이 RPC 호출보다 나중에 위치 — 권한 검사 순서 위반"
     )
