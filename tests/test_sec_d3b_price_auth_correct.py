@@ -1,5 +1,5 @@
 """SEC-03 D3-B P0 — 가격 API 인증·인가 소스 계약 테스트
-WO-TAI-SEC03-D3B-P0-PRICE-AUTH-CORRECT-001
+WO-TAI-SEC03-D3B-P0-PRICE-AUTH-CORRECT-001 (R1 포함)
 
 검증 방식: 정적 AST 분석 (소스 파일 기반, 라이브 DB 불필요)
 
@@ -8,15 +8,18 @@ WO-TAI-SEC03-D3B-P0-PRICE-AUTH-CORRECT-001
   PAC-02  admin_pricing — GET /pricing/keys: _require_admin 호출 존재
   PAC-03  admin_pricing — PATCH /pricing: _require_admin 호출 존재
   PAC-04  admin_pricing — _require_admin 위치: patch_pricing 내 DB 작업 이전
-  PAC-05  price_setting — 쓰기 엔드포인트 5개: Depends(get_current_user) 존재
-  PAC-06  price_setting — 쓰기 엔드포인트 5개: _require_admin 호출 존재
-  PAC-07  price_master_admin — 전체 엔드포인트 7개: Depends(get_current_user) 존재
-  PAC-08  price_master_admin — 전체 엔드포인트 7개: _require_admin 호출 존재
+  PAC-05  price_setting — 쓰기 엔드포인트 6개: Depends(get_current_user) 존재
+  PAC-06  price_setting — 쓰기 엔드포인트 6개: _require_admin 호출 존재
+  PAC-07  price_master_admin — 전체 엔드포인트 6개: Depends(get_current_user) 존재
+  PAC-08  price_master_admin — 전체 엔드포인트 6개: _require_admin 호출 존재
   PAC-09  diagnosis_fields — db.supabase_client 사용 (anon 키 제거)
   PAC-10  diagnosis_fields — 쓰기 경로 없음 (INSERT/UPDATE/DELETE 미사용)
+  PAC-11  price_setting — 읽기 엔드포인트 7개: Depends(get_current_user) 존재 (R1)
+  PAC-12  price_setting — 읽기 엔드포인트 7개: _require_admin 호출 존재 (R1)
   PAC-NC1 NC: admin_pricing — db.database 사용 시 FAIL
   PAC-NC2 NC: price_setting — 쓰기 엔드포인트 auth 없음 시 FAIL
   PAC-NC3 NC: _require_admin 주석 처리 시 FAIL
+  PAC-NC4 NC: price_setting — 읽기 엔드포인트 auth 없음 시 FAIL (R1)
 """
 from __future__ import annotations
 
@@ -38,6 +41,16 @@ _PRICE_WRITE_ENDPOINTS = {
     "update_repair_brokerage",
     "update_safety_management",
     "update_consulting",
+}
+
+_PRICE_READ_ENDPOINTS = {
+    "list_saas_plans",
+    "get_saas_plan",
+    "list_diagnosis_reports",
+    "list_change_logs",
+    "list_repair_brokerage",
+    "list_safety_management",
+    "list_consulting",
 }
 
 _PRICE_MASTER_ENDPOINTS = {
@@ -144,7 +157,7 @@ def test_pac_04_admin_pricing_require_admin_before_write():
 # ── PAC-05 ~ PAC-06: price_setting ────────────────────────────────────
 
 def test_pac_05_price_setting_write_endpoints_have_auth():
-    """PAC-05: price_setting.py 쓰기 엔드포인트 6개 — Depends(get_current_user) 존재."""
+    """PAC-05: price_setting.py 쓰기 엔드포인트 6개 — Depends(get_current_user) 존재. (write: PATCH/POST)"""
     funcs = _func_nodes(_tree(_PRICE_SETTING))
     missing = []
     for name in _PRICE_WRITE_ENDPOINTS:
@@ -155,7 +168,7 @@ def test_pac_05_price_setting_write_endpoints_have_auth():
 
 
 def test_pac_06_price_setting_write_endpoints_have_require_admin():
-    """PAC-06: price_setting.py 쓰기 엔드포인트 6개 — _require_admin() 호출 존재."""
+    """PAC-06: price_setting.py 쓰기 엔드포인트 6개 — _require_admin() 호출 존재. (write: PATCH/POST)"""
     funcs = _func_nodes(_tree(_PRICE_SETTING))
     missing = []
     for name in _PRICE_WRITE_ENDPOINTS:
@@ -168,7 +181,7 @@ def test_pac_06_price_setting_write_endpoints_have_require_admin():
 # ── PAC-07 ~ PAC-08: price_master_admin ───────────────────────────────
 
 def test_pac_07_price_master_admin_all_endpoints_have_auth():
-    """PAC-07: price_master_admin.py 전체 엔드포인트 — Depends(get_current_user) 존재."""
+    """PAC-07: price_master_admin.py 전체 엔드포인트 6개 — Depends(get_current_user) 존재."""
     funcs = _func_nodes(_tree(_PRICE_MASTER))
     missing = []
     for name in _PRICE_MASTER_ENDPOINTS:
@@ -179,7 +192,7 @@ def test_pac_07_price_master_admin_all_endpoints_have_auth():
 
 
 def test_pac_08_price_master_admin_all_endpoints_have_require_admin():
-    """PAC-08: price_master_admin.py 전체 엔드포인트 — _require_admin() 호출 존재."""
+    """PAC-08: price_master_admin.py 전체 엔드포인트 6개 — _require_admin() 호출 존재."""
     funcs = _func_nodes(_tree(_PRICE_MASTER))
     missing = []
     for name in _PRICE_MASTER_ENDPOINTS:
@@ -240,11 +253,37 @@ def test_pac_nc2_price_setting_patch_no_unguarded_writes():
         assert _require_admin_linenos(f), f"{name}: _require_admin 없음 (NC-02)"
 
 
+# ── PAC-11 ~ PAC-12: price_setting GET 엔드포인트 (R1) ────────────────
+
+def test_pac_11_price_setting_read_endpoints_have_auth():
+    """PAC-11 (R1): price_setting.py 읽기 엔드포인트 7개 — Depends(get_current_user) 존재."""
+    funcs = _func_nodes(_tree(_PRICE_SETTING))
+    missing = []
+    for name in _PRICE_READ_ENDPOINTS:
+        f = funcs.get(name)
+        if f is None or not _has_depends_get_current_user(f):
+            missing.append(name)
+    assert not missing, f"Depends(get_current_user) 없는 읽기 엔드포인트: {missing}"
+
+
+def test_pac_12_price_setting_read_endpoints_have_require_admin():
+    """PAC-12 (R1): price_setting.py 읽기 엔드포인트 7개 — _require_admin() 호출 존재."""
+    funcs = _func_nodes(_tree(_PRICE_SETTING))
+    missing = []
+    for name in _PRICE_READ_ENDPOINTS:
+        f = funcs.get(name)
+        if f is None or not _require_admin_linenos(f):
+            missing.append(name)
+    assert not missing, f"_require_admin() 없는 읽기 엔드포인트: {missing}"
+
+
+# ── Negative Controls ──────────────────────────────────────────────────
+
 def test_pac_nc3_require_admin_not_commented_out():
     """PAC-NC3 (NC): _require_admin 호출이 주석 처리되지 않음."""
     for path, names in [
         (_ADMIN_PRICING, ["list_pricing_keys", "patch_pricing"]),
-        (_PRICE_SETTING, list(_PRICE_WRITE_ENDPOINTS)),
+        (_PRICE_SETTING, list(_PRICE_WRITE_ENDPOINTS) + list(_PRICE_READ_ENDPOINTS)),
         (_PRICE_MASTER, list(_PRICE_MASTER_ENDPOINTS)),
     ]:
         funcs = _func_nodes(_tree(path))
@@ -253,3 +292,13 @@ def test_pac_nc3_require_admin_not_commented_out():
             assert f and _require_admin_linenos(f), (
                 f"{path.name}:{name} — _require_admin AST 호출 없음 (주석 처리 의심)"
             )
+
+
+def test_pac_nc4_price_setting_read_no_unguarded_reads():
+    """PAC-NC4 (NC, R1): price_setting.py 읽기 엔드포인트에 auth guard 없으면 탐지."""
+    funcs = _func_nodes(_tree(_PRICE_SETTING))
+    for name in _PRICE_READ_ENDPOINTS:
+        f = funcs.get(name)
+        assert f is not None, f"{name} 함수 없음"
+        assert _has_depends_get_current_user(f), f"{name}: auth guard 없음 (NC-04)"
+        assert _require_admin_linenos(f), f"{name}: _require_admin 없음 (NC-04)"
