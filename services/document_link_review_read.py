@@ -411,6 +411,77 @@ def get_candidates(
     )
 
 
+class CandidateValidationError(Exception):
+    """Raised when a candidate pair fails validation before propose."""
+
+    def __init__(self, error_code: str, message: str = "") -> None:
+        super().__init__(message or error_code)
+        self.error_code = error_code
+        self.message = message
+
+
+def validate_candidate_for_propose(
+    client: Any,
+    candidate_id: str,
+) -> tuple[str, str]:
+    """
+    Validate that a candidate pair is safe to propose as a link.
+    Returns (saas_uuid, ref_uuid) on success.
+    Raises CandidateValidationError if:
+      - candidate_id not in CSV
+      - SAAS or REF document not found in DB
+      - stale_source is True (inactive, title mismatch, source not found)
+
+    The caller must use the returned UUIDs for the RPC — never the client-supplied UUIDs.
+    """
+    all_rows = _load_csv()
+    row = next((r for r in all_rows if r["candidate_id"] == candidate_id), None)
+    if row is None:
+        raise CandidateValidationError(
+            "CANDIDATE_NOT_FOUND",
+            f"후보 ID '{candidate_id}'를 CSV 스냅샷에서 찾을 수 없습니다.",
+        )
+
+    saas_map = _fetch_saas_docs(client, [row["saas_source_code"]])
+    ref_map = _fetch_ref_docs(client, [row["ref_source_code"]])
+    saas_row = saas_map.get(row["saas_source_code"])
+    ref_row = ref_map.get(row["ref_source_code"])
+
+    summary = _build_summary(row, saas_row, ref_row, [])
+
+    if summary.stale_source:
+        raise CandidateValidationError(
+            "CANDIDATE_STALE",
+            f"후보 원본 검증 실패: {summary.stale_reason}",
+        )
+
+    return str(saas_row["id"]), str(ref_row["id"])
+
+
+def get_link_by_id(
+    client: Any,
+    link_id: str,
+) -> Optional[dict[str, Any]]:
+    """Return a single unified_document_link row by UUID, or None if not found."""
+    rows = client.select(
+        "unified_document_link",
+        columns="id,saas_catalog_id,reference_form_id,relation_type,review_state,"
+                "evidence_note,reviewed_by,reviewed_at,owner_approval_ref,version,"
+                "created_at,updated_at",
+        filters={"id": f"eq.{link_id}"},
+        limit=1,
+    )
+    return rows[0] if rows else None
+
+
+def get_link_audit_history(
+    client: Any,
+    link_id: str,
+) -> list[dict[str, Any]]:
+    """Return unified_document_link_audit rows for a link, newest first."""
+    return _fetch_audit_for_links(client, [link_id])
+
+
 def get_candidate_detail(
     client: Any,
     candidate_id: str,
