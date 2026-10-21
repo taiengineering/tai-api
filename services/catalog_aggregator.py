@@ -417,19 +417,21 @@ def get_unified_catalog(
     return CatalogPage(total=total, page=page, per_page=per_page, items=page_items)
 
 
+_APPROVED_RELATION_TYPES = "in.(SAME_DOCUMENT_VERIFIED,RELATED_FORM)"
+
+
 def get_approved_links_for_catalog(
     client: SupabaseRestClient,
     db_uuid: str,
     source_system: str,
 ) -> list[dict[str, Any]]:
-    """Return APPROVED SAME_DOCUMENT_VERIFIED links for catalog display.
+    """Return APPROVED links (SAME_DOCUMENT_VERIFIED + RELATED_FORM) for catalog display.
 
-    Only SAME_DOCUMENT_VERIFIED + APPROVED rows are included.
-    RELATED_FORM and unapproved states are excluded.
+    review_state must be APPROVED. PROPOSED, UNDER_REVIEW, REJECTED, RETIRED are excluded.
     Audit history and internal evidence are not exposed.
 
     Returns [] for a successful 0-result query.
-    Raises RuntimeError on DB access failure so the caller can return 503.
+    Raises on DB access failure so the caller can return 503.
     """
     if source_system == "SAAS":
         link_rows = client.select(
@@ -438,7 +440,7 @@ def get_approved_links_for_catalog(
             filters={
                 "saas_catalog_id": f"eq.{db_uuid}",
                 "review_state": "eq.APPROVED",
-                "relation_type": "eq.SAME_DOCUMENT_VERIFIED",
+                "relation_type": _APPROVED_RELATION_TYPES,
             },
         )
         if not link_rows:
@@ -468,7 +470,7 @@ def get_approved_links_for_catalog(
             filters={
                 "reference_form_id": f"eq.{db_uuid}",
                 "review_state": "eq.APPROVED",
-                "relation_type": "eq.SAME_DOCUMENT_VERIFIED",
+                "relation_type": _APPROVED_RELATION_TYPES,
             },
         )
         if not link_rows:

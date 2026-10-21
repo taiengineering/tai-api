@@ -120,7 +120,7 @@ def _item_to_dict(
             "SAAS_EXPORT": _channel_to_dict(item.channels.SAAS_EXPORT),
             "SAAS_AUTO_FILL": _channel_to_dict(item.channels.SAAS_AUTO_FILL),
         },
-        # links: APPROVED SAME_DOCUMENT_VERIFIED only (populated in detail endpoint)
+        # links: APPROVED (SAME_DOCUMENT_VERIFIED + RELATED_FORM), populated in detail endpoint
         "links": links if links is not None else [],
     }
 
@@ -172,7 +172,7 @@ def list_document_catalog(
     sector/category/status filters apply to SAAS records only.
     channel: 'WEB_EDIT' → READY; 'WEB_EDIT:BLOCKED' → explicit; unknown name/state → 422.
     WEB_EDIT and SAAS_EXPORT are fail-closed in catalog context (factory scope unverified).
-    links[] is always empty at this phase (unified_document_link table not applied).
+    links[] is always [] in list response (populated only in detail endpoint).
     """
     channel_normalised = _normalise_channel(channel)
     try:
@@ -214,7 +214,7 @@ def get_catalog_item(
     key: DOC:<doc_id> for SAAS records, REF:<canonical_slug> for REFERENCE_CMS records.
     Auth: Bearer JWT required → 401 if missing/invalid; 403 if not role 001.
     Returns 404 if not found or key format invalid.
-    links[] is always empty at this phase.
+    links[]: APPROVED (SAME_DOCUMENT_VERIFIED + RELATED_FORM) populated from unified_document_link.
     """
     if not (key.startswith("DOC:") or key.startswith("REF:")):
         raise HTTPException(

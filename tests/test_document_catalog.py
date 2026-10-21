@@ -39,6 +39,7 @@ from services.catalog_aggregator import (
     compute_channel_state,
     get_unified_catalog,
     get_document_detail,
+    get_approved_links_for_catalog,
 )
 
 
@@ -769,6 +770,353 @@ class T19_ChannelFilterEnhancements(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# WP04 helpers
+# ---------------------------------------------------------------------------
+
+def _make_link_mock_client(
+    saas_detail_row=None,
+    ref_detail_row=None,
+    link_rows=None,
+    ref_lookup_rows=None,
+    saas_lookup_rows=None,
+    schema_rows=None,
+):
+    """Mock for get_approved_links_for_catalog tests.
+
+    Distinguishes detail-resolution queries (by doc_id / canonical_slug)
+    from link-resolution lookups (by id IN ...).
+    """
+    client = MagicMock(spec=SupabaseRestClient)
+
+    def _select(table, columns="*", filters=None, **_):
+        filters = filters or {}
+        if table == "document_forms":
+            if "id" in filters:
+                return saas_lookup_rows or []
+            return [saas_detail_row] if saas_detail_row else []
+        if table == "reference_form_public_view":
+            if "id" in filters:
+                return ref_lookup_rows or []
+            return [ref_detail_row] if ref_detail_row else []
+        if table == "runtime_form_schema":
+            return schema_rows or []
+        if table == "unified_document_link":
+            return link_rows or []
+        return []
+
+    client.select.side_effect = _select
+    return client
+
+
+# ---------------------------------------------------------------------------
+# T20: APPROVED + RELATED_FORM returned (SAAS → REF)
+# ---------------------------------------------------------------------------
+
+class T20_RelatedFormLinkReturnedForSaas(unittest.TestCase):
+    def test(self):
+        client = _make_link_mock_client(
+            link_rows=[{
+                "id": "lk-1",
+                "reference_form_id": "ref-uuid-c023",
+                "relation_type": "RELATED_FORM",
+                "review_state": "APPROVED",
+            }],
+            ref_lookup_rows=[{
+                "id": "ref-uuid-c023",
+                "canonical_slug": "ref-c023",
+                "title": "안전보호구 지급대장",
+            }],
+        )
+        result = get_approved_links_for_catalog(client, "saas-uuid-osh045", "SAAS")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["linked_key"], "REF:ref-c023")
+        self.assertEqual(result[0]["linked_title"], "안전보호구 지급대장")
+        self.assertEqual(result[0]["relation_type"], "RELATED_FORM")
+
+
+# ---------------------------------------------------------------------------
+# T21: APPROVED + SAME_DOCUMENT_VERIFIED still works (regression guard)
+# ---------------------------------------------------------------------------
+
+class T21_SameDocumentVerifiedStillReturned(unittest.TestCase):
+    def test(self):
+        client = _make_link_mock_client(
+            link_rows=[{
+                "id": "lk-sdv",
+                "reference_form_id": "ref-uuid-gov01",
+                "relation_type": "SAME_DOCUMENT_VERIFIED",
+                "review_state": "APPROVED",
+            }],
+            ref_lookup_rows=[{
+                "id": "ref-uuid-gov01",
+                "canonical_slug": "ref-gov-01",
+                "title": "산업안전보건위원회 회의록",
+            }],
+        )
+        result = get_approved_links_for_catalog(client, "saas-uuid-osh058", "SAAS")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["relation_type"], "SAME_DOCUMENT_VERIFIED")
+        self.assertEqual(result[0]["linked_key"], "REF:ref-gov-01")
+
+
+# ---------------------------------------------------------------------------
+# T22: Query sends review_state=eq.APPROVED filter (unapproved excluded by filter)
+# ---------------------------------------------------------------------------
+
+class T22_QueryFiltersApprovedState(unittest.TestCase):
+    def test(self):
+        calls: list[dict] = []
+
+        def _select(table, columns="*", filters=None, **_):
+            if table == "unified_document_link":
+                calls.append(dict(filters) if filters else {})
+            return []
+
+        client = MagicMock(spec=SupabaseRestClient)
+        client.select.side_effect = _select
+        get_approved_links_for_catalog(client, "saas-uuid", "SAAS")
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].get("review_state"), "eq.APPROVED",
+                         "Must filter review_state=APPROVED to exclude PROPOSED/UNDER_REVIEW/REJECTED")
+
+
+# ---------------------------------------------------------------------------
+# T23: relation_type filter includes both SAME_DOCUMENT_VERIFIED and RELATED_FORM
+# ---------------------------------------------------------------------------
+
+class T23_RelationTypeFilterIncludesBoth(unittest.TestCase):
+    def _capture_filter(self, source_system: str) -> str:
+        calls: list[dict] = []
+
+        def _select(table, columns="*", filters=None, **_):
+            if table == "unified_document_link":
+                calls.append(dict(filters) if filters else {})
+            return []
+
+        client = MagicMock(spec=SupabaseRestClient)
+        client.select.side_effect = _select
+        get_approved_links_for_catalog(client, "uuid", source_system)
+        return calls[0].get("relation_type", "") if calls else ""
+
+    def test_saas_includes_related_form(self):
+        rt = self._capture_filter("SAAS")
+        self.assertIn("RELATED_FORM", rt)
+
+    def test_saas_includes_same_document_verified(self):
+        rt = self._capture_filter("SAAS")
+        self.assertIn("SAME_DOCUMENT_VERIFIED", rt)
+
+    def test_ref_cms_includes_related_form(self):
+        rt = self._capture_filter("REFERENCE_CMS")
+        self.assertIn("RELATED_FORM", rt)
+
+    def test_ref_cms_includes_same_document_verified(self):
+        rt = self._capture_filter("REFERENCE_CMS")
+        self.assertIn("SAME_DOCUMENT_VERIFIED", rt)
+
+
+# ---------------------------------------------------------------------------
+# T24: SAAS → REF direction returns correct linked_key format
+# ---------------------------------------------------------------------------
+
+class T24_SaasToRefDirection(unittest.TestCase):
+    def test(self):
+        client = _make_link_mock_client(
+            link_rows=[{
+                "id": "lk-2",
+                "reference_form_id": "ref-uuid-conf01",
+                "relation_type": "RELATED_FORM",
+                "review_state": "APPROVED",
+            }],
+            ref_lookup_rows=[{
+                "id": "ref-uuid-conf01",
+                "canonical_slug": "ref-conf-01",
+                "title": "밀폐공간 출입·작업허가서",
+            }],
+        )
+        result = get_approved_links_for_catalog(client, "saas-uuid-osh047", "SAAS")
+        self.assertEqual(len(result), 1)
+        self.assertTrue(result[0]["linked_key"].startswith("REF:"),
+                        "SAAS→REF linked_key must start with REF:")
+
+
+# ---------------------------------------------------------------------------
+# T25: REF → SAAS direction returns correct linked_key format
+# ---------------------------------------------------------------------------
+
+class T25_RefToSaasDirection(unittest.TestCase):
+    def test(self):
+        client = _make_link_mock_client(
+            link_rows=[{
+                "id": "lk-3",
+                "saas_catalog_id": "saas-uuid-osh006",
+                "relation_type": "RELATED_FORM",
+                "review_state": "APPROVED",
+            }],
+            saas_lookup_rows=[{
+                "id": "saas-uuid-osh006",
+                "doc_id": "DOC-OSH-006",
+                "doc_name": "안전보건교육일지",
+            }],
+        )
+        result = get_approved_links_for_catalog(client, "ref-uuid-c031", "REFERENCE_CMS")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["linked_key"], "DOC:DOC-OSH-006")
+        self.assertEqual(result[0]["relation_type"], "RELATED_FORM")
+
+
+# ---------------------------------------------------------------------------
+# T26: Multi-mapping — ref-c031 returns 2 SAAS docs
+# ---------------------------------------------------------------------------
+
+class T26_MultiMappingRefToTwoSaas(unittest.TestCase):
+    def test(self):
+        client = _make_link_mock_client(
+            link_rows=[
+                {"id": "lk-a", "saas_catalog_id": "saas-uuid-osh006",
+                 "relation_type": "RELATED_FORM", "review_state": "APPROVED"},
+                {"id": "lk-b", "saas_catalog_id": "saas-uuid-osh037",
+                 "relation_type": "RELATED_FORM", "review_state": "APPROVED"},
+            ],
+            saas_lookup_rows=[
+                {"id": "saas-uuid-osh006", "doc_id": "DOC-OSH-006", "doc_name": "안전보건교육일지"},
+                {"id": "saas-uuid-osh037", "doc_id": "DOC-OSH-037", "doc_name": "안전보건교육 실시기록부"},
+            ],
+        )
+        result = get_approved_links_for_catalog(client, "ref-uuid-c031", "REFERENCE_CMS")
+        self.assertEqual(len(result), 2)
+        keys = {r["linked_key"] for r in result}
+        self.assertIn("DOC:DOC-OSH-006", keys)
+        self.assertIn("DOC:DOC-OSH-037", keys)
+        # no duplicates
+        self.assertEqual(len(result), len(keys))
+
+
+# ---------------------------------------------------------------------------
+# T27: No approved links → returns []
+# ---------------------------------------------------------------------------
+
+class T27_NoLinksReturnsEmpty(unittest.TestCase):
+    def test_saas(self):
+        client = _make_link_mock_client(link_rows=[])
+        result = get_approved_links_for_catalog(client, "saas-uuid-no-links", "SAAS")
+        self.assertEqual(result, [])
+
+    def test_ref_cms(self):
+        client = _make_link_mock_client(link_rows=[])
+        result = get_approved_links_for_catalog(client, "ref-uuid-no-links", "REFERENCE_CMS")
+        self.assertEqual(result, [])
+
+
+# ---------------------------------------------------------------------------
+# T28: DB failure propagates (caller must return 503)
+# ---------------------------------------------------------------------------
+
+class T28_DbFailurePropagates(unittest.TestCase):
+    def test(self):
+        client = MagicMock(spec=SupabaseRestClient)
+        client.select.side_effect = RuntimeError("DB connection failed")
+        with self.assertRaises(Exception):
+            get_approved_links_for_catalog(client, "saas-uuid", "SAAS")
+
+
+# ---------------------------------------------------------------------------
+# T29: Router detail endpoint returns links[] with RELATED_FORM entries
+# ---------------------------------------------------------------------------
+
+class T29_RouterDetailIncludesRelatedFormLinks(unittest.TestCase):
+    def _run_detail_with_links(self, key: str, mock_client):
+        import unittest.mock as mock
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers.document_catalog import router
+        from routers.auth import get_current_user
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: _ADMIN_USER
+        tc = TestClient(app, raise_server_exceptions=False)
+        with mock.patch("routers.document_catalog._get_rest_client", return_value=mock_client):
+            return tc.get(f"/api/document-catalog/{key}")
+
+    def test_doc_key_returns_related_form_links(self):
+        client = _make_link_mock_client(
+            saas_detail_row=_make_saas_row("DOC-OSH-045", "보호구 지급대장"),
+            link_rows=[{
+                "id": "lk-z",
+                "reference_form_id": "ref-uuid-c023",
+                "relation_type": "RELATED_FORM",
+                "review_state": "APPROVED",
+            }],
+            ref_lookup_rows=[{
+                "id": "ref-uuid-c023",
+                "canonical_slug": "ref-c023",
+                "title": "안전보호구 지급대장",
+            }],
+            schema_rows=[],
+        )
+        resp = self._run_detail_with_links("DOC:DOC-OSH-045", client)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["provisional_key"], "DOC:DOC-OSH-045")
+        links = data.get("links", [])
+        self.assertEqual(len(links), 1)
+        self.assertEqual(links[0]["linked_key"], "REF:ref-c023")
+        self.assertEqual(links[0]["relation_type"], "RELATED_FORM")
+
+    def test_ref_key_returns_reverse_related_form_links(self):
+        client = _make_link_mock_client(
+            ref_detail_row=_make_ref_row("ref-c031", "안전보건교육 실시일지"),
+            link_rows=[
+                {"id": "lk-p", "saas_catalog_id": "saas-uuid-osh006",
+                 "relation_type": "RELATED_FORM", "review_state": "APPROVED"},
+                {"id": "lk-q", "saas_catalog_id": "saas-uuid-osh037",
+                 "relation_type": "RELATED_FORM", "review_state": "APPROVED"},
+            ],
+            saas_lookup_rows=[
+                {"id": "saas-uuid-osh006", "doc_id": "DOC-OSH-006", "doc_name": "안전보건교육일지"},
+                {"id": "saas-uuid-osh037", "doc_id": "DOC-OSH-037", "doc_name": "안전보건교육 실시기록부"},
+            ],
+        )
+        resp = self._run_detail_with_links("REF:ref-c031", client)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        links = data.get("links", [])
+        self.assertEqual(len(links), 2)
+        keys = {lk["linked_key"] for lk in links}
+        self.assertIn("DOC:DOC-OSH-006", keys)
+        self.assertIn("DOC:DOC-OSH-037", keys)
+
+    def test_internal_fields_not_exposed(self):
+        """owner_approval_ref, evidence_note, audit data must not appear in links[]."""
+        client = _make_link_mock_client(
+            saas_detail_row=_make_saas_row("DOC-OSH-058"),
+            link_rows=[{
+                "id": "lk-int",
+                "reference_form_id": "ref-uuid-gov01",
+                "relation_type": "RELATED_FORM",
+                "review_state": "APPROVED",
+                "owner_approval_ref": "SYS-UDL-SECRET",
+                "evidence_note": "internal note",
+            }],
+            ref_lookup_rows=[{
+                "id": "ref-uuid-gov01",
+                "canonical_slug": "ref-gov-01",
+                "title": "산업안전보건위원회 회의록",
+            }],
+            schema_rows=[],
+        )
+        resp = self._run_detail_with_links("DOC:DOC-OSH-058", client)
+        self.assertEqual(resp.status_code, 200)
+        resp_text = resp.text
+        self.assertNotIn("SYS-UDL-SECRET", resp_text)
+        self.assertNotIn("internal note", resp_text)
+        self.assertNotIn("owner_approval_ref", resp_text)
+        self.assertNotIn("evidence_note", resp_text)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -796,6 +1144,17 @@ if __name__ == "__main__":
         T17_ChannelAndStatusFilters,
         T18_PerPageCappedAt200,
         T19_ChannelFilterEnhancements,
+        # WP04
+        T20_RelatedFormLinkReturnedForSaas,
+        T21_SameDocumentVerifiedStillReturned,
+        T22_QueryFiltersApprovedState,
+        T23_RelationTypeFilterIncludesBoth,
+        T24_SaasToRefDirection,
+        T25_RefToSaasDirection,
+        T26_MultiMappingRefToTwoSaas,
+        T27_NoLinksReturnsEmpty,
+        T28_DbFailurePropagates,
+        T29_RouterDetailIncludesRelatedFormLinks,
     ]
 
     for tc in test_classes:
