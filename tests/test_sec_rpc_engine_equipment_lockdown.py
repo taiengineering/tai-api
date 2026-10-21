@@ -32,7 +32,7 @@ SOURCE GATE 기준:
   RPC-SQL-13  BASE_SHA 주석 포함
   RPC-SQL-14  대상 외 함수 변경 없음
   RPC-S01     소비처 service_role 경유 확인 (equipment_catalog_svc.py)
-  RPC-S02     API 인증 누락 등록 (engine_equipment.py refresh 인증 없음)
+  RPC-S02     POST /refresh 인증 및 관리자 권한 계약 확인
 """
 from __future__ import annotations
 
@@ -189,18 +189,49 @@ def test_rpc_s01_consumer_uses_service_role():
     )
 
 
-def test_rpc_s02_api_refresh_has_no_auth():
-    """RPC-S02: POST /engine-equipment/refresh 인증 미설정 확인 — API 보강 WO 대상"""
+def test_rpc_s02_api_refresh_requires_auth_and_admin():
+    """RPC-S02: POST /engine-equipment/refresh 인증 및 관리자 권한 계약 확인
+
+    SEC-03(PR #667) 완료 후 갱신된 계약:
+    1. POST /refresh 엔드포인트 존재
+    2. Depends(get_current_user) 명시
+    3. run_refresh_engine_equipment 호출
+    4. 해당 Service 내 _require_admin() 존재
+    5. _require_admin() 이 RPC 실행보다 먼저 발생
+    """
     router_src = (_ROOT / "routers" / "engine_equipment.py").read_text(encoding="utf-8")
-    # refresh 엔드포인트 함수 시그니처에 Depends(get_current_user) 없음을 확인
-    # (이 테스트는 잔여 위험을 명시적으로 기록하기 위한 정적 증거)
+    svc_src = (_ROOT / "services" / "equipment_catalog_svc.py").read_text(encoding="utf-8")
+
+    # 1. POST /refresh 엔드포인트 블록 추출
     refresh_block = re.search(
         r'@router\.post\("/refresh"\).*?(?=@router|\Z)',
         router_src, re.DOTALL,
     )
     assert refresh_block is not None, "POST /refresh 엔드포인트를 찾을 수 없습니다"
     block_text = refresh_block.group(0)
-    # get_current_user가 없어야 함 (현재 상태 = 인증 누락 = 잔여 위험)
-    assert "get_current_user" not in block_text, (
-        "POST /refresh 에 이미 인증이 있습니다 — RPC-S02 조건 불일치"
+
+    # 2. Depends(get_current_user) 필수
+    assert "get_current_user" in block_text, (
+        "POST /refresh 에 Depends(get_current_user) 없음 — 인증 누락"
+    )
+
+    # 3. run_refresh_engine_equipment 호출 필수
+    assert "run_refresh_engine_equipment" in block_text, (
+        "POST /refresh 가 run_refresh_engine_equipment 를 호출하지 않음"
+    )
+
+    # 4+5. Service 내 _require_admin → RPC 순서 확인
+    svc_block = re.search(
+        r'def run_refresh_engine_equipment\(.*?\n(?=def |\Z)',
+        svc_src, re.DOTALL,
+    )
+    assert svc_block is not None, "run_refresh_engine_equipment 를 찾을 수 없습니다"
+    svc_text = svc_block.group(0)
+    assert "_require_admin" in svc_text, (
+        "run_refresh_engine_equipment 에 _require_admin 없음 — 관리자 검사 누락"
+    )
+    admin_pos = svc_text.index("_require_admin")
+    rpc_pos = svc_text.index("refresh_engine_equipment_summary")
+    assert admin_pos < rpc_pos, (
+        "_require_admin 이 RPC 호출보다 나중에 위치 — 권한 검사 순서 위반"
     )
