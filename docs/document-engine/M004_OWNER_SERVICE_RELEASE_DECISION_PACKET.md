@@ -13,6 +13,7 @@
 > **ACTIVATION-EXEC-001 (2026-10-22): DOC-CON-044 운영 활성화 실행 완료 — schema APPROVED_FOR_RUNTIME_USE / fields×4 APPROVED_BY_HUMAN/REQUIRED_BY_HUMAN / audit aa0d131a**  
 > 기준 데이터: 기존 스냅샷 + R2 binding + R3 handoff 수치 재사용. DB SELECT 0건 추가 수행.  
 > 변경: NEW_CODE=0 / PROD_DB_WRITE=6건(schema1+field4+audit1) / MIGRATION=0 / PR=0 / MERGE=0 / DEPLOY=0
+> **63DOC-ACTIVATION-CORR-001 (2026-10-23): GPT SOURCE IV 4개 결함 교정 — CORR-1(rollback_snapshot per-doc+fields) / CORR-2(P8/F4 exact triplet JOIN) / CORR-3(고객 활성화 영향 재기술) / CORR-4(LEG_GATE_REQUIRED=YES 63/63 Owner패킷 반영)**
 
 ---
 
@@ -745,7 +746,13 @@ GPT_IV = PENDING
 |---|---|
 | IN_P0 (field_key 수준 검증 완료) | 8종 |
 | IN_P0 외 (P0 근거 없음, FORM_CONTRACT_UNVERIFIED) | 55종 |
-| LEG_GATE_REQUIRED | **해당 없음** (NON_LEGAL 전건) |
+| LEGAL_FORM_CLASS | NON_LEGAL (63/63) — `has_legal_form=FALSE` |
+| LEG_GATE_REQUIRED (FORM_CONFORMANCE_EVIDENCE.csv 정본) | **YES (63/63)** |
+
+> **CORR-001 (2026-10-23)**: `LEG_GATE_REQUIRED=YES`는 `LEGAL_FORM_CLASS=NON_LEGAL`과 동시에 성립한다.  
+> `FORM_CONFORMANCE_EVIDENCE.csv` 정본 기준 63종 전부 `LEG_GATE_REQUIRED=YES` / `LEGAL_FORM_CLASS=NON_LEGAL`.  
+> `LEGAL_FORM_CLASS=NON_LEGAL`이 LEG Gate 요건을 자동으로 면제하지 않는다.  
+> LEG Gate 처리 경로는 GPT SOURCE IV 판정 이후 Owner가 결정한다.
 
 P0 8종: DOC-CHEM-003 / DOC-CON-013 / DOC-CON-014 / DOC-CON-026 / DOC-CON-032 / DOC-CON-043 / DOC-FAC-002 / DOC-OSH-046
 
@@ -765,12 +772,13 @@ CHECKLISTS_PRESERVED = 178
 
 SOURCE_CONTRACT = M004_65DOC_REQUIREDNESS_SUMMARY.csv (정본)
 PRJ_STEP4D_CONTRACT = docs/sql/20260825_WP_PERSISTENCE_02A_STEP4D_UP.sql
-LEGAL_FORM_GATE = NOT_TRIGGERED (63종 전부 NON_LEGAL)
+LEGAL_FORM_CLASS    = NON_LEGAL (63/63, has_legal_form=FALSE)
+LEG_GATE_REQUIRED   = YES (63/63, FORM_CONFORMANCE_EVIDENCE.csv 정본 — CORR-001)
 FORM_CONFORMANCE_STATUS = IN_P0=8(PASS) / NOT_IN_P0=55(UNVERIFIED)
 
 PREFLIGHT_SQL = docs/document-engine/M004_63DOC_ACTIVATION_PREFLIGHT.sql
 ACTIVATION_SQL = docs/document-engine/M004_63DOC_ACTIVATION_PLAN.sql
-AUDIT_SNAPSHOT_CONTRACT = before_state=CANDIDATE 전체 JSON / rollback_available=true
+AUDIT_SNAPSHOT_CONTRACT = rollback_snapshot=per-doc(schema_status/version/fields) / rollback_available=true (CORR-001)
 ROLLBACK_CONTRACT = P4/P5 zero-doc 전제조건 + runtime_document_data/bridge=0 확인 후 단일 DO 복구
 
 READY_FOR_EXECUTION = YES (DB 사전조건 전부 PASS)
