@@ -1,4 +1,5 @@
-"""WO-TAI-M004-AUTO-WEB-MAINLINE-INTEGRATION-001 — gap tests only.
+"""WO-TAI-M004-AUTO-WEB-MAINLINE-INTEGRATION-001-CORR-001
+보정 날짜: 2026-10-22
 
 기존 테스트 재사용 매핑 (코드 변경 없음):
   A01 AUTO Inspection HTML    ← test_auto_doc_security_integration::test_SI2
@@ -9,13 +10,24 @@
   A04 AUTO 미완료 업무 차단   ← test_auto_reuse_01_discovery::test_RR1-RR4
   A05 AUTO 타사업장 접근 차단 ← test_auto_doc_factory_isolation (13 tests)
                                  test_auto_doc_security_integration::test_SI1/SI3/ST1/ST3
-  A06 AUTO 미승인 필드 자동입력 차단 ← NEW: test_A06_generate_document_no_auto_fetcher
-  W01 WEB 승인 Fixture 열기   ← test_m004_e2e_pipeline::test_E2E_02
+  A06 AUTO 미승인 필드 자동입력 차단
+      수준1(API계약)           ← NEW: test_A06_generate_document_no_auto_fetcher
+      수준2(서비스 실행)       ← NEW: test_A06b_render_html_user_data_not_overwritten
+  W01 WEB 편집기 열기
+      RUNTIME_CREATION_PASS   ← test_m004_e2e_pipeline::test_E2E_02
+      UI_NOT_VERIFIED          ← UI 실행 검증 없음. 서비스 계층 생성만 확인.
   W02 WEB 입력·수정           ← test_m004_e2e_pipeline::test_E2E_04
   W03 WEB 저장                ← test_m004_e2e_pipeline::test_E2E_02 / test_E2E_04
-  W04 WEB 복원·재수정         ← test_m004_e2e_pipeline::test_E2E_03
-  W05 WEB HTML 렌더링         ← test_m004_e2e_pipeline::test_E2E_08
-  W06 WEB PDF 생성            ← NEW: test_W06_generate_document_pdf
+  W04 WEB 복원·재수정
+      RESTORE_REDIT_PASS       ← NEW: test_W04_restore_and_re_edit
+  W05 WEB HTML 렌더링
+      RENDER_PATH_UNIT_PASS    ← test_m004_e2e_pipeline::test_E2E_08
+      실제 렌더러는 Mock 처리됨 (build_render_artifacts mocked).
+      실제 HTML 렌더링 완료가 아님.
+  W06 WEB PDF 생성
+      API_CONTRACT_PASS        ← NEW: test_W06_generate_document_pdf
+      PDF_RENDER_INTEGRATION_UNVERIFIED ← Gotenberg 외부 서비스 필요.
+                                           로컬 환경에서 실제 변환 미검증.
   W07 WEB CANDIDATE 차단      ← test_m004_e2e_pipeline::test_E2E_10a
   W08 WEB 상태 전이           ← test_m004_e2e_pipeline::test_E2E_05a / 05b / 05c
   W09 WEB 봉인 문서 편집 차단 ← test_m004_e2e_pipeline::test_E2E_10d
@@ -40,69 +52,339 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DOC_ID  = "doc00001-0000-0000-0000-000000000001"
-USER_ID = "user0001-0000-0000-0000-000000000001"
+# ── 공통 픽스처 ────────────────────────────────────────────────────────────────
+SCHEMA_ID = "sc000001-0000-0000-0000-000000000001"
+DOC_ID    = "doc00001-0000-0000-0000-000000000001"
+USER_ID   = "user0001-0000-0000-0000-000000000001"
 _FAKE_HTML = "<html><body>WEB 문서</body></html>"
 _FAKE_PDF  = b"%PDF-1.4 fake"
 
 
-def _fake_doc_scope(_sb, _doc_id, _user):
+# ── 로컬 FakeDB (test_m004_e2e_pipeline 패턴 재사용) ───────────────────────────
+
+class _Q:
+    def __init__(self, rows, single_mode=False):
+        self._rows = list(rows) if isinstance(rows, list) else ([] if rows is None else [rows])
+        self._filters: dict = {}
+        self._single = single_mode
+
+    def select(self, *a, **kw): return self
+    def order(self, *a, **kw): return self
+    def limit(self, n): return self
+
+    def eq(self, field, value):
+        self._filters[field] = value
+        return self
+
+    def single(self):
+        self._single = True
+        return self
+
+    def update(self, payload):
+        return _UpdateQ(self._rows, self._filters, payload)
+
+    def _filtered(self):
+        return [
+            r for r in self._rows
+            if isinstance(r, dict) and all(
+                (r.get(k) == v) if v is not None else (r.get(k) is None)
+                for k, v in self._filters.items()
+            )
+        ]
+
+    def execute(self):
+        filtered = self._filtered()
+        m = MagicMock()
+        m.count = len(filtered)
+        m.data = filtered[0] if self._single and filtered else (
+            None if self._single else filtered
+        )
+        return m
+
+
+class _UpdateQ:
+    def __init__(self, rows, filters, payload):
+        self._rows = rows
+        self._filters = dict(filters)
+        self._payload = payload
+
+    def eq(self, field, value):
+        self._filters[field] = value
+        return self
+
+    def execute(self):
+        updated = []
+        for r in self._rows:
+            if isinstance(r, dict) and all(r.get(k) == v for k, v in self._filters.items()):
+                updated.append({**r, **self._payload})
+        m = MagicMock()
+        m.data = updated
+        return m
+
+
+class _FakeSB:
+    def __init__(self, table_map: dict, insert_result=None):
+        self._map = table_map
+        self._inserts: list = []
+        self._insert_result = insert_result
+
+    def table(self, name: str):
+        rows = self._map.get(name, [])
+        sb = self
+
+        class _Tbl:
+            def select(self_, *a, **kw): return _Q(rows)
+            def insert(self_, payload):
+                sb._inserts.append((name, payload))
+                result_rows = [sb._insert_result or payload]
+                return _Q(result_rows)
+            def update(self_, payload):
+                return _UpdateQ(list(rows), {}, payload)
+
+        return _Tbl()
+
+    def rpc(self, name, params=None):
+        rows = self._map.get("_rpc_" + name, [])
+        m = MagicMock()
+        m.execute.return_value.data = rows[0] if rows else {}
+        return m
+
+
+def _make_doc(runtime_data_json=None):
+    return {
+        "id": DOC_ID, "form_schema_id": SCHEMA_ID,
+        "status": "DRAFT", "version": 1,
+        "company_id": "c1", "factory_id": "f1",
+        "runtime_data_json": dict(runtime_data_json or {}),
+        "evidence_links": [],
+        "submitted_by": None, "submitted_at": None,
+        "reviewed_by": None, "reviewed_at": None, "review_comment": None,
+    }
+
+
+def _make_schema():
+    return {
+        "id": SCHEMA_ID, "status": "APPROVED_FOR_RUNTIME_USE",
+        "form_name": "테스트 서식", "version": 1,
+        "catalog_document_id": None, "source_trace": {},
+    }
+
+
+def _make_fields(keys):
+    return [
+        {"id": f"fld-{k}", "form_schema_id": SCHEMA_ID, "field_key": k,
+         "input_type": "text", "field_order": i}
+        for i, k in enumerate(keys)
+    ]
+
+
+def _check_doc_scope_noop(_sb, _doc_id, _user):
     return {"id": _doc_id, "company_id": "c1", "factory_id": "f1", "status": "DRAFT"}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# A06  AUTO 미승인 필드 자동입력 차단
-#      generate_document 는 InspectionFetcher / TbmFetcher 를 호출하지 않는다.
-#      사용자가 입력한 runtime_data_json 만 사용하는 svc.render_document_html() 경로.
+# A06  AUTO 미승인 필드 자동입력 차단 — 수준 1 (API 계약)
+#      generate_document() 가 InspectionFetcher / TbmFetcher 를 직접 호출하지 않음.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def test_A06_generate_document_no_auto_fetcher():
-    """WEB export_type=HTML: render_document_html 호출 O, InspectionFetcher/TbmFetcher 호출 X."""
+    """WEB export_type=HTML: render_document_html 호출 O, InspectionFetcher/TbmFetcher 호출 X.
+
+    수준: API 계약 (generate_document 라우터 수준 격리 검증).
+    svc.render_document_html 은 Mock 처리됨.
+    """
     from schemas.document_engine import GenerateDocumentIn
     from routers.document_engine_api import generate_document
 
-    inspection_fetch_called: list[bool] = []
-    tbm_fetch_called: list[bool] = []
+    insp_called: list[bool] = []
+    tbm_called: list[bool] = []
 
-    async def _fake_insp_fetch(*a, **kw):
-        inspection_fetch_called.append(True)
+    async def _fake_insp(*a, **kw):
+        insp_called.append(True)
         return {}
 
-    async def _fake_tbm_fetch(*a, **kw):
-        tbm_fetch_called.append(True)
+    async def _fake_tbm(*a, **kw):
+        tbm_called.append(True)
         return {}
 
     with patch("routers.document_engine_api.get_supabase", return_value=MagicMock()):
-        with patch("routers.document_engine_api._check_doc_scope", side_effect=_fake_doc_scope):
-            with patch("routers.document_engine_api.svc.render_document_html", return_value=_FAKE_HTML):
-                with patch("services.document_engine.fetchers.inspection_fetcher.InspectionFetcher.fetch",
-                           new_callable=AsyncMock, side_effect=_fake_insp_fetch):
-                    with patch("services.document_engine.fetchers.tbm_fetcher.TbmFetcher.fetch",
-                               new_callable=AsyncMock, side_effect=_fake_tbm_fetch):
+        with patch("routers.document_engine_api._check_doc_scope",
+                   side_effect=_check_doc_scope_noop):
+            with patch("routers.document_engine_api.svc.render_document_html",
+                       return_value=_FAKE_HTML):
+                with patch(
+                    "services.document_engine.fetchers.inspection_fetcher.InspectionFetcher.fetch",
+                    new_callable=AsyncMock, side_effect=_fake_insp,
+                ):
+                    with patch(
+                        "services.document_engine.fetchers.tbm_fetcher.TbmFetcher.fetch",
+                        new_callable=AsyncMock, side_effect=_fake_tbm,
+                    ):
                         body = GenerateDocumentIn(export_type="HTML")
                         resp = asyncio.run(
                             generate_document(DOC_ID, body, current_user={"id": USER_ID})
                         )
 
-    assert not inspection_fetch_called, \
+    assert not insp_called, \
         "generate_document must NOT call InspectionFetcher.fetch (auto fill 금지)"
-    assert not tbm_fetch_called, \
+    assert not tbm_called, \
         "generate_document must NOT call TbmFetcher.fetch (auto fill 금지)"
     assert _FAKE_HTML in resp.body.decode(), "render_document_html 결과가 응답에 포함돼야 함"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# W06  WEB PDF 생성
-#      generate_document(export_type=PDF) → application/pdf + 비어있지 않은 bytes
+# A06b AUTO 미승인 필드 자동입력 차단 — 수준 2 (서비스 실행)
+#      실제 svc.render_document_html() 호출 + FakeDB 격리.
+#      build_render_artifacts / resolve_signature_images_for_render 만 Mock.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_A06b_render_html_user_data_not_overwritten_by_autofill():
+    """실제 svc.render_document_html() 가 사용자 runtime_data_json 을 덮어쓰지 않음을 검증.
+
+    수준: 서비스 실행 (FakeDB 격리, 외부 렌더러만 Mock).
+    검증:
+    - build_render_artifacts 에 전달된 document.runtime_data_json 이 사용자 입력값과 동일
+    - InspectionFetcher.fetch / TbmFetcher.fetch 미호출
+    - 사용자 입력값이 자동입력값으로 대체되지 않음
+
+    svc.render_document_html docstring 명시: "Does NOT call InspectionFetcher or TbmFetcher."
+    """
+    import services.document_engine_svc as svc_mod
+
+    USER_INPUT = {"inspection_result": "완료", "note": "이상 없음"}
+    fields = _make_fields(["inspection_result", "note"])
+
+    sb = _FakeSB({
+        "runtime_document_data": [_make_doc(USER_INPUT)],
+        "runtime_form_schema": [_make_schema()],
+        "runtime_field": fields,
+        "runtime_checklist_item": [],
+        "runtime_evidence_field": [],
+    })
+
+    captured_doc: list[dict] = []
+
+    def _capture_build(*a, document=None, **kw):
+        captured_doc.append(document or {})
+        return {"rendered_body": "<html>RENDERED</html>"}
+
+    insp_called: list[bool] = []
+    tbm_called: list[bool] = []
+
+    async def _fake_insp(*a, **kw): insp_called.append(True); return {}
+    async def _fake_tbm(*a, **kw): tbm_called.append(True); return {}
+
+    with patch("services.document_engine_svc.get_supabase", return_value=sb):
+        with patch("services.document_schema_renderer.build_render_artifacts",
+                   side_effect=_capture_build):
+            with patch(
+                "services.document_signature_svc.resolve_signature_images_for_render",
+                return_value={"images": {}, "manifest": []},
+            ):
+                with patch(
+                    "services.document_engine.fetchers.inspection_fetcher.InspectionFetcher.fetch",
+                    new_callable=AsyncMock, side_effect=_fake_insp,
+                ):
+                    with patch(
+                        "services.document_engine.fetchers.tbm_fetcher.TbmFetcher.fetch",
+                        new_callable=AsyncMock, side_effect=_fake_tbm,
+                    ):
+                        html = svc_mod.render_document_html(DOC_ID)
+
+    assert html == "<html>RENDERED</html>", "render_document_html 반환값 확인"
+
+    assert len(captured_doc) == 1, "build_render_artifacts 정확히 1회 호출"
+    passed_data = captured_doc[0].get("runtime_data_json")
+    assert passed_data == USER_INPUT, (
+        f"render_document_html 은 사용자 runtime_data_json 을 그대로 전달해야 함. "
+        f"expected={USER_INPUT!r}, got={passed_data!r}"
+    )
+
+    assert not insp_called, \
+        "InspectionFetcher.fetch 는 WEB render 경로에서 호출되면 안 됨"
+    assert not tbm_called, \
+        "TbmFetcher.fetch 는 WEB render 경로에서 호출되면 안 됨"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# W04  WEB 복원·재수정
+#      저장된 문서 재조회 → 기존값 보존 확인 → 일부 필드 수정 → merge 검증
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_W04_restore_and_re_edit():
+    """WEB 문서 복원·재수정 흐름 계약.
+
+    흐름:
+    1. FakeDB 에 초기 runtime_data_json 을 가진 DRAFT 문서 존재
+    2. get_document() 로 재조회 → 초기값 확인 (단계 2-3)
+    3. update_document() 로 일부 필드(field_a)만 수정 (단계 4)
+    4. 반환된 문서: field_a = 수정값, field_b = 기존값 유지 (단계 5)
+    5. DB 저장 없는 Fake 환경에서 PATCH merge semantics 검증 (단계 6 계약)
+
+    기존 E2E-03 (idempotency) 과 구분:
+      E2E-03 = 동일 점검 재요청 시 INSERT 방지.
+      W04    = 저장된 문서 재조회 후 부분 수정 시 기존 필드 보존.
+    """
+    import services.document_engine_svc as svc_mod
+
+    INITIAL = {"field_a": "초기값_A", "field_b": "초기값_B"}
+    fields = _make_fields(["field_a", "field_b"])
+
+    sb = _FakeSB({
+        "runtime_document_data": [_make_doc(INITIAL)],
+        "runtime_form_schema": [_make_schema()],
+        "runtime_field": fields,
+        "runtime_checklist_item": [],
+        "runtime_lifecycle_audit_log": [],
+    })
+
+    with patch("services.document_engine_svc.get_supabase", return_value=sb):
+        # 단계 2-3: 재조회 — 저장된 초기값 보존 확인
+        restored = svc_mod.get_document(DOC_ID)
+        assert restored is not None, "문서 재조회 실패"
+        assert restored["runtime_data_json"]["field_a"] == "초기값_A", \
+            "재조회 후 field_a 초기값 유지"
+        assert restored["runtime_data_json"]["field_b"] == "초기값_B", \
+            "재조회 후 field_b 초기값 유지"
+
+        # 단계 4-5: 일부 필드(field_a) 수정, field_b 는 건드리지 않음
+        result = svc_mod.update_document(
+            DOC_ID,
+            runtime_data_json={"field_a": "수정값_A"},
+            updated_by=USER_ID,
+        )
+
+    assert result is not None, "update_document 반환값 없음"
+    merged = result.get("runtime_data_json") or {}
+    assert merged["field_a"] == "수정값_A", \
+        "수정한 field_a 는 새 값으로 업데이트돼야 함"
+    assert merged["field_b"] == "초기값_B", \
+        "수정하지 않은 field_b 는 기존값을 유지해야 함 (PATCH merge semantics)"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# W06  WEB PDF 생성 — 수준 1 (API 계약)
+#      generate_document(export_type=PDF) → application/pdf + bytes 보존
+#
+# 수준 2 (실제 PDF 변환):
+#   PDF_RENDER_INTEGRATION_UNVERIFIED
+#   _html_to_pdf 는 외부 Gotenberg 서비스 의존.
+#   로컬 테스트 환경에서 Gotenberg 미운영 → 실제 변환 경로 미검증.
+#   Mock PDF 바이트 반환을 실제 PDF 생성 성공으로 해석하지 않음.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def test_W06_generate_document_pdf():
-    """export_type=PDF → Content-Type: application/pdf, PDF bytes 반환, DB 쓰기 없음."""
+    """export_type=PDF → Content-Type: application/pdf, PDF bytes 반환, DB 저장 없음.
+
+    수준: API 계약 (_html_to_pdf Mock, application/pdf 응답 구조 검증).
+    실제 PDF 변환: PDF_RENDER_INTEGRATION_UNVERIFIED (Gotenberg 필요).
+    """
     from schemas.document_engine import GenerateDocumentIn
     from routers.document_engine_api import generate_document
 
     with patch("routers.document_engine_api.get_supabase", return_value=MagicMock()):
-        with patch("routers.document_engine_api._check_doc_scope", side_effect=_fake_doc_scope):
+        with patch("routers.document_engine_api._check_doc_scope",
+                   side_effect=_check_doc_scope_noop):
             with patch("routers.document_engine_api.svc.render_document_html",
                        return_value=_FAKE_HTML) as mock_render:
                 with patch("routers.document_engine_api._html_to_pdf",
@@ -112,8 +394,9 @@ def test_W06_generate_document_pdf():
                         generate_document(DOC_ID, body, current_user={"id": USER_ID})
                     )
 
-    assert resp.media_type == "application/pdf", \
-        f"PDF export 시 Content-Type은 application/pdf여야 함, got {resp.media_type!r}"
-    assert resp.body == _FAKE_PDF, "PDF bytes 원본 반환 필요"
+    assert resp.media_type == "application/pdf", (
+        f"PDF export 시 Content-Type 은 application/pdf 여야 함, got {resp.media_type!r}"
+    )
+    assert resp.body == _FAKE_PDF, "PDF bytes 원본 보존 필요"
     mock_render.assert_called_once_with(DOC_ID)
     mock_pdf.assert_called_once_with(_FAKE_HTML)
