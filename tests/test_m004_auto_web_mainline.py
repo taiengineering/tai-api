@@ -1,4 +1,4 @@
-"""WO-TAI-M004-AUTO-WEB-MAINLINE-INTEGRATION-001-CORR-001
+"""WO-TAI-M004-AUTO-WEB-MAINLINE-INTEGRATION-001-CORR-001-FINAL
 보정 날짜: 2026-10-22
 
 기존 테스트 재사용 매핑 (코드 변경 없음):
@@ -19,7 +19,8 @@
   W02 WEB 입력·수정           ← test_m004_e2e_pipeline::test_E2E_04
   W03 WEB 저장                ← test_m004_e2e_pipeline::test_E2E_02 / test_E2E_04
   W04 WEB 복원·재수정
-      RESTORE_REDIT_PASS       ← NEW: test_W04_restore_and_re_edit
+      RESTORE_REDIT_PASS            ← NEW: test_W04_restore_and_re_edit
+      FAKEDB_PERSISTENCE_RELOAD_PASS ← 재조회 + 2차 수정 검증 포함 (CORR-F1/F2)
   W05 WEB HTML 렌더링
       RENDER_PATH_UNIT_PASS    ← test_m004_e2e_pipeline::test_E2E_08
       실제 렌더러는 Mock 처리됨 (build_render_artifacts mocked).
@@ -38,6 +39,10 @@
   C04 SAAS_EXPORT             ← test_document_catalog::T9
   C05 SAAS_AUTO_FILL          ← test_document_catalog::T5
   C06 채널 필터               ← test_document_catalog::T11 / T12 / T13
+
+CORR-F1: _MutableUpdateQ — _FakeSB._map 직접 변경으로 post-update get_document() 검증 가능.
+CORR-F2: test_W04_restore_and_re_edit — field_false=False/field_zero=0 falsy 보존 +
+         재조회(단계6) + 2차 부분 수정(단계7) 검증.
 
 Production write = 0. Fake DB only.
 """
@@ -103,6 +108,7 @@ class _Q:
 
 
 class _UpdateQ:
+    """Non-persisting UPDATE used by _Q.update() (legacy path, does not mutate _FakeSB._map)."""
     def __init__(self, rows, filters, payload):
         self._rows = rows
         self._filters = dict(filters)
@@ -117,6 +123,38 @@ class _UpdateQ:
         for r in self._rows:
             if isinstance(r, dict) and all(r.get(k) == v for k, v in self._filters.items()):
                 updated.append({**r, **self._payload})
+        m = MagicMock()
+        m.data = updated
+        return m
+
+
+class _MutableUpdateQ:
+    """Persisting UPDATE used by _FakeSB._Tbl.update().
+
+    Mutates _FakeSB._map[table_name] in place so that subsequent
+    get_document() / select() calls see the updated row.
+    Required for CORR-F2 post-update reload verification.
+    """
+    def __init__(self, map_ref: dict, table_name: str, filters: dict, payload: dict):
+        self._map_ref = map_ref
+        self._table_name = table_name
+        self._filters = dict(filters)
+        self._payload = payload
+
+    def eq(self, field, value):
+        self._filters[field] = value
+        return self
+
+    def execute(self):
+        updated = []
+        rows = self._map_ref.get(self._table_name, [])
+        for i, r in enumerate(rows):
+            if isinstance(r, dict) and all(
+                r.get(k) == v for k, v in self._filters.items()
+            ):
+                new_row = {**r, **self._payload}
+                rows[i] = new_row  # mutate _map in place
+                updated.append(new_row)
         m = MagicMock()
         m.data = updated
         return m
@@ -139,7 +177,7 @@ class _FakeSB:
                 result_rows = [sb._insert_result or payload]
                 return _Q(result_rows)
             def update(self_, payload):
-                return _UpdateQ(list(rows), {}, payload)
+                return _MutableUpdateQ(sb._map, name, {}, payload)
 
         return _Tbl()
 
@@ -309,17 +347,23 @@ def test_A06b_render_html_user_data_not_overwritten_by_autofill():
 # ══════════════════════════════════════════════════════════════════════════════
 # W04  WEB 복원·재수정
 #      저장된 문서 재조회 → 기존값 보존 확인 → 일부 필드 수정 → merge 검증
+#      CORR-F1: _MutableUpdateQ 로 FakeDB 내 실제 row 변경
+#      CORR-F2: field_false=False / field_zero=0 falsy 보존 +
+#               재조회(단계6, FAKEDB_PERSISTENCE_RELOAD_PASS) +
+#               2차 부분 수정(단계7)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def test_W04_restore_and_re_edit():
-    """WEB 문서 복원·재수정 흐름 계약.
+    """WEB 문서 복원·재수정 흐름 계약.  RESTORE_REDIT_PASS / FAKEDB_PERSISTENCE_RELOAD_PASS
 
     흐름:
     1. FakeDB 에 초기 runtime_data_json 을 가진 DRAFT 문서 존재
+       (field_false=False, field_zero=0 falsy 값 포함)
     2. get_document() 로 재조회 → 초기값 확인 (단계 2-3)
-    3. update_document() 로 일부 필드(field_a)만 수정 (단계 4)
-    4. 반환된 문서: field_a = 수정값, field_b = 기존값 유지 (단계 5)
-    5. DB 저장 없는 Fake 환경에서 PATCH merge semantics 검증 (단계 6 계약)
+    3. update_document() 로 field_a 만 수정 (단계 4)
+    4. 반환된 문서: field_a = 수정값, field_b / field_false / field_zero 기존값 유지 (단계 5)
+    5. 동일 FakeDB 재조회 → 수정 지속성 검증 (단계 6, FAKEDB_PERSISTENCE_RELOAD_PASS)
+    6. 2차 부분 수정(field_b) → 1차 수정값(field_a) 유지 검증 (단계 7)
 
     기존 E2E-03 (idempotency) 과 구분:
       E2E-03 = 동일 점검 재요청 시 INSERT 방지.
@@ -327,8 +371,13 @@ def test_W04_restore_and_re_edit():
     """
     import services.document_engine_svc as svc_mod
 
-    INITIAL = {"field_a": "초기값_A", "field_b": "초기값_B"}
-    fields = _make_fields(["field_a", "field_b"])
+    INITIAL = {
+        "field_a": "초기값_A",
+        "field_b": "초기값_B",
+        "field_false": False,
+        "field_zero": 0,
+    }
+    fields = _make_fields(["field_a", "field_b", "field_false", "field_zero"])
 
     sb = _FakeSB({
         "runtime_document_data": [_make_doc(INITIAL)],
@@ -339,27 +388,56 @@ def test_W04_restore_and_re_edit():
     })
 
     with patch("services.document_engine_svc.get_supabase", return_value=sb):
-        # 단계 2-3: 재조회 — 저장된 초기값 보존 확인
+        # 단계 2-3: 재조회 — 저장된 초기값 보존 확인 (falsy 포함)
         restored = svc_mod.get_document(DOC_ID)
         assert restored is not None, "문서 재조회 실패"
-        assert restored["runtime_data_json"]["field_a"] == "초기값_A", \
-            "재조회 후 field_a 초기값 유지"
-        assert restored["runtime_data_json"]["field_b"] == "초기값_B", \
-            "재조회 후 field_b 초기값 유지"
+        assert restored["runtime_data_json"]["field_a"] == "초기값_A"
+        assert restored["runtime_data_json"]["field_b"] == "초기값_B"
+        assert restored["runtime_data_json"]["field_false"] is False, \
+            "재조회 후 falsy 값 False 보존"
+        assert restored["runtime_data_json"]["field_zero"] == 0, \
+            "재조회 후 falsy 값 0 보존"
 
-        # 단계 4-5: 일부 필드(field_a) 수정, field_b 는 건드리지 않음
+        # 단계 4-5: 일부 필드(field_a) 수정, 나머지는 건드리지 않음
         result = svc_mod.update_document(
             DOC_ID,
             runtime_data_json={"field_a": "수정값_A"},
             updated_by=USER_ID,
         )
+        assert result is not None, "update_document 반환값 없음"
+        merged = result.get("runtime_data_json") or {}
+        assert merged["field_a"] == "수정값_A", \
+            "수정한 field_a 는 새 값으로 업데이트돼야 함"
+        assert merged["field_b"] == "초기값_B", \
+            "수정하지 않은 field_b 는 기존값을 유지해야 함 (PATCH merge semantics)"
+        assert merged["field_false"] is False, \
+            "PATCH merge: falsy False 보존"
+        assert merged["field_zero"] == 0, \
+            "PATCH merge: falsy 0 보존"
 
-    assert result is not None, "update_document 반환값 없음"
-    merged = result.get("runtime_data_json") or {}
-    assert merged["field_a"] == "수정값_A", \
-        "수정한 field_a 는 새 값으로 업데이트돼야 함"
-    assert merged["field_b"] == "초기값_B", \
-        "수정하지 않은 field_b 는 기존값을 유지해야 함 (PATCH merge semantics)"
+        # 단계 6: 동일 FakeDB 재조회 → 수정 지속성 검증 (FAKEDB_PERSISTENCE_RELOAD_PASS)
+        reloaded = svc_mod.get_document(DOC_ID)
+        assert reloaded is not None, "수정 후 재조회 실패"
+        assert reloaded["runtime_data_json"]["field_a"] == "수정값_A", \
+            "재조회 후 수정값 유지 (FAKEDB persistence)"
+        assert reloaded["runtime_data_json"]["field_b"] == "초기값_B"
+        assert reloaded["runtime_data_json"]["field_false"] is False
+        assert reloaded["runtime_data_json"]["field_zero"] == 0
+
+        # 단계 7: 2차 부분 수정 → 1차 수정값 유지
+        result2 = svc_mod.update_document(
+            DOC_ID,
+            runtime_data_json={"field_b": "수정값_B"},
+            updated_by=USER_ID,
+        )
+        assert result2 is not None, "2차 update_document 반환값 없음"
+        merged2 = result2.get("runtime_data_json") or {}
+        assert merged2["field_a"] == "수정값_A", \
+            "2차 수정 후 field_a 1차 수정값 유지"
+        assert merged2["field_b"] == "수정값_B", \
+            "2차 field_b 수정값"
+        assert merged2["field_false"] is False
+        assert merged2["field_zero"] == 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
