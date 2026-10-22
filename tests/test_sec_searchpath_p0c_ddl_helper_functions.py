@@ -24,7 +24,7 @@ R1: ACL PRE/POST · Owner POST · 정확한 서명 · 트리거 10건 · proconf
   SP3-SQL-15  GRANT 없음
   SP3-SQL-16  REVOKE 없음
   SP3-SQL-17  DML 없음
-  SP3-SQL-18  PRE — SECURITY INVOKER 검증 (prosecdef=false)
+  SP3-SQL-18  PRE — SECURITY INVOKER 검증 (prosecdef IS DISTINCT FROM false)
   SP3-SQL-19  PRE — F1 본문 MD5 기준선 포함
   SP3-SQL-20  PRE — F2 본문 MD5 기준선 포함
   SP3-SQL-21  PRE — F3 본문 MD5 기준선 포함
@@ -37,11 +37,12 @@ R1: ACL PRE/POST · Owner POST · 정확한 서명 · 트리거 10건 · proconf
   SP3-SQL-28  POST — 본문 MD5 불변 검증 포함 (PRE+POST 각 2회)
   SP3-SQL-29  POST — SECURITY INVOKER 불변 검증 포함 (PRE+POST 각 2회)
   SP3-SQL-30  PRE — 스키마 CREATE 권한 부재 검증 포함
-  SP3-SQL-31  R1 — pg_get_function_identity_arguments 정확한 서명 검증 (≥16회)
+  SP3-SQL-31  R2 — to_regprocedure() OID 기반 식별 (≥4회) · pg_get_function_identity_arguments 제거 확인
   SP3-SQL-32  R1 — PRE ACL 기준선 상수 선언 및 4개 함수 PRE 불일치 검증
   SP3-SQL-33  R1 — POST ACL 불변 검증 (4개 함수 POST)
   SP3-SQL-34  R1 — Owner POST 불변 검증 (pg_get_userbyid PRE+POST 각 4회)
   SP3-SQL-35  R1 — 트리거 정확히 10건 PRE+POST (v_trig_count != 10 × 2)
+  SP3-SQL-36  R2 — IS DISTINCT FROM NULL-safe 비교 사용 확인 (≥8회)
   SP3-SRC-01  이 Migration SHA256 고정
   SP3-SRC-02  P0B Migration SHA256 불변
   SP3-SRC-03  P0A Migration SHA256 불변
@@ -221,11 +222,14 @@ def test_sp3_sql_17_no_dml():
 # ── PRE 조건 ──────────────────────────────────────────────────────────────────
 
 def test_sp3_sql_18_pre_security_invoker():
-    """SP3-SQL-18: PRE — SECURITY INVOKER 검증 (prosecdef=false)"""
+    """SP3-SQL-18: PRE — SECURITY INVOKER 검증 (prosecdef IS DISTINCT FROM false)"""
     nc = _nc_upper()
     assert re.search(r"\bPROSECDEF\b", nc), "prosecdef 검증 없음"
-    assert re.search(r"PROSECDEF\s*!=\s*FALSE|V_SECDEF\s*!=\s*FALSE", nc, re.IGNORECASE), \
-        "prosecdef != false 검증 없음"
+    assert re.search(
+        r"PROSECDEF\s*!=\s*FALSE|V_SECDEF\s*!=\s*FALSE"
+        r"|V_SECDEF\s+IS\s+DISTINCT\s+FROM\s+FALSE",
+        nc, re.IGNORECASE
+    ), "prosecdef 불일치 검증 없음 (!= 또는 IS DISTINCT FROM)"
 
 
 def test_sp3_sql_19_pre_f1_body_md5():
@@ -327,12 +331,17 @@ def test_sp3_sql_30_pre_schema_create_privilege():
 
 # ── R1 강화 검증 ──────────────────────────────────────────────────────────────
 
-def test_sp3_sql_31_r1_exact_signature_identity_args():
-    """SP3-SQL-31: R1 — pg_get_function_identity_arguments 정확한 서명 검증 (≥16회)"""
+def test_sp3_sql_31_r2_regprocedure_oid_lookup():
+    """SP3-SQL-31: R2 — to_regprocedure() OID 기반 식별 (≥4회) · pg_get_function_identity_arguments 제거 확인"""
     nc = _nc_upper()
-    matches = re.findall(r"PG_GET_FUNCTION_IDENTITY_ARGUMENTS\s*\(", nc)
-    assert len(matches) >= 16, \
-        f"pg_get_function_identity_arguments 사용이 16건 이상이어야 함 (PRE×4×함수4): {len(matches)}건"
+    # to_regprocedure 사용 확인 (각 함수 최소 1회)
+    reg_matches = re.findall(r"TO_REGPROCEDURE\s*\(", nc)
+    assert len(reg_matches) >= 4, \
+        f"to_regprocedure 사용이 4건 이상이어야 함: {len(reg_matches)}건"
+    # pg_get_function_identity_arguments 제거 확인
+    ident_matches = re.findall(r"PG_GET_FUNCTION_IDENTITY_ARGUMENTS\s*\(", nc)
+    assert len(ident_matches) == 0, \
+        f"pg_get_function_identity_arguments가 R2에서 제거되어야 함: {len(ident_matches)}건 잔존"
 
 
 def test_sp3_sql_32_r1_acl_baseline_pre():
@@ -373,6 +382,18 @@ def test_sp3_sql_35_r1_trigger_count_10_pre_post():
         f"v_trig_count != 10 검증이 PRE+POST 각 1회=2건 이상이어야 함: {len(trig_count_checks)}건"
 
 
+def test_sp3_sql_36_r2_is_distinct_from_null_safe():
+    """SP3-SQL-36: R2 — IS DISTINCT FROM NULL-safe 비교 사용 확인 (≥8회)"""
+    nc = _nc_upper()
+    # proacl, owner, secdef, proconfig[1] 비교에서 IS DISTINCT FROM 사용
+    distinct_matches = re.findall(r"IS\s+DISTINCT\s+FROM", nc)
+    assert len(distinct_matches) >= 8, \
+        f"IS DISTINCT FROM 사용이 8건 이상이어야 함 (각 함수 PRE+POST 최소): {len(distinct_matches)}건"
+    # to_regprocedure NULL 체크도 IS NULL 방식 확인
+    assert re.search(r"TO_REGPROCEDURE\s*\(.*\)\s+IS\s+NULL", nc, re.IGNORECASE), \
+        "to_regprocedure IS NULL 존재 확인 검사 없음"
+
+
 # ── SHA256 불변 앵커 ──────────────────────────────────────────────────────────
 
 def _sha256(path: pathlib.Path) -> str:
@@ -380,8 +401,8 @@ def _sha256(path: pathlib.Path) -> str:
 
 
 def test_sp3_src_01_this_migration_sha256():
-    """SP3-SRC-01: 이 Migration SHA256 고정 (R1)"""
-    expected = "e38dcd892da517c0f317bb9a2b23ab94bd844bb0a50aa091d5b1f025aa141571"
+    """SP3-SRC-01: 이 Migration SHA256 고정 (R2)"""
+    expected = "5267358bf0c9cd45351bb0034d1c327a62c06481eb71a2bd6de9b5a70688809e"
     actual = _sha256(_MIGRATION_PATH)
     assert actual == expected, f"Migration SHA256 변경: {actual}"
 
