@@ -21,6 +21,14 @@ SOURCE GATE 기준:
   - 트리거 변경 없음 (CREATE/ALTER/DROP TRIGGER 없음)
   - 사전·사후조건 검증 블록 존재
   - SEC-04 기존 Migration 불변
+  R1 추가 기준:
+  - inspection_sets relkind='r' 명시
+  - work_schedules relkind='p' 명시 (파티션 부모)
+  - 사전 테이블 유형 검사 내 relkind 분기 존재
+  - 사전·사후 RLS 검사에서 파티션 부모(relkind='p') 포함
+  - has_table_privilege service_role 유효 권한 검사 존재
+  - has_table_privilege anon/authenticated 차단 검사 존재
+  - has_table_privilege 범위가 두 대상 테이블로 한정
 
 테스트 목록:
   S2-SQL-01  Migration 파일 존재
@@ -43,6 +51,14 @@ SOURCE GATE 기준:
   S2-SQL-18  트리거 변경 없음
   S2-SQL-19  사전조건 검증 블록 존재 (PRE FAILED 패턴)
   S2-SQL-20  사후조건 검증 블록 존재 (POST FAILED 패턴)
+  S2-SQL-21  inspection_sets relkind='r' 명시 (일반 테이블)
+  S2-SQL-22  work_schedules relkind='p' 명시 (파티션 부모)
+  S2-SQL-23  사전 테이블 유형 검사 내 relkind 분기 존재
+  S2-SQL-24  사전 RLS 검사에서 파티션 부모 포함 (relkind='p' + relrowsecurity)
+  S2-SQL-25  사후 RLS 검사에서 파티션 부모 포함 (relkind 분기 3회 이상)
+  S2-SQL-26  service_role 유효 권한 검사 존재 (has_table_privilege)
+  S2-SQL-27  anon/authenticated 유효 권한 차단 검사 존재 (has_table_privilege)
+  S2-SQL-28  has_table_privilege 범위가 두 대상 테이블로 한정
   S2-SRC-01  SEC-04 CSI4 Migration 불변
   S2-SRC-02  SEC-04 UDL7 Migration 불변
   S2-SRC-03  SEC-04 Remaining6 Migration 불변
@@ -225,12 +241,14 @@ def test_s2_sql_15_no_table_ddl():
 
 
 def test_s2_sql_16_no_data_mutation():
-    """S2-SQL-16: 데이터 DML 없음 (INSERT/UPDATE/DELETE/TRUNCATE 없음)"""
+    """S2-SQL-16: 데이터 DML 없음 (INSERT INTO/DELETE FROM/UPDATE…SET/TRUNCATE 없음)"""
     nc = _nc_upper()
-    assert not re.search(r"\bINSERT\b", nc), "INSERT 발견"
-    assert not re.search(r"\bUPDATE\b", nc), "UPDATE 발견"
-    assert not re.search(r"\bDELETE\b", nc), "DELETE 발견"
+    # INSERT/UPDATE/DELETE 는 has_table_privilege 인자·RAISE 메시지에 합법 등장.
+    # 실제 DML 구문(INSERT INTO, DELETE FROM, UPDATE…SET, TRUNCATE)으로 한정 검사.
+    assert not re.search(r"\bINSERT\s+INTO\b", nc), "INSERT INTO 발견"
+    assert not re.search(r"\bDELETE\s+FROM\b", nc), "DELETE FROM 발견"
     assert not re.search(r"\bTRUNCATE\b", nc), "TRUNCATE 발견"
+    assert not re.search(r"\bUPDATE\b\s+\w+\s+SET\b", nc), "UPDATE … SET 발견"
 
 
 def test_s2_sql_17_no_function_ddl():
@@ -262,6 +280,102 @@ def test_s2_sql_20_postcondition_block_exists():
     assert "POST FAILED" in _sql(), "사후조건 검증 패턴 'POST FAILED' 없음"
     nc = _non_comment_lines(_sql())
     assert "POST FAILED" in nc, "비주석 영역에 사후조건 검증 없음"
+
+
+# ── S2-SQL R1 — relkind·유효 권한 검사 ──────────────────────────────────────
+
+
+def test_s2_sql_21_inspection_sets_relkind_r():
+    """S2-SQL-21: inspection_sets relkind='r' 명시 (일반 테이블)"""
+    nc = _non_comment_lines(_sql())
+    assert re.search(
+        r"relname\s*=\s*'inspection_sets'\s+AND\s+c\.relkind\s*=\s*'r'",
+        nc,
+        re.IGNORECASE,
+    ), "inspection_sets AND c.relkind = 'r' 패턴 없음"
+
+
+def test_s2_sql_22_work_schedules_relkind_p():
+    """S2-SQL-22: work_schedules relkind='p' 명시 (파티션 부모)"""
+    nc = _non_comment_lines(_sql())
+    assert re.search(
+        r"relname\s*=\s*'work_schedules'\s+AND\s+c\.relkind\s*=\s*'p'",
+        nc,
+        re.IGNORECASE,
+    ), "work_schedules AND c.relkind = 'p' 패턴 없음"
+
+
+def test_s2_sql_23_precondition_relkind_branch_exists():
+    """S2-SQL-23: 사전 테이블 유형 검사 내 relkind 분기 존재"""
+    nc = _non_comment_lines(_sql())
+    assert re.search(r"\brelkind\b", nc, re.IGNORECASE), (
+        "비주석 영역에 relkind 검사 없음"
+    )
+    assert "PRE FAILED" in nc, "비주석 영역에 PRE FAILED 없음"
+
+
+def test_s2_sql_24_pre_rls_check_includes_partition_parent():
+    """S2-SQL-24: 사전 RLS 검사에서 파티션 부모 포함 (relrowsecurity + relkind='p')"""
+    nc = _non_comment_lines(_sql())
+    assert re.search(r"\brelrowsecurity\b", nc, re.IGNORECASE), (
+        "relrowsecurity 검사 없음"
+    )
+    assert re.search(r"relkind\s*=\s*'p'", nc, re.IGNORECASE), (
+        "relkind='p' 패턴 없음 — 파티션 부모 RLS 검사 누락"
+    )
+
+
+def test_s2_sql_25_post_rls_check_includes_partition_parent():
+    """S2-SQL-25: 사후 RLS 검사에서 파티션 부모 포함 (relkind 분기 3회 이상)"""
+    nc = _non_comment_lines(_sql())
+    count_r = len(re.findall(r"relkind\s*=\s*'r'", nc, re.IGNORECASE))
+    count_p = len(re.findall(r"relkind\s*=\s*'p'", nc, re.IGNORECASE))
+    assert count_r >= 3, (
+        f"relkind='r' 패턴이 3회 이상 필요 (STEP 1-a/1-b/4-f). 실제: {count_r}"
+    )
+    assert count_p >= 3, (
+        f"relkind='p' 패턴이 3회 이상 필요 (STEP 1-a/1-b/4-f). 실제: {count_p}"
+    )
+
+
+def test_s2_sql_26_service_role_effective_privilege_check():
+    """S2-SQL-26: service_role 유효 권한 검사 존재 (has_table_privilege)"""
+    nc = _non_comment_lines(_sql())
+    assert re.search(
+        r"has_table_privilege\s*\(\s*'service_role'",
+        nc,
+        re.IGNORECASE,
+    ), "has_table_privilege('service_role'...) 패턴 없음"
+
+
+def test_s2_sql_27_anon_authenticated_effective_privilege_block():
+    """S2-SQL-27: anon/authenticated 유효 권한 차단 검사 존재 (has_table_privilege)"""
+    nc = _non_comment_lines(_sql())
+    assert re.search(
+        r"has_table_privilege\s*\(\s*'anon'",
+        nc,
+        re.IGNORECASE,
+    ), "has_table_privilege('anon'...) 패턴 없음"
+    assert re.search(
+        r"has_table_privilege\s*\(\s*'authenticated'",
+        nc,
+        re.IGNORECASE,
+    ), "has_table_privilege('authenticated'...) 패턴 없음"
+
+
+def test_s2_sql_28_has_table_privilege_scope_limited():
+    """S2-SQL-28: has_table_privilege 범위가 두 대상 테이블로 한정"""
+    nc = _non_comment_lines(_sql())
+    tables_in_htpriv = re.findall(
+        r"has_table_privilege\s*\(\s*'[^']+'\s*,\s*'public\.(\w+)'",
+        nc,
+        re.IGNORECASE,
+    )
+    allowed = {"inspection_sets", "work_schedules"}
+    unexpected = [t for t in tables_in_htpriv if t.lower() not in allowed]
+    assert not unexpected, (
+        f"has_table_privilege 범위 외 테이블 발견: {unexpected}"
+    )
 
 
 # ── S2-SRC — SEC-04 기존 Migration 불변 ──────────────────────────────────────
