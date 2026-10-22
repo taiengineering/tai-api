@@ -3,12 +3,13 @@
 > WO: WO-TAI-M004-AUTO-WEB-SERVICE-RELEASE-GATE-001  
 > 작성일: 2026-10-22  
 > 작성자: Claude Code (실행) — GPT 독립검증 대기  
-> 상태: FORM_CONFORMANCE_MAINLINE_001_APPLIED / WEB_REQUIREDNESS_GATE_001_APPLIED / REQUIREDNESS_CORR-001_APPLIED / ACTIVATION_PILOT_001_TECHNICAL_READY / ACTIVATION_PILOT_CORR-001_APPLIED / GPT_IV_PENDING / OWNER_GATE_PENDING  
+> 상태: FORM_CONFORMANCE_MAINLINE_001_APPLIED / WEB_REQUIREDNESS_GATE_001_APPLIED / REQUIREDNESS_CORR-001_APPLIED / ACTIVATION_PILOT_001_TECHNICAL_READY / ACTIVATION_PILOT_CORR-001_APPLIED / ACTIVATION_PILOT_CORR-002_APPLIED / GPT_IV_PENDING / OWNER_GATE_PENDING  
 > R1 정정 (2026-10-22): D1=LEGAL_FORM_CLASS 추가 / D2=AUTO_FORM 135→133 정정 / D3=C-3 삭제 / D4=SCHEMA_REVIEW_CANDIDACY→FORM_CONFORMANCE_STATUS  
 > WO-MAINLINE (2026-10-22): CORR-A 오류 정정 + FORM_CONFORMANCE 260건 판정 + SCHEMA_PROMOTION_READY 24건 확인  
 > WO-WEB-REQUIREDNESS-GATE-001 (2026-10-22): NON_LEGAL+증빙없음+서명없음 65종 318필드 필수여부 계약 분석 완료  
 > REQUIREDNESS-CORR-001 (2026-10-22): OPTIONAL→NOT_REQUIRED(87건) / DOC-SERA-011 multi_row BLOCKED / 318필드 input_type DB 실증 완료  
-> ACTIVATION-PILOT-CORR-001 (2026-10-22): ISOLATION_CONFIRMED_FRONTEND_NOT_WIRED / P8+G4 precondition 추가 / review_comment 교정 / conditional rollback guard 추가  
+> ACTIVATION-PILOT-CORR-001 (2026-10-22): ISOLATION_CONFIRMED_FRONTEND_NOT_WIRED / P8+G4 precondition 추가 / review_comment 교정 / conditional rollback guard 추가
+> ACTIVATION-PILOT-CORR-002 (2026-10-22): CORR-001 격리 주장 교정 — ISOLATION_CONFIRMED_FORM_SCHEMA_ID_NOT_WIRED / P4B+P9+G5+F5 추가 / rollback audit guard 추가 / PRJ Step4D 경로 명시  
 > 기준 데이터: 기존 스냅샷 + R2 binding + R3 handoff 수치 재사용. DB SELECT 0건 추가 수행.  
 > 변경: NEW_CODE=0 / PROD_DB_WRITE=0 / MIGRATION=0 / PR=0 / MERGE=0 / DEPLOY=0
 
@@ -503,12 +504,14 @@ CORR_TRIGGER = GPT SOURCE IV CONDITIONAL (ACTIVATION-PILOT-001)
 CORR_COUNT = 4
 
 ── CORR-1: 고객 격리 실증 ──
-ISOLATION_STATUS = ISOLATION_CONFIRMED_FRONTEND_NOT_WIRED
+ISOLATION_STATUS = ISOLATION_CONFIRMED_FRONTEND_NOT_WIRED  [CORR-002에서 교정됨 — 아래 참조]
 EVIDENCE_1 = useEngineDocumentList.ts:103 → GET /document-forms (구 API 전용)
 EVIDENCE_2 = useEngineDocumentDetail.ts:36 → GET /document-forms/{id} (구 API 전용)
 EVIDENCE_3 = admin-vue3 전 파일 grep "POST /documents" → 0건 (신 엔진 미연결)
 ISOLATION_PATH = 신 문서 엔진(POST /documents / GET /documents/catalog) 고객 UI 미연결
 CUSTOMER_RELEASE_HOLD_BASIS = 전용 UI 연결 · QA 없이 고객 노출 금지 (격리 계약 확정)
+  ※ CORR-002 교정: tai-admin/vue3/ (고객 SaaS 실제 경로)는 POST /document-engine/documents 사용함.
+     격리 근거는 document_forms.form_schema_id 컬럼 부재(DB 검증) — CORR-001은 admin-vue3(어드민) 경로만 검색한 오류.
 
 ── CORR-2: 실행시점 불변조건 추가 ──
 P8_ADDED = runtime_form_schema.catalog_document_id = v_catalog_id AND schema_candidate_id = v_cand_id (source provenance 동시 검증)
@@ -534,6 +537,74 @@ MIGRATION_APPLIED = 0
 NEW_CODE = 0
 
 RESULT_COMMIT = f2a7e30a
+GPT_IV = SUPERSEDED_BY_CORR-002
+OWNER_OPERATION_APPROVAL = PENDING
+```
+
+```
+WO = WO-TAI-M004-WEB-ACTIVATION-PILOT-001-CORR-002
+
+CORR_TRIGGER = GPT SOURCE IV CONDITIONAL (CORR-001) — ISOLATION_CONFIRMED_FRONTEND_NOT_WIRED 주장 불충족
+CORR_COUNT = 5
+
+── CORR-1: 격리 주장 교정 ──
+ISOLATION_OLD = ISOLATION_CONFIRMED_FRONTEND_NOT_WIRED (CORR-001 오류)
+ISOLATION_ROOT_CAUSE = CORR-001이 admin-vue3(어드민 전용 경로)만 검색하고 tai-admin/vue3(고객 SaaS 경로) 누락
+ISOLATION_NEW = ISOLATION_CONFIRMED_FORM_SCHEMA_ID_NOT_WIRED
+
+FRONTEND_CALL_PATH:
+  tai-admin/vue3/src/pages/document-forms/useDocumentFormsList.ts:49
+    → GET /document-forms?per_page=200 (OLD API 목록)
+  tai-admin/vue3/src/pages/document-forms/useDocumentFormsGenerate.ts:73
+    → POST /document-engine/documents {form_schema_id, factory_id, company_id, created_by}
+
+ISOLATION_MECHANISM:
+  document_forms 테이블 컬럼 조회 결과: id, doc_id, is_active (form_schema_id 없음, DB 직접 확인)
+  document-formsFormat.ts:219 pickFormSchemaId(tpl) → tpl.form_schema_id||tpl.runtime_form_schema_id||tpl.schema_id||''
+  → DOC-CON-044 선택 시 전부 undefined → '' 반환
+  useDocumentFormsGenerate.ts:71 if (!formSchemaId) throw '이 서식에 연결된 form_schema_id가 없습니다.'
+  → POST /document-engine/documents API 호출 미발생
+
+CUSTOMER_EXPOSURE_STATUS:
+  DOC-CON-044 → 고객 서식 목록 표시 (is_active=true)
+  문서 생성 시도 → 프론트 에러 차단 (API 미호출)
+  스키마 활성화가 이 차단 메커니즘을 변경하지 않음
+  CAVEAT: 인증+factory scope 보유 시 직접 API 호출로 우회 가능
+
+PRODUCTION_DEPLOYMENT_SCOPE = tai-admin/vue3 = 고객 SaaS 화면 (CF 배포됨)
+API_CUSTOMER_ACCESS_CONTROL = 인증 필수 + factory scope 필수 + schema.status=APPROVED_FOR_RUNTIME_USE 필수 (document_engine_svc.py:127)
+
+── CORR-2: SQL precondition 강화 ──
+P4B_ADDED = field_label 4건 exact match (DB 실증값: 건설공사 개요/시공 절차/시공 시 주의사항/위험공종 및 안전관리 대책)
+P9_ADDED = runtime_form_schema.version = 1 (DB 실증값)
+G5_ADDED = document_forms.required_fields 4건 + 전부 is_mandatory=true (JSONB 직접 검증)
+F5_ADDED = schema version 최종 불변 assert
+
+DB_VERIFICATION:
+  runtime_form_schema.version = 1 (조회 확인)
+  runtime_field field_label 4건 = {건설공사 개요, 시공 절차, 시공 시 주의사항, 위험공종 및 안전관리 대책}
+  document_forms.required_fields 4건, 전부 is_mandatory=true, source=법정, law_ref=건설기술진흥법 제62조의2
+
+── CORR-3: rollback DO 블록 — 감사기록 존재 확인 추가 ──
+ROLLBACK_AUDIT_GUARD = runtime_form_audit_log PROMOTE_TO_RUNTIME_USE = 1건 존재 확인
+ROLLBACK_AUDIT_PRESERVE = 감사기록 삭제 금지 명시 (복구 후에도 이력 보존)
+
+── CORR-4: PRJ Step4D 참조 명시 ──
+PRJ_STEP4D_REFERENCE = docs/sql/20260825_WP_PERSISTENCE_02A_STEP4D_UP.sql (파일 존재 확인됨)
+PRJ_STEP4D_STATUS = VERIFIED (로컬 파일 경로 실증)
+REVIEWER_ID_NULL = CONFIRMED_VALID (Step4D B-1 계약 동일 패턴 재확인)
+
+── CORR-5: BEFORE/AFTER 스냅샷 field_label 포함 ──
+SNAPSHOT_ENHANCED = before/after 스냅샷에 field_label 추가 (감사 이력 풍부화)
+
+── 산출물 ──
+ACTIVATION_SQL = docs/document-engine/M004_PILOT_ACTIVATION_PLAN_DOC_CON_044.sql (CORR-002 교정 완료, NOT EXECUTED)
+
+PROD_DB_WRITE = 0
+MIGRATION_APPLIED = 0
+NEW_CODE = 0
+
+RESULT_COMMIT = [pending]
 GPT_IV = PENDING
 OWNER_OPERATION_APPROVAL = PENDING
 ```
