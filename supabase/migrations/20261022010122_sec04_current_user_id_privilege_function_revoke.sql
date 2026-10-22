@@ -1,0 +1,43 @@
+-- Migration: 20261022010122_sec04_current_user_id_privilege_function_revoke.sql
+-- WO: WO-TAI-SEC04-CURRENT-USER-ID-IMPLEMENT-001
+-- SEC-04: current_user_id() 공개 실행권한 제거 (Option A).
+--
+-- 배경:
+--   SEC-04 최종 대상 함수. 이전 CSI4/UDL7/Remaining6 완료 후 마지막으로 처리.
+--   현재 ACL: PUBLIC/anon/authenticated/service_role EXECUTE 전부 허용.
+--   Supabase는 함수를 생성할 때 anon/authenticated에 명시적 GRANT를 자동 부여.
+--   추가로 PUBLIC 명시적 EXECUTE(=X/postgres)가 존재 — 부여 이력 미확인.
+--
+-- 함수 계약:
+--   public.current_user_id()
+--   반환 타입: UUID
+--   SECURITY DEFINER, STABLE
+--   search_path = public, auth
+--   본문: SELECT id FROM public.users WHERE auth_id = auth.uid()
+--         AND COALESCE(is_active, true) = true
+--         AND COALESCE(status_code, 'ACTIVE') = 'ACTIVE' LIMIT 1;
+--   → auth.uid() 의존 — anon 호출 시 항상 NULL 반환.
+--
+-- 의존성 검증 (PASS):
+--   RLS 정책 참조   = 0건
+--   DB 함수 참조    = 0건
+--   View 참조       = 0건
+--   Python RPC 참조 = 0건 (동명 변수/파라미터와 구별됨)
+--   tai-admin(PWA) 407파일 검색 = 0건
+--   tai-www 207파일 검색        = 0건
+--   FRONTEND_DEPENDENCY_STATUS  = NO_DEPENDENCY_FOUND
+--
+-- 변경 범위:
+--   PUBLIC, anon, authenticated → EXECUTE 회수 (1건).
+--   service_role → 기존 명시적 GRANT 유지 (본 migration에서 변경 없음).
+--   postgres → 기존 권한 유지 (본 migration에서 변경 없음).
+--   함수 본문·SECURITY DEFINER·STABLE·search_path 변경 없음.
+--   RLS·Auth·트리거 변경 없음.
+--
+-- 기준: GPT_SEC04_CURRENT_USER_ID_FRONTEND_IV = PASS_WITH_CORRECTIONS
+-- OPTION = A (PUBLIC + anon + authenticated 전체 회수)
+-- 패턴: 20261022000001~20261022000003
+
+REVOKE EXECUTE ON FUNCTION
+    public.current_user_id()
+FROM PUBLIC, anon, authenticated;
