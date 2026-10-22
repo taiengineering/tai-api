@@ -3,11 +3,12 @@
 > WO: WO-TAI-M004-AUTO-WEB-SERVICE-RELEASE-GATE-001  
 > 작성일: 2026-10-22  
 > 작성자: Claude Code (실행) — GPT 독립검증 대기  
-> 상태: FORM_CONFORMANCE_MAINLINE_001_APPLIED / WEB_REQUIREDNESS_GATE_001_APPLIED / CORR-001_APPLIED / ACTIVATION_PILOT_001_TECHNICAL_READY / GPT_IV_PENDING / OWNER_GATE_PENDING  
+> 상태: FORM_CONFORMANCE_MAINLINE_001_APPLIED / WEB_REQUIREDNESS_GATE_001_APPLIED / REQUIREDNESS_CORR-001_APPLIED / ACTIVATION_PILOT_001_TECHNICAL_READY / ACTIVATION_PILOT_CORR-001_APPLIED / GPT_IV_PENDING / OWNER_GATE_PENDING  
 > R1 정정 (2026-10-22): D1=LEGAL_FORM_CLASS 추가 / D2=AUTO_FORM 135→133 정정 / D3=C-3 삭제 / D4=SCHEMA_REVIEW_CANDIDACY→FORM_CONFORMANCE_STATUS  
 > WO-MAINLINE (2026-10-22): CORR-A 오류 정정 + FORM_CONFORMANCE 260건 판정 + SCHEMA_PROMOTION_READY 24건 확인  
 > WO-WEB-REQUIREDNESS-GATE-001 (2026-10-22): NON_LEGAL+증빙없음+서명없음 65종 318필드 필수여부 계약 분석 완료  
-> CORR-001 (2026-10-22): OPTIONAL→NOT_REQUIRED(87건) / DOC-SERA-011 multi_row BLOCKED / 318필드 input_type DB 실증 완료  
+> REQUIREDNESS-CORR-001 (2026-10-22): OPTIONAL→NOT_REQUIRED(87건) / DOC-SERA-011 multi_row BLOCKED / 318필드 input_type DB 실증 완료  
+> ACTIVATION-PILOT-CORR-001 (2026-10-22): ISOLATION_CONFIRMED_FRONTEND_NOT_WIRED / P8+G4 precondition 추가 / review_comment 교정 / conditional rollback guard 추가  
 > 기준 데이터: 기존 스냅샷 + R2 binding + R3 handoff 수치 재사용. DB SELECT 0건 추가 수행.  
 > 변경: NEW_CODE=0 / PROD_DB_WRITE=0 / MIGRATION=0 / PR=0 / MERGE=0 / DEPLOY=0
 
@@ -437,7 +438,7 @@ PRJ_FIELD_STATUS_TRANSITION = CANDIDATE→APPROVED_BY_HUMAN (동일 DO 블록 �
 PRJ_REQUIREDNESS_TRANSITION = CANDIDATE_ONLY→REQUIRED_BY_HUMAN (동일 DO 블록 내 원자 처리)
 PRJ_APPROVAL_MECHANISM = 수동 SQL DO 블록. API 엔드포인트 없음. Owner+PRJ 명시 승인 후 단일 execute_sql.
 AUDIT_REQUIRED = runtime_form_audit_log INSERT action=PROMOTE_TO_RUNTIME_USE
-ROLLBACK_MECHANISM = before_state JSON → rollback_snapshot 저장. 복구 SQL: status→CANDIDATE + required_status→CANDIDATE_ONLY
+ROLLBACK_MECHANISM = before_state JSON → rollback_snapshot 저장. 복구 DO 블록: runtime_document_data=0 + bridge=0 + schema=APPROVED 전제조건 확인 후 원자 복구 (CORR-001 CORR-4)
 
 ── G2 입력 계약 ──
 FORM_CONTRACT = PASS
@@ -463,6 +464,10 @@ REQUIRED_VALIDATION = required_status=REQUIRED_BY_HUMAN(4건) 설정 후 편집�
 ── G4 차단 유지 ──
 LEGAL_GATE = HOLD (has_legal_form=False이나 법령 참조 있음 — G1 gate에서 has_legal_form=FALSE 확인)
 CUSTOMER_RELEASE = HOLD (PRJ+Owner 명시 승인 전 활성화 금지)
+CUSTOMER_ISOLATION = ISOLATION_CONFIRMED_FRONTEND_NOT_WIRED (CORR-001 CORR-1 확인)
+  → 고객 접근 경로(engine-document·document-forms 페이지)는 구 /document-forms API 전용
+  → POST /documents / GET /documents/catalog 호출 0건 확인 (admin-vue3 전 파일 검색)
+  → 스키마 활성화 → can_create=True(API) 상태 변경이나 현재 고객 UI 경로 없음
 SECURITY_GATES = 변동 없음 (기존 인가·인증 게이트 완화 없음)
 AUTO_FORM_GATE = UNCHANGED (tai_auto=False — AUTO_FORM 해당 없음)
 
@@ -485,6 +490,48 @@ PROD_DB_WRITE = 0
 MIGRATION_APPLIED = 0
 CUSTOMER_RELEASE = HOLD
 DEPLOY = HOLD
+
+RESULT_COMMIT = 2cc6d1a0
+GPT_IV = PENDING
+OWNER_OPERATION_APPROVAL = PENDING
+```
+
+```
+WO = WO-TAI-M004-WEB-ACTIVATION-PILOT-001-CORR-001
+
+CORR_TRIGGER = GPT SOURCE IV CONDITIONAL (ACTIVATION-PILOT-001)
+CORR_COUNT = 4
+
+── CORR-1: 고객 격리 실증 ──
+ISOLATION_STATUS = ISOLATION_CONFIRMED_FRONTEND_NOT_WIRED
+EVIDENCE_1 = useEngineDocumentList.ts:103 → GET /document-forms (구 API 전용)
+EVIDENCE_2 = useEngineDocumentDetail.ts:36 → GET /document-forms/{id} (구 API 전용)
+EVIDENCE_3 = admin-vue3 전 파일 grep "POST /documents" → 0건 (신 엔진 미연결)
+ISOLATION_PATH = 신 문서 엔진(POST /documents / GET /documents/catalog) 고객 UI 미연결
+CUSTOMER_RELEASE_HOLD_BASIS = 전용 UI 연결 · QA 없이 고객 노출 금지 (격리 계약 확정)
+
+── CORR-2: 실행시점 불변조건 추가 ──
+P8_ADDED = runtime_form_schema.catalog_document_id = v_catalog_id AND schema_candidate_id = v_cand_id (source provenance 동시 검증)
+G4_ADDED = document_schema_candidate.id = v_cand_id → status='CANDIDATE' (승격 전 소스 불변 사전확인)
+F4_ADDED = final assert: source provenance 불변 검증 (F2와 이중 교차검증)
+EXISTING_SUFFICIENT = P1/P4/G1/G2/G3/F2/F3 기존 조건 유지
+
+── CORR-3: reviewer_id=NULL 적절성 확인 + review_comment 교정 ──
+REVIEWER_ID_NULL = CONFIRMED_VALID (Step4D B-1 계약 — nullable 허용, 별도 reviewer identity 계약 없음)
+REVIEW_COMMENT_OLD = "PRJ+Owner approval obtained before execution" (실행 전 완료사실 주장 — 부정확)
+REVIEW_COMMENT_NEW = "Execution requires explicit Owner+PRJ authorization before running this SQL" (요건 명시)
+
+── CORR-4: 조건부 복구 가드 ──
+ROLLBACK_GUARD_ADDED = DO 블록 전제조건: runtime_document_data=0 + bridge=0 + schema=APPROVED_FOR_RUNTIME_USE + ROW_COUNT=4 검증
+ROLLBACK_AUTO_ABORT = 조건 불충족 시 EXCEPTION → 전체 롤백 자동
+ROLLBACK_ESCALATION = 조건 불충족 시 Owner 에스컬레이션 명시
+
+── 산출물 ──
+ACTIVATION_SQL = docs/document-engine/M004_PILOT_ACTIVATION_PLAN_DOC_CON_044.sql (CORR-001 교정 완료, NOT EXECUTED)
+
+PROD_DB_WRITE = 0
+MIGRATION_APPLIED = 0
+NEW_CODE = 0
 
 RESULT_COMMIT = [pending]
 GPT_IV = PENDING
