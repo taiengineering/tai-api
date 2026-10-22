@@ -681,3 +681,107 @@ CUSTOMER_RELEASE_SCOPE = DOC-CON-044_ONLY
 RESULT_COMMIT = 44b16d3b
 GPT_IV = PENDING
 ```
+
+---
+
+## F. 63종 활성화 준비 (WO-TAI-M004-WEB-63DOC-ACTIVATION-PREP-001)
+
+> 추가일: 2026-10-23  
+> 상태: SQL_READY / PROD_DB_WRITE=0 / GPT_IV=PENDING / OWNER_EXEC_APPROVAL=PENDING
+
+### F-1. 대상 확정
+
+| 항목 | 수치 |
+|---|---|
+| SOURCE_COHORT | 65 |
+| EXCLUDE_COMPLETED | DOC-CON-044 (EXEC-001 2026-10-22 완료) |
+| EXCLUDE_UNSUPPORTED | DOC-SERA-011 (편집기 미지원 타입 multi_row) |
+| **TARGET_DOCS** | **63** |
+| TARGET_FIELDS | 309 |
+| TARGET_REQUIRED | 223 (REQUIRED_BY_HUMAN) |
+| TARGET_OPTIONAL | 86 (NOT_REQUIRED) |
+| EXISTING_CHECKLISTS | 178 (APPROVED_BY_HUMAN 유지, 변경 없음) |
+
+### F-2. 사전검증 결과 (2026-10-23 읽기 전용 DB 조회)
+
+| 사전조건 | 결과 |
+|---|---|
+| 스키마 CANDIDATE + version=1 | 63/63 PASS |
+| 필드 CANDIDATE/CANDIDATE_ONLY | 309/309 PASS |
+| has_legal_form = FALSE | 63/63 PASS |
+| document_schema_candidate CANDIDATE | 63/63 PASS |
+| runtime_document_data 없음 | 0건 PASS |
+| runtime_inspection_bridge 없음 | 0건 PASS |
+| 기존 승격 감사기록 없음 | 0건 PASS |
+| 동일 catalog_document_id APPROVED 없음 | 0건 PASS |
+| required_fields is_mandatory 일치 | 309/309 PASS |
+| 체크리스트 APPROVED_BY_HUMAN | 178/178 확인 |
+| 편집기 미지원 타입 | 0건 (text/textarea 전체) |
+
+**DB 상태 정합성: PASS**
+
+### F-3. 산출물
+
+| 파일 | 설명 |
+|---|---|
+| `docs/document-engine/M004_63DOC_ACTIVATION_PREFLIGHT.sql` | 읽기 전용 사전검증 쿼리 (10개 섹션) |
+| `docs/document-engine/M004_63DOC_ACTIVATION_PLAN.sql` | 운영 활성화 실행 SQL (미실행) |
+
+**활성화 SQL 구조:**
+- 전역 사전조건: P1~P8 + G1/G2/G4 (8개 aggregate 게이트)
+- 문서별 필드 수 개별 확인: 63개 IF 블록
+- 필드 UPDATE: 309건 VALUES list — `(form_schema_id, field_key, required_status)` 일치 기반
+- 스키마 상태 2단계 전환: CANDIDATE→APPROVED_BY_HUMAN→APPROVED_FOR_RUNTIME_USE
+- 체크리스트 불변 확인 (178건 APPROVED_BY_HUMAN 유지 assert)
+- 최종 ASSERT: F1~F4
+- 감사 로그 INSERT: 63건 (before/after state JSON 포함)
+- 원자성: 단일 DO 블록. 어떤 ASSERT 실패 시 전체 롤백
+
+### F-4. 법령·서식 게이트 (C3)
+
+63종 전부 `has_legal_form=FALSE`, `LEGAL_FORM_CLASS=NON_LEGAL`.
+
+| 구분 | 수치 |
+|---|---|
+| IN_P0 (field_key 수준 검증 완료) | 8종 |
+| IN_P0 외 (P0 근거 없음, FORM_CONTRACT_UNVERIFIED) | 55종 |
+| LEG_GATE_REQUIRED | **해당 없음** (NON_LEGAL 전건) |
+
+P0 8종: DOC-CHEM-003 / DOC-CON-013 / DOC-CON-014 / DOC-CON-026 / DOC-CON-032 / DOC-CON-043 / DOC-FAC-002 / DOC-OSH-046
+
+55종은 `FORM_CONTRACT_UNVERIFIED` 상태 — field_key 수준 대조 미완료.  
+**미검증 사항을 임의 추론하여 PASS 처리하지 않음.** GPT SOURCE IV에서 개별 문서 적합성 판정 필요.
+
+### F-5. 완료 보고
+
+```
+WO = WO-TAI-M004-WEB-63DOC-ACTIVATION-PREP-001
+
+TARGET_DOCS      = 63
+TARGET_FIELDS    = 309
+REQUIRED         = 223
+OPTIONAL         = 86
+CHECKLISTS_PRESERVED = 178
+
+SOURCE_CONTRACT = M004_65DOC_REQUIREDNESS_SUMMARY.csv (정본)
+PRJ_STEP4D_CONTRACT = docs/sql/20260825_WP_PERSISTENCE_02A_STEP4D_UP.sql
+LEGAL_FORM_GATE = NOT_TRIGGERED (63종 전부 NON_LEGAL)
+FORM_CONFORMANCE_STATUS = IN_P0=8(PASS) / NOT_IN_P0=55(UNVERIFIED)
+
+PREFLIGHT_SQL = docs/document-engine/M004_63DOC_ACTIVATION_PREFLIGHT.sql
+ACTIVATION_SQL = docs/document-engine/M004_63DOC_ACTIVATION_PLAN.sql
+AUDIT_SNAPSHOT_CONTRACT = before_state=CANDIDATE 전체 JSON / rollback_available=true
+ROLLBACK_CONTRACT = P4/P5 zero-doc 전제조건 + runtime_document_data/bridge=0 확인 후 단일 DO 복구
+
+READY_FOR_EXECUTION = YES (DB 사전조건 전부 PASS)
+BLOCKED_DOCS = 0
+UNVERIFIED_DOCS = 55 (FORM_CONTRACT_UNVERIFIED — GPT SOURCE IV 판정 필요)
+
+PROD_DB_WRITE = 0
+MIGRATION_APPLIED = 0
+DEPLOY = NO
+
+RESULT_COMMIT = PENDING
+GPT_IV = PENDING
+OWNER_EXEC_APPROVAL = PENDING
+```
