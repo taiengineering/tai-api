@@ -3,6 +3,7 @@
 > WO: WO-TAI-M004-WEB-48DOC-API-SOURCE-ALIGN-001  
 > 작성일: 2026-10-23  
 > 교정일: 2026-10-23 (CORR-001 — 필드 수·소스 분포·law_ref 커버리지 수치 교정)  
+> 교정일: 2026-10-23 (CORR-002 — required_fields.law_ref 기재 오류 교정: 245/245 → 186/245+NULL 59)  
 > 작성자: Claude Code — GPT 독립검증 대기  
 > 전제: 신규 API 수집·서식 제작 금지 / ACTIVATION_SQL 변경 없음 / PROD_DB_WRITE=0
 
@@ -15,6 +16,7 @@
 | 총 필드 수 | 90 | **245** | SNAPSHOT CSV ast.literal_eval 재파싱 (초판: json.loads 파싱 오류로 과소 산출) |
 | required_fields.source 분포 | `'법정'` 전건 | 법정=186/KOSHA=36/고용노동부지침=13/공인기관지침=7/지침=3 | 동일 파싱 |
 | law_ref 커버리지 | 기재 없음 | 조문번호 명시=145/186, 법령명만=41/186 | 동일 파싱 + 정규표현식 분류 |
+| required_fields.law_ref 범위 | `245/245` | **186/245** (비법정 59필드 law_ref=NULL) | GPT SOURCE IV CORR-002 지적 |
 
 ---
 
@@ -129,7 +131,8 @@ WEB 서식작성 엔진
 | 자료 | 건수 | 설명 |
 |---|---|---|
 | `document_forms.required_fields` | 48/48 | 법령·지침 기반 설계 필드 목록. 이것이 설계 근거 원본 |
-| `required_fields.law_ref` | 245/245 | 각 필드의 출처 참조 (법정: 조문/법령명, 비법정: 지침명) |
+| `required_fields.law_ref` (법정) | **186/245** | 법정 186필드에만 law_ref 값 존재 |
+| `required_fields.law_ref` (비법정) | **0/59 (NULL)** | KOSHA·지침 59필드는 law_ref=NULL — 출처 유형(source)만 기록, 개별 지침 조문 미연결 |
 | `law_master`/`law_article` | 법정 186필드 연결 가능 | 법제처 API로 수집된 법령 원문 (law_ref 매핑 대상) |
 | `FIELD_COUNT_MATCH=YES` | 48/48 | runtime_field ↔ 스냅샷 수 일치 확인 |
 
@@ -195,6 +198,11 @@ LAW_REF_COVERAGE (법정 186필드):
   LAW_NAME_ONLY     = 41  (법령명만, 14 고유값)
   MISSING           = 0
 
+LAW_REF_GUIDELINE (비법정 59필드):
+  LAW_REF_VALUE     = NULL (59/59)  ← CORR-002 교정
+  SOURCE_FIELD      = 기록됨 (source 컬럼에 KOSHA/고용노동부지침 등 출처 유형 표기)
+  GUIDELINE_TEXT_LINK = 미연결 (개별 지침 원문과 직접 연결 없음)
+
 FIELD_COUNT_MATCH = YES (48/48, 총 245필드)
 FIELD_KEYS_VERIFIED = NO (48/48) — 법령 조문 대조 미실시
 
@@ -209,8 +217,14 @@ ACTIVATION_SQL_CHANGED = NO
 PROD_DB_WRITE = 0
 DEPLOY = NO
 
-RESULT_COMMIT = PENDING
-GPT_IV = PENDING
+RESULT_COMMIT = 69d38c73 (CORR-001) / CORR-002 PENDING
+GPT_IV = CONDITIONAL_PASS
+  FIELD_COUNT_IV = PASS
+  SOURCE_DISTRIBUTION_IV = PASS
+  LEGAL_FIELD_REF_IV = PASS
+  GUIDELINE_FIELD_REF_CLAIM = FAIL (law_ref 245/245 오기 → CORR-002 교정)
+  API_SOURCE_CONTENT_MATCH = UNVERIFIED
+  ACTIVATION_SQL_CHANGE = NOT_REQUIRED
 ```
 
 ---
