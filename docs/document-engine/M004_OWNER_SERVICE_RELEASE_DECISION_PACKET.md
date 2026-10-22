@@ -3,9 +3,10 @@
 > WO: WO-TAI-M004-AUTO-WEB-SERVICE-RELEASE-GATE-001  
 > 작성일: 2026-10-22  
 > 작성자: Claude Code (실행) — GPT 독립검증 대기  
-> 상태: FORM_CONFORMANCE_MAINLINE_001_APPLIED / GPT_IV_PENDING / OWNER_GATE_PENDING  
+> 상태: FORM_CONFORMANCE_MAINLINE_001_APPLIED / WEB_REQUIREDNESS_GATE_001_APPLIED / GPT_IV_PENDING / OWNER_GATE_PENDING  
 > R1 정정 (2026-10-22): D1=LEGAL_FORM_CLASS 추가 / D2=AUTO_FORM 135→133 정정 / D3=C-3 삭제 / D4=SCHEMA_REVIEW_CANDIDACY→FORM_CONFORMANCE_STATUS  
 > WO-MAINLINE (2026-10-22): CORR-A 오류 정정 + FORM_CONFORMANCE 260건 판정 + SCHEMA_PROMOTION_READY 24건 확인  
+> WO-WEB-REQUIREDNESS-GATE-001 (2026-10-22): NON_LEGAL+증빙없음+서명없음 65종 318필드 필수여부 계약 분석 완료  
 > 기준 데이터: 기존 스냅샷 + R2 binding + R3 handoff 수치 재사용. DB SELECT 0건 추가 수행.  
 > 변경: NEW_CODE=0 / PROD_DB_WRITE=0 / MIGRATION=0 / PR=0 / MERGE=0 / DEPLOY=0
 
@@ -239,11 +240,48 @@ Claude 분석에 사용한 `obj00/RUNTIME_FORM_SCHEMA_324_SNAPSHOT.csv`는 FK �
 
 ---
 
+## E. 웹 편집기 필수여부 게이트 분석 결과 (WO-TAI-M004-WEB-REQUIREDNESS-GATE-001)
+
+**대상 코호트:** NON_LEGAL + evidence_count=0 + signature 필드 없음 = **65종 / 318필드**
+
+| 항목 | 수치 | 비고 |
+|---|---|---|
+| 분석 대상 문서 | 65 | BUILDING=7, COMMON=20, INDUSTRIAL=6, CONSTRUCTION=26, SPECIAL_FACILITY=6 |
+| 분석 대상 필드 | 318 | 65종 전체 필드 |
+| REQUIRED_BY_HUMAN 후보 | 231 | SOURCE is_mandatory=True 필드 |
+| OPTIONAL 후보 | 87 | SOURCE is_mandatory=False 필드 |
+| 타입 호환 PASS | 318 / 318 | 서명·증빙 제외 기준 (C2B E2E B3 근거) |
+| P0 필드 입력타입 검증 | 27 | P0 코호트 8종 포함 |
+
+**게이트 판정:**
+
+| Gate | 판정 | 근거 |
+|---|---|---|
+| PARENT_SCHEMA_GATE | **BLOCKED** (65종 전부) | 스키마 status=CANDIDATE. APPROVED_FOR_RUNTIME_USE 필요 |
+| FIELD_STATUS_GATE | **BLOCKED** (318필드 전부) | required_status=CANDIDATE_ONLY. REQUIRED_BY_HUMAN/OPTIONAL 전환 필요 |
+| EVIDENCE_GATE | NOT_APPLICABLE | evidence_count=0 (65종 전부) |
+| SIGNATURE_GATE | NOT_APPLICABLE | signature 필드 없음 (65종 전부) |
+
+**기술적 변경 준비 상태:**
+- 318필드 전부 `CHANGE_READY=YES_PENDING_PRJ_APPROVAL`
+- PRJ Gate 승인 시 필요 DB 변경: `runtime_form_schema.status` UPDATE 65건 + `runtime_field.required_status` UPDATE 318건
+- PROD_DB_WRITE=0 / MIGRATION=0 (이번 WO 범위)
+
+**활성화 경로 (PRJ Gate 승인 후):**
+1. `runtime_form_schema.status`: CANDIDATE → APPROVED_FOR_RUNTIME_USE (65건)
+2. `runtime_field.required_status`: CANDIDATE_ONLY → REQUIRED_BY_HUMAN(231건) / OPTIONAL(87건)
+
+**산출물:**
+- `docs/document-engine/M004_FIELD_REQUIREDNESS_GATE.csv` (318행, 18컬럼 — 필드별 상세)
+- `docs/document-engine/M004_65DOC_REQUIREDNESS_SUMMARY.csv` (65행 — 문서별 요약)
+
+---
+
 ## 다음 단계
 
 1. **GPT 독립검증 (진행 중)**: G1/G2/G3 개별 문서 ID·분류 산식·R2/R3 근거 대조 + FORM_CONFORMANCE_EVIDENCE 24건 PASS 판정 기준 독립검증
 2. **Owner 결정**: SCHEMA_PROMOTION_READY 24건 중 PRJ Gate 승인 대상 doc_id 확정 → G2 스키마 승격 (FK 이미 연결)
-3. **활성화 단계**: 개별 승인 doc_id에 한해 `runtime_form_schema.status` UPDATE 실행
+3. **활성화 단계**: 개별 승인 doc_id에 한해 `runtime_form_schema.status` UPDATE + `runtime_field.required_status` UPDATE 실행
 4. **배포**: Railway HOLD 유지. 코드 변경 없으므로 배포 불필요
 
 ---
@@ -318,4 +356,41 @@ SCHEMA_PROMOTION_BLOCKED = 0
 SCHEMA_PROMOTION_UNVERIFIED = 236
 G2_NOT_APPLICABLE_REMAINING = 11
 FORM_CONFORMANCE_EVIDENCE_FILE = docs/document-engine/M004_FORM_CONFORMANCE_EVIDENCE.csv
+```
+
+```
+WO = WO-TAI-M004-WEB-REQUIREDNESS-GATE-001
+
+SCOPE_NONLEGAL_NO_EVIDENCE_SIGNATURE = 65
+FIELD_CONTRACT_CHECKED = 318
+REQUIREDNESS_MAPPING_SUPPORTED = 318
+REQUIREDNESS_MAPPING_BLOCKED = 0
+  → REQUIRED_BY_HUMAN_CANDIDATE = 231
+  → OPTIONAL_CANDIDATE = 87
+
+EDITOR_TYPE_PASS = 318
+EDITOR_TYPE_BLOCKED = 0
+PARENT_SCHEMA_GATE = BLOCKED (65종 전부 SCHEMA_CANDIDATE)
+FIELD_STATUS_GATE = BLOCKED (318필드 전부 CANDIDATE_ONLY)
+EVIDENCE_GATE = NOT_APPLICABLE (65종 evidence_count=0)
+SIGNATURE_GATE = NOT_APPLICABLE (65종 signature 필드 없음)
+
+TECHNICALLY_CHANGE_READY = 318 fields / 65 schemas
+SCHEMA_STATUS_CHANGE_REQUIRED = 65건 CANDIDATE→APPROVED_FOR_RUNTIME_USE
+FIELD_STATUS_CHANGE_REQUIRED = 318건 CANDIDATE_ONLY→REQUIRED_BY_HUMAN/OPTIONAL
+
+E2E_PRIOR_EVIDENCE_P0_LINKED = 8 docs (P0 Quality Audit 내 NON_LEGAL 포함)
+E2E_ENGINE_COMMON_LINKED = 65 docs (PR#678 208/208 PASS + C2B_BROWSER_SMOKE)
+
+FIELD_REQUIREDNESS_GATE_FILE = docs/document-engine/M004_FIELD_REQUIREDNESS_GATE.csv (318행)
+DOC_REQUIREDNESS_SUMMARY_FILE = docs/document-engine/M004_65DOC_REQUIREDNESS_SUMMARY.csv (65행)
+
+NEW_CODE = 0
+PROD_DB_WRITE = 0
+MIGRATION = 0
+MERGE = NO
+DEPLOY = NO
+
+GPT_IV = PENDING
+OWNER_RELEASE = HOLD
 ```
