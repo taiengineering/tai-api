@@ -1,6 +1,7 @@
 """
 WO-TAI-SEC-SEARCHPATH-P0C-IMPLEMENT-001 정적 계약 테스트
 DDL 헬퍼 함수 4개 search_path 고정 Migration 검증
+R1: ACL PRE/POST · Owner POST · 정확한 서명 · 트리거 10건 · proconfig 동일성
 
 대상 Migration:
   20261022152140_sec_searchpath_p0c_ddl_helper_functions.sql
@@ -32,10 +33,15 @@ DDL 헬퍼 함수 4개 search_path 고정 Migration 검증
   SP3-SQL-24  PRE — anon EXECUTE 검증 포함 (4개 함수)
   SP3-SQL-25  PRE — authenticated EXECUTE 검증 포함 (4개 함수)
   SP3-SQL-26  PRE — tai_set_updated_at 의존 함수 존재 검증 포함
-  SP3-SQL-27  POST — 4개 함수 proconfig 설정 확인 포함
+  SP3-SQL-27  POST — proconfig array_length 동일성 검증 (R1)
   SP3-SQL-28  POST — 본문 MD5 불변 검증 포함 (PRE+POST 각 2회)
   SP3-SQL-29  POST — SECURITY INVOKER 불변 검증 포함 (PRE+POST 각 2회)
   SP3-SQL-30  PRE — 스키마 CREATE 권한 부재 검증 포함
+  SP3-SQL-31  R1 — pg_get_function_identity_arguments 정확한 서명 검증 (≥16회)
+  SP3-SQL-32  R1 — PRE ACL 기준선 상수 선언 및 4개 함수 PRE 불일치 검증
+  SP3-SQL-33  R1 — POST ACL 불변 검증 (4개 함수 POST)
+  SP3-SQL-34  R1 — Owner POST 불변 검증 (pg_get_userbyid PRE+POST 각 4회)
+  SP3-SQL-35  R1 — 트리거 정확히 10건 PRE+POST (v_trig_count != 10 × 2)
   SP3-SRC-01  이 Migration SHA256 고정
   SP3-SRC-02  P0B Migration SHA256 불변
   SP3-SRC-03  P0A Migration SHA256 불변
@@ -279,13 +285,13 @@ def test_sp3_sql_26_pre_tai_set_updated_at():
 # ── POST 조건 ─────────────────────────────────────────────────────────────────
 
 def test_sp3_sql_27_post_proconfig_set():
-    """SP3-SQL-27: POST — 4개 함수 proconfig 설정 확인 포함"""
+    """SP3-SQL-27: POST — proconfig array_length 동일성 검증 (R1)"""
     nc = _nc_upper()
     assert re.search(r"POST.*FAIL|PROCONFIG.*IS\s+NULL|SEARCH_PATH.*NOT\s+SET", nc, re.IGNORECASE), \
         "POST proconfig 검증 없음"
-    # ARRAY[@>] 패턴으로 proconfig 값 검증
-    assert re.search(r"@>.*ARRAY|PROCONFIG.*ARRAY", nc, re.IGNORECASE), \
-        "POST proconfig ARRAY 포함 검사 없음"
+    # R1: array_length 동일성 검사 (ARRAY_LENGTH(V_PROCONFIG, 1) != 1)
+    assert re.search(r"ARRAY_LENGTH\s*\(\s*V_PROCONFIG", nc, re.IGNORECASE), \
+        "POST proconfig array_length 동일성 검사 없음"
 
 
 def test_sp3_sql_28_post_body_md5_unchanged():
@@ -319,6 +325,54 @@ def test_sp3_sql_30_pre_schema_create_privilege():
         "authenticated schema CREATE 검증 없음"
 
 
+# ── R1 강화 검증 ──────────────────────────────────────────────────────────────
+
+def test_sp3_sql_31_r1_exact_signature_identity_args():
+    """SP3-SQL-31: R1 — pg_get_function_identity_arguments 정확한 서명 검증 (≥16회)"""
+    nc = _nc_upper()
+    matches = re.findall(r"PG_GET_FUNCTION_IDENTITY_ARGUMENTS\s*\(", nc)
+    assert len(matches) >= 16, \
+        f"pg_get_function_identity_arguments 사용이 16건 이상이어야 함 (PRE×4×함수4): {len(matches)}건"
+
+
+def test_sp3_sql_32_r1_acl_baseline_pre():
+    """SP3-SQL-32: R1 — PRE ACL 기준선 상수 선언 및 4개 함수 PRE 불일치 검증"""
+    sql = _sql()
+    assert re.search(r"c_acl_baseline\s+CONSTANT\s+text", sql, re.IGNORECASE), \
+        "c_acl_baseline CONSTANT text 선언 없음"
+    nc = _nc_upper()
+    pre_acl_matches = re.findall(r"PRE FAILED.*ACL|V_PROACL\s*!=\s*C_ACL_BASELINE", nc, re.IGNORECASE)
+    assert len(pre_acl_matches) >= 4, \
+        f"PRE ACL 불일치 검증이 4건 이상이어야 함: {len(pre_acl_matches)}건"
+
+
+def test_sp3_sql_33_r1_acl_post_unchanged():
+    """SP3-SQL-33: R1 — POST ACL 불변 검증 (4개 함수 POST)"""
+    nc = _nc_upper()
+    post_acl_matches = re.findall(r"POST FAILED.*ACL", nc, re.IGNORECASE)
+    assert len(post_acl_matches) >= 4, \
+        f"POST ACL 불변 검증이 4건 이상이어야 함: {len(post_acl_matches)}건"
+
+
+def test_sp3_sql_34_r1_owner_post_unchanged():
+    """SP3-SQL-34: R1 — Owner POST 불변 검증 (pg_get_userbyid PRE+POST 각 4회, 합계 ≥8)"""
+    nc = _nc_upper()
+    owner_matches = re.findall(r"PG_GET_USERBYID\s*\(", nc)
+    assert len(owner_matches) >= 8, \
+        f"pg_get_userbyid 사용이 PRE×4+POST×4=8건 이상이어야 함: {len(owner_matches)}건"
+    post_owner_matches = re.findall(r"POST FAILED.*OWNER\s+CHANGED", nc, re.IGNORECASE)
+    assert len(post_owner_matches) >= 4, \
+        f"POST owner 불변 검증 RAISE가 4건 이상이어야 함: {len(post_owner_matches)}건"
+
+
+def test_sp3_sql_35_r1_trigger_count_10_pre_post():
+    """SP3-SQL-35: R1 — 트리거 정확히 10건 PRE+POST (v_trig_count != 10 × 2)"""
+    nc = _nc_upper()
+    trig_count_checks = re.findall(r"V_TRIG_COUNT\s*!=\s*10", nc)
+    assert len(trig_count_checks) >= 2, \
+        f"v_trig_count != 10 검증이 PRE+POST 각 1회=2건 이상이어야 함: {len(trig_count_checks)}건"
+
+
 # ── SHA256 불변 앵커 ──────────────────────────────────────────────────────────
 
 def _sha256(path: pathlib.Path) -> str:
@@ -326,8 +380,8 @@ def _sha256(path: pathlib.Path) -> str:
 
 
 def test_sp3_src_01_this_migration_sha256():
-    """SP3-SRC-01: 이 Migration SHA256 고정"""
-    expected = "3716a660adc286d2e181ca886d974eac0198a8e6f6c7765fe71a6f97f05b68ae"
+    """SP3-SRC-01: 이 Migration SHA256 고정 (R1)"""
+    expected = "e38dcd892da517c0f317bb9a2b23ab94bd844bb0a50aa091d5b1f025aa141571"
     actual = _sha256(_MIGRATION_PATH)
     assert actual == expected, f"Migration SHA256 변경: {actual}"
 
