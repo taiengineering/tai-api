@@ -2,6 +2,7 @@
 
 > WO: WO-TAI-M004-MAINLINE-FINAL-CLOSEOUT-001  
 > 작성일: 2026-10-23  
+> 교정일: 2026-10-23 (CORR-001 — WEB47→WEB48, 68→86, E2/E3 증거 범위 교정)  
 > 작성자: Claude Code — GPT 독립검증 대기  
 > 전제: 기존 완료 작업 인수 / 신규 수집·설계·엔진 제작 금지 / PROD_DB_WRITE=0 (별도 승인 전)
 
@@ -54,9 +55,11 @@ PDF 바이너리 반환
 
 | 문서 | schema 상태 | can_create | 사유 |
 |---|---|---|---|
-| DOC-CON-044 | `APPROVED_FOR_RUNTIME_USE` | **True** | E2E PASS |
-| WEB47 (나머지 47종) | `CANDIDATE` | **False** | 63DOC SQL 미실행 |
+| DOC-CON-044 | `APPROVED_FOR_RUNTIME_USE` | **True** | E2E PASS (63DOC SQL 제외 — 별도 완료) |
+| WEB48 (63DOC SQL 대상) | `CANDIDATE` | **False** | 63DOC SQL 미실행 |
 | INSP15 (15종) | `CANDIDATE` | **False** | 별도 AUTO_SOURCE 경로 |
+
+> **교정 (CORR-001):** 초판 "WEB47"은 오기. DOC-CON-044는 63DOC SQL에 포함되지 않으므로 SQL 대상 WEB 분류는 48종 전부 미활성화.
 
 ---
 
@@ -80,12 +83,11 @@ INSP15의 서비스 의도: `OVERALL_STATUS=AUTO_SOURCE_ONLY` (WEB_EDIT 아닌 �
 |---|---|---|
 | 법정서식 file_url 목록 제공 | **IMPLEMENTED** | `GET /document-forms` → `file_url` 반환 |
 | 다운로드 클라이언트 연결 | **IMPLEMENTED** | `window.open(file_url, '_blank')` |
-| URL 존재 건수 | 68/260 | `DOWNLOAD_FORM_STATUS=URL_EXISTS_DOWNLOAD_NOT_IMPLEMENTED` |
-| URL 미존재 | 173/260 | `NOT_IN_SCOPE` |
-| 공식원본 전용 | 19/260 | `BLOCKED_ORIGINAL_ONLY` |
+| file_url 보유 건수 | **86/260** | API 실측 (law.go.kr/LSW/flDownload.do) |
+| URL 미보유 | 174/260 | — |
 
-`URL_EXISTS_DOWNLOAD_NOT_IMPLEMENTED` 68건: file_url은 DB에 존재하나 실제 파일 다운로드 구현 상태 미확인.  
-63종 대상 중 해당 건수 별도 확인 필요.
+> **교정 (CORR-001):** 초판 68건은 `M004_SERVICE_MODE_MATRIX.csv` 기준. 운영 DB API 실측 결과 86건.  
+> `WO-TAI-M004-PRODUCTION-FINAL-E2E-001`에서 대표 URL HTTP 200 + HWP 바이너리 반환 확인 (E5 PASS).
 
 ---
 
@@ -104,11 +106,11 @@ INSP15의 서비스 의도: `OVERALL_STATUS=AUTO_SOURCE_ONLY` (WEB_EDIT 아닌 �
 
 | E2E | 내용 | 상태 | 근거 |
 |---|---|---|---|
-| E1 | 회원 → 문서검색 → 빈양식 다운로드 | **UNVERIFIED** | 기존 증거 없음 |
-| E2 | 회원 → 사업장 → 자동작성 → PDF | **PASS** | DOC-CON-044 E2E 인수 |
-| E3 | SaaS 점검데이터 → 점검일지 생성 | **PASS** | DOC-CON-044 E2E 인수 |
-| E4 | TBM → PDF → 문서함 → 재다운로드 | **UNVERIFIED** | 기존 증거 없음 |
-| E5 | 공식 별지 → 원본 다운로드 | **UNVERIFIED** | 기존 증거 없음 |
+| E1 | 회원 → 문서검색 → 빈양식 다운로드 | **DEFECT** | API file_url 86건 존재 + 실제 HWP 응답 확인. UI 미연결 (vue3 file_url 미사용) |
+| E2 | 회원 → 사업장 → 자동작성 → PDF | **UNVERIFIED** | DOC-CON-044는 수동 웹작성 E2E. 자동작성 별도 증거 없음 (CORR-001) |
+| E3 | SaaS 점검데이터 → 점검일지 생성 | **UNVERIFIED** | DOC-CON-044는 수동 웹작성 E2E. 점검데이터 연동 별도 증거 없음 (CORR-001) |
+| E4 | TBM → PDF → 문서함 → 재다운로드 | **PARTIAL** | TBM 생성·문서함·signed URL 경로 구현 확인. 실제 demo E2E 미수행 |
+| E5 | 공식 별지 → 원본 다운로드 | **PASS** | HTTP 200 + Content-Type=application/hwp + OLE2 bytes 확인 |
 | E6 | GPT 보조필드 → Human confirm → 생성 | **NOT_IN_SCOPE** | GPT 보조작성 미구현 |
 | E7 | 다른 회사 문서 접근 차단 | **PASS** | WO-TAI-SEC02/SEC03/SEC04 완료 |
 | E8 | 템플릿 누락 fail-close | **PASS** | catalog_resolver NO_SCHEMA 처리 확인 |
@@ -180,15 +182,19 @@ SECURITY_SCOPE = PASS (WO-TAI-SEC 시리즈 완료)
 DEPLOYMENT_STATUS = feat/m004-auto-web-mainline-integration PR#683
 
 RELEASE_READY_DOCS = 1 (DOC-CON-044)
-RELEASE_PENDING_OWNER_APPROVAL = 47 (WEB47 — 63DOC SQL 미실행)
+RELEASE_PENDING_OWNER_APPROVAL = 48 (WEB48 — 63DOC SQL 미실행)  ← CORR-001 교정
 RELEASE_SEPARATE_TRACK = 15 (INSP15 — AUTO_SOURCE_ONLY)
-ACTUAL_DEFECTS = 미확인 (E1/E4/E5 UNVERIFIED)
+ORIGINAL_DOWNLOAD_URL_COUNT = 86 (law.go.kr, E5 PASS)  ← CORR-001 교정
+
+ACTUAL_DEFECTS:
+  DEF-001 = E1 — file_url UI 미연결 (vue3 document-forms에서 file_url 미사용)
+  DEF-002 = E2/E3 — 자동작성·점검데이터 기반 생성 경로 미검증 (수동 웹작성과 다른 경로)
 
 REMAINING_WORK:
-  R1 = 63DOC SQL Owner 최종 승인 (WEB47 48종 동시 활성화)
-  R2 = E1 (빈양식 다운로드) E2E 확인
-  R3 = E4 (문서함 저장·재다운로드) E2E 확인
-  R4 = E5 (공식별지 원본 다운로드 68건) E2E 확인
+  R1 = 63DOC SQL Owner 최종 승인 (WEB48 동시 활성화)
+  R2 = DEF-001 교정: vue3 UI에 file_url 다운로드 링크 연결
+  R3 = E4 (문서함 저장·재다운로드) 실제 demo E2E 수행
+  R4 = E2/E3 자동작성 경로 별도 검증 또는 NOT_IN_SCOPE 확정
   R5 = INSP15 D2 결정 (WEB 포함 vs AUTO_SOURCE 별도 유지)
 
 NEW_SOURCE_COLLECTION = 0
@@ -205,8 +211,9 @@ GPT_IV = PENDING
 
 | # | 결정 | 영향 |
 |---|---|---|
-| **R1** | 63DOC SQL 실행 승인 | WEB47 즉시 전체 고객 노출. 실행 전 E1/E4/E5 E2E 확인 권고. |
-| **R5** | INSP15 WEB 포함 여부 | YES=15종 추가 노출(AUTO_SOURCE별도경로 병행) / NO=현행 AUTO_SOURCE_ONLY 유지 |
+| **R1** | 63DOC SQL 실행 승인 (WEB48) | 실행 즉시 전체 고객 노출. DEF-001 교정 후 실행 권고. |
+| **R2** | DEF-001 교정 승인 | file_url 86건 UI 연결. 소규모 vue3 변경. |
+| **R5** | INSP15 WEB 포함 여부 | YES=15종 추가 WEB 노출 / NO=현행 AUTO_SOURCE_ONLY 유지 (GPT 권고=NO) |
 
-E1/E4/E5 UNVERIFIED 항목은 실제 결함이 존재하면 수정 후 R1 실행 권고.  
-결함이 없으면 R1 바로 진행 가능.
+**DEF-001 교정 우선:** vue3 document-forms UI에 file_url이 있는 문서 대상 "원본 다운로드" 버튼/링크를 추가.  
+법제처 URL로 직접 연결 (이미 HTTP 200 + HWP 반환 확인). 소규모 UI 변경으로 E1 차단 해소 가능.
