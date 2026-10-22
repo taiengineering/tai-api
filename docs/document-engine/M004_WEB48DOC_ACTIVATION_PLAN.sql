@@ -491,6 +491,10 @@ BEGIN
 
   -- ── [1] runtime_field ×245 UPDATE ─────────────────────────────────────
   -- CANDIDATE/CANDIDATE_ONLY → APPROVED_BY_HUMAN + REQUIRED_BY_HUMAN(186) or NOT_REQUIRED(59)
+  -- 근거: document_forms.required_fields.is_mandatory (CSV 정본 + DB 재확인)
+  UPDATE runtime_field AS rf
+  SET status = 'APPROVED_BY_HUMAN',
+      required_status = v.req_status
   FROM (VALUES
     ('2c62ce24-baea-4d39-a5dc-ce030648d0d7'::uuid, 'inspection_findings', 'REQUIRED_BY_HUMAN'),
     ('2c62ce24-baea-4d39-a5dc-ce030648d0d7'::uuid, 'action_plan', 'REQUIRED_BY_HUMAN'),
@@ -910,15 +914,70 @@ END $$;
 -- =====================================================================
 -- END — !!! NOT EXECUTED. PRJ+Owner 운영 변경 승인 후 실행. !!!
 --
--- 실행 직후 VERIFY:
+-- 실행 직후 VERIFY (독립 실행 — DO 블록 외부, v_schema_ids 사용 불가):
+--
+-- Q1: schema 승격 확인
 --   SELECT count(*) FROM runtime_form_schema
---     WHERE id = ANY(v_schema_ids) AND status = 'APPROVED_FOR_RUNTIME_USE';
+--     WHERE id = ANY(ARRAY[
+--       '2c62ce24-baea-4d39-a5dc-ce030648d0d7','f9de138a-138d-4202-a7be-4bb7158d92c4',
+--       'ecc54b1d-7f3e-4556-9134-94ad4dd3cd97','dcea0582-d5eb-4671-a258-b75d142e83f3',
+--       'ee1e9dde-2b7f-4278-9cf2-a64476d8a014','331ab855-e930-434b-9f8c-25f8a6c8988a',
+--       '910ef261-3f3b-46a7-9f0b-d6ced4a92376','0204725e-c5e8-4cdb-b9a8-ddf8a423ed00',
+--       '3b246692-a2d2-4b83-978b-11754dfca0ce','3214f248-9fce-4169-a243-a4e43f3e81e5',
+--       '9c34459f-5b82-40f7-a03a-a532cfdefdd4','5d5a2b58-80e3-4924-933a-006b89267d26',
+--       '99905f16-9b1e-4b79-8e15-ef2d2d56b5e0','b3071484-1547-4f1e-8b5f-12ed391f5519',
+--       '98b60eca-5a11-4fc5-a386-c62fb67277a4','4bf3ed32-a9b3-4fdc-ba1a-dd9e5a6de27d',
+--       '48b04ae3-4c0e-4f78-949c-fc8a24421c50','769d94ff-476e-4d2a-9310-acdff418bda0',
+--       '328bcdb1-45cf-401c-99ad-76e131a39be5','5e89caa2-da79-4d20-86f1-cdfe138b5ac7',
+--       '3ce74995-9679-4cf0-acde-f46fbd940454','4f783679-c8ab-42f1-98c5-ce429cd38b19',
+--       '3ac8db99-aede-460f-b2d5-daa969b29b6b','c959e7e9-942b-449a-aead-904996476687',
+--       '117958e3-f936-4d06-b869-273001ea023d','b920ccaf-191a-492c-b43f-8c8f785c632c',
+--       'eddf1605-7b4f-469f-947d-a4380ba6a8cc','8e1aea7d-1220-4352-bfd0-569d6c9478eb',
+--       'b65478e8-d239-41e0-8959-c4d5b3b73347','2d4a097a-0a5c-47d7-8115-b537218142fd',
+--       'c0e894c4-f8bc-4f0f-8820-bf633ce81f86','91217759-bd5e-44fa-9348-0ee5b68e8abc',
+--       '7758efc8-6cf4-4c4f-9209-3c704813c56c','e7e367d6-845a-490d-96b4-994dd67f3703',
+--       '85d3d8e0-421e-46d9-971d-cfda24713402','e71177c7-76e4-4009-a14a-c8d7d0532550',
+--       '4c871f98-6a30-4cbb-a89a-5751d829471b','4781af01-ab18-4e81-b679-6bca175e8c99',
+--       '7fee07c5-e992-4000-ac07-dcf4b38013fd','dd8b30a3-4084-4e6f-a2c0-57f4325bdc44',
+--       '835ef8bb-9433-4044-97bb-5f8966809ac3','67e1f882-221c-4a6a-9a82-6312f75a548f',
+--       '65e92560-3823-42b0-88af-45d661801bb1','59d28560-4a8a-4727-925e-cd9a19e0b585',
+--       '1491b3f4-2742-40ac-942b-9f20819f854d','22c0195f-1719-4858-b653-0af0b3128f38',
+--       '0fd7c6a9-4b79-4f61-86f5-6a2e349deae1','36d9ccda-546a-4549-8c74-72daa15140bf'
+--     ]::uuid[]) AND status = 'APPROVED_FOR_RUNTIME_USE';
 --   -- EXPECTED: 48
 --
---   SELECT count(*), required_status FROM runtime_field
---     WHERE form_schema_id = ANY(v_schema_ids)
---   GROUP BY required_status;
---   -- EXPECTED: APPROVED_BY_HUMAN=245, REQUIRED_BY_HUMAN=186, NOT_REQUIRED=59
+-- Q2: 필드 승인·필수여부 확인
+--   SELECT status, required_status, count(*)
+--     FROM runtime_field
+--     WHERE form_schema_id = ANY(ARRAY[
+--       '2c62ce24-baea-4d39-a5dc-ce030648d0d7','f9de138a-138d-4202-a7be-4bb7158d92c4',
+--       'ecc54b1d-7f3e-4556-9134-94ad4dd3cd97','dcea0582-d5eb-4671-a258-b75d142e83f3',
+--       'ee1e9dde-2b7f-4278-9cf2-a64476d8a014','331ab855-e930-434b-9f8c-25f8a6c8988a',
+--       '910ef261-3f3b-46a7-9f0b-d6ced4a92376','0204725e-c5e8-4cdb-b9a8-ddf8a423ed00',
+--       '3b246692-a2d2-4b83-978b-11754dfca0ce','3214f248-9fce-4169-a243-a4e43f3e81e5',
+--       '9c34459f-5b82-40f7-a03a-a532cfdefdd4','5d5a2b58-80e3-4924-933a-006b89267d26',
+--       '99905f16-9b1e-4b79-8e15-ef2d2d56b5e0','b3071484-1547-4f1e-8b5f-12ed391f5519',
+--       '98b60eca-5a11-4fc5-a386-c62fb67277a4','4bf3ed32-a9b3-4fdc-ba1a-dd9e5a6de27d',
+--       '48b04ae3-4c0e-4f78-949c-fc8a24421c50','769d94ff-476e-4d2a-9310-acdff418bda0',
+--       '328bcdb1-45cf-401c-99ad-76e131a39be5','5e89caa2-da79-4d20-86f1-cdfe138b5ac7',
+--       '3ce74995-9679-4cf0-acde-f46fbd940454','4f783679-c8ab-42f1-98c5-ce429cd38b19',
+--       '3ac8db99-aede-460f-b2d5-daa969b29b6b','c959e7e9-942b-449a-aead-904996476687',
+--       '117958e3-f936-4d06-b869-273001ea023d','b920ccaf-191a-492c-b43f-8c8f785c632c',
+--       'eddf1605-7b4f-469f-947d-a4380ba6a8cc','8e1aea7d-1220-4352-bfd0-569d6c9478eb',
+--       'b65478e8-d239-41e0-8959-c4d5b3b73347','2d4a097a-0a5c-47d7-8115-b537218142fd',
+--       'c0e894c4-f8bc-4f0f-8820-bf633ce81f86','91217759-bd5e-44fa-9348-0ee5b68e8abc',
+--       '7758efc8-6cf4-4c4f-9209-3c704813c56c','e7e367d6-845a-490d-96b4-994dd67f3703',
+--       '85d3d8e0-421e-46d9-971d-cfda24713402','e71177c7-76e4-4009-a14a-c8d7d0532550',
+--       '4c871f98-6a30-4cbb-a89a-5751d829471b','4781af01-ab18-4e81-b679-6bca175e8c99',
+--       '7fee07c5-e992-4000-ac07-dcf4b38013fd','dd8b30a3-4084-4e6f-a2c0-57f4325bdc44',
+--       '835ef8bb-9433-4044-97bb-5f8966809ac3','67e1f882-221c-4a6a-9a82-6312f75a548f',
+--       '65e92560-3823-42b0-88af-45d661801bb1','59d28560-4a8a-4727-925e-cd9a19e0b585',
+--       '1491b3f4-2742-40ac-942b-9f20819f854d','22c0195f-1719-4858-b653-0af0b3128f38',
+--       '0fd7c6a9-4b79-4f61-86f5-6a2e349deae1','36d9ccda-546a-4549-8c74-72daa15140bf'
+--     ]::uuid[])
+--   GROUP BY status, required_status;
+--   -- EXPECTED: APPROVED_BY_HUMAN/REQUIRED_BY_HUMAN=186, APPROVED_BY_HUMAN/NOT_REQUIRED=59
 --
---   GET /document-engine/catalog/DOC-BLD-023 → can_create=true (임의 1개)
+-- Q3: catalog can_create 확인 (임의 1개)
+--   GET /document-engine/catalog/DOC-BLD-023 → can_create=true
 -- =====================================================================
