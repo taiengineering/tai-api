@@ -3,10 +3,11 @@
 > WO: WO-TAI-M004-AUTO-WEB-SERVICE-RELEASE-GATE-001  
 > 작성일: 2026-10-22  
 > 작성자: Claude Code (실행) — GPT 독립검증 대기  
-> 상태: FORM_CONFORMANCE_MAINLINE_001_APPLIED / WEB_REQUIREDNESS_GATE_001_APPLIED / GPT_IV_PENDING / OWNER_GATE_PENDING  
+> 상태: FORM_CONFORMANCE_MAINLINE_001_APPLIED / WEB_REQUIREDNESS_GATE_001_APPLIED / CORR-001_APPLIED / GPT_IV_PENDING / OWNER_GATE_PENDING  
 > R1 정정 (2026-10-22): D1=LEGAL_FORM_CLASS 추가 / D2=AUTO_FORM 135→133 정정 / D3=C-3 삭제 / D4=SCHEMA_REVIEW_CANDIDACY→FORM_CONFORMANCE_STATUS  
 > WO-MAINLINE (2026-10-22): CORR-A 오류 정정 + FORM_CONFORMANCE 260건 판정 + SCHEMA_PROMOTION_READY 24건 확인  
 > WO-WEB-REQUIREDNESS-GATE-001 (2026-10-22): NON_LEGAL+증빙없음+서명없음 65종 318필드 필수여부 계약 분석 완료  
+> CORR-001 (2026-10-22): OPTIONAL→NOT_REQUIRED(87건) / DOC-SERA-011 multi_row BLOCKED / 318필드 input_type DB 실증 완료  
 > 기준 데이터: 기존 스냅샷 + R2 binding + R3 handoff 수치 재사용. DB SELECT 0건 추가 수행.  
 > 변경: NEW_CODE=0 / PROD_DB_WRITE=0 / MIGRATION=0 / PR=0 / MERGE=0 / DEPLOY=0
 
@@ -240,7 +241,7 @@ Claude 분석에 사용한 `obj00/RUNTIME_FORM_SCHEMA_324_SNAPSHOT.csv`는 FK �
 
 ---
 
-## E. 웹 편집기 필수여부 게이트 분석 결과 (WO-TAI-M004-WEB-REQUIREDNESS-GATE-001)
+## E. 웹 편집기 필수여부 게이트 분석 결과 (WO-TAI-M004-WEB-REQUIREDNESS-GATE-001 + CORR-001)
 
 **대상 코호트:** NON_LEGAL + evidence_count=0 + signature 필드 없음 = **65종 / 318필드**
 
@@ -249,27 +250,41 @@ Claude 분석에 사용한 `obj00/RUNTIME_FORM_SCHEMA_324_SNAPSHOT.csv`는 FK �
 | 분석 대상 문서 | 65 | BUILDING=7, COMMON=20, INDUSTRIAL=6, CONSTRUCTION=26, SPECIAL_FACILITY=6 |
 | 분석 대상 필드 | 318 | 65종 전체 필드 |
 | REQUIRED_BY_HUMAN 후보 | 231 | SOURCE is_mandatory=True 필드 |
-| OPTIONAL 후보 | 87 | SOURCE is_mandatory=False 필드 |
-| 타입 호환 PASS | 318 / 318 | 서명·증빙 제외 기준 (C2B E2E B3 근거) |
-| P0 필드 입력타입 검증 | 27 | P0 코호트 8종 포함 |
+| NOT_REQUIRED 후보 | 87 | SOURCE is_mandatory=False 필드 (CORR-001: OPTIONAL→NOT_REQUIRED) |
+| 타입 지원 PASS (RUNTIME_VERIFIED) | 290 | text=259, textarea=31. 운영 DB 실증 기준 |
+| 타입 지원 PASS (P0_VERIFIED) | 27 | P0 코호트 필드 (C2B E2E B3 근거 포함) |
+| 타입 지원 BLOCKED | 1 | DOC-SERA-011 / submitted_document_list (multi_row — 미지원) |
+| TYPE_COMPATIBLE_DOCS | 64 | DOC-SERA-011 제외 |
+| TYPE_BLOCKED_DOCS | 1 | DOC-SERA-011 (multi_row 별도 타입 계약 필요) |
+
+**input_type 실증 결과 (운영 DB SELECT, CORR-001 실행):**
+
+| input_type | 건수 | 편집기 지원 (SUPPORTED_FIELD_TYPES) | 판정 |
+|---|---|---|---|
+| `text` | 286 | SUPPORTED | PASS |
+| `textarea` | 31 | SUPPORTED | PASS |
+| `multi_row` | 1 | NOT_SUPPORTED | BLOCKED_UNSUPPORTED_TYPE |
+
+> 편집기 계약: `useDocumentFormsEditor.ts` SUPPORTED_FIELD_TYPES = `{'text', 'textarea', 'date', 'signature'}`. `multi_row` → `UNKNOWN_FIELD_TYPE:multi_row` 에러 발생.
 
 **게이트 판정:**
 
 | Gate | 판정 | 근거 |
 |---|---|---|
 | PARENT_SCHEMA_GATE | **BLOCKED** (65종 전부) | 스키마 status=CANDIDATE. APPROVED_FOR_RUNTIME_USE 필요 |
-| FIELD_STATUS_GATE | **BLOCKED** (318필드 전부) | required_status=CANDIDATE_ONLY. REQUIRED_BY_HUMAN/OPTIONAL 전환 필요 |
+| FIELD_STATUS_GATE | **BLOCKED** (318필드 전부) | required_status=CANDIDATE_ONLY. REQUIRED_BY_HUMAN/NOT_REQUIRED 전환 필요 |
 | EVIDENCE_GATE | NOT_APPLICABLE | evidence_count=0 (65종 전부) |
 | SIGNATURE_GATE | NOT_APPLICABLE | signature 필드 없음 (65종 전부) |
+| TYPE_COMPATIBILITY | **BLOCKED** (1필드) | DOC-SERA-011/submitted_document_list: multi_row 미지원 |
 
 **기술적 변경 준비 상태:**
-- 318필드 전부 `CHANGE_READY=YES_PENDING_PRJ_APPROVAL`
-- PRJ Gate 승인 시 필요 DB 변경: `runtime_form_schema.status` UPDATE 65건 + `runtime_field.required_status` UPDATE 318건
-- PROD_DB_WRITE=0 / MIGRATION=0 (이번 WO 범위)
+- 317필드 `CHANGE_READY=YES_PENDING_PRJ_APPROVAL` (64종 전체 + DOC-SERA-011 4필드)
+- 1필드 `CHANGE_READY=NO_TYPE_CONTRACT_REQUIRED` (DOC-SERA-011/submitted_document_list)
+- DOC-SERA-011: 4필드는 PRJ 승인 후 변경 가능. 1필드(multi_row)는 타입 계약 해소 전 차단 유지
 
 **활성화 경로 (PRJ Gate 승인 후):**
-1. `runtime_form_schema.status`: CANDIDATE → APPROVED_FOR_RUNTIME_USE (65건)
-2. `runtime_field.required_status`: CANDIDATE_ONLY → REQUIRED_BY_HUMAN(231건) / OPTIONAL(87건)
+1. `runtime_form_schema.status`: CANDIDATE → APPROVED_FOR_RUNTIME_USE (64종. DOC-SERA-011은 타입 계약 해소 후)
+2. `runtime_field.required_status`: CANDIDATE_ONLY → REQUIRED_BY_HUMAN(231건) / NOT_REQUIRED(87건)
 
 **산출물:**
 - `docs/document-engine/M004_FIELD_REQUIREDNESS_GATE.csv` (318행, 18컬럼 — 필드별 상세)
@@ -360,37 +375,51 @@ FORM_CONFORMANCE_EVIDENCE_FILE = docs/document-engine/M004_FORM_CONFORMANCE_EVID
 
 ```
 WO = WO-TAI-M004-WEB-REQUIREDNESS-GATE-001
+STATUS = SUPERSEDED_BY_CORR-001 (수치 정정됨 — 아래 CORR-001 블록 참조)
+```
 
-SCOPE_NONLEGAL_NO_EVIDENCE_SIGNATURE = 65
-FIELD_CONTRACT_CHECKED = 318
-REQUIREDNESS_MAPPING_SUPPORTED = 318
-REQUIREDNESS_MAPPING_BLOCKED = 0
-  → REQUIRED_BY_HUMAN_CANDIDATE = 231
-  → OPTIONAL_CANDIDATE = 87
+```
+WO = WO-TAI-M004-WEB-REQUIREDNESS-GATE-001-CORR-001
 
-EDITOR_TYPE_PASS = 318
-EDITOR_TYPE_BLOCKED = 0
+SOURCE_HEAD = 494f2f61
+RESULT_COMMIT = [pending — 이 커밋]
+
+DOCS_CHECKED = 65
+FIELDS_CHECKED = 318
+
+REQUIRED_BY_HUMAN_CANDIDATE = 231
+NOT_REQUIRED_CANDIDATE = 87
+INVALID_OPTIONAL_REMAINING = 0
+
+EDITOR_SUPPORTED_FIELDS = 317
+EDITOR_UNSUPPORTED_FIELDS = 1
+TYPE_COMPATIBLE_DOCS = 64
+TYPE_BLOCKED_DOCS = 1
+
+DOC_SERA_011 = BLOCKED_UNSUPPORTED_TYPE (submitted_document_list: multi_row)
+
+INPUT_TYPE_DISTRIBUTION = text=286 / textarea=31 / multi_row=1
+INPUT_TYPE_VERIFIED_FROM_DB = 291 (RUNTIME_VERIFIED) + 27 (P0_VERIFIED) = 318
+SUPPORTED_FIELD_TYPES_CONTRACT = useDocumentFormsEditor.ts: {text, textarea, date, signature}
+
 PARENT_SCHEMA_GATE = BLOCKED (65종 전부 SCHEMA_CANDIDATE)
 FIELD_STATUS_GATE = BLOCKED (318필드 전부 CANDIDATE_ONLY)
-EVIDENCE_GATE = NOT_APPLICABLE (65종 evidence_count=0)
-SIGNATURE_GATE = NOT_APPLICABLE (65종 signature 필드 없음)
+EVIDENCE_GATE = NOT_APPLICABLE (변동 없음)
+SIGNATURE_GATE = NOT_APPLICABLE (변동 없음)
 
-TECHNICALLY_CHANGE_READY = 318 fields / 65 schemas
-SCHEMA_STATUS_CHANGE_REQUIRED = 65건 CANDIDATE→APPROVED_FOR_RUNTIME_USE
-FIELD_STATUS_CHANGE_REQUIRED = 318건 CANDIDATE_ONLY→REQUIRED_BY_HUMAN/OPTIONAL
-
-E2E_PRIOR_EVIDENCE_P0_LINKED = 8 docs (P0 Quality Audit 내 NON_LEGAL 포함)
-E2E_ENGINE_COMMON_LINKED = 65 docs (PR#678 208/208 PASS + C2B_BROWSER_SMOKE)
+CHANGE_READY_YES = 317 fields / 64+1_partial schemas
+CHANGE_READY_NO = 1 field (DOC-SERA-011/submitted_document_list)
+SCHEMA_STATUS_CHANGE_REQUIRED = 64건 즉시 + DOC-SERA-011 1건 타입계약 해소 후
 
 FIELD_REQUIREDNESS_GATE_FILE = docs/document-engine/M004_FIELD_REQUIREDNESS_GATE.csv (318행)
 DOC_REQUIREDNESS_SUMMARY_FILE = docs/document-engine/M004_65DOC_REQUIREDNESS_SUMMARY.csv (65행)
 
-NEW_CODE = 0
 PROD_DB_WRITE = 0
 MIGRATION = 0
+PRODUCTION_CODE_CHANGED = NO
 MERGE = NO
 DEPLOY = NO
 
 GPT_IV = PENDING
-OWNER_RELEASE = HOLD
+OWNER_GATE = PENDING
 ```
