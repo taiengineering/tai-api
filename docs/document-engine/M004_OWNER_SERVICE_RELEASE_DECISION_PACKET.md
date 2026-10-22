@@ -3,7 +3,8 @@
 > WO: WO-TAI-M004-AUTO-WEB-SERVICE-RELEASE-GATE-001  
 > 작성일: 2026-10-22  
 > 작성자: Claude Code (실행) — GPT 독립검증 대기  
-> 상태: GPT_IV_PENDING / OWNER_GATE_PENDING  
+> 상태: OWNER_DIRECTION_R1_APPLIED / GPT_IV_PENDING / OWNER_GATE_PENDING  
+> R1 정정 (2026-10-22): D1=LEGAL_FORM_CLASS 추가 / D2=AUTO_FORM 135→133 정정 / D3=C-3 삭제 / D4=SCHEMA_REVIEW_CANDIDACY→FORM_CONFORMANCE_STATUS  
 > 기준 데이터: 기존 스냅샷 + R2 binding + R3 handoff 수치 재사용. DB SELECT 0건 추가 수행.  
 > 변경: NEW_CODE=0 / PROD_DB_WRITE=0 / MIGRATION=0 / PR=0 / MERGE=0 / DEPLOY=0
 
@@ -23,10 +24,10 @@
 | R3 타입 호환 후보 | 225 (handoff 기준) |
 | R3 타입 갭 | 35 (handoff 기준) |
 | AUTO_SOURCE 코드 존재 (inspection/TBM) | 35 |
-| WEB SCHEMA GATE: READY_FOR_OWNER_REVIEW (no LEG) | 95 |
-| WEB SCHEMA GATE: READY_FOR_OWNER_REVIEW_WITH_LEG_GATE | 111 |
-| WEB SCHEMA GATE: AUTO_SOURCE_SEPARATE_TRACK | 35 |
-| WEB SCHEMA GATE: UNVERIFIED | 19 |
+| WEB SCHEMA GATE: FORM_CONTRACT_UNVERIFIED (no LEG) | 95 |
+| WEB SCHEMA GATE: FORM_CONTRACT_UNVERIFIED + LEG_GATE | 111 |
+| WEB SCHEMA GATE: NOT_APPLICABLE (AUTO_SOURCE 별도 트랙) | 35 |
+| WEB SCHEMA GATE: FORM_CONTRACT_UNVERIFIED (schema UNVERIFIED) | 19 |
 | LEG Gate 필요 (has_legal_form=True) | 138 |
 | 고객 자동입력 허용 | **0** |
 
@@ -80,38 +81,44 @@
 
 ## B. Owner 승인 필요 항목
 
-### B-1. WEB 스키마 승인 — 95건 (no LEG gate)
+### B-1. WEB 스키마 승인 — 95건 (LEG gate 없음)
 
 **설명:** 다음 조건을 모두 충족하는 문서
 
-- has_legal_form=False
-- AUTO_SOURCE 별도 트랙 아님
+- LEGAL_FORM_CLASS = NON_LEGAL (has_legal_form=False)
+- AUTO_SOURCE 별도 트랙 아님 (FORM_CONFORMANCE_STATUS ≠ NOT_APPLICABLE)
 - doc_format ≠ ORIGINAL_ONLY
 - field_count > 0
 
 **차단 원인:** 스키마 CANDIDATE. `CANDIDATE → APPROVED_FOR_RUNTIME_USE` 전환에 Owner+PRJ Gate 필요.
+
+**FORM_CONFORMANCE_STATUS:** 95건 전부 `FORM_CONTRACT_UNVERIFIED`  
+(required_fields 존재, 스키마 있음 — 필드 키 수준 대조는 R2 ZIP 96d71937 기반 별도 검증 필요)
 
 **Owner 결정 필요 내용:**
 1. 이 95건 중 실제 웹 편집 서비스를 제공할 문서 ID 확정
 2. 각 문서의 스키마 승인 기준 (필드 구성, 편집기 호환성 여부)
 3. 개별 승인 시 PRJ Gate를 통한 DB 변경 승인
 
-**참고 파일:** `M004_WEB_SCHEMA_APPROVAL_MATRIX.csv` — SCHEMA_REVIEW_CANDIDACY = READY_FOR_OWNER_REVIEW
+**참고 파일:** `M004_WEB_SCHEMA_APPROVAL_MATRIX.csv` — FORM_CONFORMANCE_STATUS = FORM_CONTRACT_UNVERIFIED (LEG_GATE_REQUIRED = NO)
 
 ### B-2. WEB 스키마 승인 — 111건 (LEG gate 추가 필요)
 
-**설명:** has_legal_form=True인 문서. 스키마 승인 외에 법령 게이트 별도 필요.
+**설명:** LEGAL_FORM_CLASS ≠ NON_LEGAL인 문서. 스키마 승인 외에 법령 게이트 별도 필요.
 
 **차단 원인:**
 1. 스키마 CANDIDATE (B-1과 동일)
 2. 법정서식: LEG Gate 미충족 (doc_rule_mapping 전건 PENDING, FORM647 BLOCKED)
+
+**FORM_CONFORMANCE_STATUS:** 111건 전부 `FORM_CONTRACT_UNVERIFIED`  
+(required_fields 존재, 스키마 있음 — 필드 키 수준 대조는 R2 ZIP 96d71937 기반 별도 검증 필요)
 
 **Owner 결정 필요 내용:**
 1. 법정서식 WEB 제공 시 LEG Gate를 어떻게 처리할 것인가
 2. 법령 검증 완료 전 임시 WEB 제공 가능 여부 (현재 정책상 BLOCKED)
 3. Gate C 해소 경로 (LEG + PRJ 공동 승인 필요)
 
-**참고 파일:** `M004_WEB_SCHEMA_APPROVAL_MATRIX.csv` — SCHEMA_REVIEW_CANDIDACY = READY_FOR_OWNER_REVIEW_WITH_LEG_GATE
+**참고 파일:** `M004_WEB_SCHEMA_APPROVAL_MATRIX.csv` — FORM_CONFORMANCE_STATUS = FORM_CONTRACT_UNVERIFIED (LEG_GATE_REQUIRED = YES)
 
 ### B-3. AUTO_SOURCE 고객 연결 승인 — 35건
 
@@ -128,9 +135,20 @@
 
 **참고 파일:** `M004_AUTO_SAFETY_GATE.csv` — OVERALL=AUTO_SOURCE_CODE_EXISTS_CUSTOMER_BLOCKED
 
-### B-4. AUTO_FORM 법정 자동입력 — 135건 (tai_auto=True 중 R2 미확정)
+### B-4. AUTO_FORM 법정 자동입력 — 133건 (tai_auto=True 중 R2 UNVERIFIED)
 
-**설명:** tai_auto=True이나 R2 바인딩 증거 없는 134건 + R2 EXACT_CONTRACT 2건(GPT 보류) 중 non-exact 133건.
+**수치 정정 (D2):**
+
+| 구분 | 건수 |
+|---|---|
+| tai_auto=True 전체 | 134 |
+| tai_auto=False 전체 | 126 |
+| R2 EXACT_CONTRACT 중 tai_auto=True | 1 (DOC-BLD-020/address) |
+| R2 EXACT_CONTRACT 중 tai_auto=False | 1 (DOC-OSH-049/work_location) |
+| tai_auto=True UNVERIFIED (미확정) | **133** (= 134 − 1 EXACT) |
+
+**설명:** tai_auto=True 134건 중 R2 EXACT_CONTRACT 1건(GPT 보류 중) 제외 133건.  
+R2 EXACT_CONTRACT 2건 모두 effective_safe=False (A-3 참조) — 자동입력 차단 유지.
 
 **차단 원인:** R2 binding = UNVERIFIED. effective_safe=0 전체 유지.
 
@@ -167,14 +185,6 @@ Claude 분석에 사용한 `obj00/RUNTIME_FORM_SCHEMA_324_SNAPSHOT.csv`는 FK �
 
 **수정 불필요:** 차단이 정상. 스키마 승인 완료 시 자동 해제됨.
 
-### C-3. TBM DOC-CON-012 _FETCHERS 미등록
-
-**현황:** `21_TEMPLATE_RUNTIME_STATE_MATRIX.csv` 확인: DOC-CON-012는 TBM source 신호이나 `_FETCHERS` dict에 미등록. DOC-OSH-056만 OLD path 등록.
-
-**영향:** DOC-CON-012의 AUTO_SOURCE 기능 불가.
-
-**수정 필요 여부:** `routers/document_engine_api.py`의 `_FETCHERS` dict에 DOC-CON-012 추가. Owner 승인 후 코드 변경 최소화.
-
 ---
 
 ## 통합 차단 상태 (문서 ID별)
@@ -182,14 +192,14 @@ Claude 분석에 사용한 `obj00/RUNTIME_FORM_SCHEMA_324_SNAPSHOT.csv`는 FK �
 | 상태 | 건수 | 설명 |
 |---|---|---|
 | WEB READY | 0 | CANDIDATE 스키마 0 APPROVED |
-| WEB READY_FOR_OWNER_REVIEW (LEG 없음) | 95 | 스키마 승인만 필요 |
-| WEB READY_FOR_OWNER_REVIEW (LEG 있음) | 111 | 스키마 + LEG Gate |
-| WEB AUTO_SOURCE_SEPARATE_TRACK | 35 | 점검/TBM 별도 경로 |
-| WEB UNVERIFIED | 19 | 증거 부족 |
+| WEB FORM_CONTRACT_UNVERIFIED (LEG gate 없음) | 95 | 스키마 승인만 필요. LEGAL_FORM_CLASS=NON_LEGAL |
+| WEB FORM_CONTRACT_UNVERIFIED (LEG gate 필요) | 111 | 스키마 + LEG Gate. LEGAL_FORM_CLASS≠NON_LEGAL |
+| WEB NOT_APPLICABLE (AUTO_SOURCE 별도 트랙) | 35 | 점검/TBM 별도 경로 |
+| WEB FORM_CONTRACT_UNVERIFIED (schema UNVERIFIED) | 19 | schema 증거 부족 |
 | AUTO_SOURCE 고객 연결 BLOCKED | 35 | 코드 있음, 프론트 미연결 |
-| AUTO_FORM legal prefill BLOCKED (tai_auto) | 123 | 바인딩 미확립 |
-| AUTO_FORM NOT_APPLICABLE | 100 | auto 신호 없음 |
-| AUTO_FORM OWNER_PENDING (R2 EXACT → GPT override) | 2 | 재검증 필요 |
+| AUTO_FORM UNVERIFIED (tai_auto=True, R2 미확정) | 133 | 바인딩 미확립 (D2 정정) |
+| AUTO_FORM NOT_APPLICABLE (tai_auto=False) | 126 | auto 신호 없음 |
+| AUTO_FORM OWNER_PENDING (R2 EXACT → GPT override) | 2 | effective_safe=False (A-3) |
 | CUSTOMER_AUTOFILL_PERMITTED | 0 | 전건 NO |
 
 > 하나의 문서가 WEB과 AUTO 양쪽 항목에 중복 포함될 수 있으므로 합계 ≠ 260.
@@ -200,10 +210,10 @@ Claude 분석에 사용한 `obj00/RUNTIME_FORM_SCHEMA_324_SNAPSHOT.csv`는 FK �
 
 | 순위 | 결정 ID | 내용 | 산출물 참조 |
 |---|---|---|---|
-| P1 | B-1-SCHEMA | WEB 95건 중 첫 승인 대상 doc_id 선정 | M004_WEB_SCHEMA_APPROVAL_MATRIX.csv |
+| P1 | B-1-SCHEMA | WEB 95건 중 첫 승인 대상 doc_id 선정 | M004_WEB_SCHEMA_APPROVAL_MATRIX.csv — FORM_CONFORMANCE_STATUS=FORM_CONTRACT_UNVERIFIED, LEG_GATE_REQUIRED=NO |
 | P2 | B-3-AUTO | AUTO_SOURCE 점검/TBM 고객 연결 경로 결정 | M004_AUTO_SAFETY_GATE.csv |
-| P3 | B-2-LEG | 법정서식 111건 LEG Gate 경로 확정 | LEG 협의 필요 |
-| P4 | B-4-AUTO2 | tai_auto=True 134건 R2 재검증 범위 | R2 ZIP 96d71937 기반 |
+| P3 | B-2-LEG | 법정서식 111건 LEG Gate 경로 확정 | LEG 협의 필요. LEGAL_FORM_CLASS 분포: DIGITAL=88, COPY=31, ORIGINAL=19 |
+| P4 | B-4-AUTO2 | tai_auto=True 133건(D2 정정) R2 재검증 범위 | R2 ZIP 96d71937 기반 |
 | ~~P3~~ | ~~C-1-FK~~ | ~~catalog_document_id Migration 승인~~ | **GPT IV 정정: FK 이미 연결됨, Migration 불필요** |
 
 ---
@@ -234,16 +244,25 @@ MODE_SOURCE_CONFIRMED = 0 (문서별 Owner 승인 목록 없음)
 MODE_OWNER_PENDING = 260
 MODE_UNVERIFIED = 0 (전건 검토됨, PENDING/BLOCKED 분류 완료)
 
-WEB_READY_FOR_OWNER_REVIEW = 95 (no LEG gate)
-WEB_READY_FOR_OWNER_REVIEW_WITH_LEG_GATE = 111
-WEB_BLOCKED_AUTO_SOURCE = 35
+WEB_FORM_CONTRACT_UNVERIFIED_NO_LEG = 95 (LEGAL_FORM_CLASS=NON_LEGAL)
+WEB_FORM_CONTRACT_UNVERIFIED_WITH_LEG = 111 (LEGAL_FORM_CLASS≠NON_LEGAL)
+WEB_NOT_APPLICABLE_AUTO_SOURCE = 35
 WEB_BLOCKED_SCHEMA_ONLY = 260 (primary block: schema CANDIDATE)
-WEB_BLOCKED_LEGAL = 138 (has_legal_form=True, subset of 260)
-WEB_UNVERIFIED = 19
+WEB_BLOCKED_LEGAL = 138 (LEGAL_FORM_CLASS≠NON_LEGAL, subset of 260)
+WEB_FORM_CONTRACT_UNVERIFIED_SCHEMA_UNVERIFIED = 19
+LEGAL_FORM_CLASS_NON_LEGAL = 122
+LEGAL_FORM_CLASS_DIGITAL_METADATA = 88
+LEGAL_FORM_CLASS_COPY_METADATA = 31
+LEGAL_FORM_CLASS_ORIGINAL_ONLY = 19
 
 AUTO_EXISTING_SOURCE = 35 (코드 존재, 고객 연결 BLOCKED)
 AUTO_SAFE_APPROVED_FIELDS = 0
 AUTO_BLOCKED_FIELDS = 1246 (effective_safe=0, R2 전건)
+AUTO_FORM_TAI_AUTO_TRUE = 134
+AUTO_FORM_TAI_AUTO_FALSE = 126
+AUTO_FORM_EXACT_CONTRACT_TAI_AUTO_TRUE = 1 (DOC-BLD-020/address)
+AUTO_FORM_EXACT_CONTRACT_TAI_AUTO_FALSE = 1 (DOC-OSH-049/work_location)
+AUTO_FORM_TAI_AUTO_TRUE_UNVERIFIED = 133 (D2 정정)
 
 G1_MATRIX = docs/document-engine/M004_SERVICE_MODE_MATRIX.csv (260행)
 G2_MATRIX = docs/document-engine/M004_WEB_SCHEMA_APPROVAL_MATRIX.csv (260행)
