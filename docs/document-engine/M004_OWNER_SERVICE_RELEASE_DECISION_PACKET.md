@@ -3,8 +3,9 @@
 > WO: WO-TAI-M004-AUTO-WEB-SERVICE-RELEASE-GATE-001  
 > 작성일: 2026-10-22  
 > 작성자: Claude Code (실행) — GPT 독립검증 대기  
-> 상태: OWNER_DIRECTION_R1_APPLIED / GPT_IV_PENDING / OWNER_GATE_PENDING  
+> 상태: FORM_CONFORMANCE_MAINLINE_001_APPLIED / GPT_IV_PENDING / OWNER_GATE_PENDING  
 > R1 정정 (2026-10-22): D1=LEGAL_FORM_CLASS 추가 / D2=AUTO_FORM 135→133 정정 / D3=C-3 삭제 / D4=SCHEMA_REVIEW_CANDIDACY→FORM_CONFORMANCE_STATUS  
+> WO-MAINLINE (2026-10-22): CORR-A 오류 정정 + FORM_CONFORMANCE 260건 판정 + SCHEMA_PROMOTION_READY 24건 확인  
 > 기준 데이터: 기존 스냅샷 + R2 binding + R3 handoff 수치 재사용. DB SELECT 0건 추가 수행.  
 > 변경: NEW_CODE=0 / PROD_DB_WRITE=0 / MIGRATION=0 / PR=0 / MERGE=0 / DEPLOY=0
 
@@ -95,8 +96,10 @@
 **FORM_CONFORMANCE_STATUS:** 95건 전부 `FORM_CONTRACT_UNVERIFIED`  
 (required_fields 존재, 스키마 있음 — 필드 키 수준 대조는 R2 ZIP 96d71937 기반 별도 검증 필요)
 
-**Owner 결정 필요 내용:**
-1. 이 95건 중 실제 웹 편집 서비스를 제공할 문서 ID 확정
+**Owner 결정 필요 내용:**  
+> Owner 역할: 운영 변경 승인 + 고객 서비스 공개 승인. 기술 정합 증거는 FORM_CONFORMANCE_EVIDENCE.csv 참조.
+
+1. 이 95건 중 실제 웹 편집 서비스를 제공할 문서 ID 확정 (증거 기반: FORM_CONFORMANCE_STATUS 확인 후)
 2. 각 문서의 스키마 승인 기준 (필드 구성, 편집기 호환성 여부)
 3. 개별 승인 시 PRJ Gate를 통한 DB 변경 승인
 
@@ -143,8 +146,8 @@
 |---|---|
 | tai_auto=True 전체 | 134 |
 | tai_auto=False 전체 | 126 |
-| R2 EXACT_CONTRACT 중 tai_auto=True | 1 (DOC-BLD-020/address) |
-| R2 EXACT_CONTRACT 중 tai_auto=False | 1 (DOC-OSH-049/work_location) |
+| R2 EXACT_CONTRACT 중 tai_auto=True | 1 (DOC-OSH-049/work_location) |
+| R2 EXACT_CONTRACT 중 tai_auto=False | 1 (DOC-BLD-020/address) |
 | tai_auto=True UNVERIFIED (미확정) | **133** (= 134 − 1 EXACT) |
 
 **설명:** tai_auto=True 134건 중 R2 EXACT_CONTRACT 1건(GPT 보류 중) 제외 133건.  
@@ -218,11 +221,29 @@ Claude 분석에 사용한 `obj00/RUNTIME_FORM_SCHEMA_324_SNAPSHOT.csv`는 FK �
 
 ---
 
+## D. 입력폼 정합성 검증 결과 (WO-TAI-M004-FORM-CONFORMANCE-MAINLINE-001)
+
+| 항목 | 수치 | 근거 |
+|---|---|---|
+| FORM_CONFORMANCE_PASS | **24** | P0 Wave 1+2 field_key 완전 일치 (WO-DOC-OBJ02-C1-P0-CANDIDATE-QUALITY-AUDIT-001) |
+| FORM_CONTRACT_UNVERIFIED | **236** | P0 외: runtime field_key 데이터 없음 (필드 수 일치 확인됨, 키 수준 미검증) |
+| FORM_REFERENCE_MISSING | **0** | 260건 전부 required_fields 존재 |
+| NOT_APPLICABLE (G2) | **11** | 비P0 AUTO_SOURCE (WEB 제공 범위 미확정) |
+| SCHEMA_PROMOTION_READY | **24** | FORM_CONFORMANCE_PASS 전건. PRJ 운영 변경 승인 별도 필요 |
+| SCHEMA_PROMOTION_BLOCKED | **0** | P0 중 LEGAL_ORIGINAL_ONLY 없음 |
+| SCHEMA_PROMOTION_UNVERIFIED | **236** | FORM_CONTRACT_UNVERIFIED 전건 |
+
+**SCHEMA_PROMOTION_READY 24건:** P0 Wave 1+2 (CHK/INSP/PPE/EQUIP/TBM). PRJ Gate 운영 변경 승인 후 `runtime_form_schema.status CANDIDATE → APPROVED_FOR_RUNTIME_USE` 가능. 운영 DB DDL/DML 금지 유지.
+
+**FORM_CONFORMANCE_EVIDENCE:** `docs/document-engine/M004_FORM_CONFORMANCE_EVIDENCE.csv` (260행, 24컬럼)
+
+---
+
 ## 다음 단계
 
-1. **GPT 독립검증 (진행 중)**: G1/G2/G3 개별 문서 ID·분류 산식·R2/R3 근거 대조 — 현재 NOT_VERIFIED
-2. **Owner 결정**: B-1 중 최소 1건 doc_id 확정 → G2 스키마 승격 (C-1 Migration 불필요 — FK 이미 연결)
-3. **활성화 단계**: 개별 승인 doc_id에 한해 `runtime_form_schema.status` UPDATE 실행 (FK 없이 가능)
+1. **GPT 독립검증 (진행 중)**: G1/G2/G3 개별 문서 ID·분류 산식·R2/R3 근거 대조 + FORM_CONFORMANCE_EVIDENCE 24건 PASS 판정 기준 독립검증
+2. **Owner 결정**: SCHEMA_PROMOTION_READY 24건 중 PRJ Gate 승인 대상 doc_id 확정 → G2 스키마 승격 (FK 이미 연결)
+3. **활성화 단계**: 개별 승인 doc_id에 한해 `runtime_form_schema.status` UPDATE 실행
 4. **배포**: Railway HOLD 유지. 코드 변경 없으므로 배포 불필요
 
 ---
@@ -246,7 +267,8 @@ MODE_UNVERIFIED = 0 (전건 검토됨, PENDING/BLOCKED 분류 완료)
 
 WEB_FORM_CONTRACT_UNVERIFIED_NO_LEG = 95 (LEGAL_FORM_CLASS=NON_LEGAL)
 WEB_FORM_CONTRACT_UNVERIFIED_WITH_LEG = 111 (LEGAL_FORM_CLASS≠NON_LEGAL)
-WEB_NOT_APPLICABLE_AUTO_SOURCE = 35
+WEB_FORM_CONFORMANCE_PASS = 24 (P0 Wave1+2, SCHEMA_PROMOTION_READY)
+WEB_NOT_APPLICABLE_AUTO_SOURCE = 11 (비P0 AUTO_SOURCE, FORM-C UNVERIFIED)
 WEB_BLOCKED_SCHEMA_ONLY = 260 (primary block: schema CANDIDATE)
 WEB_BLOCKED_LEGAL = 138 (LEGAL_FORM_CLASS≠NON_LEGAL, subset of 260)
 WEB_FORM_CONTRACT_UNVERIFIED_SCHEMA_UNVERIFIED = 19
@@ -260,14 +282,24 @@ AUTO_SAFE_APPROVED_FIELDS = 0
 AUTO_BLOCKED_FIELDS = 1246 (effective_safe=0, R2 전건)
 AUTO_FORM_TAI_AUTO_TRUE = 134
 AUTO_FORM_TAI_AUTO_FALSE = 126
-AUTO_FORM_EXACT_CONTRACT_TAI_AUTO_TRUE = 1 (DOC-BLD-020/address)
-AUTO_FORM_EXACT_CONTRACT_TAI_AUTO_FALSE = 1 (DOC-OSH-049/work_location)
+AUTO_FORM_EXACT_CONTRACT_TAI_AUTO_TRUE = 1 (DOC-OSH-049/work_location)
+AUTO_FORM_EXACT_CONTRACT_TAI_AUTO_FALSE = 1 (DOC-BLD-020/address)
 AUTO_FORM_TAI_AUTO_TRUE_UNVERIFIED = 133 (D2 정정)
 
 G1_MATRIX = docs/document-engine/M004_SERVICE_MODE_MATRIX.csv (260행)
 G2_MATRIX = docs/document-engine/M004_WEB_SCHEMA_APPROVAL_MATRIX.csv (260행)
 G3_MATRIX = docs/document-engine/M004_AUTO_SAFETY_GATE.csv (260행)
+FORM_CONFORMANCE_EVIDENCE = docs/document-engine/M004_FORM_CONFORMANCE_EVIDENCE.csv (260행)
 OWNER_DECISION_PACKET = docs/document-engine/M004_OWNER_SERVICE_RELEASE_DECISION_PACKET.md
+
+FORM_CONFORMANCE_PASS = 24
+FORM_CONTRACT_UNVERIFIED = 236
+FORM_REFERENCE_MISSING = 0
+SCHEMA_PROMOTION_READY = 24 (PRJ 운영 변경 승인 별도)
+SCHEMA_PROMOTION_BLOCKED = 0
+SCHEMA_PROMOTION_UNVERIFIED = 236
+E2E_PRIOR_EVIDENCE_LINKED = 24 (P0 Quality Audit)
+E2E_EVIDENCE_UNLOCATED = 236 (doc-specific E2E 미발견, 공통 엔진 PR#678 PASS)
 
 NEW_CODE = 0
 PROD_DB_WRITE = 0
@@ -278,4 +310,12 @@ DEPLOY = NO
 CLAUDE_RESULT = G1/G2/G3 매트릭스 + Owner 결정 패킷 생성 완료
 GPT_IV = PENDING
 OWNER_GATE = PENDING
+FORM_CONFORMANCE_MAINLINE_STATUS = CORR_A_APPLIED
+FORM_CONFORMANCE_PASS = 24
+FORM_CONTRACT_UNVERIFIED = 236
+SCHEMA_PROMOTION_READY = 24
+SCHEMA_PROMOTION_BLOCKED = 0
+SCHEMA_PROMOTION_UNVERIFIED = 236
+G2_NOT_APPLICABLE_REMAINING = 11
+FORM_CONFORMANCE_EVIDENCE_FILE = docs/document-engine/M004_FORM_CONFORMANCE_EVIDENCE.csv
 ```
