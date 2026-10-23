@@ -42,6 +42,8 @@ WO-TAI-SEC-SEARCHPATH-REM97-C3-W2-SOURCE-001 정적 계약 테스트
   W2-SQL-34  W1/W3/W4/W5 범위 외 함수 미포함
   W2-SQL-35  OID 배열에 4개 OID 포함 (18565/246342/246455/18569)
   W2-SQL-36  Volatility 배열에 v/i/i/i 패턴 포함
+  W2-SQL-37  PRE — Parallel 기준선 검증 포함 (proparallel = 'u')
+  W2-SQL-38  POST — Parallel 불변 검증 포함
   W2-BEH-01  generate_request_no 본문 MD5 기준선
   W2-BEH-02  help_blocks_valid 본문 MD5 기준선
   W2-BEH-03  help_doc_include_refs 본문 MD5 기준선
@@ -393,6 +395,22 @@ def test_w2_sql_36_volatility_array():
         "v_volats ARRAY['v','i','i','i'] 패턴 없음"
 
 
+def test_w2_sql_37_pre_parallel_baseline():
+    """W2-SQL-37: PRE — Parallel 기준선 검증 포함 (proparallel = 'u')"""
+    nc = _nc()
+    assert re.search(r"V_PARALLEL\s+IS\s+DISTINCT\s+FROM\s+'U'", nc), \
+        "PRE v_parallel IS DISTINCT FROM 'u' 검증 없음"
+    assert "PROPARALLEL" in nc, "proparallel 열 조회 없음"
+
+
+def test_w2_sql_38_post_parallel_unchanged():
+    """W2-SQL-38: POST — Parallel 불변 검증 포함"""
+    nc = _nc()
+    matches = re.findall(r"V_PARALLEL\s+IS\s+DISTINCT\s+FROM\s+'U'", nc)
+    assert len(matches) >= 2, \
+        f"POST v_parallel 불변 검증 횟수={len(matches)}, 기대≥2 (PRE+POST)"
+
+
 # ── 함수 본문 행동 계약 (MD5 기준선) ──────────────────────────────────────────
 
 def test_w2_beh_01_generate_request_no_md5():
@@ -426,8 +444,8 @@ def test_w2_beh_04_jsonb_to_text_array_md5():
 # ── 소스 SHA256 고정 ───────────────────────────────────────────────────────────
 
 def test_w2_src_01_migration_sha256():
-    """W2-SRC-01: W2 Migration SHA256 고정"""
-    expected = "d181f4d2fb35e43f38a4501d17c117f65ccb6e07c56e11fe9fa045d63327262c"
+    """W2-SRC-01: W2 Migration SHA256 고정 (R1: proparallel 검증 추가 반영)"""
+    expected = "8b4fd42a0ac8c675c4f26c7e70da51474a734f26e66eb455454c0fb6f06f3cec"
     actual = _sha256(_MIGRATION_PATH)
     assert actual == expected, f"W2 Migration SHA256 불일치: {actual}"
 

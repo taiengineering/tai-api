@@ -54,6 +54,7 @@ DECLARE
   v_proconfig text[];
   v_proacl    text;
   v_volat     char;
+  v_parallel  char;
 
 BEGIN
   FOR i IN 1..array_length(v_fn_sigs, 1) LOOP
@@ -115,6 +116,12 @@ BEGIN
     SELECT p.provolatile INTO v_volat FROM pg_proc p WHERE p.oid = v_oid;
     IF v_volat IS DISTINCT FROM v_volats[i] THEN
       RAISE EXCEPTION 'PRE FAILED: % volatility mismatch (expected %, got %).', v_fn_sig, v_volats[i], v_volat;
+    END IF;
+
+    -- 1-k. Parallel 기준선 확인 (u = UNSAFE)
+    SELECT p.proparallel INTO v_parallel FROM pg_proc p WHERE p.oid = v_oid;
+    IF v_parallel IS DISTINCT FROM 'u' THEN
+      RAISE EXCEPTION 'PRE FAILED: % proparallel is %, expected u.', v_fn_sig, v_parallel;
     END IF;
 
   END LOOP;
@@ -193,6 +200,7 @@ DECLARE
   v_proconfig text[];
   v_proacl    text;
   v_volat     char;
+  v_parallel  char;
 
 BEGIN
   FOR i IN 1..array_length(v_fn_sigs, 1) LOOP
@@ -238,6 +246,12 @@ BEGIN
     SELECT p.provolatile INTO v_volat FROM pg_proc p WHERE p.oid = v_oid;
     IF v_volat IS DISTINCT FROM v_volats[i] THEN
       RAISE EXCEPTION 'POST FAILED: % volatility changed (expected %, got %).', v_fn_sig, v_volats[i], v_volat;
+    END IF;
+
+    -- 3-h. Parallel 불변 확인 (u = UNSAFE)
+    SELECT p.proparallel INTO v_parallel FROM pg_proc p WHERE p.oid = v_oid;
+    IF v_parallel IS DISTINCT FROM 'u' THEN
+      RAISE EXCEPTION 'POST FAILED: % proparallel changed (got %).', v_fn_sig, v_parallel;
     END IF;
 
   END LOOP;
