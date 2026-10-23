@@ -53,12 +53,12 @@ async def preview_document(
         raise HTTPException(404, f"No fetcher registered for {doc_id}")
 
     try:
-        data = await fetcher.fetch(
-            factory_id=factory_id,
-            date_from=date_from,
-            date_to=date_to,
-            meeting_id=meeting_id,
-        )
+        data = await fetcher.fetch({
+            "factory_id": factory_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            "meeting_id": meeting_id,
+        })
         html = await render_document_html(doc_id, data)
         return HTMLResponse(content=html)
     except FileNotFoundError as e:
@@ -75,13 +75,12 @@ async def generate_document(doc_id: str, req: GenerateRequest):
         raise HTTPException(404, f"No fetcher registered for {doc_id}")
 
     try:
-        data = await fetcher.fetch(
-            factory_id=req.factory_id,
-            date_from=req.date_from,
-            date_to=req.date_to,
-            meeting_id=req.meeting_id,
-            additional_data=req.additional_data,
-        )
+        data = await fetcher.fetch({
+            "factory_id": req.factory_id,
+            "date_from": req.date_from,
+            "date_to": req.date_to,
+            "meeting_id": req.meeting_id,
+        })
         pdf_bytes = await generate_document_pdf(doc_id, data)
 
         filename = f"{doc_id}_{req.factory_id[:8]}_{data.get('work_date', 'doc')}.pdf"
