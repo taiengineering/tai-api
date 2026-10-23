@@ -281,7 +281,14 @@ def get_factory(factory_id: str, current: dict = Depends(get_current_user)):
     ).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
-    return {"status": "success", "data": res.data}
+    data = dict(res.data)
+    company_id = data.get("company_id")
+    company_name = ""
+    if company_id:
+        comp = supabase.table("companies").select("name").eq("id", company_id).limit(1).execute()
+        company_name = (comp.data[0].get("name") or "") if comp.data else ""
+    data["company_name"] = company_name
+    return {"status": "success", "data": data}
 
 
 # ============================================================
