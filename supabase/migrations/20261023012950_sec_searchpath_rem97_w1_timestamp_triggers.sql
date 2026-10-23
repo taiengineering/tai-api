@@ -125,6 +125,109 @@ BEGIN
       RAISE EXCEPTION 'PRE FAILED: % trigger count mismatch (expected %, got %).', v_fn_sig, v_trigs[i], v_trig_cnt;
     END IF;
 
+    -- 1-k. 연결 트리거 모두 활성 상태 확인 (tgenabled = 'O')
+    IF EXISTS (
+      SELECT 1 FROM pg_trigger t WHERE t.tgfoid = v_oid AND t.tgenabled IS DISTINCT FROM 'O'
+    ) THEN
+      RAISE EXCEPTION 'PRE FAILED: % has disabled trigger.', v_fn_sig;
+    END IF;
+
+  END LOOP;
+END;
+$$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- STEP 1B: PRE 트리거 식별자·정의 기준선 검증 (17건)
+-- ─────────────────────────────────────────────────────────────────────────────
+DO $$
+DECLARE
+  -- (trigger_name, function_name, triggerdef_md5) 기준선
+  v_tg_names text[] := ARRAY[
+    'trg_master_fields_updated_at',
+    'help_doc_touch_trg',
+    'help_node_touch_trg',
+    'trg_inquiries_updated_at',
+    'trg_rtc_updated',
+    'trg_runtime_dependency_updated_at',
+    'trg_runtime_doc_updated_at',
+    'trg_runtime_evidence_updated_at',
+    'trg_runtime_schedule_updated_at',
+    'trg_runtime_task_updated_at',
+    'trg_user_profile_updated_at',
+    'trg_kosha_guide_body_touch',
+    'trg_cmc_updated_at',
+    'trg_documents_updated_at',
+    'trg_update_master_products_elec',
+    'trg_billing_keys_updated_at',
+    'trg_subscriptions_updated_at'
+  ];
+  v_tg_fns  text[] := ARRAY[
+    'fn_set_updated_at',
+    'help_touch_updated_at',
+    'help_touch_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'tg_kosha_guide_body_touch',
+    'update_cmc_updated_at',
+    'update_documents_timestamp',
+    'update_timestamp',
+    'update_updated_at_column',
+    'update_updated_at_column'
+  ];
+  v_tg_md5s text[] := ARRAY[
+    '31385e8917683003499dd127476c31a6',
+    '78772ce5158e8420bd8877f468d7c39c',
+    '1838c6df987051282aab56dc1496580a',
+    '355aa6ccf67978e624832828205b6ae9',
+    '30b73f8c98328db19ef52e0078e48c3e',
+    'fd73431d0070cd82d8c04ea150b46ad6',
+    '0fc2f219752ee5dc052e0ce3612d8f25',
+    'afa49c17f779436b900523b845289dc8',
+    'e0666511a85e9f1d193336d7890b012e',
+    'db5e339add68d968f6ee38f3ddba97a8',
+    'b8cbe767cc2b021ecf1f1d848195d801',
+    '4765b011abd404a5a59f390db6232d33',
+    '82fdc43c9bc7eb426a737f78c9274ffb',
+    '47782aad0d163b8b0575bb8a56c9c842',
+    'e5c63e70d5bba989e963f75b0d71baa3',
+    'cee5dddfb63a3bfd4b85a265df912645',
+    '3e4b19c7912516202eb46c0366df7069'
+  ];
+
+  i             int;
+  v_actual_md5  text;
+  v_enabled     char;
+
+BEGIN
+  FOR i IN 1..array_length(v_tg_names, 1) LOOP
+    SELECT md5(pg_get_triggerdef(t.oid)), t.tgenabled
+    INTO v_actual_md5, v_enabled
+    FROM pg_trigger t
+    JOIN pg_proc p ON t.tgfoid = p.oid
+    JOIN pg_namespace n ON p.pronamespace = n.oid
+    WHERE t.tgname = v_tg_names[i]
+      AND p.proname = v_tg_fns[i]
+      AND n.nspname = 'public';
+
+    IF v_actual_md5 IS NULL THEN
+      RAISE EXCEPTION 'PRE FAILED: trigger % for %() not found.',
+        v_tg_names[i], v_tg_fns[i];
+    END IF;
+    IF v_enabled IS DISTINCT FROM 'O' THEN
+      RAISE EXCEPTION 'PRE FAILED: trigger % is not enabled (tgenabled=%).',
+        v_tg_names[i], v_enabled;
+    END IF;
+    IF v_actual_md5 IS DISTINCT FROM v_tg_md5s[i] THEN
+      RAISE EXCEPTION 'PRE FAILED: trigger % definition changed (expected %, got %).',
+        v_tg_names[i], v_tg_md5s[i], v_actual_md5;
+    END IF;
+
   END LOOP;
 END;
 $$;
@@ -208,10 +311,10 @@ BEGIN
       RAISE EXCEPTION 'POST FAILED: % OID changed unexpectedly.', v_fn_sig;
     END IF;
 
-    -- 3-b. proconfig 설정 확인
+    -- 3-b. proconfig 정확 일치 확인 (NULL-safe, 추가 설정 불허)
     SELECT p.proconfig INTO v_proconfig FROM pg_proc p WHERE p.oid = v_oid;
-    IF NOT (v_proconfig @> ARRAY[c_search_path]::text[]) THEN
-      RAISE EXCEPTION 'POST FAILED: % search_path not set correctly (got %).', v_fn_sig, v_proconfig;
+    IF v_proconfig IS DISTINCT FROM ARRAY[c_search_path]::text[] THEN
+      RAISE EXCEPTION 'POST FAILED: % unexpected proconfig: %.', v_fn_sig, v_proconfig;
     END IF;
 
     -- 3-c. 함수 본문 MD5 불변 확인
@@ -242,6 +345,108 @@ BEGIN
     SELECT COUNT(*)::int INTO v_trig_cnt FROM pg_trigger t WHERE t.tgfoid = v_oid;
     IF v_trig_cnt IS DISTINCT FROM v_trigs[i] THEN
       RAISE EXCEPTION 'POST FAILED: % trigger count changed (expected %, got %).', v_fn_sig, v_trigs[i], v_trig_cnt;
+    END IF;
+
+    -- 3-h. 연결 트리거 모두 활성 상태 불변 확인 (tgenabled = 'O')
+    IF EXISTS (
+      SELECT 1 FROM pg_trigger t WHERE t.tgfoid = v_oid AND t.tgenabled IS DISTINCT FROM 'O'
+    ) THEN
+      RAISE EXCEPTION 'POST FAILED: % trigger became disabled.', v_fn_sig;
+    END IF;
+
+  END LOOP;
+END;
+$$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- STEP 3B: POST 트리거 식별자·정의 불변 검증 (17건)
+-- ─────────────────────────────────────────────────────────────────────────────
+DO $$
+DECLARE
+  v_tg_names text[] := ARRAY[
+    'trg_master_fields_updated_at',
+    'help_doc_touch_trg',
+    'help_node_touch_trg',
+    'trg_inquiries_updated_at',
+    'trg_rtc_updated',
+    'trg_runtime_dependency_updated_at',
+    'trg_runtime_doc_updated_at',
+    'trg_runtime_evidence_updated_at',
+    'trg_runtime_schedule_updated_at',
+    'trg_runtime_task_updated_at',
+    'trg_user_profile_updated_at',
+    'trg_kosha_guide_body_touch',
+    'trg_cmc_updated_at',
+    'trg_documents_updated_at',
+    'trg_update_master_products_elec',
+    'trg_billing_keys_updated_at',
+    'trg_subscriptions_updated_at'
+  ];
+  v_tg_fns  text[] := ARRAY[
+    'fn_set_updated_at',
+    'help_touch_updated_at',
+    'help_touch_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'set_updated_at',
+    'tg_kosha_guide_body_touch',
+    'update_cmc_updated_at',
+    'update_documents_timestamp',
+    'update_timestamp',
+    'update_updated_at_column',
+    'update_updated_at_column'
+  ];
+  v_tg_md5s text[] := ARRAY[
+    '31385e8917683003499dd127476c31a6',
+    '78772ce5158e8420bd8877f468d7c39c',
+    '1838c6df987051282aab56dc1496580a',
+    '355aa6ccf67978e624832828205b6ae9',
+    '30b73f8c98328db19ef52e0078e48c3e',
+    'fd73431d0070cd82d8c04ea150b46ad6',
+    '0fc2f219752ee5dc052e0ce3612d8f25',
+    'afa49c17f779436b900523b845289dc8',
+    'e0666511a85e9f1d193336d7890b012e',
+    'db5e339add68d968f6ee38f3ddba97a8',
+    'b8cbe767cc2b021ecf1f1d848195d801',
+    '4765b011abd404a5a59f390db6232d33',
+    '82fdc43c9bc7eb426a737f78c9274ffb',
+    '47782aad0d163b8b0575bb8a56c9c842',
+    'e5c63e70d5bba989e963f75b0d71baa3',
+    'cee5dddfb63a3bfd4b85a265df912645',
+    '3e4b19c7912516202eb46c0366df7069'
+  ];
+
+  i             int;
+  v_actual_md5  text;
+  v_enabled     char;
+
+BEGIN
+  FOR i IN 1..array_length(v_tg_names, 1) LOOP
+    SELECT md5(pg_get_triggerdef(t.oid)), t.tgenabled
+    INTO v_actual_md5, v_enabled
+    FROM pg_trigger t
+    JOIN pg_proc p ON t.tgfoid = p.oid
+    JOIN pg_namespace n ON p.pronamespace = n.oid
+    WHERE t.tgname = v_tg_names[i]
+      AND p.proname = v_tg_fns[i]
+      AND n.nspname = 'public';
+
+    IF v_actual_md5 IS NULL THEN
+      RAISE EXCEPTION 'POST FAILED: trigger % for %() not found.',
+        v_tg_names[i], v_tg_fns[i];
+    END IF;
+    IF v_enabled IS DISTINCT FROM 'O' THEN
+      RAISE EXCEPTION 'POST FAILED: trigger % became disabled (tgenabled=%).',
+        v_tg_names[i], v_enabled;
+    END IF;
+    IF v_actual_md5 IS DISTINCT FROM v_tg_md5s[i] THEN
+      RAISE EXCEPTION 'POST FAILED: trigger % definition changed (expected %, got %).',
+        v_tg_names[i], v_tg_md5s[i], v_actual_md5;
     END IF;
 
   END LOOP;

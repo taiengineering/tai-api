@@ -318,10 +318,10 @@ def test_w1_sql_28_pre_trigger_count_baseline():
 # ── POST 검증 내용 ────────────────────────────────────────────────────────────
 
 def test_w1_sql_29_post_proconfig_check():
-    """W1-SQL-29: POST — proconfig 설정 검증 포함"""
+    """W1-SQL-29: POST — proconfig 설정 검증 포함 (IS DISTINCT FROM, NULL-safe)"""
     nc = _nc()
-    assert re.search(r"PROCONFIG\s*@>", nc), \
-        "POST proconfig @> (contains) 검증 없음"
+    assert re.search(r"V_PROCONFIG\s+IS\s+DISTINCT\s+FROM\s+ARRAY\[C_SEARCH_PATH\]", nc), \
+        "POST proconfig IS DISTINCT FROM ARRAY[c_search_path] 검증 없음"
     assert "SEARCH_PATH=PG_CATALOG, PUBLIC, PG_TEMP" in nc, \
         "POST search_path 기대값 상수 없음"
 
@@ -371,6 +371,85 @@ def test_w1_sql_35_is_distinct_from_null_safe():
     assert count >= 5, f"IS DISTINCT FROM 횟수={count}, 최소 5건 기대"
 
 
+def test_w1_sql_r1_01_post_proconfig_exact_match():
+    """W1-SQL-R1-01: POST proconfig IS DISTINCT FROM 정확 일치 (NULL-safe, @> 제거)"""
+    nc = _nc()
+    # @> (contains) 검사 제거 확인
+    assert "PROCONFIG @>" not in nc, \
+        "POST proconfig @> (포함 검사) 발견 — IS DISTINCT FROM 으로 교체해야 함"
+    # IS DISTINCT FROM 정확 일치 확인
+    assert re.search(r"PROCONFIG\s+IS\s+DISTINCT\s+FROM\s+ARRAY\[C_SEARCH_PATH\]", nc), \
+        "POST proconfig IS DISTINCT FROM ARRAY[c_search_path] 없음"
+
+
+def test_w1_sql_r1_02_post_trigger_tgenabled_check():
+    """W1-SQL-R1-02: POST tgenabled = 'O' 트리거 활성 상태 불변 검증"""
+    nc = _nc()
+    assert re.search(r"TGENABLED\s+IS\s+DISTINCT\s+FROM\s+'O'", nc), \
+        "POST tgenabled IS DISTINCT FROM 'O' 검증 없음"
+    assert "POST FAILED" in nc and re.search(r"POST FAILED.*TRIGGER.*DISABLED|TRIGGER.*BECAME.*DISABLED", nc), \
+        "POST 트리거 비활성 예외 없음"
+
+
+def test_w1_sql_r1_03_trigger_identity_baseline():
+    """W1-SQL-R1-03: 트리거 식별자 기준선 17건 포함 (tgname + function_name + triggerdef_md5)"""
+    sql = _sql()
+    expected_tg_names = [
+        'trg_master_fields_updated_at',
+        'help_doc_touch_trg',
+        'help_node_touch_trg',
+        'trg_inquiries_updated_at',
+        'trg_rtc_updated',
+        'trg_runtime_dependency_updated_at',
+        'trg_runtime_doc_updated_at',
+        'trg_runtime_evidence_updated_at',
+        'trg_runtime_schedule_updated_at',
+        'trg_runtime_task_updated_at',
+        'trg_user_profile_updated_at',
+        'trg_kosha_guide_body_touch',
+        'trg_cmc_updated_at',
+        'trg_documents_updated_at',
+        'trg_update_master_products_elec',
+        'trg_billing_keys_updated_at',
+        'trg_subscriptions_updated_at',
+    ]
+    for tgname in expected_tg_names:
+        assert tgname in sql, f"트리거명 기준선 누락: {tgname}"
+
+
+def test_w1_sql_r1_04_triggerdef_md5_baseline():
+    """W1-SQL-R1-04: triggerdef_md5 기준선 17건 포함"""
+    sql = _sql()
+    expected_md5s = [
+        '31385e8917683003499dd127476c31a6',
+        '78772ce5158e8420bd8877f468d7c39c',
+        '1838c6df987051282aab56dc1496580a',
+        '355aa6ccf67978e624832828205b6ae9',
+        '30b73f8c98328db19ef52e0078e48c3e',
+        'fd73431d0070cd82d8c04ea150b46ad6',
+        '0fc2f219752ee5dc052e0ce3612d8f25',
+        'afa49c17f779436b900523b845289dc8',
+        'e0666511a85e9f1d193336d7890b012e',
+        'db5e339add68d968f6ee38f3ddba97a8',
+        'b8cbe767cc2b021ecf1f1d848195d801',
+        '4765b011abd404a5a59f390db6232d33',
+        '82fdc43c9bc7eb426a737f78c9274ffb',
+        '47782aad0d163b8b0575bb8a56c9c842',
+        'e5c63e70d5bba989e963f75b0d71baa3',
+        'cee5dddfb63a3bfd4b85a265df912645',
+        '3e4b19c7912516202eb46c0366df7069',
+    ]
+    for md5_val in expected_md5s:
+        assert md5_val in sql, f"triggerdef_md5 기준선 누락: {md5_val}"
+
+
+def test_w1_sql_r1_05_pg_get_triggerdef_used():
+    """W1-SQL-R1-05: pg_get_triggerdef() 함수 사용 확인 (PRE+POST 각 1회 = ≥2회)"""
+    nc = _nc()
+    count = len(re.findall(r"\bPG_GET_TRIGGERDEF\b", nc))
+    assert count >= 2, f"pg_get_triggerdef 호출 횟수={count}, 최소 2건(PRE+POST) 기대"
+
+
 def test_w1_sql_36_no_out_of_scope_functions():
     """W1-SQL-36: W2/W3/W4/W5 범위 외 함수 미포함"""
     nc = _nc()
@@ -395,8 +474,8 @@ def _sha256(path: pathlib.Path) -> str:
 
 
 def test_w1_src_01_migration_sha256():
-    """W1-SRC-01: 이 Migration SHA256 고정"""
-    expected = "21ed7f4386699fdbcb7cd4eb3b4a48ec8634d83c7656eaa5a2db9f81a3d33452"
+    """W1-SRC-01: 이 Migration SHA256 고정 (R1: proconfig IS DISTINCT FROM + 트리거 17건 정의 검증 포함)"""
+    expected = "660ed59c767510b2e5c8f491ce4ffe60aa8bc6242eb3db60ef4a69a107dd8863"
     actual = _sha256(_MIGRATION_PATH)
     assert actual == expected, (
         f"Migration SHA256 불일치\\n"
