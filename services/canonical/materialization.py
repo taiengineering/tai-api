@@ -30,6 +30,11 @@ from typing import Any, Dict
 # allowlist SoT — LEG Runtime 이 판정에 참조하는 입력 vocabulary(정확 이름).
 from clients.leg_runtime_client import _LEG_INPUT_FIELDS
 
+# server-side 산출 전용 필드 — form_data·외부 input 직접 주입 차단
+_MATERIAL_ONLY_FIELDS: frozenset = frozenset({
+    "fc001_permit_manufacture_or_use_nonexempt",
+})
+
 
 def canonical_applicability(source: Dict[str, Any]) -> Dict[str, Any]:
     """``source`` 에서 RTM-vocab(_LEG_INPUT_FIELDS) 과 정확히 같은 이름인 키만,
@@ -43,6 +48,8 @@ def canonical_applicability(source: Dict[str, Any]) -> Dict[str, Any]:
         return {}
     out: Dict[str, Any] = {}
     for code in _LEG_INPUT_FIELDS:
+        if code in _MATERIAL_ONLY_FIELDS:
+            continue
         if code not in source:
             continue
         val = source[code]
