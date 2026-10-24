@@ -233,6 +233,32 @@ def _render_rows(
             continue
         # ──────────────────────────────────────────────────────────────────────
 
+        # ── file/image field: render filename, never expose snapshot JSON ──
+        if input_type in ("file", "image"):
+            if key is not None and key in data:
+                consumed.add(key)
+            snap = (data.get(key) if key else None) or {}
+            if isinstance(snap, dict) and snap.get("_type") == "file_snapshot":
+                state = "present"
+                cell_html = _esc(snap.get("original_file_name") or _MISSING_TEXT)
+            else:
+                state = "missing"
+                cell_html = _esc(_MISSING_TEXT)
+            out.append(
+                '<tr data-field-id="%s" data-field-key="%s" data-input-type="%s" data-state="%s">'
+                "<th>%s</th><td>%s</td></tr>"
+                % (
+                    _esc(fid),
+                    _esc(key) if key is not None else "",
+                    _esc(input_type),
+                    state,
+                    _esc(label),
+                    cell_html,
+                )
+            )
+            continue
+        # ──────────────────────────────────────────────────────────────────────
+
         if key is None:
             # 값 조회 키가 없는 필드 — 값을 추측하지 않는다(auto fill 금지).
             state, text = "unmappable", _MISSING_TEXT

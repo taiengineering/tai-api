@@ -35,7 +35,7 @@ from services import document_engine_svc as svc
 from services.document_engine_svc import DocumentScopeMismatchError
 from services.document_confirm_svc import confirm_document_atomic, ConfirmError
 from services.document_signature_svc import SignatureError, apply_profile_to_document
-from services.document_attachment_svc import AttachmentError, upload_file_to_field, get_file_signed_url
+from services.document_attachment_svc import AttachmentError, upload_file_to_field, get_file_signed_url, remove_file_from_field
 from services.document_engine.catalog_resolver import resolve_catalog_runtime_schema
 from services.document_engine.renderer import html_to_pdf as _html_to_pdf
 from services.document_engine.generator import render_html as _render_html, render_pdf as _render_pdf
@@ -497,6 +497,38 @@ def download_file_field(
         msg = str(e)
         if "not found" in msg:
             raise HTTPException(404, msg)
+        raise HTTPException(400, msg)
+
+
+@router.delete("/documents/{doc_id}/file/{field_key}")
+async def delete_file_field(
+    doc_id: str,
+    field_key: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """파일/이미지 필드 스냅샷 제거 (P1-B).
+
+    runtime_data_json[field_key] = None 으로 설정 (낙관적 동시성).
+    Storage 파일은 sha256-idempotent이므로 삭제하지 않는다.
+
+    Returns: {"status": "success"}
+    """
+    sb = get_supabase()
+    _check_doc_scope(sb, doc_id, current_user)
+
+    try:
+        await remove_file_from_field(
+            doc_id=doc_id,
+            field_key=field_key,
+            current_user=current_user,
+        )
+        return {"status": "success"}
+    except AttachmentError as e:
+        msg = str(e)
+        if "not found" in msg:
+            raise HTTPException(404, msg)
+        if "DOCUMENT_ATTACHMENT_CONFLICT" in msg:
+            raise HTTPException(409, msg)
         raise HTTPException(400, msg)
 
 

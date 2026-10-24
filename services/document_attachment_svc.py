@@ -58,6 +58,12 @@ MAX_FILE_BYTES = 50 * 1024 * 1024
 
 _EDITABLE_STATUSES = frozenset({"DRAFT", "IN_PROGRESS", "RETURNED_FOR_EDIT"})
 
+# OD-B06 HOLD PENDING_OWNER: blocked pending Owner source-form confirmation
+_OD_B06_HOLD_FIELD_KEYS: frozenset = frozenset({
+    "attached_documents_list",
+    "attached_plan_list",
+})
+
 
 class AttachmentError(ValueError):
     """File attachment operation failure — maps to HTTP 400/422/404/409 at router."""
@@ -124,6 +130,13 @@ async def upload_file_to_field(
     user_id = str(current_user.get("id") or "").strip()
     if not user_id:
         raise AttachmentError("authenticated user id unavailable")
+
+    # 0. OD-B06 HOLD: server-side block for deferred field keys
+    if field_key in _OD_B06_HOLD_FIELD_KEYS:
+        raise AttachmentError(
+            f"field_key {field_key!r} is currently HOLD pending Owner decision (OD-B06); "
+            "attachment upload blocked"
+        )
 
     # 1. Load document — check editable status
     doc_res = (
@@ -228,6 +241,11 @@ async def upload_file_to_field(
         .execute()
     )
     if not update_res.data:
+        # Orphan cleanup: storage upload succeeded but DB write failed — remove orphan file
+        try:
+            sb.storage.from_(_BUCKET).remove([storage_path])
+        except Exception:
+            pass
         raise AttachmentError(
             "DOCUMENT_ATTACHMENT_CONFLICT: document was modified concurrently or status changed"
         )
@@ -253,7 +271,7 @@ def get_file_signed_url(
 
     doc_res = (
         sb.table("runtime_document_data")
-        .select("id,runtime_data_json")
+        .select("id,form_schema_id,runtime_data_json")
         .eq("id", doc_id)
         .single()
         .execute()
@@ -268,10 +286,30 @@ def get_file_signed_url(
     if snapshot.get("_type") != "file_snapshot":
         raise AttachmentError(f"field {field_key!r} is not a file_snapshot")
 
+    # Binding validation: verify storage_ref path matches doc_id/field_id from schema
+    schema_id = doc_res.data.get("form_schema_id")
+    field_res = (
+        sb.table("runtime_field")
+        .select("id")
+        .eq("form_schema_id", schema_id)
+        .eq("field_key", field_key)
+        .execute()
+    )
+    field_rows = field_res.data or []
+    if not field_rows:
+        raise AttachmentError(f"field_key not found in schema: {field_key!r}")
+    runtime_field_id = str(field_rows[0]["id"])
+
+    expected_path_prefix = f"{_ATTACH_PREFIX}/{doc_id}/{runtime_field_id}/"
     storage_ref = snapshot.get("storage_ref", "")
     if not storage_ref.startswith(_STORAGE_PREFIX):
         raise AttachmentError(f"invalid storage_ref: {storage_ref!r}")
     path = storage_ref[len(_STORAGE_PREFIX):]
+    if not path.startswith(expected_path_prefix):
+        raise AttachmentError(
+            f"storage_ref path mismatch for field {field_key!r}: "
+            f"expected prefix {expected_path_prefix!r}"
+        )
 
     try:
         result = sb.storage.from_(_BUCKET).create_signed_url(path, expires_in)
@@ -283,3 +321,79 @@ def get_file_signed_url(
         raise
     except Exception as e:
         raise AttachmentError(f"signed URL error: {e}")
+
+
+async def remove_file_from_field(
+    doc_id: str,
+    field_key: str,
+    current_user: Dict[str, Any],
+) -> None:
+    """Remove a file snapshot from a document field.
+
+    Sets runtime_data_json[field_key] = None with optimistic concurrency.
+    Storage file is NOT deleted (sha256-idempotent path — safe to retain).
+
+    Raises:
+        AttachmentError on any failure.
+    """
+    sb = get_supabase()
+    user_id = str(current_user.get("id") or "").strip()
+    if not user_id:
+        raise AttachmentError("authenticated user id unavailable")
+
+    # OD-B06 HOLD: also blocked for remove
+    if field_key in _OD_B06_HOLD_FIELD_KEYS:
+        raise AttachmentError(
+            f"field_key {field_key!r} is currently HOLD pending Owner decision (OD-B06)"
+        )
+
+    doc_res = (
+        sb.table("runtime_document_data")
+        .select("id,form_schema_id,runtime_data_json,status,updated_at")
+        .eq("id", doc_id)
+        .single()
+        .execute()
+    )
+    if not doc_res.data:
+        raise AttachmentError("document not found")
+    doc = doc_res.data
+    expected_updated_at = doc.get("updated_at")
+
+    if doc["status"] not in _EDITABLE_STATUSES:
+        raise AttachmentError(
+            f"document status '{doc['status']}' does not allow editing; "
+            f"editable: {sorted(_EDITABLE_STATUSES)}"
+        )
+
+    schema_id = doc["form_schema_id"]
+    field_res = (
+        sb.table("runtime_field")
+        .select("id,field_key,input_type")
+        .eq("form_schema_id", schema_id)
+        .eq("field_key", field_key)
+        .execute()
+    )
+    field_rows = field_res.data or []
+    if not field_rows:
+        raise AttachmentError(f"field_key not found in schema: {field_key!r}")
+    if field_rows[0].get("input_type") not in ("file", "image"):
+        raise AttachmentError(
+            f"field {field_key!r} is not a file/image field "
+            f"(input_type={field_rows[0].get('input_type')!r})"
+        )
+
+    now = serialize_external_utc(now_kst())
+    existing_json = doc.get("runtime_data_json") or {}
+    merged = {**existing_json, field_key: None}
+    update_res = (
+        sb.table("runtime_document_data")
+        .update({"runtime_data_json": merged, "updated_at": now})
+        .eq("id", doc_id)
+        .eq("updated_at", expected_updated_at)
+        .in_("status", list(_EDITABLE_STATUSES))
+        .execute()
+    )
+    if not update_res.data:
+        raise AttachmentError(
+            "DOCUMENT_ATTACHMENT_CONFLICT: document was modified concurrently or status changed"
+        )

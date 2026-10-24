@@ -500,6 +500,10 @@ def _validate_runtime_keys(sb, schema_id: str, data_json: dict):
         r["field_key"] for r in (res.data or [])
         if r.get("field_key") and r.get("input_type") == "signature"
     }
+    file_image_field_keys = {
+        r["field_key"] for r in (res.data or [])
+        if r.get("field_key") and r.get("input_type") in ("file", "image")
+    }
 
     # 2. Load allowed checklist UUIDs
     cl_res = (
@@ -535,6 +539,13 @@ def _validate_runtime_keys(sb, schema_id: str, data_json: dict):
                     f"signature field {key!r} cannot be set via PATCH; "
                     "use POST /document-engine/documents/{doc_id}"
                     f"/signature/{key}/apply-profile"
+                )
+            # File/image field guard: must use canonical P1-B upload endpoint
+            if key in file_image_field_keys:
+                raise ValueError(
+                    f"file/image field {key!r} cannot be set via PATCH; "
+                    "use POST /document-engine/documents/{doc_id}"
+                    f"/file/{key}/upload"
                 )
 
     if unknown_keys:
