@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
 from db.supabase_client import get_supabase
+
+log = logging.getLogger(__name__)
 
 
 def list_document_forms(
@@ -49,14 +52,19 @@ def list_document_forms(
     }
 
 
+_APPROVED = "APPROVED_FOR_RUNTIME_USE"
+_CANDIDATE = "CANDIDATE"
+
+
 def _enrich_with_availability(supabase: Any, items: list[dict]) -> None:
     """Batch-enriches items with schema_availability. Mutates in place.
 
-    Reuses the same availability logic as workspace_readmodel.py:
-      APPROVED_FOR_RUNTIME_USE present  → READY_FOR_EDIT
-      only CANDIDATE present            → PREPARING
-      neither                           → NO_SCHEMA
-      multiple APPROVED                 → PREPARING (multiple_approved guard)
+    Availability contract (mirrors catalog_resolver.py):
+      APPROVED_FOR_RUNTIME_USE == 1  → READY_FOR_EDIT
+      APPROVED_FOR_RUNTIME_USE > 1   → SCHEMA_ERROR (integrity violation, same policy as catalog_resolver)
+      only CANDIDATE                 → PREPARING
+      neither                        → NO_SCHEMA
+      DB query failure               → NO_SCHEMA (fail-closed; never silently READY)
     """
     if not items:
         return
@@ -67,16 +75,19 @@ def _enrich_with_availability(supabase: Any, items: list[dict]) -> None:
             item["schema_availability"] = "NO_SCHEMA"
         return
 
-    _APPROVED = "APPROVED_FOR_RUNTIME_USE"
-    _CANDIDATE = "CANDIDATE"
-
-    schema_rows = (
-        supabase.table("runtime_form_schema")
-        .select("catalog_document_id,status")
-        .in_("catalog_document_id", catalog_ids)
-        .in_("status", [_APPROVED, _CANDIDATE])
-        .execute()
-    ).data or []
+    try:
+        schema_rows = (
+            supabase.table("runtime_form_schema")
+            .select("catalog_document_id,status")
+            .in_("catalog_document_id", catalog_ids)
+            .in_("status", [_APPROVED, _CANDIDATE])
+            .execute()
+        ).data or []
+    except Exception as exc:
+        log.warning("runtime_form_schema batch query failed — fail-closed to NO_SCHEMA: %s", exc)
+        for item in items:
+            item["schema_availability"] = "NO_SCHEMA"
+        return
 
     approved_map: dict[str, int] = {}
     candidate_count_map: dict[str, int] = {}
@@ -91,9 +102,11 @@ def _enrich_with_availability(supabase: Any, items: list[dict]) -> None:
         cid = item.get("id")
         acount = approved_map.get(cid, 0)
         ccount = candidate_count_map.get(cid, 0)
-        if acount == 1:
+        if acount > 1:
+            item["schema_availability"] = "SCHEMA_ERROR"
+        elif acount == 1:
             item["schema_availability"] = "READY_FOR_EDIT"
-        elif acount > 1 or ccount > 0:
+        elif ccount > 0:
             item["schema_availability"] = "PREPARING"
         else:
             item["schema_availability"] = "NO_SCHEMA"
