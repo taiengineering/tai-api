@@ -44,6 +44,7 @@ WO-TAI-SEC-SEARCHPATH-REM97-C3-W5-SOURCE-001 정적 계약 테스트
   W5-SQL-36  to_regprocedure() OID 기반 식별 (≥2회)
   W5-SQL-37  IS DISTINCT FROM null-safe 비교 사용 (≥5회)
   W5-SQL-38  W1·W2·W3·W4 범위 외 함수 미포함
+  W5-SQL-39  POST — search_tsv tsvector 타입 불변 검증 포함 (R1 추가)
   W5-SRC-01  이 Migration SHA256 고정
   W5-SRC-02  W3 Migration SHA256 불변
 """
@@ -380,11 +381,27 @@ def test_w5_sql_38_no_out_of_scope_functions():
         ), f"범위 외 함수 {fn} 가 W5 Migration에 포함됨"
 
 
+def test_w5_sql_39_post_search_tsv_type_unchanged():
+    """W5-SQL-39: POST — search_tsv tsvector 타입 불변 검증 포함 (R1 추가)"""
+    sql = _sql()
+    # POST 영역(STEP 3B 이후)에서 udt_name = 'tsvector' 조건이 존재해야 함
+    # PRE 영역은 'STEP 1B'에 있으므로 STEP 3B 이후를 분리하여 확인
+    step3b_idx = sql.upper().find("STEP 3B")
+    assert step3b_idx != -1, "STEP 3B 마커가 없음"
+    post_section = sql[step3b_idx:]
+    assert re.search(
+        r"UDT_NAME\s*=\s*'tsvector'", post_section, re.IGNORECASE
+    ), "POST(STEP 3B) 영역에 search_tsv tsvector 타입 검증이 없음"
+    # PRE에만 있고 POST에 없는 경우를 배제: POST 영역에 실제 조건 라인 수 ≥ 1
+    matches = re.findall(r"UDT_NAME\s*=\s*'tsvector'", post_section, re.IGNORECASE)
+    assert len(matches) >= 1, f"POST 영역 tsvector 검증 건수={len(matches)}, 기대≥1"
+
+
 # ── 소스 SHA256 고정 ───────────────────────────────────────────────────────────
 
 def test_w5_src_01_migration_sha256():
     """W5-SRC-01: W5 Migration SHA256 고정"""
-    expected = "4b24b31b204971ed9ce174356491451695aeede302c0e5b093e03f0ff6c5487a"
+    expected = "e8d34675b83ccdcb39091db1640e74be35cce98148b3cb48aed2a513c0b276af"
     actual = _sha256(_MIGRATION_PATH)
     assert actual == expected, f"W5 Migration SHA256 불일치: {actual}"
 

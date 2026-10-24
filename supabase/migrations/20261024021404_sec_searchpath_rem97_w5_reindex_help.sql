@@ -267,6 +267,17 @@ BEGIN
     RAISE EXCEPTION 'POST FAILED: safe_help_content required columns changed. found=%', v_count;
   END IF;
 
+  -- search_tsv 컬럼 타입 불변 (tsvector)
+  SELECT COUNT(*) INTO v_count
+  FROM information_schema.columns
+  WHERE table_schema = 'public'
+    AND table_name = 'safe_help_content'
+    AND column_name = 'search_tsv'
+    AND udt_name = 'tsvector';
+  IF v_count IS DISTINCT FROM 1 THEN
+    RAISE EXCEPTION 'POST FAILED: safe_help_content.search_tsv is no longer tsvector type.';
+  END IF;
+
   -- text search config 'simple' 불변
   SELECT COUNT(*) INTO v_count
   FROM pg_ts_config
