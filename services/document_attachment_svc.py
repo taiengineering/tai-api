@@ -21,12 +21,16 @@ Owner decisions pending (OD-B02, OD-B03, OD-B04 PENDING_OWNER — 2026-10-24):
 """
 from __future__ import annotations
 
+import base64 as _base64
 import hashlib
+import logging as _logging
 import re as _re
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from db.supabase_client import get_supabase
 from services.time import now_kst, serialize_external_utc
+
+_log = _logging.getLogger(__name__)
 
 _BUCKET = "company-docs"
 _STORAGE_PREFIX = "storage://company-docs/"
@@ -83,10 +87,12 @@ def _ext_from_filename(filename: str) -> str:
     return ""
 
 
-def _upload_bytes(sb, path: str, data: bytes, mime_type: str) -> None:
+def _upload_bytes(sb, path: str, data: bytes, mime_type: str) -> bool:
     """Upload file to private company-docs bucket.
 
-    Idempotent: sha256-keyed path — if path already exists, silently skip.
+    Returns:
+        True  — new file was uploaded (orphan cleanup required if DB write fails)
+        False — path already existed, idempotent reuse (must NOT delete on DB failure)
     """
     try:
         sb.storage.from_(_BUCKET).upload(
@@ -94,11 +100,65 @@ def _upload_bytes(sb, path: str, data: bytes, mime_type: str) -> None:
             file=data,
             file_options={"content-type": mime_type},
         )
+        return True
     except Exception as up_err:
         err_str = str(up_err).lower()
         if any(k in err_str for k in ("already", "duplicate", "exists", "23505")):
-            return  # sha256-keyed path — identical content assumed, idempotent
+            return False  # idempotent reuse — existing file preserved, do not delete
         raise AttachmentError(f"storage upload failed: {up_err}")
+
+
+# Magic byte prefixes for MIME verification — second-layer check (no library dependency)
+_MAGIC: Dict[str, bytes] = {
+    "application/pdf": b"%PDF",
+    "image/jpeg": b"\xff\xd8\xff",
+    "image/png": b"\x89PNG\r\n\x1a\n",
+    "image/gif_87": b"GIF87a",
+    "image/gif_89": b"GIF89a",
+    "image/webp_riff": b"RIFF",
+}
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0"   # HWP / DOC / XLS
+_OOXML_MAGIC = b"PK\x03\x04"         # XLSX / DOCX (ZIP)
+_OLE2_MIMES = frozenset({
+    "application/haansoft-hwp", "application/x-hwp",
+    "application/msword", "application/vnd.ms-excel",
+})
+_OOXML_MIMES = frozenset({
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+})
+
+
+def _verify_magic_bytes(file_bytes: bytes, declared_mime: str) -> None:
+    """Best-effort magic bytes verification — blocks trivially mislabeled uploads.
+
+    Does not replace the MIME whitelist; adds a second layer.
+    Passes silently for types without a registered signature.
+    """
+    if len(file_bytes) < 4:
+        raise AttachmentError("file too small to determine type")
+    head = file_bytes[:16]
+    if declared_mime == "application/pdf":
+        if not head.startswith(b"%PDF"):
+            raise AttachmentError("file magic bytes do not match declared MIME (expected PDF)")
+    elif declared_mime == "image/jpeg":
+        if not head.startswith(b"\xff\xd8\xff"):
+            raise AttachmentError("file magic bytes do not match declared MIME (expected JPEG)")
+    elif declared_mime == "image/png":
+        if not head.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise AttachmentError("file magic bytes do not match declared MIME (expected PNG)")
+    elif declared_mime == "image/gif":
+        if not (head.startswith(b"GIF87a") or head.startswith(b"GIF89a")):
+            raise AttachmentError("file magic bytes do not match declared MIME (expected GIF)")
+    elif declared_mime == "image/webp":
+        if not (head.startswith(b"RIFF") and len(file_bytes) >= 12 and file_bytes[8:12] == b"WEBP"):
+            raise AttachmentError("file magic bytes do not match declared MIME (expected WebP)")
+    elif declared_mime in _OLE2_MIMES:
+        if not head.startswith(_OLE2_MAGIC):
+            raise AttachmentError("file magic bytes do not match declared MIME (expected OLE2 document)")
+    elif declared_mime in _OOXML_MIMES:
+        if not head.startswith(_OOXML_MAGIC):
+            raise AttachmentError("file magic bytes do not match declared MIME (expected OOXML/ZIP)")
 
 
 async def upload_file_to_field(
@@ -199,6 +259,9 @@ async def upload_file_to_field(
             f"file size {mb:.1f} MB exceeds limit of {MAX_FILE_BYTES // (1024 * 1024)} MB"
         )
 
+    # 4a. Magic bytes check — second layer beyond MIME header trust
+    _verify_magic_bytes(file_bytes, mime_type)
+
     # 5. Compute sha256 server-side
     sha = _compute_sha256(file_bytes)
 
@@ -211,7 +274,7 @@ async def upload_file_to_field(
     doc_storage_ref = _storage_ref(storage_path)
 
     # 7. Upload to company-docs bucket (idempotent, sha256-keyed)
-    _upload_bytes(sb, storage_path, file_bytes, mime_type)
+    is_new_upload = _upload_bytes(sb, storage_path, file_bytes, mime_type)
 
     # 8. Assemble FileSnapshot
     now = serialize_external_utc(now_kst())
@@ -241,11 +304,17 @@ async def upload_file_to_field(
         .execute()
     )
     if not update_res.data:
-        # Orphan cleanup: storage upload succeeded but DB write failed — remove orphan file
-        try:
-            sb.storage.from_(_BUCKET).remove([storage_path])
-        except Exception:
-            pass
+        # Orphan cleanup: only safe when THIS request uploaded a NEW file.
+        # If the path was reused (idempotent), the file belongs to a prior upload — do NOT delete.
+        if is_new_upload:
+            try:
+                sb.storage.from_(_BUCKET).remove([storage_path])
+            except Exception as cleanup_err:
+                # Log for manual recovery — do not suppress silently
+                _log.warning(
+                    "orphan_storage_cleanup_failed path=%r error=%r doc_id=%r field_key=%r",
+                    storage_path, str(cleanup_err), doc_id, field_key,
+                )
         raise AttachmentError(
             "DOCUMENT_ATTACHMENT_CONFLICT: document was modified concurrently or status changed"
         )
@@ -397,3 +466,49 @@ async def remove_file_from_field(
         raise AttachmentError(
             "DOCUMENT_ATTACHMENT_CONFLICT: document was modified concurrently or status changed"
         )
+
+
+def resolve_attachment_images_for_render(
+    runtime_data_json: Dict[str, Any],
+    fields: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Resolve image field snapshots to base64 data URIs for inline HTML rendering.
+
+    Only processes fields with input_type == 'image' that hold a valid FileSnapshot.
+    File fields render filename only — no inline data URI.
+
+    Returns:
+        {field_key: "data:{mime};base64,{b64}"} for successfully fetched images.
+        Missing or failed fields are omitted (renderer falls back to filename).
+    """
+    sb = get_supabase()
+    result: Dict[str, str] = {}
+
+    image_keys = {
+        f.get("field_key")
+        for f in fields
+        if f.get("input_type") == "image" and f.get("field_key")
+    }
+
+    for field_key in image_keys:
+        snap = runtime_data_json.get(field_key)
+        if not isinstance(snap, dict) or snap.get("_type") != "file_snapshot":
+            continue
+        storage_ref = snap.get("storage_ref", "")
+        if not storage_ref.startswith(_STORAGE_PREFIX):
+            continue
+        path = storage_ref[len(_STORAGE_PREFIX):]
+        mime_type = snap.get("mime_type") or "image/jpeg"
+
+        try:
+            file_bytes = sb.storage.from_(_BUCKET).download(path)
+            b64 = _base64.b64encode(file_bytes).decode("ascii")
+            result[field_key] = f"data:{mime_type};base64,{b64}"
+        except Exception as fetch_err:
+            # Fail open for rendering: image unavailable → renderer shows filename
+            _log.warning(
+                "attachment_image_fetch_failed field_key=%r path=%r error=%r",
+                field_key, path, str(fetch_err),
+            )
+
+    return result

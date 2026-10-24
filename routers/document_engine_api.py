@@ -448,7 +448,11 @@ async def upload_file_field(
     sb = get_supabase()
     _check_doc_scope(sb, doc_id, current_user)
 
-    file_bytes = await file.read()
+    # Read with an over-limit sentinel to reject oversized files early
+    _MAX_READ = 50 * 1024 * 1024 + 1  # 50 MB + 1 byte sentinel
+    file_bytes = await file.read(_MAX_READ)
+    if len(file_bytes) == _MAX_READ:
+        raise HTTPException(400, "file exceeds 50 MB size limit")
     mime_type = file.content_type or "application/octet-stream"
     original_file_name = file.filename or "upload"
 
