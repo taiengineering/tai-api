@@ -119,15 +119,27 @@ $$;
 
 -- B19-P2-03: anon 호출 → 권한 오류 (42501 또는 42P01)
 -- anon은 engine_isolated USAGE 없음 → 테이블 접근 불가
+-- R2: SET LOCAL ROLE 영역과 함수 호출 영역 분리
 DO $$
 DECLARE
   v_fn_called boolean := false;
   v_blocked   boolean := false;
   v_sqlstate  text    := '';
   v_err       text    := '';
+  v_cur_user  text    := '';
 BEGIN
+  -- Step 1: 역할 전환 — EXCEPTION 핸들러 없음, 실패 시 DO 블록 전체 FAIL (Fail-Closed)
+  SET LOCAL ROLE anon;
+
+  -- Step 2: current_user 검증 — 전환이 실제로 적용됐는지 확인
+  v_cur_user := current_user;
+  IF v_cur_user IS DISTINCT FROM 'anon' THEN
+    RESET ROLE;
+    RAISE EXCEPTION 'B19-P2-03 FAILED: SET LOCAL ROLE did not take effect (current_user=%)', v_cur_user;
+  END IF;
+
+  -- Step 3: 함수 호출 — 42501/42P01만 차단 성공으로 인정
   BEGIN
-    SET LOCAL ROLE anon;
     PERFORM * FROM public.get_precompiled_factory_ids();
     v_fn_called := true;
   EXCEPTION
@@ -138,6 +150,7 @@ BEGIN
   END;
   RESET ROLE;
 
+  -- Step 4: 판정
   IF v_fn_called THEN
     RAISE EXCEPTION 'B19-P2-03 FAILED: anon accessed facility_applicability without expected error';
   END IF;
@@ -149,14 +162,26 @@ END;
 $$;
 
 -- B19-P2-04: authenticated 호출 → 권한 오류
+-- R2: SET LOCAL ROLE 영역과 함수 호출 영역 분리
 DO $$
 DECLARE
   v_fn_called boolean := false;
   v_blocked   boolean := false;
   v_sqlstate  text    := '';
+  v_cur_user  text    := '';
 BEGIN
+  -- Step 1: 역할 전환 — EXCEPTION 핸들러 없음, 실패 시 DO 블록 전체 FAIL (Fail-Closed)
+  SET LOCAL ROLE authenticated;
+
+  -- Step 2: current_user 검증
+  v_cur_user := current_user;
+  IF v_cur_user IS DISTINCT FROM 'authenticated' THEN
+    RESET ROLE;
+    RAISE EXCEPTION 'B19-P2-04 FAILED: SET LOCAL ROLE did not take effect (current_user=%)', v_cur_user;
+  END IF;
+
+  -- Step 3: 함수 호출 — 42501/42P01만 차단 성공으로 인정
   BEGIN
-    SET LOCAL ROLE authenticated;
     PERFORM * FROM public.get_precompiled_factory_ids();
     v_fn_called := true;
   EXCEPTION
@@ -167,6 +192,7 @@ BEGIN
   END;
   RESET ROLE;
 
+  -- Step 4: 판정
   IF v_fn_called THEN
     RAISE EXCEPTION 'B19-P2-04 FAILED: authenticated accessed facility_applicability without expected error';
   END IF;
