@@ -7,10 +7,10 @@ Path:   attachments/document/{doc_id}/{field_id}/{sha256}.{ext}
 
 Stable reference: storage://company-docs/attachments/document/{doc_id}/{field_id}/{sha256}.{ext}
 
-Owner decisions pending (OD-B02, OD-B03, OD-B04 PENDING_OWNER — 2026-10-24):
-  ALLOWED_MIME_TYPES: proposed whitelist — Owner 확정 필요
-  MAX_FILE_BYTES:     50 MB — Owner 확정 필요
-  Storage path format: OD-B04 proposal — Owner 확정 필요
+Owner decisions (2026-10-25):
+  OD-B02 APPROVED: ALLOWED_FILE_MIME_TYPES (9종) / ALLOWED_IMAGE_MIME_TYPES (4종)
+  OD-B03 APPROVED: MAX_FILE_BYTES = 50 MiB = 52,428,800 bytes
+  OD-B04 APPROVED: bucket=company-docs / prefix=attachments/document
 
 금지:
   - client-supplied sha256 / uploaded_at / uploaded_by_user_id 신뢰
@@ -34,9 +34,9 @@ _log = _logging.getLogger(__name__)
 
 _BUCKET = "company-docs"
 _STORAGE_PREFIX = "storage://company-docs/"
-_ATTACH_PREFIX = "attachments/document"  # OD-B04 PENDING_OWNER: proposed prefix
+_ATTACH_PREFIX = "attachments/document"  # OD-B04 APPROVED (2026-10-25)
 
-# OD-B02 PENDING_OWNER: proposed MIME whitelist for file fields
+# OD-B02 APPROVED (2026-10-25): file MIME whitelist
 ALLOWED_FILE_MIME_TYPES = frozenset({
     "application/pdf",
     "image/jpeg",
@@ -49,7 +49,7 @@ ALLOWED_FILE_MIME_TYPES = frozenset({
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 })
 
-# OD-B02 PENDING_OWNER: proposed MIME whitelist for image fields
+# OD-B02 APPROVED (2026-10-25): image MIME whitelist
 ALLOWED_IMAGE_MIME_TYPES = frozenset({
     "image/jpeg",
     "image/png",
@@ -57,7 +57,7 @@ ALLOWED_IMAGE_MIME_TYPES = frozenset({
     "image/webp",
 })
 
-# OD-B03 PENDING_OWNER: proposed size limit (50 MB)
+# OD-B03 APPROVED (2026-10-25): 50 MiB = 52,428,800 bytes
 MAX_FILE_BYTES = 50 * 1024 * 1024
 
 _EDITABLE_STATUSES = frozenset({"DRAFT", "IN_PROGRESS", "RETURNED_FOR_EDIT"})
@@ -174,8 +174,8 @@ async def upload_file_to_field(
     Contract (OD-B01 APPROVED — A안 조건부 승인):
     1. Verifies document editable status
     2. Resolves field_key → field_id from active schema (input_type must be file or image)
-    3. Validates MIME type whitelist (OD-B02 PENDING_OWNER: proposed whitelist)
-    4. Validates file size (OD-B03 PENDING_OWNER: 50 MB proposed limit)
+    3. Validates MIME type whitelist (OD-B02 APPROVED: 파일 9종·이미지 4종)
+    4. Validates file size (OD-B03 APPROVED: 50 MiB = 52,428,800 bytes)
     5. Computes sha256 server-side
     6. Uploads to storage (idempotent, sha256-keyed path)
     7. Assembles FileSnapshot and writes to runtime_data_json[field_key]
@@ -238,7 +238,7 @@ async def upload_file_to_field(
         )
     runtime_field_id = str(field_row["id"])
 
-    # 3. Validate MIME type (OD-B02 PENDING_OWNER: proposed whitelist)
+    # 3. Validate MIME type (OD-B02 APPROVED)
     if input_type == "image":
         allowed = ALLOWED_IMAGE_MIME_TYPES
     else:
@@ -249,7 +249,7 @@ async def upload_file_to_field(
             f"allowed: {sorted(allowed)}"
         )
 
-    # 4. Validate file size (OD-B03 PENDING_OWNER: 50 MB proposed limit)
+    # 4. Validate file size (OD-B03 APPROVED: 50 MiB)
     byte_count = len(file_bytes)
     if byte_count == 0:
         raise AttachmentError("file is empty")
@@ -265,8 +265,8 @@ async def upload_file_to_field(
     # 5. Compute sha256 server-side
     sha = _compute_sha256(file_bytes)
 
-    # 6. Build storage path (OD-B04 PENDING_OWNER: proposed format)
-    #    attachments/document/{doc_id}/{field_id}/{sha256}.{ext}
+    # 6. Build storage path (OD-B04 APPROVED)
+    #    attachments/document/{doc_id}/{field_id}/{sha256}[.{ext}]
     ext = _ext_from_filename(original_file_name)
     storage_path = f"{_ATTACH_PREFIX}/{doc_id}/{runtime_field_id}/{sha}"
     if ext:
