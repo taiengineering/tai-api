@@ -791,6 +791,12 @@ class TestResolveAttachmentIntegrityClose:
                 snap_override={"byte_size": 9999},  # actual = len(_PNG_BYTES_BIND) = 108
             )
 
+    def test_a28_byte_size_missing_strict_raises(self):
+        """snap.byte_size absent → AttachmentError (byte_size_missing_or_invalid) in strict."""
+        from services.document_attachment_svc import AttachmentError
+        with pytest.raises(AttachmentError, match="byte_size_missing_or_invalid"):
+            self._run_resolve(runtime_data=None, snap_override={"byte_size": None})
+
     def test_a29_draft_cross_doc_path_skipped_no_storage_read(self):
         """Non-strict (draft), cross-doc storage_ref → field skipped AND storage not called."""
         wrong_ref = (

@@ -596,7 +596,16 @@ def resolve_attachment_images_for_render(
                         raise AttachmentError(msg)
                     continue
             expected_byte_size = snap.get("byte_size")
-            if isinstance(expected_byte_size, int) and len(file_bytes) != expected_byte_size:
+            if not isinstance(expected_byte_size, int) or expected_byte_size <= 0:
+                msg = (
+                    "attachment_image_byte_size_missing_or_invalid field_key=%r "
+                    "byte_size=%r"
+                    % (field_key, expected_byte_size)
+                )
+                _log.warning(msg)
+                if strict:
+                    raise AttachmentError(msg)
+            elif len(file_bytes) != expected_byte_size:
                 msg = (
                     "attachment_image_byte_size_mismatch field_key=%r "
                     "expected=%r actual=%r"

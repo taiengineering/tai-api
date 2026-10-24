@@ -723,3 +723,54 @@ def test_B12_confirm_with_valid_image_forwards_base64_to_renderer():
     assert "site_photo" in ai
     expected_uri = "data:image/png;base64," + _b64.b64encode(_PNG_BYTES_CONF).decode()
     assert ai["site_photo"] == expected_uri
+
+
+def test_B13_real_archive_rendered_body_contains_base64_image():
+    """Real build_render_artifacts + compute_confirmed_snapshot_hash:
+    archived rendered_body contains the Base64 image and snapshot_hash is a valid hex string
+    computed from that rendered_body (봉인 HTML·Hash 일치 증거)."""
+    import base64 as _b64
+    import re
+
+    # Fields need form_schema_id so the real renderer accepts them
+    _fields_with_schema = [{**r, "form_schema_id": SCHEMA_ID} for r in _IMAGE_FIELD_ROWS]
+
+    conn = FakeConn(
+        locked_row=locked(runtime=_IMAGE_RUNTIME),
+        field_rows=_fields_with_schema,
+    )
+
+    # Intercept archive INSERT to capture rendered_body and snapshot_hash params
+    class _CaptureCursor(FakeCursor):
+        def execute(self, sql, params=None):
+            super().execute(sql, params)
+            if "INSERT INTO RUNTIME_DOCUMENT_ARCHIVE" in sql.strip().upper():
+                self.conn._archive_params = params
+    conn.cursor = lambda cursor_factory=None: _CaptureCursor(conn)
+
+    _install(conn)
+
+    sb = MagicMock()
+    sb.storage.from_.return_value.download.return_value = _PNG_BYTES_CONF
+
+    with patch("services.document_attachment_svc.get_supabase", return_value=sb):
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+
+    # params[8] = rendered_body, params[10] = snapshot_hash (see INSERT column order)
+    rendered_body: str = conn._archive_params[8]
+    snapshot_hash: str = conn._archive_params[10]
+
+    expected_b64 = _b64.b64encode(_PNG_BYTES_CONF).decode()
+    assert "data:image/png;base64," in rendered_body, (
+        "rendered_body does not contain image data URI"
+    )
+    assert expected_b64 in rendered_body, (
+        "rendered_body does not contain expected PNG base64"
+    )
+
+    assert re.fullmatch(r"[0-9a-f]{64}", snapshot_hash), (
+        "snapshot_hash is not a 64-char hex: %r" % snapshot_hash
+    )
