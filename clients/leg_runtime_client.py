@@ -411,6 +411,7 @@ _LEG_INPUT_FIELDS = (
     "fc001_managed_tank_equipment_work",
     "fc001_permit_manufacture_or_use",
     "fc001_permit_storage_transport",
+    "fc001_permit_manufacture_or_use_nonexempt",
     # WO-LFR-OBJ-S02-L1-ART68-INITIAL-FACT-IMPLEMENT-001: 건설공사발주자 4-fact.
     # has_subcontractor 대체. 추정/alias/파생 금지. missing → OMIT(UNKNOWN).
     "contracts_construction_work_at_site",
