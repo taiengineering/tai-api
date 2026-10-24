@@ -18,6 +18,7 @@ import os, re, random, secrets, string, logging, hashlib
 
 import bcrypt
 from supabase import create_client
+from supabase_auth.errors import AuthApiError
 from services.health_registry import register_probe
 from watch_engine import create_trace, emit_event
 from watch_engine.trace import clear_trace
@@ -1171,8 +1172,28 @@ def verify_identity(req: VerifyIdentityRequest, authorization: Optional[str] = H
 
 @router.post("/logout")
 def logout(authorization: Optional[str] = Header(None)):
-    try: get_supabase().auth.sign_out()
-    except Exception: pass
+    # Authorization 헤더 없음: 이미 로그아웃 상태 간주, 기존 클라이언트 호환
+    if not authorization:
+        return {"status": "success", "message": "로그아웃되었습니다"}
+
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="AUTH_HEADER_INVALID")
+
+    token = authorization[len("Bearer "):]
+    if not token:
+        raise HTTPException(status_code=401, detail="AUTH_TOKEN_MISSING")
+
+    try:
+        get_supabase_admin().auth.admin.sign_out(jwt=token, scope="local")
+    except AuthApiError as e:
+        if e.status in (400, 401, 403):
+            raise HTTPException(status_code=401, detail="AUTH_TOKEN_INVALID")
+        log.error("[logout] GoTrue revocation failed status=%s", e.status)
+        raise HTTPException(status_code=502, detail="LOGOUT_UPSTREAM_ERROR")
+    except Exception as e:
+        log.error("[logout] GoTrue service unavailable: %s", type(e).__name__)
+        raise HTTPException(status_code=503, detail="LOGOUT_SERVICE_UNAVAILABLE")
+
     return {"status": "success", "message": "로그아웃되었습니다"}
 
 
