@@ -24,19 +24,19 @@ MIGRATION_PATH = (
     / "20261024101500_sec_searchpath_rem97_bw3b_sync_triggers.sql"
 )
 
-BW3A_MIGRATION_PATH = (
+BW2B_MIGRATION_PATH = (
     REPO_ROOT
     / "supabase"
     / "migrations"
-    / "20261024100000_sec_searchpath_rem97_bw3a_domain_triggers.sql"
+    / "20261024094500_sec_searchpath_rem97_bw2b_status_transition_validators.sql"
 )
 
 EXPECTED_SHA256 = (
     "92ec79cca4b2d0eaeef9793f9920cb2f538a9ab8559ec883be93dfd9a0df6644"
 )
 
-BW3A_EXPECTED_SHA256 = (
-    "75a40b813b430ebc9204ec7ef0cfb979d278f10de310b90f3b369d3cab30b5e2"
+BW2B_EXPECTED_SHA256 = (
+    "c9598ab60537698c8ff58b64b94deebb959ebe0521b2fe11f6a9c03b787fc02e"
 )
 
 FN_SIGS = [
@@ -248,12 +248,12 @@ def test_bw3b_sql_18_md5_in_pre_and_post(sql: str):
         assert md5 in post_section, f"MD5 {md5} not in POST section"
 
 
-def test_bw3b_sql_19_bw3a_migration_unchanged():
-    """BW3A Migration 파일이 승인된 SHA256 그대로 유지되어야 한다."""
-    assert BW3A_MIGRATION_PATH.exists(), "BW3A migration file missing"
-    digest = hashlib.sha256(BW3A_MIGRATION_PATH.read_bytes()).hexdigest()
-    assert digest == BW3A_EXPECTED_SHA256, (
-        f"BW3A migration SHA256 changed!\n  expected: {BW3A_EXPECTED_SHA256}\n  got:      {digest}"
+def test_bw3b_sql_19_bw2b_migration_unchanged():
+    """BW2B Migration 파일(공통 BASE)이 승인된 SHA256 그대로 유지되어야 한다."""
+    assert BW2B_MIGRATION_PATH.exists(), "BW2B migration file missing"
+    digest = hashlib.sha256(BW2B_MIGRATION_PATH.read_bytes()).hexdigest()
+    assert digest == BW2B_EXPECTED_SHA256, (
+        f"BW2B migration SHA256 changed!\n  expected: {BW2B_EXPECTED_SHA256}\n  got:      {digest}"
     )
 
 
