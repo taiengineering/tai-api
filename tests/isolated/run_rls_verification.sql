@@ -1,24 +1,31 @@
--- WO-TAI-SEC-SEARCHPATH-REM97-ISOLATED-R1-GATE-CLOSE-004
--- ROLE/RLS verification: B2B-07 + B3B-11
+-- WO-TAI-SEC-SEARCHPATH-REM97-ISOLATED-FINAL-R2-006
+-- ROLE/RLS verification: B2B-07 + B3B-11 (R2 — GAP-001/002/003 addressed)
 -- Run AFTER setup_isolated.sql + setup_rls.sql
 -- Covers PHASE1 (pre-ALTER) and PHASE2 (post-ALTER)
 --
 -- ROLES TESTED:
---   anon       — Supabase anon key role
---   authenticated — Supabase JWT-authenticated role
---   postgres   — superuser = service_role equivalent (bypasses RLS)
+--   anon          — Supabase anon key role (no grant on runtime tables)
+--   authenticated — Supabase JWT-authenticated role (no grant on runtime tables)
+--   service_role  — BYPASSRLS + runtime table grants (GAP-002: direct SET ROLE test)
+--   postgres      — superuser, secondary evidence only
 --
--- B2B-07: anon cannot INSERT runtime review tables (no grant → permission denied)
---         service_role (postgres) can INSERT → trigger fires correctly
--- B3B-11: anon CAN INSERT construction_workers → trigger fires → registry created
---         authenticated CAN INSERT construction_workers → trigger runs as authenticated
---           → trigger tries INSERT worker_registry → BLOCKED (no authenticated RLS policy on worker_registry)
---           → this is production behavior (PRODUCTION_RLS_OBSERVATION, not a test defect)
+-- B2B-07:
+--   R1: anon INSERT runtime_inspection_review → permission denied (no grant)
+--   R2: anon INSERT runtime_work_order_review → permission denied (no grant)
+--   R3: anon SELECT runtime_inspection_review → permission denied (no grant)
+--   R4: postgres INSERT → trigger fires (secondary evidence)
+--   R5: service_role INSERT → trigger fires (GAP-002: direct service_role test)
+--   R6: authenticated INSERT → permission denied SQLSTATE=42501 (GAP-003)
+--
+-- B3B-11:
+--   R1: anon INSERT construction_workers → trigger fires → registry created
+--   R2: anon UPDATE construction_workers → trigger fires → registry updated
+--   R3: authenticated INSERT → worker_registry RLS blocks (GAP-001: strict 42501 assertion)
 
 SET search_path = public;
 
 DO $$ BEGIN RAISE NOTICE '========================================'; END $$;
-DO $$ BEGIN RAISE NOTICE 'ROLE/RLS VERIFICATION: B2B-07 + B3B-11'; END $$;
+DO $$ BEGIN RAISE NOTICE 'ROLE/RLS VERIFICATION: B2B-07 + B3B-11 (R2)'; END $$;
 DO $$ BEGIN RAISE NOTICE '========================================'; END $$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -134,8 +141,8 @@ BEGIN
 END;
 $$;
 
--- ── B2B-07-R4: postgres (service_role equivalent) INSERT → trigger fires ───────
--- postgres bypasses RLS. Trigger should fire and update session status.
+-- ── B2B-07-R4: postgres (superuser) INSERT → trigger fires [secondary evidence] ─
+-- postgres bypasses RLS. Kept as secondary evidence; service_role direct test is R5.
 DO $$
 DECLARE
   v_session_id   uuid;
@@ -170,7 +177,101 @@ BEGIN
       v_sess_status, v_rev_status;
   END IF;
 
-  RAISE NOTICE 'B2B-07-R4 PHASE1 PASS: postgres (service_role equiv) INSERT → trigger fires → session APPROVED';
+  RAISE NOTICE 'B2B-07-R4 PHASE1 PASS: postgres (superuser, secondary evidence) INSERT → trigger fires → session APPROVED';
+END;
+$$;
+
+-- ── B2B-07-R5: service_role INSERT runtime_inspection_review → trigger fires ────
+-- GAP-002: direct SET LOCAL ROLE service_role test.
+-- service_role has BYPASSRLS + runtime table grants → trigger should fire correctly.
+DO $$
+DECLARE
+  v_session_id   uuid;
+  v_worker_id    uuid := gen_random_uuid();
+  v_reviewer_id  uuid := gen_random_uuid();
+  v_obligation   uuid;
+  v_sess_status  text;
+  v_rev_status   text;
+BEGIN
+  INSERT INTO runtime_obligation_registry (id, label) VALUES (gen_random_uuid(), 'rls-test') RETURNING id INTO v_obligation;
+  INSERT INTO runtime_inspection_session
+    (id, operational_work_order_id, worker_user_id, session_status, submission_status,
+     evidence_status, review_status, offline_sync_status, source_trace)
+  VALUES
+    (gen_random_uuid(), gen_random_uuid(), v_worker_id,
+     'REVIEW_PENDING','SUBMITTED','CONFIRMED','NOT_REVIEWED','ONLINE','RUNTIME_GENERATED')
+  RETURNING id INTO v_session_id;
+
+  SET LOCAL ROLE service_role;
+  BEGIN
+    INSERT INTO runtime_inspection_review
+      (inspection_session_id, reviewer_id, review_action,
+       previous_status, new_status, source_trace)
+    VALUES
+      (v_session_id, v_reviewer_id, 'APPROVE',
+       'REVIEW_PENDING', 'APPROVED', 'MANUAL_REVIEW');
+  EXCEPTION WHEN OTHERS THEN
+    RESET ROLE;
+    RAISE EXCEPTION 'B2B-07-R5 PHASE1 FAIL: service_role INSERT failed: % (SQLSTATE=%)', SQLERRM, SQLSTATE;
+  END;
+  RESET ROLE;
+
+  SELECT session_status, review_status INTO v_sess_status, v_rev_status
+  FROM runtime_inspection_session WHERE id = v_session_id;
+
+  IF v_sess_status <> 'APPROVED' OR v_rev_status <> 'APPROVED' THEN
+    RAISE EXCEPTION 'B2B-07-R5 PHASE1 FAIL: service_role INSERT trigger did not fire correctly (%, %)',
+      v_sess_status, v_rev_status;
+  END IF;
+
+  RAISE NOTICE 'B2B-07-R5 PHASE1 PASS: service_role INSERT runtime_inspection_review → trigger fires → session APPROVED';
+END;
+$$;
+
+-- ── B2B-07-R6: authenticated INSERT runtime_inspection_review → permission denied
+-- GAP-003: authenticated also has no grant on runtime tables → SQLSTATE=42501
+DO $$
+DECLARE
+  v_session_id uuid;
+  v_worker_id  uuid := gen_random_uuid();
+  v_obligation uuid;
+  v_blocked    bool := false;
+  v_sqlstate   text;
+BEGIN
+  INSERT INTO runtime_obligation_registry (id, label) VALUES (gen_random_uuid(), 'rls-test') RETURNING id INTO v_obligation;
+  INSERT INTO runtime_inspection_session
+    (id, operational_work_order_id, worker_user_id, session_status, submission_status,
+     evidence_status, review_status, offline_sync_status, source_trace)
+  VALUES
+    (gen_random_uuid(), gen_random_uuid(), v_worker_id,
+     'REVIEW_PENDING','SUBMITTED','CONFIRMED','NOT_REVIEWED','ONLINE','RUNTIME_GENERATED')
+  RETURNING id INTO v_session_id;
+
+  SET LOCAL ROLE authenticated;
+  BEGIN
+    INSERT INTO runtime_inspection_review
+      (inspection_session_id, reviewer_id, review_action,
+       previous_status, new_status, source_trace)
+    VALUES
+      (v_session_id, gen_random_uuid(), 'APPROVE',
+       'REVIEW_PENDING', 'APPROVED', 'MANUAL_REVIEW');
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_blocked  := true;
+    v_sqlstate := SQLSTATE;
+  WHEN OTHERS THEN
+    RESET ROLE;
+    RAISE EXCEPTION 'B2B-07-R6 PHASE1 unexpected SQLSTATE=% MSG=%', SQLSTATE, SQLERRM;
+  END;
+  RESET ROLE;
+
+  IF NOT v_blocked THEN
+    RAISE EXCEPTION 'B2B-07-R6 PHASE1 FAIL: authenticated INSERT runtime_inspection_review was not blocked';
+  END IF;
+  IF v_sqlstate <> '42501' THEN
+    RAISE EXCEPTION 'B2B-07-R6 PHASE1 FAIL: expected SQLSTATE=42501, got %', v_sqlstate;
+  END IF;
+
+  RAISE NOTICE 'B2B-07-R6 PHASE1 PASS: authenticated INSERT runtime_inspection_review → permission denied (SQLSTATE=42501, no grant on runtime tables)';
 END;
 $$;
 
@@ -265,6 +366,7 @@ $$;
 -- ── B3B-11-R3: authenticated INSERT construction_workers → worker_registry RLS gap
 -- authenticated has no RLS policy on worker_registry → trigger INSERT worker_registry blocked
 -- This is PRODUCTION_RLS_OBSERVATION — not a test defect
+-- GAP-001: tightened to require SQLSTATE=42501 and error from worker_registry specifically
 DO $$
 DECLARE
   v_co_id      uuid := gen_random_uuid();
@@ -272,6 +374,7 @@ DECLARE
   v_worker_id  uuid;
   v_blocked    bool := false;
   v_sqlstate   text;
+  v_errmsg     text;
 BEGIN
   INSERT INTO companies (id, name, company_code) VALUES (v_co_id, 'RLSTestCo3', 'RLS003');
   INSERT INTO construction_sites (id, company_id, site_name)
@@ -284,17 +387,27 @@ BEGIN
     VALUES
       (gen_random_uuid(), v_site_id, 'RLSWorker3', '010-0000-0103', 'WORKER')
     RETURNING id INTO v_worker_id;
-  EXCEPTION WHEN OTHERS THEN
-    v_blocked := true;
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_blocked  := true;
     v_sqlstate := SQLSTATE;
+    v_errmsg   := SQLERRM;
+  WHEN OTHERS THEN
+    RESET ROLE;
+    RAISE EXCEPTION 'B3B-11-R3 PHASE1 unexpected SQLSTATE=% MSG=%', SQLSTATE, SQLERRM;
   END;
   RESET ROLE;
 
   IF NOT v_blocked THEN
     RAISE EXCEPTION 'B3B-11-R3 PHASE1 UNEXPECTED: authenticated INSERT succeeded — worker_registry policy gap expected to block trigger';
   END IF;
+  IF v_sqlstate <> '42501' THEN
+    RAISE EXCEPTION 'B3B-11-R3 PHASE1 FAIL: expected SQLSTATE=42501, got %', v_sqlstate;
+  END IF;
+  IF v_errmsg NOT LIKE '%worker_registry%' THEN
+    RAISE EXCEPTION 'B3B-11-R3 PHASE1 FAIL: expected error from worker_registry, got: %', v_errmsg;
+  END IF;
 
-  RAISE NOTICE 'B3B-11-R3 PHASE1 PRODUCTION_RLS_OBSERVATION: authenticated INSERT construction_workers → trigger INSERT worker_registry blocked (SQLSTATE=%) — no authenticated RLS policy on worker_registry = production behavior', v_sqlstate;
+  RAISE NOTICE 'B3B-11-R3 PHASE1 PRODUCTION_RLS_OBSERVATION: authenticated INSERT construction_workers → trigger INSERT worker_registry blocked (SQLSTATE=42501, MSG=%) — no authenticated RLS policy on worker_registry = production behavior', v_errmsg;
 END;
 $$;
 
@@ -425,6 +538,7 @@ END;
 $$;
 
 -- ── B2B-07-R4 POST ────────────────────────────────────────────────────────────
+-- postgres superuser, secondary evidence
 DO $$
 DECLARE
   v_session_id   uuid;
@@ -458,7 +572,100 @@ BEGIN
       v_sess_status, v_rev_status;
   END IF;
 
-  RAISE NOTICE 'B2B-07-R4 PHASE2 PASS: postgres (service_role equiv) INSERT → trigger still fires after ALTER → session APPROVED';
+  RAISE NOTICE 'B2B-07-R4 PHASE2 PASS: postgres (superuser, secondary evidence) INSERT → trigger still fires after ALTER → session APPROVED';
+END;
+$$;
+
+-- ── B2B-07-R5 POST ────────────────────────────────────────────────────────────
+-- GAP-002: service_role direct test (post-ALTER)
+DO $$
+DECLARE
+  v_session_id   uuid;
+  v_worker_id    uuid := gen_random_uuid();
+  v_reviewer_id  uuid := gen_random_uuid();
+  v_obligation   uuid;
+  v_sess_status  text;
+  v_rev_status   text;
+BEGIN
+  INSERT INTO runtime_obligation_registry (id, label) VALUES (gen_random_uuid(), 'rls-test') RETURNING id INTO v_obligation;
+  INSERT INTO runtime_inspection_session
+    (id, operational_work_order_id, worker_user_id, session_status, submission_status,
+     evidence_status, review_status, offline_sync_status, source_trace)
+  VALUES
+    (gen_random_uuid(), gen_random_uuid(), v_worker_id,
+     'REVIEW_PENDING','SUBMITTED','CONFIRMED','NOT_REVIEWED','ONLINE','RUNTIME_GENERATED')
+  RETURNING id INTO v_session_id;
+
+  SET LOCAL ROLE service_role;
+  BEGIN
+    INSERT INTO runtime_inspection_review
+      (inspection_session_id, reviewer_id, review_action,
+       previous_status, new_status, source_trace)
+    VALUES
+      (v_session_id, v_reviewer_id, 'APPROVE',
+       'REVIEW_PENDING', 'APPROVED', 'MANUAL_REVIEW');
+  EXCEPTION WHEN OTHERS THEN
+    RESET ROLE;
+    RAISE EXCEPTION 'B2B-07-R5 PHASE2 FAIL: service_role INSERT failed after ALTER: % (SQLSTATE=%)', SQLERRM, SQLSTATE;
+  END;
+  RESET ROLE;
+
+  SELECT session_status, review_status INTO v_sess_status, v_rev_status
+  FROM runtime_inspection_session WHERE id = v_session_id;
+
+  IF v_sess_status <> 'APPROVED' OR v_rev_status <> 'APPROVED' THEN
+    RAISE EXCEPTION 'B2B-07-R5 PHASE2 FAIL: service_role INSERT trigger did not fire after ALTER (%, %)',
+      v_sess_status, v_rev_status;
+  END IF;
+
+  RAISE NOTICE 'B2B-07-R5 PHASE2 PASS: service_role INSERT runtime_inspection_review → trigger still fires after ALTER → session APPROVED';
+END;
+$$;
+
+-- ── B2B-07-R6 POST ────────────────────────────────────────────────────────────
+-- GAP-003: authenticated blocked post-ALTER
+DO $$
+DECLARE
+  v_session_id uuid;
+  v_worker_id  uuid := gen_random_uuid();
+  v_obligation uuid;
+  v_blocked    bool := false;
+  v_sqlstate   text;
+BEGIN
+  INSERT INTO runtime_obligation_registry (id, label) VALUES (gen_random_uuid(), 'rls-test') RETURNING id INTO v_obligation;
+  INSERT INTO runtime_inspection_session
+    (id, operational_work_order_id, worker_user_id, session_status, submission_status,
+     evidence_status, review_status, offline_sync_status, source_trace)
+  VALUES
+    (gen_random_uuid(), gen_random_uuid(), v_worker_id,
+     'REVIEW_PENDING','SUBMITTED','CONFIRMED','NOT_REVIEWED','ONLINE','RUNTIME_GENERATED')
+  RETURNING id INTO v_session_id;
+
+  SET LOCAL ROLE authenticated;
+  BEGIN
+    INSERT INTO runtime_inspection_review
+      (inspection_session_id, reviewer_id, review_action,
+       previous_status, new_status, source_trace)
+    VALUES
+      (v_session_id, gen_random_uuid(), 'APPROVE',
+       'REVIEW_PENDING', 'APPROVED', 'MANUAL_REVIEW');
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_blocked  := true;
+    v_sqlstate := SQLSTATE;
+  WHEN OTHERS THEN
+    RESET ROLE;
+    RAISE EXCEPTION 'B2B-07-R6 PHASE2 unexpected SQLSTATE=% MSG=%', SQLSTATE, SQLERRM;
+  END;
+  RESET ROLE;
+
+  IF NOT v_blocked THEN
+    RAISE EXCEPTION 'B2B-07-R6 PHASE2 FAIL: authenticated INSERT runtime_inspection_review was not blocked after ALTER';
+  END IF;
+  IF v_sqlstate <> '42501' THEN
+    RAISE EXCEPTION 'B2B-07-R6 PHASE2 FAIL: expected SQLSTATE=42501, got %', v_sqlstate;
+  END IF;
+
+  RAISE NOTICE 'B2B-07-R6 PHASE2 PASS: authenticated INSERT runtime_inspection_review → still permission denied after ALTER (SQLSTATE=42501)';
 END;
 $$;
 
@@ -543,6 +750,7 @@ END;
 $$;
 
 -- ── B3B-11-R3 POST ────────────────────────────────────────────────────────────
+-- GAP-001: tightened to require SQLSTATE=42501 and error from worker_registry
 DO $$
 DECLARE
   v_co_id      uuid := gen_random_uuid();
@@ -550,6 +758,7 @@ DECLARE
   v_worker_id  uuid;
   v_blocked    bool := false;
   v_sqlstate   text;
+  v_errmsg     text;
 BEGIN
   INSERT INTO companies (id, name, company_code) VALUES (v_co_id, 'RLSTestCo6', 'RLS006');
   INSERT INTO construction_sites (id, company_id, site_name)
@@ -562,17 +771,27 @@ BEGIN
     VALUES
       (gen_random_uuid(), v_site_id, 'RLSWorker6', '010-0000-0106', 'WORKER')
     RETURNING id INTO v_worker_id;
-  EXCEPTION WHEN OTHERS THEN
-    v_blocked := true;
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_blocked  := true;
     v_sqlstate := SQLSTATE;
+    v_errmsg   := SQLERRM;
+  WHEN OTHERS THEN
+    RESET ROLE;
+    RAISE EXCEPTION 'B3B-11-R3 PHASE2 unexpected SQLSTATE=% MSG=%', SQLSTATE, SQLERRM;
   END;
   RESET ROLE;
 
   IF NOT v_blocked THEN
     RAISE EXCEPTION 'B3B-11-R3 PHASE2 UNEXPECTED: authenticated INSERT succeeded after ALTER — worker_registry policy gap expected to block';
   END IF;
+  IF v_sqlstate <> '42501' THEN
+    RAISE EXCEPTION 'B3B-11-R3 PHASE2 FAIL: expected SQLSTATE=42501, got %', v_sqlstate;
+  END IF;
+  IF v_errmsg NOT LIKE '%worker_registry%' THEN
+    RAISE EXCEPTION 'B3B-11-R3 PHASE2 FAIL: expected error from worker_registry, got: %', v_errmsg;
+  END IF;
 
-  RAISE NOTICE 'B3B-11-R3 PHASE2 PRODUCTION_RLS_OBSERVATION: authenticated INSERT still blocked after ALTER (SQLSTATE=%) — behavior unchanged = PASS', v_sqlstate;
+  RAISE NOTICE 'B3B-11-R3 PHASE2 PRODUCTION_RLS_OBSERVATION: authenticated INSERT still blocked after ALTER (SQLSTATE=42501, MSG=%) — behavior unchanged = PASS', v_errmsg;
 END;
 $$;
 
@@ -584,20 +803,26 @@ DO $$ BEGIN RAISE NOTICE '--- PHASE 2 ROLE/RLS COMPLETE ---'; END $$;
 DO $$
 BEGIN
   RAISE NOTICE '========================================';
-  RAISE NOTICE 'ROLE/RLS VERIFICATION COMPLETE';
+  RAISE NOTICE 'ROLE/RLS VERIFICATION COMPLETE (R2)';
   RAISE NOTICE '';
   RAISE NOTICE 'B2B-07 PHASE1+PHASE2:';
   RAISE NOTICE '  R1: anon INSERT runtime_inspection_review → permission denied (no grant) [PASS]';
   RAISE NOTICE '  R2: anon INSERT runtime_work_order_review → permission denied (no grant) [PASS]';
   RAISE NOTICE '  R3: anon SELECT runtime_inspection_review → permission denied (no grant; SELECT policy unreachable) [PASS]';
-  RAISE NOTICE '  R4: postgres/service_role INSERT → trigger fires correctly [PASS]';
+  RAISE NOTICE '  R4: postgres superuser INSERT → trigger fires (secondary evidence) [PASS]';
+  RAISE NOTICE '  R5: service_role INSERT → trigger fires (GAP-002: direct SET ROLE service_role) [PASS]';
+  RAISE NOTICE '  R6: authenticated INSERT → permission denied SQLSTATE=42501 (GAP-003) [PASS]';
   RAISE NOTICE '';
   RAISE NOTICE 'B3B-11 PHASE1+PHASE2:';
   RAISE NOTICE '  R1: anon INSERT construction_workers → trigger fires → registry created [PASS]';
   RAISE NOTICE '  R2: anon UPDATE construction_workers → trigger fires → registry updated [PASS]';
-  RAISE NOTICE '  R3: authenticated INSERT construction_workers → blocked (worker_registry RLS gap) [PRODUCTION_RLS_OBSERVATION]';
+  RAISE NOTICE '  R3: authenticated INSERT construction_workers → worker_registry RLS SQLSTATE=42501 (GAP-001: strict assertion) [PRODUCTION_RLS_OBSERVATION]';
   RAISE NOTICE '';
-  RAISE NOTICE 'ALTER FUNCTION equivalence: CONFIRMED for anon role (primary production path)';
+  RAISE NOTICE 'GAP-001 RESOLVED: B3B-11-R3 now asserts SQLSTATE=42501 + worker_registry error source';
+  RAISE NOTICE 'GAP-002 RESOLVED: B2B-07-R5 uses SET LOCAL ROLE service_role directly';
+  RAISE NOTICE 'GAP-003 RESOLVED: B2B-07-R6 authenticated INSERT blocked SQLSTATE=42501 verified';
+  RAISE NOTICE '';
+  RAISE NOTICE 'ALTER FUNCTION equivalence: CONFIRMED for all roles';
   RAISE NOTICE 'search_path fix does NOT change role/RLS behavior';
   RAISE NOTICE '========================================';
 END;

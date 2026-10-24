@@ -32,10 +32,30 @@ $$;
 
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 
+-- ─── SERVICE_ROLE (GAP-002: direct role reproduction) ─────────────────────────
+-- service_role in Supabase has BYPASSRLS privilege + runtime table grants.
+-- Isolated reproduction: CREATE ROLE service_role BYPASSRLS to mirror production.
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    CREATE ROLE service_role BYPASSRLS NOLOGIN;
+  END IF;
+END;
+$$;
+
+GRANT USAGE ON SCHEMA public TO service_role;
+-- service_role needs direct access to runtime tables (bypasses RLS)
+GRANT SELECT, INSERT, UPDATE, DELETE ON runtime_inspection_review      TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON runtime_inspection_session     TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON runtime_operational_work_order TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON runtime_work_order_review      TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON runtime_obligation_registry    TO service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;
+
 -- ─── TABLE GRANTS ─────────────────────────────────────────────────────────────
 
 -- B2B runtime tables: NO grant to anon/authenticated (matches production)
--- postgres (superuser = service_role equivalent) already has all privileges
 
 -- B3B tables: anon and authenticated get SELECT/INSERT/UPDATE/DELETE
 GRANT SELECT, INSERT, UPDATE, DELETE ON construction_workers  TO anon, authenticated;
@@ -124,6 +144,12 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     RAISE EXCEPTION 'RLS SETUP FAILED: role authenticated not found';
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    RAISE EXCEPTION 'RLS SETUP FAILED: role service_role not found';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role' AND rolbypassrls = true) THEN
+    RAISE EXCEPTION 'RLS SETUP FAILED: service_role does not have BYPASSRLS';
+  END IF;
 
   -- Verify RLS enabled on runtime tables
   SELECT COUNT(*) INTO v_count FROM pg_class c
@@ -165,9 +191,11 @@ BEGIN
 
   RAISE NOTICE '';
   RAISE NOTICE 'RLS SETUP OK:';
-  RAISE NOTICE '  Roles: anon, authenticated created';
+  RAISE NOTICE '  Roles: anon, authenticated, service_role created';
+  RAISE NOTICE '  service_role: BYPASSRLS=true + runtime table grants (GAP-002)';
   RAISE NOTICE '  RLS enabled: 4 runtime tables + 5 B3B tables + companies + runtime_obligation_registry';
   RAISE NOTICE '  B2B: anon has NO grant on runtime tables (permission denied = production behavior)';
+  RAISE NOTICE '  B2B: service_role has direct grants + BYPASSRLS on runtime tables';
   RAISE NOTICE '  B3B: anon=ALL grant+policy on construction_workers/sites/factories/worker_registry';
   RAISE NOTICE '  B3B: authenticated=ALL grant+policy on construction_workers/sites/factories';
   RAISE NOTICE '  B3B: worker_registry authenticated=grant only (no policy = RLS blocked = production behavior)';

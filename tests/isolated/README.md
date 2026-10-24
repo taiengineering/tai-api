@@ -156,5 +156,5 @@ RLS 동등성 검증은 불가하다. 해당 함수는 `service_role` 경유로�
 
 | Migration | SHA256 |
 |-----------|--------|
-| B-W2B: `20261024094500_sec_searchpath_rem97_bw2b_review_triggers.sql` | `c9598ab60537698c8ff58b64b94deebb959ebe0521b2fe11f6a9c03b787fc02e` |
+| B-W2B: `20261024094500_sec_searchpath_rem97_bw2b_status_transition_validators.sql` | `c9598ab60537698c8ff58b64b94deebb959ebe0521b2fe11f6a9c03b787fc02e` |
 | B-W3B: `20261024101500_sec_searchpath_rem97_bw3b_sync_triggers.sql` | `92ec79cca4b2d0eaeef9793f9920cb2f538a9ab8559ec883be93dfd9a0df6644` |
