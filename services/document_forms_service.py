@@ -39,12 +39,64 @@ def list_document_forms(
     end = start + per_page - 1
 
     res = query.order("doc_id").range(start, end).execute()
+    items = res.data or []
+    _enrich_with_availability(supabase, items)
     return {
-        "items": res.data or [],
+        "items": items,
         "total": int(res.count or 0),
         "page": page,
         "per_page": per_page,
     }
+
+
+def _enrich_with_availability(supabase: Any, items: list[dict]) -> None:
+    """Batch-enriches items with schema_availability. Mutates in place.
+
+    Reuses the same availability logic as workspace_readmodel.py:
+      APPROVED_FOR_RUNTIME_USE present  → READY_FOR_EDIT
+      only CANDIDATE present            → PREPARING
+      neither                           → NO_SCHEMA
+      multiple APPROVED                 → PREPARING (multiple_approved guard)
+    """
+    if not items:
+        return
+
+    catalog_ids = [item["id"] for item in items if item.get("id")]
+    if not catalog_ids:
+        for item in items:
+            item["schema_availability"] = "NO_SCHEMA"
+        return
+
+    _APPROVED = "APPROVED_FOR_RUNTIME_USE"
+    _CANDIDATE = "CANDIDATE"
+
+    schema_rows = (
+        supabase.table("runtime_form_schema")
+        .select("catalog_document_id,status")
+        .in_("catalog_document_id", catalog_ids)
+        .in_("status", [_APPROVED, _CANDIDATE])
+        .execute()
+    ).data or []
+
+    approved_map: dict[str, int] = {}
+    candidate_count_map: dict[str, int] = {}
+    for s in schema_rows:
+        cid = s["catalog_document_id"]
+        if s["status"] == _APPROVED:
+            approved_map[cid] = approved_map.get(cid, 0) + 1
+        elif s["status"] == _CANDIDATE:
+            candidate_count_map[cid] = candidate_count_map.get(cid, 0) + 1
+
+    for item in items:
+        cid = item.get("id")
+        acount = approved_map.get(cid, 0)
+        ccount = candidate_count_map.get(cid, 0)
+        if acount == 1:
+            item["schema_availability"] = "READY_FOR_EDIT"
+        elif acount > 1 or ccount > 0:
+            item["schema_availability"] = "PREPARING"
+        else:
+            item["schema_availability"] = "NO_SCHEMA"
 
 
 def get_document_form(doc_id: str) -> Dict[str, Any]:
