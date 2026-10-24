@@ -1,14 +1,14 @@
 -- Migration: 20261024103000_sec_searchpath_rem97_bw4_rpc_analysis_functions.sql
--- WO: WO-TAI-SEC-SEARCHPATH-REM97-BW4-SOURCE-001
--- SEC SEARCHPATH REM97 B-W4 — RPC·분석 함수 8개 search_path 고정
+-- WO: WO-TAI-SEC-SEARCHPATH-REM97-BW4-SOURCE-001 / R1: WO-TAI-SEC-SEARCHPATH-REM97-BW4-SOURCE-R1-001
+-- SEC SEARCHPATH REM97 B-W4A — RPC·분석 함수 7개 search_path 고정
 --
 -- 배경:
 --   B-W1/B-W2A CLOSED_FINAL. B-W2B PROD=BLOCKED_ISOLATED_TEST.
 --   B-W3A PROD=HOLD. B-W3B PROD=BLOCKED_ISOLATED_TEST.
---   B-W4 대상 8개 함수: 모두 SECURITY INVOKER, proconfig=NULL.
+--   B-W4A 대상 7개 함수: 모두 SECURITY INVOKER, proconfig=NULL.
 --   전원 SELECT 전용 RPC 함수 — 외부 DML 없음, 격리 기능검증 불필요.
---   → function_search_path_mutable Advisor 75건 중 B-W4 8건 해소 (75→67) 예정.
---   8개 함수 모두 비한정 참조 테이블이 public 스키마에 존재하여
+--   → function_search_path_mutable Advisor 75건 중 B-W4A 7건 해소 (75→68) 예정.
+--   7개 함수 모두 비한정 참조 테이블이 public 스키마에 존재하여
 --   search_path = pg_catalog, public, pg_temp 고정 후 동작 동등 확인
 --   (METADATA_ONLY, 기존 동작 변경 없음).
 --
@@ -17,8 +17,6 @@
 --     SET search_path = pg_catalog, public, pg_temp  (B17)
 --   ALTER FUNCTION public.get_equip_count_by_process(text[])
 --     SET search_path = pg_catalog, public, pg_temp  (B18)
---   ALTER FUNCTION public.get_precompiled_factory_ids()
---     SET search_path = pg_catalog, public, pg_temp  (B19)
 --   ALTER FUNCTION public.search_help(text, text[], text, text, integer, text[], text, integer, integer)
 --     SET search_path = pg_catalog, public, pg_temp  (B20)
 --   ALTER FUNCTION public.search_help_count(text, text[], text, integer, text[], text)
@@ -30,7 +28,14 @@
 --   ALTER FUNCTION public.stats_diagnosis_funnel(date, date, text)
 --     SET search_path = pg_catalog, public, pg_temp  (B24)
 --   함수 본문·ACL·SECURITY INVOKER·Volatility·Parallel 변경 없음.
---   트리거 없음 (8개 함수 모두 RPC 전용).
+--   트리거 없음 (7개 함수 모두 RPC 전용).
+--
+-- B19 HOLD (GPT_BW4_SOURCE_IV 지적):
+--   public.get_precompiled_factory_ids() (OID=70200)
+--   본문이 참조하는 facility_applicability는 engine_isolated 스키마에만 존재.
+--   public.facility_applicability 없음 — search_path=pg_catalog,public,pg_temp 고정 시
+--   기존 오류 해소 불가. B19 전용 스키마 해석 및 Source·기능검증 Gate 별도 필요.
+--   B19_STATUS = HOLD_SCHEMA_RESOLUTION
 --
 -- 참조:
 --   20261024101500_sec_searchpath_rem97_bw3b_sync_triggers.sql
@@ -47,25 +52,23 @@ DECLARE
   v_fn_sigs   text[]  := ARRAY[
     'public.get_diagrams_for_diagnosis(text, text[])',
     'public.get_equip_count_by_process(text[])',
-    'public.get_precompiled_factory_ids()',
     'public.search_help(text, text[], text, text, integer, text[], text, integer, integer)',
     'public.search_help_count(text, text[], text, integer, text[], text)',
     'public.search_safety_materials(text, text, text, integer, integer)',
     'public.stats_customer_sites(date, date, text)',
     'public.stats_diagnosis_funnel(date, date, text)'
   ];
-  v_oids      oid[]   := ARRAY[18566, 18567, 70200, 243821, 243822, 223735, 242472, 242471];
+  v_oids      oid[]   := ARRAY[18566, 18567, 243821, 243822, 223735, 242472, 242471];
   v_md5s      text[]  := ARRAY[
     '5e66840f274e21e02ee20c5ed4d9db0d',
     'a22fb0bc8c91cbd82eeb65a059a982d4',
-    'fa38689f8ad0f1fd6b904df01237bbde',
     '736962e539ec4be659ef6712f57d05a0',
     'b5f39c3c761e54f88c4d451d8454c1ab',
     '349e30be44996f011cea340aecbeb093',
     '4ee2731ed5cf2b66d6757ed41bff6fc9',
     '49351eb5a856c2e0c19485dd03e9d629'
   ];
-  v_volatiles char[]  := ARRAY['v', 's', 's', 's', 's', 's', 's', 's'];
+  v_volatiles char[]  := ARRAY['v', 's', 's', 's', 's', 's', 's'];
 
   i            int;
   v_fn_sig     text;
@@ -117,7 +120,7 @@ BEGIN
       RAISE EXCEPTION 'PRE FAILED: % proconfig already set: %.', v_fn_sig, v_proconfig;
     END IF;
 
-    -- 1-g. Volatility 기준선 (B17=VOLATILE, B18-B24=STABLE)
+    -- 1-g. Volatility 기준선 (B17=VOLATILE, B18/B20-B24=STABLE)
     SELECT p.provolatile INTO v_volat FROM pg_proc p WHERE p.oid = v_oid;
     IF v_volat IS DISTINCT FROM v_volatiles[i] THEN
       RAISE EXCEPTION 'PRE FAILED: % volatility mismatch (expected %, got %).', v_fn_sig, v_volatiles[i], v_volat;
@@ -144,28 +147,26 @@ CREATE TEMP TABLE _bw4_fn_acl_baseline (
 INSERT INTO _bw4_fn_acl_baseline (fn_oid, proacl)
 SELECT p.oid, p.proacl::text
 FROM pg_proc p
-WHERE p.oid IN (18566, 18567, 70200, 243821, 243822, 223735, 242472, 242471);
+WHERE p.oid IN (18566, 18567, 243821, 243822, 223735, 242472, 242471);
 
 DO $$
 DECLARE v_count int;
 BEGIN
   SELECT COUNT(*) INTO v_count FROM _bw4_fn_acl_baseline;
-  IF v_count IS DISTINCT FROM 8 THEN
-    RAISE EXCEPTION 'PRE FAILED: ACL baseline captured % rows, expected 8.', v_count;
+  IF v_count IS DISTINCT FROM 7 THEN
+    RAISE EXCEPTION 'PRE FAILED: ACL baseline captured % rows, expected 7.', v_count;
   END IF;
 END;
 $$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- STEP 2: search_path 고정 (METADATA_ONLY — 함수 본문·ACL 변경 없음)
+-- B19 get_precompiled_factory_ids() 제외 (HOLD_SCHEMA_RESOLUTION)
 -- ─────────────────────────────────────────────────────────────────────────────
 ALTER FUNCTION public.get_diagrams_for_diagnosis(text, text[])
   SET search_path = pg_catalog, public, pg_temp;
 
 ALTER FUNCTION public.get_equip_count_by_process(text[])
-  SET search_path = pg_catalog, public, pg_temp;
-
-ALTER FUNCTION public.get_precompiled_factory_ids()
   SET search_path = pg_catalog, public, pg_temp;
 
 ALTER FUNCTION public.search_help(text, text[], text, text, integer, text[], text, integer, integer)
@@ -193,25 +194,23 @@ DECLARE
   v_fn_sigs   text[]  := ARRAY[
     'public.get_diagrams_for_diagnosis(text, text[])',
     'public.get_equip_count_by_process(text[])',
-    'public.get_precompiled_factory_ids()',
     'public.search_help(text, text[], text, text, integer, text[], text, integer, integer)',
     'public.search_help_count(text, text[], text, integer, text[], text)',
     'public.search_safety_materials(text, text, text, integer, integer)',
     'public.stats_customer_sites(date, date, text)',
     'public.stats_diagnosis_funnel(date, date, text)'
   ];
-  v_oids      oid[]   := ARRAY[18566, 18567, 70200, 243821, 243822, 223735, 242472, 242471];
+  v_oids      oid[]   := ARRAY[18566, 18567, 243821, 243822, 223735, 242472, 242471];
   v_md5s      text[]  := ARRAY[
     '5e66840f274e21e02ee20c5ed4d9db0d',
     'a22fb0bc8c91cbd82eeb65a059a982d4',
-    'fa38689f8ad0f1fd6b904df01237bbde',
     '736962e539ec4be659ef6712f57d05a0',
     'b5f39c3c761e54f88c4d451d8454c1ab',
     '349e30be44996f011cea340aecbeb093',
     '4ee2731ed5cf2b66d6757ed41bff6fc9',
     '49351eb5a856c2e0c19485dd03e9d629'
   ];
-  v_volatiles char[]  := ARRAY['v', 's', 's', 's', 's', 's', 's', 's'];
+  v_volatiles char[]  := ARRAY['v', 's', 's', 's', 's', 's', 's'];
 
   i            int;
   v_fn_sig     text;
