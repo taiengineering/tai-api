@@ -84,9 +84,11 @@ def _enrich_with_availability(supabase: Any, items: list[dict]) -> None:
             .execute()
         ).data or []
     except Exception as exc:
-        log.warning("runtime_form_schema batch query failed — fail-closed to NO_SCHEMA: %s", exc)
+        # DB query failure: distinct from "schema not yet created" — use SCHEMA_ERROR
+        # so the frontend shows "상태 확인 불가" rather than "서식 미준비"
+        log.warning("runtime_form_schema batch query failed — marking all as SCHEMA_ERROR: %s", exc)
         for item in items:
-            item["schema_availability"] = "NO_SCHEMA"
+            item["schema_availability"] = "SCHEMA_ERROR"
         return
 
     approved_map: dict[str, int] = {}

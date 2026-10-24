@@ -93,8 +93,8 @@ class TestEnrichAvailabilityUnit(unittest.TestCase):
         self.assertNotEqual(items[0]["schema_availability"], "PREPARING")
         self.assertNotEqual(items[0]["schema_availability"], "READY_FOR_EDIT")
 
-    def test_t05_db_failure_fail_closed_no_schema(self):
-        """DB query exception must never result in READY_FOR_EDIT (fail-closed → NO_SCHEMA)."""
+    def test_t05_db_failure_schema_error_not_ready(self):
+        """DB query exception → SCHEMA_ERROR (distinguishable from NO_SCHEMA) and never READY_FOR_EDIT."""
         items = [_make_item("DOC-E", "uid-e"), _make_item("DOC-F", "uid-f")]
         sb = MagicMock()
         chain = MagicMock()
@@ -105,7 +105,8 @@ class TestEnrichAvailabilityUnit(unittest.TestCase):
 
         _enrich_with_availability(sb, items)
         for item in items:
-            self.assertEqual(item["schema_availability"], "NO_SCHEMA")
+            self.assertEqual(item["schema_availability"], "SCHEMA_ERROR")
+            self.assertNotEqual(item["schema_availability"], "NO_SCHEMA")
             self.assertNotEqual(item["schema_availability"], "READY_FOR_EDIT")
 
 
