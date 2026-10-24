@@ -20,6 +20,10 @@ import json
 from typing import Any, Dict, Optional
 
 from services.document_confirm_authz import authorize_confirm
+from services.document_attachment_svc import (
+    AttachmentError,
+    resolve_attachment_images_for_render,
+)
 from services.document_schema_renderer import (
     build_render_artifacts,
     SchemaRenderError,
@@ -211,7 +215,18 @@ def confirm_document_atomic(
             except SignatureError as e:
                 raise ConfirmError(422, "signature resolution failed: %s" % e)
 
-            # 14b. 렌더 (05A) — 락 이후 값으로만, 서명 inline image 포함
+            # 14a-1. Attachment image resolution — strict=True (fail-close for sealing)
+            try:
+                attachment_images = resolve_attachment_images_for_render(
+                    runtime_data_json=runtime_values,
+                    fields=fields,
+                    document_id=str(locked["id"]),
+                    strict=True,
+                )
+            except AttachmentError as e:
+                raise ConfirmError(422, "attachment image resolution failed: %s" % e)
+
+            # 14b. 렌더 (05A) — 락 이후 값으로만, 서명 + 첨부 이미지 inline 포함
             render_doc = {
                 "id": locked["id"],
                 "form_schema_id": schema_id,
@@ -226,6 +241,7 @@ def confirm_document_atomic(
                     checklists=checklists,
                     signature_images=sig_result.get("images"),
                     signature_manifest=sig_result.get("manifest"),
+                    attachment_images=attachment_images,
                 )
             except SchemaRenderError as e:
                 raise ConfirmError(422, "render failed: %s" % e)

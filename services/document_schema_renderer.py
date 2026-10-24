@@ -252,7 +252,10 @@ def _render_rows(
                             % (img_uri, _esc(fname))
                         )
                     else:
-                        state = "present"
+                        # Snap exists but image URI unavailable — distinct from "present"
+                        # so archives are not incorrectly marked as having inline images.
+                        # Confirmation (strict path) raises before rendering reaches here.
+                        state = "present-no-image"
                         cell_html = _esc(fname)
                 else:
                     state = "present"

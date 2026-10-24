@@ -25,7 +25,7 @@ import base64 as _base64
 import hashlib
 import logging as _logging
 import re as _re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from db.supabase_client import get_supabase
 from services.time import now_kst, serialize_external_utc
@@ -471,44 +471,128 @@ async def remove_file_from_field(
 def resolve_attachment_images_for_render(
     runtime_data_json: Dict[str, Any],
     fields: List[Dict[str, Any]],
+    document_id: Optional[str] = None,
+    strict: bool = False,
 ) -> Dict[str, str]:
     """Resolve image field snapshots to base64 data URIs for inline HTML rendering.
 
     Only processes fields with input_type == 'image' that hold a valid FileSnapshot.
     File fields render filename only — no inline data URI.
 
+    Args:
+        document_id: When provided, enables C2 binding validation — path prefix,
+                     SHA-256, and magic bytes are verified against the snapshot.
+        strict:      When True (confirmation path), any unresolvable image raises
+                     AttachmentError instead of silently omitting the field.
+
     Returns:
         {field_key: "data:{mime};base64,{b64}"} for successfully fetched images.
-        Missing or failed fields are omitted (renderer falls back to filename).
+        Non-strict: missing or failed fields are omitted (renderer falls back to filename).
+        Strict: AttachmentError raised if any image snap cannot be verified or fetched.
     """
-    sb = get_supabase()
     result: Dict[str, str] = {}
+    _sb = None  # lazy: created only when a snap actually needs to be downloaded
 
-    image_keys = {
-        f.get("field_key")
-        for f in fields
-        if f.get("input_type") == "image" and f.get("field_key")
-    }
+    for field in fields:
+        if field.get("input_type") != "image":
+            continue
+        field_key = field.get("field_key")
+        if not field_key:
+            continue
+        field_id = str(field.get("id") or "")
 
-    for field_key in image_keys:
         snap = runtime_data_json.get(field_key)
         if not isinstance(snap, dict) or snap.get("_type") != "file_snapshot":
             continue
+
         storage_ref = snap.get("storage_ref", "")
         if not storage_ref.startswith(_STORAGE_PREFIX):
+            msg = (
+                "attachment_image_invalid_ref field_key=%r ref=%r"
+                % (field_key, storage_ref)
+            )
+            _log.warning(msg)
+            if strict:
+                raise AttachmentError(msg)
             continue
         path = storage_ref[len(_STORAGE_PREFIX):]
         mime_type = snap.get("mime_type") or "image/jpeg"
 
+        # C2: binding validation — only when document_id is supplied
+        if document_id is not None:
+            if snap.get("field_key") != field_key:
+                msg = (
+                    "attachment_image_binding_mismatch field_key=%r snap.field_key=%r"
+                    % (field_key, snap.get("field_key"))
+                )
+                _log.warning(msg)
+                if strict:
+                    raise AttachmentError(msg)
+                continue
+            if field_id and str(snap.get("field_id") or "") != field_id:
+                msg = (
+                    "attachment_image_binding_mismatch field_key=%r "
+                    "snap.field_id=%r expected=%r"
+                    % (field_key, snap.get("field_id"), field_id)
+                )
+                _log.warning(msg)
+                if strict:
+                    raise AttachmentError(msg)
+                continue
+            if field_id:
+                expected_path_prefix = f"{_ATTACH_PREFIX}/{document_id}/{field_id}/"
+                if not path.startswith(expected_path_prefix):
+                    msg = (
+                        "attachment_image_path_mismatch field_key=%r path=%r "
+                        "expected_prefix=%r"
+                        % (field_key, path, expected_path_prefix)
+                    )
+                    _log.warning(msg)
+                    if strict:
+                        raise AttachmentError(msg)
+                    continue
+
         try:
-            file_bytes = sb.storage.from_(_BUCKET).download(path)
-            b64 = _base64.b64encode(file_bytes).decode("ascii")
-            result[field_key] = f"data:{mime_type};base64,{b64}"
+            if _sb is None:
+                _sb = get_supabase()
+            file_bytes = _sb.storage.from_(_BUCKET).download(path)
         except Exception as fetch_err:
-            # Fail open for rendering: image unavailable → renderer shows filename
-            _log.warning(
-                "attachment_image_fetch_failed field_key=%r path=%r error=%r",
-                field_key, path, str(fetch_err),
+            msg = (
+                "attachment_image_fetch_failed field_key=%r path=%r error=%r"
+                % (field_key, path, str(fetch_err))
             )
+            _log.warning(msg)
+            if strict:
+                raise AttachmentError(msg)
+            continue
+
+        # C2: post-download integrity — SHA-256 and magic bytes
+        if document_id is not None:
+            expected_sha = str(snap.get("sha256") or "").lower()
+            if expected_sha:
+                actual_sha = _compute_sha256(file_bytes)
+                if actual_sha != expected_sha:
+                    msg = (
+                        "attachment_image_sha256_mismatch field_key=%r "
+                        "expected=%r actual=%r"
+                        % (field_key, expected_sha, actual_sha)
+                    )
+                    _log.warning(msg)
+                    if strict:
+                        raise AttachmentError(msg)
+                    continue
+            try:
+                _verify_magic_bytes(file_bytes, mime_type)
+            except AttachmentError:
+                _log.warning(
+                    "attachment_image_magic_mismatch field_key=%r mime=%r",
+                    field_key, mime_type,
+                )
+                if strict:
+                    raise
+                continue
+
+        b64 = _base64.b64encode(file_bytes).decode("ascii")
+        result[field_key] = f"data:{mime_type};base64,{b64}"
 
     return result

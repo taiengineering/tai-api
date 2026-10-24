@@ -5,8 +5,10 @@ _connect 를 monkeypatch 하여 주입식 실패로 롤백을 확인한다.
 05A 렌더러·Q4 해시·B0A authz 는 실제 모듈을 그대로 호출한다(순수).
 """
 
+import hashlib
 import sys
 import datetime as _dt
+from unittest.mock import MagicMock, patch
 
 import services.document_confirm_svc as mod
 from services.document_confirm_svc import confirm_document_atomic, ConfirmError
@@ -519,4 +521,114 @@ def test_B6_seal_returns_no_row_500():
         assert False
     except ConfirmError as e:
         assert e.http_status == 500
+    assert conn.rolled_back and not conn.committed
+
+
+# ════════════════════════════════════════════════════════════
+# B7~B9 — 첨부 이미지 봉인 경로 (C1/C2/C3)
+
+_IMG_FIELD_ID = "ffffffff-imag-imag-imag-000000000001"
+_PNG_BYTES_CONF = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+_IMG_SHA_CONF = hashlib.sha256(_PNG_BYTES_CONF).hexdigest()
+_IMG_STORAGE_REF = (
+    f"storage://company-docs/attachments/document/"
+    f"{DOC_ID}/{_IMG_FIELD_ID}/{_IMG_SHA_CONF}.png"
+)
+_IMAGE_RUNTIME = {
+    "site_photo": {
+        "_type": "file_snapshot",
+        "field_key": "site_photo",
+        "field_id": _IMG_FIELD_ID,
+        "storage_ref": _IMG_STORAGE_REF,
+        "sha256": _IMG_SHA_CONF,
+        "mime_type": "image/png",
+        "byte_size": len(_PNG_BYTES_CONF),
+        "original_file_name": "photo.png",
+        "uploaded_by_user_id": USER_ID,
+        "uploaded_at": "2026-10-25T00:00:00Z",
+    }
+}
+_IMAGE_FIELD_ROWS = [
+    {
+        "id": _IMG_FIELD_ID,
+        "field_key": "site_photo",
+        "input_type": "image",
+        "field_label": "현장사진",
+        "field_order": 1,
+        "required_status": "OPTIONAL",
+    }
+]
+
+
+def test_B7_confirm_calls_resolve_with_strict_and_doc_id():
+    """confirm_document_atomic calls resolve_attachment_images_for_render with strict=True
+    and document_id=str(doc_id), ensuring C1/C2/C3 binding contract is enforced."""
+    conn = FakeConn(locked_row=locked())
+    _install(conn)
+
+    captured = []
+
+    def spy_resolve(runtime_data_json, fields, document_id=None, strict=False):
+        captured.append({"document_id": document_id, "strict": strict})
+        return {}
+
+    with patch("services.document_confirm_svc.resolve_attachment_images_for_render",
+               side_effect=spy_resolve):
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                current_user=user())
+
+    assert len(captured) == 1
+    assert captured[0]["strict"] is True
+    assert captured[0]["document_id"] == str(DOC_ID)
+    assert conn.committed and not conn.rolled_back
+
+
+def test_B8_confirm_fails_when_attachment_image_unreachable():
+    """confirm raises ConfirmError(422) when image snap exists but storage fetch fails.
+    Transaction must be rolled back (봉인 차단)."""
+    conn = FakeConn(
+        locked_row=locked(runtime=_IMAGE_RUNTIME),
+        field_rows=_IMAGE_FIELD_ROWS,
+    )
+    _install(conn)
+
+    sb = MagicMock()
+    sb.storage.from_.return_value.download.side_effect = RuntimeError("storage down")
+
+    with patch("services.document_attachment_svc.get_supabase", return_value=sb):
+        try:
+            confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                    current_user=user())
+            assert False, "expected ConfirmError"
+        except ConfirmError as e:
+            assert e.http_status == 422
+            assert "attachment" in e.detail.lower()
+
+    assert conn.rolled_back and not conn.committed
+
+
+def test_B9_confirm_fails_when_image_path_mismatch():
+    """confirm raises ConfirmError(422) when image storage_ref path doesn't match
+    the expected doc_id/field_id prefix (cross-document reference blocked)."""
+    import copy
+
+    bad_runtime = copy.deepcopy(_IMAGE_RUNTIME)
+    bad_runtime["site_photo"]["storage_ref"] = (
+        "storage://company-docs/attachments/document/WRONG-DOC-ID/field-xyz/abc123.png"
+    )
+
+    conn = FakeConn(
+        locked_row=locked(runtime=bad_runtime),
+        field_rows=_IMAGE_FIELD_ROWS,
+    )
+    _install(conn)
+
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                current_user=user())
+        assert False, "expected ConfirmError"
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "attachment" in e.detail.lower()
+
     assert conn.rolled_back and not conn.committed

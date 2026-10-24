@@ -557,3 +557,162 @@ class TestResolveAttachmentImages:
             )
 
         assert result == {}  # fail open — no crash, just omit
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A18-A22 — resolve_attachment_images_for_render: C2 binding validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Fixtures for binding tests — SHA256 derived from actual PNG bytes so integrity check passes
+_BIND_DOC_ID = "doc-bind-001"
+_BIND_FIELD_ID = "field-bind-img-001"
+_PNG_BYTES_BIND = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+_BIND_SHA = hashlib.sha256(_PNG_BYTES_BIND).hexdigest()
+_BIND_STORAGE_REF = (
+    f"storage://company-docs/attachments/document/"
+    f"{_BIND_DOC_ID}/{_BIND_FIELD_ID}/{_BIND_SHA}.png"
+)
+_BIND_SNAP = {
+    "_type": "file_snapshot",
+    "field_key": "site_photo",
+    "field_id": _BIND_FIELD_ID,
+    "storage_ref": _BIND_STORAGE_REF,
+    "sha256": _BIND_SHA,
+    "mime_type": "image/png",
+    "byte_size": len(_PNG_BYTES_BIND),
+    "original_file_name": "photo.png",
+    "uploaded_by_user_id": USER_ID,
+    "uploaded_at": NOW,
+}
+_BIND_FIELD = {
+    "id": _BIND_FIELD_ID,
+    "field_key": "site_photo",
+    "input_type": "image",
+    "field_label": "현장사진",
+    "field_order": 1,
+    "form_schema_id": SCHEMA_ID,
+    "required_status": "OPTIONAL",
+}
+
+
+class TestResolveAttachmentBinding:
+    def _run(self, snap_override=None, field_override=None, doc_id=_BIND_DOC_ID,
+             strict=True, storage_bytes=_PNG_BYTES_BIND, storage_raises=None):
+        from services.document_attachment_svc import resolve_attachment_images_for_render
+        snap = {**_BIND_SNAP, **(snap_override or {})}
+        field = {**_BIND_FIELD, **(field_override or {})}
+        sb = MagicMock()
+        if storage_raises:
+            sb.storage.from_.return_value.download.side_effect = storage_raises
+        else:
+            sb.storage.from_.return_value.download.return_value = storage_bytes
+        with patch("services.document_attachment_svc.get_supabase", return_value=sb):
+            return resolve_attachment_images_for_render(
+                runtime_data_json={"site_photo": snap},
+                fields=[field],
+                document_id=doc_id,
+                strict=strict,
+            )
+
+    def test_a18_binding_pass_returns_data_uri(self):
+        """Correct doc_id/field_id/sha256/magic → data URI returned."""
+        result = self._run()
+        assert "site_photo" in result
+        assert result["site_photo"].startswith("data:image/png;base64,")
+        expected_b64 = base64.b64encode(_PNG_BYTES_BIND).decode("ascii")
+        assert expected_b64 in result["site_photo"]
+
+    def test_a19_path_mismatch_strict_raises(self):
+        """storage_ref with wrong doc_id → AttachmentError in strict mode."""
+        from services.document_attachment_svc import AttachmentError
+        wrong_ref = (
+            "storage://company-docs/attachments/document/WRONG-DOC/field-xyz/abc.png"
+        )
+        with pytest.raises(AttachmentError, match="path_mismatch"):
+            self._run(snap_override={"storage_ref": wrong_ref})
+
+    def test_a19_path_mismatch_non_strict_skips(self):
+        """storage_ref with wrong doc_id → field omitted in non-strict mode."""
+        wrong_ref = (
+            "storage://company-docs/attachments/document/WRONG-DOC/field-xyz/abc.png"
+        )
+        result = self._run(snap_override={"storage_ref": wrong_ref}, strict=False)
+        assert result == {}
+
+    def test_a20_sha256_mismatch_strict_raises(self):
+        """Downloaded bytes whose SHA-256 doesn't match snap.sha256 → AttachmentError."""
+        from services.document_attachment_svc import AttachmentError
+        with pytest.raises(AttachmentError, match="sha256_mismatch"):
+            self._run(
+                snap_override={"sha256": "b" * 64},  # wrong SHA
+                storage_bytes=_PNG_BYTES_BIND,
+            )
+
+    def test_a21_magic_bytes_mismatch_strict_raises(self):
+        """MIME says image/jpeg but bytes are PNG → AttachmentError."""
+        from services.document_attachment_svc import AttachmentError
+        with pytest.raises(AttachmentError, match="magic"):
+            self._run(
+                snap_override={
+                    "mime_type": "image/jpeg",
+                    "sha256": hashlib.sha256(_PNG_BYTES_BIND).hexdigest(),
+                },
+            )
+
+    def test_a22_fetch_fail_strict_raises(self):
+        """Storage download error → AttachmentError in strict mode."""
+        from services.document_attachment_svc import AttachmentError
+        with pytest.raises(AttachmentError, match="fetch_failed"):
+            self._run(storage_raises=RuntimeError("network error"))
+
+    def test_a22_fetch_fail_non_strict_skips(self):
+        """Storage download error → field omitted in non-strict mode."""
+        result = self._run(storage_raises=RuntimeError("network error"), strict=False)
+        assert result == {}
+
+    def test_a18_field_key_mismatch_strict_raises(self):
+        """snap.field_key doesn't match field_key → AttachmentError."""
+        from services.document_attachment_svc import AttachmentError
+        with pytest.raises(AttachmentError, match="binding_mismatch"):
+            self._run(snap_override={"field_key": "OTHER_KEY"})
+
+    def test_a18_field_id_mismatch_strict_raises(self):
+        """snap.field_id doesn't match field.id → AttachmentError."""
+        from services.document_attachment_svc import AttachmentError
+        with pytest.raises(AttachmentError, match="binding_mismatch"):
+            self._run(snap_override={"field_id": "WRONG-FIELD-ID"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A25 — renderer: image fallback state = "present-no-image"
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRendererFallbackState:
+    def _render(self, fields, data, attachment_images=None):
+        from services.document_schema_renderer import _render_rows
+        consumed: set = set()
+        return "\n".join(_render_rows(fields, data, consumed, None, attachment_images))
+
+    def test_a25_image_snap_without_uri_has_present_no_image_state(self):
+        """Snap exists but no img_uri → data-state="present-no-image", not "present"."""
+        html = self._render(
+            [_IMG_FIELD],
+            {"site_photo": _IMG_SNAP},
+            attachment_images=None,  # no URI → fallback
+        )
+        assert 'data-state="present-no-image"' in html
+        assert 'data-state="present"' not in html
+        assert "photo.png" in html
+        assert "<img" not in html
+
+    def test_a25_image_with_uri_retains_present_state(self):
+        """Snap with valid img_uri → data-state="present" (unchanged)."""
+        data_uri = "data:image/png;base64,iVBORw0KGgo="
+        html = self._render(
+            [_IMG_FIELD],
+            {"site_photo": _IMG_SNAP},
+            attachment_images={"site_photo": data_uri},
+        )
+        assert 'data-state="present"' in html
+        assert 'data-state="present-no-image"' not in html
+        assert '<img src="data:image/png' in html
