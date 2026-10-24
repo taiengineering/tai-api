@@ -21,8 +21,8 @@ v1.2.0 (WP-DOCUMENT-ARCH-05B-B1-CORR-01): SUBMITTED_FOR_REVIEW 도 submitted_by 
 v1.3.0 (OBJ02-C2A-CORR-14): Full runtime authorization — all document instance endpoints
   require authentication + tenant scope via company_scope helpers.
 """
-from fastapi import APIRouter, HTTPException, Query, Depends
-from fastapi.responses import HTMLResponse, Response
+from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File
+from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from typing import Any, Optional
 from schemas.document_engine import (
     DocumentCreateIn,
@@ -35,6 +35,7 @@ from services import document_engine_svc as svc
 from services.document_engine_svc import DocumentScopeMismatchError
 from services.document_confirm_svc import confirm_document_atomic, ConfirmError
 from services.document_signature_svc import SignatureError, apply_profile_to_document
+from services.document_attachment_svc import AttachmentError, upload_file_to_field, get_file_signed_url
 from services.document_engine.catalog_resolver import resolve_catalog_runtime_schema
 from services.document_engine.renderer import html_to_pdf as _html_to_pdf
 from services.document_engine.generator import render_html as _render_html, render_pdf as _render_pdf
@@ -418,6 +419,85 @@ def list_evidence(doc_id: str, current_user: dict = Depends(get_current_user)):
     sb = get_supabase()
     _check_doc_scope(sb, doc_id, current_user)
     return {"status": "success", "data": svc.list_evidence(doc_id)}
+
+
+# ═══════════════════════════════════════════════════════
+# 4-B. File/Image Field Attachment (P1-B, WO-TAI-DOCUMENT-260-P1B)
+# OD-B01 APPROVED (A안 조건부 승인 — 2026-10-24)
+# OD-B02/B03/B04 PENDING_OWNER — proposed defaults applied
+# ═══════════════════════════════════════════════════════
+
+@router.post("/documents/{doc_id}/file/{field_key}/upload")
+async def upload_file_field(
+    doc_id: str,
+    field_key: str,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """파일/이미지 필드 첨부 업로드 (P1-B 전용 엔드포인트).
+
+    Contract (OD-B01 A안):
+    - Verifies document ownership (_check_doc_scope)
+    - Validates MIME whitelist and file size (OD-B02/B03 PENDING_OWNER: proposed limits)
+    - Computes sha256 server-side
+    - Uploads to: attachments/document/{doc_id}/{field_id}/{sha256}.{ext}
+    - Assembles FileSnapshot and writes to runtime_data_json[field_key]
+
+    Returns: {"status": "success", "data": {"file_snapshot": {...}}}
+    """
+    sb = get_supabase()
+    _check_doc_scope(sb, doc_id, current_user)
+
+    file_bytes = await file.read()
+    mime_type = file.content_type or "application/octet-stream"
+    original_file_name = file.filename or "upload"
+
+    try:
+        result = await upload_file_to_field(
+            doc_id=doc_id,
+            field_key=field_key,
+            file_bytes=file_bytes,
+            original_file_name=original_file_name,
+            mime_type=mime_type,
+            current_user=current_user,
+        )
+        return {"status": "success", "data": result}
+    except AttachmentError as e:
+        msg = str(e)
+        if "not found" in msg:
+            raise HTTPException(404, msg)
+        if "DOCUMENT_ATTACHMENT_CONFLICT" in msg:
+            raise HTTPException(409, msg)
+        raise HTTPException(400, msg)
+
+
+@router.get("/documents/{doc_id}/file/{field_key}/download")
+def download_file_field(
+    doc_id: str,
+    field_key: str,
+    current_user: dict = Depends(get_current_user),
+    expires_in: int = Query(3600, ge=60, le=86400),
+):
+    """파일/이미지 필드 서명 다운로드 URL 반환.
+
+    Returns: {"status": "success", "data": {"signed_url": "..."}}
+    """
+    sb = get_supabase()
+    _check_doc_scope(sb, doc_id, current_user)
+
+    try:
+        signed_url = get_file_signed_url(
+            doc_id=doc_id,
+            field_key=field_key,
+            current_user=current_user,
+            expires_in=expires_in,
+        )
+        return {"status": "success", "data": {"signed_url": signed_url}}
+    except AttachmentError as e:
+        msg = str(e)
+        if "not found" in msg:
+            raise HTTPException(404, msg)
+        raise HTTPException(400, msg)
 
 
 # ═══════════════════════════════════════════════════════
