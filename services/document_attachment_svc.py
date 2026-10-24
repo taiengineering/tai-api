@@ -502,7 +502,13 @@ def resolve_attachment_images_for_render(
         field_id = str(field.get("id") or "")
 
         snap = runtime_data_json.get(field_key)
+        if snap is None:
+            continue  # absent optional field — always OK
         if not isinstance(snap, dict) or snap.get("_type") != "file_snapshot":
+            msg = "attachment_image_malformed_snapshot field_key=%r" % (field_key,)
+            _log.warning(msg)
+            if strict:
+                raise AttachmentError(msg)
             continue
 
         storage_ref = snap.get("storage_ref", "")
@@ -566,10 +572,18 @@ def resolve_attachment_images_for_render(
                 raise AttachmentError(msg)
             continue
 
-        # C2: post-download integrity — SHA-256 and magic bytes
+        # C2: post-download integrity — SHA-256, byte_size, and magic bytes
         if document_id is not None:
             expected_sha = str(snap.get("sha256") or "").lower()
-            if expected_sha:
+            if not expected_sha or not _re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+                msg = (
+                    "attachment_image_sha256_missing_or_invalid field_key=%r sha=%r"
+                    % (field_key, expected_sha)
+                )
+                _log.warning(msg)
+                if strict:
+                    raise AttachmentError(msg)
+            else:
                 actual_sha = _compute_sha256(file_bytes)
                 if actual_sha != expected_sha:
                     msg = (
@@ -581,6 +595,17 @@ def resolve_attachment_images_for_render(
                     if strict:
                         raise AttachmentError(msg)
                     continue
+            expected_byte_size = snap.get("byte_size")
+            if isinstance(expected_byte_size, int) and len(file_bytes) != expected_byte_size:
+                msg = (
+                    "attachment_image_byte_size_mismatch field_key=%r "
+                    "expected=%r actual=%r"
+                    % (field_key, expected_byte_size, len(file_bytes))
+                )
+                _log.warning(msg)
+                if strict:
+                    raise AttachmentError(msg)
+                continue
             try:
                 _verify_magic_bytes(file_bytes, mime_type)
             except AttachmentError:

@@ -724,6 +724,7 @@ def render_document_html(doc_id: str) -> str:
     attachment_images = resolve_attachment_images_for_render(
         runtime_data_json=rdj,
         fields=state["fields"],
+        document_id=str(document.get("id") or doc_id),
     )
     artifacts = build_render_artifacts(
         document=document,

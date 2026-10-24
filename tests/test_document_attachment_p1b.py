@@ -716,3 +716,90 @@ class TestRendererFallbackState:
         assert 'data-state="present"' in html
         assert 'data-state="present-no-image"' not in html
         assert '<img src="data:image/png' in html
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A26-A29 — IMAGE-INTEGRITY-CLOSE-004 (C1/C2 completeness)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestResolveAttachmentIntegrityClose:
+    """C1: strict mode completeness — sha256 required, byte_size, malformed snap.
+       C2: draft binding — cross-doc path skipped before storage read."""
+
+    def _run_resolve(self, runtime_data, snap_override=None, field_override=None,
+                     doc_id=_BIND_DOC_ID, strict=True,
+                     storage_bytes=_PNG_BYTES_BIND, storage_raises=None):
+        from services.document_attachment_svc import resolve_attachment_images_for_render
+        if snap_override is not None:
+            snap = {**_BIND_SNAP, **snap_override}
+        else:
+            snap = _BIND_SNAP
+        field = {**_BIND_FIELD, **(field_override or {})}
+        sb = MagicMock()
+        if storage_raises:
+            sb.storage.from_.return_value.download.side_effect = storage_raises
+        else:
+            sb.storage.from_.return_value.download.return_value = storage_bytes
+        with patch("services.document_attachment_svc.get_supabase", return_value=sb):
+            return resolve_attachment_images_for_render(
+                runtime_data_json={"site_photo": snap},
+                fields=[field],
+                document_id=doc_id,
+                strict=strict,
+            ), sb
+
+    def test_a26_sha256_missing_strict_raises(self):
+        """sha256 absent → AttachmentError (sha256_missing_or_invalid) in strict mode."""
+        from services.document_attachment_svc import AttachmentError
+        with pytest.raises(AttachmentError, match="sha256_missing_or_invalid"):
+            self._run_resolve(runtime_data=None, snap_override={"sha256": None})
+
+    def test_a26_sha256_invalid_format_strict_raises(self):
+        """sha256 with wrong length/chars → AttachmentError in strict mode."""
+        from services.document_attachment_svc import AttachmentError
+        with pytest.raises(AttachmentError, match="sha256_missing_or_invalid"):
+            self._run_resolve(runtime_data=None, snap_override={"sha256": "tooshort"})
+
+    def test_a27_malformed_snapshot_strict_raises(self):
+        """Non-file_snapshot dict in image field → AttachmentError (malformed_snapshot)."""
+        from services.document_attachment_svc import resolve_attachment_images_for_render, AttachmentError
+        with pytest.raises(AttachmentError, match="malformed_snapshot"):
+            resolve_attachment_images_for_render(
+                runtime_data_json={"site_photo": {"_type": "WRONG", "data": 1}},
+                fields=[_BIND_FIELD],
+                document_id=_BIND_DOC_ID,
+                strict=True,
+            )
+
+    def test_a27_none_value_is_not_malformed(self):
+        """None value for optional image field → silently skipped, no error."""
+        from services.document_attachment_svc import resolve_attachment_images_for_render
+        result = resolve_attachment_images_for_render(
+            runtime_data_json={"site_photo": None},
+            fields=[_BIND_FIELD],
+            document_id=_BIND_DOC_ID,
+            strict=True,
+        )
+        assert result == {}
+
+    def test_a28_byte_size_mismatch_strict_raises(self):
+        """snap.byte_size != actual file size → AttachmentError in strict mode."""
+        from services.document_attachment_svc import AttachmentError
+        with pytest.raises(AttachmentError, match="byte_size_mismatch"):
+            self._run_resolve(
+                runtime_data=None,
+                snap_override={"byte_size": 9999},  # actual = len(_PNG_BYTES_BIND) = 108
+            )
+
+    def test_a29_draft_cross_doc_path_skipped_no_storage_read(self):
+        """Non-strict (draft), cross-doc storage_ref → field skipped AND storage not called."""
+        wrong_ref = (
+            "storage://company-docs/attachments/document/OTHER-DOC/field-xyz/abc.png"
+        )
+        result, sb = self._run_resolve(
+            runtime_data=None,
+            snap_override={"storage_ref": wrong_ref},
+            strict=False,
+        )
+        assert result == {}
+        sb.storage.from_.return_value.download.assert_not_called()

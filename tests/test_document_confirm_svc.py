@@ -632,3 +632,94 @@ def test_B9_confirm_fails_when_image_path_mismatch():
         assert "attachment" in e.detail.lower()
 
     assert conn.rolled_back and not conn.committed
+
+
+def test_B10_confirm_fails_when_sha256_missing():
+    """confirm raises ConfirmError(422) when image snap has no sha256 (strict blocks)."""
+    import copy
+
+    bad_runtime = copy.deepcopy(_IMAGE_RUNTIME)
+    bad_runtime["site_photo"]["sha256"] = None
+
+    conn = FakeConn(
+        locked_row=locked(runtime=bad_runtime),
+        field_rows=_IMAGE_FIELD_ROWS,
+    )
+    _install(conn)
+
+    sb = MagicMock()
+    sb.storage.from_.return_value.download.return_value = _PNG_BYTES_CONF
+
+    with patch("services.document_attachment_svc.get_supabase", return_value=sb):
+        try:
+            confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                    current_user=user())
+            assert False, "expected ConfirmError"
+        except ConfirmError as e:
+            assert e.http_status == 422
+            assert "attachment" in e.detail.lower()
+
+    assert conn.rolled_back and not conn.committed
+
+
+def test_B11_confirm_fails_when_snapshot_malformed():
+    """confirm raises ConfirmError(422) when image field holds a malformed (non-file_snapshot) value."""
+    bad_runtime = {"site_photo": {"_type": "WRONG_TYPE", "some": "data"}}
+
+    conn = FakeConn(
+        locked_row=locked(runtime=bad_runtime),
+        field_rows=_IMAGE_FIELD_ROWS,
+    )
+    _install(conn)
+
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                current_user=user())
+        assert False, "expected ConfirmError"
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "attachment" in e.detail.lower()
+
+    assert conn.rolled_back and not conn.committed
+
+
+def test_B12_confirm_with_valid_image_forwards_base64_to_renderer():
+    """Valid image snap → build_render_artifacts receives attachment_images with base64 URI
+    (봉인된 rendered_body에 Base64 포함 증거)."""
+    import base64 as _b64
+
+    conn = FakeConn(
+        locked_row=locked(runtime=_IMAGE_RUNTIME),
+        field_rows=_IMAGE_FIELD_ROWS,
+    )
+    _install(conn)
+
+    sb = MagicMock()
+    sb.storage.from_.return_value.download.return_value = _PNG_BYTES_CONF
+
+    captured_kwargs: list = []
+
+    def spy_render(*args, **kwargs):
+        captured_kwargs.append(kwargs)
+        return {
+            "rendered_body": "<html/>",
+            "source_trace_snapshot": [],
+            "template_identity": "tpl",
+            "evidence_manifest": [],
+        }
+
+    with (
+        patch("services.document_attachment_svc.get_supabase", return_value=sb),
+        patch("services.document_confirm_svc.build_render_artifacts", side_effect=spy_render),
+        patch("services.document_confirm_svc.compute_confirmed_snapshot_hash",
+              return_value="a" * 64),
+    ):
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+    assert len(captured_kwargs) == 1
+    ai = captured_kwargs[0].get("attachment_images", {})
+    assert "site_photo" in ai
+    expected_uri = "data:image/png;base64," + _b64.b64encode(_PNG_BYTES_CONF).decode()
+    assert ai["site_photo"] == expected_uri
