@@ -41,7 +41,7 @@ BEGIN
   BEGIN
     PERFORM * FROM public.get_precompiled_factory_ids();
     -- 오류 없이 통과하면 이 환경에서 우연히 동작한 것 (격리 환경 이상)
-    RAISE NOTICE 'B19-P1-01: UNEXPECTED_PASS (table found without engine_isolated in search_path)';
+    RAISE EXCEPTION 'B19-P1-01 FAILED: 42P01 not reproduced — isolation env unexpectedly has engine_isolated accessible';
   EXCEPTION WHEN undefined_table THEN
     v_err := SQLERRM;
     RAISE NOTICE 'B19-P1-01: PASS — 42P01 재현: %', v_err;
@@ -96,8 +96,15 @@ $$;
 -- B19-P2-02: service_role로 함수 호출 → 정상 동작 (distinct factory_id 반환)
 DO $$
 DECLARE
-  v_count int;
+  v_count     int;
+  v_bypassrls bool;
 BEGIN
+  -- service_role이 BYPASSRLS인지 명시 확인
+  SELECT rolbypassrls INTO v_bypassrls FROM pg_roles WHERE rolname = 'service_role';
+  IF v_bypassrls IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'B19-P2-02 FAILED: service_role is not BYPASSRLS (got %)', v_bypassrls;
+  END IF;
+
   SET LOCAL ROLE service_role;
   SELECT COUNT(*) INTO v_count FROM public.get_precompiled_factory_ids();
   RESET ROLE;
@@ -106,7 +113,7 @@ BEGIN
   IF v_count IS DISTINCT FROM 2 THEN
     RAISE EXCEPTION 'B19-P2-02 FAILED: expected 2 distinct factory_ids, got %', v_count;
   END IF;
-  RAISE NOTICE 'B19-P2-02: PASS — service_role 호출 성공, distinct_count=%', v_count;
+  RAISE NOTICE 'B19-P2-02: PASS — service_role(BYPASSRLS) 호출 성공, distinct_count=%', v_count;
 END;
 $$;
 
@@ -114,52 +121,59 @@ $$;
 -- anon은 engine_isolated USAGE 없음 → 테이블 접근 불가
 DO $$
 DECLARE
-  v_sqlstate text := '';
-  v_err      text := '';
+  v_fn_called boolean := false;
+  v_blocked   boolean := false;
+  v_sqlstate  text    := '';
+  v_err       text    := '';
 BEGIN
   BEGIN
     SET LOCAL ROLE anon;
     PERFORM * FROM public.get_precompiled_factory_ids();
-    RESET ROLE;
-    -- 오류 없이 통과 = 권한 확대 이상
-    RAISE EXCEPTION 'B19-P2-03 FAILED: anon should not access facility_applicability';
+    v_fn_called := true;
   EXCEPTION
     WHEN insufficient_privilege THEN
-      RESET ROLE;
-      v_sqlstate := '42501'; v_err := SQLERRM;
-      RAISE NOTICE 'B19-P2-03: PASS — anon 차단 (42501): %', v_err;
+      v_blocked := true; v_sqlstate := '42501'; v_err := SQLERRM;
     WHEN undefined_table THEN
-      RESET ROLE;
-      v_sqlstate := '42P01'; v_err := SQLERRM;
-      RAISE NOTICE 'B19-P2-03: PASS — anon 차단 (42P01): %', v_err;
-    WHEN others THEN
-      RESET ROLE;
-      RAISE NOTICE 'B19-P2-03: PASS (other error %) — anon 차단: %', SQLSTATE, SQLERRM;
+      v_blocked := true; v_sqlstate := '42P01'; v_err := SQLERRM;
   END;
+  RESET ROLE;
+
+  IF v_fn_called THEN
+    RAISE EXCEPTION 'B19-P2-03 FAILED: anon accessed facility_applicability without expected error';
+  END IF;
+  IF NOT v_blocked THEN
+    RAISE EXCEPTION 'B19-P2-03 FAILED: unexpected outcome (fn_called=%, blocked=%)', v_fn_called, v_blocked;
+  END IF;
+  RAISE NOTICE 'B19-P2-03: PASS — anon 차단 (%): %', v_sqlstate, v_err;
 END;
 $$;
 
 -- B19-P2-04: authenticated 호출 → 권한 오류
 DO $$
 DECLARE
-  v_err text := '';
+  v_fn_called boolean := false;
+  v_blocked   boolean := false;
+  v_sqlstate  text    := '';
 BEGIN
   BEGIN
     SET LOCAL ROLE authenticated;
     PERFORM * FROM public.get_precompiled_factory_ids();
-    RESET ROLE;
-    RAISE EXCEPTION 'B19-P2-04 FAILED: authenticated should not access facility_applicability';
+    v_fn_called := true;
   EXCEPTION
     WHEN insufficient_privilege THEN
-      RESET ROLE;
-      RAISE NOTICE 'B19-P2-04: PASS — authenticated 차단 (42501)';
+      v_blocked := true; v_sqlstate := '42501';
     WHEN undefined_table THEN
-      RESET ROLE;
-      RAISE NOTICE 'B19-P2-04: PASS — authenticated 차단 (42P01)';
-    WHEN others THEN
-      RESET ROLE;
-      RAISE NOTICE 'B19-P2-04: PASS (other error %) — authenticated 차단', SQLSTATE;
+      v_blocked := true; v_sqlstate := '42P01';
   END;
+  RESET ROLE;
+
+  IF v_fn_called THEN
+    RAISE EXCEPTION 'B19-P2-04 FAILED: authenticated accessed facility_applicability without expected error';
+  END IF;
+  IF NOT v_blocked THEN
+    RAISE EXCEPTION 'B19-P2-04 FAILED: unexpected outcome (fn_called=%, blocked=%)', v_fn_called, v_blocked;
+  END IF;
+  RAISE NOTICE 'B19-P2-04: PASS — authenticated 차단 (%)', v_sqlstate;
 END;
 $$;
 

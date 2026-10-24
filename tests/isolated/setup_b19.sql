@@ -43,6 +43,11 @@ CREATE TABLE engine_isolated.facility_applicability (
 GRANT SELECT ON engine_isolated.facility_applicability TO service_role;
 -- anon/authenticated: 권한 없음 (의도적)
 
+-- ─── RLS 활성화 (운영 동일) ────────────────────────────────────────────────────
+-- service_role은 BYPASSRLS이므로 RLS 정책 없이도 접근 가능.
+-- anon/authenticated: USAGE 없음 + RLS ON = 이중 차단.
+ALTER TABLE engine_isolated.facility_applicability ENABLE ROW LEVEL SECURITY;
+
 -- ─── 테스트 데이터 ────────────────────────────────────────────────────────────
 INSERT INTO engine_isolated.facility_applicability (factory_id, applicability_status)
 VALUES
@@ -86,6 +91,13 @@ BEGIN
   SELECT COUNT(*) INTO v_count FROM engine_isolated.facility_applicability;
   IF v_count IS DISTINCT FROM 3 THEN
     RAISE EXCEPTION 'SETUP FAILED: expected 3 test rows, got %', v_count;
+  END IF;
+
+  -- RLS 활성화 확인 (운영 동일)
+  IF NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid
+                  WHERE n.nspname = 'engine_isolated' AND c.relname = 'facility_applicability'
+                    AND c.relrowsecurity = true) THEN
+    RAISE EXCEPTION 'SETUP FAILED: facility_applicability RLS not enabled';
   END IF;
 
   -- service_role 권한 확인
