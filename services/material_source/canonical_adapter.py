@@ -140,6 +140,12 @@ def merge_or_raise(
     return merged
 
 
+# 제453조·제462조 적용 제외 물질 — 법령 정본 물질 식별키 기준
+_PERMIT_MOU_EXEMPT_MATERIAL_KEYS: frozenset = frozenset({
+    "ISHL-ENF-ART88-0088001-P-H4",  # 베릴륨(Beryllium; 7440-41-7)
+    # 석면: ishl_enf_art88_items.json 미등재 → qualifying 자동 미포함
+})
+
 # WO-A5-FC001-TRACK1-SOURCE-TRANSPORT-IMPLEMENT-001: FC-001 per-row synthesis.
 # (synthetic_field, classification_code_filter, mode_code)
 # classification_code_filter=None → any active row regardless of classification.
@@ -195,13 +201,16 @@ def project_material_fc001_facts(
     cls_by_key = idx["classifications_by_key"]
 
     row_cls: List[Set[str]] = []
+    row_keys: List[Optional[str]] = []
     for row in active_rows:
         key = row.get("material_master_key")
         if isinstance(key, str) and key.strip():
             hits = cls_by_key.get(key) or []
             codes: Set[str] = {h["classification_code"] for h in hits if h.get("active") is not False}
+            row_keys.append(key)
         else:
             codes = set()
+            row_keys.append(None)
         row_cls.append(codes)
 
     out: Dict[str, Any] = {}
@@ -216,4 +225,18 @@ def project_material_fc001_facts(
         elif state is False:
             out[field] = False
         # None → omit (UNKNOWN)
+
+    # 제453조·제462조 전용: 베릴륨 제외 허가대상 물질 제조·사용
+    _ne_qualifying = [
+        r
+        for r, codes, key in zip(active_rows, row_cls, row_keys)
+        if "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE" in codes
+        and key not in _PERMIT_MOU_EXEMPT_MATERIAL_KEYS
+    ]
+    _ne_state = _fc001_row_state(_ne_qualifying, "MANUFACTURE_OR_USE")
+    if _ne_state is True:
+        out["fc001_permit_manufacture_or_use_nonexempt"] = True
+    # False·None → 생략(UNKNOWN) — 미식별 물질 혼재 시 FALSE 오판정 방지
     return out
+
+
