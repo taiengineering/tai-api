@@ -13,6 +13,11 @@ from typing import Any, Dict, List
 
 from clients import leg_runtime_client as leg_client
 
+try:
+    from services import collector_activation as _collector_activation  # §8-B WO025-I06
+except Exception:
+    _collector_activation = None
+
 # CONSTRUCTION /rtm/evaluate는 최대 ~16s가 관측되므로 전용 budget을 부여한다.
 # BUILDING/INDUSTRIAL는 None → 하위 클라이언트의 LEG_RUNTIME_TIMEOUT 그대로 사용.
 LEG_RTM_CONSTRUCTION_TIMEOUT = float(os.getenv("LEG_RTM_CONSTRUCTION_TIMEOUT", "30.0"))
@@ -130,6 +135,12 @@ def run_leg_diagnosis(step1_body: Any) -> Dict[str, Any]:
         "unconfirmed": unconfirmed,
         "unconfirmed_count": len(unconfirmed),
     }
+    # §8-B Collector: penalty/agency 부가정보 추가. fail-safe — LEG 진단 실패 금지.
+    if _collector_activation is not None:
+        try:
+            full_result = _collector_activation.activate(full_result)
+        except Exception:  # noqa: BLE001
+            pass
     log.info(
         "leg_diagnosis status=%s obligations=%d laws=%d",
         status, len(obligations), len(law_names),
