@@ -1308,6 +1308,7 @@ class TestRenderDocumentId:
         with (
             patch("services.document_engine_svc.resolve_runtime_document_state", return_value=fake_state),
             patch("services.document_signature_svc.resolve_signature_images_for_render", side_effect=mock_resolver),
+            patch("services.document_attachment_svc.resolve_attachment_images_for_render", return_value={}),
             patch("services.document_schema_renderer.build_render_artifacts", return_value={"rendered_body": "<html/>"}),
         ):
             render_document_html(DOC_ID)

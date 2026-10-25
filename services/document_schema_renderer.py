@@ -192,6 +192,7 @@ def _render_rows(
     data: Dict[str, Any],
     consumed: set,
     signature_images: Optional[Dict[str, str]] = None,
+    attachment_images: Optional[Dict[str, str]] = None,
 ) -> List[str]:
     out: List[str] = []
     for f in fields:
@@ -215,6 +216,52 @@ def _render_rows(
                     'style="max-width:200px;max-height:80px;display:block;">'
                     % img_uri
                 )
+            else:
+                state = "missing"
+                cell_html = _esc(_MISSING_TEXT)
+            out.append(
+                '<tr data-field-id="%s" data-field-key="%s" data-input-type="%s" data-state="%s">'
+                "<th>%s</th><td>%s</td></tr>"
+                % (
+                    _esc(fid),
+                    _esc(key) if key is not None else "",
+                    _esc(input_type),
+                    state,
+                    _esc(label),
+                    cell_html,
+                )
+            )
+            continue
+        # ──────────────────────────────────────────────────────────────────────
+
+        # ── file/image field: inline image (image) or filename label (file) ──
+        if input_type in ("file", "image"):
+            if key is not None and key in data:
+                consumed.add(key)
+            snap = (data.get(key) if key else None) or {}
+            if isinstance(snap, dict) and snap.get("_type") == "file_snapshot":
+                fname = snap.get("original_file_name") or _MISSING_TEXT
+                if input_type == "image":
+                    img_uri = (attachment_images or {}).get(key) if key else None
+                    if img_uri:
+                        state = "present"
+                        # data URI: A-Za-z0-9+/= — safe in quoted attribute
+                        cell_html = (
+                            '<img src="%s" alt="%s" '
+                            'style="max-width:400px;max-height:200px;display:block;">'
+                            % (img_uri, _esc(fname))
+                        )
+                    else:
+                        # Snap exists but image URI unavailable — distinct from "present"
+                        # so archives are not incorrectly marked as having inline images.
+                        # Confirmation (strict path) raises before rendering reaches here.
+                        state = "present-no-image"
+                        cell_html = _esc(fname)
+                else:
+                    state = "present"
+                    byte_size = snap.get("byte_size") or 0
+                    kb = byte_size / 1024
+                    cell_html = _esc(f"[첨부] {fname} ({kb:.1f} KB)")
             else:
                 state = "missing"
                 cell_html = _esc(_MISSING_TEXT)
@@ -311,6 +358,7 @@ def build_render_artifacts(
     checklists: List[Dict[str, Any]],
     signature_images: Optional[Dict[str, str]] = None,
     signature_manifest: Optional[List[Dict[str, Any]]] = None,
+    attachment_images: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """confirm 봉인에 필요한 렌더 산출물을 만든다(순수 함수).
 
@@ -365,7 +413,7 @@ def build_render_artifacts(
     ordered_checks = sorted(checklists, key=lambda r: _order_key(r, "item_order"))
 
     consumed: set = set()
-    field_rows = _render_rows(ordered_fields, data, consumed, signature_images)
+    field_rows = _render_rows(ordered_fields, data, consumed, signature_images, attachment_images)
     check_rows = _render_checklists(ordered_checks, data, consumed)
     unmapped_rows = _render_unmapped(data, consumed)
 

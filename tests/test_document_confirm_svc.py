@@ -5,8 +5,10 @@ _connect 를 monkeypatch 하여 주입식 실패로 롤백을 확인한다.
 05A 렌더러·Q4 해시·B0A authz 는 실제 모듈을 그대로 호출한다(순수).
 """
 
+import hashlib
 import sys
 import datetime as _dt
+from unittest.mock import MagicMock, patch
 
 import services.document_confirm_svc as mod
 from services.document_confirm_svc import confirm_document_atomic, ConfirmError
@@ -520,3 +522,255 @@ def test_B6_seal_returns_no_row_500():
     except ConfirmError as e:
         assert e.http_status == 500
     assert conn.rolled_back and not conn.committed
+
+
+# ════════════════════════════════════════════════════════════
+# B7~B9 — 첨부 이미지 봉인 경로 (C1/C2/C3)
+
+_IMG_FIELD_ID = "ffffffff-imag-imag-imag-000000000001"
+_PNG_BYTES_CONF = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+_IMG_SHA_CONF = hashlib.sha256(_PNG_BYTES_CONF).hexdigest()
+_IMG_STORAGE_REF = (
+    f"storage://company-docs/attachments/document/"
+    f"{DOC_ID}/{_IMG_FIELD_ID}/{_IMG_SHA_CONF}.png"
+)
+_IMAGE_RUNTIME = {
+    "site_photo": {
+        "_type": "file_snapshot",
+        "field_key": "site_photo",
+        "field_id": _IMG_FIELD_ID,
+        "storage_ref": _IMG_STORAGE_REF,
+        "sha256": _IMG_SHA_CONF,
+        "mime_type": "image/png",
+        "byte_size": len(_PNG_BYTES_CONF),
+        "original_file_name": "photo.png",
+        "uploaded_by_user_id": USER_ID,
+        "uploaded_at": "2026-10-25T00:00:00Z",
+    }
+}
+_IMAGE_FIELD_ROWS = [
+    {
+        "id": _IMG_FIELD_ID,
+        "field_key": "site_photo",
+        "input_type": "image",
+        "field_label": "현장사진",
+        "field_order": 1,
+        "required_status": "OPTIONAL",
+    }
+]
+
+
+def test_B7_confirm_calls_resolve_with_strict_and_doc_id():
+    """confirm_document_atomic calls resolve_attachment_images_for_render with strict=True
+    and document_id=str(doc_id), ensuring C1/C2/C3 binding contract is enforced."""
+    conn = FakeConn(locked_row=locked())
+    _install(conn)
+
+    captured = []
+
+    def spy_resolve(runtime_data_json, fields, document_id=None, strict=False):
+        captured.append({"document_id": document_id, "strict": strict})
+        return {}
+
+    with patch("services.document_confirm_svc.resolve_attachment_images_for_render",
+               side_effect=spy_resolve):
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                current_user=user())
+
+    assert len(captured) == 1
+    assert captured[0]["strict"] is True
+    assert captured[0]["document_id"] == str(DOC_ID)
+    assert conn.committed and not conn.rolled_back
+
+
+def test_B8_confirm_fails_when_attachment_image_unreachable():
+    """confirm raises ConfirmError(422) when image snap exists but storage fetch fails.
+    Transaction must be rolled back (봉인 차단)."""
+    conn = FakeConn(
+        locked_row=locked(runtime=_IMAGE_RUNTIME),
+        field_rows=_IMAGE_FIELD_ROWS,
+    )
+    _install(conn)
+
+    sb = MagicMock()
+    sb.storage.from_.return_value.download.side_effect = RuntimeError("storage down")
+
+    with patch("services.document_attachment_svc.get_supabase", return_value=sb):
+        try:
+            confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                    current_user=user())
+            assert False, "expected ConfirmError"
+        except ConfirmError as e:
+            assert e.http_status == 422
+            assert "attachment" in e.detail.lower()
+
+    assert conn.rolled_back and not conn.committed
+
+
+def test_B9_confirm_fails_when_image_path_mismatch():
+    """confirm raises ConfirmError(422) when image storage_ref path doesn't match
+    the expected doc_id/field_id prefix (cross-document reference blocked)."""
+    import copy
+
+    bad_runtime = copy.deepcopy(_IMAGE_RUNTIME)
+    bad_runtime["site_photo"]["storage_ref"] = (
+        "storage://company-docs/attachments/document/WRONG-DOC-ID/field-xyz/abc123.png"
+    )
+
+    conn = FakeConn(
+        locked_row=locked(runtime=bad_runtime),
+        field_rows=_IMAGE_FIELD_ROWS,
+    )
+    _install(conn)
+
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                current_user=user())
+        assert False, "expected ConfirmError"
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "attachment" in e.detail.lower()
+
+    assert conn.rolled_back and not conn.committed
+
+
+def test_B10_confirm_fails_when_sha256_missing():
+    """confirm raises ConfirmError(422) when image snap has no sha256 (strict blocks)."""
+    import copy
+
+    bad_runtime = copy.deepcopy(_IMAGE_RUNTIME)
+    bad_runtime["site_photo"]["sha256"] = None
+
+    conn = FakeConn(
+        locked_row=locked(runtime=bad_runtime),
+        field_rows=_IMAGE_FIELD_ROWS,
+    )
+    _install(conn)
+
+    sb = MagicMock()
+    sb.storage.from_.return_value.download.return_value = _PNG_BYTES_CONF
+
+    with patch("services.document_attachment_svc.get_supabase", return_value=sb):
+        try:
+            confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                    current_user=user())
+            assert False, "expected ConfirmError"
+        except ConfirmError as e:
+            assert e.http_status == 422
+            assert "attachment" in e.detail.lower()
+
+    assert conn.rolled_back and not conn.committed
+
+
+def test_B11_confirm_fails_when_snapshot_malformed():
+    """confirm raises ConfirmError(422) when image field holds a malformed (non-file_snapshot) value."""
+    bad_runtime = {"site_photo": {"_type": "WRONG_TYPE", "some": "data"}}
+
+    conn = FakeConn(
+        locked_row=locked(runtime=bad_runtime),
+        field_rows=_IMAGE_FIELD_ROWS,
+    )
+    _install(conn)
+
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                current_user=user())
+        assert False, "expected ConfirmError"
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "attachment" in e.detail.lower()
+
+    assert conn.rolled_back and not conn.committed
+
+
+def test_B12_confirm_with_valid_image_forwards_base64_to_renderer():
+    """Valid image snap → build_render_artifacts receives attachment_images with base64 URI
+    (봉인된 rendered_body에 Base64 포함 증거)."""
+    import base64 as _b64
+
+    conn = FakeConn(
+        locked_row=locked(runtime=_IMAGE_RUNTIME),
+        field_rows=_IMAGE_FIELD_ROWS,
+    )
+    _install(conn)
+
+    sb = MagicMock()
+    sb.storage.from_.return_value.download.return_value = _PNG_BYTES_CONF
+
+    captured_kwargs: list = []
+
+    def spy_render(*args, **kwargs):
+        captured_kwargs.append(kwargs)
+        return {
+            "rendered_body": "<html/>",
+            "source_trace_snapshot": [],
+            "template_identity": "tpl",
+            "evidence_manifest": [],
+        }
+
+    with (
+        patch("services.document_attachment_svc.get_supabase", return_value=sb),
+        patch("services.document_confirm_svc.build_render_artifacts", side_effect=spy_render),
+        patch("services.document_confirm_svc.compute_confirmed_snapshot_hash",
+              return_value="a" * 64),
+    ):
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+    assert len(captured_kwargs) == 1
+    ai = captured_kwargs[0].get("attachment_images", {})
+    assert "site_photo" in ai
+    expected_uri = "data:image/png;base64," + _b64.b64encode(_PNG_BYTES_CONF).decode()
+    assert ai["site_photo"] == expected_uri
+
+
+def test_B13_real_archive_rendered_body_contains_base64_image():
+    """Real build_render_artifacts + compute_confirmed_snapshot_hash:
+    archived rendered_body contains the Base64 image and snapshot_hash is a valid hex string
+    computed from that rendered_body (봉인 HTML·Hash 일치 증거)."""
+    import base64 as _b64
+    import re
+
+    # Fields need form_schema_id so the real renderer accepts them
+    _fields_with_schema = [{**r, "form_schema_id": SCHEMA_ID} for r in _IMAGE_FIELD_ROWS]
+
+    conn = FakeConn(
+        locked_row=locked(runtime=_IMAGE_RUNTIME),
+        field_rows=_fields_with_schema,
+    )
+
+    # Intercept archive INSERT to capture rendered_body and snapshot_hash params
+    class _CaptureCursor(FakeCursor):
+        def execute(self, sql, params=None):
+            super().execute(sql, params)
+            if "INSERT INTO RUNTIME_DOCUMENT_ARCHIVE" in sql.strip().upper():
+                self.conn._archive_params = params
+    conn.cursor = lambda cursor_factory=None: _CaptureCursor(conn)
+
+    _install(conn)
+
+    sb = MagicMock()
+    sb.storage.from_.return_value.download.return_value = _PNG_BYTES_CONF
+
+    with patch("services.document_attachment_svc.get_supabase", return_value=sb):
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
+                                current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+
+    # params[8] = rendered_body, params[10] = snapshot_hash (see INSERT column order)
+    rendered_body: str = conn._archive_params[8]
+    snapshot_hash: str = conn._archive_params[10]
+
+    expected_b64 = _b64.b64encode(_PNG_BYTES_CONF).decode()
+    assert "data:image/png;base64," in rendered_body, (
+        "rendered_body does not contain image data URI"
+    )
+    assert expected_b64 in rendered_body, (
+        "rendered_body does not contain expected PNG base64"
+    )
+
+    assert re.fullmatch(r"[0-9a-f]{64}", snapshot_hash), (
+        "snapshot_hash is not a 64-char hex: %r" % snapshot_hash
+    )
