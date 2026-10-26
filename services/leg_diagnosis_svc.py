@@ -100,11 +100,16 @@ def run_leg_diagnosis(step1_body: Any) -> Dict[str, Any]:
         law = (r.get("law_name") or "").strip()
         article = (r.get("law_article") or "").strip()
         title = " ".join(x for x in (law, article) if x) or "추가 확인 필요"
+        _rcode = r.get("reason_code") or "MISSING_NUMERIC_INPUT"
+        if _rcode == "ART438_EVENT_UNCONFIRMED":
+            _reason_msg = "제438조 제1항 각 호에 따른 상황 발생 및 작업중지 여부를 확인하지 못해 적용 여부를 확정할 수 없습니다."
+        else:
+            _reason_msg = "추가 수치 정보가 필요하여 적용 여부를 확정하지 못했습니다."
         unconfirmed.append({
             **r,
             "title": title,
-            "reason_code": r.get("reason_code") or "MISSING_NUMERIC_INPUT",
-            "reason": "추가 수치 정보가 필요하여 적용 여부를 확정하지 못했습니다.",  # human 문장은 여기서 소유
+            "reason_code": _rcode,
+            "reason": _reason_msg,  # human 문장은 여기서 소유
         })
 
     full_result: Dict[str, Any] = {
