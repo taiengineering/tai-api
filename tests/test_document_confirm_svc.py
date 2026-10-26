@@ -127,7 +127,7 @@ class FakeConn:
         self.locked_row = kw.get("locked_row")
         self.factory_row = kw.get("factory_row")
         self.rule_row = kw.get("rule_row", {"requires_reviewer": True, "requires_comment": True})
-        self.schema_row = kw.get("schema_row", {"id": SCHEMA_ID, "form_name": "테스트", "form_schema_id": SCHEMA_ID})
+        self.schema_row = kw.get("schema_row", {"id": SCHEMA_ID, "form_name": "테스트", "form_schema_id": SCHEMA_ID, "status": "APPROVED_FOR_RUNTIME_USE"})
         self.field_rows = kw.get("field_rows", [])
         self.checklist_rows = kw.get("checklist_rows", [])
         self.evidence_field_rows = kw.get("evidence_field_rows", [])
@@ -857,7 +857,8 @@ def test_E24_09_candidate_evidence_status_blocks_confirm():
         assert False, "expected ConfirmError"
     except ConfirmError as e:
         assert e.http_status == 422
-        assert "LEGAL_REQUIREDNESS=UNKNOWN" in e.detail
+        assert "not approved" in e.detail.lower()
+        assert "CANDIDATE" in e.detail
     assert conn.rolled_back and conn.archive_inserts == 0
 
 
@@ -884,3 +885,115 @@ def test_E24_02_evidence_connection_missing_candidate_id_blocks():
         assert e.http_status == 422
         assert "evidence_candidate_id missing" in e.detail
     assert conn.rolled_back and conn.archive_inserts == 0
+
+
+# ── R1 보강 테스트 (WO-024-R1) ──────────────────────────────────
+
+def test_R1_T03_unknown_evidence_status_blocks():
+    """R1-T03: evidence_candidate_status=UNKNOWN → 422 (allowlist 차단)."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"attached_documents": {
+            "_type": "file_snapshot",
+            "field_key": "attached_documents",
+            "field_id": "f-att",
+            "storage_ref": f"storage://company-docs/attachments/document/{DOC_ID}/f-att/abc.pdf",
+            "sha256": "a" * 64,
+            "mime_type": "application/pdf",
+            "byte_size": 100,
+        }}),
+        field_rows=[_field_ev("f-att", "attached_documents", input_type="file", field_candidate_id="fc-u")],
+        evidence_field_rows=[{"id": "ev-u", "form_schema_id": SCHEMA_ID,
+                               "evidence_candidate_id": "efc-u", "evidence_type": "ATTACHMENT"}],
+        evidence_candidate_row={"id": "efc-u", "field_candidate_id": "fc-u", "status": "UNKNOWN"},
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "not approved" in e.detail.lower()
+    assert conn.rolled_back
+
+
+def test_R1_T03b_null_evidence_status_blocks():
+    """R1-T03b: evidence_field_candidate.status=NULL → defaults to UNKNOWN → 422."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"attached_documents": {
+            "_type": "file_snapshot",
+            "field_key": "attached_documents",
+            "field_id": "f-null",
+            "storage_ref": f"storage://company-docs/attachments/document/{DOC_ID}/f-null/abc.pdf",
+            "sha256": "b" * 64,
+            "mime_type": "application/pdf",
+            "byte_size": 100,
+        }}),
+        field_rows=[_field_ev("f-null", "attached_documents", input_type="file", field_candidate_id="fc-n")],
+        evidence_field_rows=[{"id": "ev-n", "form_schema_id": SCHEMA_ID,
+                               "evidence_candidate_id": "efc-n", "evidence_type": "ATTACHMENT"}],
+        evidence_candidate_row={"id": "efc-n", "field_candidate_id": "fc-n", "status": None},
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "not approved" in e.detail.lower()
+    assert conn.rolled_back
+
+
+def test_R1_T05_unapproved_schema_status_blocks():
+    """R1-T05: runtime schema status=CANDIDATE → 422 (봉인 차단)."""
+    conn = FakeConn(
+        locked_row=locked(),
+        schema_row={"id": SCHEMA_ID, "form_name": "test", "status": "CANDIDATE"},
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="ok", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "not approved" in e.detail.lower()
+    assert conn.rolled_back
+
+
+def test_R1_T06_candidate_only_field_blocks():
+    """R1-T06: CANDIDATE_ONLY 필드 존재 → 422 (봉인 차단)."""
+    conn = FakeConn(
+        locked_row=locked(),
+        field_rows=[
+            _field_ev("f-req", "company_name", required_status="REQUIRED_BY_HUMAN"),
+            _field_ev("f-cand", "candidate_field", required_status="CANDIDATE_ONLY"),
+        ],
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="ok", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "CANDIDATE_ONLY" in e.detail
+    assert conn.rolled_back
+
+
+def test_R1_T07_non_file_evidence_input_type_blocks():
+    """R1-T07: Evidence 연결 필드가 file이 아닌 경우(text) → 422."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"some_text": "value"}),
+        field_rows=[_field_ev("f-txt", "some_text", input_type="text", field_candidate_id="fc-txt")],
+        evidence_field_rows=[{"id": "ev-txt", "form_schema_id": SCHEMA_ID,
+                               "evidence_candidate_id": "efc-txt", "evidence_type": "TEXT_REF"}],
+        evidence_candidate_row={"id": "efc-txt", "field_candidate_id": "fc-txt",
+                                 "status": "APPROVED_FOR_RUNTIME_USE"},
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "input_type" in e.detail
+        assert "text" in e.detail
+    assert conn.rolled_back

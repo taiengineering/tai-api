@@ -431,3 +431,27 @@ def test_28_attachment_evidence_manifest_no_regression_existing_docs():
     art_sig_only = build(signature_manifest=[{"type": "signature", "sha256": "e" * 64}])
     assert len(art_sig_only["evidence_manifest"]) == 1
     assert art_sig_only["evidence_manifest"][0]["type"] == "signature"
+
+
+def test_R1_T09_attachment_manifest_sort_by_evidence_field_id():
+    """R1-T09: Attachment manifest sorted by evidence_field_id — input order does not affect output."""
+    ev_aaa = {"type": "attachment", "evidence_field_id": "ev-aaa", "field_id": "f-1", "sha256": "a" * 64}
+    ev_bbb = {"type": "attachment", "evidence_field_id": "ev-bbb", "field_id": "f-2", "sha256": "b" * 64}
+    art_forward = build(attachment_evidence_manifest=[ev_aaa, ev_bbb])
+    art_reverse = build(attachment_evidence_manifest=[ev_bbb, ev_aaa])
+    assert art_forward["evidence_manifest"] == art_reverse["evidence_manifest"]
+    assert art_forward["evidence_manifest"][0]["evidence_field_id"] == "ev-aaa"
+    assert art_forward["evidence_manifest"][1]["evidence_field_id"] == "ev-bbb"
+
+
+def test_R1_T10_signature_manifest_order_preserved_with_attachment():
+    """R1-T10: Signature entries in original order; attachment sorted after, not interleaved."""
+    sig1 = {"type": "signature", "field_key": "manager_sig", "sha256": "s" * 64}
+    sig2 = {"type": "signature", "field_key": "worker_sig", "sha256": "t" * 64}
+    att = {"type": "attachment", "evidence_field_id": "ev-1", "field_id": "f-att", "sha256": "a" * 64}
+    art = build(signature_manifest=[sig1, sig2], attachment_evidence_manifest=[att])
+    manifest = art["evidence_manifest"]
+    assert len(manifest) == 3
+    assert manifest[0] == sig1   # sig order preserved
+    assert manifest[1] == sig2
+    assert manifest[2] == att    # attachment follows all signatures

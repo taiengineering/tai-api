@@ -460,5 +460,8 @@ def build_render_artifacts(
         "template_identity": _template_identity(structure),
         "source_trace_snapshot": source_trace_snapshot,
         "evidence_manifest": (list(signature_manifest) if signature_manifest else [])
-                   + (list(attachment_evidence_manifest) if attachment_evidence_manifest else []),
+                   + sorted(
+                       attachment_evidence_manifest or [],
+                       key=lambda e: (e.get("evidence_field_id", ""), e.get("field_id", "")),
+                   ),
     }

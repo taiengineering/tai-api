@@ -54,6 +54,11 @@ class ConfirmError(Exception):
 _TARGET_STATUS = "APPROVED_BY_HUMAN"
 _REQUIRED_FROM = "REVIEW_PENDING"
 _SNAPSHOT_SCHEMA_VERSION = 1
+_SCHEMA_STATUS_APPROVED = "APPROVED_FOR_RUNTIME_USE"
+# Evidence 후보 허용 상태 (allowlist — 이 외 모든 상태는 LEG 미확인으로 봉인 차단)
+_ALLOWED_EVIDENCE_CANDIDATE_STATUSES: frozenset = frozenset({_SCHEMA_STATUS_APPROVED})
+# Evidence 연결 대상 field input_type 허용 목록 (현재 file만 지원)
+_ALLOWED_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"file"})
 
 
 def _dict_cursor(conn):
@@ -148,7 +153,7 @@ def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id):
         connections.append({
             "evidence_field": ev,
             "runtime_field": matched,
-            "ev_candidate_status": str(efc.get("status") or "CANDIDATE"),
+            "ev_candidate_status": str(efc.get("status") or "UNKNOWN"),
         })
     return connections
 
@@ -258,10 +263,26 @@ def confirm_document_atomic(
             if not schema_row:
                 raise ConfirmError(422, "form schema not found")
             schema_row = dict(schema_row)
+            # R1-03-A: Runtime Schema 반드시 APPROVED_FOR_RUNTIME_USE (봉인 경로)
+            if schema_row.get("status") != _SCHEMA_STATUS_APPROVED:
+                raise ConfirmError(
+                    422,
+                    f"runtime schema not approved for sealing "
+                    f"(schema_id={schema_id!r}, status={schema_row.get('status')!r})"
+                )
             cur.execute(
                 "SELECT * FROM runtime_field WHERE form_schema_id = %s", (schema_id,)
             )
             fields = [dict(r) for r in (cur.fetchall() or [])]
+            # R1-03-B: CANDIDATE_ONLY 필드 있으면 봉인 차단 (LEG 미승인)
+            candidate_only = [f for f in fields if f.get("required_status") == "CANDIDATE_ONLY"]
+            if candidate_only:
+                keys = ", ".join(f.get("field_key") or f.get("id", "?") for f in candidate_only[:3])
+                raise ConfirmError(
+                    422,
+                    f"form schema has {len(candidate_only)} CANDIDATE_ONLY field(s): {keys} "
+                    f"— confirm blocked until fields are promoted"
+                )
             cur.execute(
                 "SELECT * FROM runtime_checklist_item WHERE form_schema_id = %s",
                 (schema_id,),
@@ -318,17 +339,27 @@ def confirm_document_atomic(
                 ev_field = ev_conn["evidence_field"]
                 rf = ev_conn["runtime_field"]
                 ev_candidate_status = ev_conn["ev_candidate_status"]
-                # OD-C023-02: CANDIDATE status = LEG 미확인 → FAIL-CLOSED
-                if ev_candidate_status == "CANDIDATE":
+                # R1-02: allowlist — CANDIDATE/UNKNOWN/REJECTED/null 전부 차단
+                if ev_candidate_status not in _ALLOWED_EVIDENCE_CANDIDATE_STATUSES:
                     raise ConfirmError(
                         422,
-                        f"evidence legal status unconfirmed "
+                        f"evidence legal status not approved "
                         f"(evidence_field={str(ev_field.get('id'))!r}, "
                         f"evidence_candidate_status={ev_candidate_status!r}) — "
-                        "LEGAL_REQUIREDNESS=UNKNOWN: confirm blocked until LEG gate passes",
+                        f"only {sorted(_ALLOWED_EVIDENCE_CANDIDATE_STATUSES)} allowed; "
+                        "confirm blocked until LEG gate passes",
                     )
                 field_id = str(rf.get("id") or "")
                 field_key = str(rf.get("field_key") or "")
+                # R1-03-C: 연결 field input_type 반드시 지원되는 유형 (현재 file만)
+                input_type = str(rf.get("input_type") or "")
+                if input_type not in _ALLOWED_EVIDENCE_INPUT_TYPES:
+                    raise ConfirmError(
+                        422,
+                        f"evidence field {str(ev_field.get('id'))!r}: "
+                        f"connected field input_type={input_type!r} not supported "
+                        f"for evidence sealing (allowed: {sorted(_ALLOWED_EVIDENCE_INPUT_TYPES)})"
+                    )
                 snap = runtime_values.get(field_key)
                 if snap is None:
                     raise ConfirmError(
