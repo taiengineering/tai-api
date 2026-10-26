@@ -844,11 +844,15 @@ def test_E24_09_candidate_evidence_status_blocks_confirm():
             "form_schema_id": SCHEMA_ID,
             "evidence_candidate_id": "efc-001",
             "evidence_type": "ATTACHMENT",
+            "status": "APPROVED_FOR_RUNTIME_USE",
+            "evidence_family": "ATTACHMENT",
+            "upload_type": "attachment",
         }],
         evidence_candidate_row={
             "id": "efc-001",
             "field_candidate_id": "fc-001",
             "status": "CANDIDATE",  # LEG not confirmed
+            "schema_candidate_id": None,
         },
     )
     _install(conn)
@@ -874,6 +878,9 @@ def test_E24_02_evidence_connection_missing_candidate_id_blocks():
             "form_schema_id": SCHEMA_ID,
             "evidence_candidate_id": None,  # missing
             "evidence_type": "ATTACHMENT",
+            "status": "APPROVED_FOR_RUNTIME_USE",
+            "evidence_family": "ATTACHMENT",
+            "upload_type": "attachment",
         }],
         evidence_candidate_row=None,
     )
@@ -890,7 +897,7 @@ def test_E24_02_evidence_connection_missing_candidate_id_blocks():
 # ── R1 보강 테스트 (WO-024-R1) ──────────────────────────────────
 
 def test_R1_T03_unknown_evidence_status_blocks():
-    """R1-T03: evidence_candidate_status=UNKNOWN → 422 (allowlist 차단)."""
+    """R1-T03: evidence_field_candidate.status=UNKNOWN → 422 (allowlist 차단)."""
     conn = FakeConn(
         locked_row=locked(runtime={"attached_documents": {
             "_type": "file_snapshot",
@@ -903,8 +910,11 @@ def test_R1_T03_unknown_evidence_status_blocks():
         }}),
         field_rows=[_field_ev("f-att", "attached_documents", input_type="file", field_candidate_id="fc-u")],
         evidence_field_rows=[{"id": "ev-u", "form_schema_id": SCHEMA_ID,
-                               "evidence_candidate_id": "efc-u", "evidence_type": "ATTACHMENT"}],
-        evidence_candidate_row={"id": "efc-u", "field_candidate_id": "fc-u", "status": "UNKNOWN"},
+                               "evidence_candidate_id": "efc-u", "evidence_type": "ATTACHMENT",
+                               "status": "APPROVED_FOR_RUNTIME_USE",
+                               "evidence_family": "ATTACHMENT", "upload_type": "attachment"}],
+        evidence_candidate_row={"id": "efc-u", "field_candidate_id": "fc-u",
+                                 "status": "UNKNOWN", "schema_candidate_id": None},
     )
     _install(conn)
     try:
@@ -930,8 +940,11 @@ def test_R1_T03b_null_evidence_status_blocks():
         }}),
         field_rows=[_field_ev("f-null", "attached_documents", input_type="file", field_candidate_id="fc-n")],
         evidence_field_rows=[{"id": "ev-n", "form_schema_id": SCHEMA_ID,
-                               "evidence_candidate_id": "efc-n", "evidence_type": "ATTACHMENT"}],
-        evidence_candidate_row={"id": "efc-n", "field_candidate_id": "fc-n", "status": None},
+                               "evidence_candidate_id": "efc-n", "evidence_type": "ATTACHMENT",
+                               "status": "APPROVED_FOR_RUNTIME_USE",
+                               "evidence_family": "ATTACHMENT", "upload_type": "attachment"}],
+        evidence_candidate_row={"id": "efc-n", "field_candidate_id": "fc-n",
+                                 "status": None, "schema_candidate_id": None},
     )
     _install(conn)
     try:
@@ -984,9 +997,11 @@ def test_R1_T07_non_file_evidence_input_type_blocks():
         locked_row=locked(runtime={"some_text": "value"}),
         field_rows=[_field_ev("f-txt", "some_text", input_type="text", field_candidate_id="fc-txt")],
         evidence_field_rows=[{"id": "ev-txt", "form_schema_id": SCHEMA_ID,
-                               "evidence_candidate_id": "efc-txt", "evidence_type": "TEXT_REF"}],
+                               "evidence_candidate_id": "efc-txt", "evidence_type": "TEXT_REF",
+                               "status": "APPROVED_FOR_RUNTIME_USE",
+                               "evidence_family": "ATTACHMENT", "upload_type": "attachment"}],
         evidence_candidate_row={"id": "efc-txt", "field_candidate_id": "fc-txt",
-                                 "status": "APPROVED_FOR_RUNTIME_USE"},
+                                 "status": "APPROVED_FOR_RUNTIME_USE", "schema_candidate_id": None},
     )
     _install(conn)
     try:
@@ -996,4 +1011,163 @@ def test_R1_T07_non_file_evidence_input_type_blocks():
         assert e.http_status == 422
         assert "input_type" in e.detail
         assert "text" in e.detail
+    assert conn.rolled_back
+
+
+# ── R2 보강 테스트 (WO-024-R2) ──────────────────────────────────
+
+def _ev_row_approved(ev_id="ev-r2", efc_id="efc-r2"):
+    """Helper: runtime_evidence_field row that passes all R2 checks."""
+    return {
+        "id": ev_id,
+        "form_schema_id": SCHEMA_ID,
+        "evidence_candidate_id": efc_id,
+        "evidence_type": "ATTACHMENT",
+        "status": "APPROVED_FOR_RUNTIME_USE",
+        "evidence_family": "ATTACHMENT",
+        "upload_type": "attachment",
+    }
+
+
+def _efc_row_approved(efc_id="efc-r2", fc_id="fc-r2", sc_id="sc-001"):
+    """Helper: evidence_field_candidate row that passes all R2 checks."""
+    return {"id": efc_id, "field_candidate_id": fc_id,
+            "status": "APPROVED_FOR_RUNTIME_USE", "schema_candidate_id": sc_id}
+
+
+def test_R2_T01_unapproved_evidence_field_status_blocks():
+    """R2-T01: runtime_evidence_field.status=CANDIDATE → 422 (R2-01)."""
+    conn = FakeConn(
+        locked_row=locked(),
+        field_rows=[_field_ev("f-r2", "attached_documents", input_type="file", field_candidate_id="fc-r2")],
+        evidence_field_rows=[{
+            **_ev_row_approved(),
+            "status": "CANDIDATE",  # not approved
+        }],
+        evidence_candidate_row=_efc_row_approved(),
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "runtime_evidence_field.status" in e.detail
+        assert "CANDIDATE" in e.detail
+    assert conn.rolled_back
+
+
+def test_R2_T02_null_evidence_field_status_blocks():
+    """R2-T02: runtime_evidence_field.status=NULL → defaults to UNKNOWN → 422 (R2-01)."""
+    conn = FakeConn(
+        locked_row=locked(),
+        field_rows=[_field_ev("f-r2", "attached_documents", input_type="file", field_candidate_id="fc-r2")],
+        evidence_field_rows=[{
+            **_ev_row_approved(),
+            "status": None,
+        }],
+        evidence_candidate_row=_efc_row_approved(),
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "runtime_evidence_field.status" in e.detail
+    assert conn.rolled_back
+
+
+def test_R2_T03_unsupported_evidence_family_blocks():
+    """R2-T03: evidence_family=IMAGE_CAPTURE (not ATTACHMENT) → 422 (R2-03)."""
+    conn = FakeConn(
+        locked_row=locked(),
+        field_rows=[_field_ev("f-r2", "attached_documents", input_type="file", field_candidate_id="fc-r2")],
+        evidence_field_rows=[{
+            **_ev_row_approved(),
+            "evidence_family": "IMAGE_CAPTURE",
+        }],
+        evidence_candidate_row=_efc_row_approved(),
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "evidence_family" in e.detail
+        assert "IMAGE_CAPTURE" in e.detail
+    assert conn.rolled_back
+
+
+def test_R2_T04_unsupported_upload_type_blocks():
+    """R2-T04: upload_type=image_upload (not attachment) → 422 (R2-03)."""
+    conn = FakeConn(
+        locked_row=locked(),
+        field_rows=[_field_ev("f-r2", "attached_documents", input_type="file", field_candidate_id="fc-r2")],
+        evidence_field_rows=[{
+            **_ev_row_approved(),
+            "upload_type": "image_upload",
+        }],
+        evidence_candidate_row=_efc_row_approved(),
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "upload_type" in e.detail
+        assert "image_upload" in e.detail
+    assert conn.rolled_back
+
+
+def test_R2_T05_schema_candidate_mismatch_blocks():
+    """R2-T05: evidence_field_candidate.schema_candidate_id != schema_candidate_id → 422 (R2-C2)."""
+    conn = FakeConn(
+        locked_row=locked(),
+        schema_row={"id": SCHEMA_ID, "form_name": "테스트", "status": "APPROVED_FOR_RUNTIME_USE",
+                    "schema_candidate_id": "sc-correct"},
+        field_rows=[_field_ev("f-r2", "attached_documents", input_type="file", field_candidate_id="fc-r2")],
+        evidence_field_rows=[_ev_row_approved()],
+        evidence_candidate_row={
+            **_efc_row_approved(),
+            "schema_candidate_id": "sc-wrong",  # mismatch
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "schema candidate mismatch" in e.detail
+        assert "sc-wrong" in e.detail
+        assert "sc-correct" in e.detail
+    assert conn.rolled_back
+
+
+def test_R2_T06_schema_candidate_id_empty_skips_c2_check():
+    """R2-T06: schema_candidate_id absent → C2 check skipped (no mismatch error raised).
+
+    The confirm proceeds past the C2 gate and fails later at FileSnapshot validation,
+    proving schema candidate mismatch was NOT the blocker.
+    """
+    conn = FakeConn(
+        locked_row=locked(),  # no runtime_data_json → FileSnapshot missing triggers later
+        schema_row={"id": SCHEMA_ID, "form_name": "테스트", "status": "APPROVED_FOR_RUNTIME_USE"},
+        field_rows=[_field_ev("f-r2", "attached_documents", input_type="file", field_candidate_id="fc-r2")],
+        evidence_field_rows=[_ev_row_approved()],
+        evidence_candidate_row=_efc_row_approved(),  # has schema_candidate_id="sc-001", C2 skipped
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "schema candidate mismatch" not in e.detail, (
+            "C2 check must be skipped when schema_candidate_id is absent"
+        )
+        assert "FileSnapshot missing" in e.detail or "evidence" in e.detail.lower()
     assert conn.rolled_back

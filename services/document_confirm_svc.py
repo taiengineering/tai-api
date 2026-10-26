@@ -57,8 +57,13 @@ _SNAPSHOT_SCHEMA_VERSION = 1
 _SCHEMA_STATUS_APPROVED = "APPROVED_FOR_RUNTIME_USE"
 # Evidence 후보 허용 상태 (allowlist — 이 외 모든 상태는 LEG 미확인으로 봉인 차단)
 _ALLOWED_EVIDENCE_CANDIDATE_STATUSES: frozenset = frozenset({_SCHEMA_STATUS_APPROVED})
+# runtime_evidence_field 자체 상태 허용 목록 (R2-01)
+_ALLOWED_EVIDENCE_FIELD_STATUSES: frozenset = frozenset({_SCHEMA_STATUS_APPROVED})
 # Evidence 연결 대상 field input_type 허용 목록 (현재 file만 지원)
 _ALLOWED_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"file"})
+# Evidence family / upload_type 허용 목록 (R2-03)
+_ALLOWED_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT"})
+_ALLOWED_UPLOAD_TYPES: frozenset = frozenset({"attachment"})
 
 
 def _dict_cursor(conn):
@@ -83,13 +88,16 @@ def _normalize_evidence(raw: Any) -> Any:
     return raw
 
 
-def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id):
+def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id, schema_candidate_id: str = ""):
     """FK-based Evidence↔Field resolution (WO-024 C1 contract).
 
     For each runtime_evidence_field row:
       evidence_candidate_id → evidence_field_candidate.id
       evidence_field_candidate.field_candidate_id → runtime_field.field_candidate_id
     Validates:
+      - runtime_evidence_field.status allowlist (R2-01)
+      - evidence_family / upload_type allowlist (R2-03)
+      - evidence_field_candidate.schema_candidate_id == schema_candidate_id (R2-C2)
       - exactly 1 matching runtime_field per evidence_field
       - form_schema_id consistency
       - evidence_field_candidate.status (CANDIDATE → LEGAL_REQUIREDNESS=UNKNOWN)
@@ -106,6 +114,30 @@ def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id):
     connections = []
     for ev in evidence_fields:
         ev_id = str(ev.get("id") or "")
+        # R2-01: runtime_evidence_field.status must be APPROVED_FOR_RUNTIME_USE
+        ev_status = str(ev.get("status") or "UNKNOWN")
+        if ev_status not in _ALLOWED_EVIDENCE_FIELD_STATUSES:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: runtime_evidence_field.status={ev_status!r} "
+                f"not approved — only {sorted(_ALLOWED_EVIDENCE_FIELD_STATUSES)} allowed",
+            )
+        # R2-03: evidence_family must be ATTACHMENT
+        ev_family = str(ev.get("evidence_family") or "")
+        if ev_family not in _ALLOWED_EVIDENCE_FAMILIES:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: evidence_family={ev_family!r} not supported "
+                f"(allowed: {sorted(_ALLOWED_EVIDENCE_FAMILIES)})",
+            )
+        # R2-03: upload_type must be attachment
+        ev_upload_type = str(ev.get("upload_type") or "")
+        if ev_upload_type not in _ALLOWED_UPLOAD_TYPES:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
+                f"(allowed: {sorted(_ALLOWED_UPLOAD_TYPES)})",
+            )
         evidence_candidate_id = str(ev.get("evidence_candidate_id") or "")
         if not evidence_candidate_id:
             raise ConfirmError(
@@ -113,7 +145,7 @@ def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id):
                 f"evidence field {ev_id!r}: evidence_candidate_id missing — FK path broken",
             )
         cur.execute(
-            "SELECT id, field_candidate_id, status "
+            "SELECT id, field_candidate_id, status, schema_candidate_id "
             "FROM evidence_field_candidate WHERE id = %s LIMIT 1",
             (evidence_candidate_id,),
         )
@@ -125,6 +157,16 @@ def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id):
                 f"{evidence_candidate_id!r} not found",
             )
         efc = dict(efc_row)
+        # R2-C2: evidence_field_candidate.schema_candidate_id must match runtime_form_schema
+        if schema_candidate_id:
+            efc_sc_id = str(efc.get("schema_candidate_id") or "")
+            if efc_sc_id != schema_candidate_id:
+                raise ConfirmError(
+                    422,
+                    f"evidence field {ev_id!r}: schema candidate mismatch — "
+                    f"evidence_field_candidate.schema_candidate_id={efc_sc_id!r} != "
+                    f"runtime_form_schema.schema_candidate_id={schema_candidate_id!r}",
+                )
         field_candidate_id = str(efc.get("field_candidate_id") or "")
         if not field_candidate_id:
             raise ConfirmError(
@@ -331,8 +373,9 @@ def confirm_document_atomic(
                 raise ConfirmError(422, "attachment image resolution failed: %s" % e)
 
             # 14a-2. Evidence FK 연결 + FileSnapshot 검증 (OD-C023-01/02/05)
+            schema_candidate_id = str(schema_row.get("schema_candidate_id") or "")
             ev_connections = _resolve_evidence_connections(
-                cur, evidence_fields, fields, schema_id
+                cur, evidence_fields, fields, schema_id, schema_candidate_id
             )
             attachment_evidence_manifest: list = []
             for ev_conn in ev_connections:
