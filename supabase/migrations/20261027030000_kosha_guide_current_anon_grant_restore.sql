@@ -1,0 +1,24 @@
+-- Migration: 20261027030000_kosha_guide_current_anon_grant_restore.sql
+-- WO: WO-SEO-INDEXNOW-GUIDE-RESTORE-001
+-- KOSHA GUIDE current View — anon/authenticated SELECT 권한 복구
+--
+-- 원인: 2026-10-21 16:54~17:08 KST 사이 마이그레이션 외부 직접 SQL로
+--       anon, authenticated SELECT 권한이 의도치 않게 회수된 것으로 추정
+--       (마이그레이션 이력에 REVOKE 기록 없음 — 원인 미확정)
+--
+-- 근거: 원본 계약 20261006153515_kosha_guide_current_snapshot.sql
+--   GRANT SELECT ON public.kosha_guide_current TO anon, authenticated, service_role
+--
+-- 영향:
+--   /safety-guide 가이드 목록·상세 페이지 현재 0건 표시
+--   sitemap_guides.xml 0 URL → IndexNow FAIL-CLOSE → 10/22~10/26 스캔 중단
+--
+-- 보안 검토:
+--   View = "Public GUIDE read model", postgres 소유, raw_json 미노출
+--   COMPLETED 스냅샷의 공개 메타데이터(id, guide_no, guide_title, guide_url 등)만 노출
+--   service_role SELECT는 이미 보존됨 — 신규 공개 정책 아님
+--
+-- GPT IV: 조건부 PASS (2026-10-26)
+-- Owner 승인 필요 (운영 DB 적용 전)
+
+GRANT SELECT ON public.kosha_guide_current TO anon, authenticated;
