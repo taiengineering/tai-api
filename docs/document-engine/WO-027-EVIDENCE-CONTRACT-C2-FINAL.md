@@ -281,7 +281,7 @@ STEP4E_UP 실행 순서 (원자 트랜잭션 내):
 
   before_state snapshot 범위 (STEP4D_UP 패턴 확장):
     schema_status
-    fields (id, field_key, status, required_status) ← 롤백 복원 대상
+    fields (id, field_key, status, required_status) ← Snapshot 포함 / STEP4E_DOWN 변경 안 함 (G3 불변)
     evidence_fields (id, status, evidence_candidate_id)
     evidence_candidate_decision_ref (runtime_review_decision.id, status 당시값) ← 신규
 
