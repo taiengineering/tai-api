@@ -1,0 +1,80 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B10-BULK-BUILD-001",
+    "form_type": "RECORD",
+    "source_id": "GOV-06",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "안전보건 운영체계",
+    "work_trigger": "도급사업 안전보건협의체 회의 후 기록",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 도급사업 안전보건협의체 회의 내용·결정사항·이행 추적 서식.",
+    "design_gate_ref": "WO-REF01-060-B10-BULK-BUILD-001"
+  },
+  "document": {
+    "title": "안전보건협의체 회의록(도급사업)",
+    "doc_id": "TAI-FORM-GOV-06-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 회의 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "회의일시" },
+        { "id": "F03", "label": "장소" },
+        { "id": "F04", "label": "주관자" },
+        { "id": "F05", "label": "참석자 수" }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 회의 안건 및 논의 내용 자유기재.",
+      "label": "회의 안건 및 논의 내용",
+      "min_height_mm": 50
+    },
+    {
+      "type": "repeat_table",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 결정사항 및 이행계획 반복 기록표.",
+      "default_row_count": 6,
+      "min_row_height_mm": 10,
+      "columns": [
+        { "id": "F01_NO",      "label": "번호",            "width_mm": 12 },
+        { "id": "F02_CONTENT", "label": "결정/조치 내용",  "width_mm": 88 },
+        { "id": "F03_OWNER",   "label": "담당",            "width_mm": 24 },
+        { "id": "F04_DUE",     "label": "기한",            "width_mm": 22 },
+        { "id": "F05_STATUS",  "label": "이행여부(입력)",  "width_mm": 24 }
+      ]
+    },
+    {
+      "type": "approval",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "주관자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}

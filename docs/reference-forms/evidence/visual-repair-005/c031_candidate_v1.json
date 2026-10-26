@@ -1,0 +1,126 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-WAVE2-SPEC-FIX-002",
+    "form_type": "RECORD",
+    "source_id": "REF-C031",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "교육실시",
+    "work_trigger": "교육 시행",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). 원본 미확인. DB proposed_fields 기반 설계. 문서 작성만으로 법정 교육 의무가 이행됐다고 표시하지 않음. 출석 증빙은 별도. FIX-002: 교육자료·출석증빙 필드 추가. GPT 검토 전 빌드 차단.",
+    "design_gate_ref": "WO-REF01-060-B8-WAVE2-BUILD-003",
+    "candidate_for_review": "WO-REF01-060-B8-WAVE2-VISUAL-REPAIR-005B",
+    "candidate_status": "REVIEW_ONLY_NOT_CANONICAL"
+  },
+  "document": {
+    "title": "안전보건교육 실시일지",
+    "doc_id": "TAI-FORM-C031-v0.2",
+    "version": "0.2-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 교육 기본정보. FIX-002: 교육자료·출석증빙 필드 추가.",
+      "fields": [
+        {
+          "id": "F01",
+          "label": "교육 구분"
+        },
+        {
+          "id": "F02",
+          "label": "교육 주제"
+        },
+        {
+          "id": "F03",
+          "label": "교육 일시"
+        },
+        {
+          "id": "F04",
+          "label": "장소"
+        },
+        {
+          "id": "F05",
+          "label": "교육자(강사)"
+        },
+        {
+          "id": "F06",
+          "label": "교육자료·버전"
+        },
+        {
+          "id": "F07",
+          "label": "출석증빙·보관"
+        }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 교육 내용 요약 기재.",
+      "label": "교육 내용 요약",
+      "min_height_mm": 36
+    },
+    {
+      "type": "repeat_table",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 참석자 확인표. 서명란은 빈 입력 칸 제공. 서명란 존재가 실제 서명·출석 증거 확보를 보장하지 않음.",
+      "default_row_count": 10,
+      "min_row_height_mm": 10,
+      "columns": [
+        {
+          "id": "F01_NO",
+          "label": "번호",
+          "width_mm": 10
+        },
+        {
+          "id": "F02_NAME",
+          "label": "성명",
+          "width_mm": 30
+        },
+        {
+          "id": "F03_DEPT",
+          "label": "소속/부서",
+          "width_mm": 40
+        },
+        {
+          "id": "F04_POSITION",
+          "label": "직책",
+          "width_mm": 30
+        },
+        {
+          "id": "F05_SIGN",
+          "label": "서명(확인)",
+          "width_mm": 60
+        }
+      ]
+    },
+    {
+      "id": "S04",
+      "type": "text_flow",
+      "paragraphs": [
+        {
+          "id": "P01",
+          "text": "【작성 안내】 출석증빙·보관란에는 출석 증빙의 종류(예: 참석자 서명부)와 실제 보관 위치를 함께 기재하십시오.",
+          "align": "left"
+        }
+      ]
+    }
+  ]
+}

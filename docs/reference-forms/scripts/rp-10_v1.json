@@ -1,0 +1,91 @@
+{
+  "_meta": {
+    "wo": "WO-B12-FIELD-COMPLETION-003",
+    "form_type": "FORM",
+    "source_id": "RP-10",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "시설 운영관리",
+    "work_trigger": "외주 정비업체 작업 방문 및 완료 확인 시",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "TAI 독자 초안. 외주 정비업체 작업범위·위험조치·출입기록·결과·이상사항·방문완료확인 서식.",
+    "design_gate_ref": "WO-B12-FIELD-COMPLETION-003"
+  },
+  "document": {
+    "title": "외주 정비업체 작업방문·완료확인서",
+    "doc_id": "TAI-FORM-RP-10-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 방문 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "방문일" },
+        { "id": "F03", "label": "업체명" },
+        { "id": "F04", "label": "담당자" }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 내용 및 범위.",
+      "label": "작업 내용 및 범위",
+      "min_height_mm": 35
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 위험 요인 및 안전조치.",
+      "label": "위험 요인 및 안전조치",
+      "min_height_mm": 30
+    },
+    {
+      "type": "freeform_area",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 출입 기록.",
+      "label": "출입 기록",
+      "min_height_mm": 25
+    },
+    {
+      "type": "freeform_area",
+      "id": "S05",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 결과 및 이상사항.",
+      "label": "작업 결과 및 이상사항",
+      "min_height_mm": 35
+    },
+    {
+      "type": "freeform_area",
+      "id": "S06",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 특이사항.",
+      "label": "특이사항",
+      "min_height_mm": 20
+    },
+    {
+      "type": "approval",
+      "id": "S07",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "외주업체 담당자" },
+        { "id": "A02", "label": "사업장 확인자" }
+      ]
+    }
+  ]
+}

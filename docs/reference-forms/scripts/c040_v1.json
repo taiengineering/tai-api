@@ -1,0 +1,96 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B8-WAVE2-BATCH-001",
+    "form_type": "REGISTER",
+    "source_id": "REF-C040",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "MIXED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "MSDS 문서이력",
+    "work_trigger": "MSDS 수령/개정",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_APPROVED_INTERNAL_POC_BUILD",
+    "design_gate_notes": "TAI 독자 초안 서식(TAI_ORIGINAL_DRAFT). source_evidence=MIXED(참조 존재 미확인). MSDS 수령·개정 이력 수동 관리용. 외부 MSDS DB 자동 연동 없음. GPT 검토 전 빌드 차단.",
+    "design_gate_ref": "WO-REF01-060-B8-WAVE2-BUILD-003"
+  },
+  "document": {
+    "title": "제품별 MSDS 수령·개정 이력대장",
+    "doc_id": "TAI-FORM-C040-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": {
+      "orientation": "portrait"
+    }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 관리 기본정보.",
+      "fields": [
+        {
+          "id": "F01",
+          "label": "사업장명"
+        },
+        {
+          "id": "F02",
+          "label": "관리 부서"
+        }
+      ]
+    },
+    {
+      "type": "repeat_table",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. MSDS 수령·개정 이력 반복 등록표. 외부 MSDS DB 자동 연동 없음.",
+      "default_row_count": 10,
+      "min_row_height_mm": 10,
+      "columns": [
+        {
+          "id": "F01_SUPPLIER",
+          "label": "공급사",
+          "width_mm": 28
+        },
+        {
+          "id": "F02_PRODUCT",
+          "label": "제품명",
+          "width_mm": 28
+        },
+        {
+          "id": "F03_RECEIVE",
+          "label": "수령일",
+          "width_mm": 22
+        },
+        {
+          "id": "F04_REVISE",
+          "label": "개정일",
+          "width_mm": 22
+        },
+        {
+          "id": "F05_VER",
+          "label": "문서 버전",
+          "width_mm": 22
+        },
+        {
+          "id": "F06_DISTRIB",
+          "label": "배포 상태(입력)",
+          "width_mm": 24
+        },
+        {
+          "id": "F07_NEXT",
+          "label": "재검토 예정일",
+          "width_mm": 24
+        }
+      ]
+    }
+  ]
+}

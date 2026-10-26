@@ -1,0 +1,90 @@
+{
+  "C031": {
+    "orig_collisions": 8,
+    "orig_collision_texts": [
+      "사용",
+      "교육자료(명칭·버전):",
+      "____________________________",
+      "출석",
+      "증빙"
+    ],
+    "cand_collisions": 0,
+    "pages": 1,
+    "orig_png": "reference-forms/evidence/visual-repair-005/ORIG_C031_pdf_page1.png",
+    "cand_png": "reference-forms/evidence/visual-repair-005/CAND_C031_pdf_page1.png",
+    "docx_roundtrip": "PASS",
+    "markers_total": 23,
+    "markers_found": 23,
+    "candidate_metadata": "PRESENT",
+    "guidance_pdf": "PRESENT",
+    "guidance_docx": "PRESENT",
+    "label_corrections": {
+      "S01.F06": {
+        "from": "사용 교육자료(명칭·버전)",
+        "to": "교육자료·버전"
+      },
+      "S01.F07": {
+        "from": "출석 증빙 종류·보관 위치",
+        "to": "출석증빙·보관"
+      }
+    },
+    "status": "PASS"
+  },
+  "C043": {
+    "orig_collisions": 4,
+    "orig_collision_texts": [
+      "훈련",
+      "참여자/명단",
+      "참조:",
+      "____________________________"
+    ],
+    "cand_collisions": 0,
+    "pages": 1,
+    "orig_png": "reference-forms/evidence/visual-repair-005/ORIG_C043_pdf_page1.png",
+    "cand_png": "reference-forms/evidence/visual-repair-005/CAND_C043_pdf_page1.png",
+    "docx_roundtrip": "PASS",
+    "markers_total": 22,
+    "markers_found": 22,
+    "candidate_metadata": "PRESENT",
+    "guidance_pdf": "N/A",
+    "guidance_docx": "N/A",
+    "label_corrections": {
+      "S01.F05": {
+        "from": "훈련 참여자/명단 참조",
+        "to": "참여/명단참조"
+      }
+    },
+    "status": "PASS"
+  },
+  "C044": {
+    "orig_collisions": 7,
+    "orig_collision_texts": [
+      "화학물질/제품명:",
+      "____________________________",
+      "작업대상",
+      "또는",
+      "적용"
+    ],
+    "cand_collisions": 0,
+    "pages": 1,
+    "orig_png": "reference-forms/evidence/visual-repair-005/ORIG_C044_pdf_page1.png",
+    "cand_png": "reference-forms/evidence/visual-repair-005/CAND_C044_pdf_page1.png",
+    "docx_roundtrip": "PASS",
+    "markers_total": 21,
+    "markers_found": 21,
+    "candidate_metadata": "PRESENT",
+    "guidance_pdf": "N/A",
+    "guidance_docx": "N/A",
+    "label_corrections": {
+      "S01.F01": {
+        "from": "화학물질/제품명",
+        "to": "물질명/제품명"
+      },
+      "S01.F04": {
+        "from": "작업대상 또는 적용 작업",
+        "to": "대상·적용 작업"
+      }
+    },
+    "status": "PASS"
+  }
+}

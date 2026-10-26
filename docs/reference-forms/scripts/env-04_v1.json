@@ -1,0 +1,95 @@
+{
+  "_meta": {
+    "wo": "WO-REF01-060-B11-BULK-BUILD-001",
+    "correction_wo": "WO-REF01-060-B16-FIELD-COMPLETENESS-001",
+    "form_type": "RECORD",
+    "source_id": "ENV-04",
+    "schema_version": "common-v1",
+    "authoring_class": "TAI_ORIGINAL_DRAFT",
+    "field_origin": "TAI_PRACTICAL_PROPOSAL",
+    "source_match": "NOT_VERIFIED",
+    "legal_review_status": "PENDING",
+    "rights_status": "RIGHTS_UNVERIFIED",
+    "publication_status": "INTERNAL_POC_ONLY",
+    "source_evidence": "TAI_PROPOSED",
+    "source_document_access": "NOT_CHECKED",
+    "workflow_family": "환경설비 관리",
+    "work_trigger": "환경설비 정기보전·수리 작업 후 기록",
+    "field_required_freeze": "LEGAL_REVIEW_PENDING — FIELD_REQUIRED 확정 금지",
+    "layout_variant": "TAI_EDITABLE_VARIANT",
+    "source_layout_exact": false,
+    "design_gate_status": "GPT_REVIEW_REQUIRED",
+    "design_gate_notes": "B16 교정: 설비 중지 시간(중지 시작·종료) 기재란 추가. 기존 작업시간과 구분.",
+    "design_gate_ref": "WO-REF01-060-B16-FIELD-COMPLETENESS-001"
+  },
+  "document": {
+    "title": "환경설비 정기보전·수리 기록부",
+    "doc_id": "TAI-FORM-ENV-04-v0.1",
+    "version": "0.1-DRAFT",
+    "subject": "산업안전보건 실무서식",
+    "creator": "TAI",
+    "producer": "TAI Document Pipeline v1",
+    "page": { "orientation": "portrait" }
+  },
+  "sections": [
+    {
+      "type": "basic_info",
+      "id": "S01",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 기본정보.",
+      "fields": [
+        { "id": "F01", "label": "사업장명" },
+        { "id": "F02", "label": "작업일" },
+        { "id": "F03", "label": "설비명/번호" },
+        { "id": "F04", "label": "담당자" }
+      ]
+    },
+    {
+      "type": "labeled_grid",
+      "id": "S02",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 설비 중지 시간 기재란. B16 신설. 작업시간과 구분.",
+      "section_label": "설비 중지 시간",
+      "row_height_mm": 8,
+      "rows": [
+        [ { "label": "중지 시작" }, { "label": "중지 종료" } ]
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S03",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 정비 원인 및 내용.",
+      "label": "정비 원인 및 내용",
+      "min_height_mm": 25
+    },
+    {
+      "type": "repeat_table",
+      "id": "S04",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 작업 항목별 내역 반복 기록표.",
+      "default_row_count": 6,
+      "min_row_height_mm": 9,
+      "columns": [
+        { "id": "F01_NO",    "label": "번호",         "width_mm": 10 },
+        { "id": "F02_ITEM",  "label": "작업 항목",    "width_mm": 62 },
+        { "id": "F03_CONT",  "label": "작업 내용",    "width_mm": 54 },
+        { "id": "F04_TIME",  "label": "작업 시간",    "width_mm": 22 },
+        { "id": "F05_WHO",   "label": "작업자",       "width_mm": 22 }
+      ]
+    },
+    {
+      "type": "freeform_area",
+      "id": "S05",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 검증 결과.",
+      "label": "검증 결과",
+      "min_height_mm": 20
+    },
+    {
+      "type": "approval",
+      "id": "S06",
+      "source_note": "TAI_PRACTICAL_PROPOSAL. 확인란.",
+      "total_width_mm": 170,
+      "fields": [
+        { "id": "A01", "label": "작성자" },
+        { "id": "A02", "label": "확인자" }
+      ]
+    }
+  ]
+}

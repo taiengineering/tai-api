@@ -1,0 +1,190 @@
+research_id,source_title,document_type,production_status,duplicate_decision,reuse_target,b15_json_exists_unregistered,repeat_table_present,numeric_cols,date_expiry_cols,status_tracking_cols,accumulation_type,key_evidence,xlsx_suitability_raw
+CHW-01,화학물질 입고·검수 기록표,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,수량,입고일,,ACCUM,repeat_table 수량 컬럼. 입고 누적 기록. 거래 단위마다 1행,GPT_REVIEW_REQUIRED
+CHW-02,화학물질 출고·사용 불출대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,불출량,출고일,,ACCUM+CALC,불출량 누계 집계 필요. 재고 차감 연산 가능. 대장형 누적,GPT_REVIEW_REQUIRED
+CHW-03,화학물질 재고실사·차이처리표,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,"장부재고,실사재고,차이수량",실사일,,CALC,차이수량=장부재고-실사재고(FORMULA_DIRECTION_UNVERIFIED). 11개 컬럼 데이터표. B14 REUSE 후보이던 PRA-22-05 대표 서식,GPT_REVIEW_REQUIRED
+CHW-04,화학물질 이상품 격리·처리 기록,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,발생일·처리일,,ACCUM,발생·처리일 추적. 격리이력 누적. 승인 구조 없으므로 PRA-22-04 대표서식 아님,GPT_REVIEW_REQUIRED
+CHW-05,화학물질 SDS 수령·버전 확인대장,REGISTER,NOT_BUILT,REUSE_EXISTING,REF-C040, ,,,,,REUSE,REF-C040 재사용. Excel 판정은 REF-C040 결과에 따름,GPT_REVIEW_REQUIRED
+CITYGAS-01,도시가스 공급·사용시설 안전점검 기록표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,점검항목·결과·이상내용 단순 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+CONF-01,밀폐공간 출입·작업허가서,FORM,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,작업 1건당 1매. 서명·승인 중심. 반복 집계 없음,GPT_REVIEW_REQUIRED
+CONF-02,밀폐공간 산소·유해가스 측정 기록부,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,"산소농도,유해가스농도",측정시각,,MEAS,수치 측정값 반복 기록. 트렌드 분석 시 유용. 기준치 비교 가능,GPT_REVIEW_REQUIRED
+CONF-03,밀폐공간 출입·감시 기록부,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,출입·퇴실시각,,ACCUM,시간 기록 누적. 통계 필요 시 유용. 서명 중심,GPT_REVIEW_REQUIRED
+CONF-04,밀폐공간 비상구조 장비 점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,수량,,,CHECKLIST,수량·점검결과 단순 체크. 계산 없음,GPT_REVIEW_REQUIRED
+DOC-01,안전관리 문서 개정·승인 이력대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,개정일·시행일,,ACCUM,버전·날짜 추적. 문서이력 누적 대장,GPT_REVIEW_REQUIRED
+DOC-02,안전관리 서식 배포·회수 관리대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,배포일·회수일,,ACCUM,배포·회수 날짜 추적. 상태관리 필요,GPT_REVIEW_REQUIRED
+DOC-03,안전관리 기록물 보존·폐기 일정표,FORM,BUILT_STRUCTURAL_MATCH,,, ,Y,,폐기예정일,,DATE,폐기예정일 관리. 기한 초과 시 알림 가능,GPT_REVIEW_REQUIRED
+ENV-01,대기배출시설·방지시설 자체관리 점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,단순 점검결과 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+ENV-02,폐수처리시설 점검 및 개선관리대장,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,점검일·완료확인일,,ACCUM,개선조치 이력 누적. 완료일 추적,GPT_REVIEW_REQUIRED
+ENV-03,폐기물 보관장소 일상점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,단순 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+ENV-04,환경설비 정기보전·수리 기록부,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,작업시간,,,ACCUM,작업시간 기록. 시간 집계 시 유용,GPT_REVIEW_REQUIRED
+EQUIP-01,지게차 작업계획서,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,SINGLE_EVENT,작업 1건당 1매. 위험요인·안전대책 기술. 계산 없음,GPT_REVIEW_REQUIRED
+EQUIP-02,트럭 적재·운반 작업계획서,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,SINGLE_EVENT,작업 1건당 1매. 계산 없음,GPT_REVIEW_REQUIRED
+EQUIP-03,고소작업대 작업계획서,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,SINGLE_EVENT,작업 1건당 1매. 계산 없음,GPT_REVIEW_REQUIRED
+EQUIP-04,이동식크레인 작업계획서,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,SINGLE_EVENT,작업 1건당 1매. 계산 없음,GPT_REVIEW_REQUIRED
+EQUIP-05,굴착기 작업계획서,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,SINGLE_EVENT,작업 1건당 1매. 계산 없음,GPT_REVIEW_REQUIRED
+EQUIP-06,지게차 안전점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,점검결과 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+EQUIP-07,크레인 안전점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,점검결과 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+EQUIP-08,컨베이어 자율점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,점검결과 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+GOV-01,산업안전보건위원회 회의록,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,기한·이행확인일,,SINGLE_EVENT,회의록 단건. 의결사항+기한 포함. 이행추적 시 유용,GPT_REVIEW_REQUIRED
+GOV-02,산업안전보건위원회 의결사항 이행관리대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,기한,,ACCUM+STATUS,의결사항별 이행상태·기한 누적 추적,GPT_REVIEW_REQUIRED
+GOV-03,근로자 안전보건 의견수렴·회신대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,접수일·회신일,,ACCUM,의견접수~회신 이력 누적,GPT_REVIEW_REQUIRED
+GOV-04,관리감독자 현장 안전활동 기록지,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,시간,,DAILY_LOG,일일 순찰 활동 기록. 서술 중심. 집계 거의 없음,GPT_REVIEW_REQUIRED
+GOV-05,관리감독자 업무수행 평가표,EVALUATION,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,SINGLE_EVENT,업무평가표. 서술 평가 중심. 합계 없음,GPT_REVIEW_REQUIRED
+GOV-06,안전보건협의체 회의록(도급사업),RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,기한,,SINGLE_EVENT,도급 협의체 회의록 단건,GPT_REVIEW_REQUIRED
+GOV-07,합동안전보건점검 및 시정조치 기록,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,완료기한,,ACCUM+STATUS,시정조치 이력 누적. 완료기한·담당 추적,GPT_REVIEW_REQUIRED
+GOV-08,설비·공정 변경 전 안전성 검토서,FORM,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,변경관리 단건 검토서. 계산 없음,GPT_REVIEW_REQUIRED
+GOV-09,안전보건 시정조치(CAPA) 관리대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,목표일·완료일,,ACCUM+STATUS+CALC,CAPA 진행상태·완료일 누적. 완료율 집계. 핵심 대장,GPT_REVIEW_REQUIRED
+GOV-10,안전보건 연간 활동계획·실적 대비표,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,"기준/목표,실적",계획일·실행일,,CALC+AGG,계획값 vs 실적값 차이 계산. 15개 활동 집계. 연간 달성률,GPT_REVIEW_REQUIRED
+GOV-11,안전보건 내부점검 결과보고서,REPORT,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,REPORT,내부감사 보고서. 서술 중심. 계산 없음,GPT_REVIEW_REQUIRED
+GOV-12,유해위험요인 개선조치 종결확인서,FORM,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,개선완료 종결 단건 확인서,GPT_REVIEW_REQUIRED
+H2-01,수소설비 운전·점검 기록부,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,MEAS,압력·온도 참조값 기록. 트렌드 분석 시 유용,GPT_REVIEW_REQUIRED
+H2-02,수소누출 대응 훈련기록표,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,SINGLE_EVENT,훈련 참석자 서명. 계산 없음,GPT_REVIEW_REQUIRED
+HAZ-01,위험물 저장·취급시설 관리점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,단순 점검 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+LAB-01,연구실 일상 안전점검 기록표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,점검결과 체크. 계산 없음,GPT_REVIEW_REQUIRED
+LAB-02,연구실 정밀안전진단 개선조치 대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,완료예정일·완료일,,ACCUM+DATE,진단지적사항 이력. 완료예정일 추적,GPT_REVIEW_REQUIRED
+LAB-03,연구실안전관리위원회 회의록,RECORD,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,회의록 단건. freeform 구성. 계산 없음,GPT_REVIEW_REQUIRED
+LPG-01,LPG 사용시설 안전점검 기록표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,단순 점검 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+MNT-01,설비예방보전 일정·완료대장,REGISTER,NOT_BUILT,REUSE_EXISTING,RP-01, ,,,,,REUSE,RP-01 재사용. Excel 판정은 RP-01 결과에 따름,GPT_REVIEW_REQUIRED
+MNT-02,설비 고장·수리 요청 및 완료서,FORM,NOT_BUILT,REUSE_EXISTING,RP-02, ,,,,,REUSE,RP-02 재사용. Excel 판정은 RP-02 결과에 따름,GPT_REVIEW_REQUIRED
+MNT-03,설비보전 작업일지,RECORD,BUILT_STRUCTURAL_MATCH,,, ,N,,,,DAILY_LOG,freeform 구성 작업일지. 서술 중심. 계산 없음,GPT_REVIEW_REQUIRED
+MNT-04,교대인수인계 설비위험 현황표,RECORD,NOT_BUILT,REUSE_EXISTING,RP-04, ,,,,,REUSE,RP-04 재사용. Excel 판정은 RP-04 결과에 따름,GPT_REVIEW_REQUIRED
+MNT-05,정비 중 에너지격리·복귀 확인표,CHECKLIST,NOT_BUILT,REUSE_EXISTING,RP-03, ,,,,,REUSE,RP-03 재사용. Excel 판정은 RP-03 결과에 따름,GPT_REVIEW_REQUIRED
+P-01,D-1 내일 작업계획·위험조율표,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,작업자수,작업시간,,DAILY_COORD,일일 작업협조. 1일 단건. 작업자수 기입,GPT_REVIEW_REQUIRED
+P-02,일일 안전관리 업무일지,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,,조치일,DAILY_LOG,일일 업무 기록. 서술 중심. 계산 없음,GPT_REVIEW_REQUIRED
+P-03,현장 안전순찰·지도 일지,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,순찰시간,,DAILY_LOG,순찰일지 단건. 서술 중심,GPT_REVIEW_REQUIRED
+P-04,TBM 실시 및 작업자 확인 기록,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,SINGLE_EVENT,서명 참석 기록. 반복 서명 중심,GPT_REVIEW_REQUIRED
+P-05,작업종료 안전조치·인계서,RECORD,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,freeform 인계 기록. 계산 없음,GPT_REVIEW_REQUIRED
+P-06,통합 위험작업 허가관리대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,허가일자·완료확인,,ACCUM,허가 이력 누적 대장. 허가번호·일자 추적,GPT_REVIEW_REQUIRED
+P-07,위험작업 동시작업 간섭조정표,FORM,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,SINGLE_EVENT,동시작업 협의 단건. 계산 없음,GPT_REVIEW_REQUIRED
+P-08,중장비 반입 사전검토·승인서,FORM,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,SINGLE_EVENT,반입 승인 단건. 계산 없음,GPT_REVIEW_REQUIRED
+P-09,장비·운전원 자격·검사 만료관리표,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,"자격만료일,검사만료일",,DATE+STATUS,자격·검사 이중 만료일 관리. 10행 반복. 만료 임박 조건부 서식 가능,GPT_REVIEW_REQUIRED
+P-10,안전시설물 설치확인서,FORM,BUILT_STRUCTURAL_MATCH,,, ,Y,수량,,,SINGLE_EVENT,설치확인 단건. 수량 입력 있으나 합산 불필요,GPT_REVIEW_REQUIRED
+P-11,가설시설·비계·거푸집 점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,점검결과 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+P-12,가설전기·임시배선 안전점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,점검결과 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+P-13,위험요인 지적·조치·재점검 대장,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,발견일·조치일,,ACCUM,위험요인 발견~조치 이력 누적,GPT_REVIEW_REQUIRED
+P-14,작업중지·재개 승인기록,FORM,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,작업중지 단건 승인. freeform 구성,GPT_REVIEW_REQUIRED
+P-15,사고 최초 상황보고서,REPORT,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,사고보고 단건. freeform 구성,GPT_REVIEW_REQUIRED
+P-16,신규작업자 투입 전 서류확인표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,서류 확인 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+P-17,외국인·신규작업자 이해확인 기록,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,SINGLE_EVENT,이해확인 서명 기록. 계산 없음,GPT_REVIEW_REQUIRED
+P-18,협력업체 일일 작업·위험정보 공유표,FORM,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,DAILY_COORD,일일 위험정보 공유. 단건. 계산 없음,GPT_REVIEW_REQUIRED
+P-19,협력업체 투입 전 적격성·서류확인표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,서류적격 확인 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+P-20,산업안전보건관리비 사용계획·집행내역,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,"집행금액,누계금액",집행일,,CALC+ACCUM,집행금액 누계 자동계산. 누계금액=SUM(집행금액) 필요. 예산관리 핵심,GPT_REVIEW_REQUIRED
+P-21,산업안전보건관리비 지출증빙 체크리스트,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,지출증빙 확인 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+P-22,월간 안전관리 업무캘린더,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,,예정일·만료기한,,DATE+STATUS,월간 업무 일정 관리. 완료여부 추적 가능,GPT_REVIEW_REQUIRED
+P-23,현장 안전관리자 업무 인수인계서,RECORD,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,인수인계 단건. freeform 구성,GPT_REVIEW_REQUIRED
+P-24,현장 핵심문서·증빙 보유현황표,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,최신개정일,,ACCUM,문서목록 현황표. 날짜 추적,GPT_REVIEW_REQUIRED
+P-25,주간 안전관리 실적·이슈 보고서,REPORT,BUILT_STRUCTURAL_MATCH,,, ,Y,,완료예정일,,REPORT,주간 보고서. 이슈 6행. 계산 적음,GPT_REVIEW_REQUIRED
+P-26,월간 안전보건 지표·경영보고서,REPORT,BUILT_STRUCTURAL_MATCH,,, ,Y,"계획값,실적값,차이",,,AGG,지표 계획값-실적값-차이 12항목. 달성률 계산 가능. 경영보고용,GPT_REVIEW_REQUIRED
+PRA-22-01,화학물질 입고예정·검수 대조표,FORM,NOT_BUILT,REUSE_EXISTING,CHW-01, ,,,,,REUSE,CHW-01 재사용. Excel 판정은 CHW-01 결과에 따름,GPT_REVIEW_REQUIRED
+PRA-22-02,화학물질 로케이션 적치·이동기록,REGISTER,NOT_BUILT,NEW_BUILD_REQUIRED,,Y(B15),Y,,이동일,,ACCUM,JSON 있음(B15 미등록). 로케이션 이동 누적 추적. 7개 컬럼,GPT_REVIEW_REQUIRED
+PRA-22-03,화학물질 출고검수·인계서,FORM,NOT_BUILT,REUSE_EXISTING,CHW-02, ,,,,,REUSE,CHW-02 재사용. Excel 판정은 CHW-02 결과에 따름,GPT_REVIEW_REQUIRED
+PRA-22-04,화학물질 파손·누출품 격리 및 재고조정 승인서,FORM,BUILT_STRUCTURAL_MATCH,SHARED_TEMPLATE_DISTINCT,CHW-04, ,N,,,,SINGLE_EVENT,승인 단건 서식. labeled_grid+freeform+approval. 계산 없음,GPT_REVIEW_REQUIRED
+PRA-22-05,화학물질 재고실사 차이조사 및 조정대장,REGISTER,NOT_BUILT,REUSE_EXISTING,CHW-03, ,,,,,REUSE,CHW-03 재사용. Excel 판정은 CHW-03 결과에 따름,GPT_REVIEW_REQUIRED
+PRA-22-06,설비 보전작업 완료·재가동 인계서,FORM,NOT_BUILT,NEW_BUILD_REQUIRED,,Y(B15),N,,,,SINGLE_EVENT,JSON 있음(B15 미등록). 완료·인계 단건. freeform 구성. 계산 없음,GPT_REVIEW_REQUIRED
+PRA-22-07,시설 외주업체 점검·정비 완료확인서,CHECKLIST,NOT_BUILT,REUSE_EXISTING,RP-10, ,,,,,REUSE,RP-10 재사용. Excel 판정은 RP-10 결과에 따름,GPT_REVIEW_REQUIRED
+PRA-22-08,연구실 사고·이상 발생 초동조치·종결 기록,REPORT,NOT_BUILT,NEW_BUILD_REQUIRED,,Y(B15),N,,,,SINGLE_EVENT,JSON 있음(B15 미등록). 사고 초동조치 단건. freeform 구성,GPT_REVIEW_REQUIRED
+PRA-22-09,현장 안전점검 사진·증빙 인계목록,CHECKLIST,NOT_BUILT,NEW_BUILD_REQUIRED,,Y(B15),Y,,,,CHECKLIST,JSON 있음(B15 미등록). 사진번호·인계확인 목록. 계산 없음,GPT_REVIEW_REQUIRED
+PRA-22-10,안전관리 미종결과제 주간 인수인계표,RECORD,NOT_BUILT,SHARED_TEMPLATE_DISTINCT,GOV-09,Y(B15),Y,,발생일·조치기한,,ACCUM+STATUS,JSON 있음(B15 미등록). 미종결 과제 인수인계 주간 기록,GPT_REVIEW_REQUIRED
+REF-C001,안전보건경영방침,FORM,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,방침 선언문. text_flow 구성. Excel 불필요,GPT_REVIEW_REQUIRED
+REF-C002,안전보건활동 목표/세부 추진계획,PLAN,LEGACY_OUTPUT_ONLY,,, ,UNKNOWN,,,,LEGACY,LEGACY_OUTPUT_ONLY. JSON 미확인. 계획문서 성격 추정,GPT_REVIEW_REQUIRED
+REF-C003,위험기계·기구·설비 목록 작성 서식,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,수량,검사대상·점검주기,,MASTER_LIST,설비 마스터 목록. 9개 컬럼. 검사주기·방호장치 포함,GPT_REVIEW_REQUIRED
+REF-C004,유해·위험물질 목록 작성 서식,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,"일일사용량,저장량,노출기준,독성치",인화점·발화점,,MASTER_LIST+CALC,15개 컬럼 화학물질 DB. 수치 데이터 집약. 사용량·저장량 합산 가능,GPT_REVIEW_REQUIRED
+REF-C005,작업별 위험과관리 대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,위험성,,,STATUS,위험코드·위험성 등급 포함. 작업단위 위험 관리 대장,GPT_REVIEW_REQUIRED
+REF-C006,위험성평가표(빈도강도법),EVALUATION,NOT_BUILT,REUSE_EXISTING,REF-C029, ,,,,,REUSE,REF-C029 재사용. Excel 판정은 REF-C029 결과에 따름,GPT_REVIEW_REQUIRED
+REF-C007,안전보건예산 편성 서식,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,"2021,2022 연도별",,,CALC+AGG,연도별 예산 비교 표. 합계 행 필요. 컬럼 구조=연도별 금액,GPT_REVIEW_REQUIRED
+REF-C008,안전보건 전문이력 평가 기준 및 평가표,EVALUATION,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,SINGLE_EVENT,인사 평가표 단건. 미흡/보통/양호 서술 평가,GPT_REVIEW_REQUIRED
+REF-C009,안전보건 전문인력 등 배치표 및 담당업무,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,MASTER_LIST,인력 배치 목록. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C010,사고 발생 대응 시나리오(처리 흐름도),WORKFLOW_DIAGRAM,NOT_BUILT,NON_FORM_REFERENCE,,, ,,,,NON_FORM,흐름도 = 빈칸 서식 아님. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C011,도급·용역·위탁 업체 안전보건 수준 평가,EVALUATION,BUILT_STRUCTURAL_MATCH,,, ,Y,"배점,점수",,,CALC,배점×체크 점수 합산 가능. 합계 자동계산 유용,GPT_REVIEW_REQUIRED
+REF-C012,안전작업 허가서,FORM,LEGACY_OUTPUT_ONLY,,, ,UNKNOWN,,,,LEGACY,LEGACY_OUTPUT_ONLY. 작업허가 단건. Excel 불필요,GPT_REVIEW_REQUIRED
+REF-C013,사고조사 보고서 서식,REPORT,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,사고조사 단건 보고서. 서술 중심. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C014,재해 감소대책 수립 및 실행 계획서 작성 서식,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,,"조치요구일,조치완료일",,DATE+STATUS,재해감소 대책별 일정 추적. 10개 항목. 완료여부,GPT_REVIEW_REQUIRED
+REF-C015,아차사고 보고서 서식,REPORT,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,아차사고 단건 보고서. 서술 중심,GPT_REVIEW_REQUIRED
+REF-C016,연간 안전보건교육 수립 서식,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,"대상인원,1월~12월",교육예정월,,CALC+AGG,12개월×교육과정 매트릭스. 대상인원 합계. 연간 교육계획 집계,GPT_REVIEW_REQUIRED
+REF-C017,안전보건관리담당자 선임계,FORM,NOT_BUILT,LEGAL_OR_RIGHTS_REVIEW,,, ,,,,LEGAL,법정 행정서식. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C018,안전보건관리담담당자의 업무,REFERENCE,NOT_BUILT,NON_FORM_REFERENCE,,, ,,,,NON_FORM,직무 참고문서. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C019,관리감독자 임명장,FORM,NOT_BUILT,LEGAL_OR_RIGHTS_REVIEW,,, ,,,,LEGAL,법정 행정서식. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C020,지게차 안전작업 계획서,PLAN,NOT_BUILT,REUSE_EXISTING,EQUIP-01, ,,,,,REUSE,EQUIP-01 재사용. Excel 판정은 EQUIP-01 결과에 따름,GPT_REVIEW_REQUIRED
+REF-C021,지게차 정기점검표,CHECKLIST,NOT_BUILT,REUSE_EXISTING,EQUIP-06, ,,,,,REUSE,EQUIP-06 재사용. Excel 판정은 EQUIP-06 결과에 따름,GPT_REVIEW_REQUIRED
+REF-C022,중량물 취급 작업계획서,PLAN,NOT_BUILT,NEW_BUILD_REQUIRED,,Y(B15),Y,,,,SINGLE_EVENT,JSON 있음(B15 미등록). 작업계획 단건. 8개 체크항목,GPT_REVIEW_REQUIRED
+REF-C023,안전보호구 지급대장,REGISTER,NOT_BUILT,NEW_BUILD_REQUIRED,,Y(B15),Y,지급수량,지급일·반납일,,ACCUM+DATE,JSON 있음(B15 미등록). 보호구 지급·반납 이력 누적. 15행,GPT_REVIEW_REQUIRED
+REF-C024,"안전보건교육일지 서식(엑셀, 한글)",RECORD,NOT_BUILT,REUSE_EXISTING,REF-C031,,,,,,REUSE,REF-C031 재사용. 원본 소스명에 '엑셀' 포함되나 현재 서식=서명 출석부,GPT_REVIEW_REQUIRED
+REF-C025,위험작업 허가서,FORM,BUILT_STRUCTURAL_MATCH,SHARED_TEMPLATE_DISTINCT,REF-C012, ,N,,,,SINGLE_EVENT,작업허가 단건. 승인·서명 중심. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C026,위험성평가 기록표(3단계 판단법),EVALUATION,BUILT_STRUCTURAL_MATCH,,, ,Y,,재확인일,,STATUS,위험수준 3단계 텍스트 입력. 자동계산 불가. 현재 서식은 수동 입력,GPT_REVIEW_REQUIRED
+REF-C027,체크리스트형 위험성평가표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,확인일,,CHECKLIST,결과 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C028,핵심요인 분석법(OPS) 위험성평가표,EVALUATION,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,SINGLE_EVENT,시나리오 분석 서술. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C029,빈도·강도법 위험성평가표,EVALUATION,BUILT_STRUCTURAL_MATCH,,, ,Y,"빈도,강도,위험수준",재평가일,,CALC,빈도×강도=위험수준 계산 가능. 현재 모두 수동입력. 자동계산화 가치 있음,GPT_REVIEW_REQUIRED
+REF-C030,연간 안전보건교육 계획서,PLAN,NOT_BUILT,REUSE_EXISTING,REF-C016, ,,,,,REUSE,REF-C016 재사용. Excel 판정은 REF-C016 결과에 따름,GPT_REVIEW_REQUIRED
+REF-C031,안전보건교육 실시일지,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,,서명,SINGLE_EVENT,교육 참석자 서명 출석부. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C032,수급업체 안전보건 수준 평가표,EVALUATION,NOT_BUILT,REUSE_EXISTING,REF-C011, ,,,,,REUSE,REF-C011 재사용. Excel 판정은 REF-C011 결과에 따름,GPT_REVIEW_REQUIRED
+REF-C033,도급업체 안전관리 이행점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,재확인일,,CHECKLIST+STATUS,이행점검 체크리스트. 시정기한 포함,GPT_REVIEW_REQUIRED
+REF-C034,사고 비상대응 절차서,REFERENCE,NOT_BUILT,NON_FORM_REFERENCE,,, ,,,,NON_FORM,비상대응 절차 참고문서. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C035,사고조사 보고서,REPORT,NOT_BUILT,REUSE_EXISTING,REF-C013, ,,,,,REUSE,REF-C013 재사용. Excel 판정은 REF-C013 결과에 따름,GPT_REVIEW_REQUIRED
+REF-C036,아차사고 보고서,REPORT,NOT_BUILT,REUSE_EXISTING,REF-C015, ,,,,,REUSE,REF-C015 재사용. Excel 판정은 REF-C015 결과에 따름,GPT_REVIEW_REQUIRED
+REF-C037,종사자 위험개선 건의·조치대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,접수일·확인일,,ACCUM+STATUS,위험건의 접수~처리 이력 누적. 상태 추적,GPT_REVIEW_REQUIRED
+REF-C038,안전보건 관계법령 의무이행 점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,법령 이행 점검표. 계산 없음. 다년도 추적 시 유용,GPT_REVIEW_REQUIRED
+REF-C039,사업장 화학물질 취급목록 관리대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,사용량,검토일,,MASTER_LIST+ACCUM,화학물질 마스터 목록. 사용량 데이터. 9개 컬럼. MSDS 링크 포함,GPT_REVIEW_REQUIRED
+REF-C040,제품별 MSDS 수령·개정 이력대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,"수령일,개정일,재검토예정일",,DATE+ACCUM,MSDS 이력 누적. 재검토예정일 만료 관리. 7개 컬럼,GPT_REVIEW_REQUIRED
+REF-C041,화학물질 경고표지 확인 점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,완료일,,CHECKLIST,라벨 점검 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C042,화학물질 저장구역 점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,저장구역 점검 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C043,화학물질 누출 비상대응 훈련기록,RECORD,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,훈련기록 단건. freeform + 4행 repeat_table,GPT_REVIEW_REQUIRED
+REF-C044,MSDS 교육·주지 확인 기록,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,,서명,SINGLE_EVENT,MSDS 교육 참석 서명표. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C045,소방시설 자체점검 실시결과 보고서,REPORT,OFFICIAL_ORIGINAL,,, ,,,,,OFFICIAL,법정 별지. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C046,소방시설 점검 후 보완조치 관리대장,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,완료기한,,ACCUM+DATE,소방시설 조치이력 누적. 완료기한 추적. 7개 컬럼,GPT_REVIEW_REQUIRED
+REF-C047,비상대피훈련 실시 및 개선기록,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,,서명,SINGLE_EVENT,훈련 참석자 서명표. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C048,전기안전관리자 선임(해임) 신고서 별지15,FORM,OFFICIAL_ORIGINAL,,, ,,,,,OFFICIAL,법정 별지. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C049,전기안전관리자 선임(해임) 신고서 별지16,FORM,OFFICIAL_ORIGINAL,,, ,,,,,OFFICIAL,법정 별지. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C050,승강기 안전관리자의 선임 또는 변경 통보서 별지24,FORM,OFFICIAL_ORIGINAL,,, ,,,,,OFFICIAL,법정 별지. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C051,고압가스 안전관리자 선임·해임·퇴직 신고서 별지19,FORM,OFFICIAL_ORIGINAL,,, ,,,,,OFFICIAL,법정 별지. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C052,전기설비 일상 점검기록표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,전기설비 점검 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C053,전기설비 정전·복전 작업기록부,RECORD,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,freeform 작업기록. 서술 중심. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C054,승강기 운행·관리 규정,REFERENCE,NOT_BUILT,NON_FORM_REFERENCE,,, ,,,,NON_FORM,운영규정 참고문서. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C055,승강기 비상연락망 관리표,REFERENCE,NOT_BUILT,NON_FORM_REFERENCE,,, ,,,,NON_FORM,비상연락망 참고표. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C056,승강기 고장·조치 이력대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,장애일시,,ACCUM,승강기 고장 이력 누적. 20행 반복,GPT_REVIEW_REQUIRED
+REF-C057,고압가스 설비 점검관리대장,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,점검항목 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C058,고압가스 누출 비상대응 점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,비상대응 점검 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C059,작업환경측정 결과보고서 별지82,REPORT,OFFICIAL_ORIGINAL,,, ,,,,,OFFICIAL,법정 별지. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C060,작업환경측정 결과표 별지83,REPORT,OFFICIAL_ORIGINAL,,, ,,,,,OFFICIAL,법정 별지. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C061,일반건강진단 결과표 별지84,EVALUATION,OFFICIAL_ORIGINAL,,, ,,,,,OFFICIAL,법정 별지. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C062,특수·배치전·수시·임시건강진단 결과표 별지85,EVALUATION,OFFICIAL_ORIGINAL,,, ,,,,,OFFICIAL,법정 별지. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C063,사후관리 조치결과 보고서 별지86,REPORT,OFFICIAL_ORIGINAL,,, ,,,,,OFFICIAL,법정 별지. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C064,건설현장 작업 전 안전회의(TBM) 기록지,RECORD,NOT_BUILT,REUSE_EXISTING,P-04, ,,,,,REUSE,P-04 재사용. Excel 판정은 P-04 결과에 따름,GPT_REVIEW_REQUIRED
+REF-C065,공종별 위험성평가 및 변경 이력표,EVALUATION,BUILT_STRUCTURAL_MATCH,,, ,Y,,재확인,,STATUS+ACCUM,공종별 위험요인 이력 누적. 재확인 추적,GPT_REVIEW_REQUIRED
+REF-C066,건설현장 유해위험 발견·시정조치 관리대장,REGISTER,NOT_BUILT,REUSE_EXISTING,P-13, ,,,,,REUSE,P-13 재사용. Excel 판정은 P-13 결과에 따름,GPT_REVIEW_REQUIRED
+REF-C067,현장 일일 안전점검 기록표,CHECKLIST,NOT_BUILT,NEW_BUILD_REQUIRED,,Y(B15),Y,,,,CHECKLIST,JSON 있음(B15 미등록). 15항목 점검 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+REF-C068,작업구역 인수인계 및 안전조치 확인서,RECORD,NOT_BUILT,REUSE_EXISTING,P-05, ,,,,,REUSE,P-05 재사용. Excel 판정은 P-05 결과에 따름,GPT_REVIEW_REQUIRED
+REF-C069,작업환경측정 대상 유해인자 사전 조사표,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,"취급량,대상인원",측정협의,,ACCUM+MEAS,유해인자별 취급량·노출수준·대상인원 기록. 15행,GPT_REVIEW_REQUIRED
+REF-C070,작업환경측정 결과 개선관리대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,조치기한·재평가일,,DATE+STATUS,측정결과 개선 이력. 기한 추적,GPT_REVIEW_REQUIRED
+REF-C071,건강진단 일정·실시 관리대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,"대상인원,미수검자","예약일,실시일",,CALC+DATE,대상인원 합계·미수검자=대상-실시 계산 가능. 15행 연간 관리,GPT_REVIEW_REQUIRED
+REF-C072,건강진단 사후관리 조치 추적표,EVALUATION,NOT_BUILT,,,, ,,,,NEEDS_REVIEW,NEEDS_REVIEW 상태 유지. Excel 판정 보류,GPT_REVIEW_REQUIRED
+REF-C073,근골격계 부담작업 유해요인 개선관리표,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,이행·재평가일,,DATE+STATUS,근골격계 개선과제 추적. 15행,GPT_REVIEW_REQUIRED
+REF-C074,사업의 개요,REFERENCE,NOT_BUILT,NON_FORM_REFERENCE,,, ,,,,NON_FORM,기술 참고문서. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C075,설치 장소 개요,REFERENCE,NOT_BUILT,NON_FORM_REFERENCE,,, ,,,,NON_FORM,기술 참고문서. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C076,주요 부속설비 구조·배치도,REFERENCE,NOT_BUILT,NON_FORM_REFERENCE,,, ,,,,NON_FORM,배치도 기술 참고자료. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C077,경보·방호장치 자료,RECORD,NOT_BUILT,NON_FORM_REFERENCE,,, ,,,,NON_FORM,기술 참고자료. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C078,공정 설명서 및 PFD,REFERENCE,NOT_BUILT,NON_FORM_REFERENCE,,, ,,,,NON_FORM,공정 기술 참고문서. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C079,P&ID,REFERENCE,NOT_BUILT,NON_FORM_REFERENCE,,, ,,,,NON_FORM,기술 도면 참고문서. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C080,폭발위험장소 구분도,REFERENCE,NOT_BUILT,NON_FORM_REFERENCE,,, ,,,,NON_FORM,구분도 기술 참고자료. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+REF-C081,비상 시 조치계획,PLAN,NOT_BUILT,NON_FORM_REFERENCE,,, ,,,,NON_FORM,비상 조치계획 기술 참고문서. Excel 제작 대상 아님,GPT_REVIEW_REQUIRED
+RP-01,설비 예방보전 일정·실적표,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,,"계획일,실시일",,DATE+CALC,PM 계획일 vs 실시일 비교. 지연 건수 계산 가능. 연간 PM 관리,GPT_REVIEW_REQUIRED
+RP-02,설비 고장·정비 작업요청서,FORM,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,작업요청 단건. freeform 구성. 계산 없음,GPT_REVIEW_REQUIRED
+RP-03,정비작업 위험확인·에너지격리 확인표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,에너지격리 확인 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+RP-04,생산·보전 교대 인수인계 기록부,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,,긴급도,DAILY_LOG,교대 인수인계 단건. 긴급도 표시. 계산 없음,GPT_REVIEW_REQUIRED
+RP-05,설비 정지·재가동 승인기록,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,"정지일시,재가동일시",,ACCUM,정지·재가동 이력 누적. 시간 기록,GPT_REVIEW_REQUIRED
+RP-06,공정 변경 전 EHS 영향검토서,FORM,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,변경관리 검토 단건. freeform 구성,GPT_REVIEW_REQUIRED
+RP-07,작업환경·안전 개선과제 월간관리표,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,등록일·완료예정일,,ACCUM+STATUS,개선과제 월간 누적 추적. 완료예정일·진행상태 관리,GPT_REVIEW_REQUIRED
+RP-08,시설·설비별 법정검사 일정관리표,PLAN,BUILT_STRUCTURAL_MATCH,,, ,Y,,"최종검사일,차기검사예정일",,DATE,차기검사예정일 만료 관리. 10행. 법정검사 일정 핵심,GPT_REVIEW_REQUIRED
+RP-09,시설관리 일일 운영일지,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,DAILY_LOG,일일 운영기록. 서술 중심. 계산 없음,GPT_REVIEW_REQUIRED
+RP-10,외주 정비업체 작업방문·완료확인서,FORM,BUILT_STRUCTURAL_MATCH,,, ,N,,,,SINGLE_EVENT,완료확인 단건. freeform 구성. 계산 없음,GPT_REVIEW_REQUIRED
+RP-11,설비 하자·수리요청 및 처리대장,REGISTER,BUILT_STRUCTURAL_MATCH,,, ,Y,,요청일·완료일,,ACCUM+STATUS,수리요청~처리 이력 누적. 9개 컬럼,GPT_REVIEW_REQUIRED
+RP-12,시설 비상경보 발생·대응이력부,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,발생일시·복구일시,,ACCUM+MEAS,경보 발생·복구 이력 누적. 시간 기록,GPT_REVIEW_REQUIRED
+RP-13,연구실 일상 안전점검표,CHECKLIST,NOT_BUILT,REUSE_EXISTING,LAB-01, ,,,,,REUSE,LAB-01 재사용. Excel 판정은 LAB-01 결과에 따름,GPT_REVIEW_REQUIRED
+RP-14,연구실 옥외저장소 점검일지,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,점검 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+RP-15,연구실 등록·변경·폐쇄 신청 확인표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,신청 확인 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+RP-16,연구실 교차점검 결과·분석보고서,REPORT,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,REPORT,교차점검 분석 보고서. 서술 중심,GPT_REVIEW_REQUIRED
+RP-17,연구실 안전교육 이수·보완 확인표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,,,CHECKLIST,교육이수 확인 체크리스트. 계산 없음,GPT_REVIEW_REQUIRED
+RP-18,화학물질 입고 검수기록부,RECORD,NOT_BUILT,REUSE_EXISTING,CHW-01, ,,,,,REUSE,CHW-01 재사용. Excel 판정은 CHW-01 결과에 따름,GPT_REVIEW_REQUIRED
+RP-19,화학물질 출고·불출 관리대장,REGISTER,NOT_BUILT,REUSE_EXISTING,CHW-02, ,,,,,REUSE,CHW-02 재사용. Excel 판정은 CHW-02 결과에 따름,GPT_REVIEW_REQUIRED
+RP-20,화학물질 재고 실사·차이 조정표,REGISTER,NOT_BUILT,REUSE_EXISTING,CHW-03, ,,,,,REUSE,CHW-03 재사용. Excel 판정은 CHW-03 결과에 따름,GPT_REVIEW_REQUIRED
+RP-21,화학물질 보관구역 이상·격리 관리대장,REGISTER,NOT_BUILT,REUSE_EXISTING,CHW-04, ,,,,,REUSE,CHW-04 재사용. Excel 판정은 CHW-04 결과에 따름,GPT_REVIEW_REQUIRED
+RP-22,유효기간·용기상태 점검표,CHECKLIST,BUILT_STRUCTURAL_MATCH,,, ,Y,,유효기간,,DATE,유효기간 만료 추적. 12행. 만료 임박 조건부 서식 가능,GPT_REVIEW_REQUIRED
+RP-23,화학폐기물 불출·인계 확인기록,RECORD,BUILT_STRUCTURAL_MATCH,,, ,Y,,인계일시,,ACCUM,폐기물 불출·인계 이력 누적,GPT_REVIEW_REQUIRED
