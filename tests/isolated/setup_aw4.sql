@@ -2,6 +2,40 @@
 -- WO-TAI-SEC-SEARCHPATH-REM97-AW4-C2-ISOLATED-TRIGGER-CONTRACT-001
 -- 격리 테스트 환경 초기화: 최소 스키마 + 함수 원본 본문 재현 (proconfig=NULL)
 -- PostgreSQL 15 격리 DB (aw4_test)
+-- R1 보정: WO-TAI-SEC-SEARCHPATH-REM97-AW4-C3-ISOLATION-GUARD-R1-001
+-- 운영 DB 오실행 방지 Fail-Closed Guard 추가 (Migration SQL 변경 불허)
+
+\set ON_ERROR_STOP on
+
+BEGIN;
+
+-- ── ISOLATION GUARD (Fail-Closed) ────────────────────────────────────
+-- Guard 실패 시 이 트랜잭션의 DROP·CREATE·ALTER 은 일절 커밋되지 않는다.
+-- app.rem97_aw4_isolated 는 파일 내부에서 설정하지 않는다.
+-- 실행 전 외부에서:
+--   PGPASSWORD=... psql ... -c "SET app.rem97_aw4_isolated='approved'" -f setup_aw4.sql
+-- 또는 psql -v 방식으로 전달한다.
+DO $$
+BEGIN
+  IF current_database() IS DISTINCT FROM 'aw4_test'
+     OR current_setting('app.rem97_aw4_isolated', true)
+        IS DISTINCT FROM 'approved'
+     OR to_regnamespace('auth') IS NOT NULL
+     OR to_regnamespace('storage') IS NOT NULL
+     OR to_regnamespace('supabase_migrations') IS NOT NULL
+  THEN
+    RAISE EXCEPTION
+      'REM97 AW4 ISOLATION GUARD FAILED: unsafe database — '
+      'db=% permit=% auth=% storage=% supabase_migrations=%',
+      current_database(),
+      current_setting('app.rem97_aw4_isolated', true),
+      to_regnamespace('auth')::text,
+      to_regnamespace('storage')::text,
+      to_regnamespace('supabase_migrations')::text;
+  END IF;
+  RAISE NOTICE 'ISOLATION GUARD PASS: db=aw4_test permit=approved no_supabase_schemas';
+END;
+$$;
 
 -- ── 0. 클린업 ─────────────────────────────────────────────
 DROP TABLE IF EXISTS public.equipment_assets CASCADE;
@@ -197,3 +231,5 @@ BEGIN
   RAISE NOTICE 'SETUP COMPLETE';
 END;
 $$;
+
+COMMIT;

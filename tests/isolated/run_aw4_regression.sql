@@ -4,8 +4,35 @@
 -- 전제: setup_aw4.sql 실행 완료 (격리 DB, proconfig=NULL)
 -- 검증: PRE 동작 → migration 적용 → POST 동작 → PRE/POST 동등성
 -- C2 evidence: GPT_REM97_AW4_C2_FINAL_IV = PASS (2026-10-26)
+-- R1 보정: WO-TAI-SEC-SEARCHPATH-REM97-AW4-C3-ISOLATION-GUARD-R1-001
+-- 운영 DB 오실행 방지 Fail-Closed Guard 추가 (파일 전체 외부 트랜잭션 없음 — 내부 SAVEPOINT 보존)
 
 \set ON_ERROR_STOP on
+
+-- ── ISOLATION GUARD (Fail-Closed) ────────────────────────────────────
+-- Guard 실패 시 ON_ERROR_STOP 으로 이후 SQL 실행 중단 (exit code ≠ 0).
+-- 파일 내부에서 app.rem97_aw4_isolated 를 설정하지 않는다.
+DO $$
+BEGIN
+  IF current_database() IS DISTINCT FROM 'aw4_test'
+     OR current_setting('app.rem97_aw4_isolated', true)
+        IS DISTINCT FROM 'approved'
+     OR to_regnamespace('auth') IS NOT NULL
+     OR to_regnamespace('storage') IS NOT NULL
+     OR to_regnamespace('supabase_migrations') IS NOT NULL
+  THEN
+    RAISE EXCEPTION
+      'REM97 AW4 ISOLATION GUARD FAILED: unsafe database — '
+      'db=% permit=% auth=% storage=% supabase_migrations=%',
+      current_database(),
+      current_setting('app.rem97_aw4_isolated', true),
+      to_regnamespace('auth')::text,
+      to_regnamespace('storage')::text,
+      to_regnamespace('supabase_migrations')::text;
+  END IF;
+  RAISE NOTICE 'ISOLATION GUARD PASS: db=aw4_test permit=approved no_supabase_schemas';
+END;
+$$;
 
 DO $$ BEGIN RAISE NOTICE '=== A-W4 격리 회귀 테스트 시작 ==='; END; $$;
 
