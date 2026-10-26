@@ -53,6 +53,10 @@ E47  save_page_checkpoint SNAPSHOT_NOT_STAGING → PageFencedError
 E48  save_page_checkpoint RUN_FENCED → PageFencedError
 E49  regression: 기존 EXT-132 adapter 등록 영향 없음
 E50  regression: 기존 EXT-165 adapter 등록 영향 없음
+E65  bootstrap: heartbeat 정상 → 기존 동작 유지 (PageSaveError 미발생)
+E66  bootstrap: heartbeat False → PageFencedError → STAGING 보존 (fail_snapshot 미호출)
+E67  bootstrap: heartbeat 네트워크 예외 → PageSaveError → SAVE_ERROR → STAGING 보존
+E68  resume: heartbeat 네트워크 예외 → PageSaveError → SAVE_ERROR → STAGING 보존
 """
 from __future__ import annotations
 
@@ -891,3 +895,161 @@ def test_e64_parse_totalcount_zero_empty_items_ok():
     assert page.result_code == "00"
     assert page.total_count == 0
     assert page.items == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# E65-E68 — HEARTBEAT-REPAIR-001: heartbeat 예외 처리 보완
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_e65_bootstrap_heartbeat_ok_no_exception():
+    """heartbeat 정상 → PageSaveError 미발생, 수집 정상 진행."""
+    from services.ext037_chemical_safety.sync import SyncResult, SyncStatus
+    from services.ext037_chemical_safety.parse import Ext037Item
+
+    item = Ext037Item(datano="1", raw={})
+    snap_id = "snap-e65"
+
+    mock_store = MagicMock()
+    mock_store.heartbeat.return_value = True
+
+    def fake_collect_all(**kwargs):
+        on_page = kwargs.get("on_page_complete")
+        if on_page:
+            on_page(1, [item], 1, 1)
+        return SyncResult(
+            status=SyncStatus.COMPLETED, fetched=1,
+            items=[item], pages_fetched=1, budget_used=1,
+        )
+
+    with patch("tools.ext037.bootstrap._claim_run", return_value=(mock_store, str(uuid4()))), \
+         patch("services.ext037_chemical_safety.store.create_staging_snapshot", return_value=snap_id), \
+         patch("services.ext037_chemical_safety.store.save_page_checkpoint", return_value=1), \
+         patch("services.ext037_chemical_safety.sync.collect_all", side_effect=fake_collect_all), \
+         patch("services.ext037_chemical_safety.store.atomic_complete_snapshot", return_value=True), \
+         patch("services.ext037_chemical_safety.store.compute_content_hash", return_value="abc123"), \
+         patch("services.ext037_chemical_safety.store.fail_snapshot") as mock_fail, \
+         patch("tools.ext037.bootstrap._complete_run"):
+        rc = __import__("tools.ext037.bootstrap", fromlist=["cmd_bootstrap"]).cmd_bootstrap()
+
+    assert rc == 0
+    mock_store.heartbeat.assert_called_once()
+    mock_fail.assert_not_called()
+
+
+def test_e66_bootstrap_heartbeat_false_fenced_staging_preserved():
+    """heartbeat가 False를 반환하면 PageFencedError → STAGING 보존 (fail_snapshot 미호출)."""
+    from services.ext037_chemical_safety.sync import SyncResult, SyncStatus
+    from services.ext037_chemical_safety.parse import Ext037Item
+    from services.public_data_sync.errors import PageFencedError, PageSaveError
+
+    item = Ext037Item(datano="1", raw={})
+    snap_id = "snap-e66"
+
+    mock_store = MagicMock()
+    mock_store.heartbeat.return_value = False
+
+    def fake_collect_all(**kwargs):
+        on_page = kwargs.get("on_page_complete")
+        if on_page:
+            try:
+                on_page(1, [item], 1, 10)
+            except PageFencedError:
+                return SyncResult(
+                    status=SyncStatus.FAILED, fetched=1,
+                    items=[item], pages_fetched=1, budget_used=1,
+                    error_code="FENCED",
+                )
+        return SyncResult(status=SyncStatus.COMPLETED, fetched=1, items=[item])
+
+    with patch("tools.ext037.bootstrap._claim_run", return_value=(mock_store, str(uuid4()))), \
+         patch("services.ext037_chemical_safety.store.create_staging_snapshot", return_value=snap_id), \
+         patch("services.ext037_chemical_safety.store.save_page_checkpoint", return_value=1), \
+         patch("services.ext037_chemical_safety.sync.collect_all", side_effect=fake_collect_all), \
+         patch("services.ext037_chemical_safety.store.fail_snapshot") as mock_fail, \
+         patch("tools.ext037.bootstrap._complete_run"):
+        rc = __import__("tools.ext037.bootstrap", fromlist=["cmd_bootstrap"]).cmd_bootstrap()
+
+    assert rc == 1
+    mock_fail.assert_not_called()
+
+
+def test_e67_bootstrap_heartbeat_exception_save_error_staging_preserved():
+    """heartbeat가 네트워크 예외를 발생시키면 PageSaveError → SAVE_ERROR → STAGING 보존."""
+    from services.ext037_chemical_safety.sync import SyncResult, SyncStatus
+    from services.ext037_chemical_safety.parse import Ext037Item
+    from services.public_data_sync.errors import PageFencedError, PageSaveError
+
+    item = Ext037Item(datano="1", raw={})
+    snap_id = "snap-e67"
+
+    mock_store = MagicMock()
+    mock_store.heartbeat.side_effect = IOError("simulated network error")
+
+    def fake_collect_all(**kwargs):
+        on_page = kwargs.get("on_page_complete")
+        if on_page:
+            try:
+                on_page(1, [item], 1, 10)
+            except PageSaveError:
+                return SyncResult(
+                    status=SyncStatus.FAILED, fetched=1,
+                    items=[item], pages_fetched=1, budget_used=1,
+                    error_code="SAVE_ERROR",
+                )
+        return SyncResult(status=SyncStatus.COMPLETED, fetched=1, items=[item])
+
+    with patch("tools.ext037.bootstrap._claim_run", return_value=(mock_store, str(uuid4()))), \
+         patch("services.ext037_chemical_safety.store.create_staging_snapshot", return_value=snap_id), \
+         patch("services.ext037_chemical_safety.store.save_page_checkpoint", return_value=1), \
+         patch("services.ext037_chemical_safety.sync.collect_all", side_effect=fake_collect_all), \
+         patch("services.ext037_chemical_safety.store.fail_snapshot") as mock_fail, \
+         patch("tools.ext037.bootstrap._complete_run"):
+        rc = __import__("tools.ext037.bootstrap", fromlist=["cmd_bootstrap"]).cmd_bootstrap()
+
+    assert rc == 1
+    mock_fail.assert_not_called()
+
+
+def test_e68_resume_heartbeat_exception_save_error_staging_preserved():
+    """resume에서 heartbeat 예외 → PageSaveError → SAVE_ERROR → STAGING 보존."""
+    from services.ext037_chemical_safety.sync import SyncResult, SyncStatus
+    from services.ext037_chemical_safety.parse import Ext037Item
+    from services.public_data_sync.errors import PageFencedError, PageSaveError
+
+    item = Ext037Item(datano="1", raw={})
+    snap_id = "snap-e68"
+    staging_row = {
+        "id": snap_id,
+        "run_id": str(uuid4()),
+        "last_page_no": 1,
+        "checkpoint_api_total": 10,
+        "checkpoint_total_count": 0,
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+
+    mock_store = MagicMock()
+    mock_store.heartbeat.side_effect = IOError("simulated network error")
+
+    def fake_collect_all(**kwargs):
+        on_page = kwargs.get("on_page_complete")
+        if on_page:
+            try:
+                on_page(1, [item], 1, 10)
+            except PageSaveError:
+                return SyncResult(
+                    status=SyncStatus.FAILED, fetched=1,
+                    items=[item], pages_fetched=1, budget_used=1,
+                    error_code="SAVE_ERROR",
+                )
+        return SyncResult(status=SyncStatus.COMPLETED, fetched=1, items=[item])
+
+    with patch("services.ext037_chemical_safety.store.find_resumable_staging", return_value=staging_row), \
+         patch("tools.ext037.bootstrap._claim_run", return_value=(mock_store, str(uuid4()))), \
+         patch("services.ext037_chemical_safety.store.save_page_checkpoint", return_value=1), \
+         patch("services.ext037_chemical_safety.sync.collect_all", side_effect=fake_collect_all), \
+         patch("services.ext037_chemical_safety.store.fail_snapshot") as mock_fail, \
+         patch("tools.ext037.bootstrap._complete_run"):
+        rc = __import__("tools.ext037.bootstrap", fromlist=["cmd_resume"]).cmd_resume()
+
+    assert rc == 1
+    mock_fail.assert_not_called()
