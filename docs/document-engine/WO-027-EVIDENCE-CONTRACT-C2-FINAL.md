@@ -403,11 +403,11 @@ Before Snapshot 범위:
 Rollback 순서 (원자 트랜잭션, 부분 복원 금지):
   1. 대상 행 SELECT FOR UPDATE (동시 변경 통제)
   2. runtime_form_schema   → CANDIDATE
-  3. runtime_field         → CANDIDATE + required_status → CANDIDATE_ONLY
-  4. runtime_evidence_field → CANDIDATE (form_schema_id 해당 전 행)
-  5. runtime_form_audit_log 롤백 기록
+  3. runtime_evidence_field → CANDIDATE (form_schema_id 해당 전 행)
+  4. runtime_form_audit_log 롤백 기록
      (action='ROLLBACK_FROM_RUNTIME_USE_WITH_EVIDENCE',
       rollback_available→false, 롤백 주체·시점·사유 기록)
+  ※ runtime_field = 불변 (STEP4E_UP이 변경하지 않았으므로 DOWN도 변경 안 함. G3 승인 보존.)
   ※ evidence_field_candidate.status = 변경 없음 (독립 결정 보존)
   ※ 트랜잭션 A 승인 이력 = 변경 없음
 
@@ -560,9 +560,9 @@ C3-05: 테스트 작성 (test_document_confirm_svc.py 확장)
 | C3-T03 | evidence_field_candidate.status=APPROVED_BY_HUMAN (D1 후) | 봉인 통과 |
 | C3-T04 | evidence_field_candidate.status=CANDIDATE | 422 차단 |
 | C3-T05 | STEP4E_UP 실행 후 schema.status=APPROVED_FOR_RUNTIME_USE | 승격 성공 |
-| C3-T06 | STEP4E_DOWN 실행 후 runtime_form_schema·runtime_field·runtime_evidence_field 복원 | 롤백 성공 |
+| C3-T06 | STEP4E_DOWN 실행 후 runtime_form_schema·runtime_evidence_field CANDIDATE 복원 / runtime_field 불변(APPROVED_BY_HUMAN 유지) | 롤백 성공 |
 | C3-T07 | STEP4E_DOWN 후 evidence_field_candidate.status 변경 없음 | 독립 결정 보존 |
-| C3-T07B | STEP4E_DOWN 후 runtime_field.required_status = CANDIDATE_ONLY 복원 | 필드 상태 복원 |
+| C3-T07B | STEP4E_DOWN 후 runtime_field.status = APPROVED_BY_HUMAN 유지 (G3 승인 보존) | G3 필드 불변 확인 |
 | C3-T08 | evidence_field_candidate 승인 시 runtime_review_decision INSERT + status UPDATE 동시 | 원자성 |
 | C3-T09 | reviewer_id = 권한 없는 사용자 → 403 | AND 조건 검증 |
 | C3-T09B | reviewer_id = UUID 일치이나 역할 불일치 → 403 | AND 조건 (OR 불허) |
@@ -681,11 +681,11 @@ C2-A_AUTHORITY_CONTRACT     = PASS
   - review_reason 필수화 (API 레벨)
   - 중복·부정 전이 차단 계약
 
-C2-B_STEP4E_CONTRACT        = PASS
-  - runtime_field status+required_status 롤백 포함
+C2-B_STEP4E_CONTRACT        = PASS (P0-4 정합화 반영)
+  - runtime_field 불변 (STEP4E_UP 변경 범위 외 — G3 승인 보존)
   - Before Snapshot 범위 확장 (evidence_candidate_decision_ref 추가)
   - 롤백 차단 기준 6개 확정
-  - 롤백 성공·실패 감사 기록 계약
+  - 롤백 성공·실패 감사 기록 계약 (실패 Audit = 별도 파일 독립 TX)
   - STEP4D_DOWN 재사용 불가 사유 및 STEP4E_DOWN 신규 설계
 
 C2-C_LEG_BOUNDARY           = PASS
