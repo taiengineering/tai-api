@@ -23,6 +23,7 @@ from services.document_confirm_authz import authorize_confirm
 from services.document_attachment_svc import (
     AttachmentError,
     resolve_attachment_images_for_render,
+    verify_file_snapshot_for_evidence,
 )
 from services.document_schema_renderer import (
     build_render_artifacts,
@@ -75,6 +76,81 @@ def _normalize_evidence(raw: Any) -> Any:
     if raw is None:
         return []
     return raw
+
+
+def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id):
+    """FK-based Evidence↔Field resolution (WO-024 C1 contract).
+
+    For each runtime_evidence_field row:
+      evidence_candidate_id → evidence_field_candidate.id
+      evidence_field_candidate.field_candidate_id → runtime_field.field_candidate_id
+    Validates:
+      - exactly 1 matching runtime_field per evidence_field
+      - form_schema_id consistency
+      - evidence_field_candidate.status (CANDIDATE → LEGAL_REQUIREDNESS=UNKNOWN)
+    Returns list of dicts: {evidence_field, runtime_field, ev_candidate_status}
+    Raises ConfirmError(422) on any FK or cardinality failure.
+    """
+    if not evidence_fields:
+        return []
+    field_by_candidate = {
+        str(f.get("field_candidate_id") or ""): f
+        for f in fields
+        if f.get("field_candidate_id")
+    }
+    connections = []
+    for ev in evidence_fields:
+        ev_id = str(ev.get("id") or "")
+        evidence_candidate_id = str(ev.get("evidence_candidate_id") or "")
+        if not evidence_candidate_id:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: evidence_candidate_id missing — FK path broken",
+            )
+        cur.execute(
+            "SELECT id, field_candidate_id, status "
+            "FROM evidence_field_candidate WHERE id = %s LIMIT 1",
+            (evidence_candidate_id,),
+        )
+        efc_row = cur.fetchone()
+        if not efc_row:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: evidence_field_candidate "
+                f"{evidence_candidate_id!r} not found",
+            )
+        efc = dict(efc_row)
+        field_candidate_id = str(efc.get("field_candidate_id") or "")
+        if not field_candidate_id:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: field_candidate_id missing in "
+                f"evidence_field_candidate {evidence_candidate_id!r}",
+            )
+        matched = field_by_candidate.get(field_candidate_id)
+        if matched is None:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: no runtime_field with "
+                f"field_candidate_id={field_candidate_id!r} in schema {schema_id!r}",
+            )
+        # Cardinality: detect ambiguity (should be caught by DB UNIQUE, but guard anyway)
+        ambiguous = [
+            f for f in fields
+            if str(f.get("field_candidate_id") or "") == field_candidate_id
+        ]
+        if len(ambiguous) > 1:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: ambiguous — "
+                f"{len(ambiguous)} fields share field_candidate_id={field_candidate_id!r}",
+            )
+        connections.append({
+            "evidence_field": ev,
+            "runtime_field": matched,
+            "ev_candidate_status": str(efc.get("status") or "CANDIDATE"),
+        })
+    return connections
 
 
 def confirm_document_atomic(
@@ -192,6 +268,13 @@ def confirm_document_atomic(
             )
             checklists = [dict(r) for r in (cur.fetchall() or [])]
 
+            # 13.5. runtime_evidence_field 조회 + FK 연결 검증
+            cur.execute(
+                "SELECT * FROM runtime_evidence_field WHERE form_schema_id = %s",
+                (schema_id,),
+            )
+            evidence_fields = [dict(r) for r in (cur.fetchall() or [])]
+
             # runtime_data_json / evidence_links 정규화 (락 이후 값)
             runtime_values = _normalize_values(locked.get("runtime_data_json"))
             evidence_links = _normalize_evidence(locked.get("evidence_links"))
@@ -226,6 +309,45 @@ def confirm_document_atomic(
             except AttachmentError as e:
                 raise ConfirmError(422, "attachment image resolution failed: %s" % e)
 
+            # 14a-2. Evidence FK 연결 + FileSnapshot 검증 (OD-C023-01/02/05)
+            ev_connections = _resolve_evidence_connections(
+                cur, evidence_fields, fields, schema_id
+            )
+            attachment_evidence_manifest: list = []
+            for ev_conn in ev_connections:
+                ev_field = ev_conn["evidence_field"]
+                rf = ev_conn["runtime_field"]
+                ev_candidate_status = ev_conn["ev_candidate_status"]
+                # OD-C023-02: CANDIDATE status = LEG 미확인 → FAIL-CLOSED
+                if ev_candidate_status == "CANDIDATE":
+                    raise ConfirmError(
+                        422,
+                        f"evidence legal status unconfirmed "
+                        f"(evidence_field={str(ev_field.get('id'))!r}, "
+                        f"evidence_candidate_status={ev_candidate_status!r}) — "
+                        "LEGAL_REQUIREDNESS=UNKNOWN: confirm blocked until LEG gate passes",
+                    )
+                field_id = str(rf.get("id") or "")
+                field_key = str(rf.get("field_key") or "")
+                snap = runtime_values.get(field_key)
+                if snap is None:
+                    raise ConfirmError(
+                        422,
+                        f"evidence field {str(ev_field.get('id'))!r}: "
+                        f"FileSnapshot missing in runtime_data_json[{field_key!r}]",
+                    )
+                try:
+                    manifest_entry = verify_file_snapshot_for_evidence(
+                        snapshot=snap,
+                        document_id=str(locked["id"]),
+                        field_id=field_id,
+                        field_key=field_key,
+                    )
+                except AttachmentError as e:
+                    raise ConfirmError(422, f"evidence verification failed: {e}")
+                manifest_entry["evidence_field_id"] = str(ev_field.get("id") or "")
+                attachment_evidence_manifest.append(manifest_entry)
+
             # 14b. 렌더 (05A) — 락 이후 값으로만, 서명 + 첨부 이미지 inline 포함
             render_doc = {
                 "id": locked["id"],
@@ -242,6 +364,7 @@ def confirm_document_atomic(
                     signature_images=sig_result.get("images"),
                     signature_manifest=sig_result.get("manifest"),
                     attachment_images=attachment_images,
+                    attachment_evidence_manifest=attachment_evidence_manifest,
                 )
             except SchemaRenderError as e:
                 raise ConfirmError(422, "render failed: %s" % e)

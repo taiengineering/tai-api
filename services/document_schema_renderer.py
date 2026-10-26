@@ -359,6 +359,7 @@ def build_render_artifacts(
     signature_images: Optional[Dict[str, str]] = None,
     signature_manifest: Optional[List[Dict[str, Any]]] = None,
     attachment_images: Optional[Dict[str, str]] = None,
+    attachment_evidence_manifest: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """confirm 봉인에 필요한 렌더 산출물을 만든다(순수 함수).
 
@@ -366,7 +367,8 @@ def build_render_artifacts(
         rendered_body           결정적 HTML 문자열
         template_identity       schema-renderer:<ver>:sha256:<schema_structure_hash>
         source_trace_snapshot   UNKNOWN 1-element (provenance 미완성의 명시적 봉인)
-        evidence_manifest       [] (실제 sealed evidence 없음 — 가짜 생성 금지)
+        evidence_manifest       signature_manifest + attachment_evidence_manifest
+                                (둘 다 없으면 [] — 가짜 항목 생성 금지)
     """
     if not isinstance(document, dict) or not isinstance(schema, dict):
         raise _fail("document/schema must be dict")
@@ -457,5 +459,6 @@ def build_render_artifacts(
         "rendered_body": rendered_body,
         "template_identity": _template_identity(structure),
         "source_trace_snapshot": source_trace_snapshot,
-        "evidence_manifest": list(signature_manifest) if signature_manifest else [],
+        "evidence_manifest": (list(signature_manifest) if signature_manifest else [])
+                   + (list(attachment_evidence_manifest) if attachment_evidence_manifest else []),
     }

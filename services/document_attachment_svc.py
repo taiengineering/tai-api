@@ -630,3 +630,96 @@ def resolve_attachment_images_for_render(
         result[field_key] = f"data:{mime_type};base64,{b64}"
 
     return result
+
+
+def verify_file_snapshot_for_evidence(
+    *,
+    snapshot: Dict[str, Any],
+    document_id: str,
+    field_id: str,
+    field_key: str,
+) -> Dict[str, Any]:
+    """Verify a FileSnapshot for evidence sealing.
+
+    Downloads the file from Storage, re-computes SHA256, validates binding.
+    Returns a manifest entry dict on success; raises AttachmentError on failure.
+
+    This is the strict (seal-path) analogue of resolve_attachment_images_for_render
+    for input_type='file' fields — image fields use the existing resolver.
+    """
+    if not isinstance(snapshot, dict) or snapshot.get("_type") != "file_snapshot":
+        raise AttachmentError(
+            f"evidence_verify: malformed snapshot field_key={field_key!r}"
+        )
+    snap_field_key = snapshot.get("field_key")
+    if snap_field_key != field_key:
+        raise AttachmentError(
+            f"evidence_verify: field_key mismatch "
+            f"snap={snap_field_key!r} expected={field_key!r}"
+        )
+    snap_field_id = str(snapshot.get("field_id") or "")
+    if snap_field_id != field_id:
+        raise AttachmentError(
+            f"evidence_verify: field_id mismatch "
+            f"snap={snap_field_id!r} expected={field_id!r}"
+        )
+    storage_ref = snapshot.get("storage_ref", "")
+    if not storage_ref.startswith(_STORAGE_PREFIX):
+        raise AttachmentError(
+            f"evidence_verify: invalid storage_ref field_key={field_key!r} ref={storage_ref!r}"
+        )
+    path = storage_ref[len(_STORAGE_PREFIX):]
+    expected_path_prefix = f"{_ATTACH_PREFIX}/{document_id}/{field_id}/"
+    if not path.startswith(expected_path_prefix):
+        raise AttachmentError(
+            f"evidence_verify: path mismatch field_key={field_key!r} "
+            f"path={path!r} expected_prefix={expected_path_prefix!r}"
+        )
+    expected_sha = str(snapshot.get("sha256") or "").lower()
+    if not expected_sha or not _re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+        raise AttachmentError(
+            f"evidence_verify: sha256 missing/invalid field_key={field_key!r} sha={expected_sha!r}"
+        )
+    mime_type = snapshot.get("mime_type") or ""
+    if mime_type not in ALLOWED_FILE_MIME_TYPES:
+        raise AttachmentError(
+            f"evidence_verify: mime not in allowlist field_key={field_key!r} mime={mime_type!r}"
+        )
+    expected_byte_size = snapshot.get("byte_size")
+    if not isinstance(expected_byte_size, int) or expected_byte_size <= 0:
+        raise AttachmentError(
+            f"evidence_verify: byte_size invalid field_key={field_key!r} "
+            f"byte_size={expected_byte_size!r}"
+        )
+    try:
+        sb = get_supabase()
+        file_bytes = sb.storage.from_(_BUCKET).download(path)
+    except Exception as fetch_err:
+        raise AttachmentError(
+            f"evidence_verify: storage download failed field_key={field_key!r} "
+            f"path={path!r} error={fetch_err!r}"
+        )
+    actual_sha = _compute_sha256(file_bytes)
+    if actual_sha != expected_sha:
+        raise AttachmentError(
+            f"evidence_verify: sha256 mismatch field_key={field_key!r} "
+            f"expected={expected_sha!r} actual={actual_sha!r}"
+        )
+    if len(file_bytes) != expected_byte_size:
+        raise AttachmentError(
+            f"evidence_verify: byte_size mismatch field_key={field_key!r} "
+            f"expected={expected_byte_size} actual={len(file_bytes)}"
+        )
+    _verify_magic_bytes(file_bytes, mime_type)
+    return {
+        "type": "attachment",
+        "field_id": field_id,
+        "field_key": field_key,
+        "storage_ref": storage_ref,
+        "sha256": expected_sha,
+        "mime_type": mime_type,
+        "byte_size": expected_byte_size,
+        "original_file_name": snapshot.get("original_file_name"),
+        "uploaded_by_user_id": snapshot.get("uploaded_by_user_id"),
+        "uploaded_at": snapshot.get("uploaded_at"),
+    }

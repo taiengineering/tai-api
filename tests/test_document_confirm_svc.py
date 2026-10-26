@@ -89,6 +89,10 @@ class FakeCursor:
             self.conn._last = self.conn.rule_row
         elif "RUNTIME_FORM_SCHEMA" in s:
             self.conn._last = self.conn.schema_row
+        elif "RUNTIME_EVIDENCE_FIELD" in s:
+            self.conn._last_many = self.conn.evidence_field_rows
+        elif "FROM EVIDENCE_FIELD_CANDIDATE" in s:
+            self.conn._last = self.conn.evidence_candidate_row
         elif "RUNTIME_FIELD" in s:
             self.conn._last_many = self.conn.field_rows
         elif "RUNTIME_CHECKLIST_ITEM" in s:
@@ -126,6 +130,8 @@ class FakeConn:
         self.schema_row = kw.get("schema_row", {"id": SCHEMA_ID, "form_name": "테스트", "form_schema_id": SCHEMA_ID})
         self.field_rows = kw.get("field_rows", [])
         self.checklist_rows = kw.get("checklist_rows", [])
+        self.evidence_field_rows = kw.get("evidence_field_rows", [])
+        self.evidence_candidate_row = kw.get("evidence_candidate_row", None)
         self.fail_on = kw.get("fail_on", {})
         self.autocommit = True
         self.executed = []
@@ -774,3 +780,107 @@ def test_B13_real_archive_rendered_body_contains_base64_image():
     assert re.fullmatch(r"[0-9a-f]{64}", snapshot_hash), (
         "snapshot_hash is not a 64-char hex: %r" % snapshot_hash
     )
+
+
+# ── Evidence gate tests (WO-024) ──────────────────────────────
+
+def _field_ev(fid, key, input_type="text", field_candidate_id=None, **kw):
+    """Helper: runtime_field row with optional field_candidate_id."""
+    return {
+        "id": fid,
+        "field_key": key,
+        "input_type": input_type,
+        "field_label": key,
+        "form_schema_id": SCHEMA_ID,
+        "field_order": 1,
+        "required_status": "REQUIRED_BY_HUMAN",
+        "field_candidate_id": field_candidate_id,
+        **kw,
+    }
+
+
+def _fake_storage_noop():
+    sb = MagicMock()
+    sb.storage.from_.return_value.download.return_value = b""
+    return sb
+
+
+def test_E24_01_no_evidence_fields_passes():
+    """E24-11 regression: document without evidence fields seals normally."""
+    conn = FakeConn(
+        locked_row=locked(),
+        field_rows=[_field_ev("f1", "company_name")],
+        checklist_rows=[],
+        evidence_field_rows=[],
+    )
+    _install(conn)
+    with patch("services.document_attachment_svc.get_supabase",
+               return_value=_fake_storage_noop()):
+        with patch("services.document_signature_svc.get_supabase",
+                   return_value=_fake_storage_noop()):
+            result = confirm_document_atomic(
+                DOC_ID, actor_id=None, comment="ok", current_user=user()
+            )
+    assert result["status"] == "APPROVED_BY_HUMAN"
+
+
+def test_E24_09_candidate_evidence_status_blocks_confirm():
+    """E24-09: LEG UNKNOWN (CANDIDATE evidence_field_candidate) → ConfirmError(422)."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"attached_documents": {
+            "_type": "file_snapshot",
+            "field_key": "attached_documents",
+            "field_id": "f-attached",
+            "storage_ref": f"storage://company-docs/attachments/document/{DOC_ID}/f-attached/abc.pdf",
+            "sha256": "a" * 64,
+            "mime_type": "application/pdf",
+            "byte_size": 100,
+        }}),
+        field_rows=[_field_ev("f-attached", "attached_documents",
+                              input_type="file", field_candidate_id="fc-001")],
+        checklist_rows=[],
+        evidence_field_rows=[{
+            "id": "ev-001",
+            "form_schema_id": SCHEMA_ID,
+            "evidence_candidate_id": "efc-001",
+            "evidence_type": "ATTACHMENT",
+        }],
+        evidence_candidate_row={
+            "id": "efc-001",
+            "field_candidate_id": "fc-001",
+            "status": "CANDIDATE",  # LEG not confirmed
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False, "expected ConfirmError"
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "LEGAL_REQUIREDNESS=UNKNOWN" in e.detail
+    assert conn.rolled_back and conn.archive_inserts == 0
+
+
+def test_E24_02_evidence_connection_missing_candidate_id_blocks():
+    """E24-02: evidence_candidate_id missing → ConfirmError(422)."""
+    conn = FakeConn(
+        locked_row=locked(),
+        field_rows=[_field_ev("f-attached", "attached_documents",
+                              input_type="file", field_candidate_id="fc-001")],
+        checklist_rows=[],
+        evidence_field_rows=[{
+            "id": "ev-001",
+            "form_schema_id": SCHEMA_ID,
+            "evidence_candidate_id": None,  # missing
+            "evidence_type": "ATTACHMENT",
+        }],
+        evidence_candidate_row=None,
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False, "expected ConfirmError"
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "evidence_candidate_id missing" in e.detail
+    assert conn.rolled_back and conn.archive_inserts == 0
