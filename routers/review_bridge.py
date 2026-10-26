@@ -13,6 +13,9 @@ from routers.auth import get_current_user
 router = APIRouter(prefix="/bridge", tags=["검토 브릿지"])
 logger = logging.getLogger("review_bridge")
 
+# Evidence 승인 가능 role_code — AUTH_TRUSTBOUNDARY_SOURCE_AUDIT.md 기준 (002 = 안전관리자)
+_EVIDENCE_APPROVE_ROLE_CODES: frozenset = frozenset({"002"})
+
 
 def _audit(action: str, entity: str, entity_id: str, user_id: str = "system"):
     logger.info(f"REVIEW_BRIDGE_AUDIT | action={action} entity={entity} id={entity_id} by={user_id}")
@@ -189,7 +192,8 @@ def bridge_evidence_approve(
     """Evidence Candidate 승인 (runtime_review_decision INSERT + status UPDATE 원자 처리).
 
     C2-FINAL §2-3 계약:
-      - AND 조건 권한 검증: approved_user_id AND approval_role AND approval_scope
+      - 선제 역할 검증: current_user.role_code ∈ _EVIDENCE_APPROVE_ROLE_CODES (DB 이전)
+      - AND 조건 권한 검증: approver_user_id AND approver_role AND approval_scope
       - review_reason 필수 (빈 문자열·공백 불허)
       - 원자 트랜잭션: review_decision INSERT + evidence_field_candidate.status UPDATE
       - 중복·부정 전이 차단
@@ -200,6 +204,14 @@ def bridge_evidence_approve(
     reviewer_id = str(current_user.get("id") or "")
     if not reviewer_id:
         raise HTTPException(401, "authentication required")
+
+    # [선제 역할 검증] 인증된 사용자의 role_code가 SAFETY_MANAGER에 해당하는지 확인
+    # DB authority 조회 이전에 Fail-Closed 차단 (P0-2)
+    if str(current_user.get("role_code", "")) not in _EVIDENCE_APPROVE_ROLE_CODES:
+        raise HTTPException(
+            403,
+            "reviewer role is not authorized for EVIDENCE approval",
+        )
 
     if not review_reason or not str(review_reason).strip():
         raise HTTPException(400, "review_reason is required and must not be blank")
@@ -215,13 +227,14 @@ def bridge_evidence_approve(
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
 
             # [단계 1] 권한 검증 — AND 조건 (C2-FINAL §2-3, OR 금지)
+            # 실제 DB 컬럼: approver_user_id, approver_role, approval_scope
             cur.execute(
                 """
                 SELECT 1 FROM runtime_review_authority
                 WHERE review_domain = 'EVIDENCE'
                   AND authority_status = 'ACTIVE'
-                  AND approved_user_id = %s
-                  AND approval_role = 'SAFETY_MANAGER'
+                  AND approver_user_id = %s
+                  AND approver_role = 'SAFETY_MANAGER'
                   AND approval_scope LIKE '%%증빙%%'
                 LIMIT 1
                 """,

@@ -165,12 +165,12 @@ ALTER TABLE evidence_field_candidate
   FROM runtime_review_authority
   WHERE review_domain = 'EVIDENCE'
     AND authority_status = 'ACTIVE'
-    AND approved_user_id = <서버_검증_reviewer_id>  -- 사용자 UUID 일치 (AND)
-    AND approval_role = 'SAFETY_MANAGER'            -- 역할 일치 (AND)
+    AND approver_user_id = <서버_검증_reviewer_id>  -- 사용자 UUID 일치 (AND)
+    AND approver_role = 'SAFETY_MANAGER'            -- 역할 일치 (AND)
     AND approval_scope LIKE '%증빙%'                -- scope 포함 확인
   → 결과 없으면 403 반환 (승인 금지)
 
-  금지: approved_user_id 일치 OR approval_role 일치 조건
+  금지: approver_user_id 일치 OR approver_role 일치 조건
   금지: 클라이언트 전달 역할 문자열 직접 사용
         → 역할은 서버 인증·인가 데이터(JWT claims 또는 DB 프로필)에서 확인
 
@@ -188,7 +188,7 @@ ALTER TABLE evidence_field_candidate
 |------|--------|
 | 승인 기록 위치 | `runtime_review_decision` (reviewer_id·review_reason·review_action) |
 | review_reason | **필수** — NULL·빈 문자열·공백 전부 거부 (API 레벨 강제) |
-| reviewer_id 검증 | approved_user_id **AND** approval_role **AND** approval_scope (OR 금지) |
+| reviewer_id 검증 | approver_user_id **AND** approver_role **AND** approval_scope (OR 금지) |
 | 역할 출처 | 서버 인증 데이터 (클라이언트 전달 임의 문자열 사용 금지) |
 | 중복 승인 | 동일 evidence_field_candidate에 APPROVE decision 존재 시 409 |
 | 부정 전이 | APPROVED_BY_HUMAN / REJECTED_BY_HUMAN 상태에서 재승인 차단 |

@@ -100,7 +100,8 @@ class _FakeConn:
 
 _EFC_ID = "5e5687b3-e62f-480c-ad75-1efc41706e3b"
 _REVIEWER_ID = "user-safety-mgr-001"
-_AUTH_USER = {"id": _REVIEWER_ID}
+# role_code "002" = 안전관리자 (AUTH_TRUSTBOUNDARY_SOURCE_AUDIT.md 기준)
+_AUTH_USER = {"id": _REVIEWER_ID, "role_code": "002"}
 
 
 def _call(conn: _FakeConn, current_user: dict = _AUTH_USER,
@@ -139,30 +140,48 @@ def test_C3_T08_atomic_decision_and_status_update():
 # ─── C3-T09: 권한 없는 reviewer → 403 ──────────────────────────────────
 
 def test_C3_T09_unauthorized_reviewer_403():
-    """C3-T09: runtime_review_authority에 해당 reviewer 없음 → 403."""
+    """C3-T09: role_code는 올바르나 runtime_review_authority에 UUID 없음 → 403."""
     cursor = _FakeCursor(authority_ok=False)
     conn = _FakeConn(cursor)
 
+    # role_code="002"는 있으나 DB authority에 UUID 미등록
     with pytest.raises(HTTPException) as exc_info:
-        _call(conn, current_user={"id": "unauth-user-999"})
+        _call(conn, current_user={"id": "unauth-user-999", "role_code": "002"})
 
     assert exc_info.value.status_code == 403
     assert conn.rolled_back
 
 
-# ─── C3-T09B: UUID 일치하나 역할 불일치 → 403 (AND 조건) ──────────────────
+# ─── C3-T09B: role_code 불일치 → 403 (선제 역할 검증) ──────────────────────
 
-def test_C3_T09B_role_mismatch_403():
-    """C3-T09B: AND 조건 불충족(역할 불일치) → 403. OR 조건 허용 금지 계약 확인."""
-    # AND 조건이므로 역할 불일치 → DB 쿼리 결과 없음 → authority_ok=False와 동일 효과
-    cursor = _FakeCursor(authority_ok=False)
+def test_C3_T09B_role_code_mismatch_403():
+    """C3-T09B: role_code가 SAFETY_MANAGER(_EVIDENCE_APPROVE_ROLE_CODES)에 없음 → 403.
+    DB에 도달하지 않고 선제 차단. conn.rolled_back=False (DB 연결 없음).
+    """
+    cursor = _FakeCursor(authority_ok=True)
     conn = _FakeConn(cursor)
 
     with pytest.raises(HTTPException) as exc_info:
-        _call(conn)  # reviewer_id 일치하지만 authority_ok=False로 시뮬레이션
+        # role_code="004" = 일반사용자, SAFETY_MANAGER 아님
+        _call(conn, current_user={"id": _REVIEWER_ID, "role_code": "004"})
 
     assert exc_info.value.status_code == 403
-    assert conn.rolled_back
+    # 선제 검증이므로 DB 연결 전 차단 → rollback 호출 없음
+    assert not conn.rolled_back
+
+
+# ─── C3-T09C: role_code 누락 → 403 (선제 역할 검증) ────────────────────────
+
+def test_C3_T09C_missing_role_code_403():
+    """C3-T09C: current_user에 role_code 필드 없음 → 403 (Fail-Closed)."""
+    cursor = _FakeCursor(authority_ok=True)
+    conn = _FakeConn(cursor)
+
+    with pytest.raises(HTTPException) as exc_info:
+        _call(conn, current_user={"id": _REVIEWER_ID})  # role_code 없음
+
+    assert exc_info.value.status_code == 403
+    assert not conn.rolled_back
 
 
 # ─── C3-T11: 중복 APPROVE → 409 ────────────────────────────────────────
