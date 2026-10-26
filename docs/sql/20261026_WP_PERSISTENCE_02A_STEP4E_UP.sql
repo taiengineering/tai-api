@@ -12,18 +12,24 @@
 --   evidence_field_candidate.id = 5e5687b3-e62f-480c-ad75-1efc41706e3b
 -- 원자성: 단일 DO 블록. 실패 시 전체 롤백. 부분 승격 없음.
 -- STEP4D 차이: evidence_count ≥ 1 허용, evidence 상태 전이 포함.
+-- ※ 실행 전: v_reviewer_id를 G4 승격 승인자 UUID로 교체할 것 (NULL 금지 — C2-FINAL §4-3)
 -- =====================================================================
 
 DO $$
 DECLARE
   v_schema_id        uuid := '4e07df2e-904a-4fe6-ad18-cecc0f5e57f3';
   v_candidate_id     uuid := '2f41ab16-4748-4bf7-84a3-55a20f74efda';
+  v_reviewer_id      uuid := NULL;   -- ★ 실행 전 G4 승격 승인자 UUID로 교체 필수 (C2-FINAL §4-3)
   v_before           jsonb;
   v_after            jsonb;
   v_cnt              integer;
   v_field_cnt        integer;
   v_evidence_cnt     integer;
 BEGIN
+  -- [P0] reviewer_id NULL 가드 (C2-FINAL §4-3: NULL 불허)
+  IF v_reviewer_id IS NULL THEN
+    RAISE EXCEPTION 'ABORT [P0]: v_reviewer_id가 NULL입니다. 승인자 UUID를 설정한 후 재실행하십시오.';
+  END IF;
   -- ─── PRECONDITION 검증 [P1~P4] ────────────────────────────────────
 
   -- [P1] schema status = CANDIDATE
@@ -249,7 +255,7 @@ BEGIN
     ('runtime_form_schema', v_schema_id,
      'PROMOTE_TO_RUNTIME_USE_WITH_EVIDENCE', 1,
      v_before, v_after,
-     NULL,
+     v_reviewer_id,  -- NULL 불허 (C2-FINAL §4-3: STEP4D와 차이)
      'STEP4E evidence-included promotion. DOC-CON-048 재하도급 승낙 통보서. C2-FINAL §4 계약 기준.',
      v_before, true);
 

@@ -305,7 +305,8 @@ def bridge_evidence_approve(
         raise
     except Exception as e:
         conn.rollback()
-        raise HTTPException(500, f"evidence approval failed: {e}")
+        logger.exception("evidence approval failed")
+        raise HTTPException(500, "evidence approval failed")
     finally:
         conn.close()
 
