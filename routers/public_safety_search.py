@@ -132,6 +132,17 @@ async def public_shared_search(
     chem_mode = (os.environ.get("KOSHA_MSDS_PUBLIC_MODE") or "off").strip().lower()
     if "CHEM" in object_types and chem_mode not in ("seo_preview", "full"):
         object_types = [ot for ot in object_types if ot != "CHEM"]
+        if type and not object_types:
+            from services.shared_search.result import SearchResponse
+
+            return SearchResponse(
+                query=q,
+                page=page,
+                page_size=page_size,
+                total=0,
+                items=[],
+                status="empty",
+            ).to_dict()
 
     # Build OpenSearch reader — 503 if not configured (§41)
     try:

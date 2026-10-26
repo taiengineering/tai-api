@@ -576,3 +576,135 @@ def test_p14_context_type_chemical():
     assert len(ctx) == 1
     assert ctx[0]["context_type"] == "chemical"
     assert ctx[0]["context_key"] == "50-00-0"
+
+
+# CSIE OBJ-00 / WP-00B: C01-C06, route-only mocks; no DB/OpenSearch calls.
+@pytest.fixture
+def csie_route_mocks(monkeypatch):
+    import services.shared_search.opensearch_reader as reader_mod
+    import services.shared_search.retrieval as retrieval_mod
+    from services.shared_search.result import SearchResponse, SearchResult
+
+    client_factory = MagicMock()
+    reader_factory = MagicMock()
+    engine = MagicMock()
+    engine_factory = MagicMock(return_value=engine)
+
+    def search(q, *, object_types, page, page_size, **kwargs):
+        types = object_types or pss_mod._PUBLIC_OBJECT_TYPES
+        items = [
+            SearchResult(
+                object_type=ot,
+                canonical_id=f"fixture-{ot}",
+                title="합성 검색 자료",
+                source_id="FIXTURE",
+                source_key=None,
+                source_updated_at=None,
+            )
+            for ot in types
+        ]
+        return SearchResponse(
+            query=q, page=page, page_size=page_size, total=len(items), items=items,
+        )
+
+    engine.search.side_effect = search
+    monkeypatch.setattr(pss_mod, "get_client", client_factory)
+    monkeypatch.setattr(reader_mod, "OpenSearchSearchReader", reader_factory)
+    monkeypatch.setattr(retrieval_mod, "SharedRetrievalEngine", engine_factory)
+    return client_factory, reader_factory, engine_factory, engine
+
+
+@pytest.mark.parametrize("mode", [None, "off", "invalid"])
+def test_csie_c01_chem_off_empty_without_search(monkeypatch, csie_route_mocks, mode):
+    if mode is None:
+        monkeypatch.delenv("KOSHA_MSDS_PUBLIC_MODE", raising=False)
+    else:
+        monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", mode)
+    with TestClient(_make_app()) as client:
+        response = client.get(
+            "/public/safety-search",
+            params={"q": " 암모니아 ", "type": "chem", "page": 2, "page_size": 7},
+        )
+    assert response.status_code == 200
+    assert response.json() == {
+        "query": " 암모니아 ", "page": 2, "page_size": 7,
+        "total": 0, "items": [], "active_tiers": [],
+        "dictionary_snapshot": None, "status": "empty",
+    }
+    for mocked in csie_route_mocks[:3]:
+        mocked.assert_not_called()
+    csie_route_mocks[3].search.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["seo_preview", "full"])
+def test_csie_c02_chem_public_mode_preserves_type(monkeypatch, csie_route_mocks, mode):
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", mode)
+    with TestClient(_make_app()) as client:
+        response = client.get("/public/safety-search", params={"q": "암모니아", "type": "chem"})
+    assert response.status_code == 200
+    search = csie_route_mocks[3].search
+    search.assert_called_once_with(
+        "암모니아", visibility_scopes=["PUBLIC"], object_types=["CHEM"],
+        page=1, page_size=10, within_query=None,
+    )
+    assert [item["object_type"] for item in response.json()["items"]] == ["CHEM"]
+
+
+def test_csie_c03_untyped_off_excludes_only_chem(monkeypatch, csie_route_mocks):
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "off")
+    with TestClient(_make_app()) as client:
+        response = client.get("/public/safety-search", params={"q": "암모니아"})
+    assert response.status_code == 200
+    expected = [ot for ot in pss_mod._PUBLIC_OBJECT_TYPES if ot != "CHEM"]
+    search = csie_route_mocks[3].search
+    search.assert_called_once_with(
+        "암모니아", visibility_scopes=["PUBLIC"], object_types=expected,
+        page=1, page_size=10, within_query=None,
+    )
+    assert [item["object_type"] for item in response.json()["items"]] == expected
+
+
+@pytest.mark.parametrize("type_key,object_type", [
+    ("chem_safety", "CHEM_SAFETY"),
+    ("hazardous", "HAZARDOUS_MATERIAL"),
+    ("chem_accident", "CHEM_ACCIDENT"),
+    ("reference_form", "REFERENCE_FORM"),
+])
+def test_csie_c04_non_chem_typed_preserved(monkeypatch, csie_route_mocks, type_key, object_type):
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "off")
+    with TestClient(_make_app()) as client:
+        response = client.get("/public/safety-search", params={"q": "암모니아", "type": type_key})
+    assert response.status_code == 200
+    csie_route_mocks[3].search.assert_called_once_with(
+        "암모니아", visibility_scopes=["PUBLIC"], object_types=[object_type],
+        page=1, page_size=10, within_query=None,
+    )
+    assert [item["object_type"] for item in response.json()["items"]] == [object_type]
+
+
+def test_csie_c05_unknown_type_remains_422(csie_route_mocks):
+    with TestClient(_make_app()) as client:
+        response = client.get("/public/safety-search", params={"q": "암모니아", "type": "unknown"})
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith("Unknown type 'unknown'")
+    csie_route_mocks[0].assert_not_called()
+    csie_route_mocks[3].search.assert_not_called()
+
+
+@pytest.mark.parametrize("failure_stage", ["client", "search"])
+def test_csie_c06_unavailable_remains_503(monkeypatch, csie_route_mocks, failure_stage):
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "off")
+    error = pss_mod.OpenSearchUnavailable("fixture unavailable")
+    if failure_stage == "client":
+        csie_route_mocks[0].side_effect = error
+    else:
+        csie_route_mocks[3].search.side_effect = error
+    with TestClient(_make_app()) as client:
+        response = client.get("/public/safety-search", params={"q": "암모니아", "type": "guide"})
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "SHARED_SEARCH_UNAVAILABLE"
+    assert "items" not in response.json()
+    if failure_stage == "client":
+        csie_route_mocks[3].search.assert_not_called()
+    else:
+        csie_route_mocks[3].search.assert_called_once()
