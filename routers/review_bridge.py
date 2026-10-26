@@ -13,8 +13,9 @@ from routers.auth import get_current_user
 router = APIRouter(prefix="/bridge", tags=["검토 브릿지"])
 logger = logging.getLogger("review_bridge")
 
-# Evidence 승인 가능 role_code — AUTH_TRUSTBOUNDARY_SOURCE_AUDIT.md 기준 (002 = 안전관리자)
-_EVIDENCE_APPROVE_ROLE_CODES: frozenset = frozenset({"002"})
+# Evidence 승인 가능 role_code — legal_engine_patch.SAFETY_MANAGER_ROLES 정본 (003, 012 = 안전관리자)
+# public.roles 기준: 002=관리자, 003=안전관리자, 012=안전관리자
+_EVIDENCE_APPROVE_ROLE_CODES: frozenset = frozenset({"003", "012"})
 
 
 def _audit(action: str, entity: str, entity_id: str, user_id: str = "system"):

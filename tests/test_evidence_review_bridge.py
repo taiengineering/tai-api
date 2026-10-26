@@ -100,8 +100,8 @@ class _FakeConn:
 
 _EFC_ID = "5e5687b3-e62f-480c-ad75-1efc41706e3b"
 _REVIEWER_ID = "user-safety-mgr-001"
-# role_code "002" = 안전관리자 (AUTH_TRUSTBOUNDARY_SOURCE_AUDIT.md 기준)
-_AUTH_USER = {"id": _REVIEWER_ID, "role_code": "002"}
+# role_code "003" = 안전관리자 (public.roles 기준 / legal_engine_patch.SAFETY_MANAGER_ROLES)
+_AUTH_USER = {"id": _REVIEWER_ID, "role_code": "003"}
 
 
 def _call(conn: _FakeConn, current_user: dict = _AUTH_USER,
@@ -144,9 +144,9 @@ def test_C3_T09_unauthorized_reviewer_403():
     cursor = _FakeCursor(authority_ok=False)
     conn = _FakeConn(cursor)
 
-    # role_code="002"는 있으나 DB authority에 UUID 미등록
+    # role_code="003" (안전관리자) 이나 DB authority에 UUID 미등록
     with pytest.raises(HTTPException) as exc_info:
-        _call(conn, current_user={"id": "unauth-user-999", "role_code": "002"})
+        _call(conn, current_user={"id": "unauth-user-999", "role_code": "003"})
 
     assert exc_info.value.status_code == 403
     assert conn.rolled_back

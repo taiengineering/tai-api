@@ -357,12 +357,12 @@ VALUES
 | Evidence Candidate 승인 (`evidence_field_candidate.status`) | STEP4E 실패·롤백 시 **원복 안 함** |
 | 근거 | Evidence Candidate 승인은 "이 증빙 후보를 사용 가능한 것으로 본다"는 지속적 결정. schema 승격 실패와 무관. |
 | Evidence Candidate 원복 | 별도 관리자 결정 필요 (`/bridge/review-decisions` REJECT action) |
-| **runtime_field.status** | **STEP4E 롤백 시 CANDIDATE 복원** (STEP4D_DOWN 패턴 재사용) |
-| **runtime_field.required_status** | **STEP4E 롤백 시 CANDIDATE_ONLY 복원** |
+| **runtime_field.status** | **불변** (STEP4E_UP이 변경하지 않으므로 STEP4E_DOWN도 변경 안 함. G3 승인 보존.) |
+| **runtime_field.required_status** | **불변** (동일 이유) |
 | runtime_evidence_field.status | STEP4E 롤백 시 CANDIDATE 복원 |
 | runtime_form_schema.status | STEP4E 롤백 시 CANDIDATE 복원 |
 
-> **GPT IV R2 지적 보완**: 기존 STEP4E R2 계약에서 `runtime_field` 복원 누락. STEP4D_UP.sql은 `runtime_field.status` + `required_status`를 before_state에 포함하고 STEP4D_DOWN.sql은 이를 복원함. STEP4E_DOWN도 동일하게 포함.
+> **P0-4 계약 정합화 (GPT C3 IV 최종 정정)**: STEP4E_UP은 `runtime_field`를 변경하지 않으므로 STEP4E_DOWN도 `runtime_field`를 원복 대상으로 포함하지 않음. D3 진입 조건은 APPROVED_BY_HUMAN 유지 확인용으로 보존. STEP4D_DOWN과의 차이: STEP4D_UP은 runtime_field를 변경하나 STEP4E_UP은 변경하지 않음.
 
 #### STEP4D_DOWN 재사용 불가 이유
 

@@ -201,30 +201,8 @@ END $$;
 -- ─────────────────────────────────────────────────────────────────────
 -- DO 블록에서 RAISE EXCEPTION 발생 시 트랜잭션 전체가 자동 롤백됩니다.
 -- DB 상태는 롤백 시도 이전으로 복원됩니다.
--- 아래 INSERT를 새 세션의 별도 트랜잭션으로 실행하여 실패를 기록하십시오.
--- ─────────────────────────────────────────────────────────────────────
--- 실행 전 교체 필요 항목:
---   <abort_gate>   : 실패한 게이트 (예: D1, B1, DOWN[1])
---   <error_reason> : RAISE EXCEPTION 메시지 (psql 오류 출력)
---   <actor_uuid>   : 실행한 운영자 UUID (또는 NULL)
--- ─────────────────────────────────────────────────────────────────────
-
-INSERT INTO runtime_form_audit_log
-  (source_table, source_id, action, schema_version,
-   before_state, after_state, reviewer_id, review_comment,
-   rollback_snapshot, rollback_available)
-VALUES
-  ('runtime_form_schema', '4e07df2e-904a-4fe6-ad18-cecc0f5e57f3',
-   'ROLLBACK_ABORTED', 1,
-   NULL,
-   jsonb_build_object(
-     'target_schema_id', '4e07df2e-904a-4fe6-ad18-cecc0f5e57f3',
-     'abort_gate',       '<abort_gate>',
-     'reason',           '<error_reason>',
-     'actor',            '<actor_uuid>',
-     'attempted_at',     now()
-   ),
-   NULL, NULL, NULL, false);
-
+-- 실패 Audit INSERT는 이 파일에 포함하지 않습니다.
+-- → 실패 Audit을 기록하려면 별도 파일을 새 세션에서 실행하십시오:
+--   20261026_WP_PERSISTENCE_02A_STEP4E_DOWN_FAIL_AUDIT.sql
 -- =====================================================================
 -- END STEP4E_DOWN SQL — NOT EXECUTED.
