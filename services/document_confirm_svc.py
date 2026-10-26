@@ -23,6 +23,7 @@ from services.document_confirm_authz import authorize_confirm
 from services.document_attachment_svc import (
     AttachmentError,
     resolve_attachment_images_for_render,
+    verify_file_snapshot_for_evidence,
 )
 from services.document_schema_renderer import (
     build_render_artifacts,
@@ -53,6 +54,16 @@ class ConfirmError(Exception):
 _TARGET_STATUS = "APPROVED_BY_HUMAN"
 _REQUIRED_FROM = "REVIEW_PENDING"
 _SNAPSHOT_SCHEMA_VERSION = 1
+_SCHEMA_STATUS_APPROVED = "APPROVED_FOR_RUNTIME_USE"
+# Evidence 후보 허용 상태 (allowlist — 이 외 모든 상태는 LEG 미확인으로 봉인 차단)
+_ALLOWED_EVIDENCE_CANDIDATE_STATUSES: frozenset = frozenset({_SCHEMA_STATUS_APPROVED})
+# runtime_evidence_field 자체 상태 허용 목록 (R2-01)
+_ALLOWED_EVIDENCE_FIELD_STATUSES: frozenset = frozenset({_SCHEMA_STATUS_APPROVED})
+# Evidence 연결 대상 field input_type 허용 목록 (현재 file만 지원)
+_ALLOWED_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"file"})
+# Evidence family / upload_type 허용 목록 (R2-03)
+_ALLOWED_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT"})
+_ALLOWED_UPLOAD_TYPES: frozenset = frozenset({"attachment"})
 
 
 def _dict_cursor(conn):
@@ -75,6 +86,118 @@ def _normalize_evidence(raw: Any) -> Any:
     if raw is None:
         return []
     return raw
+
+
+def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id, schema_candidate_id: str = ""):
+    """FK-based Evidence↔Field resolution (WO-024 C1 contract).
+
+    For each runtime_evidence_field row:
+      evidence_candidate_id → evidence_field_candidate.id
+      evidence_field_candidate.field_candidate_id → runtime_field.field_candidate_id
+    Validates:
+      - runtime_evidence_field.status allowlist (R2-01)
+      - evidence_family / upload_type allowlist (R2-03)
+      - evidence_field_candidate.schema_candidate_id == schema_candidate_id (R2-C2)
+      - exactly 1 matching runtime_field per evidence_field
+      - form_schema_id consistency
+      - evidence_field_candidate.status (CANDIDATE → LEGAL_REQUIREDNESS=UNKNOWN)
+    Returns list of dicts: {evidence_field, runtime_field, ev_candidate_status}
+    Raises ConfirmError(422) on any FK or cardinality failure.
+    """
+    if not evidence_fields:
+        return []
+    field_by_candidate = {
+        str(f.get("field_candidate_id") or ""): f
+        for f in fields
+        if f.get("field_candidate_id")
+    }
+    connections = []
+    for ev in evidence_fields:
+        ev_id = str(ev.get("id") or "")
+        # R2-01: runtime_evidence_field.status must be APPROVED_FOR_RUNTIME_USE
+        ev_status = str(ev.get("status") or "UNKNOWN")
+        if ev_status not in _ALLOWED_EVIDENCE_FIELD_STATUSES:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: runtime_evidence_field.status={ev_status!r} "
+                f"not approved — only {sorted(_ALLOWED_EVIDENCE_FIELD_STATUSES)} allowed",
+            )
+        # R2-03: evidence_family must be ATTACHMENT
+        ev_family = str(ev.get("evidence_family") or "")
+        if ev_family not in _ALLOWED_EVIDENCE_FAMILIES:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: evidence_family={ev_family!r} not supported "
+                f"(allowed: {sorted(_ALLOWED_EVIDENCE_FAMILIES)})",
+            )
+        # R2-03: upload_type must be attachment
+        ev_upload_type = str(ev.get("upload_type") or "")
+        if ev_upload_type not in _ALLOWED_UPLOAD_TYPES:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
+                f"(allowed: {sorted(_ALLOWED_UPLOAD_TYPES)})",
+            )
+        evidence_candidate_id = str(ev.get("evidence_candidate_id") or "")
+        if not evidence_candidate_id:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: evidence_candidate_id missing — FK path broken",
+            )
+        cur.execute(
+            "SELECT id, field_candidate_id, status, schema_candidate_id "
+            "FROM evidence_field_candidate WHERE id = %s LIMIT 1",
+            (evidence_candidate_id,),
+        )
+        efc_row = cur.fetchone()
+        if not efc_row:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: evidence_field_candidate "
+                f"{evidence_candidate_id!r} not found",
+            )
+        efc = dict(efc_row)
+        # R2-C2: evidence_field_candidate.schema_candidate_id must match runtime_form_schema
+        if schema_candidate_id:
+            efc_sc_id = str(efc.get("schema_candidate_id") or "")
+            if efc_sc_id != schema_candidate_id:
+                raise ConfirmError(
+                    422,
+                    f"evidence field {ev_id!r}: schema candidate mismatch — "
+                    f"evidence_field_candidate.schema_candidate_id={efc_sc_id!r} != "
+                    f"runtime_form_schema.schema_candidate_id={schema_candidate_id!r}",
+                )
+        field_candidate_id = str(efc.get("field_candidate_id") or "")
+        if not field_candidate_id:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: field_candidate_id missing in "
+                f"evidence_field_candidate {evidence_candidate_id!r}",
+            )
+        matched = field_by_candidate.get(field_candidate_id)
+        if matched is None:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: no runtime_field with "
+                f"field_candidate_id={field_candidate_id!r} in schema {schema_id!r}",
+            )
+        # Cardinality: detect ambiguity (should be caught by DB UNIQUE, but guard anyway)
+        ambiguous = [
+            f for f in fields
+            if str(f.get("field_candidate_id") or "") == field_candidate_id
+        ]
+        if len(ambiguous) > 1:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: ambiguous — "
+                f"{len(ambiguous)} fields share field_candidate_id={field_candidate_id!r}",
+            )
+        connections.append({
+            "evidence_field": ev,
+            "runtime_field": matched,
+            "ev_candidate_status": str(efc.get("status") or "UNKNOWN"),
+        })
+    return connections
 
 
 def confirm_document_atomic(
@@ -182,15 +305,38 @@ def confirm_document_atomic(
             if not schema_row:
                 raise ConfirmError(422, "form schema not found")
             schema_row = dict(schema_row)
+            # R1-03-A: Runtime Schema 반드시 APPROVED_FOR_RUNTIME_USE (봉인 경로)
+            if schema_row.get("status") != _SCHEMA_STATUS_APPROVED:
+                raise ConfirmError(
+                    422,
+                    f"runtime schema not approved for sealing "
+                    f"(schema_id={schema_id!r}, status={schema_row.get('status')!r})"
+                )
             cur.execute(
                 "SELECT * FROM runtime_field WHERE form_schema_id = %s", (schema_id,)
             )
             fields = [dict(r) for r in (cur.fetchall() or [])]
+            # R1-03-B: CANDIDATE_ONLY 필드 있으면 봉인 차단 (LEG 미승인)
+            candidate_only = [f for f in fields if f.get("required_status") == "CANDIDATE_ONLY"]
+            if candidate_only:
+                keys = ", ".join(f.get("field_key") or f.get("id", "?") for f in candidate_only[:3])
+                raise ConfirmError(
+                    422,
+                    f"form schema has {len(candidate_only)} CANDIDATE_ONLY field(s): {keys} "
+                    f"— confirm blocked until fields are promoted"
+                )
             cur.execute(
                 "SELECT * FROM runtime_checklist_item WHERE form_schema_id = %s",
                 (schema_id,),
             )
             checklists = [dict(r) for r in (cur.fetchall() or [])]
+
+            # 13.5. runtime_evidence_field 조회 + FK 연결 검증
+            cur.execute(
+                "SELECT * FROM runtime_evidence_field WHERE form_schema_id = %s",
+                (schema_id,),
+            )
+            evidence_fields = [dict(r) for r in (cur.fetchall() or [])]
 
             # runtime_data_json / evidence_links 정규화 (락 이후 값)
             runtime_values = _normalize_values(locked.get("runtime_data_json"))
@@ -226,6 +372,56 @@ def confirm_document_atomic(
             except AttachmentError as e:
                 raise ConfirmError(422, "attachment image resolution failed: %s" % e)
 
+            # 14a-2. Evidence FK 연결 + FileSnapshot 검증 (OD-C023-01/02/05)
+            schema_candidate_id = str(schema_row.get("schema_candidate_id") or "")
+            ev_connections = _resolve_evidence_connections(
+                cur, evidence_fields, fields, schema_id, schema_candidate_id
+            )
+            attachment_evidence_manifest: list = []
+            for ev_conn in ev_connections:
+                ev_field = ev_conn["evidence_field"]
+                rf = ev_conn["runtime_field"]
+                ev_candidate_status = ev_conn["ev_candidate_status"]
+                # R1-02: allowlist — CANDIDATE/UNKNOWN/REJECTED/null 전부 차단
+                if ev_candidate_status not in _ALLOWED_EVIDENCE_CANDIDATE_STATUSES:
+                    raise ConfirmError(
+                        422,
+                        f"evidence legal status not approved "
+                        f"(evidence_field={str(ev_field.get('id'))!r}, "
+                        f"evidence_candidate_status={ev_candidate_status!r}) — "
+                        f"only {sorted(_ALLOWED_EVIDENCE_CANDIDATE_STATUSES)} allowed; "
+                        "confirm blocked until LEG gate passes",
+                    )
+                field_id = str(rf.get("id") or "")
+                field_key = str(rf.get("field_key") or "")
+                # R1-03-C: 연결 field input_type 반드시 지원되는 유형 (현재 file만)
+                input_type = str(rf.get("input_type") or "")
+                if input_type not in _ALLOWED_EVIDENCE_INPUT_TYPES:
+                    raise ConfirmError(
+                        422,
+                        f"evidence field {str(ev_field.get('id'))!r}: "
+                        f"connected field input_type={input_type!r} not supported "
+                        f"for evidence sealing (allowed: {sorted(_ALLOWED_EVIDENCE_INPUT_TYPES)})"
+                    )
+                snap = runtime_values.get(field_key)
+                if snap is None:
+                    raise ConfirmError(
+                        422,
+                        f"evidence field {str(ev_field.get('id'))!r}: "
+                        f"FileSnapshot missing in runtime_data_json[{field_key!r}]",
+                    )
+                try:
+                    manifest_entry = verify_file_snapshot_for_evidence(
+                        snapshot=snap,
+                        document_id=str(locked["id"]),
+                        field_id=field_id,
+                        field_key=field_key,
+                    )
+                except AttachmentError as e:
+                    raise ConfirmError(422, f"evidence verification failed: {e}")
+                manifest_entry["evidence_field_id"] = str(ev_field.get("id") or "")
+                attachment_evidence_manifest.append(manifest_entry)
+
             # 14b. 렌더 (05A) — 락 이후 값으로만, 서명 + 첨부 이미지 inline 포함
             render_doc = {
                 "id": locked["id"],
@@ -242,6 +438,7 @@ def confirm_document_atomic(
                     signature_images=sig_result.get("images"),
                     signature_manifest=sig_result.get("manifest"),
                     attachment_images=attachment_images,
+                    attachment_evidence_manifest=attachment_evidence_manifest,
                 )
             except SchemaRenderError as e:
                 raise ConfirmError(422, "render failed: %s" % e)

@@ -788,6 +788,7 @@ def get_catalog_runtime(doc_id: str):
             "fields": resolved["fields"],
             "checklists": resolved["checklists"],
             "evidence_fields": resolved["evidence_fields"],
+            "resolved_evidence_connections": resolved.get("resolved_evidence_connections", []),
             "supported_export_formats": ["HTML", "PDF"],
         },
     }

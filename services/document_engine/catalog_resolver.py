@@ -16,6 +16,81 @@ _APPROVED = "APPROVED_FOR_RUNTIME_USE"
 _CANDIDATE = "CANDIDATE"
 
 
+def _resolve_evidence_connections_for_catalog(
+    sb, evidence_fields: list, fields: list, schema_id: str
+) -> list:
+    """Resolve Evidence↔Field FK connections for catalog API response.
+
+    Returns list of resolved connection dicts. UNRESOLVED entries are included
+    with status='UNRESOLVED' so the frontend can distinguish failure modes.
+    Does NOT raise — caller should surface UNRESOLVED entries to the frontend.
+    """
+    if not evidence_fields:
+        return []
+    field_by_candidate = {
+        str(f.get("field_candidate_id") or ""): f
+        for f in fields
+        if f.get("field_candidate_id")
+    }
+    connections = []
+    for ev in evidence_fields:
+        ev_id = str(ev.get("id") or "")
+        evidence_candidate_id = str(ev.get("evidence_candidate_id") or "")
+        if not evidence_candidate_id:
+            connections.append({
+                "evidence_field_id": ev_id,
+                "status": "UNRESOLVED",
+                "reason": "no_evidence_candidate_id",
+            })
+            continue
+        efc_res = (
+            sb.table("evidence_field_candidate")
+            .select("id,field_candidate_id,status")
+            .eq("id", evidence_candidate_id)
+            .single()
+            .execute()
+        )
+        efc = efc_res.data if efc_res and efc_res.data else None
+        if not efc:
+            connections.append({
+                "evidence_field_id": ev_id,
+                "status": "UNRESOLVED",
+                "reason": "evidence_candidate_not_found",
+            })
+            continue
+        field_candidate_id = str(efc.get("field_candidate_id") or "")
+        matched_fields = [
+            f for f in fields
+            if str(f.get("field_candidate_id") or "") == field_candidate_id
+            and str(f.get("form_schema_id") or "") == schema_id
+        ]
+        if len(matched_fields) == 0:
+            connections.append({
+                "evidence_field_id": ev_id,
+                "status": "UNRESOLVED",
+                "reason": "no_matching_field",
+                "evidence_candidate_status": str(efc.get("status") or "UNKNOWN"),
+            })
+        elif len(matched_fields) > 1:
+            connections.append({
+                "evidence_field_id": ev_id,
+                "status": "UNRESOLVED",
+                "reason": "ambiguous_field",
+                "evidence_candidate_status": str(efc.get("status") or "UNKNOWN"),
+            })
+        else:
+            rf = matched_fields[0]
+            connections.append({
+                "evidence_field_id": ev_id,
+                "status": "RESOLVED",
+                "evidence_candidate_status": str(efc.get("status") or "UNKNOWN"),
+                "field_id": str(rf.get("id") or ""),
+                "field_key": str(rf.get("field_key") or ""),
+                "input_type": str(rf.get("input_type") or ""),
+            })
+    return connections
+
+
 def resolve_catalog_runtime_schema(catalog_document_id: str) -> dict:
     """Return schema + fields + availability for a catalog document.
 
@@ -80,6 +155,7 @@ def resolve_catalog_runtime_schema(catalog_document_id: str) -> dict:
     fields: list = []
     checklists: list = []
     evidence_fields: list = []
+    resolved_evidence_connections: list = []
 
     query_schema = schema if schema else (candidates[0] if candidates else None)
     if query_schema:
@@ -87,6 +163,9 @@ def resolve_catalog_runtime_schema(catalog_document_id: str) -> dict:
         fields = (sb.table("runtime_field").select("*").eq("form_schema_id", schema_id).order("field_order").execute()).data or []
         checklists = (sb.table("runtime_checklist_item").select("*").eq("form_schema_id", schema_id).order("item_order").execute()).data or []
         evidence_fields = (sb.table("runtime_evidence_field").select("*").eq("form_schema_id", schema_id).execute()).data or []
+        resolved_evidence_connections = _resolve_evidence_connections_for_catalog(
+            sb, evidence_fields, fields, schema_id
+        )
 
     return {
         "availability": availability,
@@ -98,4 +177,5 @@ def resolve_catalog_runtime_schema(catalog_document_id: str) -> dict:
         "fields": fields,
         "checklists": checklists,
         "evidence_fields": evidence_fields,
+        "resolved_evidence_connections": resolved_evidence_connections,
     }
