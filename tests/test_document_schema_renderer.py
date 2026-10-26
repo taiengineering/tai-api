@@ -383,3 +383,51 @@ def test_25_document_version_type_contract():
     assert build(document=doc(version=1))["rendered_body"] != build(
         document=doc(version=2)
     )["rendered_body"]
+
+
+def test_26_attachment_evidence_manifest_merged_with_signature():
+    """E24-07: OD-C023-01 — signature + attachment manifests merged in order."""
+    sig_entry = {
+        "type": "signature",
+        "field_id": "sig-field-1",
+        "field_key": "manager_signature",
+        "sha256": "a" * 64,
+    }
+    att_entry = {
+        "type": "attachment",
+        "evidence_field_id": "ev-1",
+        "field_id": "file-field-1",
+        "field_key": "attached_documents",
+        "sha256": "b" * 64,
+    }
+    art = build(
+        signature_manifest=[sig_entry],
+        attachment_evidence_manifest=[att_entry],
+    )
+    manifest = art["evidence_manifest"]
+    assert len(manifest) == 2
+    assert manifest[0] == sig_entry
+    assert manifest[1] == att_entry
+
+
+def test_27_attachment_evidence_manifest_deterministic():
+    """E24-08: Manifest output is deterministic (order preserved)."""
+    entries = [
+        {"type": "attachment", "field_key": "a", "sha256": "c" * 64},
+        {"type": "attachment", "field_key": "b", "sha256": "d" * 64},
+    ]
+    art1 = build(attachment_evidence_manifest=entries)
+    art2 = build(attachment_evidence_manifest=entries)
+    assert art1["evidence_manifest"] == art2["evidence_manifest"]
+    assert art1["evidence_manifest"][0]["field_key"] == "a"
+    assert art1["evidence_manifest"][1]["field_key"] == "b"
+
+
+def test_28_attachment_evidence_manifest_no_regression_existing_docs():
+    """E24-11: Evidence-less documents: output unchanged (regression guard)."""
+    art = build()  # no attachment_evidence_manifest, no signature_manifest
+    assert art["evidence_manifest"] == []
+
+    art_sig_only = build(signature_manifest=[{"type": "signature", "sha256": "e" * 64}])
+    assert len(art_sig_only["evidence_manifest"]) == 1
+    assert art_sig_only["evidence_manifest"][0]["type"] == "signature"
