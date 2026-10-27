@@ -4,12 +4,18 @@ Phase 5: Operational Authority → Runtime Governance.
 금지: reviewer bypass, hidden approval, auto approval,
       silent rejection, duplicate review, legacy mutation
 """
-from fastapi import APIRouter, HTTPException, Query
-from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Any, Dict, Optional
 import logging
+
+from routers.auth import get_current_user
 
 router = APIRouter(prefix="/bridge", tags=["검토 브릿지"])
 logger = logging.getLogger("review_bridge")
+
+# Evidence 승인 가능 role_code — legal_engine_patch.SAFETY_MANAGER_ROLES 정본 (003, 012 = 안전관리자)
+# public.roles 기준: 002=관리자, 003=안전관리자, 012=안전관리자
+_EVIDENCE_APPROVE_ROLE_CODES: frozenset = frozenset({"003", "012"})
 
 
 def _audit(action: str, entity: str, entity_id: str, user_id: str = "system"):
@@ -174,6 +180,161 @@ def bridge_list_review_escalations(
     q = q.order("created_at", desc=True).limit(50)
     r = q.execute()
     return {"status": "success", "source": "runtime", "data": r.data or []}
+
+
+# ═══ Evidence Candidate 승인 (C3-04 / C2-FINAL §2) ═══════════════
+
+@router.post("/evidence-approve")
+def bridge_evidence_approve(
+    evidence_field_candidate_id: str = Query(...),
+    review_reason: str = Query(...),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Evidence Candidate 승인 (runtime_review_decision INSERT + status UPDATE 원자 처리).
+
+    C2-FINAL §2-3 계약:
+      - 선제 역할 검증: current_user.role_code ∈ _EVIDENCE_APPROVE_ROLE_CODES (DB 이전)
+      - AND 조건 권한 검증: approver_user_id AND approver_role AND approval_scope
+      - review_reason 필수 (빈 문자열·공백 불허)
+      - 원자 트랜잭션: review_decision INSERT + evidence_field_candidate.status UPDATE
+      - 중복·부정 전이 차단
+    """
+    import psycopg2
+    from db.direct_sql import _connect
+
+    reviewer_id = str(current_user.get("id") or "")
+    if not reviewer_id:
+        raise HTTPException(401, "authentication required")
+
+    # [선제 역할 검증] 인증된 사용자의 role_code가 SAFETY_MANAGER에 해당하는지 확인
+    # DB authority 조회 이전에 Fail-Closed 차단 (P0-2)
+    if str(current_user.get("role_code", "")) not in _EVIDENCE_APPROVE_ROLE_CODES:
+        raise HTTPException(
+            403,
+            "reviewer role is not authorized for EVIDENCE approval",
+        )
+
+    if not review_reason or not str(review_reason).strip():
+        raise HTTPException(400, "review_reason is required and must not be blank")
+
+    try:
+        conn = _connect()
+    except Exception:
+        raise HTTPException(503, "database unavailable")
+
+    try:
+        conn.autocommit = False
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+
+            # [단계 1] 권한 검증 — AND 조건 (C2-FINAL §2-3, OR 금지)
+            # 실제 DB 컬럼: approver_user_id, approver_role, approval_scope
+            cur.execute(
+                """
+                SELECT 1 FROM runtime_review_authority
+                WHERE review_domain = 'EVIDENCE'
+                  AND authority_status = 'ACTIVE'
+                  AND approver_user_id = %s
+                  AND approver_role = 'SAFETY_MANAGER'
+                  AND approval_scope LIKE '%%증빙%%'
+                LIMIT 1
+                """,
+                (reviewer_id,),
+            )
+            if not cur.fetchone():
+                raise HTTPException(
+                    403,
+                    "reviewer is not authorized for EVIDENCE approval "
+                    "(requires SAFETY_MANAGER role with 증빙 scope)",
+                )
+
+            # [단계 2] 대상 행 잠금 + 현재 상태 확인
+            cur.execute(
+                "SELECT id, status FROM evidence_field_candidate WHERE id = %s FOR UPDATE",
+                (evidence_field_candidate_id,),
+            )
+            target = cur.fetchone()
+            if not target:
+                raise HTTPException(404, f"evidence_field_candidate {evidence_field_candidate_id!r} not found")
+            target = dict(target)
+
+            current_status = target["status"]
+            if current_status not in ("CANDIDATE", "NEEDS_HUMAN_REVIEW"):
+                raise HTTPException(
+                    409,
+                    f"evidence_field_candidate already processed "
+                    f"(status={current_status!r}). Cannot re-approve.",
+                )
+
+            # 중복 APPROVE decision 차단
+            cur.execute(
+                """
+                SELECT 1 FROM runtime_review_decision
+                WHERE review_domain = 'EVIDENCE'
+                  AND source_entity_id = %s
+                  AND review_action = 'APPROVE'
+                LIMIT 1
+                """,
+                (evidence_field_candidate_id,),
+            )
+            if cur.fetchone():
+                raise HTTPException(
+                    409,
+                    f"APPROVE decision already exists for evidence_field_candidate "
+                    f"{evidence_field_candidate_id!r}",
+                )
+
+            # [단계 3] review_decision INSERT
+            cur.execute(
+                """
+                INSERT INTO runtime_review_decision
+                  (review_domain, source_entity_id, reviewer_id,
+                   review_action, review_reason, review_started_at, source_trace)
+                VALUES (%s, %s, %s, 'APPROVE', %s, now(), 'MANUAL_REVIEW')
+                RETURNING id
+                """,
+                ("EVIDENCE", evidence_field_candidate_id, reviewer_id, review_reason),
+            )
+            decision_row = dict(cur.fetchone())
+            decision_id = decision_row["id"]
+
+            # [단계 4] evidence_field_candidate.status → APPROVED_BY_HUMAN (동일 TX)
+            cur.execute(
+                """
+                UPDATE evidence_field_candidate
+                SET status = 'APPROVED_BY_HUMAN'
+                WHERE id = %s AND status IN ('CANDIDATE', 'NEEDS_HUMAN_REVIEW')
+                """,
+                (evidence_field_candidate_id,),
+            )
+            if cur.rowcount != 1:
+                raise HTTPException(
+                    409,
+                    "evidence_field_candidate status update failed — concurrent modification",
+                )
+
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        logger.exception("evidence approval failed")
+        raise HTTPException(500, "evidence approval failed")
+    finally:
+        conn.close()
+
+    _audit("EVIDENCE_APPROVE", "evidence_field_candidate", evidence_field_candidate_id, reviewer_id)
+    return {
+        "status": "success",
+        "source": "runtime",
+        "data": {
+            "evidence_field_candidate_id": evidence_field_candidate_id,
+            "review_decision_id": str(decision_id),
+            "new_status": "APPROVED_BY_HUMAN",
+            "reviewer_id": reviewer_id,
+        },
+    }
 
 
 # ═══ Status ═══

@@ -844,14 +844,14 @@ def test_E24_09_candidate_evidence_status_blocks_confirm():
             "form_schema_id": SCHEMA_ID,
             "evidence_candidate_id": "efc-001",
             "evidence_type": "ATTACHMENT",
-            "status": "APPROVED_FOR_RUNTIME_USE",
+            "status": "APPROVED_BY_HUMAN",
             "evidence_family": "ATTACHMENT",
             "upload_type": "attachment",
         }],
         evidence_candidate_row={
             "id": "efc-001",
             "field_candidate_id": "fc-001",
-            "status": "CANDIDATE",  # LEG not confirmed
+            "status": "CANDIDATE",  # evidence approval gate 미통과
             "schema_candidate_id": None,
         },
     )
@@ -878,7 +878,7 @@ def test_E24_02_evidence_connection_missing_candidate_id_blocks():
             "form_schema_id": SCHEMA_ID,
             "evidence_candidate_id": None,  # missing
             "evidence_type": "ATTACHMENT",
-            "status": "APPROVED_FOR_RUNTIME_USE",
+            "status": "APPROVED_BY_HUMAN",
             "evidence_family": "ATTACHMENT",
             "upload_type": "attachment",
         }],
@@ -911,7 +911,7 @@ def test_R1_T03_unknown_evidence_status_blocks():
         field_rows=[_field_ev("f-att", "attached_documents", input_type="file", field_candidate_id="fc-u")],
         evidence_field_rows=[{"id": "ev-u", "form_schema_id": SCHEMA_ID,
                                "evidence_candidate_id": "efc-u", "evidence_type": "ATTACHMENT",
-                               "status": "APPROVED_FOR_RUNTIME_USE",
+                               "status": "APPROVED_BY_HUMAN",
                                "evidence_family": "ATTACHMENT", "upload_type": "attachment"}],
         evidence_candidate_row={"id": "efc-u", "field_candidate_id": "fc-u",
                                  "status": "UNKNOWN", "schema_candidate_id": None},
@@ -941,7 +941,7 @@ def test_R1_T03b_null_evidence_status_blocks():
         field_rows=[_field_ev("f-null", "attached_documents", input_type="file", field_candidate_id="fc-n")],
         evidence_field_rows=[{"id": "ev-n", "form_schema_id": SCHEMA_ID,
                                "evidence_candidate_id": "efc-n", "evidence_type": "ATTACHMENT",
-                               "status": "APPROVED_FOR_RUNTIME_USE",
+                               "status": "APPROVED_BY_HUMAN",
                                "evidence_family": "ATTACHMENT", "upload_type": "attachment"}],
         evidence_candidate_row={"id": "efc-n", "field_candidate_id": "fc-n",
                                  "status": None, "schema_candidate_id": None},
@@ -998,10 +998,10 @@ def test_R1_T07_non_file_evidence_input_type_blocks():
         field_rows=[_field_ev("f-txt", "some_text", input_type="text", field_candidate_id="fc-txt")],
         evidence_field_rows=[{"id": "ev-txt", "form_schema_id": SCHEMA_ID,
                                "evidence_candidate_id": "efc-txt", "evidence_type": "TEXT_REF",
-                               "status": "APPROVED_FOR_RUNTIME_USE",
+                               "status": "APPROVED_BY_HUMAN",
                                "evidence_family": "ATTACHMENT", "upload_type": "attachment"}],
         evidence_candidate_row={"id": "efc-txt", "field_candidate_id": "fc-txt",
-                                 "status": "APPROVED_FOR_RUNTIME_USE", "schema_candidate_id": None},
+                                 "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None},
     )
     _install(conn)
     try:
@@ -1017,22 +1017,22 @@ def test_R1_T07_non_file_evidence_input_type_blocks():
 # ── R2 보강 테스트 (WO-024-R2) ──────────────────────────────────
 
 def _ev_row_approved(ev_id="ev-r2", efc_id="efc-r2"):
-    """Helper: runtime_evidence_field row that passes all R2 checks."""
+    """Helper: runtime_evidence_field row that passes all R2 checks (C2-FINAL §3)."""
     return {
         "id": ev_id,
         "form_schema_id": SCHEMA_ID,
         "evidence_candidate_id": efc_id,
         "evidence_type": "ATTACHMENT",
-        "status": "APPROVED_FOR_RUNTIME_USE",
+        "status": "APPROVED_BY_HUMAN",
         "evidence_family": "ATTACHMENT",
         "upload_type": "attachment",
     }
 
 
 def _efc_row_approved(efc_id="efc-r2", fc_id="fc-r2", sc_id="sc-001"):
-    """Helper: evidence_field_candidate row that passes all R2 checks."""
+    """Helper: evidence_field_candidate row that passes all R2 checks (C2-FINAL §2 D1)."""
     return {"id": efc_id, "field_candidate_id": fc_id,
-            "status": "APPROVED_FOR_RUNTIME_USE", "schema_candidate_id": sc_id}
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": sc_id}
 
 
 def test_R2_T01_unapproved_evidence_field_status_blocks():
@@ -1170,4 +1170,154 @@ def test_R2_T06_schema_candidate_id_empty_skips_c2_check():
             "C2 check must be skipped when schema_candidate_id is absent"
         )
         assert "FileSnapshot missing" in e.detail or "evidence" in e.detail.lower()
+    assert conn.rolled_back
+
+
+# ── C3 신규 테스트 (WO-027-C2-FINAL §7-2 / C3-T01~T04, T10) ──────────────────
+
+def test_C3_T01_approved_by_human_evidence_field_passes_r2():
+    """C3-T01: runtime_evidence_field.status=APPROVED_BY_HUMAN → R2-01 통과 (C2-FINAL §3)."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"attached_documents": {
+            "_type": "file_snapshot",
+            "field_key": "attached_documents",
+            "field_id": "f-c3t01",
+            "storage_ref": f"storage://company-docs/attachments/document/{DOC_ID}/f-c3t01/ev.pdf",
+            "sha256": "c" * 64,
+            "mime_type": "application/pdf",
+            "byte_size": 100,
+        }}),
+        field_rows=[_field_ev("f-c3t01", "attached_documents", input_type="file",
+                              field_candidate_id="fc-c3t01")],
+        evidence_field_rows=[{
+            "id": "ev-c3t01",
+            "form_schema_id": SCHEMA_ID,
+            "evidence_candidate_id": "efc-c3t01",
+            "evidence_type": "ATTACHMENT",
+            "status": "APPROVED_BY_HUMAN",   # C2-FINAL §3 터미널 승인값
+            "evidence_family": "ATTACHMENT",
+            "upload_type": "attachment",
+        }],
+        evidence_candidate_row={
+            "id": "efc-c3t01",
+            "field_candidate_id": "fc-c3t01",
+            "status": "APPROVED_BY_HUMAN",   # C2-FINAL §2 D1 승인값
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="ok", current_user=user())
+    except ConfirmError as e:
+        # R2-01 또는 R1-02에서 차단되면 안 됨 — "not approved" 포함 오류는 테스트 실패
+        assert "not approved" not in e.detail.lower(), (
+            f"C3-T01: APPROVED_BY_HUMAN should pass R2-01 and R1-02, got: {e.detail}"
+        )
+
+
+def test_C3_T02_candidate_evidence_field_still_blocked():
+    """C3-T02: runtime_evidence_field.status=CANDIDATE → 422 (R2-01 차단 유지)."""
+    conn = FakeConn(
+        locked_row=locked(),
+        field_rows=[_field_ev("f-c3t02", "attached_documents", input_type="file",
+                              field_candidate_id="fc-c3t02")],
+        evidence_field_rows=[{
+            **_ev_row_approved("ev-c3t02", "efc-c3t02"),
+            "status": "CANDIDATE",   # 승인 안 된 상태
+        }],
+        evidence_candidate_row=_efc_row_approved("efc-c3t02", "fc-c3t02"),
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False, "expected ConfirmError"
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "runtime_evidence_field.status" in e.detail
+        assert "CANDIDATE" in e.detail
+    assert conn.rolled_back
+
+
+def test_C3_T03_approved_by_human_evidence_candidate_passes_r1():
+    """C3-T03: evidence_field_candidate.status=APPROVED_BY_HUMAN → R1-02 통과 (C2-FINAL §2 D1)."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"attached_documents": {
+            "_type": "file_snapshot",
+            "field_key": "attached_documents",
+            "field_id": "f-c3t03",
+            "storage_ref": f"storage://company-docs/attachments/document/{DOC_ID}/f-c3t03/ev.pdf",
+            "sha256": "d" * 64,
+            "mime_type": "application/pdf",
+            "byte_size": 100,
+        }}),
+        field_rows=[_field_ev("f-c3t03", "attached_documents", input_type="file",
+                              field_candidate_id="fc-c3t03")],
+        evidence_field_rows=[_ev_row_approved("ev-c3t03", "efc-c3t03")],
+        evidence_candidate_row={
+            "id": "efc-c3t03",
+            "field_candidate_id": "fc-c3t03",
+            "status": "APPROVED_BY_HUMAN",   # D1 Migration 후 승인된 상태
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="ok", current_user=user())
+    except ConfirmError as e:
+        assert "not approved" not in e.detail.lower(), (
+            f"C3-T03: APPROVED_BY_HUMAN should pass R1-02, got: {e.detail}"
+        )
+
+
+def test_C3_T04_candidate_evidence_candidate_still_blocked():
+    """C3-T04: evidence_field_candidate.status=CANDIDATE → 422 (R1-02 차단 유지)."""
+    conn = FakeConn(
+        locked_row=locked(),
+        field_rows=[_field_ev("f-c3t04", "attached_documents", input_type="file",
+                              field_candidate_id="fc-c3t04")],
+        evidence_field_rows=[_ev_row_approved("ev-c3t04", "efc-c3t04")],
+        evidence_candidate_row={
+            "id": "efc-c3t04",
+            "field_candidate_id": "fc-c3t04",
+            "status": "CANDIDATE",   # 미승인 — evidence approval gate 차단
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False, "expected ConfirmError"
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "not approved" in e.detail.lower()
+        assert "CANDIDATE" in e.detail
+    assert conn.rolled_back
+
+
+def test_C3_T10_error_message_no_leg_gate():
+    """C3-T10: 에러 메시지에 'LEG gate' 미포함 — C2-FINAL §4B 계약 (C3-04B)."""
+    conn = FakeConn(
+        locked_row=locked(),
+        field_rows=[_field_ev("f-c3t10", "attached_documents", input_type="file",
+                              field_candidate_id="fc-c3t10")],
+        evidence_field_rows=[_ev_row_approved("ev-c3t10", "efc-c3t10")],
+        evidence_candidate_row={
+            "id": "efc-c3t10",
+            "field_candidate_id": "fc-c3t10",
+            "status": "CANDIDATE",   # 미승인 → 오류 메시지 유발
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False, "expected ConfirmError"
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "LEG gate" not in e.detail, (
+            f"C3-T10: 에러 메시지에 'LEG gate' 포함 금지 (C2-FINAL §4B). got: {e.detail!r}"
+        )
+        assert "evidence approval gate" in e.detail, (
+            f"C3-T10: 에러 메시지에 'evidence approval gate' 포함 필요. got: {e.detail!r}"
+        )
     assert conn.rolled_back

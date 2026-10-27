@@ -55,10 +55,10 @@ _TARGET_STATUS = "APPROVED_BY_HUMAN"
 _REQUIRED_FROM = "REVIEW_PENDING"
 _SNAPSHOT_SCHEMA_VERSION = 1
 _SCHEMA_STATUS_APPROVED = "APPROVED_FOR_RUNTIME_USE"
-# Evidence 후보 허용 상태 (allowlist — 이 외 모든 상태는 LEG 미확인으로 봉인 차단)
-_ALLOWED_EVIDENCE_CANDIDATE_STATUSES: frozenset = frozenset({_SCHEMA_STATUS_APPROVED})
-# runtime_evidence_field 자체 상태 허용 목록 (R2-01)
-_ALLOWED_EVIDENCE_FIELD_STATUSES: frozenset = frozenset({_SCHEMA_STATUS_APPROVED})
+# Evidence 후보 허용 상태 — DB CHECK 터미널 승인값 (R1-02 / C2-FINAL §2)
+_ALLOWED_EVIDENCE_CANDIDATE_STATUSES: frozenset = frozenset({"APPROVED_BY_HUMAN"})
+# runtime_evidence_field 자체 상태 허용 목록 — DB CHECK 터미널 승인값 (R2-01 / C2-FINAL §3)
+_ALLOWED_EVIDENCE_FIELD_STATUSES: frozenset = frozenset({"APPROVED_BY_HUMAN"})
 # Evidence 연결 대상 field input_type 허용 목록 (현재 file만 지원)
 _ALLOWED_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"file"})
 # Evidence family / upload_type 허용 목록 (R2-03)
@@ -114,7 +114,7 @@ def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id, schem
     connections = []
     for ev in evidence_fields:
         ev_id = str(ev.get("id") or "")
-        # R2-01: runtime_evidence_field.status must be APPROVED_FOR_RUNTIME_USE
+        # R2-01: runtime_evidence_field.status must be APPROVED_BY_HUMAN (C2-FINAL §3)
         ev_status = str(ev.get("status") or "UNKNOWN")
         if ev_status not in _ALLOWED_EVIDENCE_FIELD_STATUSES:
             raise ConfirmError(
@@ -390,7 +390,7 @@ def confirm_document_atomic(
                         f"(evidence_field={str(ev_field.get('id'))!r}, "
                         f"evidence_candidate_status={ev_candidate_status!r}) — "
                         f"only {sorted(_ALLOWED_EVIDENCE_CANDIDATE_STATUSES)} allowed; "
-                        "confirm blocked until LEG gate passes",
+                        "confirm blocked until evidence approval gate passes",
                     )
                 field_id = str(rf.get("id") or "")
                 field_key = str(rf.get("field_key") or "")
