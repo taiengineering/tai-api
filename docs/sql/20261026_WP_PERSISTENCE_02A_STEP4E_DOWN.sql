@@ -112,7 +112,21 @@ BEGIN
     'evidence_fields', (SELECT jsonb_agg(jsonb_build_object(
                  'id', id, 'status', status,
                  'evidence_candidate_id', evidence_candidate_id))
-               FROM runtime_evidence_field WHERE form_schema_id = v_schema_id)
+               FROM runtime_evidence_field WHERE form_schema_id = v_schema_id),
+    'evidence_candidate_decision_ref', (
+      SELECT jsonb_agg(jsonb_build_object(
+               'evidence_field_candidate_id', efc.id,
+               'review_decision_id', rd.id,
+               'review_status', rd.review_status))
+      FROM runtime_evidence_field ev
+      JOIN evidence_field_candidate efc ON efc.id = ev.evidence_candidate_id
+      JOIN runtime_review_decision rd
+        ON rd.source_entity_id = efc.id
+       AND rd.review_domain = 'EVIDENCE'
+       AND rd.review_action = 'APPROVE'
+       AND rd.review_status = 'APPROVED'
+      WHERE ev.form_schema_id = v_schema_id
+    )
   ) INTO v_before;
 
   -- ─── 롤백 순서 ───────────────────────────────────────────────────
@@ -159,7 +173,21 @@ BEGIN
       'note', 'runtime_field unchanged (STEP4E_UP did not modify runtime_field)'),
     'evidence_fields', (SELECT jsonb_agg(jsonb_build_object(
                  'id', id, 'status', status))
-               FROM runtime_evidence_field WHERE form_schema_id = v_schema_id)
+               FROM runtime_evidence_field WHERE form_schema_id = v_schema_id),
+    'evidence_candidate_decision_ref', (
+      SELECT jsonb_agg(jsonb_build_object(
+               'evidence_field_candidate_id', efc.id,
+               'review_decision_id', rd.id,
+               'review_status', rd.review_status))
+      FROM runtime_evidence_field ev
+      JOIN evidence_field_candidate efc ON efc.id = ev.evidence_candidate_id
+      JOIN runtime_review_decision rd
+        ON rd.source_entity_id = efc.id
+       AND rd.review_domain = 'EVIDENCE'
+       AND rd.review_action = 'APPROVE'
+       AND rd.review_status = 'APPROVED'
+      WHERE ev.form_schema_id = v_schema_id
+    )
   ) INTO v_after;
 
   -- ─── Audit: promotion rollback_available flip (C2-FINAL §4-4) ──────

@@ -92,7 +92,21 @@ BEGIN
     'evidence_fields', (SELECT jsonb_agg(jsonb_build_object(
                  'id', id, 'status', status,
                  'evidence_candidate_id', evidence_candidate_id))
-               FROM runtime_evidence_field WHERE form_schema_id = v_schema_id)
+               FROM runtime_evidence_field WHERE form_schema_id = v_schema_id),
+    'evidence_candidate_decision_ref', (
+      SELECT jsonb_agg(jsonb_build_object(
+               'evidence_field_candidate_id', efc.id,
+               'review_decision_id', rd.id,
+               'review_status', rd.review_status))
+      FROM runtime_evidence_field ev
+      JOIN evidence_field_candidate efc ON efc.id = ev.evidence_candidate_id
+      JOIN runtime_review_decision rd
+        ON rd.source_entity_id = efc.id
+       AND rd.review_domain = 'EVIDENCE'
+       AND rd.review_action = 'APPROVE'
+       AND rd.review_status = 'APPROVED'
+      WHERE ev.form_schema_id = v_schema_id
+    )
   ) INTO v_before;
 
   -- ─── STEP 1: evidence_field_candidate 검증 [S1] ────────────────────
@@ -126,6 +140,27 @@ BEGIN
       AND evidence_candidate_id IS NULL
   ) THEN
     RAISE EXCEPTION 'ABORT [S1-4]: evidence_candidate_id NULL 행 존재. FK 무결성 불가. STOP.';
+  END IF;
+
+  -- [S1-5] APPROVE 결정 카디널리티 확인 (C2-FINAL §4-2)
+  --        각 evidence_field_candidate에 APPROVE 결정이 정확히 1건이어야 함
+  --        0건 = 미승인, 2건+ = 중복 — 둘 다 차단
+  IF EXISTS (
+    SELECT 1
+    FROM runtime_evidence_field ev
+    JOIN evidence_field_candidate efc ON efc.id = ev.evidence_candidate_id
+    LEFT JOIN (
+      SELECT source_entity_id, COUNT(*) AS cnt
+      FROM runtime_review_decision
+      WHERE review_domain = 'EVIDENCE'
+        AND review_action = 'APPROVE'
+        AND review_status = 'APPROVED'
+      GROUP BY source_entity_id
+    ) rd ON rd.source_entity_id = efc.id
+    WHERE ev.form_schema_id = v_schema_id
+      AND COALESCE(rd.cnt, 0) <> 1
+  ) THEN
+    RAISE EXCEPTION 'ABORT [S1-5]: evidence_field_candidate APPROVE 결정이 0 또는 2건 이상. STOP.';
   END IF;
 
   -- ─── STEP 2: runtime_evidence_field → APPROVED_BY_HUMAN [S2] ────────
@@ -242,7 +277,21 @@ BEGIN
     'evidence_fields', (SELECT jsonb_agg(jsonb_build_object(
                  'id', id, 'status', status,
                  'evidence_candidate_id', evidence_candidate_id))
-               FROM runtime_evidence_field WHERE form_schema_id = v_schema_id)
+               FROM runtime_evidence_field WHERE form_schema_id = v_schema_id),
+    'evidence_candidate_decision_ref', (
+      SELECT jsonb_agg(jsonb_build_object(
+               'evidence_field_candidate_id', efc.id,
+               'review_decision_id', rd.id,
+               'review_status', rd.review_status))
+      FROM runtime_evidence_field ev
+      JOIN evidence_field_candidate efc ON efc.id = ev.evidence_candidate_id
+      JOIN runtime_review_decision rd
+        ON rd.source_entity_id = efc.id
+       AND rd.review_domain = 'EVIDENCE'
+       AND rd.review_action = 'APPROVE'
+       AND rd.review_status = 'APPROVED'
+      WHERE ev.form_schema_id = v_schema_id
+    )
   ) INTO v_after;
 
   -- ─── Audit INSERT (C2-FINAL §4-3) ─────────────────────────────────
