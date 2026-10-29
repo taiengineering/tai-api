@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query
 
 from services.document_forms_service import (
     get_document_form,
+    get_document_form_articles,
     get_document_forms_stats,
     list_document_forms,
 )
@@ -43,6 +44,19 @@ def list_forms(
 @router.get("/stats")
 def forms_stats():
     return get_document_forms_stats()
+
+
+@router.get("/{doc_id}/articles")
+def form_articles(
+    doc_id: str,
+    include_pending: bool = Query(False, description="PENDING 상태 매핑 포함 여부"),
+):
+    """서식에 연결된 공용 조문 목록 조회.
+
+    field_rule_mapping → law_article 경로로 조회한다.
+    PENDING 매핑은 is_confirmed=False 표시. 고시 제6조 자동 추론 금지.
+    """
+    return get_document_form_articles(doc_id, include_pending=include_pending)
 
 
 @router.get("/{doc_id}")
