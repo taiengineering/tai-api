@@ -8,16 +8,28 @@ Goal: G-ms4je4z3-33eada (구축 이어받기 G-ms5pdquz-9e76e5)
 """
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
 from services.automation_svc import (
     ACTION_TYPES, EVENT_TYPES, AutomationError, approve_run, close_ops_task, fire,
     list_ops_tasks, register, scan_expiring_subscriptions,
 )
+from services.company_scope import _require_admin
 
-router = APIRouter(prefix="/automation", tags=["운영자동화"])
+
+def require_automation_admin(current: dict = Depends(get_current_user)) -> dict:
+    _require_admin(current, get_supabase())
+    return current
+
+
+router = APIRouter(
+    prefix="/automation",
+    tags=["운영자동화"],
+    dependencies=[Depends(require_automation_admin)],
+)
 
 # 모듈 로드 시 수신 콜백 등록(부팅 1회). 실패해도 라우터는 기동.
 try:
@@ -61,7 +73,9 @@ def list_rules(event_type: Optional[str] = Query(None), enabled: Optional[bool] 
 
 
 @router.post("/rules")
-def create_rule(body: RuleBody):
+def create_rule(body: RuleBody, current: dict = Depends(require_automation_admin)):
+    if body.action_type == "CALL_WEBHOOK":
+        raise HTTPException(status_code=403, detail="CALL_WEBHOOK 규칙 등록 비활성화")
     if body.event_type not in EVENT_TYPES:
         raise HTTPException(status_code=400, detail=f"지원하지 않는 이벤트: {body.event_type}")
     if body.action_type not in ACTION_TYPES:
@@ -72,7 +86,7 @@ def create_rule(body: RuleBody):
         "condition_json": body.condition_json or {},
         "action_config_json": body.action_config_json or {},
         "require_approval": body.require_approval, "enabled": body.enabled,
-        "memo": body.memo, "created_by": body.by,
+        "memo": body.memo, "created_by": str(current["id"]),
     }
     try:
         res = get_supabase().table("automation_rule").insert(row).execute()
@@ -115,10 +129,11 @@ def list_runs(status: Optional[str] = Query(None), limit: int = Query(default=50
 
 
 @router.post("/runs/{run_id}/approve")
-def approve(run_id: str, by: Optional[str] = Query(None)):
+def approve(run_id: str, current: dict = Depends(require_automation_admin)):
     """승인 대기 건 실행."""
+    actor = str(current["id"])
     try:
-        result = approve_run(run_id, actor=by)
+        result = approve_run(run_id, actor=actor)
     except AutomationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
     return {"status": "success", "data": result}
@@ -133,10 +148,11 @@ def list_tasks(status: Optional[str] = Query(None), company_id: Optional[str] = 
 
 
 @router.post("/tasks/{task_id}/close")
-def close_task(task_id: str, body: TaskCloseBody):
+def close_task(task_id: str, body: TaskCloseBody, current: dict = Depends(require_automation_admin)):
     """운영 태스크 종결(DONE/CANCELED)."""
+    actor = str(current["id"])
     try:
-        result = close_ops_task(task_id, status=body.status, actor=body.by)
+        result = close_ops_task(task_id, status=body.status, actor=actor)
     except AutomationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
     return {"status": "success", "data": result}
