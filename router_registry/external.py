@@ -13,6 +13,7 @@ ROUTERS = [
     {"module": "routers.notify"},       # WO-8C 통합 발송 (POST /notify/send, /notify/dry-run)
     {"module": "routers.integration_health"},  # WO-10 연동 관제 (GET /integrations/health, POST /probe)
     {"module": "routers.automation"},   # WO-12 운영 자동화 (/automation/*)
+    {"module": "routers.slack_events"},  # WO-R3 Slack Events Relay (POST /slack/events)
     {"module": "routers.ops_home"},     # WO-13 관제홈 (GET /ops/home)
     {"module": "routers.stats_provider"},  # WO-14 경영 지표 (GET /stats/business)
     {"module": "routers.tax_ops"},      # WO-15 세무 발행현황 (/tax/ops, /tax/unissued, /tax/issued)
