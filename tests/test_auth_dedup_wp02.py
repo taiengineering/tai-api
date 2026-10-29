@@ -216,15 +216,27 @@ class TestTokenInvalidation:
 class TestPublicPathUnchanged:
 
     def test_D01_public_path_no_supabase_call(self):
-        """Public 경로 Supabase 미호출 — get_current_user 자체를 호출하지 않음."""
+        """Public 경로 → _evaluate() 조기 반환 — Supabase 미호출."""
+        import services.permission_guard as pg
+        req = _make_request()
+        req.method = "GET"
+        req.url = MagicMock()
+        req.url.path = "/health"  # _PUBLIC 등록 경로
         sb = MagicMock()
         with patch.object(auth_mod, "get_supabase", return_value=sb):
-            pass
+            result = pg._evaluate(req)
+        assert result is None
         sb.auth.get_user.assert_not_called()
 
     def test_D02_public_path_state_not_set(self):
-        """Public 경로 state 미설정 — _auth_user, _auth_token attribute 없음."""
+        """Public 경로 _evaluate() 후 _auth_user, _auth_token state 미설정."""
+        import services.permission_guard as pg
         req = _make_request()
+        req.method = "GET"
+        req.url = MagicMock()
+        req.url.path = "/health"
+        with patch.object(auth_mod, "get_supabase", return_value=MagicMock()):
+            pg._evaluate(req)
         assert not hasattr(req.state, "_auth_user")
         assert not hasattr(req.state, "_auth_token")
 
@@ -315,11 +327,24 @@ class TestRegressionSuite:
         assert exc.value.status_code == 401
 
     def test_F05_entitlement_check_unchanged(self):
-        """WRITE 만료 계정 → 403 — entitlement 체크 불변."""
-        sb = _supabase_ok()
-        with patch.object(auth_mod, "get_supabase", return_value=sb):
-            result = get_current_user(authorization=VALID_TOKEN)
-        assert result.get("company_id") == "co-001"
+        """WRITE 만료 계정 → 403 — _evaluate()의 entitlement 체크 불변."""
+        import services.permission_guard as pg
+        req = _make_request(VALID_TOKEN)
+        req.method = "POST"
+        req.url = MagicMock()
+        req.url.path = "/factories"
+
+        with patch.object(pg, "is_public", return_value=False), \
+             patch.object(pg, "template_for", return_value="/factories"), \
+             patch.object(pg, "lookup_permission", return_value=None), \
+             patch.object(pg, "_resource_of", return_value="factories"), \
+             patch.object(pg, "_resolve_user", return_value=VALID_USER), \
+             patch.object(pg, "active_entitlement", return_value=False), \
+             patch.object(pg, "_is_advisory", return_value=False):
+            result = pg._evaluate(req)
+
+        assert result is not None
+        assert result.status_code == 403
 
     def test_F06_http_integration_auth_success(self):
         """HTTP 통합 테스트 — 인증 성공 경로 200."""
@@ -502,25 +527,230 @@ class TestPermissionGuardModes:
         assert result is None
 
     def test_I03_advisory_mode_no_auth_header_raises_401_via_di(self):
-        """ADVISORY 모드 인증 실패 → DI 폴백 401."""
+        """ADVISORY 모드 — 미들웨어 통과(None), DI get_current_user → 401 폴백."""
+        from services.permission_guard import permission_guard_middleware
+
         app = FastAPI()
 
-        @app.get("/protected")
+        @app.get("/wp02-protected")
         def protected(user: dict = Depends(get_current_user)):
             return {"id": user["id"]}
 
+        app.middleware("http")(permission_guard_middleware)
         client = TestClient(app, raise_server_exceptions=False)
-        resp = client.get("/protected")
+
+        # ADVISORY 기본 모드: 미들웨어는 인증 없이 통과 → DI에서 401
+        with patch.object(auth_mod, "get_supabase", return_value=MagicMock()):
+            resp = client.get("/wp02-protected")
         assert resp.status_code == 401
 
     def test_I04_advisory_mode_does_not_expand_permissions(self):
-        """ADVISORY 모드 허용 확대 없음 — WP02 전후 동작 동일."""
+        """ADVISORY 모드 허용 확대 없음 — WP02 전후 _deny 로직 불변."""
         import services.permission_guard as pg
-        # ADVISORY 모드 기본값 확인
-        assert pg._MODE in ("ADVISORY", "ENFORCE")
-        # WP02 전후 _deny 로직 변경 없음 — ENFORCE 경로 변화 없음
         from starlette.responses import JSONResponse
+
+        # 기존 _deny 계약: ENFORCE → JSONResponse, ADVISORY → None
         enforce_result = pg._deny(advisory=False, code=403, msg="권한 없음")
         advisory_result = pg._deny(advisory=True, code=403, msg="권한 없음")
         assert isinstance(enforce_result, JSONResponse)
+        assert enforce_result.status_code == 403
         assert advisory_result is None
+
+        # WP02가 _deny 함수 자체를 변경하지 않았음
+        import inspect
+        src = inspect.getsource(pg._deny)
+        # _auth_user/_auth_token 관련 코드가 _deny에 없어야 함
+        assert "_auth_user" not in src
+        assert "_auth_token" not in src
+
+
+# ────────────────────────────────────────────────────────────────────
+# 그룹 J: 미들웨어–DI 캐시 통합 (CRITICAL — WP-02 핵심 성능 증거)
+#
+# 실제 HTTP 요청에서 permission_guard_middleware가 request.state에 저장한
+# 인증 결과를 Depends(get_current_user)가 재사용하는지 검증한다.
+# Supabase 호출 4회 → 2회 감소를 직접 계측한다.
+# ────────────────────────────────────────────────────────────────────
+
+class TestMiddlewareDIIntegration:
+    """미들웨어 + DI 연동 통합 테스트 — 운영 DB 불사용, Supabase mock 계측."""
+
+    def _build_app(self) -> tuple:
+        """미들웨어 장착 FastAPI app + Supabase 호출 횟수 카운터 반환."""
+        from services.permission_guard import permission_guard_middleware
+
+        call_counts = {"auth_get_user": 0, "table_select": 0}
+
+        def counting_sb():
+            sb = MagicMock()
+
+            def _get_user(token):
+                call_counts["auth_get_user"] += 1
+                return MagicMock(user=MagicMock(id=VALID_USER["auth_id"]))
+
+            sb.auth.get_user.side_effect = _get_user
+            sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.side_effect = \
+                lambda: (call_counts.__setitem__("table_select", call_counts["table_select"] + 1)
+                         or MagicMock(data=[VALID_USER]))
+            return sb
+
+        app = FastAPI()
+
+        @app.get("/api/protected")
+        def protected(user: dict = Depends(get_current_user)):
+            return {"id": user["id"]}
+
+        app.middleware("http")(permission_guard_middleware)
+        return app, call_counts, counting_sb
+
+    def test_J01_middleware_sets_state_and_di_reads_cache(self):
+        """정상 보호 요청: 미들웨어에서 state 저장 → DI 캐시 반환."""
+        app, counts, counting_sb = self._build_app()
+        client = TestClient(app, raise_server_exceptions=True)
+
+        with patch.object(auth_mod, "get_supabase", side_effect=counting_sb):
+            resp = client.get("/api/protected", headers={"Authorization": VALID_TOKEN})
+
+        assert resp.status_code == 200
+        assert resp.json()["id"] == VALID_USER["id"]
+        # 미들웨어 1회만 Supabase 호출 — DI는 캐시 사용
+        assert counts["auth_get_user"] == 1, \
+            f"auth.get_user 호출 수 = {counts['auth_get_user']} (기대: 1)"
+        assert counts["table_select"] == 1, \
+            f"table.select 호출 수 = {counts['table_select']} (기대: 1)"
+
+    def test_J02_total_supabase_calls_reduced_from_4_to_2(self):
+        """Supabase 총 호출 4회 → 2회 감소 직접 계측."""
+        app, counts, counting_sb = self._build_app()
+        client = TestClient(app, raise_server_exceptions=True)
+
+        with patch.object(auth_mod, "get_supabase", side_effect=counting_sb):
+            resp = client.get("/api/protected", headers={"Authorization": VALID_TOKEN})
+
+        assert resp.status_code == 200
+        total = counts["auth_get_user"] + counts["table_select"]
+        assert total == 2, \
+            f"총 Supabase 호출 수 = {total} (기대: 2, WP02 이전 = 4)"
+
+    def test_J03_different_tokens_isolation_between_requests(self):
+        """서로 다른 토큰 요청 간 캐시 격리 — 각 요청 독립적 Supabase 호출."""
+        from services.permission_guard import permission_guard_middleware
+
+        user_a = {**VALID_USER, "id": "user-a", "auth_id": "auth-a"}
+        user_b = {**VALID_USER, "id": "user-b", "auth_id": "auth-b"}
+        token_a = "Bearer token_a"
+        token_b = "Bearer token_b"
+
+        user_map = {"token_a": user_a, "token_b": user_b,
+                    "auth-a": user_a, "auth-b": user_b}
+        call_log = []
+
+        def counting_sb():
+            sb = MagicMock()
+
+            def _get_user(token):
+                call_log.append(("auth_get_user", token))
+                uid = "auth-a" if token == "token_a" else "auth-b"
+                return MagicMock(user=MagicMock(id=uid))
+
+            def _table_execute():
+                call_log.append("table_select")
+                auth_id = call_log[-2][1] if len(call_log) >= 2 else None
+                u = user_map.get(auth_id, VALID_USER)
+                return MagicMock(data=[u])
+
+            sb.auth.get_user.side_effect = _get_user
+            sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.side_effect = \
+                _table_execute
+            return sb
+
+        app = FastAPI()
+
+        @app.get("/api/isolated")
+        def isolated(user: dict = Depends(get_current_user)):
+            return {"id": user["id"]}
+
+        app.middleware("http")(permission_guard_middleware)
+        client = TestClient(app, raise_server_exceptions=True)
+
+        with patch.object(auth_mod, "get_supabase", side_effect=counting_sb):
+            resp_a = client.get("/api/isolated", headers={"Authorization": token_a})
+            resp_b = client.get("/api/isolated", headers={"Authorization": token_b})
+
+        assert resp_a.status_code == 200
+        assert resp_b.status_code == 200
+        # 각 요청이 독립적 → auth.get_user 2회 (요청당 1회)
+        auth_calls = [c for c in call_log if isinstance(c, tuple) and c[0] == "auth_get_user"]
+        assert len(auth_calls) == 2, f"auth.get_user 호출 수 = {len(auth_calls)} (기대: 2)"
+
+    def test_J04_no_token_still_raises_401(self):
+        """토큰 없는 요청 → 401 유지 (캐시 최적화 후 회귀 없음)."""
+        app, _, counting_sb = self._build_app()
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with patch.object(auth_mod, "get_supabase", side_effect=counting_sb):
+            resp = client.get("/api/protected")
+        assert resp.status_code == 401
+
+    def test_J05_pending_account_still_raises_403(self):
+        """PENDING 계정 → 403 유지 (캐시 최적화 후 회귀 없음)."""
+        from services.permission_guard import permission_guard_middleware
+
+        pending = {**VALID_USER, "status_code": "PENDING", "is_active": False}
+        app = FastAPI()
+
+        @app.get("/api/pending-test")
+        def pending_route(user: dict = Depends(get_current_user)):
+            return {"id": user["id"]}
+
+        app.middleware("http")(permission_guard_middleware)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        sb = _supabase_ok(pending)
+        with patch.object(auth_mod, "get_supabase", return_value=sb):
+            resp = client.get("/api/pending-test", headers={"Authorization": VALID_TOKEN})
+        assert resp.status_code == 403
+
+    def test_J06_state_auth_user_and_token_set_by_middleware(self):
+        """미들웨어가 인증 성공 후 request.state에 _auth_user + _auth_token 설정."""
+        import services.permission_guard as pg
+
+        captured = {}
+
+        req = MagicMock(spec=Request)
+        req.method = "GET"
+        req.url = MagicMock()
+        req.url.path = "/api/me"
+        req.headers = {"authorization": VALID_TOKEN}
+        req.state = State()
+
+        with patch.object(pg, "is_public", return_value=False), \
+             patch.object(pg, "template_for", return_value="/api/me"), \
+             patch.object(pg, "lookup_permission", return_value=None), \
+             patch.object(pg, "_resource_of", return_value="api"), \
+             patch.object(pg, "_resolve_user", return_value=VALID_USER), \
+             patch.object(pg, "_is_worker_route", return_value=True):
+            pg._evaluate(req)
+
+        assert req.state._auth_user == VALID_USER
+        assert req.state._auth_token == VALID_TOKEN
+
+    def test_J07_public_path_no_state_set(self):
+        """Public GET /health — _evaluate() 즉시 반환, state 미설정."""
+        import services.permission_guard as pg
+
+        req = MagicMock(spec=Request)
+        req.method = "GET"
+        req.url = MagicMock()
+        req.url.path = "/health"
+        req.headers = {}
+        req.state = State()
+
+        sb = MagicMock()
+        with patch.object(auth_mod, "get_supabase", return_value=sb):
+            result = pg._evaluate(req)
+
+        assert result is None
+        sb.auth.get_user.assert_not_called()
+        assert not hasattr(req.state, "_auth_user")
+        assert not hasattr(req.state, "_auth_token")
