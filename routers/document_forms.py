@@ -4,7 +4,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from db.supabase_client import get_supabase
 from routers.auth import get_current_user_optional
+from services.company_scope import _require_admin
 from services.document_forms_service import (
     get_document_form,
     get_document_form_articles,
@@ -57,10 +59,12 @@ def form_articles(
 
     field_rule_mapping → law_article 경로로 조회한다.
     PENDING 매핑은 is_confirmed=False 표시. 고시 제6조 자동 추론 금지.
-    include_pending=true는 인증된 사용자만 요청 가능.
+    include_pending=true는 플랫폼 관리자(role_code=ALL scope)만 요청 가능.
     """
-    if include_pending and current_user is None:
-        raise HTTPException(status_code=401, detail="PENDING 조회는 인증이 필요합니다")
+    if include_pending:
+        if current_user is None:
+            raise HTTPException(status_code=401, detail="인증이 필요합니다")
+        _require_admin(current_user, get_supabase())
     return get_document_form_articles(doc_id, include_pending=include_pending)
 
 
