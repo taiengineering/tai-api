@@ -1,13 +1,19 @@
 """
 tests/test_document_forms_articles.py
-WO-DOC260-SHARED-ARTICLE-READ-019-R2
+WO-DOC260-SHARED-ARTICLE-READ-019-R2 / WO-DOC260-SHARED-MAPPING-STATUS-022
 
-R2 보정 포함 단위 테스트 (21건).
+R2 보정 + WO-022 승인 상태 계약 보정 포함 단위 테스트 (24건).
 No live DB; all Supabase calls are mocked.
 
 실제 field_rule_mapping 컬럼: doc_id / field_key / article_id / review_status
 law_article 컬럼 추가: law_version_id
 law_master 컬럼 추가: current_version_id
+
+WO-022 계약 변경:
+  _CONFIRMED_STATUSES = {"CONFIRMED"} (기존 "APPROVED" → "CONFIRMED")
+  CONFIRMED = 공용 매핑 검토 완료. 법적 증적 승인과 별개.
+  APPROVED는 DB CHECK 허용값이 아님 → 확정 취급 금지.
+  REJECTED / REVISED → 확정 취급 금지.
 
 Test matrix:
   T01 — 28건 → 1개 조문 중복 제거 + 컬럼명 런타임 검증
@@ -15,7 +21,7 @@ Test matrix:
   T03 — PENDING-only 필터 제외 시 UNCONFIRMED_MAPPING gap (내부 ID 미노출)
   T04 — 고시 제6조 자동 추론 없음
   T05 — PENDING 매핑 is_confirmed=False
-  T06 — APPROVED 매핑 is_confirmed=True
+  T06 — CONFIRMED 매핑 is_confirmed=True (WO-022: APPROVED → CONFIRMED)
   T07 — include_pending=False → PENDING 제외 → 빈 배열
   T08 — include_pending=True → PENDING 포함
   T09 — 존재하지 않는 서식 → HTTPException 404
@@ -23,14 +29,17 @@ Test matrix:
   T11 — field_rule_mapping 0건 → 빈 배열 반환
   T12 — 미인증 include_pending=true → 401
   T13 — DB 조회 오류 예외 전파
-  T14 — APPROVED+PENDING 혼합 + include_pending=True → is_confirmed=False, MIXED
-  T15 — APPROVED+PENDING 혼합 + include_pending=False → 공개 응답에서 제외 (R2-01)
+  T14 — CONFIRMED+PENDING 혼합 + include_pending=True → is_confirmed=False, MIXED
+  T15 — CONFIRMED+PENDING 혼합 + include_pending=False → 공개 응답에서 제외 (R2-01)
   T16 — 공개 gap 메시지에 article_id / field_key 미노출 (R2-02)
   T17 — 일반 인증 사용자 include_pending=True → 403 (R2-03)
   T18 — 관리자 include_pending=True → 정상 조회 (R2-03)
   T19 — 구버전 조문 → 반환 제외 (R2-04)
   T20 — 현재 버전 조문 → 정상 반환 (R2-04)
   T21 — law_master 누락 → 확정 근거 반환 금지 (R2-04)
+  T22 — REJECTED → 확정 취급 금지 (WO-022)
+  T23 — REVISED → 확정 취급 금지 (WO-022)
+  T24 — APPROVED → 확정 취급 금지 (WO-022: DB 허용값 아님)
 """
 from __future__ import annotations
 
@@ -136,7 +145,7 @@ def _make_supabase_mock(
 # T01 — 28건 → 1개 조문 중복 제거 + 컬럼명 런타임 검증
 # ---------------------------------------------------------------------------
 def test_t01_deduplication_and_correct_columns():
-    frm_rows = _make_frm_rows(28, _ARTICLE_UUID_24, "APPROVED")
+    frm_rows = _make_frm_rows(28, _ARTICLE_UUID_24, "CONFIRMED")
     sb = _make_supabase_mock(frm_rows=frm_rows, art_data=[_ART_ROW_24], law_data=[_LAW_ROW_CHEM])
 
     selected: dict[str, str] = {}
@@ -170,7 +179,7 @@ def test_t01_deduplication_and_correct_columns():
 # ---------------------------------------------------------------------------
 def test_t02_chem_art24_returned():
     sb = _make_supabase_mock(
-        frm_rows=_make_frm_rows(4, _ARTICLE_UUID_24, "APPROVED"),
+        frm_rows=_make_frm_rows(4, _ARTICLE_UUID_24, "CONFIRMED"),
         art_data=[_ART_ROW_24],
         law_data=[_LAW_ROW_CHEM],
     )
@@ -210,7 +219,7 @@ def test_t03_unconfirmed_mapping_gap_no_internal_ids():
 # ---------------------------------------------------------------------------
 def test_t04_no_auto_inference_of_gosi_art6():
     frm_rows = [
-        {"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "APPROVED"},
+        {"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "CONFIRMED"},
     ]
     _LAW_UUID_GOSI = "eeeeeeee-0005-0005-0005-000000000005"
     _VERSION_UUID_GOSI = "gggggggg-0008-0008-0008-000000000008"
@@ -244,7 +253,8 @@ def test_t04_no_auto_inference_of_gosi_art6():
         result = get_document_form_articles("DOC-CHEM-001")
 
     ids = [a["law_article_id"] for a in result["articles"]]
-    assert _ARTICLE_UUID_6 not in ids, "매핑 없는 고시 제6조는 자동으로 반환되지 않아야 함"
+    assert _ARTICLE_UUID_24 in ids,     "매핑된 제24조는 정상 반환돼야 함"
+    assert _ARTICLE_UUID_6 not in ids,  "매핑 없는 고시 제6조는 자동으로 반환되지 않아야 함"
 
 
 # ---------------------------------------------------------------------------
@@ -262,16 +272,16 @@ def test_t05_pending_is_not_confirmed():
 
 
 # ---------------------------------------------------------------------------
-# T06 — APPROVED → is_confirmed=True
+# T06 — CONFIRMED → is_confirmed=True (WO-022: APPROVED → CONFIRMED)
 # ---------------------------------------------------------------------------
-def test_t06_approved_is_confirmed():
-    frm_rows = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "APPROVED"}]
+def test_t06_confirmed_is_confirmed():
+    frm_rows = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "CONFIRMED"}]
     sb = _make_supabase_mock(frm_rows=frm_rows, art_data=[_ART_ROW_24])
     with patch("services.document_forms_service.get_supabase", return_value=sb):
         result = get_document_form_articles("DOC-CHEM-001")
 
     assert result["articles"][0]["is_confirmed"] is True
-    assert result["articles"][0]["mapping_status"] == "APPROVED"
+    assert result["articles"][0]["mapping_status"] == "CONFIRMED"
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +323,7 @@ def test_t09_not_found_raises_404():
 # T10 — DELETED + is_deleted_in_version 필터 검증
 # ---------------------------------------------------------------------------
 def test_t10_deleted_and_version_deleted_excluded():
-    frm_rows = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "APPROVED"}]
+    frm_rows = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "CONFIRMED"}]
     sb = _make_supabase_mock(frm_rows=frm_rows, art_data=[])  # DELETED/is_deleted 제외 후 0건
     with patch("services.document_forms_service.get_supabase", return_value=sb):
         result = get_document_form_articles("DOC-CHEM-001")
@@ -336,6 +346,7 @@ def test_t10_deleted_and_version_deleted_excluded():
             return c
         return _chain([])
 
+    frm_rows2 = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "CONFIRMED"}]
     sb2 = MagicMock()
     sb2.table.side_effect = _t2
     with patch("services.document_forms_service.get_supabase", return_value=sb2):
@@ -401,11 +412,11 @@ def test_t13_db_error_propagates_not_silenced():
 
 
 # ---------------------------------------------------------------------------
-# T14 — APPROVED+PENDING 혼합 + include_pending=True → is_confirmed=False, MIXED
+# T14 — CONFIRMED+PENDING 혼합 + include_pending=True → is_confirmed=False, MIXED
 # ---------------------------------------------------------------------------
 def test_t14_mixed_status_include_pending_true():
     frm_rows = [
-        {"field_key": "applicant_information",    "article_id": _ARTICLE_UUID_24, "review_status": "APPROVED"},
+        {"field_key": "applicant_information",    "article_id": _ARTICLE_UUID_24, "review_status": "CONFIRMED"},
         {"field_key": "preferred_inspection_date", "article_id": _ARTICLE_UUID_24, "review_status": "PENDING"},
     ]
     sb = _make_supabase_mock(frm_rows=frm_rows, art_data=[_ART_ROW_24])
@@ -420,12 +431,12 @@ def test_t14_mixed_status_include_pending_true():
 
 
 # ---------------------------------------------------------------------------
-# T15 — APPROVED+PENDING 혼합 + include_pending=False → 공개 응답에서 제외 (R2-01)
+# T15 — CONFIRMED+PENDING 혼합 + include_pending=False → 공개 응답에서 제외 (R2-01)
 # ---------------------------------------------------------------------------
 def test_t15_mixed_status_excluded_from_public():
     """혼합 상태 조문은 공개(include_pending=false) 응답에 포함하지 않음."""
     frm_rows = [
-        {"field_key": "applicant_information",    "article_id": _ARTICLE_UUID_24, "review_status": "APPROVED"},
+        {"field_key": "applicant_information",    "article_id": _ARTICLE_UUID_24, "review_status": "CONFIRMED"},
         {"field_key": "preferred_inspection_date", "article_id": _ARTICLE_UUID_24, "review_status": "PENDING"},
     ]
     sb = _make_supabase_mock(frm_rows=frm_rows, art_data=[_ART_ROW_24])
@@ -516,7 +527,7 @@ def test_t18_admin_include_pending_returns_200():
 def test_t19_old_law_version_excluded():
     """law_article.law_version_id != law_master.current_version_id → 반환 제외."""
     art_old = {**_ART_ROW_24, "law_version_id": _OLD_VERSION_UUID}  # old version
-    frm_rows = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "APPROVED"}]
+    frm_rows = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "CONFIRMED"}]
     sb = _make_supabase_mock(frm_rows=frm_rows, art_data=[art_old], law_data=[_LAW_ROW_CHEM])
     with patch("services.document_forms_service.get_supabase", return_value=sb):
         result = get_document_form_articles("DOC-CHEM-001")
@@ -529,7 +540,7 @@ def test_t19_old_law_version_excluded():
 # ---------------------------------------------------------------------------
 def test_t20_current_law_version_included():
     """law_version_id == current_version_id → 정상 반환."""
-    frm_rows = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "APPROVED"}]
+    frm_rows = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "CONFIRMED"}]
     sb = _make_supabase_mock(frm_rows=frm_rows, art_data=[_ART_ROW_24], law_data=[_LAW_ROW_CHEM])
     with patch("services.document_forms_service.get_supabase", return_value=sb):
         result = get_document_form_articles("DOC-CHEM-001")
@@ -543,9 +554,57 @@ def test_t20_current_law_version_included():
 # ---------------------------------------------------------------------------
 def test_t21_missing_law_master_not_returned():
     """law_master 없는 조문 (current_version_id 확인 불가) → 반환 금지."""
-    frm_rows = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "APPROVED"}]
+    frm_rows = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "CONFIRMED"}]
     sb = _make_supabase_mock(frm_rows=frm_rows, art_data=[_ART_ROW_24], law_data=[])  # 법령 없음
     with patch("services.document_forms_service.get_supabase", return_value=sb):
         result = get_document_form_articles("DOC-CHEM-001")
 
     assert result["article_count"] == 0, "법령 미확인 시 확정 근거로 반환 금지"
+
+
+# ---------------------------------------------------------------------------
+# T22 — REJECTED → 확정 취급 금지 (WO-022)
+# ---------------------------------------------------------------------------
+def test_t22_rejected_is_not_confirmed():
+    """REJECTED 매핑은 확정으로 취급하지 않는다."""
+    frm_rows = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "REJECTED"}]
+    sb = _make_supabase_mock(frm_rows=frm_rows, art_data=[_ART_ROW_24])
+    with patch("services.document_forms_service.get_supabase", return_value=sb):
+        result_public = get_document_form_articles("DOC-CHEM-001", include_pending=False)
+        result_admin  = get_document_form_articles("DOC-CHEM-001", include_pending=True)
+
+    assert result_public["article_count"] == 0, "REJECTED 공개 응답 제외"
+    assert result_admin["article_count"] == 1,  "REJECTED 관리자 응답 포함"
+    assert result_admin["articles"][0]["is_confirmed"] is False, "REJECTED is_confirmed=False"
+
+
+# ---------------------------------------------------------------------------
+# T23 — REVISED → 확정 취급 금지 (WO-022)
+# ---------------------------------------------------------------------------
+def test_t23_revised_is_not_confirmed():
+    """REVISED 매핑은 확정으로 취급하지 않는다."""
+    frm_rows = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "REVISED"}]
+    sb = _make_supabase_mock(frm_rows=frm_rows, art_data=[_ART_ROW_24])
+    with patch("services.document_forms_service.get_supabase", return_value=sb):
+        result_public = get_document_form_articles("DOC-CHEM-001", include_pending=False)
+        result_admin  = get_document_form_articles("DOC-CHEM-001", include_pending=True)
+
+    assert result_public["article_count"] == 0, "REVISED 공개 응답 제외"
+    assert result_admin["article_count"] == 1,  "REVISED 관리자 응답 포함"
+    assert result_admin["articles"][0]["is_confirmed"] is False, "REVISED is_confirmed=False"
+
+
+# ---------------------------------------------------------------------------
+# T24 — APPROVED → 확정 취급 금지 (WO-022: DB CHECK 허용값 아님)
+# ---------------------------------------------------------------------------
+def test_t24_approved_is_not_confirmed():
+    """APPROVED는 DB 허용값이 아니므로 확정으로 취급하지 않는다."""
+    frm_rows = [{"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "APPROVED"}]
+    sb = _make_supabase_mock(frm_rows=frm_rows, art_data=[_ART_ROW_24])
+    with patch("services.document_forms_service.get_supabase", return_value=sb):
+        result_public = get_document_form_articles("DOC-CHEM-001", include_pending=False)
+        result_admin  = get_document_form_articles("DOC-CHEM-001", include_pending=True)
+
+    assert result_public["article_count"] == 0, "APPROVED 공개 응답 제외 (확정 인정 금지)"
+    assert result_admin["article_count"] == 1,  "APPROVED 관리자 응답 포함"
+    assert result_admin["articles"][0]["is_confirmed"] is False, "APPROVED is_confirmed=False"
