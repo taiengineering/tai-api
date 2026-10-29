@@ -10,7 +10,7 @@
 # v3.4.1: get_current_user() Depends 함수 추가
 # v3.4.0: POST /auth/register — business_number, representative_name 필드 추가
 # v3.3.0: /auth/seed-test-accounts 임시 엔드포인트 추가
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Request
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone, timedelta
@@ -113,9 +113,18 @@ def _require_active_account(user: dict) -> None:
                                 "message": "비활성 상태 계정입니다."})
 
 
-def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
+def get_current_user(
+    authorization: Optional[str] = Header(None),
+    request: Request = None,
+) -> dict:
+    # IG-01: 인증 헤더 검증 우선 — H-03: 헤더 없으면 캐시 반환 금지
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="토큰이 없습니다")
+    if request is not None:
+        cached = getattr(request.state, "_auth_user", None)
+        cached_token = getattr(request.state, "_auth_token", None)
+        if cached is not None and cached_token == authorization:
+            return cached
     token = authorization.replace("Bearer ", "")
     supabase = get_supabase()
     try:
