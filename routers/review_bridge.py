@@ -337,6 +337,267 @@ def bridge_evidence_approve(
     }
 
 
+# ═══ Runtime Evidence Field 사용 승인 (WO-DOC260-POSTACT-P0E-B2-RUNTIME-APPROVAL-003) ═══
+
+@router.post("/evidence-runtime-approve")
+def bridge_evidence_runtime_approve(
+    runtime_evidence_field_id: str = Query(...),
+    review_reason: str = Query(...),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Runtime Evidence Field 사용 승인.
+
+    선행 후보 승인(evidence-approve)과 독립된 별도 경로 — C2-FINAL 설계 정합.
+
+    선행 조건:
+      1. 인증된 사용자 + role_code ∈ _EVIDENCE_APPROVE_ROLE_CODES
+      2. runtime_review_authority 권한 검증 (AND 조건)
+      3. runtime_evidence_field.status = CANDIDATE
+      4. evidence_family = ATTACHMENT + upload_type = attachment
+      5. evidence_field_candidate.status = APPROVED_BY_HUMAN (선행 후보 승인 완료)
+      6. EVIDENCE APPROVE decision 존재 (efc_id 기준)
+      7. runtime_form_schema.status = APPROVED_FOR_RUNTIME_USE
+      8. field connection: 정확히 1건, input_type = file
+      9. 중복 RUNTIME_EVIDENCE_APPROVE decision 차단
+
+    처리: runtime_review_decision INSERT + runtime_evidence_field.status 전이 (원자 TX)
+    감사: review_domain='EVIDENCE', source_trace='RUNTIME_EVIDENCE_APPROVE'
+    """
+    import psycopg2
+    from db.direct_sql import _connect
+
+    reviewer_id = str(current_user.get("id") or "")
+    if not reviewer_id:
+        raise HTTPException(401, "authentication required")
+
+    if str(current_user.get("role_code", "")) not in _EVIDENCE_APPROVE_ROLE_CODES:
+        raise HTTPException(403, "reviewer role is not authorized for EVIDENCE_RUNTIME approval")
+
+    if not review_reason or not str(review_reason).strip():
+        raise HTTPException(400, "review_reason is required and must not be blank")
+
+    try:
+        conn = _connect()
+    except Exception:
+        raise HTTPException(503, "database unavailable")
+
+    try:
+        conn.autocommit = False
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+
+            # [1] 권한 검증 — AND 조건
+            cur.execute(
+                """
+                SELECT 1 FROM runtime_review_authority
+                WHERE review_domain = 'EVIDENCE'
+                  AND authority_status = 'ACTIVE'
+                  AND approver_user_id = %s
+                  AND approver_role = 'SAFETY_MANAGER'
+                  AND approval_scope LIKE '%%증빙%%'
+                LIMIT 1
+                """,
+                (reviewer_id,),
+            )
+            if not cur.fetchone():
+                raise HTTPException(
+                    403,
+                    "reviewer is not authorized for EVIDENCE_RUNTIME approval "
+                    "(requires SAFETY_MANAGER role with 증빙 scope)",
+                )
+
+            # [2] runtime_evidence_field 잠금 + 상태 확인
+            cur.execute(
+                """
+                SELECT id, status, evidence_family, upload_type,
+                       evidence_candidate_id, form_schema_id
+                FROM runtime_evidence_field
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (runtime_evidence_field_id,),
+            )
+            ev = cur.fetchone()
+            if not ev:
+                raise HTTPException(404, f"runtime_evidence_field {runtime_evidence_field_id!r} not found")
+            ev = dict(ev)
+
+            if ev["status"] != "CANDIDATE":
+                raise HTTPException(
+                    409,
+                    f"runtime_evidence_field already processed (status={ev['status']!r}). "
+                    "Cannot re-approve.",
+                )
+
+            # [3] evidence_family / upload_type 검증
+            if ev["evidence_family"] != "ATTACHMENT":
+                raise HTTPException(
+                    422,
+                    f"evidence_family={ev['evidence_family']!r} not supported "
+                    "(only ATTACHMENT allowed)",
+                )
+            if ev["upload_type"] != "attachment":
+                raise HTTPException(
+                    422,
+                    f"upload_type={ev['upload_type']!r} not supported "
+                    "(only attachment allowed)",
+                )
+
+            evidence_candidate_id = str(ev.get("evidence_candidate_id") or "")
+            if not evidence_candidate_id:
+                raise HTTPException(422, "evidence_candidate_id missing — FK path broken")
+
+            # [4] evidence_field_candidate 상태 확인 — 선행 후보 승인 필수
+            cur.execute(
+                "SELECT id, status, field_candidate_id FROM evidence_field_candidate WHERE id = %s LIMIT 1",
+                (evidence_candidate_id,),
+            )
+            efc = cur.fetchone()
+            if not efc:
+                raise HTTPException(404, f"evidence_field_candidate {evidence_candidate_id!r} not found")
+            efc = dict(efc)
+
+            if efc["status"] != "APPROVED_BY_HUMAN":
+                raise HTTPException(
+                    409,
+                    f"evidence_field_candidate not yet approved (status={efc['status']!r}). "
+                    "Run /bridge/evidence-approve first.",
+                )
+
+            # [5] 선행 EVIDENCE APPROVE decision 존재 확인
+            cur.execute(
+                """
+                SELECT 1 FROM runtime_review_decision
+                WHERE review_domain = 'EVIDENCE'
+                  AND source_entity_id = %s
+                  AND review_action = 'APPROVE'
+                LIMIT 1
+                """,
+                (evidence_candidate_id,),
+            )
+            if not cur.fetchone():
+                raise HTTPException(
+                    409,
+                    f"No EVIDENCE APPROVE decision found for evidence_field_candidate "
+                    f"{evidence_candidate_id!r}. Audit trail missing.",
+                )
+
+            # [6] runtime_form_schema 상태 확인
+            form_schema_id = str(ev.get("form_schema_id") or "")
+            cur.execute(
+                "SELECT id, status FROM runtime_form_schema WHERE id = %s LIMIT 1",
+                (form_schema_id,),
+            )
+            rfs = cur.fetchone()
+            if not rfs:
+                raise HTTPException(404, f"runtime_form_schema {form_schema_id!r} not found")
+            rfs = dict(rfs)
+            if rfs["status"] != "APPROVED_FOR_RUNTIME_USE":
+                raise HTTPException(
+                    409,
+                    f"runtime_form_schema not approved for runtime use "
+                    f"(status={rfs['status']!r})",
+                )
+
+            # [7] field connection 검증 — 정확히 1건, input_type = file
+            field_candidate_id = str(efc.get("field_candidate_id") or "")
+            if not field_candidate_id:
+                raise HTTPException(422, "field_candidate_id missing in evidence_field_candidate")
+
+            cur.execute(
+                """
+                SELECT id, input_type FROM runtime_field
+                WHERE field_candidate_id = %s
+                  AND form_schema_id = %s
+                """,
+                (field_candidate_id, form_schema_id),
+            )
+            matched_fields = cur.fetchall()
+            if len(matched_fields) == 0:
+                raise HTTPException(422, "no runtime_field matched — connection broken")
+            if len(matched_fields) > 1:
+                raise HTTPException(422, "ambiguous connection — multiple runtime_fields matched")
+
+            rf = dict(matched_fields[0])
+            if rf["input_type"] != "file":
+                raise HTTPException(
+                    422,
+                    f"connected runtime_field.input_type={rf['input_type']!r} not supported "
+                    "(only file allowed)",
+                )
+
+            # [8] 중복 RUNTIME_EVIDENCE_APPROVE decision 차단
+            cur.execute(
+                """
+                SELECT 1 FROM runtime_review_decision
+                WHERE review_domain = 'EVIDENCE'
+                  AND source_entity_id = %s
+                  AND source_trace = 'RUNTIME_EVIDENCE_APPROVE'
+                  AND review_action = 'APPROVE'
+                LIMIT 1
+                """,
+                (runtime_evidence_field_id,),
+            )
+            if cur.fetchone():
+                raise HTTPException(
+                    409,
+                    f"RUNTIME_EVIDENCE_APPROVE decision already exists for "
+                    f"runtime_evidence_field {runtime_evidence_field_id!r}",
+                )
+
+            # [9] runtime_review_decision INSERT
+            cur.execute(
+                """
+                INSERT INTO runtime_review_decision
+                  (review_domain, source_entity_id, reviewer_id,
+                   review_action, review_reason, review_started_at, source_trace)
+                VALUES (%s, %s, %s, 'APPROVE', %s, now(), 'RUNTIME_EVIDENCE_APPROVE')
+                RETURNING id
+                """,
+                ("EVIDENCE", runtime_evidence_field_id, reviewer_id, review_reason),
+            )
+            decision_row = dict(cur.fetchone())
+            decision_id = decision_row["id"]
+
+            # [10] runtime_evidence_field.status → APPROVED_BY_HUMAN
+            cur.execute(
+                """
+                UPDATE runtime_evidence_field
+                SET status = 'APPROVED_BY_HUMAN'
+                WHERE id = %s AND status = 'CANDIDATE'
+                """,
+                (runtime_evidence_field_id,),
+            )
+            if cur.rowcount != 1:
+                raise HTTPException(
+                    409,
+                    "runtime_evidence_field status update failed — concurrent modification",
+                )
+
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        logger.exception("evidence runtime approval failed")
+        raise HTTPException(500, "evidence runtime approval failed")
+    finally:
+        conn.close()
+
+    _audit("EVIDENCE_RUNTIME_APPROVE", "runtime_evidence_field", runtime_evidence_field_id, reviewer_id)
+    return {
+        "status": "success",
+        "source": "runtime",
+        "data": {
+            "runtime_evidence_field_id": runtime_evidence_field_id,
+            "review_decision_id": str(decision_id),
+            "new_status": "APPROVED_BY_HUMAN",
+            "reviewer_id": reviewer_id,
+        },
+    }
+
+
 # ═══ Status ═══
 
 @router.get("/review-status")
