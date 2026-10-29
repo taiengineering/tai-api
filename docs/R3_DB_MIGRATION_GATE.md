@@ -9,7 +9,8 @@ date: 2026-10-30
 
 **대상**: `migrations/2026-10-30_slack_relay_event_log.sql`  
 **대상 DB**: taieng (vwlahtguyggrhvslabax), ap-northeast-2  
-**현재 상태**: **MIGRATION_NOT_APPLIED**
+**현재 상태**: **MIGRATION_APPLIED — G1V GPT_IV_PASS / CLOSED FINAL**  
+**Migration 이력**: `20261030060217_slack_relay_event_log_r3`
 
 ---
 
@@ -95,10 +96,23 @@ SELECT cron.schedule('slack-relay-cleanup', '0 3 * * *',
 
 ## 6. Gate 통과 기준
 
-- [ ] `slack_relay_event_log` 테이블 존재 확인
-- [ ] 컬럼 19개 존재 확인
-- [ ] `rowsecurity = true` 확인
-- [ ] 명시적 CREATE INDEX 3개 생성 확인 (event_id UNIQUE 자동 인덱스와 구분)
-- [ ] anon 역할 접근 거부 확인 (GPT 독립검증)
+- [x] `slack_relay_event_log` 테이블 존재 확인
+- [x] 컬럼 19개 존재 확인
+- [x] `rowsecurity = true` 확인
+- [x] 명시적 CREATE INDEX 3개 생성 확인 (event_id UNIQUE 자동 인덱스와 구분)
+- [x] anon 역할 접근 거부 확인 (GPT 독립검증)
+
+**G1V: PASS — 2026-10-30 (GPT 독립검증 완료)**
+
+---
+
+## 7. GPT IV 발견 사항 (비차단)
+
+| 항목 | 내용 | 처리 |
+|------|------|------|
+| anon/authenticated SQL 권한 | 테이블에 GRANT 잔존. RLS RESTRICTIVE가 데이터 접근 차단 중 | G5 전 별도 Gate에서 REVOKE 권고 |
+| idx_srel_event_id 중복 | UNIQUE 자동 인덱스와 구조 중복 | 성능 정리 후보 — 현재 차단 사유 아님 |
+
+두 항목 모두 G1 차단 사유 아님. 별도 Owner 승인하에 보안 보강.
 
 **Owner 승인 후 Claude Code가 GPT 독립검증 제출.**
