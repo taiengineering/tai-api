@@ -146,20 +146,25 @@ class DbStore(InMemoryStore):
                 )
                 continue
 
-            # IN×IN returns cross-product; re-match each row to exact (job_code, instant) pair.
+            # IN×IN returns a cross-product; re-match each row to the exact
+            # (job_code, aware-instant) pair.  Naive or unparseable scheduled_for
+            # values are skipped; rows for other slots or jobs are ignored.
             terminal_hits: dict[str, dict] = {}
             for row in rows:
-                row_code = row.get("job_code")
-                row_dt = _parse_ts(row.get("scheduled_for"))
-                if row_dt is None:
-                    continue
-                for code, serialized, job in chunk:
-                    if code != row_code:
+                try:
+                    row_code = row.get("job_code")
+                    row_dt = _parse_ts(row.get("scheduled_for"))
+                    if row_dt is None or row_dt.tzinfo is None:
                         continue
-                    candidate_dt = _parse_ts(serialized)
-                    if candidate_dt is not None and row_dt == candidate_dt:
-                        terminal_hits[code] = row
-                    break
+                    for code, serialized, job in chunk:
+                        if code != row_code:
+                            continue
+                        candidate_dt = _parse_ts(serialized)
+                        if candidate_dt is not None and row_dt == candidate_dt:
+                            terminal_hits[code] = row
+                        break
+                except Exception:
+                    continue
 
             for code, serialized, job in chunk:
                 if code not in terminal_hits:
@@ -170,7 +175,8 @@ class DbStore(InMemoryStore):
                         {"next_run_at": serialize_business_datetime(nxt)}
                     ).eq("job_code", code).eq("next_run_at", serialized).execute()
                     # Pre-existing: CAS affected-row count not checked; local advance proceeds
-                    # regardless of whether UPDATE matched. Documented in T08. Not changed in this WO.
+                    # regardless of whether UPDATE matched 0 or 1 rows.
+                    # Documented in T08. Not changed in this WO.
                 except Exception:
                     logger.warning("[SCHED] reconcile CAS update failed job=%s", code)
                     continue
