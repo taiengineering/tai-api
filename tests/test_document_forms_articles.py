@@ -219,7 +219,7 @@ def test_t03_unconfirmed_mapping_gap_no_internal_ids():
 # ---------------------------------------------------------------------------
 def test_t04_no_auto_inference_of_gosi_art6():
     frm_rows = [
-        {"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "APPROVED"},
+        {"field_key": "applicant_information", "article_id": _ARTICLE_UUID_24, "review_status": "CONFIRMED"},
     ]
     _LAW_UUID_GOSI = "eeeeeeee-0005-0005-0005-000000000005"
     _VERSION_UUID_GOSI = "gggggggg-0008-0008-0008-000000000008"
@@ -253,7 +253,8 @@ def test_t04_no_auto_inference_of_gosi_art6():
         result = get_document_form_articles("DOC-CHEM-001")
 
     ids = [a["law_article_id"] for a in result["articles"]]
-    assert _ARTICLE_UUID_6 not in ids, "매핑 없는 고시 제6조는 자동으로 반환되지 않아야 함"
+    assert _ARTICLE_UUID_24 in ids,     "매핑된 제24조는 정상 반환돼야 함"
+    assert _ARTICLE_UUID_6 not in ids,  "매핑 없는 고시 제6조는 자동으로 반환되지 않아야 함"
 
 
 # ---------------------------------------------------------------------------
@@ -573,8 +574,8 @@ def test_t22_rejected_is_not_confirmed():
         result_admin  = get_document_form_articles("DOC-CHEM-001", include_pending=True)
 
     assert result_public["article_count"] == 0, "REJECTED 공개 응답 제외"
-    if result_admin["article_count"] > 0:
-        assert result_admin["articles"][0]["is_confirmed"] is False, "REJECTED is_confirmed=False"
+    assert result_admin["article_count"] == 1,  "REJECTED 관리자 응답 포함"
+    assert result_admin["articles"][0]["is_confirmed"] is False, "REJECTED is_confirmed=False"
 
 
 # ---------------------------------------------------------------------------
@@ -589,8 +590,8 @@ def test_t23_revised_is_not_confirmed():
         result_admin  = get_document_form_articles("DOC-CHEM-001", include_pending=True)
 
     assert result_public["article_count"] == 0, "REVISED 공개 응답 제외"
-    if result_admin["article_count"] > 0:
-        assert result_admin["articles"][0]["is_confirmed"] is False, "REVISED is_confirmed=False"
+    assert result_admin["article_count"] == 1,  "REVISED 관리자 응답 포함"
+    assert result_admin["articles"][0]["is_confirmed"] is False, "REVISED is_confirmed=False"
 
 
 # ---------------------------------------------------------------------------
@@ -605,5 +606,5 @@ def test_t24_approved_is_not_confirmed():
         result_admin  = get_document_form_articles("DOC-CHEM-001", include_pending=True)
 
     assert result_public["article_count"] == 0, "APPROVED 공개 응답 제외 (확정 인정 금지)"
-    if result_admin["article_count"] > 0:
-        assert result_admin["articles"][0]["is_confirmed"] is False, "APPROVED is_confirmed=False"
+    assert result_admin["article_count"] == 1,  "APPROVED 관리자 응답 포함"
+    assert result_admin["articles"][0]["is_confirmed"] is False, "APPROVED is_confirmed=False"

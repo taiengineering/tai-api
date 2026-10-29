@@ -163,7 +163,8 @@ def get_document_forms_stats() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 # field_rule_mapping.review_status 값 중 법적 확정으로 인정되는 상태.
-# ACTIVE/CONFIRMED 임의 포함 금지 — PRJ 승인 계약 기준만 인정.
+# WO-022: DB CHECK 허용값 기준 — CONFIRMED만 인정. APPROVED는 DB 저장 불가.
+# 임의 확장 금지 — PRJ 승인 계약 기준만 인정.
 _CONFIRMED_STATUSES = frozenset({"CONFIRMED"})
 
 
@@ -176,9 +177,9 @@ def get_document_form_articles(
     field_rule_mapping 실제 컬럼: doc_id / field_key / article_id / review_status.
     동일 article_id 중복 제거. PENDING → is_confirmed=False.
 
-    is_confirmed=True 조건: 원본(raw) 매핑 전체가 APPROVED인 경우만.
-    혼합(APPROVED+PENDING)은 MIXED로 표시하며 is_confirmed=False.
-    공개 응답은 전체-APPROVED 조문만 포함. 고시 제6조 자동 추론 금지.
+    is_confirmed=True 조건: 원본(raw) 매핑 전체가 CONFIRMED인 경우만.
+    혼합(CONFIRMED+PENDING)은 MIXED로 표시하며 is_confirmed=False.
+    공개 응답은 전체-CONFIRMED 조문만 포함. 고시 제6조 자동 추론 금지.
     law_master.current_version_id 일치 조문만 반환.
     """
     supabase = get_supabase()
