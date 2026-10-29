@@ -22,7 +22,7 @@ WO-TAI-SLACK-BOT-UNIFIED-001-R3 (Alternative C: Slack Events Relay)
 | 아키텍처 잠금 | ARCHITECTURE_LOCKED |
 | 보안 계약 | PASS |
 | 내구성 계약 | DURABILITY_CORRECTION_REQUIRED → Addendum으로 해소 |
-| 토큰 교체 | TOKEN_ROTATION_PENDING → 절차서 작성 완료 |
+| 토큰 교체 | TOKEN_ROTATION_DEFERRED (Owner 결정, SECURITY_RISK_OPEN 유지) |
 | 최종 판정 | GPT_IV_CONDITIONAL_PASS (조건: Addendum 확정) |
 
 ---
@@ -50,7 +50,7 @@ Owner가 완료 후 구두 또는 서면으로 확인해 주십시오.
 
 | # | 항목 | 완료 여부 |
 |---|------|-----------|
-| P-01 | `SLACK_BOT_TOKEN1` 재발급 + Railway `tai-api-prod` 환경변수 업데이트 | □ |
+| P-01 | `SLACK_BOT_TOKEN1` 재발급 + Railway `tai-api-prod` 환경변수 업데이트 | **DEFERRED** — Owner 결정. 구현은 계속 진행하나 SECURITY_RISK_OPEN 유지. |
 | P-02 | Slack App 관리 콘솔에서 `api_app_id` 확인 및 보안 기록 | □ |
 | P-03 | `groups:history` 스코프 추가 (OAuth & Permissions) | □ |
 | P-04 | 파일럿용 private 릴레이 채널 생성 + 채널 ID 확인 | □ |
@@ -118,9 +118,15 @@ Owner가 아래 중 하나로 응답:
 
 ---
 
-## 노출 토큰 교체 우선 처리
+## 토큰 교체 결정 현황 (COR-06 보정)
 
-구현 시작 전 반드시 P-01(토큰 교체)을 먼저 완료하십시오.
-현재 세션에서 `SLACK_BOT_TOKEN1` 값이 노출되었습니다.
-교체 완료 전까지 TAI Slack 봇 발송 기능은 정상 동작하나,
-보안 원칙상 파일럿 구현 착수 전 교체가 필수입니다.
+**Owner 결정 (2026-10-30)**: TOKEN_ROTATION_DEFERRED
+
+- P-01 토큰 교체는 파일럿 구현의 선결 조건에서 제외됨
+- 구현(Draft PR)과 검증은 계속 진행
+- SECURITY_RISK_OPEN 유지 — 토큰 노출 위험이 해소된 것으로 표기하지 않음
+- 토큰 전체값은 어떠한 경우에도 로그·코드에 출력하지 않음
+- 실제 토큰 교체는 별도 Owner 승인 후 진행
+
+이 결정은 보안 위험을 허용하는 것이 아니라, 파일럿 코드 검증을 먼저 완료하여
+교체 시점의 실수를 최소화하기 위한 절차적 결정입니다.

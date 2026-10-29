@@ -397,11 +397,12 @@ def test_t16_claim_cas_race_condition():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T17: CLAIMED → SENDING claim_token 불일치 시 False
+# T17: CLAIMED → SENDING claim_token + 출발 상태 검증
+# (COR-02: .eq("id").eq("claim_token").eq("status","CLAIMED") 3중 CAS)
 # ─────────────────────────────────────────────────────────────────────────────
 def test_t17_start_sending_token_mismatch():
     fake_sb = MagicMock()
-    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
         result = _start_sending("row-001", "wrong-token")
     assert result is False
@@ -409,7 +410,7 @@ def test_t17_start_sending_token_mismatch():
 
 def test_t17_start_sending_token_match():
     fake_sb = MagicMock()
-    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = [{"id": "row-001"}]
+    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = [{"id": "row-001"}]
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
         result = _start_sending("row-001", "correct-token")
     assert result is True
@@ -527,10 +528,11 @@ def test_t21_concurrent_claim_only_one_succeeds():
 
 # ─────────────────────────────────────────────────────────────────────────────
 # T22: claim_token 불일치 → _finish 0행 반환
+# (COR-02: .eq("id").eq("claim_token").eq("status","SENDING") 3중 CAS)
 # ─────────────────────────────────────────────────────────────────────────────
 def test_t22_finish_token_mismatch_no_update():
     fake_sb = MagicMock()
-    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
         result = _finish("row-T22", "stale-token", "SENT")
     assert result is False
@@ -928,3 +930,76 @@ def test_r13_p0_slack_and_automation_coexist():
 def test_r14_slack_relay_router_attributes():
     assert router.prefix == "/slack"
     assert "slack-relay" in router.tags
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R05: COR-04 — stale SENDING → UNKNOWN 전환, Slack 재발송 없음
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r05_stale_sending_to_unknown_no_resend():
+    """stale SENDING → UNKNOWN 전환 확인 (자동 재발송 차단, claim_token 제거)."""
+    fake_sb = MagicMock()
+    fake_sb.table.return_value.update.return_value.eq.return_value.lt.return_value.execute.return_value.data = [
+        {"id": "row-R05"}
+    ]
+    with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
+        with patch("httpx.AsyncClient") as mock_httpx:
+            recovered = recover_stale_claimed()
+    # Slack HTTP 발송 없음
+    mock_httpx.assert_not_called()
+    # SENDING→UNKNOWN 업데이트 포함 확인
+    update_calls = fake_sb.table.return_value.update.call_args_list
+    assert any("UNKNOWN" in str(c) for c in update_calls)
+    # UNKNOWN 전환 시 claim_token=None 포함 확인 (재발송 잠금)
+    for call in update_calls:
+        payload = call.args[0] if call.args else (call[0][0] if call[0] else {})
+        if isinstance(payload, dict) and payload.get("status") == "UNKNOWN":
+            assert payload.get("claim_token") is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R15: COR-01 — 복구 진입점 등록, 미인증 시 401
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r15_recovery_endpoint_exists_and_requires_auth():
+    """COR-01: POST /internal/slack-relay/recover — 등록 확인, 미인증 시 401."""
+    from fastapi import FastAPI
+    from routers.slack_relay_recover import router as recover_router
+    app = FastAPI()
+    app.include_router(recover_router)
+    url = app.url_path_for("trigger_relay_recovery")
+    assert str(url) == "/internal/slack-relay/recover"
+    client = TestClient(app)
+    resp = client.post("/internal/slack-relay/recover")
+    assert resp.status_code == 401
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R16: COR-02 — _start_sending / _finish 출발 상태 검증 (status guard)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r16_start_sending_requires_claimed_status():
+    """COR-02: _start_sending이 status='CLAIMED' 조건(3번째 .eq)으로 UPDATE하는지 확인."""
+    fake_sb = MagicMock()
+    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        {"id": "row-R16"}
+    ]
+    with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
+        result = _start_sending("row-R16", "tok-R16")
+    assert result is True
+    # 세 번째 .eq() 호출: eq.return_value.eq.return_value.eq.call_args
+    third_eq = fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq
+    assert third_eq.called
+    call_args = third_eq.call_args
+    assert "CLAIMED" in str(call_args)
+
+
+def test_r16_finish_requires_sending_status():
+    """COR-02: _finish가 status='SENDING' 조건(3번째 .eq)으로 UPDATE하는지 확인."""
+    fake_sb = MagicMock()
+    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        {"id": "row-R16"}
+    ]
+    with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
+        result = _finish("row-R16", "tok-R16", "SENT")
+    assert result is True
+    third_eq = fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq
+    assert third_eq.called
+    assert "SENDING" in str(third_eq.call_args)

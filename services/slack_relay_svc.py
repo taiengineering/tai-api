@@ -135,23 +135,23 @@ def _claim(event_id: str) -> Optional[tuple[str, str]]:
 
 
 def _start_sending(row_id: str, claim_token: str) -> bool:
-    """CLAIMED → SENDING (claim_token CAS 펜싱)."""
+    """CLAIMED → SENDING (claim_token + 출발 상태 CAS 펜싱)."""
     sb = _get_supabase()
     result = sb.table("slack_relay_event_log").update({
         "status": "SENDING",
         "dispatch_started_at": _now(),
         "updated_at": _now(),
-    }).eq("id", row_id).eq("claim_token", claim_token).execute()
+    }).eq("id", row_id).eq("claim_token", claim_token).eq("status", "CLAIMED").execute()
     return bool(result.data)
 
 
 def _finish(row_id: str, claim_token: str, new_status: str, **extra) -> bool:
-    """SENDING → (SENT|RETRY|UNKNOWN|FAILED_PERMANENT) (claim_token CAS 펜싱)."""
+    """SENDING → (SENT|RETRY|UNKNOWN|FAILED_PERMANENT) (claim_token + 출발 상태 CAS 펜싱)."""
     sb = _get_supabase()
     update_data = {"status": new_status, "updated_at": _now(), **extra}
     result = sb.table("slack_relay_event_log").update(update_data).eq(
         "id", row_id
-    ).eq("claim_token", claim_token).execute()
+    ).eq("claim_token", claim_token).eq("status", "SENDING").execute()
     return bool(result.data)
 
 
