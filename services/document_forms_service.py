@@ -164,7 +164,7 @@ def get_document_forms_stats() -> Dict[str, Any]:
 
 # field_rule_mapping.review_status 값 중 법적 확정으로 인정되는 상태.
 # ACTIVE/CONFIRMED 임의 포함 금지 — PRJ 승인 계약 기준만 인정.
-_CONFIRMED_STATUSES = frozenset({"APPROVED"})
+_CONFIRMED_STATUSES = frozenset({"CONFIRMED"})
 
 
 def get_document_form_articles(
@@ -279,7 +279,7 @@ def get_document_form_articles(
             has_unconfirmed = any(s not in _CONFIRMED_STATUSES for s in raw_statuses)
 
             if is_confirmed:
-                mapping_status = "APPROVED"
+                mapping_status = "CONFIRMED"
             elif has_approved and has_unconfirmed:
                 mapping_status = "MIXED"
             else:
