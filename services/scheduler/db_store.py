@@ -94,35 +94,88 @@ class DbStore(InMemoryStore):
 
     def reconcile_terminal_wedges(self) -> None:
         """Self-heal leftover terminal(X) with config.next_run_at==X. Not used by the atomic complete path."""
-        sb = self._client()
-        for job in list(self.jobs.values()):
+        candidates: list[tuple[str, str, JobRow]] = []
+        for job in self.jobs.values():
             if job.next_run_at is None or not job.cron_expression:
                 continue
             try:
-                existing = (
+                serialized = serialize_business_datetime(job.next_run_at)
+            except Exception:
+                continue
+            candidates.append((job.job_code, serialized, job))
+
+        if not candidates:
+            return
+
+        sb = self._client()
+        _CHUNK = 25
+
+        for chunk_start in range(0, len(candidates), _CHUNK):
+            chunk = candidates[chunk_start : chunk_start + _CHUNK]
+            chunk_codes = [c[0] for c in chunk]
+            chunk_slots = list({c[1] for c in chunk})
+
+            try:
+                result = (
                     sb.table("cron_job_log")
-                    .select("status,scheduled_for")
-                    .eq("job_code", job.job_code)
-                    .eq("scheduled_for", serialize_business_datetime(job.next_run_at))
-                    .limit(1)
+                    .select("job_code,status,scheduled_for", count="exact")
+                    .in_("job_code", chunk_codes)
+                    .in_("scheduled_for", chunk_slots)
+                    .in_("status", sorted(TERMINAL))
                     .execute()
                 )
             except Exception:
+                logger.warning(
+                    "[SCHED] reconcile batch query failed chunk_size=%d; skipping", len(chunk)
+                )
                 continue
-            rows = existing.data or []
-            if not rows:
+
+            rows = result.data or []
+            reported_count = getattr(result, "count", None)
+
+            if (
+                reported_count is None
+                or not isinstance(reported_count, int)
+                or reported_count != len(rows)
+            ):
+                logger.warning(
+                    "[SCHED] reconcile count mismatch/missing count=%s rows=%d chunk_size=%d; skipping chunk",
+                    reported_count,
+                    len(rows),
+                    len(chunk),
+                )
                 continue
-            if rows[0].get("status") not in TERMINAL:
-                continue
-            nxt = next_fire_after(job.cron_expression, job.next_run_at)
-            scheduled = serialize_business_datetime(job.next_run_at)
-            try:
-                sb.table("cron_schedule_config").update(
-                    {"next_run_at": serialize_business_datetime(nxt)}
-                ).eq("job_code", job.job_code).eq("next_run_at", scheduled).execute()
-            except Exception:
-                continue
-            job.next_run_at = nxt
+
+            # IN×IN returns cross-product; re-match each row to exact (job_code, instant) pair.
+            terminal_hits: dict[str, dict] = {}
+            for row in rows:
+                row_code = row.get("job_code")
+                row_dt = _parse_ts(row.get("scheduled_for"))
+                if row_dt is None:
+                    continue
+                for code, serialized, job in chunk:
+                    if code != row_code:
+                        continue
+                    candidate_dt = _parse_ts(serialized)
+                    if candidate_dt is not None and row_dt == candidate_dt:
+                        terminal_hits[code] = row
+                    break
+
+            for code, serialized, job in chunk:
+                if code not in terminal_hits:
+                    continue
+                nxt = next_fire_after(job.cron_expression, job.next_run_at)
+                try:
+                    sb.table("cron_schedule_config").update(
+                        {"next_run_at": serialize_business_datetime(nxt)}
+                    ).eq("job_code", code).eq("next_run_at", serialized).execute()
+                    # Pre-existing: CAS affected-row count not checked; local advance proceeds
+                    # regardless of whether UPDATE matched. Documented in T08. Not changed in this WO.
+                except Exception:
+                    logger.warning("[SCHED] reconcile CAS update failed job=%s", code)
+                    continue
+                logger.info("[SCHED] reconcile healed wedge job=%s slot=%s", code, serialized)
+                job.next_run_at = nxt
 
     def claim(self, job: JobRow, worker_id: str, now: datetime, lease: timedelta) -> Claim | None:
         scheduled_for = job.next_run_at
