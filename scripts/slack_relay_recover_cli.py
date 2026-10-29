@@ -4,7 +4,8 @@ COR-F01: 외부 HTTP 경로 대신 격리된 CLI 진입점으로 제공.
 --run 플래그 없이 실행하면 도움말을 출력하고 종료.
 
 사용법:
-    python scripts/slack_relay_recover_cli.py --run
+    python -m scripts.slack_relay_recover_cli --run  # 권장 (패키지 루트에서 실행)
+    python scripts/slack_relay_recover_cli.py --run  # 직접 실행 (PYTHONPATH 설정 필요)
 """
 from __future__ import annotations
 
