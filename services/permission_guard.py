@@ -85,6 +85,9 @@ _PUBLIC: Tuple[Tuple[str, str], ...] = (
     # SEC-03 EE-12: /engine-equipment/categories 는 정적 CATEGORY_MAP 전용 공개 경로.
     # /engine-equipment/ 전체 prefix 공개가 아닌 exact 경로만 허용.
     ("GET", "/engine-equipment/categories"),
+    # WO-R3: Slack Events Relay 수신 엔드포인트. Slack 서버는 Bearer 토큰 없이 POST.
+    # 자체 HMAC Signing Secret 검증으로 보호 (slack_events.py).
+    ("POST", "/slack/events"),
 )
 
 _RESOURCE_PREFIX = {
