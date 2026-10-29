@@ -1143,16 +1143,21 @@ def test_iso04_relay_secret_url_verification():
 
 
 def test_iso05_kin_still_verifies_with_legacy_secret():
-    """COR-01-ISO-05: slack_kin은 SLACK_SIGNING_SECRET으로 정상 검증."""
+    """COR-01-ISO-05: slack_kin은 SLACK_SIGNING_SECRET으로 정상 검증 → 200 핸들러 응답."""
+    from urllib.parse import urlencode
     from routers.slack_kin import router as kin_router
     from fastapi import FastAPI
 
     kin_app = FastAPI()
     kin_app.include_router(kin_router)
 
-    payload = json.dumps({"payload": json.dumps({"type": "block_actions", "actions": []})}).encode("utf-8")
+    # Kin 핸들러는 parse_qs(form-urlencoded)로 payload 필드를 읽음
+    # actions=[] → _handle_payload가 "알 수 없는 요청입니다." 200 반환
+    kin_payload_json = json.dumps({"type": "block_actions", "actions": []})
+    body = urlencode({"payload": kin_payload_json}).encode("utf-8")
+
     ts = str(int(time.time()))
-    sig_base = f"v0:{ts}:{payload.decode('utf-8')}"
+    sig_base = f"v0:{ts}:{body.decode('utf-8')}"
     digest = hmac.new(_KIN_SECRET.encode("utf-8"), sig_base.encode("utf-8"), hashlib.sha256).hexdigest()
     headers = {
         "x-slack-request-timestamp": ts,
@@ -1165,23 +1170,27 @@ def test_iso05_kin_still_verifies_with_legacy_secret():
     }
     with patch.dict("os.environ", env, clear=True):
         client = TestClient(kin_app, raise_server_exceptions=False)
-        resp = client.post("/slack/kin/interactions", content=payload, headers=headers)
-    # 서명 검증 통과 여부만 확인 (400/200 가능, 403은 아님)
-    assert resp.status_code != 403
+        resp = client.post("/slack/kin/interactions", content=body, headers=headers)
+    # 서명 검증 통과 + 핸들러 정상 응답 확인
+    assert resp.status_code == 200
+    assert resp.json().get("text") == "알 수 없는 요청입니다."
 
 
 def test_iso06_kin_rejects_relay_secret_signature():
-    """COR-01-ISO-06: slack_kin은 R3 전용 Secret 서명을 거부."""
+    """COR-01-ISO-06: slack_kin은 R3 전용 Secret 서명을 거부 → 403."""
+    from urllib.parse import urlencode
     from routers.slack_kin import router as kin_router
     from fastapi import FastAPI
 
     kin_app = FastAPI()
     kin_app.include_router(kin_router)
 
-    payload = json.dumps({"payload": json.dumps({"type": "block_actions", "actions": []})}).encode("utf-8")
+    kin_payload_json = json.dumps({"type": "block_actions", "actions": []})
+    body = urlencode({"payload": kin_payload_json}).encode("utf-8")
+
     ts = str(int(time.time()))
     # R3 Secret(_SIGNING_SECRET)으로 서명 — Kin이 기대하는 _KIN_SECRET과 다름
-    sig_base = f"v0:{ts}:{payload.decode('utf-8')}"
+    sig_base = f"v0:{ts}:{body.decode('utf-8')}"
     digest = hmac.new(_SIGNING_SECRET.encode("utf-8"), sig_base.encode("utf-8"), hashlib.sha256).hexdigest()
     headers = {
         "x-slack-request-timestamp": ts,
@@ -1194,7 +1203,7 @@ def test_iso06_kin_rejects_relay_secret_signature():
     }
     with patch.dict("os.environ", env, clear=True):
         client = TestClient(kin_app, raise_server_exceptions=False)
-        resp = client.post("/slack/kin/interactions", content=payload, headers=headers)
+        resp = client.post("/slack/kin/interactions", content=body, headers=headers)
     assert resp.status_code == 403
 
 

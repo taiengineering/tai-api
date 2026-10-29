@@ -1,7 +1,7 @@
 ---
 title: R3 Slack App 설정 체크리스트
 wo: WO-TAI-SLACK-BOT-UNIFIED-001-R3-PRODUCTION-PREFLIGHT-001
-status: G3_PASS_PENDING_P03_OWNER_CONFIRM
+status: G3_PASS_COMPLETE
 date: 2026-10-30
 decision: WO-TAI-SLACK-BOT-R3-G3-EXISTING-CONFIG-REUSE-001
 ---
@@ -44,19 +44,18 @@ Claude Code는 이 섹션을 실행하지 않습니다. 비밀값을 채팅에 �
 
 ## P-03: channels:history 스코프 확인 *(정정: 구명칭 groups:history)*
 
-- [ ] OAuth & Permissions → Scopes → Bot Token Scopes
-  - `channels:history` 존재 여부 확인 *(ERRATA: 기재된 `groups:history`는 `channels:history`로 정정)*
-  - **이미 있으면 생략** — 불필요한 App 재설치 금지
-  - 없을 경우에만 추가 + 재설치 (기존 Bot 연동 영향 사전 확인 후)
+- [x] OAuth & Permissions → Scopes → Bot Token Scopes
+  - `channels:history` 추가 완료 *(ERRATA: 기재된 `groups:history`는 `channels:history`로 정정)*
+  - App 재설치 완료 (기존 Bot 연동 영향 확인 후 진행)
 
-**G3V 상태**: **OWNER_CONFIRM_REQUIRED** — Railway 환경변수·소스코드로 확인 불가. Owner가 Slack App Console → OAuth & Permissions → Bot Token Scopes에서 직접 확인 필요.
+**G3V 확인**: `channels:history` 추가 + App 재설치 Owner 직접 완료 ✅
 
 ---
 
 ## P-04: Relay 발신 채널 및 Bot 멤버십 확인
 
-- [x] 파일럿 Relay 발신 채널로 사용할 기존 비공개 채널 확인
-  - 채널 ID 확인 (형식: `G0XXXXXXXX`)
+- [x] 파일럿 Relay 발신 채널로 사용할 기존 공개 채널 확인 *(ERRATA: 비공개 채널 → 공개 채널로 정정)*
+  - 채널 ID 확인 (형식: `C0XXXXXXXX`)
   - `tai_bot`이 해당 채널 멤버인지 확인 (미초대 시 `/invite @tai_bot`)
   - **신규 채널 생성 금지**
 
@@ -129,7 +128,7 @@ SLACK_RELAY_ALLOWED_SENDER_IDS = <P-05 승인 발신자 User ID>
 | 항목 | 완료 여부 |
 |------|---------|
 | P-02 App ID / Team ID 확인 및 환경변수 설정 | ✅ (Railway guri-cf 직접 확인) |
-| P-03 `channels:history` 권한 확인 *(ERRATA: groups:history → channels:history)* | ⚠️ OWNER_CONFIRM_REQUIRED |
+| P-03 `channels:history` 권한 확인 + App 재설치 | ✅ (Owner 직접 완료) |
 | P-04 Relay 발신 채널 및 `tai_bot` 멤버십 확인 | ✅ (Owner 직접 확인) |
 | P-05 대상 채널·승인 발신자 확인 | ✅ (Railway guri-cf 직접 확인) |
 | Railway 환경변수 3개 설정 + `/health` 200 확인 | ✅ (7f54d4e9 SUCCESS, /health 200) |
@@ -159,7 +158,11 @@ SLACK_RELAY_ALLOWED_SENDER_IDS = <P-05 승인 발신자 User ID>
 
 ## G3 판정
 
-**G3V 종합**: PASS — P-03(`groups:history`) OWNER_CONFIRM_REQUIRED 제외 전 항목 검증 완료.
+**G3V 종합**: PASS — P-02~P-05 전 항목 완료 ✅
 
-- P-03는 차단 조건 아님: `groups:history`가 없으면 비공개 채널 메시지 이벤트 수신 불가 → G5 E2E에서 실제 메시지가 들어오지 않으므로 그 시점에 발각됨. G4 Request URL Verification은 channel 이벤트 미필요.
-- **G4 진입 선행**: Owner가 P-03 콘솔 확인 후 G4 승인 발화.
+- P-03 `channels:history` 추가 + App 재설치 Owner 직접 완료
+- 기존 공개 채널 재사용 (`message.channels` 적용)
+- `SLACK_SIGNING_SECRET` 기존 유지 (Kin 전용)
+- `SLACK_RELAY_SIGNING_SECRET` 설정 대기 (G4 Merge + 배포 후)
+- G4 URL Verification: Signing Secret 불일치 해결(PR #725 Merge) 후 실행
+- G5 이후: 별도 Owner 승인
