@@ -24,7 +24,9 @@ import scheduler as sch
 from routers.auth import get_current_user
 from services.education_assignment_svc import expire_overdue_education_assignments
 
-BASE = "c37c826dbfdbda1ce79bfafc48927d583d304f01"  # WO-009 WP-02 승인 변경 후
+BASE = "991edce3015af279e57a48efc0fe8b4af6b97ba0"  # 최신 main HEAD (WO-019 포함)
+# WO-009 WP-02 승인 변경 후 확정된 permission_guard.py blob
+APPROVED_GUARD_BLOB = "8f1a1df40b3b5e910eee373940fec83db43497d5"
 USER = "11111111-1111-1111-1111-111111111111"
 OTHER_USER = "99999999-9999-9999-9999-999999999999"
 ADMIN_ID = "aaaaaaaa-0000-4000-8000-000000000001"
@@ -751,9 +753,8 @@ def test_F3_worker_complete_unchanged():
 
 
 def test_F4_permission_guard_unchanged():
-    assert _git("rev-parse", "HEAD:services/permission_guard.py") == _git(
-        "rev-parse", "%s:services/permission_guard.py" % BASE
-    )
+    # WO-009 WP-02 승인 blob에 고정 — Squash Merge 후 main 체크아웃에서도 안정적
+    assert _git("rev-parse", "HEAD:services/permission_guard.py") == APPROVED_GUARD_BLOB
 
 
 def test_F5_api_permissions_db_change_0():
