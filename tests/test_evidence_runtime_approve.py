@@ -4,10 +4,12 @@ Runtime Evidence Field 사용 승인 브릿지 테스트
 테스트 케이스:
   RT-T01: 정상 승인 — review_decision INSERT + ev.status UPDATE 원자 커밋
   RT-T02: role_code 불일치 → 403 (선제 검증, DB 미도달)
+  RT-T02B: 허용 목록 외 증적 ID → 403 (Owner Gate 범위 초과, DB 미도달) [CORR-001]
   RT-T03: runtime_review_authority 없음 → 403
   RT-T04: ev.status 이미 APPROVED_BY_HUMAN → 409
   RT-T05: efc.status CANDIDATE (선행 후보 승인 없음) → 409
   RT-T06: 선행 EVIDENCE APPROVE decision 없음 → 409
+  RT-T06B: 선행 decision review_status=PENDING (미완료) → 409 [CORR-001]
   RT-T07: runtime_form_schema 미승인 → 409
   RT-T08: field connection 없음 → 422
   RT-T09: 중복 RUNTIME_EVIDENCE_APPROVE → 409
@@ -326,4 +328,39 @@ def test_RT_T11_unexpected_exception_rollback():
 
     assert exc_info.value.status_code == 409
     assert "concurrent modification" in exc_info.value.detail.lower()
+    assert conn.rolled_back
+
+
+# ─── CORR-001 추가 테스트 ────────────────────────────────────────────────
+
+# RT-T02B: 허용 목록 외 ID → 403 (Owner Gate 범위 초과) ────────────────
+
+def test_RT_T02B_not_in_allowlist_403():
+    """RT-T02B: _RUNTIME_EV_ALLOWLIST에 없는 ID → DB 미도달 선제 차단 403. [CORR-001]"""
+    from routers.review_bridge import bridge_evidence_runtime_approve
+
+    with pytest.raises(HTTPException) as exc_info:
+        with patch("db.direct_sql._connect", side_effect=AssertionError("DB should not be reached")):
+            bridge_evidence_runtime_approve(
+                runtime_evidence_field_id="00000000-0000-0000-0000-000000000001",  # 허용 목록 외
+                review_reason=_REASON,
+                current_user=_AUTH_USER,
+            )
+
+    assert exc_info.value.status_code == 403
+    assert "allowlist" in exc_info.value.detail.lower()
+
+
+# RT-T06B: 선행 decision review_status != APPROVED → 409 ─────────────
+
+def test_RT_T06B_prior_decision_not_approved_409():
+    """RT-T06B: 선행 EVIDENCE decision이 review_status=PENDING이면 조회 불일치 → 409. [CORR-001]
+    review_status='APPROVED' 조건 추가로 PENDING 상태 decision은 차단."""
+    conn = _FakeConn(_FakeCursor(prior_approve_decision=False))
+
+    with pytest.raises(HTTPException) as exc_info:
+        _call(conn)
+
+    assert exc_info.value.status_code == 409
+    assert "audit trail missing" in exc_info.value.detail.lower()
     assert conn.rolled_back

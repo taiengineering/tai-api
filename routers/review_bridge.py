@@ -339,6 +339,14 @@ def bridge_evidence_approve(
 
 # ═══ Runtime Evidence Field 사용 승인 (WO-DOC260-POSTACT-P0E-B2-RUNTIME-APPROVAL-003) ═══
 
+# Owner Gate로 허용된 증적 ID 화이트리스트 (WO-DOC260-POSTACT-P0E-B2-002 범위)
+# 확대는 별도 Owner Gate 필수
+_RUNTIME_EV_ALLOWLIST: frozenset = frozenset({
+    "fd3f3c99-62cd-4336-bf23-dda92a4b2a43",  # DOC-CHEM-001 설계 및 배치도 첨부
+    "e1793f5c-aba8-4700-9dce-2ae2b449117b",  # DOC-FAC-022 첨부서류
+})
+
+
 @router.post("/evidence-runtime-approve")
 def bridge_evidence_runtime_approve(
     runtime_evidence_field_id: str = Query(...),
@@ -351,11 +359,12 @@ def bridge_evidence_runtime_approve(
 
     선행 조건:
       1. 인증된 사용자 + role_code ∈ _EVIDENCE_APPROVE_ROLE_CODES
+      1b. runtime_evidence_field_id ∈ _RUNTIME_EV_ALLOWLIST (Owner Gate 범위 제한)
       2. runtime_review_authority 권한 검증 (AND 조건)
       3. runtime_evidence_field.status = CANDIDATE
       4. evidence_family = ATTACHMENT + upload_type = attachment
       5. evidence_field_candidate.status = APPROVED_BY_HUMAN (선행 후보 승인 완료)
-      6. EVIDENCE APPROVE decision 존재 (efc_id 기준)
+      6. EVIDENCE APPROVE decision 존재 (efc_id 기준, review_status=APPROVED)
       7. runtime_form_schema.status = APPROVED_FOR_RUNTIME_USE
       8. field connection: 정확히 1건, input_type = file
       9. 중복 RUNTIME_EVIDENCE_APPROVE decision 차단
@@ -372,6 +381,14 @@ def bridge_evidence_runtime_approve(
 
     if str(current_user.get("role_code", "")) not in _EVIDENCE_APPROVE_ROLE_CODES:
         raise HTTPException(403, "reviewer role is not authorized for EVIDENCE_RUNTIME approval")
+
+    if runtime_evidence_field_id not in _RUNTIME_EV_ALLOWLIST:
+        raise HTTPException(
+            403,
+            f"runtime_evidence_field {runtime_evidence_field_id!r} is not in the "
+            "approved allowlist for this Owner Gate. "
+            "Scope expansion requires a separate Owner Gate.",
+        )
 
     if not review_reason or not str(review_reason).strip():
         raise HTTPException(400, "review_reason is required and must not be blank")
@@ -464,13 +481,14 @@ def bridge_evidence_runtime_approve(
                     "Run /bridge/evidence-approve first.",
                 )
 
-            # [5] 선행 EVIDENCE APPROVE decision 존재 확인
+            # [5] 선행 EVIDENCE APPROVE decision 존재 확인 (action + status 이중 확인)
             cur.execute(
                 """
                 SELECT 1 FROM runtime_review_decision
                 WHERE review_domain = 'EVIDENCE'
                   AND source_entity_id = %s
                   AND review_action = 'APPROVE'
+                  AND review_status = 'APPROVED'
                 LIMIT 1
                 """,
                 (evidence_candidate_id,),
@@ -478,8 +496,8 @@ def bridge_evidence_runtime_approve(
             if not cur.fetchone():
                 raise HTTPException(
                     409,
-                    f"No EVIDENCE APPROVE decision found for evidence_field_candidate "
-                    f"{evidence_candidate_id!r}. Audit trail missing.",
+                    f"No finalized EVIDENCE APPROVE decision (review_status=APPROVED) found "
+                    f"for evidence_field_candidate {evidence_candidate_id!r}. Audit trail missing.",
                 )
 
             # [6] runtime_form_schema 상태 확인
