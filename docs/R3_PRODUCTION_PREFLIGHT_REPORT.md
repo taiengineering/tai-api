@@ -19,7 +19,7 @@ scope: READ_ONLY
 | 항목 | 결과 |
 |------|------|
 | main SHA | `24b88847` ✅ |
-| PR #722 | MERGED ✅ |
+| PR #722 | MERGED ✅ (2026-10-29 20:30:04 UTC) |
 | Migration 파일 존재 | `migrations/2026-10-30_slack_relay_event_log.sql` ✅ |
 | CLI 스크립트 존재 | `scripts/slack_relay_recover_cli.py` ✅ |
 | P0 Automation 변경 없음 | ✅ (git diff 확인) |
@@ -50,12 +50,18 @@ scope: READ_ONLY
 
 | 항목 | 결과 |
 |------|------|
-| Railway API 접근 | NOT_AUTHORIZED (MCP 인증 미설정) |
-| 현재 배포 SHA | **OWNER 직접 확인 필요** |
-| 자동 배포 | **OWNER 직접 확인 필요** |
-| Fail Closed 보증 | ✅ (SLACK_RELAY_CHANNEL_MAP 미설정 시 발송 차단 — 코드 확인) |
+| 현재 배포 SHA | `b3cd3a5b` ✅ (R3 미포함 — Fail Closed) |
+| 배포 시각 | 2026-10-29 19:57:35 UTC (PR #722 머지 32분 전) |
+| Auto-deploy 트리거 여부 | 미발생 ✅ |
+| SLACK_RELAY_APP_ID | NOT SET ✅ Fail Closed |
+| SLACK_RELAY_TEAM_ID | NOT SET ✅ Fail Closed |
+| SLACK_RELAY_ALLOWED_SENDER_IDS | NOT SET ✅ Fail Closed |
+| SLACK_RELAY_CHANNEL_MAP | NOT SET ✅ Fail Closed |
+| SLACK_SIGNING_SECRET | SET ✅ |
+| SLACK_BOT_TOKEN1 | SET ✅ |
+| SUPABASE_URL | `vwlahtguyggrhvslabax.supabase.co` ✅ |
 
-**결론**: Railway API 직접 점검 불가 → Owner 콘솔 확인 필요. Fail Closed 구조상 배포 직후 릴레이 비활성.
+**결론**: R3 코드 미배포, Relay 환경변수 4개 미설정 → Fail Closed 보증. 추가 발송 차단 확인.
 
 상세 내용: [R3_RAILWAY_DEPLOY_GATE.md](R3_RAILWAY_DEPLOY_GATE.md)
 
