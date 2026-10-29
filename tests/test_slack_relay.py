@@ -358,14 +358,14 @@ def test_t15_db_exception_503():
 
 # ─────────────────────────────────────────────────────────────────────────────
 # T16: PENDING → CLAIMED CAS 성공/실패
-# (Mock chain: .select.eq.in_.limit.execute / .update.eq.in_.execute)
+# (COR-F02: PENDING UPDATE chain = .update.eq("id").eq("status","PENDING").execute)
 # ─────────────────────────────────────────────────────────────────────────────
 def test_t16_claim_pending_success():
     fake_sb = MagicMock()
     fake_sb.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = [
         {"id": "row-001", "status": "PENDING", "next_attempt_at": None}
     ]
-    fake_sb.table.return_value.update.return_value.eq.return_value.in_.return_value.execute.return_value.data = [
+    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
         {"id": "row-001", "status": "CLAIMED"}
     ]
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
@@ -390,7 +390,7 @@ def test_t16_claim_cas_race_condition():
     fake_sb.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = [
         {"id": "row-002", "status": "PENDING", "next_attempt_at": None}
     ]
-    fake_sb.table.return_value.update.return_value.eq.return_value.in_.return_value.execute.return_value.data = []
+    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
         result = _claim("Ev_RACE")
     assert result is None
@@ -516,7 +516,8 @@ def test_t21_concurrent_claim_only_one_succeeds():
     fake_sb.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = [
         {"id": "row-T21", "status": "PENDING", "next_attempt_at": None}
     ]
-    fake_sb.table.return_value.update.return_value.eq.return_value.in_.return_value.execute.side_effect = _fake_update_execute
+    # COR-F02: PENDING UPDATE chain = .eq("id").eq("status","PENDING").execute
+    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.side_effect = _fake_update_execute
 
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
         result1 = _claim("Ev-T21")
@@ -696,7 +697,8 @@ def test_r01_claim_pending_null_next_attempt():
     fake_sb.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = [
         {"id": "row-R01", "status": "PENDING", "next_attempt_at": None}
     ]
-    fake_sb.table.return_value.update.return_value.eq.return_value.in_.return_value.execute.return_value.data = [
+    # COR-F02: PENDING UPDATE = .eq("id").eq("status","PENDING").execute
+    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
         {"id": "row-R01"}
     ]
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
@@ -715,7 +717,8 @@ def test_r02_claim_retry_arrived():
     fake_sb.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = [
         {"id": "row-R02", "status": "RETRY", "next_attempt_at": past}
     ]
-    fake_sb.table.return_value.update.return_value.eq.return_value.in_.return_value.execute.return_value.data = [
+    # COR-F02: RETRY UPDATE = .eq("id").eq("status","RETRY").or_(...).execute
+    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.or_.return_value.execute.return_value.data = [
         {"id": "row-R02"}
     ]
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
@@ -742,8 +745,13 @@ def test_r03_claim_retry_future():
 # ─────────────────────────────────────────────────────────────────────────────
 def test_r04_recover_stale_both_statuses():
     fake_sb = MagicMock()
+    # COR-F02: CLAIMED 복구는 claim_expires 기준 .or_ 체인 사용
+    fake_sb.table.return_value.update.return_value.eq.return_value.or_.return_value.execute.return_value.data = [
+        {"id": "row-stale-claimed"}
+    ]
+    # SENDING 복구는 updated_at 기준 .lt 체인 유지
     fake_sb.table.return_value.update.return_value.eq.return_value.lt.return_value.execute.return_value.data = [
-        {"id": "row-stale"}
+        {"id": "row-stale-sending"}
     ]
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
         recovered = recover_stale_claimed()
@@ -938,6 +946,9 @@ def test_r14_slack_relay_router_attributes():
 def test_r05_stale_sending_to_unknown_no_resend():
     """stale SENDING → UNKNOWN 전환 확인 (자동 재발송 차단, claim_token 제거)."""
     fake_sb = MagicMock()
+    # CLAIMED 복구 (.or_ 체인)는 빈 결과
+    fake_sb.table.return_value.update.return_value.eq.return_value.or_.return_value.execute.return_value.data = []
+    # SENDING 복구 (.lt 체인)는 1행
     fake_sb.table.return_value.update.return_value.eq.return_value.lt.return_value.execute.return_value.data = [
         {"id": "row-R05"}
     ]
@@ -1003,3 +1014,36 @@ def test_r16_finish_requires_sending_status():
     third_eq = fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq
     assert third_eq.called
     assert "SENDING" in str(third_eq.call_args)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R17: COR-F01 — CLI --run 플래그로 복구 실행 / 플래그 없으면 종료
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r17_cli_run_calls_recovery():
+    """scripts/slack_relay_recover_cli.py: --run으로 run_relay_recovery_once 호출."""
+    from scripts.slack_relay_recover_cli import main
+    with patch(
+        "services.slack_relay_svc.run_relay_recovery_once",
+        new_callable=AsyncMock,
+        return_value=3,
+    ) as mock_run:
+        result = main(["--run"])
+    assert result == 0
+    mock_run.assert_called_once()
+
+
+def test_r17_cli_no_flag_exits_nonzero():
+    """scripts/slack_relay_recover_cli.py: --run 없이 실행하면 종료 코드 != 0."""
+    from scripts.slack_relay_recover_cli import main
+    result = main([])
+    assert result != 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R18: COR-F01 — slack_relay_recover가 external ROUTERS에 없음
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r18_recover_router_not_in_external_registry():
+    """COR-F01: routers.slack_relay_recover가 인터넷 노출 레지스트리에서 제거됨."""
+    from router_registry.external import ROUTERS
+    modules = [r.get("module", "") for r in ROUTERS]
+    assert "routers.slack_relay_recover" not in modules

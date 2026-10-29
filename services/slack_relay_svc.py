@@ -121,13 +121,25 @@ def _claim(event_id: str) -> Optional[tuple[str, str]]:
 
     token = str(uuid.uuid4())
     claim_expires = _future_sec(_LEASE_SECONDS)
-    result = sb.table("slack_relay_event_log").update({
+    update_data = {
         "status": "CLAIMED",
         "claim_token": token,
         "claimed_at": now,
         "claim_expires": claim_expires,
         "updated_at": now,
-    }).eq("id", row_id).in_("status", ["PENDING", "RETRY"]).execute()
+    }
+
+    # COR-F02: DB 수준에서 상태별 조건을 분리하여 조기 Claim 경쟁 제거
+    if row_status == "PENDING":
+        result = sb.table("slack_relay_event_log").update(update_data).eq(
+            "id", row_id
+        ).eq("status", "PENDING").execute()
+    else:  # RETRY
+        result = sb.table("slack_relay_event_log").update(update_data).eq(
+            "id", row_id
+        ).eq("status", "RETRY").or_(
+            f"next_attempt_at.is.null,next_attempt_at.lte.{now}"
+        ).execute()
 
     if not result.data:
         return None
@@ -296,25 +308,29 @@ def _retry_delay_sec(retry_count: int) -> int:
 def recover_stale_claimed() -> int:
     """오래된 CLAIMED/SENDING 행 복구. 재시작 후 stale Worker 정리.
 
-    CLAIMED → RETRY, SENDING → UNKNOWN.
+    CLAIMED → RETRY (claim_expires 만료 기준 — Lease 일관성),
+    SENDING → UNKNOWN (updated_at 기준).
     """
     sb = _get_supabase()
-    stale_claimed_ts = _past_sec(_STALE_CLAIMED_SECONDS)
+    now = _now()
     stale_sending_ts = _past_sec(_STALE_SENDING_SECONDS)
 
+    # COR-F02: Lease 기준(claim_expires) 사용 — updated_at 기준 제거
     r1 = sb.table("slack_relay_event_log").update({
         "status": "RETRY",
         "claim_token": None,
         "next_attempt_at": _future_sec(60),
         "error_detail": "stale_claimed_recovery",
-        "updated_at": _now(),
-    }).eq("status", "CLAIMED").lt("updated_at", stale_claimed_ts).execute()
+        "updated_at": now,
+    }).eq("status", "CLAIMED").or_(
+        f"claim_expires.is.null,claim_expires.lt.{now}"
+    ).execute()
 
     r2 = sb.table("slack_relay_event_log").update({
         "status": "UNKNOWN",
         "claim_token": None,
         "error_detail": "stale_sending_recovery",
-        "updated_at": _now(),
+        "updated_at": now,
     }).eq("status", "SENDING").lt("updated_at", stale_sending_ts).execute()
 
     recovered = len(r1.data or []) + len(r2.data or [])
