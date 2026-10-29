@@ -1,6 +1,6 @@
 """
 pytest unit tests for DbStore.reconcile_terminal_wedges() batch implementation.
-WO-TAI-PERF-CORE-SCHEDULER-NPLUS1-007  T01–T10
+WO-TAI-PERF-CORE-SCHEDULER-NPLUS1-007  T01–T10 + T_FILTER
 
 Run: pytest tests/test_scheduler_reconcile_batch.py -v
 """
@@ -24,6 +24,7 @@ T_WEDGE     = datetime(2026, 10, 29,  9,  0, tzinfo=KST)
 T_WEDGE_UTC = datetime(2026, 10, 29,  0,  0, tzinfo=UTC)   # same instant, UTC
 T_OLD       = datetime(2026, 10, 28,  9,  0, tzinfo=KST)   # yesterday's slot
 T_NEXT      = datetime(2026, 10, 30,  9,  0, tzinfo=KST)   # mocked next_fire_after result
+T_SLOT_B    = datetime(2026, 10, 31,  9,  0, tzinfo=KST)   # a second distinct slot (JOB_B)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -54,6 +55,15 @@ def _build_sb(log_result: _MockResult):
     Build mock Supabase client that routes sb.table() by table name.
     Returns (sb, log_execute_mock, cfg_chain).
     """
+    sb, exec_m, cfg_ch, _ = _build_sb_full(log_result)
+    return sb, exec_m, cfg_ch
+
+
+def _build_sb_full(log_result: _MockResult):
+    """
+    Like _build_sb but also returns log_ch for IN-filter argument assertions.
+    Returns (sb, log_execute_mock, cfg_chain, log_chain).
+    """
     sb      = MagicMock()
     log_ch  = MagicMock()
     exec_m  = MagicMock(return_value=log_result)
@@ -65,7 +75,7 @@ def _build_sb(log_result: _MockResult):
         return log_ch if name == "cron_job_log" else cfg_ch
 
     sb.table.side_effect = _table
-    return sb, exec_m, cfg_ch
+    return sb, exec_m, cfg_ch, log_ch
 
 
 def _make_store(*jobs: JobRow, log_result: _MockResult):
@@ -74,6 +84,15 @@ def _make_store(*jobs: JobRow, log_result: _MockResult):
     for j in jobs:
         store.put_job(j)
     return store, exec_m, cfg_ch
+
+
+def _make_store_full(*jobs: JobRow, log_result: _MockResult):
+    """Like _make_store but also returns log_ch."""
+    sb, exec_m, cfg_ch, log_ch = _build_sb_full(log_result)
+    store = DbStore(sb=sb)
+    for j in jobs:
+        store.put_job(j)
+    return store, exec_m, cfg_ch, log_ch
 
 
 # ── T01: no wedge, 1 batch query, no advance ──────────────────────────────────
@@ -312,27 +331,105 @@ def test_T09_no_candidates_no_db_call():
     sb.table.assert_not_called()
 
 
-# ── T10: IN×IN cross-product — wrong-slot row rejected by re-matching ─────────
+# ── T10: IN×IN cross-product — two different slots, wrong-pair row rejected ────
 
-def test_T10_cross_product_wrong_slot_no_advance():
+def test_T10_cross_product_different_slots_no_advance():
     """
-    IN×IN may return rows for correct job_code but wrong scheduled_for slot.
-    The per-row re-matching guard must reject them; neither job advances.
+    True IN×IN cross-product scenario: two jobs with DIFFERENT scheduled_for slots.
+    JOB_A has slot T_WEDGE; JOB_B has slot T_SLOT_B.
+    Supabase returns a TERMINAL row for JOB_A but with T_SLOT_B (JOB_B's slot) —
+    a cross-product artifact (JOB_A code × JOB_B slot).
+    The re-matching guard must reject it; neither job advances.
     """
-    job_a = _job("JOB_A", next_run_at=T_WEDGE)
-    job_b = _job("JOB_B", next_run_at=T_WEDGE)
+    job_a = _job("JOB_A", next_run_at=T_WEDGE)    # slot: T_WEDGE
+    job_b = _job("JOB_B", next_run_at=T_SLOT_B)   # slot: T_SLOT_B (different day)
 
-    # Cross-product artifact: JOB_A row has T_OLD, not T_WEDGE
+    assert T_WEDGE != T_SLOT_B, "guard: slots must be distinct instants"
+
+    # Cross-product artifact: JOB_A code + JOB_B slot — should NOT match JOB_A
     log_result = _MockResult(data=[{
         "job_code":      "JOB_A",
         "status":        "SUCCESS",
-        "scheduled_for": T_OLD.isoformat(),   # WRONG slot
+        "scheduled_for": T_SLOT_B.isoformat(),   # JOB_B's slot, not JOB_A's
     }], count=1)
     store, _, cfg_ch = _make_store(job_a, job_b, log_result=log_result)
 
     with patch("services.scheduler.db_store.next_fire_after", return_value=T_NEXT):
         store.reconcile_terminal_wedges()
 
-    assert job_a.next_run_at == T_WEDGE   # not advanced
-    assert job_b.next_run_at == T_WEDGE   # not advanced
+    assert job_a.next_run_at == T_WEDGE    # not advanced: T_SLOT_B ≠ T_WEDGE
+    assert job_b.next_run_at == T_SLOT_B   # not advanced: no row matched JOB_B
     cfg_ch.update.assert_not_called()
+
+
+def test_T10b_cross_product_only_correct_pair_advances():
+    """
+    Two jobs with different slots in the same chunk.
+    Supabase returns the CORRECT row for JOB_A (JOB_A code + T_WEDGE slot) and
+    also a cross-product artifact row for JOB_A (JOB_A code + T_SLOT_B).
+    Only the correct-pair match triggers advance; artifact row is rejected.
+    count=2 matches len(data)=2 so integrity check passes.
+    """
+    job_a = _job("JOB_A", next_run_at=T_WEDGE)
+    job_b = _job("JOB_B", next_run_at=T_SLOT_B)
+
+    correct_row = {
+        "job_code":      "JOB_A",
+        "status":        "SUCCESS",
+        "scheduled_for": T_WEDGE_UTC.isoformat(),   # JOB_A's actual slot (UTC form)
+    }
+    artifact_row = {
+        "job_code":      "JOB_A",
+        "status":        "SUCCESS",
+        "scheduled_for": T_SLOT_B.isoformat(),       # cross-product: JOB_A code + JOB_B slot
+    }
+    log_result = _MockResult(data=[correct_row, artifact_row], count=2)
+    store, _, cfg_ch = _make_store(job_a, job_b, log_result=log_result)
+
+    with patch("services.scheduler.db_store.next_fire_after", return_value=T_NEXT):
+        store.reconcile_terminal_wedges()
+
+    assert job_a.next_run_at == T_NEXT     # advanced: correct pair matched
+    assert job_b.next_run_at == T_SLOT_B   # not advanced: no correct row for JOB_B
+    assert cfg_ch.update.called
+
+
+# ── T_FILTER: IN filter column names and TERMINAL values verified ─────────────
+
+def test_FILTER_in_column_names_and_terminal_status_values():
+    """
+    Verify the three IN filters are called with correct column names and values.
+
+    .select("job_code,status,scheduled_for", count="exact")
+    .in_("job_code",      chunk_codes)
+    .in_("scheduled_for", chunk_slots)
+    .in_("status",        sorted(TERMINAL))
+    """
+    job = _job("VERIFY_JOB")
+    store, _, _, log_ch = _make_store_full(
+        job, log_result=_MockResult(data=[], count=0)
+    )
+
+    store.reconcile_terminal_wedges()
+
+    # select fields + count="exact"
+    log_ch.select.assert_called_once_with("job_code,status,scheduled_for", count="exact")
+
+    # first IN: job_code
+    first_in = log_ch.select.return_value.in_.call_args
+    assert first_in is not None, "first IN call not made"
+    assert first_in[0][0] == "job_code", f"expected 'job_code', got {first_in[0][0]!r}"
+    assert "VERIFY_JOB" in first_in[0][1]
+
+    # second IN: scheduled_for (called on return value of first in_)
+    second_in = log_ch.select.return_value.in_.return_value.in_.call_args
+    assert second_in is not None, "second IN call not made"
+    assert second_in[0][0] == "scheduled_for", f"expected 'scheduled_for', got {second_in[0][0]!r}"
+
+    # third IN: status = sorted(TERMINAL)
+    third_in = log_ch.select.return_value.in_.return_value.in_.return_value.in_.call_args
+    assert third_in is not None, "third IN call not made"
+    assert third_in[0][0] == "status", f"expected 'status', got {third_in[0][0]!r}"
+    assert third_in[0][1] == sorted(TERMINAL), (
+        f"expected sorted(TERMINAL)={sorted(TERMINAL)}, got {third_in[0][1]!r}"
+    )
