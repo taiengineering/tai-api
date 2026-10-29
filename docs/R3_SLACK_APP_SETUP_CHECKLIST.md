@@ -1,7 +1,7 @@
 ---
 title: R3 Slack App 설정 체크리스트
 wo: WO-TAI-SLACK-BOT-UNIFIED-001-R3-PRODUCTION-PREFLIGHT-001
-status: G3_EXISTING_CONFIG_REUSE_PENDING_OWNER_ACTION
+status: G3_PASS_COMPLETE
 date: 2026-10-30
 decision: WO-TAI-SLACK-BOT-R3-G3-EXISTING-CONFIG-REUSE-001
 ---
@@ -19,39 +19,59 @@ Claude Code는 이 섹션을 실행하지 않습니다. 비밀값을 채팅에 �
 
 ## P-02: 기존 App ID + Team ID 재사용 확인
 
-- [ ] Slack App 관리 콘솔 → App Settings → App Credentials
+- [x] Slack App 관리 콘솔 → App Settings → App Credentials
   - 기존 `App ID` 확인 → Railway `SLACK_RELAY_APP_ID` 환경변수에 설정
   - `SLACK_SIGNING_SECRET`은 이미 Railway에 설정됨 — 재확인만
-- [ ] Workspace Team ID 확인
+- [x] Workspace Team ID 확인
   - Team ID (형식: `T0XXXXXXXX`) 확인 → Railway `SLACK_RELAY_TEAM_ID` 환경변수에 설정
+
+**G3V 확인**: Railway `SLACK_RELAY_APP_ID` SET ✅ / `SLACK_RELAY_TEAM_ID` SET ✅ (guri-cf 직접 확인)
 
 ---
 
-## P-03: groups:history 스코프 확인
+## [ERRATA] COR-02 정정 (GPT IV WO-TAI-SLACK-BOT-R3-G4-SECRET-ISOLATION-IV-CORRECTION-001)
 
-- [ ] OAuth & Permissions → Scopes → Bot Token Scopes
-  - `groups:history` 존재 여부 확인
-  - **이미 있으면 생략** — 불필요한 App 재설치 금지
-  - 없을 경우에만 추가 + 재설치 (기존 Bot 연동 영향 사전 확인 후)
+| 항목 | 기존 기재 | 정정 후 | 근거 |
+|------|---------|---------|------|
+| Event Subscriptions 이벤트명 | `message.groups` | `message.channels` | 공개 채널 대상 — `message.groups`는 비공개 채널 전용 |
+| OAuth Scope | `groups:history` | `channels:history` | 공개 채널 대상 |
+| R3 Signing Secret 환경변수 | `SLACK_SIGNING_SECRET` | `SLACK_RELAY_SIGNING_SECRET` | G4 격리 설계 반영 |
+| 기존 Slack Kin Secret | (언급 없음) | `SLACK_SIGNING_SECRET` 유지 — Kin 전용 | 기존 연동 불변 |
+
+기존 P-03/P-07 본문은 원문 보존. 위 정정이 본문에 우선합니다.
+
+---
+
+## P-03: channels:history 스코프 확인 *(정정: 구명칭 groups:history)*
+
+- [x] OAuth & Permissions → Scopes → Bot Token Scopes
+  - `channels:history` 추가 완료 *(ERRATA: 기재된 `groups:history`는 `channels:history`로 정정)*
+  - App 재설치 완료 (기존 Bot 연동 영향 확인 후 진행)
+
+**G3V 확인**: `channels:history` 추가 + App 재설치 Owner 직접 완료 ✅
 
 ---
 
 ## P-04: Relay 발신 채널 및 Bot 멤버십 확인
 
-- [ ] 파일럿 Relay 발신 채널로 사용할 기존 비공개 채널 확인
-  - 채널 ID 확인 (형식: `G0XXXXXXXX`)
+- [x] 파일럿 Relay 발신 채널로 사용할 기존 공개 채널 확인 *(ERRATA: 비공개 채널 → 공개 채널로 정정)*
+  - 채널 ID 확인 (형식: `C0XXXXXXXX`)
   - `tai_bot`이 해당 채널 멤버인지 확인 (미초대 시 `/invite @tai_bot`)
   - **신규 채널 생성 금지**
+
+**G3V 확인**: Owner 직접 확인 완료 ("기존 채널에 tai_bot 멤버 등록이 모두 완료됐다") ✅
 
 ---
 
 ## P-05: 릴레이 대상 채널 및 승인 발신자 확인
 
-- [ ] 릴레이 메시지를 수신할 기존 채널 확인
+- [x] 릴레이 메시지를 수신할 기존 채널 확인
   - 채널 ID 확인 (형식: `C0XXXXXXXX`)
   - `tai_bot`이 해당 채널 멤버인지 확인
-- [ ] 파일럿 발신자 Slack User ID 확인 (형식: `U0XXXXXXXX`)
+- [x] 파일럿 발신자 Slack User ID 확인 (형식: `U0XXXXXXXX`)
   - `SLACK_RELAY_ALLOWED_SENDER_IDS`에 설정할 값 (쉼표 구분 가능)
+
+**G3V 확인**: Railway `SLACK_RELAY_ALLOWED_SENDER_IDS` SET ✅ / Bot 멤버십 Owner 직접 확인 ✅
 
 ---
 
@@ -65,12 +85,12 @@ Claude Code는 이 섹션을 실행하지 않습니다. 비밀값을 채팅에 �
 
 ---
 
-## P-07: message.groups 이벤트 구독 (G4 — P-06 완료 후)
+## P-07: message.channels 이벤트 구독 (G4 — P-06 완료 후) *(정정: 구명칭 message.groups)*
 
 **G4 진입 시에만 실행. G3 범위 아님.**
 
 - [ ] Event Subscriptions → Subscribe to Bot Events
-  - `message.groups` 추가
+  - `message.channels` 추가 *(ERRATA: 기재된 `message.groups`는 `message.channels`로 정정)*
 - [ ] Save Changes
 
 ---
@@ -107,9 +127,42 @@ SLACK_RELAY_ALLOWED_SENDER_IDS = <P-05 승인 발신자 User ID>
 
 | 항목 | 완료 여부 |
 |------|---------|
-| P-02 App ID / Team ID 확인 및 환경변수 설정 | □ |
-| P-03 `groups:history` 권한 확인 | □ |
-| P-04 Relay 발신 채널 및 `tai_bot` 멤버십 확인 | □ |
-| P-05 대상 채널·승인 발신자 확인 | □ |
-| Railway 환경변수 3개 설정 + `/health` 200 확인 | □ |
-| `SLACK_RELAY_CHANNEL_MAP` 미설정 유지 | □ |
+| P-02 App ID / Team ID 확인 및 환경변수 설정 | ✅ (Railway guri-cf 직접 확인) |
+| P-03 `channels:history` 권한 확인 + App 재설치 | ✅ (Owner 직접 완료) |
+| P-04 Relay 발신 채널 및 `tai_bot` 멤버십 확인 | ✅ (Owner 직접 확인) |
+| P-05 대상 채널·승인 발신자 확인 | ✅ (Railway guri-cf 직접 확인) |
+| Railway 환경변수 3개 설정 + `/health` 200 확인 | ✅ (7f54d4e9 SUCCESS, /health 200) |
+| `SLACK_RELAY_CHANNEL_MAP` 미설정 유지 | ✅ (Railway 환경변수 미존재 확인) |
+
+---
+
+## G3 소스계약 검증 (WO-TAI-SLACK-BOT-R3-G3-CLOSE-G4-READINESS-001)
+
+**검증 SHA**: `be58799e` (배포 기준) / 소스 `routers/slack_events.py`
+
+| 항목 | 검증 결과 | 소스 위치 |
+|------|---------|---------|
+| url_verification 핸들러 | ✅ PASS | lines 103–106 |
+| 서명 검증 실패 → 403 | ✅ PASS | lines 92–94 |
+| Fail Closed (CHANNEL_MAP 미설정) | ✅ PASS | lines 117–119 |
+| api_app_id 하드 매칭 | ✅ PASS | lines 122–124 |
+| team_id 하드 매칭 | ✅ PASS | lines 127–129 |
+| 채널 유형 필터 없음 (비공개 채널 처리 가능) | ✅ PASS | line 148 |
+| bot_id 존재 시 차단 | ✅ PASS | lines 137–139 |
+| 승인 발신자 only 처리 | ✅ PASS | lines 142–145 |
+
+**G4 선행 조건** (`url_verification` 소스 확인됨):
+- P-06 Request URL `https://api.taieng.co.kr/slack/events` 등록 시 `/slack/events` 엔드포인트가 challenge에 즉시 응답 ✅
+
+---
+
+## G3 판정
+
+**G3V 종합**: PASS — P-02~P-05 전 항목 완료 ✅
+
+- P-03 `channels:history` 추가 + App 재설치 Owner 직접 완료
+- 기존 공개 채널 재사용 (`message.channels` 적용)
+- `SLACK_SIGNING_SECRET` 기존 유지 (Kin 전용)
+- `SLACK_RELAY_SIGNING_SECRET` 설정 대기 (G4 Merge + 배포 후)
+- G4 URL Verification: Signing Secret 불일치 해결(PR #725 Merge) 후 실행
+- G5 이후: 별도 Owner 승인
