@@ -1,7 +1,7 @@
 """WO-TAI-SLACK-BOT-UNIFIED-001-R3 — Slack Events Relay 파일럿 테스트 T01~T25 + R01~R14.
 
 커버리지:
-  T01  SLACK_SIGNING_SECRET 미설정 → 500
+  T01  SLACK_RELAY_SIGNING_SECRET 미설정 → 500
   T02  서명 없음(헤더 누락) → 403
   T03  서명 만료(타임스탬프 > 300s) → 403
   T04  유효 서명 + url_verification → 200 {"challenge": ...}
@@ -131,7 +131,7 @@ def _make_event_body(
 
 def _env(**kwargs):
     defaults = {
-        "SLACK_SIGNING_SECRET": _SIGNING_SECRET,
+        "SLACK_RELAY_SIGNING_SECRET": _SIGNING_SECRET,
         "SLACK_RELAY_APP_ID": _APP_ID,
         "SLACK_RELAY_TEAM_ID": _TEAM_ID,
         "SLACK_RELAY_ALLOWED_SENDER_IDS": _SENDER_ID,
@@ -142,11 +142,11 @@ def _env(**kwargs):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T01: SLACK_SIGNING_SECRET 미설정 → 500
+# T01: SLACK_RELAY_SIGNING_SECRET 미설정 → 500
 # ─────────────────────────────────────────────────────────────────────────────
 def test_t01_no_signing_secret():
     body = b'{"type":"event_callback"}'
-    with patch.dict("os.environ", _env(SLACK_SIGNING_SECRET=""), clear=False):
+    with patch.dict("os.environ", _env(SLACK_RELAY_SIGNING_SECRET=""), clear=False):
         client = TestClient(_app(), raise_server_exceptions=False)
         resp = client.post("/slack/events", content=body, headers={"content-type": "application/json"})
     assert resp.status_code == 500
@@ -197,7 +197,7 @@ def test_t04_url_verification():
 def test_t05_pilot_config_missing():
     body = _make_event_body()
     headers = _valid_headers(body)
-    minimal_env = {"SLACK_SIGNING_SECRET": _SIGNING_SECRET}  # APP_ID/TEAM_ID 등 미설정
+    minimal_env = {"SLACK_RELAY_SIGNING_SECRET": _SIGNING_SECRET}  # APP_ID/TEAM_ID 등 미설정
     with patch.dict("os.environ", minimal_env, clear=False):
         with patch("routers.slack_events.accept_relay_event") as mock_accept:
             client = TestClient(_app())
@@ -821,7 +821,7 @@ def test_r08_app_id_team_id_unset_fail_closed():
     body = _make_event_body()
     headers = _valid_headers(body)
     env_no_ids = {
-        "SLACK_SIGNING_SECRET": _SIGNING_SECRET,
+        "SLACK_RELAY_SIGNING_SECRET": _SIGNING_SECRET,
         "SLACK_RELAY_ALLOWED_SENDER_IDS": _SENDER_ID,
         "SLACK_RELAY_CHANNEL_MAP": _CHANNEL_MAP_JSON,
         # APP_ID, TEAM_ID 미설정
@@ -1047,3 +1047,172 @@ def test_r18_recover_router_not_in_external_registry():
     from router_registry.external import ROUTERS
     modules = [r.get("module", "") for r in ROUTERS]
     assert "routers.slack_relay_recover" not in modules
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COR-01: Secret 격리 검증 — SLACK_RELAY_SIGNING_SECRET / SLACK_SIGNING_SECRET 독립
+# ─────────────────────────────────────────────────────────────────────────────
+
+_KIN_SECRET = "kin-signing-secret-32bytes-long!!"   # 기존 Slack Kin Secret (별도)
+
+
+def _kin_sign(body: bytes, ts: int | None = None) -> tuple[str, str]:
+    ts = ts or int(time.time())
+    sig_base = f"v0:{ts}:{body.decode('utf-8')}"
+    digest = hmac.new(_KIN_SECRET.encode("utf-8"), sig_base.encode("utf-8"), hashlib.sha256).hexdigest()
+    return str(ts), f"v0={digest}"
+
+
+def _kin_headers(body: bytes) -> dict[str, str]:
+    ts_str, sig = _kin_sign(body)
+    return {"x-slack-request-timestamp": ts_str, "x-slack-signature": sig, "content-type": "application/json"}
+
+
+def test_iso01_relay_secret_missing_legacy_secret_present_500():
+    """COR-01-ISO-01: SLACK_RELAY_SIGNING_SECRET 누락 + SLACK_SIGNING_SECRET 존재 → R3 500."""
+    body = b'{"type":"event_callback"}'
+    env = {
+        "SLACK_SIGNING_SECRET": _KIN_SECRET,   # 기존 Slack Kin Secret 설정됨
+        # SLACK_RELAY_SIGNING_SECRET 미설정
+        "SLACK_RELAY_APP_ID": _APP_ID,
+        "SLACK_RELAY_TEAM_ID": _TEAM_ID,
+    }
+    with patch.dict("os.environ", env, clear=True):
+        client = TestClient(_app(), raise_server_exceptions=False)
+        resp = client.post("/slack/events", content=body, headers={"content-type": "application/json"})
+    assert resp.status_code == 500
+    assert "misconfigured" in resp.json().get("error", "")
+
+
+def test_iso02_relay_accepts_only_relay_secret():
+    """COR-01-ISO-02: 두 Secret 독립 설정 시 R3는 R3 Secret으로만 검증."""
+    payload = {"type": "url_verification", "challenge": "iso02-challenge"}
+    body = json.dumps(payload).encode("utf-8")
+    relay_headers = _valid_headers(body)      # _SIGNING_SECRET(R3 전용)으로 서명
+    env = {
+        "SLACK_RELAY_SIGNING_SECRET": _SIGNING_SECRET,
+        "SLACK_SIGNING_SECRET": _KIN_SECRET,  # 기존 Secret은 다른 값
+        "SLACK_RELAY_APP_ID": _APP_ID,
+        "SLACK_RELAY_TEAM_ID": _TEAM_ID,
+        "SLACK_RELAY_ALLOWED_SENDER_IDS": _SENDER_ID,
+        "SLACK_RELAY_CHANNEL_MAP": _CHANNEL_MAP_JSON,
+    }
+    with patch.dict("os.environ", env, clear=True):
+        client = TestClient(_app())
+        resp = client.post("/slack/events", content=body, headers=relay_headers)
+    assert resp.status_code == 200
+    assert resp.json()["challenge"] == "iso02-challenge"
+
+
+def test_iso03_legacy_secret_signature_rejected_by_relay():
+    """COR-01-ISO-03: 기존(Kin) Secret으로 서명한 요청 → R3 403."""
+    body = _make_event_body()
+    kin_headers = _kin_headers(body)  # 기존 KIN Secret으로 서명
+    env = {
+        "SLACK_RELAY_SIGNING_SECRET": _SIGNING_SECRET,  # R3 전용 (다른 값)
+        "SLACK_SIGNING_SECRET": _KIN_SECRET,
+        "SLACK_RELAY_APP_ID": _APP_ID,
+        "SLACK_RELAY_TEAM_ID": _TEAM_ID,
+        "SLACK_RELAY_ALLOWED_SENDER_IDS": _SENDER_ID,
+        "SLACK_RELAY_CHANNEL_MAP": _CHANNEL_MAP_JSON,
+    }
+    with patch.dict("os.environ", env, clear=True):
+        client = TestClient(_app())
+        resp = client.post("/slack/events", content=body, headers=kin_headers)
+    assert resp.status_code == 403
+
+
+def test_iso04_relay_secret_url_verification():
+    """COR-01-ISO-04: 정상 R3 서명 + url_verification → 200, challenge 일치."""
+    payload = {"type": "url_verification", "challenge": "iso04-xyz"}
+    body = json.dumps(payload).encode("utf-8")
+    headers = _valid_headers(body)  # R3 Secret으로 서명
+    env = {
+        "SLACK_RELAY_SIGNING_SECRET": _SIGNING_SECRET,
+        "SLACK_SIGNING_SECRET": _KIN_SECRET,
+        "SLACK_RELAY_APP_ID": _APP_ID,
+        "SLACK_RELAY_TEAM_ID": _TEAM_ID,
+        "SLACK_RELAY_ALLOWED_SENDER_IDS": _SENDER_ID,
+        "SLACK_RELAY_CHANNEL_MAP": _CHANNEL_MAP_JSON,
+    }
+    with patch.dict("os.environ", env, clear=True):
+        client = TestClient(_app())
+        resp = client.post("/slack/events", content=body, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["challenge"] == "iso04-xyz"
+
+
+def test_iso05_kin_still_verifies_with_legacy_secret():
+    """COR-01-ISO-05: slack_kin은 SLACK_SIGNING_SECRET으로 정상 검증."""
+    from routers.slack_kin import router as kin_router
+    from fastapi import FastAPI
+
+    kin_app = FastAPI()
+    kin_app.include_router(kin_router)
+
+    payload = json.dumps({"payload": json.dumps({"type": "block_actions", "actions": []})}).encode("utf-8")
+    ts = str(int(time.time()))
+    sig_base = f"v0:{ts}:{payload.decode('utf-8')}"
+    digest = hmac.new(_KIN_SECRET.encode("utf-8"), sig_base.encode("utf-8"), hashlib.sha256).hexdigest()
+    headers = {
+        "x-slack-request-timestamp": ts,
+        "x-slack-signature": f"v0={digest}",
+        "content-type": "application/x-www-form-urlencoded",
+    }
+    env = {
+        "SLACK_SIGNING_SECRET": _KIN_SECRET,
+        "SLACK_RELAY_SIGNING_SECRET": _SIGNING_SECRET,  # R3 Secret은 다른 값
+    }
+    with patch.dict("os.environ", env, clear=True):
+        client = TestClient(kin_app, raise_server_exceptions=False)
+        resp = client.post("/slack/kin/interactions", content=payload, headers=headers)
+    # 서명 검증 통과 여부만 확인 (400/200 가능, 403은 아님)
+    assert resp.status_code != 403
+
+
+def test_iso06_kin_rejects_relay_secret_signature():
+    """COR-01-ISO-06: slack_kin은 R3 전용 Secret 서명을 거부."""
+    from routers.slack_kin import router as kin_router
+    from fastapi import FastAPI
+
+    kin_app = FastAPI()
+    kin_app.include_router(kin_router)
+
+    payload = json.dumps({"payload": json.dumps({"type": "block_actions", "actions": []})}).encode("utf-8")
+    ts = str(int(time.time()))
+    # R3 Secret(_SIGNING_SECRET)으로 서명 — Kin이 기대하는 _KIN_SECRET과 다름
+    sig_base = f"v0:{ts}:{payload.decode('utf-8')}"
+    digest = hmac.new(_SIGNING_SECRET.encode("utf-8"), sig_base.encode("utf-8"), hashlib.sha256).hexdigest()
+    headers = {
+        "x-slack-request-timestamp": ts,
+        "x-slack-signature": f"v0={digest}",
+        "content-type": "application/x-www-form-urlencoded",
+    }
+    env = {
+        "SLACK_SIGNING_SECRET": _KIN_SECRET,           # Kin은 기존 Secret 사용
+        "SLACK_RELAY_SIGNING_SECRET": _SIGNING_SECRET,  # R3는 다른 Secret
+    }
+    with patch.dict("os.environ", env, clear=True):
+        client = TestClient(kin_app, raise_server_exceptions=False)
+        resp = client.post("/slack/kin/interactions", content=payload, headers=headers)
+    assert resp.status_code == 403
+
+
+def test_iso07_channel_map_unset_no_relay():
+    """COR-01-ISO-07: 유효 App ID·Team ID·발신자 + CHANNEL_MAP 미설정 → 발송 0건."""
+    body = _make_event_body()
+    headers = _valid_headers(body)
+    env = {
+        "SLACK_RELAY_SIGNING_SECRET": _SIGNING_SECRET,
+        "SLACK_RELAY_APP_ID": _APP_ID,
+        "SLACK_RELAY_TEAM_ID": _TEAM_ID,
+        "SLACK_RELAY_ALLOWED_SENDER_IDS": _SENDER_ID,
+        # SLACK_RELAY_CHANNEL_MAP 미설정
+    }
+    with patch.dict("os.environ", env, clear=True):
+        with patch("routers.slack_events.accept_relay_event") as mock_accept:
+            client = TestClient(_app())
+            resp = client.post("/slack/events", content=body, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json().get("ok") is True
+    mock_accept.assert_not_called()

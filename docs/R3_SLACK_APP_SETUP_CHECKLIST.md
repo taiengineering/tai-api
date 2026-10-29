@@ -29,10 +29,23 @@ Claude Code는 이 섹션을 실행하지 않습니다. 비밀값을 채팅에 �
 
 ---
 
-## P-03: groups:history 스코프 확인
+## [ERRATA] COR-02 정정 (GPT IV WO-TAI-SLACK-BOT-R3-G4-SECRET-ISOLATION-IV-CORRECTION-001)
+
+| 항목 | 기존 기재 | 정정 후 | 근거 |
+|------|---------|---------|------|
+| Event Subscriptions 이벤트명 | `message.groups` | `message.channels` | 공개 채널 대상 — `message.groups`는 비공개 채널 전용 |
+| OAuth Scope | `groups:history` | `channels:history` | 공개 채널 대상 |
+| R3 Signing Secret 환경변수 | `SLACK_SIGNING_SECRET` | `SLACK_RELAY_SIGNING_SECRET` | G4 격리 설계 반영 |
+| 기존 Slack Kin Secret | (언급 없음) | `SLACK_SIGNING_SECRET` 유지 — Kin 전용 | 기존 연동 불변 |
+
+기존 P-03/P-07 본문은 원문 보존. 위 정정이 본문에 우선합니다.
+
+---
+
+## P-03: channels:history 스코프 확인 *(정정: 구명칭 groups:history)*
 
 - [ ] OAuth & Permissions → Scopes → Bot Token Scopes
-  - `groups:history` 존재 여부 확인
+  - `channels:history` 존재 여부 확인 *(ERRATA: 기재된 `groups:history`는 `channels:history`로 정정)*
   - **이미 있으면 생략** — 불필요한 App 재설치 금지
   - 없을 경우에만 추가 + 재설치 (기존 Bot 연동 영향 사전 확인 후)
 
@@ -73,12 +86,12 @@ Claude Code는 이 섹션을 실행하지 않습니다. 비밀값을 채팅에 �
 
 ---
 
-## P-07: message.groups 이벤트 구독 (G4 — P-06 완료 후)
+## P-07: message.channels 이벤트 구독 (G4 — P-06 완료 후) *(정정: 구명칭 message.groups)*
 
 **G4 진입 시에만 실행. G3 범위 아님.**
 
 - [ ] Event Subscriptions → Subscribe to Bot Events
-  - `message.groups` 추가
+  - `message.channels` 추가 *(ERRATA: 기재된 `message.groups`는 `message.channels`로 정정)*
 - [ ] Save Changes
 
 ---
@@ -116,7 +129,7 @@ SLACK_RELAY_ALLOWED_SENDER_IDS = <P-05 승인 발신자 User ID>
 | 항목 | 완료 여부 |
 |------|---------|
 | P-02 App ID / Team ID 확인 및 환경변수 설정 | ✅ (Railway guri-cf 직접 확인) |
-| P-03 `groups:history` 권한 확인 | ⚠️ OWNER_CONFIRM_REQUIRED |
+| P-03 `channels:history` 권한 확인 *(ERRATA: groups:history → channels:history)* | ⚠️ OWNER_CONFIRM_REQUIRED |
 | P-04 Relay 발신 채널 및 `tai_bot` 멤버십 확인 | ✅ (Owner 직접 확인) |
 | P-05 대상 채널·승인 발신자 확인 | ✅ (Railway guri-cf 직접 확인) |
 | Railway 환경변수 3개 설정 + `/health` 200 확인 | ✅ (7f54d4e9 SUCCESS, /health 200) |

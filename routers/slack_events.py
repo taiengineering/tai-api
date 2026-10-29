@@ -8,7 +8,7 @@ WO-TAI-SLACK-BOT-UNIFIED-001-R3 (Alternative C: Slack Events Relay)
 - 모든 필수 설정 미설정 시 Fail Closed (발송 안 함)
 
 환경변수:
-- SLACK_SIGNING_SECRET       : Slack 서명 검증 (필수)
+- SLACK_RELAY_SIGNING_SECRET : Slack R3 Relay 서명 검증 (필수)
 - SLACK_RELAY_APP_ID         : 허용할 Slack App api_app_id (필수, COR-05)
 - SLACK_RELAY_TEAM_ID        : 허용할 Slack workspace team_id (필수, COR-05)
 - SLACK_RELAY_ALLOWED_SENDER_IDS : 쉼표 구분 사용자 ID (미설정 시 Fail Closed)
@@ -36,7 +36,7 @@ _MAX_BODY_BYTES = 512 * 1024  # 512 KB
 
 def _load_config() -> dict[str, Any]:
     return {
-        "signing_secret": os.environ.get("SLACK_SIGNING_SECRET", "").strip(),
+        "signing_secret": os.environ.get("SLACK_RELAY_SIGNING_SECRET", "").strip(),
         "app_id": os.environ.get("SLACK_RELAY_APP_ID", "").strip(),
         "team_id": os.environ.get("SLACK_RELAY_TEAM_ID", "").strip(),
         "allowed_sender_ids": {
@@ -83,7 +83,7 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks) -> J
     cfg = _load_config()
     signing_secret = cfg["signing_secret"]
     if not signing_secret:
-        logger.error("[RELAY] SLACK_SIGNING_SECRET 미설정 — 500 반환")
+        logger.error("[RELAY] SLACK_RELAY_SIGNING_SECRET 미설정 — 500 반환")
         return JSONResponse({"error": "misconfigured"}, status_code=500)
 
     # 3. HMAC 서명 검증 (원본 바이트 기준, 서명 검증 전 JSON 파싱 금지)
