@@ -16,21 +16,30 @@ from typing import Optional
 
 import httpx
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("slack_relay_svc")
 
 _MAX_RETRY = 3
-_RETRY_DELAYS_MINUTES = [1, 5, 15]
-_STALE_CLAIMED_MINUTES = 5
-_STALE_SENDING_MINUTES = 10
+_RETRY_DELAYS_SECONDS = [60, 300, 900]   # 1분, 5분, 15분 (초 단위)
+_STALE_CLAIMED_SECONDS = 300             # 5분
+_STALE_SENDING_SECONDS = 600             # 10분
 _RECOVERY_BATCH = 10
+_LEASE_SECONDS = 120                     # claim_expires = now + 2분
+
+
+def _now_dt() -> datetime:
+    return datetime.now(tz=timezone.utc)
 
 
 def _now() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
+    return _now_dt().isoformat()
 
 
-def _future(minutes: int) -> str:
-    return (datetime.now(tz=timezone.utc) + timedelta(minutes=minutes)).isoformat()
+def _future_sec(seconds: int) -> str:
+    return (_now_dt() + timedelta(seconds=seconds)).isoformat()
+
+
+def _past_sec(seconds: int) -> str:
+    return (_now_dt() - timedelta(seconds=seconds)).isoformat()
 
 
 def _get_supabase():
@@ -39,10 +48,8 @@ def _get_supabase():
 
 
 def _get_bot_token() -> str:
-    return (
-        os.environ.get("SLACK_BOT_TOKEN1", "").strip()
-        or os.environ.get("SLACK_BOT_TOKEN", "").strip()
-    )
+    """COR-06: SLACK_BOT_TOKEN1만 사용. 구형 SLACK_BOT_TOKEN 폴백 없음."""
+    return os.environ.get("SLACK_BOT_TOKEN1", "").strip()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -60,8 +67,8 @@ def accept_relay_event(
 ) -> bool:
     """이벤트를 DB에 PENDING으로 원자적 삽입.
 
-    중복(event_id 충돌) 시 DO NOTHING → False 반환.
-    신규 삽입 시 True 반환.
+    중복(event_id 충돌) 시 ON CONFLICT DO NOTHING → False.
+    신규 삽입 시 True.
     """
     sb = _get_supabase()
     row = {
@@ -87,19 +94,41 @@ def accept_relay_event(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _claim(event_id: str) -> Optional[tuple[str, str]]:
-    """PENDING → CLAIMED. (row_id, claim_token) 반환; 경쟁 실패 시 None."""
+    """PENDING 또는 재시도 시각이 도래한 RETRY → CLAIMED.
+    (row_id, claim_token) 반환; 경쟁 실패 또는 비대상 시 None.
+
+    COR-02: RETRY도 Claim 허용.
+    COR-03: PENDING은 next_attempt_at 무관. RETRY는 도래 시각만.
+    COR-04: claim_expires 설정.
+    """
     sb = _get_supabase()
-    row = sb.table("slack_relay_event_log").select("id").eq("event_id", event_id).eq("status", "PENDING").limit(1).execute()
-    if not row.data:
+    now = _now()
+    row_res = sb.table("slack_relay_event_log").select("id, status, next_attempt_at").eq(
+        "event_id", event_id
+    ).in_("status", ["PENDING", "RETRY"]).limit(1).execute()
+
+    if not row_res.data:
         return None
-    row_id = row.data[0]["id"]
+
+    row = row_res.data[0]
+    row_id = row["id"]
+    row_status = row["status"]
+    next_attempt = row.get("next_attempt_at")
+
+    # RETRY: next_attempt_at이 도래하지 않은 경우 스킵
+    if row_status == "RETRY" and next_attempt is not None and next_attempt > now:
+        return None
+
     token = str(uuid.uuid4())
+    claim_expires = _future_sec(_LEASE_SECONDS)
     result = sb.table("slack_relay_event_log").update({
         "status": "CLAIMED",
         "claim_token": token,
-        "claimed_at": _now(),
-        "updated_at": _now(),
-    }).eq("id", row_id).eq("status", "PENDING").execute()
+        "claimed_at": now,
+        "claim_expires": claim_expires,
+        "updated_at": now,
+    }).eq("id", row_id).in_("status", ["PENDING", "RETRY"]).execute()
+
     if not result.data:
         return None
     return row_id, token
@@ -120,7 +149,9 @@ def _finish(row_id: str, claim_token: str, new_status: str, **extra) -> bool:
     """SENDING → (SENT|RETRY|UNKNOWN|FAILED_PERMANENT) (claim_token CAS 펜싱)."""
     sb = _get_supabase()
     update_data = {"status": new_status, "updated_at": _now(), **extra}
-    result = sb.table("slack_relay_event_log").update(update_data).eq("id", row_id).eq("claim_token", claim_token).execute()
+    result = sb.table("slack_relay_event_log").update(update_data).eq(
+        "id", row_id
+    ).eq("claim_token", claim_token).execute()
     return bool(result.data)
 
 
@@ -140,7 +171,7 @@ async def process_relay_event(event_id: str) -> None:
     """단일 이벤트 처리. BackgroundTask 및 Recovery Worker 공용."""
     claimed = _claim(event_id)
     if claimed is None:
-        logger.debug("[RELAY] claim 실패(경쟁 또는 비PENDING) event_id=%s", event_id)
+        logger.debug("[RELAY] claim 실패(경쟁 또는 비대상) event_id=%s", event_id)
         return
     row_id, claim_token = claimed
 
@@ -159,11 +190,11 @@ async def process_relay_event(event_id: str) -> None:
 
     token = _get_bot_token()
     if not token:
-        logger.error("[RELAY] SLACK_BOT_TOKEN1 미설정 — RETRY")
+        logger.error("[RELAY] SLACK_BOT_TOKEN1 미설정 — RETRY row_id=%s", row_id)
         _finish(row_id, claim_token, "RETRY",
                 retry_count=retry_count + 1,
-                next_attempt_at=_future(_retry_delay(retry_count)),
-                error_detail="bot token not configured")
+                next_attempt_at=_future_sec(_retry_delay_sec(retry_count)),
+                error_detail="SLACK_BOT_TOKEN1 not configured")
         return
 
     await _send_to_slack(row_id, claim_token, target_channel, message_text, retry_count, token)
@@ -207,50 +238,55 @@ async def _send_to_slack(
             return
 
         error_code = body.get("error", "")
-        # 영구 오류: 채널/권한 문제는 재시도 불필요
         if error_code in ("channel_not_found", "not_in_channel", "is_archived",
                           "invalid_auth", "account_inactive", "token_revoked"):
-            _finish(row_id, claim_token, "FAILED_PERMANENT", error_detail=f"slack_error:{error_code}")
+            _finish(row_id, claim_token, "FAILED_PERMANENT",
+                    error_detail=f"slack_error:{error_code}")
             logger.error("[RELAY] FAILED_PERMANENT row_id=%s error=%s", row_id, error_code)
             return
 
         if retry_count >= _MAX_RETRY:
-            _finish(row_id, claim_token, "FAILED_PERMANENT", error_detail=f"max_retry:{error_code}")
+            _finish(row_id, claim_token, "FAILED_PERMANENT",
+                    error_detail=f"max_retry:{error_code}")
         else:
             _finish(row_id, claim_token, "RETRY",
                     retry_count=retry_count + 1,
-                    next_attempt_at=_future(_retry_delay(retry_count)),
+                    next_attempt_at=_future_sec(_retry_delay_sec(retry_count)),
                     error_detail=f"slack_error:{error_code}")
         return
 
     if resp.status_code == 429:
-        retry_after = int(resp.headers.get("Retry-After", "60"))
+        # COR-07: Retry-After는 초 단위로 정확히 반영 (분 내림 없음)
+        retry_after_sec = int(resp.headers.get("Retry-After", "60"))
+        retry_after_sec = max(retry_after_sec, 10)
         if retry_count >= _MAX_RETRY:
-            _finish(row_id, claim_token, "FAILED_PERMANENT", error_detail="rate_limit_max_retry")
+            _finish(row_id, claim_token, "FAILED_PERMANENT",
+                    error_detail="rate_limit_max_retry")
         else:
             _finish(row_id, claim_token, "RETRY",
                     retry_count=retry_count + 1,
-                    next_attempt_at=_future(max(1, retry_after // 60)),
-                    error_detail="rate_limited")
+                    next_attempt_at=_future_sec(retry_after_sec),
+                    error_detail=f"rate_limited retry_after={retry_after_sec}s")
         return
 
     if resp.status_code >= 500:
         if retry_count >= _MAX_RETRY:
-            _finish(row_id, claim_token, "FAILED_PERMANENT", error_detail=f"http_{resp.status_code}_max")
+            _finish(row_id, claim_token, "FAILED_PERMANENT",
+                    error_detail=f"http_{resp.status_code}_max")
         else:
             _finish(row_id, claim_token, "RETRY",
                     retry_count=retry_count + 1,
-                    next_attempt_at=_future(_retry_delay(retry_count)),
+                    next_attempt_at=_future_sec(_retry_delay_sec(retry_count)),
                     error_detail=f"http_{resp.status_code}")
         return
 
-    # 4xx 외 기타 → 영구 실패
-    _finish(row_id, claim_token, "FAILED_PERMANENT", error_detail=f"http_{resp.status_code}")
+    _finish(row_id, claim_token, "FAILED_PERMANENT",
+            error_detail=f"http_{resp.status_code}")
 
 
-def _retry_delay(retry_count: int) -> int:
-    idx = min(retry_count, len(_RETRY_DELAYS_MINUTES) - 1)
-    return _RETRY_DELAYS_MINUTES[idx]
+def _retry_delay_sec(retry_count: int) -> int:
+    idx = min(retry_count, len(_RETRY_DELAYS_SECONDS) - 1)
+    return _RETRY_DELAYS_SECONDS[idx]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -258,27 +294,28 @@ def _retry_delay(retry_count: int) -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def recover_stale_claimed() -> int:
-    """오래된 CLAIMED/SENDING 행을 RETRY로 복구. 재시작 후 stale Worker 정리."""
-    sb = _get_supabase()
-    stale_claimed = _future(-_STALE_CLAIMED_MINUTES)
-    stale_sending = _future(-_STALE_SENDING_MINUTES)
+    """오래된 CLAIMED/SENDING 행 복구. 재시작 후 stale Worker 정리.
 
-    # stale CLAIMED → RETRY
+    CLAIMED → RETRY, SENDING → UNKNOWN.
+    """
+    sb = _get_supabase()
+    stale_claimed_ts = _past_sec(_STALE_CLAIMED_SECONDS)
+    stale_sending_ts = _past_sec(_STALE_SENDING_SECONDS)
+
     r1 = sb.table("slack_relay_event_log").update({
         "status": "RETRY",
         "claim_token": None,
-        "next_attempt_at": _future(1),
+        "next_attempt_at": _future_sec(60),
         "error_detail": "stale_claimed_recovery",
         "updated_at": _now(),
-    }).eq("status", "CLAIMED").lt("updated_at", stale_claimed).execute()
+    }).eq("status", "CLAIMED").lt("updated_at", stale_claimed_ts).execute()
 
-    # stale SENDING → UNKNOWN (전송 결과 불명 — 자동 재시도 금지)
     r2 = sb.table("slack_relay_event_log").update({
         "status": "UNKNOWN",
         "claim_token": None,
         "error_detail": "stale_sending_recovery",
         "updated_at": _now(),
-    }).eq("status", "SENDING").lt("updated_at", stale_sending).execute()
+    }).eq("status", "SENDING").lt("updated_at", stale_sending_ts).execute()
 
     recovered = len(r1.data or []) + len(r2.data or [])
     if recovered:
@@ -287,24 +324,42 @@ def recover_stale_claimed() -> int:
 
 
 async def run_relay_recovery_once() -> int:
-    """PENDING/RETRY 행 일괄 재처리. Recovery Worker/스케줄러 호출 경로."""
+    """PENDING/RETRY 행 일괄 재처리.
+
+    COR-03: PENDING(next_attempt_at NULL 포함)과 RETRY(도래 시각)를 별도 조회.
+    운영 스케줄러 등록은 이번 범위 제외. POST /internal/slack-relay/recover 또는 수동 호출.
+    """
     recover_stale_claimed()
 
     sb = _get_supabase()
-    result = sb.table("slack_relay_event_log").select(
+    now = _now()
+
+    # COR-03: PENDING은 next_attempt_at 무관 (NULL 포함 전체 대상)
+    pending_res = sb.table("slack_relay_event_log").select(
         "event_id"
-    ).in_("status", ["PENDING", "RETRY"]).lte(
-        "next_attempt_at", _now()
+    ).eq("status", "PENDING").order("created_at").limit(_RECOVERY_BATCH).execute()
+
+    # COR-03: RETRY는 next_attempt_at이 NULL이거나 도래한 경우만
+    retry_res = sb.table("slack_relay_event_log").select(
+        "event_id"
+    ).eq("status", "RETRY").or_(
+        f"next_attempt_at.is.null,next_attempt_at.lte.{now}"
     ).order("created_at").limit(_RECOVERY_BATCH).execute()
 
-    rows = result.data or []
+    pending_ids = [r["event_id"] for r in (pending_res.data or [])]
+    retry_ids = [
+        r["event_id"] for r in (retry_res.data or [])
+        if r["event_id"] not in pending_ids
+    ]
+    all_ids = (pending_ids + retry_ids)[:_RECOVERY_BATCH]
+
     processed = 0
-    for row in rows:
+    for event_id in all_ids:
         try:
-            await process_relay_event(row["event_id"])
+            await process_relay_event(event_id)
             processed += 1
         except Exception:
-            logger.exception("[RELAY] recovery 처리 실패 event_id=%s", row["event_id"])
+            logger.exception("[RELAY] recovery 처리 실패 event_id=%s", event_id)
 
     if processed:
         logger.info("[RELAY] recovery 처리 %d건", processed)

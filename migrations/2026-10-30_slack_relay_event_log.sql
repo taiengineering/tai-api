@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS public.slack_relay_event_log (
     sent_at              timestamptz,
     slack_ts             text,
     claim_token          text,
+    claim_expires        timestamptz,                                     -- COR-04: lease expiry
     error_detail         text CHECK (char_length(error_detail) <= 2000),
     created_at           timestamptz NOT NULL DEFAULT now(),
     updated_at           timestamptz NOT NULL DEFAULT now()

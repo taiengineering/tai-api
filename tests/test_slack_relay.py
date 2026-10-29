@@ -1,11 +1,11 @@
-"""WO-TAI-SLACK-BOT-UNIFIED-001-R3 — Slack Events Relay 파일럿 테스트 T01~T25.
+"""WO-TAI-SLACK-BOT-UNIFIED-001-R3 — Slack Events Relay 파일럿 테스트 T01~T25 + R01~R14.
 
 커버리지:
   T01  SLACK_SIGNING_SECRET 미설정 → 500
   T02  서명 없음(헤더 누락) → 403
   T03  서명 만료(타임스탬프 > 300s) → 403
   T04  유효 서명 + url_verification → 200 {"challenge": ...}
-  T05  SLACK_RELAY_APP_ID/SENDER_IDS/CHANNEL_MAP 미설정 → 200 ok=True (발송 안 함)
+  T05  필수 설정 미설정 → 200 ok=True, 발송 안 함 (COR-05 Fail Closed)
   T06  team_id 불일치 → 200 ok=True (discard)
   T07  api_app_id 불일치 → 200 ok=True (discard)
   T08  message 외 이벤트 타입(reaction_added) → 200 ok=True (skip)
@@ -23,11 +23,24 @@
   T20  Slack API timeout → UNKNOWN (자동 재시도 금지)
   T21  두 Worker 동시 claim: 한 쪽만 성공 (CAS)
   T22  claim_token 불일치 → _finish 0행 반환, 상태 변경 없음
-  T23  PENDING/RETRY 복구 Worker: next_attempt_at 도래 행만 처리
+  T23  PENDING/RETRY 복구 Worker: 빈 큐 → 처리 0건
   T24  Slack HTTP 200 + ok=false (채널 없음) → FAILED_PERMANENT
   T25  Bot token이 로그에 출력되지 않는 것 확인 (코드 정적 검증)
   REG1 기존 Automation 회귀: 인증 없는 /automation/rules → 401
   REG2 기존 Permission Guard is_public: /slack/events 포함 확인
+  R01  COR-03: PENDING + next_attempt_at=NULL → Claim 가능
+  R02  COR-02/03: RETRY + 도래한 next_attempt_at → Claim 가능
+  R03  COR-03: RETRY + 미래 next_attempt_at → Claim 거부
+  R04  COR-04: stale CLAIMED/SENDING 복구 — RETRY/UNKNOWN 전환 호출
+  R06  중복 event_id CAS 펜싱 — accept=False → BackgroundTask 미등록
+  R07  COR-07: 429 Retry-After=47s → _future_sec(47) 호출 (분 변환 없음)
+  R08  COR-05: APP_ID/TEAM_ID 미설정 → accept_relay_event 호출 없음
+  R09  COR-05: type != event_callback → 접수 거부
+  R10  COR-05: event.bot_id 존재 → 접수 거부
+  R11  COR-05: event_id 누락 → UUID 대체 금지, 접수 거부
+  R12  COR-06: SLACK_BOT_TOKEN1 미설정 → SLACK_BOT_TOKEN 폴백 없이 RETRY
+  R13  P0 회귀: slack_events + automation 라우터 공존
+  R14  R3 라우터 속성(prefix/tags) 확인
 """
 from __future__ import annotations
 
@@ -36,8 +49,9 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -45,7 +59,7 @@ from fastapi.testclient import TestClient
 
 from routers.slack_events import router, _load_config, _parse_channel_map
 from services.slack_relay_svc import (
-    _claim, _finish, _get_bot_token, _retry_delay, _start_sending,
+    _claim, _finish, _get_bot_token, _retry_delay_sec, _start_sending,
     accept_relay_event, process_relay_event, recover_stale_claimed,
     run_relay_recovery_once,
 )
@@ -95,10 +109,16 @@ def _make_event_body(
     event_type: str = "message",
     team_id: str = _TEAM_ID,
     app_id: str = _APP_ID,
+    bot_id: str | None = None,
 ) -> bytes:
-    event: dict[str, Any] = {"type": event_type, "user": sender_id, "channel": relay_channel, "text": text, "ts": "1000.0001"}
+    event: dict[str, Any] = {
+        "type": event_type, "user": sender_id, "channel": relay_channel,
+        "text": text, "ts": "1000.0001",
+    }
     if subtype:
         event["subtype"] = subtype
+    if bot_id:
+        event["bot_id"] = bot_id
     payload: dict[str, Any] = {
         "type": "event_callback",
         "event_id": event_id,
@@ -126,10 +146,9 @@ def _env(**kwargs):
 # ─────────────────────────────────────────────────────────────────────────────
 def test_t01_no_signing_secret():
     body = b'{"type":"event_callback"}'
-    with patch.dict("os.environ", {"SLACK_SIGNING_SECRET": ""}, clear=False):
-        with patch.dict("os.environ", _env(SLACK_SIGNING_SECRET=""), clear=False):
-            client = TestClient(_app(), raise_server_exceptions=False)
-            resp = client.post("/slack/events", content=body, headers={"content-type": "application/json"})
+    with patch.dict("os.environ", _env(SLACK_SIGNING_SECRET=""), clear=False):
+        client = TestClient(_app(), raise_server_exceptions=False)
+        resp = client.post("/slack/events", content=body, headers={"content-type": "application/json"})
     assert resp.status_code == 500
     assert "misconfigured" in resp.json().get("error", "")
 
@@ -173,12 +192,12 @@ def test_t04_url_verification():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T05: 파일럿 설정 미설정 → 200 ok=True, DB 호출 0건
+# T05: 필수 설정 미설정 → 200 ok=True, DB 호출 0건 (COR-05 Fail Closed)
 # ─────────────────────────────────────────────────────────────────────────────
 def test_t05_pilot_config_missing():
     body = _make_event_body()
     headers = _valid_headers(body)
-    minimal_env = {"SLACK_SIGNING_SECRET": _SIGNING_SECRET}  # APP_ID 등 미설정
+    minimal_env = {"SLACK_SIGNING_SECRET": _SIGNING_SECRET}  # APP_ID/TEAM_ID 등 미설정
     with patch.dict("os.environ", minimal_env, clear=False):
         with patch("routers.slack_events.accept_relay_event") as mock_accept:
             client = TestClient(_app())
@@ -321,8 +340,6 @@ def test_t14_duplicate_event_no_background_task():
                 client = TestClient(_app())
                 resp = client.post("/slack/events", content=body, headers=headers)
     assert resp.status_code == 200
-    # BackgroundTask가 등록되지 않았어야 함 (TestClient는 sync — background task는 응답 후 실행)
-    # process_relay_event가 직접 호출되지 않았는지 확인
     mock_process.assert_not_called()
 
 
@@ -341,11 +358,16 @@ def test_t15_db_exception_503():
 
 # ─────────────────────────────────────────────────────────────────────────────
 # T16: PENDING → CLAIMED CAS 성공/실패
+# (Mock chain: .select.eq.in_.limit.execute / .update.eq.in_.execute)
 # ─────────────────────────────────────────────────────────────────────────────
 def test_t16_claim_pending_success():
     fake_sb = MagicMock()
-    fake_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{"id": "row-001"}]
-    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = [{"id": "row-001", "status": "CLAIMED"}]
+    fake_sb.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = [
+        {"id": "row-001", "status": "PENDING", "next_attempt_at": None}
+    ]
+    fake_sb.table.return_value.update.return_value.eq.return_value.in_.return_value.execute.return_value.data = [
+        {"id": "row-001", "status": "CLAIMED"}
+    ]
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
         result = _claim("Ev001TEST")
     assert result is not None
@@ -356,7 +378,7 @@ def test_t16_claim_pending_success():
 
 def test_t16_claim_no_pending_row():
     fake_sb = MagicMock()
-    fake_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
+    fake_sb.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = []
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
         result = _claim("Ev_MISSING")
     assert result is None
@@ -365,8 +387,10 @@ def test_t16_claim_no_pending_row():
 def test_t16_claim_cas_race_condition():
     """다른 Worker가 먼저 claim → UPDATE 0행 → None 반환."""
     fake_sb = MagicMock()
-    fake_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{"id": "row-002"}]
-    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+    fake_sb.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = [
+        {"id": "row-002", "status": "PENDING", "next_attempt_at": None}
+    ]
+    fake_sb.table.return_value.update.return_value.eq.return_value.in_.return_value.execute.return_value.data = []
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
         result = _claim("Ev_RACE")
     assert result is None
@@ -395,45 +419,43 @@ def test_t17_start_sending_token_match():
 # T18: SENDING → SENT (Slack ok=true)
 # ─────────────────────────────────────────────────────────────────────────────
 def test_t18_sent_on_slack_ok():
-    fake_sb = MagicMock()
-    # _claim: select + update
-    select_chain = MagicMock()
-    select_chain.data = [{"id": "row-T18"}]
-    fake_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = select_chain
-    update_chain = MagicMock()
-    update_chain.data = [{"id": "row-T18"}]
-    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = update_chain
-
     slack_resp = MagicMock()
     slack_resp.status_code = 200
     slack_resp.json.return_value = {"ok": True, "message": {"ts": "1234.5678"}}
 
-    with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
-        with patch("services.slack_relay_svc._load_row", return_value={
-            "id": "row-T18", "target_channel": _TARGET_CHANNEL,
-            "message_text": "hello", "claim_token": "tok-T18", "status": "CLAIMED", "retry_count": 0
-        }):
-            with patch("services.slack_relay_svc._get_bot_token", return_value="xoxb-test-token"):
-                with patch("httpx.AsyncClient") as mock_httpx:
-                    mock_ctx = AsyncMock()
-                    mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
-                    mock_ctx.__aexit__ = AsyncMock(return_value=False)
-                    mock_ctx.post = AsyncMock(return_value=slack_resp)
-                    mock_httpx.return_value = mock_ctx
-                    with patch("services.slack_relay_svc._finish") as mock_finish:
-                        asyncio.run(process_relay_event("Ev-T18"))
+    with patch("services.slack_relay_svc._claim", return_value=("row-T18", "tok-T18")):
+        with patch("services.slack_relay_svc._start_sending", return_value=True):
+            with patch("services.slack_relay_svc._load_row", return_value={
+                "id": "row-T18", "target_channel": _TARGET_CHANNEL,
+                "message_text": "hello", "claim_token": "tok-T18",
+                "status": "CLAIMED", "retry_count": 0,
+            }):
+                with patch("services.slack_relay_svc._get_bot_token", return_value="xoxb-test-token"):
+                    with patch("httpx.AsyncClient") as mock_httpx:
+                        mock_ctx = AsyncMock()
+                        mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
+                        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+                        mock_ctx.post = AsyncMock(return_value=slack_resp)
+                        mock_httpx.return_value = mock_ctx
+                        with patch("services.slack_relay_svc._finish") as mock_finish:
+                            asyncio.run(process_relay_event("Ev-T18"))
     mock_finish.assert_called_once()
     assert mock_finish.call_args[0][2] == "SENT"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T19: DB 복구 — PENDING 행 run_relay_recovery_once 처리
+# T19: DB 복구 — PENDING 행 존재 시 run_relay_recovery_once 처리
+# (Mock chain: PENDING=.select.eq.order.limit.execute / RETRY=.select.eq.or_.order.limit.execute)
 # ─────────────────────────────────────────────────────────────────────────────
 def test_t19_recovery_processes_pending_rows():
     fake_sb = MagicMock()
-    fake_sb.table.return_value.select.return_value.in_.return_value.lte.return_value.order.return_value.limit.return_value.execute.return_value.data = [
+    # PENDING SELECT
+    fake_sb.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value.data = [
         {"event_id": "Ev-R01"}, {"event_id": "Ev-R02"}
     ]
+    # RETRY SELECT
+    fake_sb.table.return_value.select.return_value.eq.return_value.or_.return_value.order.return_value.limit.return_value.execute.return_value.data = []
+    # stale recovery UPDATE
     fake_sb.table.return_value.update.return_value.eq.return_value.lt.return_value.execute.return_value.data = []
 
     processed_ids = []
@@ -456,22 +478,22 @@ def test_t19_recovery_processes_pending_rows():
 def test_t20_slack_timeout_unknown():
     import httpx as _httpx
 
-    with patch("services.slack_relay_svc._get_supabase", return_value=MagicMock()):
-        with patch("services.slack_relay_svc._load_row", return_value={
-            "id": "row-T20", "target_channel": _TARGET_CHANNEL,
-            "message_text": "hello", "claim_token": "tok-T20", "status": "CLAIMED", "retry_count": 0
-        }):
-            with patch("services.slack_relay_svc._claim", return_value=("row-T20", "tok-T20")):
-                with patch("services.slack_relay_svc._start_sending", return_value=True):
-                    with patch("services.slack_relay_svc._get_bot_token", return_value="xoxb-test"):
-                        with patch("httpx.AsyncClient") as mock_httpx:
-                            mock_ctx = AsyncMock()
-                            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
-                            mock_ctx.__aexit__ = AsyncMock(return_value=False)
-                            mock_ctx.post = AsyncMock(side_effect=_httpx.TimeoutException("timeout"))
-                            mock_httpx.return_value = mock_ctx
-                            with patch("services.slack_relay_svc._finish") as mock_finish:
-                                asyncio.run(process_relay_event("Ev-T20"))
+    with patch("services.slack_relay_svc._claim", return_value=("row-T20", "tok-T20")):
+        with patch("services.slack_relay_svc._start_sending", return_value=True):
+            with patch("services.slack_relay_svc._load_row", return_value={
+                "id": "row-T20", "target_channel": _TARGET_CHANNEL,
+                "message_text": "hello", "claim_token": "tok-T20",
+                "status": "CLAIMED", "retry_count": 0,
+            }):
+                with patch("services.slack_relay_svc._get_bot_token", return_value="xoxb-test"):
+                    with patch("httpx.AsyncClient") as mock_httpx:
+                        mock_ctx = AsyncMock()
+                        mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
+                        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+                        mock_ctx.post = AsyncMock(side_effect=_httpx.TimeoutException("timeout"))
+                        mock_httpx.return_value = mock_ctx
+                        with patch("services.slack_relay_svc._finish") as mock_finish:
+                            asyncio.run(process_relay_event("Ev-T20"))
     mock_finish.assert_called_once()
     assert mock_finish.call_args[0][2] == "UNKNOWN"
 
@@ -480,19 +502,20 @@ def test_t20_slack_timeout_unknown():
 # T21: 두 Worker 동시 claim — 한 쪽만 성공
 # ─────────────────────────────────────────────────────────────────────────────
 def test_t21_concurrent_claim_only_one_succeeds():
-    """CAS: 두 번째 UPDATE는 status=PENDING 조건 불충족 → 0행 → None."""
+    """CAS: 두 번째 UPDATE는 status 조건 불충족 → 0행 → None."""
     call_count = {"n": 0}
 
     def _fake_update_execute():
         m = MagicMock()
         call_count["n"] += 1
-        # 첫 번째 Worker만 성공
         m.data = [{"id": "row-T21"}] if call_count["n"] == 1 else []
         return m
 
     fake_sb = MagicMock()
-    fake_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{"id": "row-T21"}]
-    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.side_effect = _fake_update_execute
+    fake_sb.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = [
+        {"id": "row-T21", "status": "PENDING", "next_attempt_at": None}
+    ]
+    fake_sb.table.return_value.update.return_value.eq.return_value.in_.return_value.execute.side_effect = _fake_update_execute
 
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
         result1 = _claim("Ev-T21")
@@ -514,12 +537,12 @@ def test_t22_finish_token_mismatch_no_update():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T23: next_attempt_at 미도래 행 → 복구 스캔에서 제외
+# T23: 빈 큐 → 복구 처리 0건
 # ─────────────────────────────────────────────────────────────────────────────
-def test_t23_recovery_skips_future_retry():
-    """next_attempt_at이 미래인 행은 lte 조건에서 제외되어 처리하지 않음."""
+def test_t23_recovery_empty_queue():
     fake_sb = MagicMock()
-    fake_sb.table.return_value.select.return_value.in_.return_value.lte.return_value.order.return_value.limit.return_value.execute.return_value.data = []
+    fake_sb.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value.data = []
+    fake_sb.table.return_value.select.return_value.eq.return_value.or_.return_value.order.return_value.limit.return_value.execute.return_value.data = []
     fake_sb.table.return_value.update.return_value.eq.return_value.lt.return_value.execute.return_value.data = []
 
     with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
@@ -542,7 +565,8 @@ def test_t24_slack_ok_false_permanent_error():
         with patch("services.slack_relay_svc._start_sending", return_value=True):
             with patch("services.slack_relay_svc._load_row", return_value={
                 "id": "row-T24", "target_channel": "C_GONE",
-                "message_text": "hi", "claim_token": "tok-T24", "status": "CLAIMED", "retry_count": 0
+                "message_text": "hi", "claim_token": "tok-T24",
+                "status": "CLAIMED", "retry_count": 0,
             }):
                 with patch("services.slack_relay_svc._get_bot_token", return_value="xoxb-test"):
                     with patch("httpx.AsyncClient") as mock_httpx:
@@ -558,10 +582,9 @@ def test_t24_slack_ok_false_permanent_error():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T25: Bot token이 로그·코드에 출력되지 않는 것 확인 (정적 검증)
+# T25: Bot token이 로그에 출력되지 않는 것 확인
 # ─────────────────────────────────────────────────────────────────────────────
 def test_t25_bot_token_not_logged():
-    """로그 핸들러에서 bot token 값이 출력되지 않음 확인."""
     import logging
     import io
     import services.slack_relay_svc as svc
@@ -572,14 +595,12 @@ def test_t25_bot_token_not_logged():
     svc_logger.addHandler(handler)
 
     fake_token = "xoxb-SHOULD-NOT-APPEAR-IN-LOGS"
-    # _get_bot_token을 직접 호출해도 token 값이 로그에 찍히지 않아야 함
     with patch.dict("os.environ", {"SLACK_BOT_TOKEN1": fake_token}):
         token = svc._get_bot_token()
         assert token == fake_token
 
     log_output = log_capture.getvalue()
     assert fake_token not in log_output
-
     svc_logger.removeHandler(handler)
 
 
@@ -605,7 +626,6 @@ def test_reg2_permission_guard_slack_events_public():
 
 
 def test_reg2_permission_guard_wildcard_not_public():
-    """/slack/* 와일드카드는 공개하지 않음 — /slack/other 는 비공개."""
     from services.permission_guard import is_public
     assert is_public("POST", "/slack/other-endpoint") is False
 
@@ -629,13 +649,13 @@ def test_parse_channel_map_invalid_json():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 보조: _retry_delay 단위 테스트
+# 보조: _retry_delay_sec 단위 테스트 (COR-07: 초 단위)
 # ─────────────────────────────────────────────────────────────────────────────
 def test_retry_delay_values():
-    assert _retry_delay(0) == 1
-    assert _retry_delay(1) == 5
-    assert _retry_delay(2) == 15
-    assert _retry_delay(99) == 15  # 상한 클램프
+    assert _retry_delay_sec(0) == 60
+    assert _retry_delay_sec(1) == 300
+    assert _retry_delay_sec(2) == 900
+    assert _retry_delay_sec(99) == 900  # 상한 클램프
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -664,3 +684,247 @@ def test_accept_relay_event_duplicate():
             message_text="hi", sender_id="U1", source_message_ts=None
         )
     assert result is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R01: COR-03 — PENDING + next_attempt_at=NULL → Claim 가능
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r01_claim_pending_null_next_attempt():
+    fake_sb = MagicMock()
+    fake_sb.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = [
+        {"id": "row-R01", "status": "PENDING", "next_attempt_at": None}
+    ]
+    fake_sb.table.return_value.update.return_value.eq.return_value.in_.return_value.execute.return_value.data = [
+        {"id": "row-R01"}
+    ]
+    with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
+        result = _claim("Ev-R01")
+    assert result is not None
+    row_id, _ = result
+    assert row_id == "row-R01"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R02: COR-02/03 — RETRY + 도래한 next_attempt_at → Claim 가능
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r02_claim_retry_arrived():
+    past = (datetime.now(tz=timezone.utc) - timedelta(seconds=120)).isoformat()
+    fake_sb = MagicMock()
+    fake_sb.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = [
+        {"id": "row-R02", "status": "RETRY", "next_attempt_at": past}
+    ]
+    fake_sb.table.return_value.update.return_value.eq.return_value.in_.return_value.execute.return_value.data = [
+        {"id": "row-R02"}
+    ]
+    with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
+        result = _claim("Ev-R02")
+    assert result is not None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R03: COR-03 — RETRY + 미래 next_attempt_at → Claim 거부
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r03_claim_retry_future():
+    future = (datetime.now(tz=timezone.utc) + timedelta(seconds=300)).isoformat()
+    fake_sb = MagicMock()
+    fake_sb.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = [
+        {"id": "row-R03", "status": "RETRY", "next_attempt_at": future}
+    ]
+    with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
+        result = _claim("Ev-R03")
+    assert result is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R04: COR-04 — stale CLAIMED/SENDING 복구 — RETRY/UNKNOWN 전환 호출
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r04_recover_stale_both_statuses():
+    fake_sb = MagicMock()
+    fake_sb.table.return_value.update.return_value.eq.return_value.lt.return_value.execute.return_value.data = [
+        {"id": "row-stale"}
+    ]
+    with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
+        recovered = recover_stale_claimed()
+    assert recovered == 2  # CLAIMED→RETRY(1) + SENDING→UNKNOWN(1)
+    update_calls = fake_sb.table.return_value.update.call_args_list
+    status_strings = [str(c) for c in update_calls]
+    assert any("RETRY" in s for s in status_strings)
+    assert any("UNKNOWN" in s for s in status_strings)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R06: 중복 event_id CAS 펜싱 — accept=False → BackgroundTask 미등록
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r06_duplicate_event_id_no_background_task():
+    body = _make_event_body(event_id="Ev-R06-DUP")
+    headers = _valid_headers(body)
+    with patch.dict("os.environ", _env()):
+        with patch("routers.slack_events.accept_relay_event", return_value=False):
+            with patch("routers.slack_events.process_relay_event") as mock_proc:
+                client = TestClient(_app())
+                resp = client.post("/slack/events", content=body, headers=headers)
+    assert resp.status_code == 200
+    mock_proc.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R07: COR-07 — 429 Retry-After=47s → _future_sec(47) 호출 (분 변환 없음)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r07_rate_limit_uses_exact_seconds():
+    slack_resp = MagicMock()
+    slack_resp.status_code = 429
+    slack_resp.headers = {"Retry-After": "47"}
+
+    future_calls: list[int] = []
+
+    def _capturing_future_sec(s: int) -> str:
+        future_calls.append(s)
+        return "2099-01-01T00:00:00+00:00"
+
+    with patch("services.slack_relay_svc._claim", return_value=("row-R07", "tok-R07")):
+        with patch("services.slack_relay_svc._start_sending", return_value=True):
+            with patch("services.slack_relay_svc._load_row", return_value={
+                "id": "row-R07", "target_channel": "C_T",
+                "message_text": "hi", "claim_token": "tok-R07",
+                "status": "CLAIMED", "retry_count": 0,
+            }):
+                with patch("services.slack_relay_svc._get_bot_token", return_value="xoxb-test"):
+                    with patch("httpx.AsyncClient") as mock_httpx:
+                        mock_ctx = AsyncMock()
+                        mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
+                        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+                        mock_ctx.post = AsyncMock(return_value=slack_resp)
+                        mock_httpx.return_value = mock_ctx
+                        with patch("services.slack_relay_svc._future_sec",
+                                   side_effect=_capturing_future_sec):
+                            with patch("services.slack_relay_svc._finish"):
+                                asyncio.run(process_relay_event("Ev-R07"))
+
+    assert 47 in future_calls, f"_future_sec(47) 미호출 — 실제 호출: {future_calls}"
+    assert 60 not in future_calls, "분 변환된 60이 사용됨 (COR-07 위반)"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R08: COR-05 — APP_ID/TEAM_ID 미설정 → accept_relay_event 호출 없음
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r08_app_id_team_id_unset_fail_closed():
+    body = _make_event_body()
+    headers = _valid_headers(body)
+    env_no_ids = {
+        "SLACK_SIGNING_SECRET": _SIGNING_SECRET,
+        "SLACK_RELAY_ALLOWED_SENDER_IDS": _SENDER_ID,
+        "SLACK_RELAY_CHANNEL_MAP": _CHANNEL_MAP_JSON,
+        # APP_ID, TEAM_ID 미설정
+    }
+    with patch.dict("os.environ", env_no_ids, clear=False):
+        with patch("routers.slack_events.accept_relay_event") as mock_accept:
+            client = TestClient(_app())
+            resp = client.post("/slack/events", content=body, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json().get("ok") is True
+    mock_accept.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R09: COR-05 — type != event_callback → 접수 거부
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r09_non_event_callback_type_discarded():
+    payload = {"type": "block_actions", "api_app_id": _APP_ID, "team_id": _TEAM_ID}
+    body = json.dumps(payload).encode("utf-8")
+    headers = _valid_headers(body)
+    with patch.dict("os.environ", _env()):
+        with patch("routers.slack_events.accept_relay_event") as mock_accept:
+            client = TestClient(_app())
+            resp = client.post("/slack/events", content=body, headers=headers)
+    assert resp.status_code == 200
+    mock_accept.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R10: COR-05 — event.bot_id 존재 → 접수 거부
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r10_bot_id_present_discarded():
+    body = _make_event_body(bot_id="B0SOMEBOTID")
+    headers = _valid_headers(body)
+    with patch.dict("os.environ", _env()):
+        with patch("routers.slack_events.accept_relay_event") as mock_accept:
+            client = TestClient(_app())
+            resp = client.post("/slack/events", content=body, headers=headers)
+    assert resp.status_code == 200
+    mock_accept.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R11: COR-05 — event_id 누락 → UUID 대체 금지, 접수 거부
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r11_missing_event_id_no_uuid_fallback():
+    event = {
+        "type": "message", "user": _SENDER_ID, "channel": _RELAY_CHANNEL,
+        "text": "no event id", "ts": "1000.0001",
+    }
+    payload = {
+        "type": "event_callback",
+        # event_id 없음
+        "team_id": _TEAM_ID,
+        "api_app_id": _APP_ID,
+        "event": event,
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = _valid_headers(body)
+    with patch.dict("os.environ", _env()):
+        with patch("routers.slack_events.accept_relay_event") as mock_accept:
+            client = TestClient(_app())
+            resp = client.post("/slack/events", content=body, headers=headers)
+    assert resp.status_code == 200
+    mock_accept.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R12: COR-06 — SLACK_BOT_TOKEN1 미설정 → SLACK_BOT_TOKEN 폴백 없이 RETRY
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r12_token1_unset_no_fallback_to_old_token():
+    import services.slack_relay_svc as svc
+    with patch.dict("os.environ", {"SLACK_BOT_TOKEN1": "", "SLACK_BOT_TOKEN": "xoxb-old-bot"}):
+        token = svc._get_bot_token()
+    assert token == ""
+
+
+def test_r12_token1_unset_causes_retry():
+    with patch("services.slack_relay_svc._claim", return_value=("row-R12", "tok-R12")):
+        with patch("services.slack_relay_svc._load_row", return_value={
+            "id": "row-R12", "target_channel": "C_T",
+            "message_text": "hi", "claim_token": "tok-R12",
+            "status": "CLAIMED", "retry_count": 0,
+        }):
+            with patch("services.slack_relay_svc._start_sending", return_value=True):
+                with patch.dict("os.environ", {"SLACK_BOT_TOKEN1": "", "SLACK_BOT_TOKEN": "xoxb-fallback"}):
+                    with patch("services.slack_relay_svc._finish") as mock_finish:
+                        asyncio.run(process_relay_event("Ev-R12"))
+    mock_finish.assert_called_once()
+    assert mock_finish.call_args[0][2] == "RETRY"
+    assert "TOKEN1" in mock_finish.call_args.kwargs.get("error_detail", "")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R13: P0 회귀 — slack_events + automation 라우터 공존 확인
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r13_p0_slack_and_automation_coexist():
+    """두 라우터를 동일 앱에 등록해도 Import 충돌·예외 없음."""
+    from fastapi import FastAPI
+    from routers.automation import router as auto_router
+    from routers.slack_events import router as slack_router
+    app = FastAPI()
+    # 예외 없이 등록 완료되어야 함
+    app.include_router(slack_router)
+    app.include_router(auto_router)
+    # URL 조회 가능 여부로 라우트 등록 확인
+    url = app.url_path_for("slack_events")
+    assert str(url) == "/slack/events"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R14: R3 라우터 속성(prefix/tags) 확인
+# ─────────────────────────────────────────────────────────────────────────────
+def test_r14_slack_relay_router_attributes():
+    assert router.prefix == "/slack"
+    assert "slack-relay" in router.tags
