@@ -1,7 +1,7 @@
 ---
 title: R3 Railway Deploy Gate
 wo: WO-TAI-SLACK-BOT-UNIFIED-001-R3-PRODUCTION-PREFLIGHT-001
-status: G2_DEPLOYED_PENDING_GPT_IV
+status: G2_CLOSED_FINAL
 date: 2026-10-30
 ---
 
@@ -77,4 +77,23 @@ date: 2026-10-30
 - [x] `POST /slack/events` (서명 없음) → HTTP 403 ✅
 - [x] `SLACK_RELAY_CHANNEL_MAP` 미설정 → Fail Closed ✅
 
-**G2 판정: PASS — PENDING_GPT_IV**
+**G2 판정: PASS — G2V GPT_IV CONDITIONAL PASS → CLOSED FINAL**
+
+---
+
+## 6. G2 거버넌스 기록
+
+### Owner 승인 이력
+
+- **승인 시각**: 2026-10-30 (UTC)
+- **승인 발화**: "오너승인합니다." (G2 Railway 배포 승인 대화에서 명시)
+- **승인 범위**: tai-api-prod 코드 배포 + `/health` · `/slack/events` 서명 검증 + Relay Fail Closed 확인
+- **비포함 범위**: Slack Relay 환경변수 4개 설정, G3~G5 실행
+
+### `/ready` 404 비차단 예외
+
+- **사실**: `/ready` 엔드포인트는 이 API에 존재하지 않음 (`main.py` 미등록)
+- **Railway 헬스체크**: `/health` (Railway 서비스 manifest 직접 확인)
+- **판단**: 404는 배포 실패가 아니라 G2 체크리스트 기재 오류
+- **예외 처리**: G2 체크리스트에서 `/ready` 항목을 비차단으로 표기, CLOSED FINAL에 반영
+- **Owner 결정**: GPT IV CONDITIONAL PASS 조건 수용 → G2 CLOSED FINAL 확정

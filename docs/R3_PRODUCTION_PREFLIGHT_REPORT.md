@@ -92,7 +92,8 @@ scope: READ_ONLY
 |------|------|----------|------|
 | G1 | Supabase Migration 적용 | main 병합 완료 ✅ | APPLIED ✅ |
 | G1V | DB 독립검증 | G1 완료 | GPT IV PASS ✅ |
-| G2 | Railway tai-api-prod 배포 | G1V PASS ✅ | DEPLOYED ✅ (PENDING_GPT_IV) |
+| G2 | Railway tai-api-prod 배포 | G1V PASS ✅ | CLOSED FINAL ✅ |
+| G2V | 배포 검증 | G2 완료 | GPT IV CONDITIONAL PASS ✅ |
 | G2V | 배포 검증 (health/ready) | G2 완료 | 자동 확인 |
 | G3 | Slack App P-02~P-07 설정 | G2 완료 | Owner 직접 실행 |
 | G4 | Request URL Verification | G2 + G3 완료 | Owner P-06 실행 |
