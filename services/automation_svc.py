@@ -170,7 +170,7 @@ def _execute_action(action_type: str, config: Dict[str, Any],
             raise AutomationError(400, "SEND_SMS: 수신번호 없음")
         return notify_send("SMS", target=to, message=config.get("message", ""))
     if action_type == "CALL_WEBHOOK":
-        return _call_webhook(config.get("url", ""), payload)
+        raise AutomationError(403, "CALL_WEBHOOK: 현재 비활성화됨")
     if action_type == "CREATE_TASK":
         return _create_ops_task(config, payload, rule_id=rule_id,
                                 event_type=event_type, trigger_ref=trigger_ref)
@@ -181,14 +181,7 @@ def _execute_action(action_type: str, config: Dict[str, Any],
 
 
 def _call_webhook(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    if not url:
-        raise AutomationError(400, "CALL_WEBHOOK: url 없음")
-    import requests as _requests
-    try:
-        resp = _requests.post(url, json=payload, timeout=10)
-        return {"webhook_status": resp.status_code}
-    except Exception as e:  # noqa: BLE001
-        raise AutomationError(502, f"웹훅 호출 실패: {e}") from e
+    raise AutomationError(403, "CALL_WEBHOOK: 현재 비활성화됨")
 
 
 def fire(event_type: str, payload: Dict[str, Any],
