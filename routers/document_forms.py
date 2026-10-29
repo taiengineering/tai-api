@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from routers.auth import get_current_user_optional
 from services.document_forms_service import (
     get_document_form,
     get_document_form_articles,
@@ -50,12 +51,16 @@ def forms_stats():
 def form_articles(
     doc_id: str,
     include_pending: bool = Query(False, description="PENDING 상태 매핑 포함 여부"),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
 ):
     """서식에 연결된 공용 조문 목록 조회.
 
     field_rule_mapping → law_article 경로로 조회한다.
     PENDING 매핑은 is_confirmed=False 표시. 고시 제6조 자동 추론 금지.
+    include_pending=true는 인증된 사용자만 요청 가능.
     """
+    if include_pending and current_user is None:
+        raise HTTPException(status_code=401, detail="PENDING 조회는 인증이 필요합니다")
     return get_document_form_articles(doc_id, include_pending=include_pending)
 
 
