@@ -24,7 +24,7 @@ import scheduler as sch
 from routers.auth import get_current_user
 from services.education_assignment_svc import expire_overdue_education_assignments
 
-BASE = "ac3f125bec94f0ad15b0b930b5e6ca149c002363"
+BASE = "c37c826dbfdbda1ce79bfafc48927d583d304f01"  # WO-009 WP-02 승인 변경 후
 USER = "11111111-1111-1111-1111-111111111111"
 OTHER_USER = "99999999-9999-9999-9999-999999999999"
 ADMIN_ID = "aaaaaaaa-0000-4000-8000-000000000001"
