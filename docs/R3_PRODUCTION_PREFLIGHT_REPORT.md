@@ -95,8 +95,8 @@ scope: READ_ONLY
 | G2 | Railway tai-api-prod 배포 | G1V PASS ✅ | CLOSED FINAL ✅ |
 | G2V | 배포 검증 | G2 완료 | GPT IV CONDITIONAL PASS ✅ |
 | G2V | 배포 검증 (health/ready) | G2 완료 | 자동 확인 |
-| G3 | Slack App P-02~P-07 설정 | G2 완료 | Owner 직접 실행 |
-| G4 | Request URL Verification | G2 + G3 완료 | Owner P-06 실행 |
+| G3 | Slack App P-02~P-07 설정 | G2 완료 | P03 OWNER_CONFIRM_REQUIRED ⚠️ |
+| G4 | Request URL Verification | G2 + G3 완료 | Owner P-06 실행 (G3 후) |
 | G5 | 단일 Relay E2E (메시지 1건) | G3 + G4 완료 | Owner 별도 승인 |
 | G6 | ChatGPT 자동화 1건 파일럿 | G5 PASS | Owner 별도 승인 |
 | G7 | 운영 채널 3곳 전환 | G6 PASS | Owner 별도 승인 |
