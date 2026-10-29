@@ -489,6 +489,9 @@ def _evaluate(request: Request) -> Optional[Response]:
     if user is None:
         return _deny(_is_advisory("auth", resource), 401,
                      "토큰이 없습니다.", f"{method} {path}")
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    request.state._auth_user = user
+    request.state._auth_token = auth
     if method in WRITE_METHODS and resource != "platform":
         if not active_entitlement(user.get("company_id")):
             d = _deny(_is_advisory("entitlement", resource), 403,
