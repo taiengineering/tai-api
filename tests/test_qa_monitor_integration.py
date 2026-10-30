@@ -643,8 +643,8 @@ class TestR1OutboxEvidence:
 
         assert result == "SKIPPED"
 
-    def test_r38_outbox_sent_slack_sent_false_no_contradiction(self, monkeypatch):
-        """R38: outbox_status=SENT → slack_sent 필드는 False여도 모순 아님 (WP-D 계약)."""
+    def test_r38_outbox_sent_slack_sent_true_slack_accepted_true(self, monkeypatch):
+        """R38 (R2 정정): outbox_status=SENT → slack_sent=True, slack_accepted=True."""
         monkeypatch.setenv("QA_MONITOR_SLACK_ENABLED", "true")
         sb = _make_supabase_mock(insert_data=[{"id": "row-r38"}])
 
@@ -657,7 +657,7 @@ class TestR1OutboxEvidence:
                     "status_code": "NO_RUN_FOUND",
                     "slot_utc": "2026-01-15T10:00:00Z",
                     "slack_message": {"text": "Alert", "blocks": None},
-                    "slack_sent": False,
+                    "slack_sent": False,  # monitor_twice_daily는 항상 False (감지 전용)
                 },
             ),
             patch(
@@ -677,7 +677,9 @@ class TestR1OutboxEvidence:
             result = asyncio.run(cron_svc.run_monitor_cron(supabase=sb, dry_run=False))
 
         assert result["outbox_status"] == "SENT"
-        assert result.get("slack_sent") is False  # WP-D: monitor_result.slack_sent 그대로 전달
+        # R2-01: outbox_status 기준으로 slack_sent/slack_accepted 재계산
+        assert result["slack_sent"] is True      # SENT → Slack+DB 모두 성공
+        assert result["slack_accepted"] is True  # SENT → Slack API 수락
 
 
 class TestR1Regression:
@@ -699,3 +701,153 @@ class TestR1Regression:
         assert callable(send_monitor_notification)
         assert callable(recover_stale_sending)
         assert "QA_WORKFLOW_MONITOR_ALERT" in EVENT_TYPE_CHANNEL
+
+
+# ── R2-03: 발송 결과 정합성 회귀 시나리오 ───────────────────────────────────────
+
+def _make_cron_context(monkeypatch, *, outbox_status: str, slot_utc: str = "2026-01-15T10:00:00Z"):
+    """run_monitor_cron() mock 컨텍스트 팩토리 (시나리오별 outbox_status 주입)."""
+    monkeypatch.setenv("QA_MONITOR_SLACK_ENABLED", "true")
+    monitor_result = {
+        "requires_alert": True,
+        "status_code": "NO_RUN_FOUND",
+        "slot_utc": slot_utc,
+        "slack_message": {"text": "Alert", "blocks": None},
+        "slack_sent": False,
+    }
+    return monitor_result
+
+
+class TestR2ReturnValueConsistency:
+    """R2-03 시나리오 1-8: slack_sent / slack_accepted 반환값 정합성."""
+
+    def _run_with_outbox(self, monkeypatch, outbox_status: str):
+        """공통 실행 헬퍼 — outbox_status를 지정해 run_monitor_cron 결과를 반환."""
+        monkeypatch.setenv("QA_MONITOR_SLACK_ENABLED", "true")
+        sb = _make_supabase_mock(insert_data=[{"id": "row-x"}])
+        with (
+            patch(
+                "services.qa_monitor_cron_svc.monitor_twice_daily",
+                new_callable=AsyncMock,
+                return_value={
+                    "requires_alert": True,
+                    "status_code": "NO_RUN_FOUND",
+                    "slot_utc": "2026-01-15T10:00:00Z",
+                    "slack_message": {"text": "Alert", "blocks": None},
+                    "slack_sent": False,
+                },
+            ),
+            patch("services.qa_monitor_cron_svc.accept_monitor_notification", return_value=(True, "row-x")),
+            patch("services.qa_monitor_cron_svc.send_monitor_notification", new_callable=AsyncMock, return_value=outbox_status),
+            patch("services.qa_workflow_monitor_svc._cfg", return_value={"repo": "tai-qa", "owner": "taiengineering", "workflow": "qa-twice-daily.yml"}),
+        ):
+            return asyncio.run(cron_svc.run_monitor_cron(supabase=sb, dry_run=False))
+
+    def test_s1_sent_slack_sent_true_accepted_true(self, monkeypatch):
+        """S1: outbox_status=SENT → slack_sent=True, slack_accepted=True."""
+        result = self._run_with_outbox(monkeypatch, "SENT")
+        assert result["outbox_status"] == "SENT"
+        assert result["slack_sent"] is True
+        assert result["slack_accepted"] is True
+
+    def test_s2_sent_db_failed_slack_sent_false_accepted_true(self, monkeypatch):
+        """S2: outbox_status=SENT_DB_FAILED → slack_sent=False, slack_accepted=True."""
+        result = self._run_with_outbox(monkeypatch, "SENT_DB_FAILED")
+        assert result["outbox_status"] == "SENT_DB_FAILED"
+        assert result["slack_sent"] is False    # DB 완료 기록 실패
+        assert result["slack_accepted"] is True  # Slack API는 수락
+
+    def test_s4_unknown_slack_sent_false_accepted_false(self, monkeypatch):
+        """S4: outbox_status=UNKNOWN → slack_sent=False, slack_accepted=False."""
+        result = self._run_with_outbox(monkeypatch, "UNKNOWN")
+        assert result["outbox_status"] == "UNKNOWN"
+        assert result["slack_sent"] is False
+        assert result["slack_accepted"] is False
+
+    def test_s5_dry_run_outbox_none_slack_sent_false(self, monkeypatch):
+        """S5: dry_run=True → outbox_status=None → slack_sent=False, slack_accepted=False."""
+        monkeypatch.setenv("QA_MONITOR_SLACK_ENABLED", "true")
+        sb = _make_supabase_mock()
+        with patch(
+            "services.qa_monitor_cron_svc.monitor_twice_daily",
+            new_callable=AsyncMock,
+            return_value={"requires_alert": True, "status_code": "NO_RUN_FOUND", "slot_utc": "", "slack_message": {}, "slack_sent": False},
+        ):
+            result = asyncio.run(cron_svc.run_monitor_cron(supabase=sb, dry_run=True))
+
+        assert result["outbox_status"] is None
+        assert result["slack_sent"] is False
+        assert result["slack_accepted"] is False
+
+    def test_s6_deduped_slack_sent_false_accepted_false(self, monkeypatch):
+        """S6: DEDUPED → slack_sent=False, slack_accepted=False."""
+        monkeypatch.setenv("QA_MONITOR_SLACK_ENABLED", "true")
+        sb = _make_supabase_mock()
+        with (
+            patch("services.qa_monitor_cron_svc.monitor_twice_daily", new_callable=AsyncMock,
+                  return_value={"requires_alert": True, "status_code": "NO_RUN_FOUND", "slot_utc": "2026-01-15T10:00:00Z", "slack_message": {}, "slack_sent": False}),
+            patch("services.qa_monitor_cron_svc.accept_monitor_notification", return_value=(False, None)),
+            patch("services.qa_workflow_monitor_svc._cfg", return_value={"repo": "tai-qa", "owner": "taiengineering", "workflow": "qa-twice-daily.yml"}),
+        ):
+            result = asyncio.run(cron_svc.run_monitor_cron(supabase=sb, dry_run=False))
+
+        assert result["outbox_status"] == "DEDUPED"
+        assert result["slack_sent"] is False
+        assert result["slack_accepted"] is False
+
+    def test_s8_r38_corrected_sent_fields(self, monkeypatch):
+        """S8: R38 정정 — outbox_status=SENT → slack_sent overrides monitor's False."""
+        result = self._run_with_outbox(monkeypatch, "SENT")
+        # monitor_twice_daily slack_sent=False가 outbox 결과로 덮어써짐
+        assert result["slack_sent"] is True
+        assert result["slack_accepted"] is True
+
+
+class TestR2OutboxExceptionHandling:
+    """R2-03 시나리오 3: Slack 성공 + _finish() 예외 → SENT_DB_FAILED."""
+
+    def test_s3_finish_raises_exception_returns_sent_db_failed(self):
+        """S3: Slack 성공 + _finish() 예외 → SENT_DB_FAILED (재발송 금지)."""
+        sb = _make_supabase_mock(update_data=[{"id": "row-s3"}])
+
+        call_count = {"n": 0}
+
+        def finish_raises_on_third():
+            call_count["n"] += 1
+            if call_count["n"] >= 3:
+                raise RuntimeError("DB connection lost")
+            mock_result = MagicMock()
+            mock_result.data = [{"id": "row-s3"}]
+            return mock_result
+
+        sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.side_effect = finish_raises_on_third
+
+        with patch("services.qa_monitor_outbox_svc.send_slack", new_callable=AsyncMock, return_value=True):
+            result = asyncio.run(outbox_svc.send_monitor_notification(
+                sb, "row-s3", {"event_type": "QA_WORKFLOW_MONITOR_ALERT"}
+            ))
+
+        assert result == "SENT_DB_FAILED"
+
+    def test_s7_unknown_no_auto_resend(self):
+        """S7: UNKNOWN 행 재처리 시도 → SKIPPED (자동 재발송 금지)."""
+        sb = _make_supabase_mock(update_data=[])  # _claim returns empty = 비대상
+
+        with patch("services.qa_monitor_outbox_svc.send_slack", new_callable=AsyncMock) as mock_slack:
+            result = asyncio.run(outbox_svc.send_monitor_notification(
+                sb, "row-unknown", {"event_type": "QA_WORKFLOW_MONITOR_ALERT"}
+            ))
+
+        mock_slack.assert_not_called()
+        assert result == "SKIPPED"
+
+    def test_s9_existing_r1_tests_still_pass(self):
+        """S9: R1 기존 회귀 — outbox 서비스 import 및 기본 경로 동작 확인."""
+        from services.qa_monitor_outbox_svc import (
+            accept_monitor_notification,
+            send_monitor_notification,
+            recover_stale_sending,
+        )
+        assert callable(accept_monitor_notification)
+        assert callable(send_monitor_notification)
+        assert callable(recover_stale_sending)

@@ -204,10 +204,19 @@ async def run_monitor_cron(
             monitor_result.get("status_code"),
         )
 
+    # R2-01: outbox_status 기준으로 slack_sent / slack_accepted 계산.
+    # monitor_twice_daily()의 slack_sent(항상 False, 감지 전용) 을 여기서 덮어씀.
+    # slack_sent:    Slack 발송 수락 + DB 완료 기록까지 모두 성공
+    # slack_accepted: Slack API가 발송을 수락 (DB 기록 실패 포함)
+    slack_sent = outbox_status == "SENT"
+    slack_accepted = outbox_status in ("SENT", "SENT_DB_FAILED")
+
     return {
         **monitor_result,
         "slack_enabled": slack_enabled,
         "outbox_status": outbox_status,
+        "slack_sent": slack_sent,
+        "slack_accepted": slack_accepted,
     }
 
 

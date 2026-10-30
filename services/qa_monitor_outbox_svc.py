@@ -172,16 +172,25 @@ async def send_monitor_notification(
         log.warning("[qa_monitor_outbox] UNKNOWN row_id=%s (send_slack=False)", row_id)
         return "UNKNOWN"
 
-    # Slack 발송 성공 — DB 완료 기록 (R1-04: _finish 결과 검증)
-    finished = _finish(supabase, row_id, claim_token, "SENT", sent_at=_now())
+    # Slack 발송 성공 — DB 완료 기록 (R1-04/R2-02: _finish 결과·예외 검증)
+    # _finish() 예외 시 Slack은 이미 발송됨 → 재발송 금지, SENT_DB_FAILED 반환
+    try:
+        finished = _finish(supabase, row_id, claim_token, "SENT", sent_at=_now())
+    except Exception:
+        log.warning(
+            "[qa_monitor_outbox] SENT_DB_FAILED row_id=%s (_finish 예외 — DB 장애)",
+            row_id,
+        )
+        return "SENT_DB_FAILED"
+
     if finished:
         log.info("[qa_monitor_outbox] SENT row_id=%s", row_id)
         return "SENT"
 
-    # Slack 발송 성공 + DB 기록 실패 — 감사 증거 불완전, 재발송 금지
+    # Slack 발송 성공 + DB 기록 빈 결과 — 감사 증거 불완전, 재발송 금지
     log.warning(
         "[qa_monitor_outbox] SENT_DB_FAILED row_id=%s "
-        "(Slack sent but DB _finish failed — possible CAS race)",
+        "(Slack sent but DB _finish returned empty — possible CAS race)",
         row_id,
     )
     return "SENT_DB_FAILED"
