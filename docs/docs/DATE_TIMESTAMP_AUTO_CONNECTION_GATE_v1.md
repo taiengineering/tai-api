@@ -5,8 +5,8 @@ wo: WO-DOC260-MAINLINE-DATE-CONTRACT-GATE-002
 collected_by: Claude Code (DESIGN role)
 collected_date: 2026-10-30
 revised_date: 2026-10-30
-revision: R1
-review_required: GPT_DATE_BE_CONTRACT_IV_R1 (WO-003-R1 통합 제출)
+revision: R2
+review_required: GPT_DATE_BE_CONTRACT_IV_R2
 ---
 
 # DATE_TIMESTAMP_AUTO_CONNECTION_GATE — WO-002 Gate 결과
@@ -77,7 +77,9 @@ _ALLOWED_UPLOAD_TYPES         = frozenset({"attachment"})
 
 1. `evidence_family = "DATE"` → `"DATE" not in {"ATTACHMENT"}` → ConfirmError(422) 발생 지점: `_resolve_evidence_connections()` line ~127
 2. `input_type = "date"` → `"date" not in {"file"}` → ConfirmError(422) 발생 지점: line ~399
-3. `upload_type = NULL` → `"" not in {"attachment"}` → ConfirmError(422) 발생 지점: line ~135
+3. `upload_type = "timestamp_auto"` → `"timestamp_auto" not in {"attachment"}` → ConfirmError(422) 발생 지점: line ~135
+
+> **R2 보정:** 운영 DB에서 DATE 증적의 `upload_type = "timestamp_auto"` 실측 확인 (P0 evidence matrix). 이전 기술의 "upload_type = NULL" 가정은 부정확했다.
 
 DATE 증적이 하나라도 포함된 서식의 확정 호출은 **전부 422로 거부**된다.
 

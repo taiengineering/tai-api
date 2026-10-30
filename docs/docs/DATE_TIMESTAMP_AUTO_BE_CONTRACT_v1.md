@@ -5,8 +5,8 @@ wo: WO-DOC260-MAINLINE-DATE-BE-CONTRACT-003
 collected_by: Claude Code (DESIGN role)
 collected_date: 2026-10-30
 revised_date: 2026-10-30
-revision: R1
-review_required: GPT_DATE_BE_CONTRACT_IV_R1
+revision: R2
+review_required: GPT_DATE_BE_CONTRACT_IV_R2
 ---
 
 # DATE_TIMESTAMP_AUTO_BE_CONTRACT — WO-003 설계 계약 (R1)
@@ -20,6 +20,16 @@ review_required: GPT_DATE_BE_CONTRACT_IV_R1
 > R1-02: DATE manifest에 `field_id`, `value_source`, `value_semantic_class` 추가.  
 > R1-03: 확정 트랜잭션 내 DATE manifest 생성 위치를 Step으로 명시.  
 > R1-04: FE DATE family 인식과 BE DATE 봉인 지원이 별도 Gate임을 명시.
+
+> **R2 보정 이력 (2026-10-30):** GPT_DATE_BE_CONTRACT_IV_R1 R2_CORRECTION_REQUIRED 수신.  
+> R2-01: Evidence 승인 상태 테이블별 구분표 추가 (값 변경 없음, 혼동 방지).  
+> R2-02: upload_type="timestamp_auto" P0 matrix 실측 확인 → `_DATE_UPLOAD_TYPES` 신규 상수.  
+> R2-03: 날짜 검증을 정규식에서 `datetime.date.fromisoformat()` 실달력 검증으로 교체.  
+> R2-04: §3.4 manifest 예시를 §3.7 8필드 스키마와 동기화.  
+> R2-05: `build_render_artifacts()` 산출물 4종 분리 명확화 (rendered_body ≠ evidence_manifest).  
+> R2-06: FE ATTACHMENT 게이트 보존 계약 (DATE-only 허용, ATTACHMENT+미지원 차단 유지).  
+> R2-07: `review_bridge.py` 범위 명시 (문서 리뷰 전용, Evidence 직접 승인 경로 아님).  
+> R2-08: "76건 이하" 미확정 수치 삭제.
 
 ---
 
@@ -78,7 +88,7 @@ GPT_DATE_BE_CONTRACT_IV에서 운영 DB 직접 조회를 통해 다음 수치를
 |------|------|-----------|
 | DATA_SEMANTIC_GAP 해당 복합 필드 | 13건 | 현재는 BUSINESS_EVENT_DATE와 동일하게 처리. 별도 분리 WO에서 해결. |
 | source_trace.law_ref = NULL | 15건 | 비법정 확정 불가. 원천 검증 추가 필요. 구현 WO 선행 조건. |
-| BUSINESS_EVENT_DATE 잠정 (나머지) | 76건 이하 | 잠정 분류. LEG Gate 통과 전 봉인 불가. |
+| BUSINESS_EVENT_DATE 잠정 (나머지) | 미확정 | 13건·15건 중복 집계 전 확정 불가. LEG Gate 통과 전 봉인 불가. |
 
 이 수치는 GPT IV 독립검증 결과이며 Claude Code가 직접 확인한 값이 아니다.
 
@@ -108,7 +118,20 @@ GPT_DATE_BE_CONTRACT_IV에서 운영 DB 직접 조회를 통해 다음 수치를
 | `services/document_confirm_svc.py` | 상수 추가 + 검증 분기 + manifest 생성 | 최소 수정 |
 | `services/document_schema_renderer.py` | 매개변수 추가 (선택) | 필요 시만 |
 
-### 3.2 상수 계약
+### 3.2 상수 계약 (R2-01/R2-02)
+
+#### 상태명 구분 (R2-01 — 혼동 방지)
+
+`APPROVED_BY_HUMAN`과 `APPROVED_FOR_RUNTIME_USE`는 서로 다른 테이블의 상태 값이다.
+
+| 테이블 | 상태 컬럼 | 허용 값 | 의미 |
+|--------|-----------|---------|------|
+| `runtime_document_data` | `status` | `APPROVED_BY_HUMAN` | 문서 확정(Confirm) 결과 |
+| `evidence_field_candidate` | `status` | `APPROVED_FOR_RUNTIME_USE` | Evidence 후보 봉인 승인 |
+| `runtime_evidence_field` | `status` | `APPROVED_FOR_RUNTIME_USE` | Runtime Evidence 필드 승인 |
+| `runtime_form_schema` | `status` | `APPROVED_FOR_RUNTIME_USE` | 스키마 봉인 승인 |
+
+`document_confirm_svc.py`의 `_ALLOWED_EVIDENCE_*` 상수는 Evidence 테이블 기준이며 `APPROVED_FOR_RUNTIME_USE`가 정합이다.
 
 ```python
 # 기존 (변경하지 않음)
@@ -125,7 +148,12 @@ _FILE_EVIDENCE_FAMILIES = frozenset({"ATTACHMENT"})
 
 # 기존 유지 (ATTACHMENT 전용)
 _ALLOWED_UPLOAD_TYPES = frozenset({"attachment"})
+
+# 신규 (R2-02): DATE family upload_type — 운영 DB P0 matrix 실측값
+_DATE_UPLOAD_TYPES = frozenset({"timestamp_auto"})
 ```
+
+> **R2-02 근거:** `docs/document-engine/obj02/candidate-quality/05_P0_EVIDENCE_MATRIX.csv` 전체 DATE 행에서 `upload_type = "timestamp_auto"` 확인. 이 명칭은 upload 처리 방식을 나타내는 DB 식별자이며, 서버 자동 타임스탬프 생성이 구현됐다는 의미가 아니다.
 
 ### 3.3 `_resolve_evidence_connections()` 수정 계약
 
@@ -147,7 +175,13 @@ if ev_family in _FILE_EVIDENCE_FAMILIES:
             f"(allowed: {sorted(_ALLOWED_UPLOAD_TYPES)})"
         )
 elif ev_family in _DATE_EVIDENCE_FAMILIES:
-    pass  # DATE 증적은 upload_type 없음 — file upload 경로 없음
+    # DATE upload_type은 "timestamp_auto" (P0 matrix 실측값 — R2-02)
+    if ev_upload_type not in _DATE_UPLOAD_TYPES:
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
+            f"for DATE family (allowed: {sorted(_DATE_UPLOAD_TYPES)})"
+        )
 ```
 
 `_resolve_evidence_connections()` 반환 구조에 `ev_family` 추가:
@@ -207,21 +241,22 @@ for ev_conn in ev_connections:
             field_key=field_key,
         )
         date_manifest_entry = {
-            "evidence_field_id": str(ev_field.get("id") or ""),
-            "field_key":         field_key,
-            "date_value":        str(date_value),
-            "evidence_family":   "DATE",
-            "input_type":        "date",
+            "evidence_field_id":     str(ev_field.get("id") or ""),
+            "field_id":              field_id,
+            "field_key":             field_key,
+            "date_value":            str(date_value),
+            "value_source":          "USER_INPUT",
+            "value_semantic_class":  "PENDING_CLASSIFICATION",  # LEG Gate 전 잠정
+            "evidence_family":       "DATE",
+            "input_type":            "date",
         }
         date_evidence_manifest.append(date_manifest_entry)
 ```
 
-### 3.5 `_verify_date_evidence_value()` 계약 (신규 함수)
+### 3.5 `_verify_date_evidence_value()` 계약 (신규 함수, R2-03 보정)
 
 ```python
-import re
-
-_ISO_DATE_RE = re.compile(r'^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$')
+from datetime import date as _date
 
 def _verify_date_evidence_value(
     *,
@@ -229,7 +264,11 @@ def _verify_date_evidence_value(
     ev_field_id: str,
     field_key: str,
 ) -> None:
-    """DATE 증적 필드 값 검증. FAIL-CLOSED."""
+    """DATE 증적 필드 값 검증. FAIL-CLOSED.
+    
+    정규식이 아닌 실달력 검증 사용 — "2026-02-31" 등 형식만 맞고 존재하지
+    않는 날짜를 통과시키지 않기 위함.
+    """
     if date_value is None:
         raise ConfirmError(
             422,
@@ -242,29 +281,61 @@ def _verify_date_evidence_value(
             f"evidence field {ev_field_id!r}: "
             f"date value must be str, got {type(date_value).__name__!r}"
         )
-    if not _ISO_DATE_RE.match(date_value):
+    # 실달력 검증: fromisoformat은 "2026-02-31"을 ValueError로 거부한다
+    try:
+        _date.fromisoformat(date_value)
+    except ValueError:
         raise ConfirmError(
             422,
             f"evidence field {ev_field_id!r}: "
-            f"date value {date_value!r} must be ISO format YYYY-MM-DD"
+            f"date value {date_value!r} is not a valid calendar date (ISO YYYY-MM-DD)"
         )
 ```
 
-### 3.6 evidence_manifest 병합 계약
+> **R2-03 근거:** 정규식 `r'^\d{{4}}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$'` 는 "2026-02-31" 을 통과시킨다. `datetime.date.fromisoformat()` 는 실달력 검증을 수행하므로 이 날짜를 `ValueError` 로 거부한다. DATA_SEMANTIC_GAP / SEMANTIC_UNRESOLVED 필드도 이 검증을 통과해야 하지만, 형식이 유효하더라도 LEG Gate 없이 봉인하지 않는다 (R1-02 기준).
 
-`build_render_artifacts()` 호출 전에 두 manifest를 병합한다. 렌더러 시그니처는 변경하지 않는다.
+### 3.6 evidence_manifest 병합 및 렌더러 산출물 분리 (R2-05)
+
+#### 렌더러 입출력 계약
+
+`build_render_artifacts()` 는 아래 4개 키를 가진 dict 를 반환한다.
+
+| 반환 키 | 타입 | 내용 |
+|---------|------|------|
+| `rendered_body` | str (HTML) | 결정적 HTML 문자열. Evidence manifest 텍스트를 포함하지 않는다. |
+| `template_identity` | str | `schema-renderer:<ver>:sha256:<hash>` |
+| `source_trace_snapshot` | list[dict] | UNKNOWN provenance 봉인 |
+| `evidence_manifest` | list[dict] | `signature_manifest + sorted(attachment_evidence_manifest)` |
+
+`evidence_manifest` 는 렌더러가 `signature_manifest` + `attachment_evidence_manifest` 파라미터를 병합해 반환한다. `rendered_body` 는 HTML이며 manifest를 직접 포함하지 않는다. 둘 다 Q4 hash 의 별도 입력 필드다.
 
 ```python
-# 두 manifest 병합 (렌더러에 단일 리스트로 전달)
+# DATE manifest 를 ATTACHMENT manifest 에 합쳐 렌더러에 단일 리스트로 전달
+# 렌더러는 이를 sorted() 후 evidence_manifest 키로 반환한다
 combined_evidence_manifest = attachment_evidence_manifest + date_evidence_manifest
 
 artifacts = build_render_artifacts(
-    ...
+    document=render_doc,
+    schema=schema_row,
+    fields=fields,
+    checklists=checklists,
+    signature_images=sig_result.get("images"),
+    signature_manifest=sig_result.get("manifest"),
+    attachment_images=attachment_images,
     attachment_evidence_manifest=combined_evidence_manifest,  # 기존 매개변수 재사용
 )
-```
+# artifacts["evidence_manifest"] = signature_manifest + sorted(combined_evidence_manifest)
+# artifacts["rendered_body"]     = HTML (manifest 텍스트 미포함)
 
-**대안 (선택적):** 렌더러가 DATE manifest를 다르게 표시해야 한다면 별도 매개변수를 추가한다. 현재 단계에서는 병합이 더 단순하다.
+# Q4 hash 입력에서 두 산출물이 각각 독립 필드로 사용됨
+snapshot_hash = compute_confirmed_snapshot_hash(
+    ...
+    evidence_manifest=artifacts["evidence_manifest"],   # manifest 독립 입력
+    rendered_body=artifacts["rendered_body"],           # HTML 독립 입력
+    confirmed_at=confirmed_at,
+    ...
+)
+```
 
 ### 3.7 DATE manifest 항목 형식 계약 (R1 보정)
 
@@ -326,7 +397,9 @@ Step 14a-3 (신규): manifest 병합 (clock_timestamp() 호출 전)
   combined_evidence_manifest = attachment_evidence_manifest + date_evidence_manifest
 
 Step 14b (변경 없음): build_render_artifacts(attachment_evidence_manifest=combined_evidence_manifest)
-  └── rendered_body 생성 — combined manifest 포함
+  └── artifacts = {rendered_body(HTML), template_identity, source_trace_snapshot, evidence_manifest}
+  └── rendered_body = HTML 문자열 (manifest 텍스트 미포함)
+  └── evidence_manifest = signature_manifest + sorted(combined_evidence_manifest)
 
 Step 15 (변경 없음): clock_timestamp() 1회 캡처 → confirmed_at
   └── DATE manifest 생성 이후이므로 date_value ≠ confirmed_at 혼동 없음
@@ -390,29 +463,35 @@ Step 19 (변경 없음): Seal UPDATE
 
 현재 FE는 `evidence_fields.length > 0` 이면 에디터를 일괄 차단한다. DATE 전용 증적만 있는 서식에서도 차단이 발생한다.
 
-**보정 계약 (구현 WO에 포함):**
+**보정 계약 (구현 WO에 포함, R2-06):**
+
+C2B 에디터는 파일 업로드를 지원하지 않으므로 ATTACHMENT 증적 서식은 이 에디터로 처리하지 않는다. 보정 목표는 DATE-only 서식의 에디터 접근을 허용하면서 ATTACHMENT 및 미지원 family 차단을 유지하는 것이다.
 
 ```typescript
-// 현재 (모든 증적 차단)
+// 현재 (모든 증적 차단 — 변경 전)
 if (rawEvidence.length > 0) {
   unsupportedReason.value = 'EVIDENCE_CONTRACT_UNSUPPORTED'
   return
 }
 
-// 보정 후 (DATE 전용은 통과)
+// 보정 후 (DATE-only 허용, ATTACHMENT·미지원 차단 유지 — R2-06)
+const EDITOR_SUPPORTED_EVIDENCE_FAMILIES = new Set(['DATE'])
 const unsupportedEvidence = rawEvidence.filter(
-  (e) => e.evidence_family !== 'DATE'
+  (e) => !EDITOR_SUPPORTED_EVIDENCE_FAMILIES.has(e.evidence_family)
 )
 if (unsupportedEvidence.length > 0) {
+  // ATTACHMENT, 미지원 family, 혼합 서식 → 차단 유지
   unsupportedReason.value = 'EVIDENCE_CONTRACT_UNSUPPORTED'
   return
 }
-// DATE 전용인 경우 에디터 활성화 허용
+// DATE 전용인 경우에만 에디터 활성화 허용
 ```
 
-**단, 이 보정은 아래 두 조건이 선행돼야 한다:**
+**이 보정은 아래 두 조건이 선행돼야 한다:**
 1. BE_DATE_CODE_READY (Gate A)
 2. 해당 서식의 evidence_field.status = `APPROVED_FOR_RUNTIME_USE` (기존 R1-02 유지)
+
+> **R2-06 근거:** ATTACHMENT 증적 처리는 파일 업로드 별도 경로이므로 C2B 에디터 필터에서 허용하지 않는다. `e.evidence_family !== 'DATE'` 필터는 ATTACHMENT family를 올바르게 차단하지만, 이 표현보다 `!EDITOR_SUPPORTED_EVIDENCE_FAMILIES.has(e.evidence_family)` 형식이 확장성과 가독성이 높다.
 
 ### 4.3 FE/BE 승인 경계 명시 (R1-04)
 
@@ -453,6 +532,16 @@ PR #181의 기존 코드는 변경하지 않는다. FE 보정은 별도 커밋 �
 - SEMANTIC_UNRESOLVED 필드 해소 또는 별도 처리 결정
 
 **현재 상태:** 104건 전부 `CANDIDATE`. 이 Gate는 이 WO의 범위 밖.
+
+**Evidence 승인 경로 제약 (R2-07):**
+
+`routers/review_bridge.py` 는 `runtime_review_decision` 테이블에 리뷰 결정을 기록하는 **문서 리뷰 워크플로** 전용이다. `evidence_field_candidate.status` 나 `runtime_evidence_field.status` 를 직접 `APPROVED_FOR_RUNTIME_USE` 로 변경하는 API가 아니다.
+
+DATE 104건에 대한 Gate B 진입 조건:
+- Evidence 승인 경로 별도 구현 또는 Operator 직접 DB 갱신 프로세스 확립
+- `runtime_review_authority` SUSPENDED 상태 임의 복원 금지
+- allowlist 일괄 추가 또는 자동 승인 금지
+- Gate B는 이 WO 또는 BE 구현 WO의 범위가 아니다 — 별도 Gate B WO에서 설계
 
 ### Gate C: RUNTIME_USE_READY
 
