@@ -62,7 +62,8 @@ def _obligation_to_key_item(o: Dict[str, Any]) -> Dict[str, Any]:
 
 def run_leg_diagnosis(step1_body: Any) -> Dict[str, Any]:
     """LEG 전용 진단. 반환 = full_result(LEG). 실패 시 LegDiagnosisError/LegRuntimeError 전파."""
-    facility = leg_client.build_facility(step1_body)
+    _tsp = getattr(step1_body, "_tsp", None)
+    facility = leg_client.build_facility(step1_body, trusted_server_projections=_tsp)
     context = leg_client.build_engine_context(step1_body)
     rtm_timeout = (
         LEG_RTM_CONSTRUCTION_TIMEOUT if context.get("sector") == "CONSTRUCTION" else None

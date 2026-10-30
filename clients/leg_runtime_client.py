@@ -471,11 +471,16 @@ _LEG_CODE_TO_CONSUMER = {
 }
 
 
-def build_facility(step1_body: Any) -> Dict[str, Any]:
+def build_facility(
+    step1_body: Any,
+    trusted_server_projections: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """DiagnoseStep1Body -> LEG /rtm/evaluate facility(consumer_input dict).
 
     값 출처: step1_body 최상위 속성 우선, 없으면 step1_body.input dict.
     None/빈 문자열은 미포함. 추정/임의 매핑 없음.
+    trusted_server_projections: projector 직접 출처 신뢰 전달(WO025-F13-I02-DEFECT2).
+      FM01은 이 채널에서만 facility에 포함됨. inp 직접 읽기 금지.
     """
     inp = getattr(step1_body, "input", None) or {}
     if not isinstance(inp, dict):
@@ -536,6 +541,12 @@ def build_facility(step1_body: Any) -> Dict[str, Any]:
             _hcs = inp.get("has_chemical_substance")
         if _hcs is not None:
             facility["has_chemical_substance"] = _hcs
+    # WO025-F13-I02-DEFECT2: FM01 via trusted_server_projections only.
+    # inp / step1_body.input FM01 직접 읽기 금지. sector gate 없음.
+    if trusted_server_projections:
+        _fm01 = trusted_server_projections.get("has_scaffold_at_ge_2m_subject_to_art56")
+        if _fm01 is True:
+            facility["has_scaffold_at_ge_2m_subject_to_art56"] = True
     return facility
 
 

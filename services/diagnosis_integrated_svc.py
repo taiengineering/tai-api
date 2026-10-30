@@ -390,6 +390,7 @@ def _build_unified_step1_body(
     construction_type_fallback: Optional[str],
     unified_factory: Callable[..., DiagnoseStep1Body],
     contract_amount_eok: Optional[float] = None,
+    _fm01_for_tsp: bool = False,
 ) -> DiagnoseStep1Body:
     """WO-010 STEP-2B: run_diagnosis 의 unified 분기(build_unified_leg_input) 조립 helper.
 
@@ -476,6 +477,10 @@ def _build_unified_step1_body(
                 step1_body.elevator_count = _elev
             except (AttributeError, ValueError):
                 step1_body = step1_body.model_copy(update={"elevator_count": _elev})
+    # WO025-F13-I02-DEFECT2: _tsp 설정 — 모든 model_copy 이후 (R4-04 정정).
+    # runtime_facts FM01 신뢰 금지. projector 직접 출처(_fm01_for_tsp)만.
+    if _fm01_for_tsp:
+        step1_body._tsp = {"has_scaffold_at_ge_2m_subject_to_art56": True}
     return step1_body
 
 
@@ -706,13 +711,18 @@ def run_diagnosis(
             ) from _mat_exc
     # WO-E2E-OBS009-COMMON-WORK-SOURCE-IMPLEMENT-001:
     # stored work → projector → merge. Explicit request keys are not overwritten.
+    # WO025-F13-I02-DEFECT2: FM01 추적. _proj_pers/_proj_trans 직접 출처만. inp FM01 신뢰 금지.
+    _fm01_for_tsp = False
     if factory_id:
         from services.work_source.merge import WorkSourceMergeConflict, merge_or_raise
+        from services.work_source.projector import project_work_rows as _pw_pers
         from services.work_source.store import WorkSourceLoadError, load_work_rows_optional
         try:
-            inp = merge_or_raise(
-                inp, work_rows=load_work_rows_optional(supabase, factory_id)
-            )
+            _pers_rows = load_work_rows_optional(supabase, factory_id)
+            _proj_pers = _pw_pers(_pers_rows)
+            inp = merge_or_raise(inp, projected=_proj_pers)
+            if _proj_pers.get("has_scaffold_at_ge_2m_subject_to_art56") is True:
+                _fm01_for_tsp = True
         except WorkSourceLoadError as exc:
             raise HTTPException(
                 status_code=503,
@@ -729,6 +739,7 @@ def run_diagnosis(
     _transient_work_rows = getattr(body, "work_rows", None) or []
     if _transient_work_rows:
         from services.work_source.merge import WorkSourceMergeConflict as _WConflict, merge_or_raise as _wmerge
+        from services.work_source.projector import project_work_rows as _pw_trans
         from services.work_source.store import WorkSourceValidationError as _WValErr, validate_payload as _validate_work
         try:
             _validated_transient = [
@@ -744,7 +755,10 @@ def run_diagnosis(
                 detail={"code": "WORK_ROW_INVALID", "message": str(exc)},
             ) from exc
         try:
-            inp = _wmerge(inp, work_rows=_validated_transient)
+            _proj_trans = _pw_trans(_validated_transient)
+            inp = _wmerge(inp, projected=_proj_trans)
+            if _proj_trans.get("has_scaffold_at_ge_2m_subject_to_art56") is True:
+                _fm01_for_tsp = True
         except _WConflict as exc:
             raise HTTPException(
                 status_code=409,
@@ -837,9 +851,11 @@ def run_diagnosis(
             construction_type_fallback=_construction_type_val,
             unified_factory=unified_step1_factory_func,
             contract_amount_eok=_contract_eok if _is_construction else None,
+            _fm01_for_tsp=_fm01_for_tsp,
         )
     elif canonical_step1_factory_func is not None and sector == "INDUSTRIAL":
         # GATE-2 Path A: WWW INDUSTRIAL LEG canonical path - legacy top-level default(400) bypass.
+        # WO025-F13-I02-DEFECT2: INDUSTRIAL legacy — _tsp=None 유지 (UNKNOWN). NOT_APPLICABLE 아님.
         step1_body = canonical_step1_factory_func(body)
     elif engine_sector == "CONSTRUCTION":
         _cst_fd = getattr(body, "form_data", None) or {}
@@ -854,6 +870,8 @@ def run_diagnosis(
             subcon_workers=body.subcon_workers or 0,
             has_chemical_substance=_cst_fd.get("has_chemical_substance"),
         )
+        if _fm01_for_tsp:
+            step1_body._tsp = {"has_scaffold_at_ge_2m_subject_to_art56": True}
     elif engine_sector == "BUILDING":
         # WP-1 BLOCKER-FIX: building_use_type/floor_count/total_floor_area 의 top-level default
         #   ('사무실'/5/400)를 제거한다. 이 default 는 build_facility precedence(top-level>input)로
@@ -882,6 +900,8 @@ def run_diagnosis(
             #   build_facility 가 inp(사용자 명시값)만 사용. 사용자가 고압가스/유해물질을 명시적으로
             #   보낼 때(building-leg UI G1/C1 분리 입력)까지 해당 조항 미발동.
         )
+        if _fm01_for_tsp:
+            step1_body._tsp = {"has_scaffold_at_ge_2m_subject_to_art56": True}
     else:
         step1_body = DiagnoseStep1Body(
             factory_id=factory_id,
@@ -898,6 +918,8 @@ def run_diagnosis(
             has_high_pressure_gas=body.has_high_pressure_gas,
             has_chemical_substance=body.has_chemical_substance,
         )
+        if _fm01_for_tsp:
+            step1_body._tsp = {"has_scaffold_at_ge_2m_subject_to_art56": True}
 
     eng = run_step1_func(supabase, step1_body)
     if eng.get("status") != "success":
