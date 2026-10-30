@@ -1,16 +1,17 @@
 ---
 title: DOC260 DATE Gate B — Evidence 승인 작업지시서
 wo: WO-DOC260-DATE-GATE-B-EVIDENCE-APPROVAL-001
-status: WP_G_B03_LINEAGE_COMPLETE_GPT_V_PENDING
+status: WP_G_B03_LINEAGE_EVIDENCE_CLOSE_GPT_VI_PENDING
 collected_by: Claude Code
 created_date: 2026-10-30
-revision: R7
-review_required: GPT_WP_G_B03_LINEAGE_IV
+revision: R8
+review_required: GPT_WP_G_B03_LINEAGE_FINAL_IV
 gpt_r1_verdict: PASS_WITH_GUARDS (2026-10-30)
 gpt_r2_verdict: PASS (2026-10-30)
 gpt_r3_verdict: STOP_SOT_MISMATCH (2026-10-30)
 gpt_r4_verdict: PASS_WITH_GUARDS (2026-10-31)
-gpt_r5_verdict: PENDING
+gpt_r5_verdict: PASS_WITH_GUARDS (2026-10-31)
+gpt_r6_verdict: PENDING
 wp_g_b01_status: CLOSED_FINAL (PR#742 1ce3c559 MERGED 2026-10-30)
 wp_g_b02_status: COMPLETE (2026-10-30)
 wp_g_b02_db_project: vwlahtguyggrhvslabax (taieng)
@@ -1415,4 +1416,153 @@ REMAINING_UNCERTAINTY_Q1 = 법령 질의 API (api.gov.45cm.com) 호출 DB 미확
 REMAINING_UNCERTAINTY_Q3 = C4 semantic review 72건 전부 인간 검토 필요
 
 NEXT_GATE = GPT_WP_G_B03_LINEAGE_IV
+```
+
+---
+
+## 18. WO-DOC260-WP-G-B03-LINEAGE-IV-EVIDENCE-CLOSE-011 완료 보고
+
+> **WO:** WO-DOC260-WP-G-B03-LINEAGE-IV-EVIDENCE-CLOSE-011  
+> **목적:** GPT R5 PASS_WITH_GUARDS Guards(G-04, G-05, G-06) 이행 — R7 소스 증적 제출, Alias 65/7 개별 매핑, C2/C3 정밀화  
+> **CODE_CHANGE = 0 / DB_MUTATION = 0 / ALLOWLIST_CHANGE = 0 / DEPLOY = 0**
+
+---
+
+### 18.1 R7 소스 증적 (G-06 해소)
+
+| 항목 | 값 |
+|------|----|
+| Commit SHA (전체) | `c82f49103e95266ee6298c53ec7f77e598886c14` |
+| GitHub URL | `https://github.com/taiengineering/tai-api/commit/c82f49103e95266ee6298c53ec7f77e598886c14` |
+| Doc Blob SHA | `bfbb2c9e5eb4ef8a4bd9d5e36d357589ba3f00cf` |
+| 변경 파일 수 | 1 (`docs/document-engine/WO-DOC260-DATE-GATE-B-EVIDENCE-APPROVAL-001.md`) |
+| 브랜치 | `wo-doc260-date-gate-b-g-b01-005` |
+| 추가 내용 | §17 전체 (WP-010 Lineage Report — §17.1~§17.5) |
+| Push 완료 | YES (2026-10-31, remote branch 동기화 확인) |
+
+---
+
+### 18.2 Alias 65/7 개별 Evidence ID 매핑 (G-04 해소)
+
+**매핑 근거:**  
+- `evidence_field_candidate.law_ref` 값에서 법령 단명 추출 → `law_alias.short_name` 대조  
+- `law_alias.verified_by` = `'INITIAL_BUILD'` → **ALIAS_PASS**  
+- `law_alias.verified_by` = `NULL` → **ALIAS_UNVERIFIED** (산안법 시행규칙 2건, 안전보건규칙 1건, 시설물안전법 4건)
+
+**ALIAS_UNVERIFIED 7건 (law_alias.verified_by = NULL):**
+
+| ev_id (앞 8자) | 법령 short_name |
+|----------------|----------------|
+| `b8209b01` | 산업안전보건법 시행규칙 |
+| `b6f899c7` | 산업안전보건법 시행규칙 |
+| `210b10ed` | 산업안전보건관련규칙 (안전보건규칙) |
+| `129665b3` | 시설물의안전관리에관한특별법 |
+| `23776288` | 시설물의안전관리에관한특별법 |
+| `0f75930a` | 시설물의안전관리에관한특별법 |
+| `785d14ec` | 시설물의안전관리에관한특별법 |
+
+**ALIAS_PASS 65건:** 72건 PROVISIONAL_SOURCE_MATCH에서 위 7건을 제외한 나머지 65건.  
+이 65건은 `law_alias.verified_by = 'INITIAL_BUILD'`로 alias 매핑은 확인됨.  
+단, C1 전체(72건)는 Q1(SoT 미확정)으로 인해 여전히 PROVISIONAL.
+
+---
+
+### 18.3 C2 정밀화 — 조문번호 존재 vs. 내용 실제 확인 분리 (G-05 부분 해소)
+
+| 구분 | 건수 | 설명 |
+|------|------|------|
+| 조문번호 token 존재 (예: "제OO조") | **48건** | `law_ref` 값에 조문번호 패턴 포함 |
+| 조문번호 없음 (법령명만 기재) | **24건** | C2 FAIL |
+| 조문 내용 실제 확인 완료 | **0건** | law_clause.action_text 대조 미수행 |
+
+**정정:** `C2_PASS = 48건` 표현은 "조문번호 token 존재"를 의미하며,  
+"조문 내용이 evidence 목적과 실제로 일치하는지 확인"은 C4(semantic review)에 해당함.  
+**ARTICLE_ACTUALLY_VERIFIED = 0건** — C2는 token 존재 여부만 확인.
+
+---
+
+### 18.4 C3 정밀화 — 현재 버전 vs. 적용 시점 이력 (G-05 부분 해소)
+
+| 구분 | 판정 | 건수 |
+|------|------|------|
+| 현재 버전 enforcement_date 존재 (is_active=true 기준) | **CONFIRMED** | 72건 |
+| evidence 생성 시점에 해당 버전이 시행 중이었는지 이력 검증 | **UNVERIFIED** | — |
+
+**정정:** §17.3의 `C3_PASS = 72건`은 "현재 is_active=true 행에 enforcement_date가 존재"를  
+의미함. "evidence가 제출될 당시 해당 조문 버전이 유효했는지" 이력적 검증은 미수행.  
+**VERSION_EFFECTIVE_AT_APPLICATION_TIME = UNVERIFIED** — 현재 시행 여부 확인 ≠ 적용 당시 유효성.
+
+---
+
+### 18.5 Lineage 정정 — 동기화 연속성 (G-05 부분 해소)
+
+| 항목 | 원 표현 | 정정 표현 |
+|------|---------|----------|
+| taieng ↔ leg-prod 동기화 | "미러/동기화 관계 없음" (추론) | **동기화 계약 또는 증거 없음 → UNVERIFIED** |
+| CONTINUOUS_SYNC_VERDICT | (명시 없음) | **UNVERIFIED** (동기화 중단 단언 불가) |
+
+**근거:** 동기화가 없다는 것은 동기화 코드/스케줄러 부재로 추론되나, 직접 확인 증거 없음.  
+"동기화 없음" 단언은 추측. 정확한 표현 = **동기화 계약/증거 미확인 (CONTINUOUS_SYNC = UNVERIFIED)**.
+
+---
+
+### 18.6 WO-011 §9 완료 보고
+
+```
+WO = WO-DOC260-WP-G-B03-LINEAGE-IV-EVIDENCE-CLOSE-011
+
+OWNER_APPROVAL = APPROVED (WP_G_B03_LINEAGE_IV_EVIDENCE_CLOSE)
+CODE_CHANGE = 0
+DB_MUTATION = 0
+ALLOWLIST_CHANGE = 0
+DEPLOY = 0
+
+── G-06 해소: R7 소스 증적 ────────────────────────────────────────────────────
+
+R7_COMMIT_SHA = c82f49103e95266ee6298c53ec7f77e598886c14
+R7_GITHUB_URL = https://github.com/taiengineering/tai-api/commit/c82f49103e95266ee6298c53ec7f77e598886c14
+R7_DOC_BLOB_SHA = bfbb2c9e5eb4ef8a4bd9d5e36d357589ba3f00cf
+R7_CHANGED_FILES = 1
+R7_BRANCH = wo-doc260-date-gate-b-g-b01-005
+R7_PUSH_STATUS = COMPLETED (2026-10-31)
+
+── G-04 해소: Alias 65/7 개별 Evidence ID ──────────────────────────────────
+
+R7_EVIDENCE_ID_COUNT = 112
+R7_UNIQUE_ID_COUNT = 112
+PROVISIONAL_SOURCE_MATCH_COUNT = 72
+
+ALIAS_PASS_65_BASIS = law_alias.verified_by = 'INITIAL_BUILD' (65건 = 72건 - 7건)
+ALIAS_FAIL_7_EVIDENCE_IDS = [
+  b8209b01-xxxx (산업안전보건법 시행규칙),
+  b6f899c7-xxxx (산업안전보건법 시행규칙),
+  210b10ed-xxxx (산업안전보건관련규칙),
+  129665b3-xxxx (시설물의안전관리에관한특별법),
+  23776288-xxxx (시설물의안전관리에관한특별법),
+  0f75930a-xxxx (시설물의안전관리에관한특별법),
+  785d14ec-xxxx (시설물의안전관리에관한특별법)
+]
+ALIAS_FAIL_LAWS = 산업안전보건법 시행규칙 (2건), 안전보건규칙 (1건), 시설물안전법 (4건)
+
+── G-05 해소: C2/C3 정밀화 ────────────────────────────────────────────────
+
+ARTICLE_TOKEN_COUNT = 48 (조문번호 token 존재 — "제OO조" 패턴)
+ARTICLE_ACTUALLY_VERIFIED = 0 (law_clause.action_text 대조 미수행)
+C2_DEFINITION_CORRECTED = token_exists ≠ content_verified
+
+VERSION_CURRENT_CONFIRMED = 72 (is_active=true 행 enforcement_date 존재)
+VERSION_EFFECTIVE_AT_APPLICATION_TIME = UNVERIFIED (이력적 유효성 미검증)
+C3_DEFINITION_CORRECTED = current_active ≠ valid_at_evidence_creation_time
+
+CONTINUOUS_SYNC_VERDICT = UNVERIFIED (동기화 계약/코드 직접 확인 없음)
+LINEAGE_VERDICT = SOURCE_TO_REPLICA_MIGRATED_THEN_INDEPENDENT (공통 원본 + M-07 확인)
+
+── 최종 상태 ──────────────────────────────────────────────────────────────
+
+C4_SEMANTIC_VERIFIED = 0
+C5_APPROVAL_CONTRACT_VERIFIED = 0
+ELIGIBILITY_EVIDENCE_COMPLETE = 0
+PROVISIONAL_SOURCE_MATCH = 72 (Q1 미결 유지)
+
+NEXT_GATE = GPT_WP_G_B03_LINEAGE_FINAL_IV
 ```
