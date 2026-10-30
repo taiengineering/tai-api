@@ -335,17 +335,62 @@ def get_internal_run(
 async def scan_stale_runs(
     x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
 ):
-    """QUEUED/RUNNING 장기 정체 Run 스캔.
+    """QUEUED/RUNNING 장기 정체 Run 스캔 — WO-TAI-QA-OPS-STALE-RUN-011.
 
-    WO-TAI-QA-OPS-STALE-RUN-011.
     - QUEUED >30분: 감지·보고 전용 (자동 ERROR 없음)
-    - RUNNING >45분: GitHub 상태 확인 후 STALE_RUN_NO_CALLBACK 조건 충족 시 ERROR 전이
+    - RUNNING >45분: GitHub completed 확인 후 CALLBACK_MISSING_DETECTED 보고 (DB 유지)
     - GitHub API 실패는 상태를 변경하지 않음 (NOT_VERIFIED)
-
-    활성화 연결: 별도 배포 Gate 대기 (WP-D와 함께 운영 스케줄 연결).
+    - 자동 ERROR 전이 없음 (WP-E 감지 전용 계약)
     """
     from services.qa_stale_svc import scan_stale_runs as _scan
     _check_secret(x_internal_secret)
     supabase = get_supabase()
     result = await _scan(supabase)
+    return {"status": "ok", "data": result}
+
+
+# ── WP-D: Workflow 미시작 감시 ────────────────────────────────────────────────
+
+class MonitorTwiceDailyRequest(BaseModel):
+    scheduled_slot_utc: Optional[str] = None
+    dry_run: bool = True
+
+
+@router.post("/monitor-twice-daily")
+async def monitor_twice_daily(
+    body: MonitorTwiceDailyRequest,
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
+):
+    """GitHub Actions 정기 Workflow 미시작 감시 — WO-TAI-QA-OPS-WORKFLOW-MONITOR-012.
+
+    tai-qa qa-twice-daily.yml이 예정 시각에 실행되지 않은 상황을 감지한다.
+    QA Run DB 상태 변경 없음 / 실제 Slack 발송 없음 (dry_run 고정).
+
+    scheduled_slot_utc: 검사할 UTC Slot (ISO 8601). 미지정 시 최근 유효 Slot 자동 선택.
+    dry_run: 항상 True (이번 배포 범위). False 활성화는 별도 Gate.
+
+    상태 코드:
+      RUN_OBSERVED             — 정상 Run 기록 확인
+      RUN_ACTIVE               — queued/in_progress 실행 중
+      RUN_COMPLETED            — Job 실행 완료
+      WORKFLOW_NOT_OBSERVED    — 60분 유예 후에도 Run 없음 → requires_alert=True
+      JOB_NOT_STARTED_SUSPECTED— Run 생성됐으나 Job 시작 증거 없음 → requires_alert=True
+      WORKFLOW_DISABLED        — Workflow 비활성 확인 → requires_alert=True
+      GITHUB_API_NOT_VERIFIED  — API 장애·인증 실패·429/5xx
+    """
+    _check_secret(x_internal_secret)
+
+    from services.qa_workflow_monitor_svc import monitor_twice_daily as _monitor
+
+    try:
+        result = await _monitor(
+            scheduled_slot_utc=body.scheduled_slot_utc,
+            dry_run=True,  # 이번 Draft PR 범위: dry_run 고정
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+
     return {"status": "ok", "data": result}

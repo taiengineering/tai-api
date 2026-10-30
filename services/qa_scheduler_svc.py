@@ -42,14 +42,14 @@ _COOLDOWN_SUCCESS_STATUSES = frozenset({"COMPLETED"})
 _DEFAULT_COOLDOWN_MINUTES  = 60
 _MIN_COOLDOWN_MINUTES      = 15
 
-# Cron guard: GitHub Actions twice-daily cron fires at 06:00/20:00 KST.
+# Cron guard: GitHub Actions twice-daily cron fires at 06:00/19:00 KST.
 # A DAILY 08:00 KST scheduler tick would re-dispatch items the cron already ran.
 # 900-min window (15 h) covers the entire operational day after 06:00 KST cron
 # (06:00→21:00 KST). If next_run_at UPDATE fails, guard still blocks re-dispatch
 # for all same-day scheduler ticks. Items with successfully-advanced next_run_at
 # are not due until tomorrow and are excluded by _due_schedules regardless of guard.
-# 20:00 KST scheduler: 06:00+900 min = 21:00 → items still covered if update failed;
-# items with next_run_at=tomorrow are excluded by _due_schedules (guard is moot).
+# 19:00 KST cron: 06:00+900 min = 21:00 → 19:00 KST is within the window, so
+# items still covered if update failed; items with next_run_at=tomorrow excluded.
 _CRON_GUARD_STATUSES = frozenset({"RUNNING", "COMPLETED", "ERROR"})
 _CRON_GUARD_MINUTES  = 900
 
