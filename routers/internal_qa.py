@@ -196,6 +196,56 @@ async def post_run_results(
     }
 
 
+# ── Cron Run Registration models ─────────────────────────────────────────────
+
+class RegisterCronRunRequest(BaseModel):
+    github_run_id:      int
+    github_run_attempt: int
+    scenario_ids:       List[str]
+    skip_reason:        Optional[str] = None
+
+
+@router.post("/runs/register-cron")
+async def register_cron_run(
+    body: RegisterCronRunRequest,
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
+):
+    """GitHub Actions 정기 QA 실행 등록 (twice-daily cron).
+
+    trigger_type=SCHEDULE, requested_by=github-cron.
+    (github_run_id, github_run_attempt) 중복 시 기존 run_id 반환 (idempotent).
+    HTTP 200 = 기존 run 반환. HTTP 201 = 신규 run 생성.
+    skip_reason="BLOCKED_NO_QA_CREDENTIALS": QA 자격증명 없음 → ERROR run + Slack 발송.
+    """
+    _check_secret(x_internal_secret)
+    supabase = get_supabase()
+    data = svc.register_cron_run(
+        supabase,
+        github_run_id=body.github_run_id,
+        github_run_attempt=body.github_run_attempt,
+        scenario_ids=body.scenario_ids,
+        skip_reason=body.skip_reason,
+    )
+    # BLOCKED_NO_QA_CREDENTIALS: 신규 ERROR run → QA_RUN_ERROR Slack (idempotent 재호출엔 재발송 안 함)
+    if data.get("blocked") and not data.get("idempotent"):
+        try:
+            notif = {
+                "event_type":    notify.QA_RUN_ERROR,
+                "trigger_type":  "SCHEDULE",
+                "run_id":        data["run_id"],
+                "error_summary": "No QA credentials configured — QA execution skipped (BLOCKED_NO_QA_CREDENTIALS)",
+            }
+            slack_payload = notify.build_qa_slack_payload(notif, is_run=True)
+            await send_slack(**slack_payload)
+        except Exception as exc:
+            log.warning("[internal_qa] slack notify failed for BLOCKED run %s: %s", data["run_id"], exc)
+    http_status = status.HTTP_200_OK if data.get("idempotent") else status.HTTP_201_CREATED
+    return JSONResponse(
+        status_code=http_status,
+        content={"status": "success", "data": data},
+    )
+
+
 # ── Targeted Dispatch models ──────────────────────────────────────────────────
 
 class TargetedDispatchRequest(BaseModel):

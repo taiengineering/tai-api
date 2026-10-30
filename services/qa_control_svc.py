@@ -797,6 +797,177 @@ def create_targeted_run(
     return run
 
 
+_BLOCKED_NO_CREDS = "BLOCKED_NO_QA_CREDENTIALS"
+
+
+def register_cron_run(
+    supabase,
+    github_run_id:      int,
+    github_run_attempt: int,
+    scenario_ids:       List[str],
+    skip_reason:        Optional[str] = None,
+) -> Dict[str, Any]:
+    """GitHub Actions 정기 QA 실행 등록 (twice-daily cron).
+
+    (github_run_id, github_run_attempt) 중복 방지:
+      기존 run 발견 → {run_id, scenario_ids, idempotent=True} 반환 (새 row 없음)
+      신규          → SCHEDULE run + targets 생성 후 반환
+
+    skip_reason="BLOCKED_NO_QA_CREDENTIALS": QA 자격증명 전부 없는 경우.
+      scenario_ids=[] 필수. ERROR run 즉시 생성 (targets 없음). blocked=True 반환.
+      호출자(라우터)가 QA_RUN_ERROR Slack 발송 책임.
+
+    trigger_type = SCHEDULE  (기존 CHECK 값 재사용, 마이그레이션 불필요)
+    requested_by = github-cron  (scheduler='scheduler'과 구별)
+    github_run_id/attempt는 apply_results 첫 바인딩이 아닌 생성 시 즉시 기록.
+    """
+    # ── BLOCKED_NO_QA_CREDENTIALS 경로 ────────────────────────────────────────
+    if skip_reason == _BLOCKED_NO_CREDS:
+        if scenario_ids:
+            raise HTTPException(422, "BLOCKED_NO_QA_CREDENTIALS skip_reason은 scenario_ids가 빈 목록이어야 합니다")
+        existing_res = (
+            supabase.table("qa_runs")
+            .select("id")
+            .eq("github_run_id", github_run_id)
+            .eq("github_run_attempt", github_run_attempt)
+            .limit(1)
+            .execute()
+        )
+        if existing_res.data:
+            return {"run_id": existing_res.data[0]["id"], "scenario_ids": [], "idempotent": True, "blocked": True}
+        now = now_kst().isoformat()
+        run_res = supabase.table("qa_runs").insert({
+            "trigger_type":       "SCHEDULE",
+            "run_status":         "ERROR",
+            "error_code":         _BLOCKED_NO_CREDS,
+            "error_summary":      "No QA credentials configured — QA execution skipped",
+            "requested_by":       "github-cron",
+            "requested_at":       now,
+            "started_at":         now,
+            "finished_at":        now,
+            "github_run_id":      github_run_id,
+            "github_run_attempt": github_run_attempt,
+            "created_at":         now,
+            "updated_at":         now,
+        }).execute()
+        if not run_res.data:
+            raise HTTPException(500, "qa_run 생성 실패 (BLOCKED_NO_QA_CREDENTIALS)")
+        return {"run_id": run_res.data[0]["id"], "scenario_ids": [], "idempotent": False, "blocked": True}
+
+    # ── 정상 경로 ─────────────────────────────────────────────────────────────
+    if not scenario_ids:
+        raise HTTPException(422, "scenario_ids가 비어있습니다")
+    if len(scenario_ids) > 100:
+        raise HTTPException(422, "scenario_ids는 최대 100건입니다")
+    if len(scenario_ids) != len(set(scenario_ids)):
+        raise HTTPException(422, "scenario_ids에 중복이 있습니다")
+
+    # Idempotency: (github_run_id, github_run_attempt) UNIQUE index 존재
+    existing_res = (
+        supabase.table("qa_runs")
+        .select("id")
+        .eq("github_run_id", github_run_id)
+        .eq("github_run_attempt", github_run_attempt)
+        .limit(1)
+        .execute()
+    )
+    if existing_res.data:
+        existing_run_id = existing_res.data[0]["id"]
+        tgts_res = (
+            supabase.table("qa_run_targets")
+            .select("qa_item_id")
+            .eq("run_id", existing_run_id)
+            .execute()
+        )
+        item_ids = [t["qa_item_id"] for t in (tgts_res.data or [])]
+        existing_sids: List[str] = []
+        if item_ids:
+            items_res2 = (
+                supabase.table("qa_items")
+                .select("id, scenario_id")
+                .in_("id", item_ids)
+                .execute()
+            )
+            existing_sids = [i["scenario_id"] for i in (items_res2.data or [])]
+        # R5: divergence — same GitHub identity must have the same scenario set.
+        # Different sets indicate a re-registration bug; do not silently reuse stale run.
+        incoming_set = set(scenario_ids)
+        existing_set = set(existing_sids)
+        if incoming_set != existing_set:
+            raise HTTPException(
+                409,
+                f"CRON_RUN_SCENARIO_DIVERGENCE: (github_run_id={github_run_id}, "
+                f"github_run_attempt={github_run_attempt}) already registered with a different "
+                f"scenario set. existing={sorted(existing_set)}, incoming={sorted(incoming_set)}",
+            )
+        return {"run_id": existing_run_id, "scenario_ids": existing_sids, "idempotent": True}
+
+    # Resolve scenario_id → qa_item rows
+    items_res = (
+        supabase.table("qa_items")
+        .select("id, scenario_id, enabled")
+        .in_("scenario_id", scenario_ids)
+        .execute()
+    )
+    sid_to_item = {r["scenario_id"]: r for r in (items_res.data or [])}
+    missing = [sid for sid in scenario_ids if sid not in sid_to_item]
+    if missing:
+        raise HTTPException(422, f"존재하지 않는 scenario_ids: {missing}")
+    disabled = [sid for sid in scenario_ids if not sid_to_item[sid]["enabled"]]
+    if disabled:
+        raise HTTPException(422, f"disabled scenario는 run에 포함할 수 없습니다: {disabled}")
+
+    now = now_kst().isoformat()
+    # R2: RUNNING at creation (workflow is already executing). QUEUED→COMPLETED is invalid;
+    # RUNNING→COMPLETED/ERROR are valid transitions for apply_results callback.
+    run_row = {
+        "trigger_type":       "SCHEDULE",
+        "run_status":         "RUNNING",
+        "requested_by":       "github-cron",
+        "requested_at":       now,
+        "started_at":         now,
+        "github_run_id":      github_run_id,
+        "github_run_attempt": github_run_attempt,
+        "created_at":         now,
+        "updated_at":         now,
+    }
+    run_res = supabase.table("qa_runs").insert(run_row).execute()
+    if not run_res.data:
+        raise HTTPException(500, "qa_run 생성 실패")
+    run_id = run_res.data[0]["id"]
+
+    target_rows = [
+        {
+            "run_id":     run_id,
+            "qa_item_id": sid_to_item[sid]["id"],
+            "ordinal":    idx + 1,
+            "created_at": now,
+        }
+        for idx, sid in enumerate(scenario_ids)
+    ]
+    try:
+        supabase.table("qa_run_targets").insert(target_rows).execute()
+    except Exception as e:
+        log.error("[qa_control] cron target insert failed run=%s: %s", run_id, e)
+        try:
+            supabase.table("qa_runs").delete().eq("id", run_id).execute()
+        except Exception as rollback_e:
+            log.error("[qa_control] rollback also failed run=%s: %s", run_id, rollback_e)
+            # R5: delete failed → orphan RUNNING record. Set ERROR to prevent stuck Admin UI run.
+            try:
+                supabase.table("qa_runs").update({
+                    "run_status":    "ERROR",
+                    "error_summary": "target insert failed; rollback failed — partial run orphaned",
+                    "finished_at":   now,
+                    "updated_at":    now,
+                }).eq("id", run_id).execute()
+            except Exception as update_e:
+                log.error("[qa_control] ERROR status set also failed run=%s: %s", run_id, update_e)
+        raise HTTPException(500, "qa_run_targets 생성 실패 — run 롤백됨")
+
+    return {"run_id": run_id, "scenario_ids": scenario_ids, "idempotent": False}
+
+
 # ── Status transition event matrix ───────────────────────────────────────────
 
 _TRANSITION_EVENTS: Dict[tuple, str] = {

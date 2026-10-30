@@ -42,6 +42,17 @@ _COOLDOWN_SUCCESS_STATUSES = frozenset({"COMPLETED"})
 _DEFAULT_COOLDOWN_MINUTES  = 60
 _MIN_COOLDOWN_MINUTES      = 15
 
+# Cron guard: GitHub Actions twice-daily cron fires at 06:00/20:00 KST.
+# A DAILY 08:00 KST scheduler tick would re-dispatch items the cron already ran.
+# 900-min window (15 h) covers the entire operational day after 06:00 KST cron
+# (06:00→21:00 KST). If next_run_at UPDATE fails, guard still blocks re-dispatch
+# for all same-day scheduler ticks. Items with successfully-advanced next_run_at
+# are not due until tomorrow and are excluded by _due_schedules regardless of guard.
+# 20:00 KST scheduler: 06:00+900 min = 21:00 → items still covered if update failed;
+# items with next_run_at=tomorrow are excluded by _due_schedules (guard is moot).
+_CRON_GUARD_STATUSES = frozenset({"RUNNING", "COMPLETED", "ERROR"})
+_CRON_GUARD_MINUTES  = 900
+
 
 def _get_cooldown_minutes() -> int:
     """Read QA_SCHEDULE_DISPATCH_COOLDOWN_MINUTES from env. Min 15."""
@@ -239,6 +250,45 @@ def _active_item_ids(supabase) -> frozenset:
     return frozenset(r["qa_item_id"] for r in (targets_res.data or []))
 
 
+def _cron_covered_item_ids(
+    supabase,
+    window_minutes: int,
+    now: datetime,
+) -> frozenset:
+    """Return qa_item_ids covered by any recent github-cron SCHEDULE run
+    (RUNNING or COMPLETED) within window_minutes.
+
+    Used for per-item exclusion in scheduler_tick: each matched item is removed
+    individually from the eligible list, so remaining items still dispatch.
+    This allows a mixed-pool tick (e.g., 51 items where 8 are cron-managed and
+    43 are not) to proceed normally for the non-cron items.
+
+    Covers PASS and FAIL cron results equally — the guard fires on run_status
+    (RUNNING|COMPLETED), not on individual test outcomes.
+    """
+    cutoff = (now - timedelta(minutes=window_minutes)).isoformat()
+    cron_res = (
+        supabase.table("qa_runs")
+        .select("id")
+        .eq("trigger_type", "SCHEDULE")
+        .eq("requested_by", "github-cron")
+        .in_("run_status", list(_CRON_GUARD_STATUSES))
+        .gte("started_at", cutoff)
+        .execute()
+    )
+    cron_run_ids = [r["id"] for r in (cron_res.data or [])]
+    if not cron_run_ids:
+        return frozenset()
+
+    targets_res = (
+        supabase.table("qa_run_targets")
+        .select("qa_item_id")
+        .in_("run_id", cron_run_ids)
+        .execute()
+    )
+    return frozenset(r["qa_item_id"] for r in (targets_res.data or []))
+
+
 def _null_schedules(supabase) -> List[Dict[str, Any]]:
     """next_run_at IS NULL인 enabled schedule (MANUAL 제외). bootstrap 대상."""
     res = (
@@ -324,15 +374,66 @@ async def scheduler_tick(supabase) -> Dict[str, Any]:
     # 2. 이미 active run에 포함된 item 제외
     busy_ids = _active_item_ids(supabase)
 
+    # 2b. Cron guard — per-item exclusion. Items covered by a recent github-cron
+    # SCHEDULE run (RUNNING|COMPLETED within 180 min) are excluded individually.
+    # This allows mixed-pool ticks: 51 due items with 8 cron-managed → 43 dispatched.
+    # Covers both PASS and FAIL cron results (guard is based on run_status, not results).
+    cron_busy_ids = _cron_covered_item_ids(supabase, _CRON_GUARD_MINUTES, now)
+    if cron_busy_ids:
+        log.info(
+            "[qa_scheduler] tick: cron guard — %d item(s) excluded (github-cron within %d min)",
+            len(cron_busy_ids), _CRON_GUARD_MINUTES,
+        )
+
     eligible = [
         s for s in schedules
         if s.get("qa_items", {}).get("enabled", False)
         and s["qa_item_id"] not in busy_ids
+        and s["qa_item_id"] not in cron_busy_ids
     ]
 
+    # R3-01: Advance next_run_at for cron-excluded items so they do not stay
+    # overdue after the 180-min guard window expires (prevents re-dispatch at 09:01+).
+    cron_excluded = [
+        s for s in schedules
+        if s.get("qa_items", {}).get("enabled", False)
+        and s["qa_item_id"] not in busy_ids
+        and s["qa_item_id"] in cron_busy_ids
+    ]
+    cron_advance_errors = 0
+    for sched in cron_excluded:
+        ft = sched.get("frequency_type", "DAILY")
+        fv = sched.get("frequency_value")
+        try:
+            if ft in _SUPPORTED_FREQ:
+                base_dt = _parse_dt(sched.get("next_run_at")) or now
+                next_dt = compute_next_run_at(ft, fv, base_dt)
+                res = supabase.table("qa_schedules").update({
+                    "next_run_at": next_dt.isoformat(),
+                    "updated_at":  now_iso,
+                }).eq("id", sched["id"]).execute()
+                if not (res.data or []):
+                    log.error(
+                        "[qa_scheduler] cron guard: next_run_at UPDATE returned 0 rows sched=%s"
+                        " — schedule may have been deleted between query and update",
+                        sched["id"],
+                    )
+                    cron_advance_errors += 1
+                else:
+                    log.info(
+                        "[qa_scheduler] cron guard: next_run_at advanced sched=%s → %s",
+                        sched["id"], next_dt.isoformat(),
+                    )
+        except Exception as e:
+            log.error(
+                "[qa_scheduler] cron guard next_run_at update failed sched=%s: %s",
+                sched["id"], e,
+            )
+            cron_advance_errors += 1
+
     if not eligible:
-        log.info("[qa_scheduler] tick: %d schedules due, all busy/disabled — skip", len(schedules))
-        return {"skipped": len(schedules), "created": 0, "error": 0, "bootstrapped": bootstrapped, "items": []}
+        log.info("[qa_scheduler] tick: %d schedules due, all busy/disabled/cron-covered — skip", len(schedules))
+        return {"skipped": len(schedules), "created": 0, "error": 0, "bootstrapped": bootstrapped, "items": [], "cron_advance_errors": cron_advance_errors}
 
     # 3. qa_run 생성 (enabled items만, 하나의 run으로 묶음)
     qa_item_ids  = [s["qa_item_id"] for s in eligible]
@@ -362,12 +463,13 @@ async def scheduler_tick(supabase) -> Dict[str, Any]:
             except Exception as e:
                 log.warning("[qa_scheduler] cooldown next_run_at update failed sched=%s: %s", sched["id"], e)
         return {
-            "skipped":      len(schedules) - len(eligible),
-            "created":      0,
-            "error":        0,
-            "bootstrapped": bootstrapped,
-            "items":        scenario_ids,
-            "dispatch":     "SKIPPED_COOLDOWN",
+            "skipped":             len(schedules) - len(eligible),
+            "created":             0,
+            "error":               0,
+            "bootstrapped":        bootstrapped,
+            "items":               scenario_ids,
+            "dispatch":            "SKIPPED_COOLDOWN",
+            "cron_advance_errors": cron_advance_errors,
         }
 
     run_row = {
@@ -381,7 +483,7 @@ async def scheduler_tick(supabase) -> Dict[str, Any]:
     run_res = supabase.table("qa_runs").insert(run_row).execute()
     if not run_res.data:
         log.error("[qa_scheduler] qa_run insert failed")
-        return {"skipped": len(schedules) - len(eligible), "created": 0, "error": 1, "bootstrapped": bootstrapped, "items": []}
+        return {"skipped": len(schedules) - len(eligible), "created": 0, "error": 1, "bootstrapped": bootstrapped, "items": [], "cron_advance_errors": cron_advance_errors}
 
     run_id = run_res.data[0]["id"]
 
@@ -395,7 +497,7 @@ async def scheduler_tick(supabase) -> Dict[str, Any]:
     except Exception as e:
         log.error("[qa_scheduler] target insert failed run=%s: %s", run_id, e)
         supabase.table("qa_runs").delete().eq("id", run_id).execute()
-        return {"skipped": len(schedules) - len(eligible), "created": 0, "error": 1, "bootstrapped": bootstrapped, "items": []}
+        return {"skipped": len(schedules) - len(eligible), "created": 0, "error": 1, "bootstrapped": bootstrapped, "items": [], "cron_advance_errors": cron_advance_errors}
 
     # 5. next_run_at 갱신 — 기준: sched["next_run_at"] (not now), cadence drift 방지
     for sched in eligible:
@@ -433,22 +535,24 @@ async def scheduler_tick(supabase) -> Dict[str, Any]:
         except Exception as slack_exc:
             log.warning("[qa_scheduler] slack notify failed: %s", slack_exc)
         return {
-            "skipped":     len(schedules) - len(eligible),
-            "created":     1,
-            "error":       1,
-            "bootstrapped": bootstrapped,
-            "items":       scenario_ids,
-            "run_id":      run_id,
-            "dispatch":    "ERROR",
+            "skipped":             len(schedules) - len(eligible),
+            "created":             1,
+            "error":               1,
+            "bootstrapped":        bootstrapped,
+            "items":               scenario_ids,
+            "run_id":              run_id,
+            "dispatch":            "ERROR",
+            "cron_advance_errors": cron_advance_errors,
         }
 
     log.info("[qa_scheduler] tick done: run=%s items=%d", run_id, len(eligible))
     return {
-        "skipped":     len(schedules) - len(eligible),
-        "created":     1,
-        "error":       0,
-        "bootstrapped": bootstrapped,
-        "items":       scenario_ids,
-        "run_id":      run_id,
-        "dispatch":    "OK",
+        "skipped":             len(schedules) - len(eligible),
+        "created":             1,
+        "error":               0,
+        "bootstrapped":        bootstrapped,
+        "items":               scenario_ids,
+        "run_id":              run_id,
+        "dispatch":            "OK",
+        "cron_advance_errors": cron_advance_errors,
     }

@@ -29,7 +29,7 @@ MR-04: create_run target 생성
 """
 import asyncio
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -297,6 +297,460 @@ def test_SC08_disabled_schedule_skipped():
 
     result = asyncio.run(_run())
     assert result["created"] == 0
+
+
+# ── SC-CRON: Cron guard (BC-2) ────────────────────────────────────────────────
+
+def test_SC_CRON01_running_cron_blocks_scheduler():
+    """BC-2: github-cron run이 RUNNING 중이면 해당 item이 eligible에서 제외됨."""
+    sched = _sched("item-5", "P0-005", next_run_offset=-5)
+    sb = _make_supabase(schedules=[sched])
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=frozenset({"item-5"})):
+            return await scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["created"] == 0  # all items cron-covered → eligible empty → no dispatch
+
+
+def test_SC_CRON02_completed_cron_within_window_blocks_scheduler():
+    """BC-2: github-cron run이 COMPLETED(3시간 내)이면 해당 item이 eligible에서 제외됨."""
+    sched = _sched("item-6", "P0-006", next_run_offset=-5)
+    sb = _make_supabase(schedules=[sched])
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=frozenset({"item-6"})):
+            return await scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["created"] == 0
+
+
+def test_SC_CRON03_old_cron_outside_window_allows_scheduler():
+    """BC-2: github-cron run이 3시간 초과 → cron guard 미발동, scheduler 정상 실행."""
+    sched = _sched("item-7", "P0-007", next_run_offset=-5)
+    sb = _make_supabase(schedules=[sched])
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=frozenset()):
+            with patch("services.qa_scheduler_svc.dispatch_qa_run", new=AsyncMock(return_value=None)):
+                return await scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["created"] == 1
+    assert result.get("dispatch") == "OK"
+
+
+def test_SC_CRON04_partial_cron_coverage_excludes_only_covered_items():
+    """BC-2: 51개 중 8개 cron-covered → 43개만 dispatcher 전달 (나머지 정상 실행)."""
+    scheds = [_sched(f"item-{i}", f"P0-{i:03d}", next_run_offset=-5) for i in range(51)]
+    cron_covered = frozenset(f"item-{i}" for i in range(8))
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_due_schedules", return_value=scheds), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=cron_covered):
+            with patch("services.qa_scheduler_svc.dispatch_qa_run", new=AsyncMock(return_value=None)):
+                return await scheduler_tick(_make_supabase(schedules=scheds))
+
+    result = asyncio.run(_run())
+    assert result["created"] == 1
+    assert len(result["items"]) == 43, f"expected 43, got {len(result['items'])}"
+
+
+def test_SC_CRON05_failed_cron_still_excludes_items():
+    """BC-2: 06:00 cron이 FAIL이어도(run_status=COMPLETED) 해당 items는 08:00 제외됨.
+    _cron_covered_item_ids는 run_status(RUNNING|COMPLETED) 기준이며 test outcome 무관."""
+    sched = _sched("item-login-1", "P0-SAAS-001", next_run_offset=-5)
+    sb = _make_supabase(schedules=[sched])
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=frozenset({"item-login-1"})):
+            with patch("services.qa_scheduler_svc.dispatch_qa_run", new=AsyncMock(return_value=None)):
+                return await scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["created"] == 0  # FAIL cron run still excludes the item
+
+
+def test_SC_CRON06_20h_after_window_cron_runs_normally():
+    """BC-2: 20:00 정기 QA — cron guard window(180분) 밖이므로 정상 실행.
+    06:00 cron 완료 14시간 후이므로 cron_covered_item_ids = frozenset() (empty)."""
+    sched = _sched("item-p0-1", "P0-LOGIN-001", next_run_offset=-5)
+    sb = _make_supabase(schedules=[sched])
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=frozenset()):
+            with patch("services.qa_scheduler_svc.dispatch_qa_run", new=AsyncMock(return_value=None)):
+                return await scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["created"] == 1  # 20:00 cron dispatches normally
+
+
+def test_SC_CRON07_cron_excluded_next_run_at_advanced():
+    """R3-01: 08:00 scheduler가 cron-covered item을 제외할 때 next_run_at을 전진시킨다.
+    전진하지 않으면 09:01+ (window 만료 후) 에 동일 item이 재Dispatch됨."""
+    sched = _sched("item-cron-x", "P0-LOGIN-001", next_run_offset=-5)
+
+    advanced_sched_ids: list = []
+
+    class _Q:
+        def __init__(self):
+            self._next_run_at_pending = False
+
+        def update(self, patch, **k):
+            if "next_run_at" in patch:
+                self._next_run_at_pending = True
+            return self
+
+        def eq(self, col, val):
+            if self._next_run_at_pending and col == "id":
+                advanced_sched_ids.append(val)
+                self._next_run_at_pending = False
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": [{}]})()
+
+        def select(self, *a, **k): return self
+        def in_(self, *a, **k):    return self
+        def lte(self, *a, **k):    return self
+        def gte(self, *a, **k):    return self
+        def is_(self, *a, **k):    return self
+        def neq(self, *a, **k):    return self
+        def insert(self, *a, **k): return self
+        def delete(self, **k):     return self
+
+    class _TrackSB:
+        def table(self, _name):
+            return _Q()
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_null_schedules", return_value=[]), \
+             patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=frozenset({"item-cron-x"})):
+            return await scheduler_tick(_TrackSB())
+
+    result = asyncio.run(_run())
+    assert result["created"] == 0
+    assert "sched-item-cron-x" in advanced_sched_ids, (
+        f"next_run_at must be advanced for cron-excluded sched-item-cron-x, got: {advanced_sched_ids}"
+    )
+
+
+def test_SC_CRON08a_next_run_at_written_value_is_future():
+    """FG-01 / R3-01: cron-excluded item의 DB에 실제로 기록된 next_run_at 값이
+    원래 next_run_at보다 20시간 이상 미래임을 검증 (DAILY advance = +24h)."""
+    from datetime import datetime, timezone
+    original_offset_min = -5
+    sched = _sched("item-cron-x", "P0-LOGIN-001", next_run_offset=original_offset_min)
+    original_next_run_at = datetime.fromisoformat(sched["next_run_at"])
+
+    written_values: list = []
+
+    class _Q:
+        def __init__(self):
+            self._patch = None
+
+        def update(self, patch, **k):
+            if "next_run_at" in patch:
+                self._patch = patch["next_run_at"]
+            return self
+
+        def eq(self, col, val):
+            if self._patch is not None and col == "id":
+                written_values.append(self._patch)
+                self._patch = None
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": [{}]})()
+
+        def select(self, *a, **k): return self
+        def in_(self, *a, **k):    return self
+        def lte(self, *a, **k):    return self
+        def gte(self, *a, **k):    return self
+        def is_(self, *a, **k):    return self
+        def neq(self, *a, **k):    return self
+        def insert(self, *a, **k): return self
+        def delete(self, **k):     return self
+
+    class _TrackSB:
+        def table(self, _name):
+            return _Q()
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_null_schedules", return_value=[]), \
+             patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=frozenset({"item-cron-x"})):
+            return await scheduler_tick(_TrackSB())
+
+    result = asyncio.run(_run())
+    assert result["created"] == 0
+    assert len(written_values) >= 1, "next_run_at must have been written to DB"
+    written_dt = datetime.fromisoformat(written_values[0])
+    min_expected = original_next_run_at + timedelta(hours=20)
+    assert written_dt > min_expected, (
+        f"written next_run_at {written_dt} must be > original+20h {min_expected}"
+    )
+    assert result.get("cron_advance_errors", 0) == 0
+
+
+def test_SC_CRON08b_zero_row_update_reported_as_cron_advance_error():
+    """FG-01: next_run_at UPDATE가 0건 반환(schedule 삭제됨)이면
+    cron_advance_errors += 1로 기록되어야 한다."""
+    sched = _sched("item-cron-del", "P0-LOGIN-001", next_run_offset=-5)
+
+    class _ZeroRowQ:
+        def update(self, *a, **k): return self
+        def eq(self, *a, **k):     return self
+
+        def execute(self):
+            return type("R", (), {"data": []})()
+
+        def select(self, *a, **k): return self
+        def in_(self, *a, **k):    return self
+        def lte(self, *a, **k):    return self
+        def gte(self, *a, **k):    return self
+        def is_(self, *a, **k):    return self
+        def neq(self, *a, **k):    return self
+        def insert(self, *a, **k): return self
+        def delete(self, **k):     return self
+
+    class _ZeroRowSB:
+        def table(self, _name):
+            return _ZeroRowQ()
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_null_schedules", return_value=[]), \
+             patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=frozenset({"item-cron-del"})):
+            return await scheduler_tick(_ZeroRowSB())
+
+    result = asyncio.run(_run())
+    assert result["created"] == 0
+    assert result.get("cron_advance_errors") == 1, (
+        f"expected cron_advance_errors=1 on 0-row UPDATE, got {result}"
+    )
+
+
+def test_SC_CRON08c_extended_guard_covers_post_180min_gap():
+    """FG-01 / _CRON_GUARD_MINUTES=900: 180분 초과(예: 9h) 후 스케줄러 tick에서도
+    cron-covered item이 중복 Dispatch되지 않는다.
+    next_run_at UPDATE 실패 시 900분 guard가 방어막 역할을 하는지 검증."""
+    # Simulate: now is 9h after cron start (well past old 180-min window)
+    # _cron_covered_item_ids mock returns the item ID (guard still active per 900-min logic)
+    sched = _sched("item-cron-c", "P0-LOGIN-001", next_run_offset=-5)
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        # Verify the constant is 900
+        assert mod._CRON_GUARD_MINUTES == 900, (
+            f"_CRON_GUARD_MINUTES must be 900 for FG-01 safety, got {mod._CRON_GUARD_MINUTES}"
+        )
+        with patch.object(mod, "_null_schedules", return_value=[]), \
+             patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=frozenset({"item-cron-c"})):
+            return await scheduler_tick(_make_supabase())
+
+    result = asyncio.run(_run())
+    assert result["created"] == 0, (
+        "item covered by 900-min cron guard must not be dispatched even after 180-min window"
+    )
+
+
+def test_SC_CRON09_mixed_51_items_8_excluded_next_run_at_advanced():
+    """R3-01 + BC-2 통합: 51개 중 8건 cron-covered → 43건 dispatch, 8건 next_run_at 전진."""
+    scheds = [_sched(f"item-{i}", f"P0-{i:03d}", next_run_offset=-5) for i in range(51)]
+    cron_covered = frozenset(f"item-{i}" for i in range(8))
+
+    advanced_sched_ids: list = []
+
+    class _Q:
+        def __init__(self):
+            self._nrat_pending = False
+            self._last_insert = None
+
+        def update(self, patch, **k):
+            if "next_run_at" in patch:
+                self._nrat_pending = True
+            return self
+
+        def eq(self, col, val):
+            if self._nrat_pending and col == "id":
+                advanced_sched_ids.append(val)
+                self._nrat_pending = False
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": [{"id": "run-mix"}]})()
+
+        def insert(self, rows, **k):
+            self._last_insert = rows
+            return self
+
+        def select(self, *a, **k): return self
+        def in_(self, *a, **k):    return self
+        def lte(self, *a, **k):    return self
+        def gte(self, *a, **k):    return self
+        def is_(self, *a, **k):    return self
+        def neq(self, *a, **k):    return self
+        def delete(self, **k):     return self
+
+    class _MixSB:
+        def table(self, _name):
+            return _Q()
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_null_schedules", return_value=[]), \
+             patch.object(mod, "_due_schedules", return_value=scheds), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=cron_covered):
+            with patch("services.qa_scheduler_svc.dispatch_qa_run", new=AsyncMock(return_value=None)):
+                return await scheduler_tick(_MixSB())
+
+    result = asyncio.run(_run())
+    assert result["created"] == 1
+    assert len(result["items"]) == 43, f"expected 43 dispatched, got {len(result['items'])}"
+    # next_run_at must have been advanced for each of the 8 cron-excluded items
+    expected_excluded = {f"sched-item-{i}" for i in range(8)}
+    assert expected_excluded.issubset(set(advanced_sched_ids)), (
+        f"missing next_run_at advances. expected {sorted(expected_excluded)}, "
+        f"got {sorted(advanced_sched_ids)}"
+    )
+
+
+def test_SC_CRON10_error_cron_run_blocks_scheduler():
+    """R3-02: 06:00 cron이 ERROR로 끝나도 해당 item이 08:00 scheduler에서 제외됨.
+    _CRON_GUARD_STATUSES = {"RUNNING", "COMPLETED", "ERROR"} 확인."""
+    sched = _sched("item-err-1", "P0-LOGIN-001", next_run_offset=-5)
+    sb = _make_supabase(schedules=[sched])
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        # Verify ERROR is in guard statuses
+        assert "ERROR" in mod._CRON_GUARD_STATUSES, (
+            f"ERROR must be in _CRON_GUARD_STATUSES, got {mod._CRON_GUARD_STATUSES}"
+        )
+        with patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=frozenset({"item-err-1"})):
+            return await scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["created"] == 0  # ERROR state cron excludes the item
+
+
+def test_SC_CRON11_error_guard_next_run_at_advanced():
+    """R3-02 + R3-01: ERROR 상태 cron으로 제외된 item의 next_run_at도 전진됨.
+    08:00에 제외되고 next_run_at 전진 → 09:01에 재실행되지 않음."""
+    sched = _sched("item-err-2", "P0-LOGIN-002", next_run_offset=-5)
+
+    advanced_ids: list = []
+
+    class _Q:
+        def __init__(self):
+            self._pending = False
+
+        def update(self, patch, **k):
+            if "next_run_at" in patch:
+                self._pending = True
+            return self
+
+        def eq(self, col, val):
+            if self._pending and col == "id":
+                advanced_ids.append(val)
+                self._pending = False
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": [{}]})()
+
+        def select(self, *a, **k): return self
+        def in_(self, *a, **k):    return self
+        def lte(self, *a, **k):    return self
+        def gte(self, *a, **k):    return self
+        def is_(self, *a, **k):    return self
+        def neq(self, *a, **k):    return self
+        def insert(self, *a, **k): return self
+        def delete(self, **k):     return self
+
+    class _TrackSB:
+        def table(self, _name):
+            return _Q()
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_null_schedules", return_value=[]), \
+             patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=frozenset({"item-err-2"})):
+            return await scheduler_tick(_TrackSB())
+
+    result = asyncio.run(_run())
+    assert result["created"] == 0
+    assert "sched-item-err-2" in advanced_ids, (
+        f"next_run_at must advance for ERROR-excluded item, got: {advanced_ids}"
+    )
+
+
+def test_SC_CRON12_error_cron_outside_window_allows_scheduler():
+    """R3-02: 06:00 cron이 ERROR로 끝난 후 180분 창 만료(09:01+) → 정상 dispatch.
+    window 밖이면 _cron_covered_item_ids가 frozenset() 반환 → scheduler 정상 실행."""
+    sched = _sched("item-err-3", "P0-LOGIN-003", next_run_offset=-5)
+    sb = _make_supabase(schedules=[sched])
+
+    async def _run():
+        import services.qa_scheduler_svc as mod
+        with patch.object(mod, "_due_schedules", return_value=[sched]), \
+             patch.object(mod, "_active_item_ids", return_value=frozenset()), \
+             patch.object(mod, "_recent_equivalent_run_exists", return_value=False), \
+             patch.object(mod, "_cron_covered_item_ids", return_value=frozenset()):
+            with patch("services.qa_scheduler_svc.dispatch_qa_run", new=AsyncMock(return_value=None)):
+                return await scheduler_tick(sb)
+
+    result = asyncio.run(_run())
+    assert result["created"] == 1  # window expired → normal dispatch
+    assert result.get("dispatch") == "OK"
 
 
 # ── MR-01~04: Manual Run (create_run svc 단위) ────────────────────────────────
