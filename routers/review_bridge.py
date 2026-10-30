@@ -362,11 +362,14 @@ def bridge_evidence_runtime_approve(
       1b. runtime_evidence_field_id ∈ _RUNTIME_EV_ALLOWLIST (Owner Gate 범위 제한)
       2. runtime_review_authority 권한 검증 (AND 조건)
       3. runtime_evidence_field.status = CANDIDATE
-      4. evidence_family = ATTACHMENT + upload_type = attachment
+      4. evidence_family/upload_type 정합 (G-B01):
+           ATTACHMENT: upload_type = attachment, input_type = file
+           DATE:       upload_type = timestamp_auto, input_type = date
+           교차 조합 → 422
       5. evidence_field_candidate.status = APPROVED_BY_HUMAN (선행 후보 승인 완료)
       6. EVIDENCE APPROVE decision 존재 (efc_id 기준, review_status=APPROVED)
       7. runtime_form_schema.status = APPROVED_FOR_RUNTIME_USE
-      8. field connection: 정확히 1건, input_type = file
+      8. field connection: 정확히 1건, input_type family 일치
       9. 중복 RUNTIME_EVIDENCE_APPROVE decision 차단
 
     처리: runtime_review_decision INSERT + runtime_evidence_field.status 전이 (원자 TX)
@@ -446,18 +449,27 @@ def bridge_evidence_runtime_approve(
                     "Cannot re-approve.",
                 )
 
-            # [3] evidence_family / upload_type 검증
-            if ev["evidence_family"] != "ATTACHMENT":
+            # [3] evidence_family / upload_type 정합 검증 (G-B01: DATE 지원 추가)
+            ev_family = ev["evidence_family"]
+            if ev_family == "ATTACHMENT":
+                if ev["upload_type"] != "attachment":
+                    raise HTTPException(
+                        422,
+                        f"upload_type={ev['upload_type']!r} not valid for ATTACHMENT family "
+                        "(expected attachment)",
+                    )
+            elif ev_family == "DATE":
+                if ev["upload_type"] != "timestamp_auto":
+                    raise HTTPException(
+                        422,
+                        f"upload_type={ev['upload_type']!r} not valid for DATE family "
+                        "(expected timestamp_auto)",
+                    )
+            else:
                 raise HTTPException(
                     422,
-                    f"evidence_family={ev['evidence_family']!r} not supported "
-                    "(only ATTACHMENT allowed)",
-                )
-            if ev["upload_type"] != "attachment":
-                raise HTTPException(
-                    422,
-                    f"upload_type={ev['upload_type']!r} not supported "
-                    "(only attachment allowed)",
+                    f"evidence_family={ev_family!r} not supported "
+                    "(supported: ATTACHMENT, DATE)",
                 )
 
             evidence_candidate_id = str(ev.get("evidence_candidate_id") or "")
@@ -517,7 +529,7 @@ def bridge_evidence_runtime_approve(
                     f"(status={rfs['status']!r})",
                 )
 
-            # [7] field connection 검증 — 정확히 1건, input_type = file
+            # [7] field connection 검증 — 정확히 1건, input_type family 일치
             field_candidate_id = str(efc.get("field_candidate_id") or "")
             if not field_candidate_id:
                 raise HTTPException(422, "field_candidate_id missing in evidence_field_candidate")
@@ -537,11 +549,12 @@ def bridge_evidence_runtime_approve(
                 raise HTTPException(422, "ambiguous connection — multiple runtime_fields matched")
 
             rf = dict(matched_fields[0])
-            if rf["input_type"] != "file":
+            expected_input_type = "file" if ev_family == "ATTACHMENT" else "date"
+            if rf["input_type"] != expected_input_type:
                 raise HTTPException(
                     422,
-                    f"connected runtime_field.input_type={rf['input_type']!r} not supported "
-                    "(only file allowed)",
+                    f"connected runtime_field.input_type={rf['input_type']!r} not valid "
+                    f"for {ev_family} family (expected {expected_input_type!r})",
                 )
 
             # [8] 중복 RUNTIME_EVIDENCE_APPROVE decision 차단
