@@ -39,10 +39,16 @@ __all__ = [
 ]
 
 # 렌더 결과 형식이 바뀌면 반드시 올린다. template_identity 에 포함된다.
-RENDERER_VERSION = "1"
+RENDERER_VERSION = "2"  # WP-B: multi_row F8 표 출력 추가
 
 # 값이 없을 때 쓰는 명시 표기. 빈칸(omitted)과 구분된다.
 _MISSING_TEXT = "(미입력)"
+
+# F8 multi_row 표 렌더 상수 (WP-B)
+_F8_FIELD_ID = "ad21a5f2-7452-401e-ba4f-59c1718ea83e"
+_F8_COL_KEYS = ("document_name", "submission_date", "submitted_to", "notes")
+_F8_COL_LABELS = ("문서명", "제출일", "제출처", "비고")
+_MULTI_ROW_EMPTY_TEXT = "(미등록)"
 
 
 class SchemaRenderError(Exception):
@@ -107,6 +113,25 @@ def _value_to_text(value: Any, _path: str) -> str:
 
 def _esc(text: str) -> str:
     return html.escape(text, quote=True)
+
+
+def _render_multi_row_table(rows: list) -> str:
+    """F8 multi_row 배열 → 4열 HTML 표 (WP-B).
+
+    rows는 WP-A 검증을 통과한 list[dict] 이어야 한다.
+    0행이면 빈 배열이므로 이 함수는 호출되지 않는다(호출자가 분기).
+    결정적 출력: 행 순서 보존, 셀값 HTML escape, 열 순서 고정.
+    """
+    header_cells = "".join("<th>%s</th>" % _esc(lbl) for lbl in _F8_COL_LABELS)
+    header_row = "<tr>%s</tr>" % header_cells
+    data_rows = []
+    for row in rows:
+        cells = "".join(
+            "<td>%s</td>" % _esc(row.get(key) or "")
+            for key in _F8_COL_KEYS
+        )
+        data_rows.append("<tr>%s</tr>" % cells)
+    return "<table>%s%s</table>" % (header_row, "".join(data_rows))
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -265,6 +290,32 @@ def _render_rows(
             else:
                 state = "missing"
                 cell_html = _esc(_MISSING_TEXT)
+            out.append(
+                '<tr data-field-id="%s" data-field-key="%s" data-input-type="%s" data-state="%s">'
+                "<th>%s</th><td>%s</td></tr>"
+                % (
+                    _esc(fid),
+                    _esc(key) if key is not None else "",
+                    _esc(input_type),
+                    state,
+                    _esc(label),
+                    cell_html,
+                )
+            )
+            continue
+        # ──────────────────────────────────────────────────────────────────────
+
+        # ── multi_row field (F8: DOC-SERA-011 submitted_document_list) ──────
+        if input_type == "multi_row" and fid == _F8_FIELD_ID:
+            raw = (data.get(key) if key is not None else None)
+            if key is not None and key in data:
+                consumed.add(key)
+            if isinstance(raw, list) and len(raw) > 0:
+                state = "present"
+                cell_html = _render_multi_row_table(raw)
+            else:
+                state = "missing"
+                cell_html = _esc(_MULTI_ROW_EMPTY_TEXT)
             out.append(
                 '<tr data-field-id="%s" data-field-key="%s" data-input-type="%s" data-state="%s">'
                 "<th>%s</th><td>%s</td></tr>"

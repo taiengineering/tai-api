@@ -13,6 +13,11 @@ from datetime import datetime, timezone
 from db.supabase_client import get_supabase
 from services.time import now_kst, serialize_external_utc
 
+# F8 multi_row column contract — DOC-SERA-011 / submitted_document_list (WP-A)
+_F8_FIELD_ID = "ad21a5f2-7452-401e-ba4f-59c1718ea83e"
+_F8_ALLOWED_COLS = frozenset({"document_name", "submission_date", "submitted_to", "notes"})
+_F8_MAX_ROWS = 50
+
 class DocumentScopeMismatchError(ValueError):
     """멱등 재조회 시 저장 문서의 company/factory가 서버 확정 정본과 다를 때."""
 
@@ -488,10 +493,10 @@ def _validate_runtime_keys(sb, schema_id: str, data_json: dict):
     if not data_json:
         return
 
-    # 1. Load allowed field_keys + input_type (to detect signature guard)
+    # 1. Load allowed field_keys + input_type + id (to detect signature/multi_row guards)
     res = (
         sb.table("runtime_field")
-        .select("field_key,input_type")
+        .select("id,field_key,input_type")
         .eq("form_schema_id", schema_id)
         .execute()
     )
@@ -503,6 +508,12 @@ def _validate_runtime_keys(sb, schema_id: str, data_json: dict):
     file_image_field_keys = {
         r["field_key"] for r in (res.data or [])
         if r.get("field_key") and r.get("input_type") in ("file", "image")
+    }
+    # multi_row field_key → field_id mapping for WP-A validation
+    multi_row_field_ids = {
+        r["field_key"]: str(r.get("id") or "")
+        for r in (res.data or [])
+        if r.get("field_key") and r.get("input_type") == "multi_row"
     }
 
     # 2. Load allowed checklist UUIDs
@@ -547,6 +558,9 @@ def _validate_runtime_keys(sb, schema_id: str, data_json: dict):
                     "use POST /document-engine/documents/{doc_id}"
                     f"/file/{key}/upload"
                 )
+            # multi_row field guard: validate array/row/column/cell-type contract (WP-A)
+            if key in multi_row_field_ids:
+                _validate_multi_row_value(key, multi_row_field_ids[key], value)
 
     if unknown_keys:
         raise ValueError(
@@ -579,6 +593,41 @@ def _validate_evidence_links(sb, schema_id: str, links: list):
             f"unknown evidence field_ids not in runtime_evidence_field: {sorted(unknown)}"
         )
 
+
+def _validate_multi_row_value(field_key: str, field_id: str, value) -> None:
+    """WP-A: F8 multi_row 필드 값 검증.
+
+    F8 (field_id=_F8_FIELD_ID) 한정 엄격 검증.
+    다른 field_id의 multi_row 필드는 기존 pass-through 유지.
+    빈 배열 []은 정상적인 삭제 값으로 허용한다.
+    """
+    if field_id != _F8_FIELD_ID:
+        return
+    if not isinstance(value, list):
+        raise ValueError(
+            f"multi_row field {field_key!r} value must be a JSON array"
+        )
+    if len(value) > _F8_MAX_ROWS:
+        raise ValueError(
+            f"multi_row field {field_key!r} exceeds maximum of {_F8_MAX_ROWS} rows "
+            f"(got {len(value)})"
+        )
+    for i, row in enumerate(value):
+        if not isinstance(row, dict):
+            raise ValueError(
+                f"multi_row field {field_key!r} row {i} must be a JSON object"
+            )
+        for col_key, cell_val in row.items():
+            if col_key not in _F8_ALLOWED_COLS:
+                raise ValueError(
+                    f"multi_row field {field_key!r} row {i} contains disallowed "
+                    f"column {col_key!r}; allowed: {sorted(_F8_ALLOWED_COLS)}"
+                )
+            if not isinstance(cell_val, str):
+                raise ValueError(
+                    f"multi_row field {field_key!r} row {i} column {col_key!r} "
+                    f"must be a string, got {type(cell_val).__name__!r}"
+                )
 
 
 # ═══════════════════════════════════════════════════════
