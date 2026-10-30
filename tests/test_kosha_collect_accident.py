@@ -21,7 +21,8 @@ def _make_item(arno: str, keyword: str = "테스트 제목", contents: str = "�
 
 def _mock_sb(existing_rows: list[dict] | None = None):
     """Single-page pre-load mock (existing_rows < 1000).
-    Pre-load uses .select().range().execute() — first call returns existing_rows, next returns [].
+    Pre-load chain: .select().order().range().execute()
+    First call returns existing_rows, subsequent calls return [].
     """
     sb = MagicMock()
     existing_rows = existing_rows or []
@@ -29,20 +30,22 @@ def _mock_sb(existing_rows: list[dict] | None = None):
     def _preload_exec():
         idx = _calls[0]; _calls[0] += 1
         return MagicMock(data=existing_rows if idx == 0 else [])
-    sb.table.return_value.select.return_value.range.return_value.execute.side_effect = _preload_exec
+    sb.table.return_value.select.return_value.order.return_value.range.return_value.execute.side_effect = _preload_exec
     sb.table.return_value.upsert.return_value.execute.return_value = MagicMock()
     return sb
 
 
 def _mock_sb_paginated(preload_pages: list[list[dict]]):
-    """Multi-page pre-load mock (existing rows span multiple 1000-row pages)."""
+    """Multi-page pre-load mock (existing rows span multiple 1000-row pages).
+    Pre-load chain: .select().order().range().execute()
+    """
     sb = MagicMock()
     _calls = [0]
     def _preload_exec():
         idx = _calls[0]; _calls[0] += 1
         page = preload_pages[idx] if idx < len(preload_pages) else []
         return MagicMock(data=page)
-    sb.table.return_value.select.return_value.range.return_value.execute.side_effect = _preload_exec
+    sb.table.return_value.select.return_value.order.return_value.range.return_value.execute.side_effect = _preload_exec
     sb.table.return_value.upsert.return_value.execute.return_value = MagicMock()
     return sb
 
@@ -74,46 +77,48 @@ def test_t01_normal_row_upserted(monkeypatch):
     assert result["upserted"] == 1
 
 
-def test_t02_missing_arno_skip(monkeypatch):
-    """T-02: 혼합 페이지에서 arno 없는 항목만 SKIP, arno 있는 항목은 유지."""
-    from routers.kosha_collect import _collect_accident_cases
+def test_t02_any_missing_arno_fails_closed(monkeypatch):
+    """T-02 R3: 페이지에 arno 없는 항목이 하나라도 있으면 CONTRACT_VALIDATION_FAILED."""
+    from routers.kosha_collect import _collect_accident_cases, KoshaFetchError
 
     item_no_arno = {"keyword": "제목", "contents": "내용", "regDt": "2024-06-01"}
     item_ok = _make_item("ARNO007")
-    # Page has 2 items: 1 missing arno (skip), 1 good (keep).
-    # Contract violation requires ALL items missing arno; mixed page is data-quality skip.
     monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: _mock_sb())
     monkeypatch.setattr("routers.kosha_collect.KoshaAPI.get",
                         AsyncMock(side_effect=[_make_resp([item_no_arno, item_ok]), _make_resp([])]))
 
-    result = _run(_collect_accident_cases(dry_run=True))
-    assert result["valid_rows"] == 1
+    with pytest.raises(KoshaFetchError) as exc_info:
+        _run(_collect_accident_cases(dry_run=True))
+    assert "CONTRACT_VALIDATION_FAILED" in str(exc_info.value)
+    assert "MISSING_ARNO" in str(exc_info.value)
 
 
-def test_t03_empty_keyword_skip(monkeypatch):
-    """T-03: arno 있음, keyword="" → SKIP."""
-    from routers.kosha_collect import _collect_accident_cases
+def test_t03_empty_keyword_fails_closed(monkeypatch):
+    """T-03 R3: arno 있음, keyword="" → CONTRACT_VALIDATION_FAILED MISSING_KEYWORD."""
+    from routers.kosha_collect import _collect_accident_cases, KoshaFetchError
 
     item = _make_item("ARNO002", keyword="")
     monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: _mock_sb())
     monkeypatch.setattr("routers.kosha_collect.KoshaAPI.get",
                         AsyncMock(side_effect=[_make_resp([item]), _make_resp([])]))
 
-    result = _run(_collect_accident_cases(dry_run=True))
-    assert result["valid_rows"] == 0
+    with pytest.raises(KoshaFetchError) as exc_info:
+        _run(_collect_accident_cases(dry_run=True))
+    assert "MISSING_KEYWORD" in str(exc_info.value)
 
 
-def test_t04_empty_contents_skip(monkeypatch):
-    """T-04: arno 있음, contents="" → SKIP."""
-    from routers.kosha_collect import _collect_accident_cases
+def test_t04_empty_contents_fails_closed(monkeypatch):
+    """T-04 R3: arno 있음, contents="" → CONTRACT_VALIDATION_FAILED MISSING_CONTENTS."""
+    from routers.kosha_collect import _collect_accident_cases, KoshaFetchError
 
     item = _make_item("ARNO003", contents="")
     monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: _mock_sb())
     monkeypatch.setattr("routers.kosha_collect.KoshaAPI.get",
                         AsyncMock(side_effect=[_make_resp([item]), _make_resp([])]))
 
-    result = _run(_collect_accident_cases(dry_run=True))
-    assert result["valid_rows"] == 0
+    with pytest.raises(KoshaFetchError) as exc_info:
+        _run(_collect_accident_cases(dry_run=True))
+    assert "MISSING_CONTENTS" in str(exc_info.value)
 
 
 def test_t05_existing_arno_preserves_id(monkeypatch):
@@ -170,11 +175,10 @@ def test_t06_new_arno_uses_arno_as_id(monkeypatch):
     assert captured[0][0]["id"] == "ARNO_NEW_999"
 
 
-def test_t07_cross_page_arno_duplicate_skip(monkeypatch):
-    """T-07: 동일 arno가 페이지 1+2에 등장 → 첫 번째만 유지."""
-    from routers.kosha_collect import _collect_accident_cases
+def test_t07_cross_page_arno_duplicate_fails_closed(monkeypatch):
+    """T-07 R3: 동일 arno가 페이지 1+2에 등장 → CONTRACT_VALIDATION_FAILED DUPLICATE_ARNO."""
+    from routers.kosha_collect import _collect_accident_cases, KoshaFetchError
 
-    # page 1: 100 items (same arno fills page to trigger page 2)
     item1 = _make_item("ARNO_DUP", keyword="제목1", contents="내용1")
     item2 = _make_item("ARNO_DUP", keyword="제목2", contents="내용2")
     resp1 = _make_resp([item1] * 100)
@@ -184,22 +188,23 @@ def test_t07_cross_page_arno_duplicate_skip(monkeypatch):
     monkeypatch.setattr("routers.kosha_collect.KoshaAPI.get",
                         AsyncMock(side_effect=[resp1, resp2, _make_resp([])]))
 
-    result = _run(_collect_accident_cases(dry_run=True))
-    # 101 items with same arno → only 1 valid row
-    assert result["valid_rows"] == 1
+    with pytest.raises(KoshaFetchError) as exc_info:
+        _run(_collect_accident_cases(dry_run=True))
+    assert "DUPLICATE_ARNO" in str(exc_info.value)
 
 
-def test_t08_whitespace_keyword_skip(monkeypatch):
-    """T-08: keyword="   " → strip → "" → SKIP."""
-    from routers.kosha_collect import _collect_accident_cases
+def test_t08_whitespace_keyword_fails_closed(monkeypatch):
+    """T-08 R3: keyword="   " → strip → "" → MISSING_KEYWORD FAIL_CLOSED."""
+    from routers.kosha_collect import _collect_accident_cases, KoshaFetchError
 
     item = _make_item("ARNO005", keyword="   ")
     monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: _mock_sb())
     monkeypatch.setattr("routers.kosha_collect.KoshaAPI.get",
                         AsyncMock(side_effect=[_make_resp([item]), _make_resp([])]))
 
-    result = _run(_collect_accident_cases(dry_run=True))
-    assert result["valid_rows"] == 0
+    with pytest.raises(KoshaFetchError) as exc_info:
+        _run(_collect_accident_cases(dry_run=True))
+    assert "MISSING_KEYWORD" in str(exc_info.value)
 
 
 def test_t09_contract_violation_no_arno_raises(monkeypatch):
@@ -324,3 +329,81 @@ def test_t13_upsert_second_batch_raises_partial_count(monkeypatch):
 
     with pytest.raises(RuntimeError, match="UPSERT_BATCH_2_FAIL"):
         _run(_collect_accident_cases(dry_run=False))
+
+
+def test_t14_db_duplicate_arno_fails_closed(monkeypatch):
+    """T-14: 기존 DB에 동일 arno를 가진 행이 두 개 → DB_DUPLICATE_ARNO FAIL_CLOSED."""
+    from routers.kosha_collect import _collect_accident_cases, KoshaFetchError
+
+    dup_rows = [
+        {"id": "ID_A", "title": "t1", "content": "c1", "board_no": "b1",
+         "raw_json": {"arno": "ARNO_DUP"}},
+        {"id": "ID_B", "title": "t2", "content": "c2", "board_no": "b2",
+         "raw_json": {"arno": "ARNO_DUP"}},
+    ]
+    sb = _mock_sb(dup_rows)
+    monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: sb)
+    monkeypatch.setattr("routers.kosha_collect.KoshaAPI.get",
+                        AsyncMock(side_effect=[_make_resp([_make_item("ARNO001")]), _make_resp([])]))
+
+    with pytest.raises(KoshaFetchError) as exc_info:
+        _run(_collect_accident_cases(dry_run=True))
+    assert "DB_DUPLICATE_ARNO" in str(exc_info.value)
+
+
+def test_t15_total_count_mismatch_completes_normally(monkeypatch):
+    """T-15: API totalCount 불일치 → WARNING만 기록, valid_rows=1 정상 반환."""
+    from routers.kosha_collect import _collect_accident_cases
+
+    item = _make_item("ARNO001")
+    # API reports totalCount=10 but delivers only 1 item (mismatch)
+    resp = _make_resp([item], total=10)
+    monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: _mock_sb())
+    # Return same resp every call; loop stops at page 1 since 1 < MAX_ROWS=100
+    monkeypatch.setattr("routers.kosha_collect.KoshaAPI.get", AsyncMock(return_value=resp))
+
+    result = _run(_collect_accident_cases(dry_run=True))
+    assert result["valid_rows"] == 1
+    assert result["collected"] == 1
+
+
+def test_t16_retry_after_partial_upsert_is_idempotent(monkeypatch):
+    """T-16: 배치2 실패 후 재시도 — UPSERT on_conflict=id 멱등성으로 최종 upserted=501."""
+    from routers.kosha_collect import _collect_accident_cases
+
+    items = [_make_item(f"ARNO{i:04d}") for i in range(501)]
+
+    def _api_pages():
+        pages = [_make_resp(items[i * 100 : (i + 1) * 100]) for i in range(5)]
+        pages.append(_make_resp(items[500:501]))
+        return pages
+
+    # First run: batch1 succeeds, batch2 fails
+    sb_first = _mock_sb()
+    _cnt = [0]
+    def _fail_second(rows, **kw):
+        _cnt[0] += 1
+        if _cnt[0] == 2:
+            raise RuntimeError("BATCH2_FAIL")
+        return sb_first.table.return_value.upsert.return_value
+    sb_first.table.return_value.upsert.side_effect = _fail_second
+
+    monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: sb_first)
+    monkeypatch.setattr("routers.kosha_collect.KoshaAPI.get", AsyncMock(side_effect=_api_pages()))
+    with pytest.raises(RuntimeError, match="BATCH2_FAIL"):
+        _run(_collect_accident_cases(dry_run=False))
+
+    # Retry run: both batches succeed
+    sb_retry = _mock_sb()
+    retry_sizes: list[int] = []
+    def _capture_retry(rows, **kw):
+        retry_sizes.append(len(list(rows)))
+        return sb_retry.table.return_value.upsert.return_value
+    sb_retry.table.return_value.upsert.side_effect = _capture_retry
+
+    monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: sb_retry)
+    monkeypatch.setattr("routers.kosha_collect.KoshaAPI.get", AsyncMock(side_effect=_api_pages()))
+    result = _run(_collect_accident_cases(dry_run=False))
+    assert result["valid_rows"] == 501
+    assert result["upserted"] == 501
+    assert retry_sizes == [500, 1]  # same data → same two batches
