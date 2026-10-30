@@ -5,8 +5,8 @@ wo: WO-DOC260-MAINLINE-DATE-CONTRACT-GATE-002
 collected_by: Claude Code (DESIGN role)
 collected_date: 2026-10-30
 revised_date: 2026-10-30
-revision: R2
-review_required: GPT_DATE_BE_CONTRACT_IV_R2
+revision: R3_PARTIAL
+review_required: GPT_DATE_BE_CONTRACT_IV_R3
 ---
 
 # DATE_TIMESTAMP_AUTO_CONNECTION_GATE — WO-002 Gate 결과
@@ -126,6 +126,18 @@ PR #181 HOLD 유지. BE 계약 문서(WO-003) 완료 후 구현 Gate 진입.
 WO-DOC260-MAINLINE-DATE-BE-CONTRACT-003 → `DATE_TIMESTAMP_AUTO_BE_CONTRACT_v1.md` 작성 → GPT_DATE_BE_CONTRACT_IV → 구현 WO 발행.
 
 ---
+
+## 9. SOURCE_IV_CONFLICT — Owner 결정 대기 (R3)
+
+GPT_DATE_BE_CONTRACT_IV_R2 에서 다음 3건에 대해 소스 직접 검증 결과와 GPT 주장 간 불일치가 확인됐다.
+
+| 항목 | GPT 주장 | 소스 실측 | 현재 계약 |
+|------|----------|-----------|-----------|
+| R3-01 Evidence 상태값 | `APPROVED_BY_HUMAN` | `APPROVED_FOR_RUNTIME_USE` (svc.py line 59·61) | 소스 기준 유지 |
+| R3-02 FE 분리 루프 | "PR #181이 이미 분리 처리" | 단일 전체 차단 (line 174) | R2 EDITOR_SUPPORTED 패턴 유지 |
+| R3-03 evidence-approve API | "존재한다" | /bridge/review-status 나열 8개에 없음 | R2 설명 유지 |
+
+Owner 확인 후 GPT 주장이 맞다면 지시에 따라 수정한다.
 
 ## 8. GPT_DATE_BE_CONTRACT_IV 수신 결과 (R1)
 

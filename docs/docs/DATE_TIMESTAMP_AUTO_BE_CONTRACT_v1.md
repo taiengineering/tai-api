@@ -5,8 +5,8 @@ wo: WO-DOC260-MAINLINE-DATE-BE-CONTRACT-003
 collected_by: Claude Code (DESIGN role)
 collected_date: 2026-10-30
 revised_date: 2026-10-30
-revision: R2
-review_required: GPT_DATE_BE_CONTRACT_IV_R2
+revision: R3_PARTIAL
+review_required: GPT_DATE_BE_CONTRACT_IV_R3
 ---
 
 # DATE_TIMESTAMP_AUTO_BE_CONTRACT — WO-003 설계 계약 (R1)
@@ -20,6 +20,14 @@ review_required: GPT_DATE_BE_CONTRACT_IV_R2
 > R1-02: DATE manifest에 `field_id`, `value_source`, `value_semantic_class` 추가.  
 > R1-03: 확정 트랜잭션 내 DATE manifest 생성 위치를 Step으로 명시.  
 > R1-04: FE DATE family 인식과 BE DATE 봉인 지원이 별도 Gate임을 명시.
+
+> **R3 보정 이력 (2026-10-30):** GPT_DATE_BE_CONTRACT_IV_R2 R3_CORRECTION_REQUIRED 수신.  
+> R3-04 적용: ev_upload_type 분기 전 초기화 + YYYY-MM-DD 형식 사전 검증 + PENDING_CLASSIFICATION Fail-Closed 조건 명시.  
+> R3-05 적용: 문서 내부 정합 (FE 차단 오류코드, timestamp_auto DB 존재 명시).  
+> SOURCE_IV_CONFLICT (Owner 결정 대기): R3-01(상태값), R3-02(FE루프), R3-03(API존재).  
+> — R3-01: 소스코드는 `APPROVED_FOR_RUNTIME_USE`. GPT 주장 `APPROVED_BY_HUMAN`과 불일치. 소스 기준 유지.  
+> — R3-02: FE 소스는 단일 전체 차단. GPT 주장 "분리 루프 존재" 불일치. R2 패턴 유지.  
+> — R3-03: /bridge/evidence-approve 없음. GPT 주장과 불일치. R2 설명 유지.
 
 > **R2 보정 이력 (2026-10-30):** GPT_DATE_BE_CONTRACT_IV_R1 R2_CORRECTION_REQUIRED 수신.  
 > R2-01: Evidence 승인 상태 테이블별 구분표 추가 (값 변경 없음, 혼동 방지).  
@@ -157,7 +165,7 @@ _DATE_UPLOAD_TYPES = frozenset({"timestamp_auto"})
 
 ### 3.3 `_resolve_evidence_connections()` 수정 계약
 
-기존 `upload_type` 검증 블록을 family 분기로 교체한다.
+기존 `upload_type` 검증 블록을 family 분기로 교체한다. `ev_upload_type` 은 분기 진입 전에 초기화해야 한다 (R3-04: 미초기화 변수 방지).
 
 ```python
 # 변경 전 (ATTACHMENT 전용)
@@ -165,9 +173,9 @@ ev_upload_type = str(ev.get("upload_type") or "")
 if ev_upload_type not in _ALLOWED_UPLOAD_TYPES:
     raise ConfirmError(422, ...)
 
-# 변경 후 (분기 처리)
+# 변경 후 (분기 처리 — ev_upload_type 분기 전 초기화 필수)
+ev_upload_type = str(ev.get("upload_type") or "")   # R3-04: 초기화는 분기 바깥
 if ev_family in _FILE_EVIDENCE_FAMILIES:
-    ev_upload_type = str(ev.get("upload_type") or "")
     if ev_upload_type not in _ALLOWED_UPLOAD_TYPES:
         raise ConfirmError(
             422,
@@ -281,6 +289,14 @@ def _verify_date_evidence_value(
             f"evidence field {ev_field_id!r}: "
             f"date value must be str, got {type(date_value).__name__!r}"
         )
+    # R3-04: YYYY-MM-DD 표준형 사전 검증 — fromisoformat()은 Python 3.11+에서
+    # "20261015" 같은 YYYYMMDD도 허용하므로 형식 확인을 먼저 수행한다
+    if len(date_value) != 10 or date_value[4] != '-' or date_value[7] != '-':
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: "
+            f"date value {date_value!r} must be strictly YYYY-MM-DD format"
+        )
     # 실달력 검증: fromisoformat은 "2026-02-31"을 ValueError로 거부한다
     try:
         _date.fromisoformat(date_value)
@@ -292,7 +308,7 @@ def _verify_date_evidence_value(
         )
 ```
 
-> **R2-03 근거:** 정규식 `r'^\d{{4}}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$'` 는 "2026-02-31" 을 통과시킨다. `datetime.date.fromisoformat()` 는 실달력 검증을 수행하므로 이 날짜를 `ValueError` 로 거부한다. DATA_SEMANTIC_GAP / SEMANTIC_UNRESOLVED 필드도 이 검증을 통과해야 하지만, 형식이 유효하더라도 LEG Gate 없이 봉인하지 않는다 (R1-02 기준).
+> **R2-03·R3-04 근거:** `datetime.date.fromisoformat()` 는 실달력 검증을 수행해 "2026-02-31" 을 거부한다. 단, Python 3.11+ 에서는 "20261015" (YYYYMMDD) 도 수용한다. 형식 사전 검증(`len==10, [4]=='-', [7]=='-'`)으로 YYYY-MM-DD 표준형을 엄격하게 강제한다. DATA_SEMANTIC_GAP / SEMANTIC_UNRESOLVED 필드도 이 검증을 통과해야 하지만, 달력 유효성과 법적 의미 승인은 별개다.
 
 ### 3.6 evidence_manifest 병합 및 렌더러 산출물 분리 (R2-05)
 
@@ -361,7 +377,7 @@ snapshot_hash = compute_confirmed_snapshot_hash(
 | `field_key` | str | DB (runtime_field.field_key) | 런타임 값과의 연결 키 |
 | `date_value` | str (ISO YYYY-MM-DD) | **사용자 입력** | 업무 날짜 원본값. 서버 시각 아님. |
 | `value_source` | str | 시스템 생성 (항상 "USER_INPUT") | 값의 생성 원천. 서버 자동 생성과 구분. |
-| `value_semantic_class` | str | 잠정 분류 기반 | `BUSINESS_EVENT_DATE` \| `DATA_SEMANTIC_GAP` \| `SEMANTIC_UNRESOLVED` |
+| `value_semantic_class` | str | 잠정 분류 기반 | `BUSINESS_EVENT_DATE` \| `DATA_SEMANTIC_GAP` \| `SEMANTIC_UNRESOLVED` \| `PENDING_CLASSIFICATION` |
 | `evidence_family` | str | DB (runtime_evidence_field.evidence_family) | 항상 "DATE" |
 | `input_type` | str | DB (runtime_field.input_type) | 항상 "date" |
 
@@ -381,6 +397,8 @@ snapshot_hash = compute_confirmed_snapshot_hash(
 모든 필드가 Python str → `datetime` / `UUID` / `Decimal` 객체 불포함 → `compute_confirmed_snapshot_hash()` FAIL-CLOSED 미발동.
 
 > **R1 추가:** str 타입이라는 사실만으로 법적 증적 무결성을 보증하지 않는다. `value_source = "USER_INPUT"` 와 `value_semantic_class` 필드는 날짜 값의 원천과 의미를 명시해 감사 추적에 사용된다. 법적 증적 무결성은 LEG Gate (Gate B) 를 통해 별도 검증한다.
+>
+> **R3-04 추가:** `value_semantic_class = "PENDING_CLASSIFICATION"` 은 감사 추적 전용 기록이다. 봉인 차단은 `_ALLOWED_EVIDENCE_CANDIDATE_STATUSES` 로 이미 수행되므로 `PENDING_CLASSIFICATION` 에 대한 별도 봉인 차단 분기를 추가하지 않는다. evidence_field_candidate.status ≠ `APPROVED_FOR_RUNTIME_USE` 이면 §3.4 R1-02 검사에서 422로 차단된다.
 
 ### 3.8 확정 트랜잭션 내 DATE manifest 생성 위치 (R1-03 신규)
 
