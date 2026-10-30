@@ -211,40 +211,121 @@ async def _collect_accident_cases(
     since_date: str = INIT_DATE,
     full_refresh: bool = False,
     strict: bool = False,
+    dry_run: bool = False,
 ) -> dict:
+    """WP-B-R1: arno/keyword/contents contract, two-pass collect→validate→upsert.
+
+    Collect ALL pages before any UPSERT (검증 전 UPSERT 금지).
+    Cross-page arno deduplication. Per-page contract violation → FAIL_CLOSED.
+    Existing good title/content protected from empty overwrite.
+    """
     sb = get_supabase()
     since = INIT_DATE if full_refresh else since_date
-    total_upserted = 0
+
+    # WP-B-3: Pre-load ALL existing rows for arno→id mapping and data protection.
+    _ex = sb.table("kosha_accident_cases").select("id, title, content, raw_json").execute()
+    arno_to_id: dict[str, str] = {}
+    arno_to_existing: dict[str, dict] = {}
+    for _r in (_ex.data or []):
+        _a = str((_r.get("raw_json") or {}).get("arno") or "").strip()
+        if _a:
+            arno_to_id[_a] = _r["id"]
+            arno_to_existing[_a] = {
+                "title":   str(_r.get("title")   or ""),
+                "content": str(_r.get("content") or ""),
+            }
+
+    # Pass 1: collect all pages.
+    all_items: list[tuple[int, int, dict]] = []
     for page in range(1, MAX_PAGES + 1):
         params = {"callApiId": "1040", "pageNo": page, "numOfRows": MAX_ROWS}
         resp  = await KoshaAPI.get("disaster_api02/getdisaster_api02", params, strict=strict)
         items = KoshaAPI.items(resp)
         if strict and page == 1 and (not items or KoshaAPI.total(resp) <= 0):
             raise KoshaFetchError("SOURCE_EMPTY_UNEXPECTED")
-        if not items: break
-        rows, stop_early = [], False
+        if not items:
+            break
+        # WP-B-R1: page-level contract violation — items present but zero have arno.
+        page_valid_arnos = [str(it.get("arno") or "").strip() for it in items if str(it.get("arno") or "").strip()]
+        if len(items) > 0 and len(page_valid_arnos) == 0:
+            raise KoshaFetchError(
+                f"CONTRACT_VIOLATION_NO_ARNO p={page} items={len(items)} "
+                f"sample_keys={list(items[0].keys())[:8]}"
+            )
         for i, it in enumerate(items):
-            dt = str(it.get("regDt") or it.get("REG_DT") or it.get("writeDate") or "")
-            if dt and not _after_since(dt, since):
-                stop_early = True
+            all_items.append((page, i, it))
+        if len(items) < MAX_ROWS:
+            break
+
+    # Pass 2: validate — build safe_rows.
+    safe_rows: list[dict] = []
+    seen_arnos: set[str] = set()
+    for page, i, it in all_items:
+        dt = str(it.get("regDt") or it.get("REG_DT") or it.get("writeDate") or "")
+        if dt and not _after_since(dt, since):
+            continue
+
+        # WP-B-2: arno FAIL_CLOSED per item.
+        arno = str(it.get("arno") or "").strip()
+        if not arno:
+            log.warning("[accident_cases] p=%d i=%d arno missing SKIP keys=%s", page, i, list(it.keys())[:8])
+            continue
+
+        # WP-B-4/5: cross-page duplicate detection.
+        if arno in seen_arnos:
+            log.warning("[accident_cases] arno=%s DUPLICATE across pages SKIP p=%d i=%d", arno, page, i)
+            continue
+        seen_arnos.add(arno)
+
+        # WP-B-2: correct field names (arno/keyword/contents).
+        keyword  = str(it.get("keyword")  or "").strip()
+        contents = str(it.get("contents") or "").strip()
+
+        # WP-B-R1: protect existing good data from empty overwrite.
+        existing = arno_to_existing.get(arno, {})
+        if not keyword:
+            if existing.get("title"):
+                log.warning("[accident_cases] arno=%s keyword empty; keeping existing title", arno)
+                keyword = existing["title"]
+            else:
+                log.warning("[accident_cases] arno=%s keyword empty, no fallback SKIP", arno)
                 continue
-            rid = str(it.get("boardNo") or it.get("BOARD_NO") or it.get("bbsNo") or _make_id("ac", page, i))
-            rows.append({
-                "id": rid,
-                "title": it.get("title") or it.get("TITLE") or it.get("bbsTitle") or it.get("BBS_TITLE") or "",
-                "business": it.get("business") or it.get("BUSINESS") or "",
-                "content": it.get("content") or it.get("CONTENT") or it.get("bbsContent") or "",
-                "board_no": rid,
-                "reg_dt": dt,
-                "file_url": it.get("fileUrl") or it.get("FILE_URL") or "",
-                "raw_json": it,
-            })
-        if rows:
-            sb.table("kosha_accident_cases").upsert(rows, on_conflict="id").execute()
-            total_upserted += len(rows)
-        if stop_early or len(items) < MAX_ROWS: break
-    _log("accident_cases", "success", total_upserted)
-    return {"target": "accident_cases", "since": since, "upserted": total_upserted}
+        if not contents:
+            if existing.get("content"):
+                log.warning("[accident_cases] arno=%s contents empty; keeping existing content", arno)
+                contents = existing["content"]
+            else:
+                log.warning("[accident_cases] arno=%s contents empty, no fallback SKIP", arno)
+                continue
+
+        # WP-B-3: existing arno→id preserves URL (no new make_id).
+        rid = arno_to_id.get(arno, arno)
+        safe_rows.append({
+            "id":       rid,
+            "title":    keyword,
+            "content":  contents,
+            "board_no": it.get("boardNo") or arno,
+            "reg_dt":   dt,
+            "file_url": it.get("fileUrl") or it.get("FILE_URL") or "",
+            "raw_json": it,
+        })
+
+    # Pass 3: UPSERT after full validation (검증 전 UPSERT 금지).
+    total_upserted = 0
+    if safe_rows and not dry_run:
+        sb.table("kosha_accident_cases").upsert(safe_rows, on_conflict="id").execute()
+        total_upserted = len(safe_rows)
+
+    log_status = "dry_run" if dry_run else "success"
+    _log("accident_cases", log_status, total_upserted)
+    return {
+        "target":      "accident_cases",
+        "since":       since,
+        "collected":   len(all_items),
+        "valid_rows":  len(safe_rows),
+        "upserted":    total_upserted,
+        "dry_run":     dry_run,
+    }
 
 
 async def _fetch_safety_materials_page(page_no: int):
@@ -309,6 +390,10 @@ async def _collect_construction_accidents(
     full_refresh: bool = False,
     strict: bool = False,
 ) -> dict:
+    # WP-B-9 BLOCKED: callApiId=1050 returns KOSHA Guide data, not construction accidents.
+    # kosha_construction_accidents currently holds 1,039 misrouted Guide entries.
+    # Re-enable only after the correct callApiId for construction accidents is confirmed.
+    raise KoshaFetchError("CONSTRUCTION_ACCIDENTS_BLOCKED_WRONG_API_DATA")
     sb = get_supabase()
     since = INIT_DATE if full_refresh else since_date
     total_upserted = 0
@@ -482,7 +567,7 @@ async def collect_all(
 
 
 async def _dispatch(target: str, since_date: str, full_refresh: bool, start_page: int = 1, dry_run: bool = True, batch_size: int = 100):
-    if target == "accident-cases":            return await _collect_accident_cases(since_date, full_refresh)
+    if target == "accident-cases":            return await _collect_accident_cases(since_date, full_refresh, dry_run=dry_run)
     elif target == "safety-materials":        return await _collect_safety_materials(since_date, full_refresh, start_page, dry_run)
     elif target == "safety-material-details": return _collect_safety_material_details(dry_run, batch_size)
     elif target == "construction-accidents":  return await _collect_construction_accidents(since_date, full_refresh)
