@@ -394,3 +394,69 @@ async def monitor_twice_daily(
         )
 
     return {"status": "ok", "data": result}
+
+
+# ── WO-016 WP-A: Cron 진입점 ─────────────────────────────────────────────────
+
+class RunMonitorCronRequest(BaseModel):
+    scheduled_for: Optional[str] = None
+
+
+@router.post("/run-monitor-cron")
+async def run_monitor_cron_endpoint(
+    body: RunMonitorCronRequest,
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
+):
+    """WP-D Workflow 미시작 감시 Cron 진입점 — WO-016 WP-A.
+
+    Cron Runner(scheduler)가 호출하는 HTTP 엔드포인트.
+    `scheduled_for`: cron_job_log.scheduled_for (UTC ISO). 미지정 시 자동 Slot 선택.
+
+    dry_run=True 고정 — Slack 실제 발송 활성화는 별도 Owner Gate.
+
+    Cron 등록 정보 (Draft — 미등록):
+      job_code:    qa_workflow_monitor_twice_daily
+      endpoint:    /internal/qa/run-monitor-cron
+      cron:        0 11,22 * * *  (UTC)
+    """
+    _check_secret(x_internal_secret)
+
+    from db.supabase_client import get_supabase
+    from services.qa_monitor_cron_svc import run_monitor_cron
+
+    supabase = get_supabase()
+    try:
+        result = await run_monitor_cron(
+            supabase=supabase,
+            scheduled_for=body.scheduled_for,
+            dry_run=True,  # 이번 PR 범위: dry_run 고정
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+
+    return {"status": "ok", "data": result}
+
+
+@router.post("/run-stale-scan")
+async def run_stale_scan_endpoint(
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
+):
+    """WP-E Stale Run 스캔 Cron 진입점 — WO-016 WP-A.
+
+    Cron Runner(scheduler)가 호출하는 HTTP 엔드포인트.
+    감지·보고 전용 — DB 상태 변경 없음, Slack 발송 없음.
+
+    Cron 등록 정보 (Draft — 미등록):
+      job_code:    qa_stale_run_scanner
+      endpoint:    /internal/qa/run-stale-scan
+      cron:        10,25,40,55 * * * *  (UTC)
+    """
+    _check_secret(x_internal_secret)
+
+    from services.qa_monitor_cron_svc import run_stale_scan_cron
+
+    result = await run_stale_scan_cron()
+    return {"status": "ok", "data": result}

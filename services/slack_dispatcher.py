@@ -1,4 +1,4 @@
-"""TAI Slack Dispatcher v1.3.1
+"""TAI Slack Dispatcher v1.3.2
 모든 이벤트를 Slack 채널로 분리 발송. WO-SLACK-EVENT-HUB-001 로 event_type 라우팅과
 Block Kit 인자를 추가. 기존 severity 기반 라우팅은 회귀 없이 유지.
 
@@ -9,7 +9,7 @@ Block Kit 인자를 추가. 기존 severity 기반 라우팅은 회귀 없이 �
 - INQUIRY        : 문의/피드백 인박스 (INQUIRY_CREATED · TAI_WISH_CREATED)
 - APPROVAL       : 결재/견적요청 (APPROVAL_CREATED · QUOTE_MANUAL_REQUESTED)
 - FREE_DIAGNOSIS : 익명 무료진단 완료 (FREE_DIAGNOSIS_COMPLETED)
-- #auto-qa       : QA 상태 전이/실행 오류 (QA_FAIL_DETECTED 등 5종)
+- #auto-qa       : QA 상태 전이/실행 오류 (QA_FAIL_DETECTED 등 5종 + QA_WORKFLOW_MONITOR_ALERT)
 
 환경변수:
 - SLACK_BOT_TOKEN1        : Slack Bot OAuth Token (우선)
@@ -92,11 +92,12 @@ EVENT_TYPE_CHANNEL = {
     "APPROVAL_CREATED":        CHANNEL_APPROVAL,
     "QUOTE_MANUAL_REQUESTED":  CHANNEL_APPROVAL,
     "FREE_DIAGNOSIS_COMPLETED": CHANNEL_FREE_DIAGNOSIS,
-    "QA_FAIL_DETECTED":        CHANNEL_QA,
-    "QA_BLOCKED_DETECTED":     CHANNEL_QA,
-    "QA_FLAKY_DETECTED":       CHANNEL_QA,
-    "QA_RECOVERED":            CHANNEL_QA,
-    "QA_RUN_ERROR":            CHANNEL_QA,
+    "QA_FAIL_DETECTED":             CHANNEL_QA,
+    "QA_BLOCKED_DETECTED":          CHANNEL_QA,
+    "QA_FLAKY_DETECTED":            CHANNEL_QA,
+    "QA_RECOVERED":                 CHANNEL_QA,
+    "QA_RUN_ERROR":                 CHANNEL_QA,
+    "QA_WORKFLOW_MONITOR_ALERT":    CHANNEL_QA,
 }
 
 # WO-SLACK-EVENT-HUB-001 PR-③: event_type → admin 링크 (전부 LIST · 딥링크 미지원 확인됨).
@@ -113,6 +114,7 @@ QA_ADMIN_BUTTON_EVENTS = {
     "QA_FLAKY_DETECTED",
     "QA_RECOVERED",
     "QA_RUN_ERROR",
+    "QA_WORKFLOW_MONITOR_ALERT",
 }
 EVENT_TYPE_ADMIN_PATH = {
     "INQUIRY_CREATED":          "/inquiry-list",
@@ -121,11 +123,12 @@ EVENT_TYPE_ADMIN_PATH = {
     "FREE_DIAGNOSIS_COMPLETED": "/anon-diagnosis-list",
     # APPROVAL_CREATED — source deferred, path 미할당
     # QA events — Phase 2-D Admin QA Console (/qa/dashboard)
-    "QA_FAIL_DETECTED":    "/qa/dashboard",
-    "QA_BLOCKED_DETECTED": "/qa/dashboard",
-    "QA_FLAKY_DETECTED":   "/qa/dashboard",
-    "QA_RECOVERED":        "/qa/dashboard",
-    "QA_RUN_ERROR":        "/qa/dashboard",
+    "QA_FAIL_DETECTED":             "/qa/dashboard",
+    "QA_BLOCKED_DETECTED":          "/qa/dashboard",
+    "QA_FLAKY_DETECTED":            "/qa/dashboard",
+    "QA_RECOVERED":                 "/qa/dashboard",
+    "QA_RUN_ERROR":                 "/qa/dashboard",
+    "QA_WORKFLOW_MONITOR_ALERT":    "/qa/dashboard",
 }
 
 # severity → 이모지

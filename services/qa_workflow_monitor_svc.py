@@ -474,7 +474,7 @@ async def monitor_twice_daily(
             "run_id":            GitHub Run ID (있는 경우),
             "evidence":          관측된 증거 dict,
             "slack_message":     생성된 Slack 메시지 (requires_alert인 경우),
-            "slack_sent":        bool — 실제 발송 여부 (항상 False in dry_run),
+            "slack_sent":        bool — 항상 False (발송은 qa_monitor_cron_svc Outbox 경유),
             "detected_at":       ISO 8601 UTC 감지 시각,
         }
     """
