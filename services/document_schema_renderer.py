@@ -39,10 +39,18 @@ __all__ = [
 ]
 
 # 렌더 결과 형식이 바뀌면 반드시 올린다. template_identity 에 포함된다.
-RENDERER_VERSION = "1"
+RENDERER_VERSION = "2"  # WP-B: multi_row F8 표 출력 추가
 
 # 값이 없을 때 쓰는 명시 표기. 빈칸(omitted)과 구분된다.
 _MISSING_TEXT = "(미입력)"
+
+# F8 multi_row 표 렌더 상수 (WP-B)
+_F8_FIELD_ID = "ad21a5f2-7452-401e-ba4f-59c1718ea83e"
+_F8_COL_KEYS = ("document_name", "submission_date", "submitted_to", "notes")
+_F8_COL_LABELS = ("문서명", "제출일", "제출처", "비고")
+_F8_ALLOWED_COLS = frozenset(_F8_COL_KEYS)
+_F8_MAX_ROWS = 50
+_MULTI_ROW_EMPTY_TEXT = "(미등록)"
 
 
 class SchemaRenderError(Exception):
@@ -107,6 +115,60 @@ def _value_to_text(value: Any, _path: str) -> str:
 
 def _esc(text: str) -> str:
     return html.escape(text, quote=True)
+
+
+def _assert_f8_multi_row(field_key: str, value: Any) -> None:
+    """F8 non-empty 배열 render 전 fail-close 검증 (WP-B R1).
+
+    absent/None/[] 는 이 함수를 호출하지 않는다 — 호출자가 분기한다.
+    잘못된 데이터를 조용히 (미등록)으로 숨기지 않는다.
+    """
+    if not isinstance(value, list):
+        raise _fail(
+            "F8 field %r: value must be a JSON array, got %s"
+            % (field_key, type(value).__name__)
+        )
+    if len(value) > _F8_MAX_ROWS:
+        raise _fail(
+            "F8 field %r: exceeds maximum of %d rows (got %d)"
+            % (field_key, _F8_MAX_ROWS, len(value))
+        )
+    for i, row in enumerate(value):
+        if not isinstance(row, dict):
+            raise _fail(
+                "F8 field %r row %d: must be a JSON object, got %s"
+                % (field_key, i, type(row).__name__)
+            )
+        for col_key, cell_val in row.items():
+            if col_key not in _F8_ALLOWED_COLS:
+                raise _fail(
+                    "F8 field %r row %d: disallowed column %r; "
+                    "allowed: %s" % (field_key, i, col_key, sorted(_F8_ALLOWED_COLS))
+                )
+            if not isinstance(cell_val, str):
+                raise _fail(
+                    "F8 field %r row %d column %r: must be a string, got %s"
+                    % (field_key, i, col_key, type(cell_val).__name__)
+                )
+
+
+def _render_multi_row_table(rows: list) -> str:
+    """F8 multi_row 배열 → 4열 HTML 표 (WP-B).
+
+    rows는 WP-A 검증을 통과한 list[dict] 이어야 한다.
+    0행이면 빈 배열이므로 이 함수는 호출되지 않는다(호출자가 분기).
+    결정적 출력: 행 순서 보존, 셀값 HTML escape, 열 순서 고정.
+    """
+    header_cells = "".join("<th>%s</th>" % _esc(lbl) for lbl in _F8_COL_LABELS)
+    header_row = "<tr>%s</tr>" % header_cells
+    data_rows = []
+    for row in rows:
+        cells = "".join(
+            "<td>%s</td>" % _esc(row.get(key) or "")
+            for key in _F8_COL_KEYS
+        )
+        data_rows.append("<tr>%s</tr>" % cells)
+    return "<table>%s%s</table>" % (header_row, "".join(data_rows))
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -265,6 +327,36 @@ def _render_rows(
             else:
                 state = "missing"
                 cell_html = _esc(_MISSING_TEXT)
+            out.append(
+                '<tr data-field-id="%s" data-field-key="%s" data-input-type="%s" data-state="%s">'
+                "<th>%s</th><td>%s</td></tr>"
+                % (
+                    _esc(fid),
+                    _esc(key) if key is not None else "",
+                    _esc(input_type),
+                    state,
+                    _esc(label),
+                    cell_html,
+                )
+            )
+            continue
+        # ──────────────────────────────────────────────────────────────────────
+
+        # ── multi_row field (F8: DOC-SERA-011 submitted_document_list) ──────
+        if input_type == "multi_row" and fid == _F8_FIELD_ID:
+            key_absent = (key is None) or (key not in data)
+            raw = (data[key] if not key_absent else None)
+            if not key_absent:
+                consumed.add(key)
+            if key_absent or raw == []:
+                # 키 부재 또는 빈 배열 → (미등록)
+                state = "missing"
+                cell_html = _esc(_MULTI_ROW_EMPTY_TEXT)
+            else:
+                # Key 존재 + 나머지 모든 값 → fail-close 검증 (null 포함 거부)
+                _assert_f8_multi_row(key or fid, raw)
+                state = "present"
+                cell_html = _render_multi_row_table(raw)
             out.append(
                 '<tr data-field-id="%s" data-field-key="%s" data-input-type="%s" data-state="%s">'
                 "<th>%s</th><td>%s</td></tr>"
