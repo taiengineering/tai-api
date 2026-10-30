@@ -5,8 +5,8 @@ wo: WO-DOC260-MAINLINE-DATE-CONTRACT-GATE-002
 collected_by: Claude Code (DESIGN role)
 collected_date: 2026-10-30
 revised_date: 2026-10-30
-revision: R3_PARTIAL
-review_required: GPT_DATE_BE_CONTRACT_IV_R3
+revision: R4_SOURCE_RESOLVED
+review_required: GPT_DATE_BE_CONTRACT_IV_R4
 ---
 
 # DATE_TIMESTAMP_AUTO_CONNECTION_GATE — WO-002 Gate 결과
@@ -127,17 +127,15 @@ WO-DOC260-MAINLINE-DATE-BE-CONTRACT-003 → `DATE_TIMESTAMP_AUTO_BE_CONTRACT_v1.
 
 ---
 
-## 9. SOURCE_IV_CONFLICT — Owner 결정 대기 (R3)
+## 9. SOURCE_IV_CONFLICT — RESOLVED (R4)
 
-GPT_DATE_BE_CONTRACT_IV_R2 에서 다음 3건에 대해 소스 직접 검증 결과와 GPT 주장 간 불일치가 확인됐다.
+WO-DOC260-MAINLINE-DATE-BE-CONTRACT-003-R3-SOURCE-RESOLUTION 수신. 로컬 브랜치가 tai-api main 대비 41커밋 뒤처진 상태(stale)였던 것이 원인으로 확인됐다. 최신 main(d219a3463855) 및 PR #181(2cebf9c40d79)을 기준으로 3건 전부 RESOLVED.
 
-| 항목 | GPT 주장 | 소스 실측 | 현재 계약 |
-|------|----------|-----------|-----------|
-| R3-01 Evidence 상태값 | `APPROVED_BY_HUMAN` | `APPROVED_FOR_RUNTIME_USE` (svc.py line 59·61) | 소스 기준 유지 |
-| R3-02 FE 분리 루프 | "PR #181이 이미 분리 처리" | 단일 전체 차단 (line 174) | R2 EDITOR_SUPPORTED 패턴 유지 |
-| R3-03 evidence-approve API | "존재한다" | /bridge/review-status 나열 8개에 없음 | R2 설명 유지 |
-
-Owner 확인 후 GPT 주장이 맞다면 지시에 따라 수정한다.
+| 항목 | GPT 주장 | 로컬 실측 (stale) | R4 확인 (최신 main) | 결과 |
+|------|----------|-------------------|---------------------|------|
+| R3-01 Evidence 상태값 | `APPROVED_BY_HUMAN` | `APPROVED_FOR_RUNTIME_USE` (구 브랜치) | `APPROVED_BY_HUMAN` (line 59·61) | **GPT 정합 — BE_CONTRACT §3.2 정정** |
+| R3-02 FE 분리 루프 | "PR #181이 이미 분리 처리" | 단일 전체 차단 (main line 174) | PR #181에 DATE/ATTACHMENT 루프 구현 완료 | **GPT 정합 — BE_CONTRACT §4 정정** |
+| R3-03 evidence-approve API | "존재한다" | /bridge/review-status 나열 8개에 없음 (구 브랜치) | `POST /bridge/evidence-approve` + `/bridge/evidence-runtime-approve` 존재 | **GPT 정합 — BE_CONTRACT §5 정정** |
 
 ## 8. GPT_DATE_BE_CONTRACT_IV 수신 결과 (R1)
 

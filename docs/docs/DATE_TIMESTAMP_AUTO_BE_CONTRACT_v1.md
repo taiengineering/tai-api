@@ -5,8 +5,8 @@ wo: WO-DOC260-MAINLINE-DATE-BE-CONTRACT-003
 collected_by: Claude Code (DESIGN role)
 collected_date: 2026-10-30
 revised_date: 2026-10-30
-revision: R3_PARTIAL
-review_required: GPT_DATE_BE_CONTRACT_IV_R3
+revision: R4_SOURCE_RESOLVED
+review_required: GPT_DATE_BE_CONTRACT_IV_R4
 ---
 
 # DATE_TIMESTAMP_AUTO_BE_CONTRACT — WO-003 설계 계약 (R1)
@@ -21,13 +21,16 @@ review_required: GPT_DATE_BE_CONTRACT_IV_R3
 > R1-03: 확정 트랜잭션 내 DATE manifest 생성 위치를 Step으로 명시.  
 > R1-04: FE DATE family 인식과 BE DATE 봉인 지원이 별도 Gate임을 명시.
 
+> **R4 SOURCE_IV_CONFLICT 해소 (2026-10-30):** WO-DOC260-MAINLINE-DATE-BE-CONTRACT-003-R3-SOURCE-RESOLUTION 수신.  
+> R3-01 RESOLVED: 로컬 브랜치가 main 대비 41커밋 뒤처진 상태였음. 최신 main(d219a3463855) 실측 →  
+> `_ALLOWED_EVIDENCE_CANDIDATE_STATUSES = frozenset({"APPROVED_BY_HUMAN"})`,  
+> `_ALLOWED_EVIDENCE_FIELD_STATUSES = frozenset({"APPROVED_BY_HUMAN"})`. 전 버전의 `APPROVED_FOR_RUNTIME_USE` 는 구 브랜치 기준이었으며 폐기.  
+> R3-02 RESOLVED: PR #181 (2cebf9c40d79) 실측 → DATE/ATTACHMENT 분기 루프 이미 구현됨. §4.1·§4.2 정정.  
+> R3-03 RESOLVED: 최신 main `review_bridge.py` 실측 → `POST /bridge/evidence-approve` + `POST /bridge/evidence-runtime-approve` 존재. §5 Gate B 정정.
+
 > **R3 보정 이력 (2026-10-30):** GPT_DATE_BE_CONTRACT_IV_R2 R3_CORRECTION_REQUIRED 수신.  
 > R3-04 적용: ev_upload_type 분기 전 초기화 + YYYY-MM-DD 형식 사전 검증 + PENDING_CLASSIFICATION Fail-Closed 조건 명시.  
-> R3-05 적용: 문서 내부 정합 (FE 차단 오류코드, timestamp_auto DB 존재 명시).  
-> SOURCE_IV_CONFLICT (Owner 결정 대기): R3-01(상태값), R3-02(FE루프), R3-03(API존재).  
-> — R3-01: 소스코드는 `APPROVED_FOR_RUNTIME_USE`. GPT 주장 `APPROVED_BY_HUMAN`과 불일치. 소스 기준 유지.  
-> — R3-02: FE 소스는 단일 전체 차단. GPT 주장 "분리 루프 존재" 불일치. R2 패턴 유지.  
-> — R3-03: /bridge/evidence-approve 없음. GPT 주장과 불일치. R2 설명 유지.
+> R3-05 적용: 문서 내부 정합 (FE 차단 오류코드, timestamp_auto DB 존재 명시).
 
 > **R2 보정 이력 (2026-10-30):** GPT_DATE_BE_CONTRACT_IV_R1 R2_CORRECTION_REQUIRED 수신.  
 > R2-01: Evidence 승인 상태 테이블별 구분표 추가 (값 변경 없음, 혼동 방지).  
@@ -135,16 +138,19 @@ GPT_DATE_BE_CONTRACT_IV에서 운영 DB 직접 조회를 통해 다음 수치를
 | 테이블 | 상태 컬럼 | 허용 값 | 의미 |
 |--------|-----------|---------|------|
 | `runtime_document_data` | `status` | `APPROVED_BY_HUMAN` | 문서 확정(Confirm) 결과 |
-| `evidence_field_candidate` | `status` | `APPROVED_FOR_RUNTIME_USE` | Evidence 후보 봉인 승인 |
-| `runtime_evidence_field` | `status` | `APPROVED_FOR_RUNTIME_USE` | Runtime Evidence 필드 승인 |
+| `evidence_field_candidate` | `status` | `APPROVED_BY_HUMAN` | Evidence 후보 봉인 승인 (R4-01 정정) |
+| `runtime_evidence_field` | `status` | `APPROVED_BY_HUMAN` | Runtime Evidence 필드 승인 (R4-01 정정) |
 | `runtime_form_schema` | `status` | `APPROVED_FOR_RUNTIME_USE` | 스키마 봉인 승인 |
 
-`document_confirm_svc.py`의 `_ALLOWED_EVIDENCE_*` 상수는 Evidence 테이블 기준이며 `APPROVED_FOR_RUNTIME_USE`가 정합이다.
+> **R4-01 근거:** 최신 main(d219a3463855) `document_confirm_svc.py` 직접 실측:  
+> `_ALLOWED_EVIDENCE_CANDIDATE_STATUSES = frozenset({"APPROVED_BY_HUMAN"})` (line 59)  
+> `_ALLOWED_EVIDENCE_FIELD_STATUSES = frozenset({"APPROVED_BY_HUMAN"})` (line 61)  
+> `runtime_form_schema.status = APPROVED_FOR_RUNTIME_USE` (line 57) — 변경 없음.
 
 ```python
-# 기존 (변경하지 않음)
-_ALLOWED_EVIDENCE_CANDIDATE_STATUSES = frozenset({"APPROVED_FOR_RUNTIME_USE"})
-_ALLOWED_EVIDENCE_FIELD_STATUSES     = frozenset({"APPROVED_FOR_RUNTIME_USE"})
+# 기존 (변경하지 않음) — 최신 main d219a3463855 실측값
+_ALLOWED_EVIDENCE_CANDIDATE_STATUSES = frozenset({"APPROVED_BY_HUMAN"})
+_ALLOWED_EVIDENCE_FIELD_STATUSES     = frozenset({"APPROVED_BY_HUMAN"})
 
 # 변경: DATE family 추가
 _ALLOWED_EVIDENCE_FAMILIES    = frozenset({"ATTACHMENT", "DATE"})
@@ -398,7 +404,7 @@ snapshot_hash = compute_confirmed_snapshot_hash(
 
 > **R1 추가:** str 타입이라는 사실만으로 법적 증적 무결성을 보증하지 않는다. `value_source = "USER_INPUT"` 와 `value_semantic_class` 필드는 날짜 값의 원천과 의미를 명시해 감사 추적에 사용된다. 법적 증적 무결성은 LEG Gate (Gate B) 를 통해 별도 검증한다.
 >
-> **R3-04 추가:** `value_semantic_class = "PENDING_CLASSIFICATION"` 은 감사 추적 전용 기록이다. 봉인 차단은 `_ALLOWED_EVIDENCE_CANDIDATE_STATUSES` 로 이미 수행되므로 `PENDING_CLASSIFICATION` 에 대한 별도 봉인 차단 분기를 추가하지 않는다. evidence_field_candidate.status ≠ `APPROVED_FOR_RUNTIME_USE` 이면 §3.4 R1-02 검사에서 422로 차단된다.
+> **R3-04 추가:** `value_semantic_class = "PENDING_CLASSIFICATION"` 은 감사 추적 전용 기록이다. 봉인 차단은 `_ALLOWED_EVIDENCE_CANDIDATE_STATUSES` 로 이미 수행되므로 `PENDING_CLASSIFICATION` 에 대한 별도 봉인 차단 분기를 추가하지 않는다. evidence_field_candidate.status ≠ `APPROVED_BY_HUMAN` 이면 §3.4 R1-02 검사에서 422로 차단된다 (R4-01 정정).
 
 ### 3.8 확정 트랜잭션 내 DATE manifest 생성 위치 (R1-03 신규)
 
@@ -468,48 +474,81 @@ Step 19 (변경 없음): Seal UPDATE
 
 ## 4. WP-C — FE PR #181 계약 정합
 
-### 4.1 PR #181 현재 상태
+### 4.1 PR #181 현재 상태 (R4-02 정정)
+
+> **tai-admin main과 PR #181 구분:** tai-admin main(`6a2396f7`)은 `evidence_fields.length > 0` 단일 차단이다.  
+> PR #181(`2cebf9c4`)은 DATE/ATTACHMENT 분기 루프가 이미 구현된 Draft 브랜치다. 두 상태를 혼동하지 않는다.
+
+**tai-admin main 상태 (병합 전):**
 
 | 항목 | 상태 |
 |------|------|
 | `date` input_type VTextField 렌더링 | 구현 완료 |
-| CANDIDATE 증적 차단 (CHILD_STATUS_DRIFT) | 구현 완료 |
-| `evidence_fields` 존재 시 에디터 전체 차단 | 구현 완료 |
-| DATE family 에디터 허용 | **미구현 — 추가 필요** |
+| `evidence_fields.length > 0` → 에디터 전체 차단 | 구현 완료 |
+| DATE family 에디터 허용 | **미구현** |
 
-### 4.2 PR #181 이후 FE 보정 필요 사항
+**PR #181 (`2cebf9c4`) Draft 상태:**
 
-현재 FE는 `evidence_fields.length > 0` 이면 에디터를 일괄 차단한다. DATE 전용 증적만 있는 서식에서도 차단이 발생한다.
+| 항목 | 상태 |
+|------|------|
+| `date` input_type VTextField 렌더링 | 구현 완료 |
+| CANDIDATE 증적 차단 (`EVIDENCE_LEGAL_UNKNOWN`) | 구현 완료 |
+| DATE / ATTACHMENT family 분기 루프 | **구현 완료** (`EVIDENCE_FAMILY_UNSUPPORTED` 차단 포함) |
+| `APPROVED_BY_HUMAN` 상태 검증 | **구현 완료** (R4-01 정합) |
+| upload_type 계약 검증 (ATTACHMENT→attachment, DATE→timestamp_auto) | **구현 완료** |
 
-**보정 계약 (구현 WO에 포함, R2-06):**
+### 4.2 PR #181 FE 구현 확인 (R4-02 정정)
 
-C2B 에디터는 파일 업로드를 지원하지 않으므로 ATTACHMENT 증적 서식은 이 에디터로 처리하지 않는다. 보정 목표는 DATE-only 서식의 에디터 접근을 허용하면서 ATTACHMENT 및 미지원 family 차단을 유지하는 것이다.
+**PR #181은 이미 DATE/ATTACHMENT 분기 루프를 구현하고 있다.** tai-admin main의 단일 차단 코드(`evidence_fields.length > 0`)는 PR #181에 존재하지 않는다. 별도 "보정 필요" 계약을 추가하지 않는다.
+
+PR #181의 실제 구현 패턴 (2cebf9c40d79, `useDocumentFormsEditor.ts`):
 
 ```typescript
-// 현재 (모든 증적 차단 — 변경 전)
-if (rawEvidence.length > 0) {
-  unsupportedReason.value = 'EVIDENCE_CONTRACT_UNSUPPORTED'
-  return
+// R2-03: evidence_family allowlist — ATTACHMENT + DATE
+for (const evId of Object.keys(evidenceFieldMap)) {
+  const ev = evidenceFieldMap[evId]
+  
+  // family 검증: ATTACHMENT/DATE 이외 전부 EVIDENCE_FAMILY_UNSUPPORTED
+  if (ev.evidence_family !== 'ATTACHMENT' && ev.evidence_family !== 'DATE') {
+    unsupportedReason.value = `EVIDENCE_FAMILY_UNSUPPORTED:${ev.evidence_family ?? ''}`
+    return
+  }
+  // upload_type 계약 검증 (family별)
+  if (ev.evidence_family === 'ATTACHMENT' && ev.upload_type !== 'attachment') {
+    unsupportedReason.value = `EVIDENCE_UPLOAD_TYPE_UNSUPPORTED:${ev.upload_type ?? ''}`
+    return
+  }
+  if (ev.evidence_family === 'DATE' && ev.upload_type !== 'timestamp_auto') {
+    unsupportedReason.value = `EVIDENCE_UPLOAD_TYPE_UNSUPPORTED:${ev.upload_type ?? ''}`
+    return
+  }
+  // R1-01: runtime_evidence_field.status APPROVED_BY_HUMAN 검증
+  if (ev.status !== 'APPROVED_BY_HUMAN') {
+    unsupportedReason.value = 'EVIDENCE_LEGAL_UNKNOWN'
+    return
+  }
+  // R2-02: evidence_candidate_status APPROVED_BY_HUMAN 검증
+  const conn = resolvedConns.find(c => c.evidence_field_id === evId)
+  if (!conn) { unsupportedReason.value = 'EVIDENCE_CONNECTION_UNRESOLVED'; return }
+  if (conn.evidence_candidate_status !== 'APPROVED_BY_HUMAN') {
+    unsupportedReason.value = 'EVIDENCE_LEGAL_UNKNOWN'
+    return
+  }
+  // input_type 계약: DATE→date, ATTACHMENT→file
+  const expectedInputType = ev.evidence_family === 'DATE' ? 'date' : 'file'
+  if (conn.input_type !== expectedInputType) {
+    unsupportedReason.value = `EVIDENCE_TYPE_UNSUPPORTED:${conn.input_type}`
+    return
+  }
 }
-
-// 보정 후 (DATE-only 허용, ATTACHMENT·미지원 차단 유지 — R2-06)
-const EDITOR_SUPPORTED_EVIDENCE_FAMILIES = new Set(['DATE'])
-const unsupportedEvidence = rawEvidence.filter(
-  (e) => !EDITOR_SUPPORTED_EVIDENCE_FAMILIES.has(e.evidence_family)
-)
-if (unsupportedEvidence.length > 0) {
-  // ATTACHMENT, 미지원 family, 혼합 서식 → 차단 유지
-  unsupportedReason.value = 'EVIDENCE_CONTRACT_UNSUPPORTED'
-  return
-}
-// DATE 전용인 경우에만 에디터 활성화 허용
 ```
 
-**이 보정은 아래 두 조건이 선행돼야 한다:**
-1. BE_DATE_CODE_READY (Gate A)
-2. 해당 서식의 evidence_field.status = `APPROVED_FOR_RUNTIME_USE` (기존 R1-02 유지)
+이 구현은 BE 계약(§3.2)의 `APPROVED_BY_HUMAN` 상태값과 정합이다.
 
-> **R2-06 근거:** ATTACHMENT 증적 처리는 파일 업로드 별도 경로이므로 C2B 에디터 필터에서 허용하지 않는다. `e.evidence_family !== 'DATE'` 필터는 ATTACHMENT family를 올바르게 차단하지만, 이 표현보다 `!EDITOR_SUPPORTED_EVIDENCE_FAMILIES.has(e.evidence_family)` 형식이 확장성과 가독성이 높다.
+**PR #181 Merge 조건:**
+1. BE_DATE_CODE_READY (Gate A) 완료
+2. 해당 서식의 `evidence_field_candidate.status = APPROVED_BY_HUMAN` + `runtime_evidence_field.status = APPROVED_BY_HUMAN`
+3. GPT_DATE_BE_CONTRACT_IV_R4 PASS 후 Owner Merge 승인
 
 ### 4.3 FE/BE 승인 경계 명시 (R1-04)
 
@@ -517,13 +556,13 @@ FE의 DATE family 인식과 BE의 DATE 봉인 지원은 **별도 Gate**다.
 
 | Gate | 항목 | 조건 |
 |------|------|------|
-| FE DATE 인식 | evidence_family = 'DATE' 필터링 | PR #181 + 에디터 gate 보정 |
+| FE DATE 인식 | evidence_family = 'DATE' 처리 | PR #181 구현 완료 (Draft HOLD 중) |
 | BE DATE 봉인 | _ALLOWED_EVIDENCE_FAMILIES + manifest | Gate A Code Ready |
-| Evidence 승인 | CANDIDATE → APPROVED_FOR_RUNTIME_USE | Gate B (LEG Gate) |
+| Evidence 승인 | CANDIDATE → APPROVED_BY_HUMAN | Gate B (/bridge/evidence-approve 경로) |
 
-FE gate 보정만 완료해도 BE가 미구현이면 확정 시 422 거부. 두 Gate가 동시에 Code Ready여야 실제 확정이 가능하다.
+FE는 PR #181에서 이미 DATE 분기를 구현했다. BE가 미구현이면 확정 시 422 거부. FE + BE 두 Gate가 동시에 Code Ready여야 실제 확정이 가능하다.
 
-PR #181의 기존 코드는 변경하지 않는다. FE 보정은 별도 커밋 또는 PR #181 추가 커밋으로 처리한다.
+PR #181을 변경할 필요는 없다. Gate A Code Ready 후 Owner Merge 승인 시 병합한다.
 
 ---
 
@@ -545,18 +584,26 @@ PR #181의 기존 코드는 변경하지 않는다. FE 보정은 별도 커밋 �
 
 **조건 (각 서식/증적 단위):**
 - LEG 확인 완료 (법적 의무 여부)
-- evidence_field_candidate.status = `APPROVED_FOR_RUNTIME_USE`
-- runtime_evidence_field.status = `APPROVED_FOR_RUNTIME_USE`
+- evidence_field_candidate.status = `APPROVED_BY_HUMAN` (R4-01 정정)
+- runtime_evidence_field.status = `APPROVED_BY_HUMAN` (R4-01 정정)
 - SEMANTIC_UNRESOLVED 필드 해소 또는 별도 처리 결정
 
 **현재 상태:** 104건 전부 `CANDIDATE`. 이 Gate는 이 WO의 범위 밖.
 
-**Evidence 승인 경로 제약 (R2-07):**
+**Evidence 승인 경로 (R4-03 정정 — R2-07 보정):**
 
-`routers/review_bridge.py` 는 `runtime_review_decision` 테이블에 리뷰 결정을 기록하는 **문서 리뷰 워크플로** 전용이다. `evidence_field_candidate.status` 나 `runtime_evidence_field.status` 를 직접 `APPROVED_FOR_RUNTIME_USE` 로 변경하는 API가 아니다.
+최신 main(d219a3463855) `routers/review_bridge.py` 에는 다음 두 API가 존재한다.
+
+| API | 대상 테이블 | 전이 결과 | 선행 조건 |
+|-----|-------------|-----------|-----------|
+| `POST /bridge/evidence-approve` | `evidence_field_candidate` | `status → APPROVED_BY_HUMAN` | SAFETY_MANAGER 역할 + 증빙 scope |
+| `POST /bridge/evidence-runtime-approve` | `runtime_evidence_field` | `status → APPROVED_BY_HUMAN` | evidence-approve 선행 완료 + ALLOWLIST 등재 |
+
+`/bridge/evidence-runtime-approve` 는 현재 `_RUNTIME_EV_ALLOWLIST`(`fd3f3c99`, `e1793f5c` 2건)만 허용하며, DATE 104건은 이 allowlist에 없다.
 
 DATE 104건에 대한 Gate B 진입 조건:
-- Evidence 승인 경로 별도 구현 또는 Operator 직접 DB 갱신 프로세스 확립
+- 각 증적에 대한 `_RUNTIME_EV_ALLOWLIST` Owner Gate 범위 확장 승인
+- LEG Gate 통과 후 서식별 `evidence-approve` → `evidence-runtime-approve` 순서 실행
 - `runtime_review_authority` SUSPENDED 상태 임의 복원 금지
 - allowlist 일괄 추가 또는 자동 승인 금지
 - Gate B는 이 WO 또는 BE 구현 WO의 범위가 아니다 — 별도 Gate B WO에서 설계
@@ -633,14 +680,14 @@ DATE 104건에 대한 Gate B 진입 조건:
 | 계층 | 항목 | 현재 상태 | 계약 후 상태 |
 |------|------|-----------|--------------|
 | DB | runtime_evidence_field.evidence_family = "DATE" | CANDIDATE 104건 | 변경 없음 |
-| DB | evidence_field_candidate.status | CANDIDATE | APPROVED 필요 (Gate B) |
+| DB | evidence_field_candidate.status | CANDIDATE | APPROVED_BY_HUMAN 필요 (Gate B) |
 | BE | _ALLOWED_EVIDENCE_FAMILIES | {"ATTACHMENT"} | {"ATTACHMENT", "DATE"} |
 | BE | _ALLOWED_EVIDENCE_INPUT_TYPES | {"file"} | {"file", "date"} |
 | BE | DATE 값 검증 | 없음 | ISO YYYY-MM-DD 검증 |
 | BE | DATE manifest 생성 | 없음 | evidence_manifest 포함 |
 | BE | Q4 hash 안전성 | ATTACHMENT만 | DATE 항목 추가 후도 안전 |
 | FE | `date` 입력 렌더링 | PASS (PR #181) | 변경 없음 |
-| FE | DATE 증적 에디터 게이트 | EVIDENCE_CONTRACT_UNSUPPORTED | DATE 전용 시 허용 (보정 필요) |
+| FE | DATE 증적 에디터 게이트 | 단일 차단 (tai-admin main) | PR #181 분기 구현 완료 — Merge 후 활성 |
 | FE | CANDIDATE 차단 | PASS (PR #181) | 변경 없음 |
 
 ---
