@@ -344,15 +344,16 @@ def _render_rows(
 
         # ── multi_row field (F8: DOC-SERA-011 submitted_document_list) ──────
         if input_type == "multi_row" and fid == _F8_FIELD_ID:
-            raw = (data.get(key) if key is not None else None)
-            if key is not None and key in data:
+            key_absent = (key is None) or (key not in data)
+            raw = (data[key] if not key_absent else None)
+            if not key_absent:
                 consumed.add(key)
-            if raw is None or raw == [] or (key is not None and key not in data):
-                # 필드 미입력 또는 빈 배열 → (미등록)
+            if key_absent or raw == []:
+                # 키 부재 또는 빈 배열 → (미등록)
                 state = "missing"
                 cell_html = _esc(_MULTI_ROW_EMPTY_TEXT)
             else:
-                # 존재하는 값: 잘못된 데이터를 조용히 숨기지 않는다 (fail-close)
+                # Key 존재 + 나머지 모든 값 → fail-close 검증 (null 포함 거부)
                 _assert_f8_multi_row(key or fid, raw)
                 state = "present"
                 cell_html = _render_multi_row_table(raw)

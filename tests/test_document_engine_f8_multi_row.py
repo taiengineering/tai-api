@@ -480,3 +480,8 @@ class TestWpBR1RendererFailClose:
         """null 셀값 → SchemaRenderError (string 계약 위반)"""
         with pytest.raises(SchemaRenderError, match="string"):
             self._build_with_raw([{"document_name": None}])
+
+    def test_WpBR1_null_array_value_raises(self):
+        """Key 존재 + null → SchemaRenderError (Key 부재와 구분; null은 배열 계약 위반)"""
+        with pytest.raises(SchemaRenderError, match="JSON array"):
+            self._build_with_raw(None)
