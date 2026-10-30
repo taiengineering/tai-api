@@ -30,6 +30,7 @@ CONTENT_ID_PREFIX = "CSI:"
 MISSING_TOKEN = "<<MISSING>>"
 MISSING_SOURCE_VALUES = frozenset({"", "미입력"})
 APPLY_ENABLE_ENV = "CSI_ACCIDENT_SYNC_ENABLE"
+DOWNLOAD_API_URL = "https://www.data.go.kr/tcs/dss/selectFileDataDownload.do"
 LICENSE = "이용허락범위 제한 없음"
 MANAGING_DEPT = "AI전략실"
 

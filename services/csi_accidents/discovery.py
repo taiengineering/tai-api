@@ -1,9 +1,13 @@
 """CSI accident portal discovery — finds the latest official CSV artifact from
 data.go.kr dataset 15108262 without browser, login, or full-file download.
 
-Two HTTP requests are made:
+Two HTTP requests are made (JSON-LD path, pre-2026-09-15):
   1. METADATA_URL (fileData.json)  → alternateName, dateModified, dataset identity
   2. DATASET_URL  (fileData.do)    → JSON-LD distribution contentUrl → attachment ID
+
+Fallback path (post-2026-09-15 portal change — distribution[] removed from JSON-LD):
+  2. DATASET_URL  (fileData.do)    → extract publicDataDetailPk from onclick handler
+  3. POST DOWNLOAD_API_URL         → resolve atchFileId + fileDetailSn via portal API
 
 Callers must provide http_get for testing (default uses urllib with bounded retry).
 Change detection is the caller's responsibility: pass all three of
@@ -19,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from services.csi_accidents.contract import (
@@ -27,6 +31,7 @@ from services.csi_accidents.contract import (
     DATASET_ID,
     DATASET_NAME,
     DATASET_URL,
+    DOWNLOAD_API_URL,
     DOWNLOAD_PATH,
     METADATA_URL,
 )
@@ -39,6 +44,7 @@ _MAX_ATTEMPTS = 3
 _ALLOWED_CSV_FORMATS: frozenset[str] = frozenset({"CSV", "TEXT/CSV"})
 
 HttpGetFn = Callable[[str], bytes]
+HttpPostFn = Callable[[str, dict], bytes]  # url, form_params → response bytes
 
 
 class DiscoveryError(Exception):
@@ -80,6 +86,24 @@ def _default_http_get(url: str) -> bytes:
     for attempt in range(_MAX_ATTEMPTS):
         try:
             req = Request(url, headers={"User-Agent": _USER_AGENT})
+            with urlopen(req, timeout=_TIMEOUT) as resp:
+                return resp.read()
+        except (HTTPError, URLError, OSError) as exc:
+            last_exc = exc
+            if attempt < _MAX_ATTEMPTS - 1:
+                continue
+    raise last_exc
+
+
+def _default_http_post(url: str, params: dict) -> bytes:
+    data = urlencode(params).encode()
+    last_exc: BaseException = RuntimeError("no attempts made")
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            req = Request(url, data=data, headers={
+                "User-Agent": _USER_AGENT,
+                "Content-Type": "application/x-www-form-urlencoded",
+            })
             with urlopen(req, timeout=_TIMEOUT) as resp:
                 return resp.read()
         except (HTTPError, URLError, OSError) as exc:
@@ -190,6 +214,69 @@ def _collect_csv_content_urls(json_ld_blocks: list[dict]) -> list[str]:
     return urls
 
 
+_DETAIL_PK_RE = re.compile(
+    r"fn_fileDataDown\s*\(\s*['\"]" + re.escape(DATASET_ID) + r"['\"]\s*,\s*['\"]([^'\"]+)['\"]",
+)
+_ATCH_FILE_ID_RE = re.compile(r"^FILE_\d+$")
+
+
+def _extract_detail_pk(html: str) -> Optional[str]:
+    """Extract publicDataDetailPk from onclick fn_fileDataDown() for this dataset."""
+    m = _DETAIL_PK_RE.search(html)
+    return m.group(1) if m else None
+
+
+def _fetch_attachment_via_api(post_fn: HttpPostFn, detail_pk: str) -> tuple[str, str]:
+    """POST to data.go.kr download API; return (atchFileId, fileDetailSn)."""
+    params = {
+        "publicDataPk": DATASET_ID,
+        "publicDataDetailPk": detail_pk,
+        "atchFileId": "",
+        "fileDetailSn": "1",
+        "publicDataTyCode": "PR0051",
+    }
+    try:
+        resp_bytes = post_fn(DOWNLOAD_API_URL, params)
+    except (HTTPError, URLError, OSError) as exc:
+        raise DiscoveryError(
+            "DISCOVERY_HTTP_ERROR",
+            f"download API fetch failed: {type(exc).__name__}",
+        ) from exc
+
+    try:
+        resp = json.loads(resp_bytes)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise DiscoveryError(
+            "DISCOVERY_PARSE_ERROR",
+            f"download API response parse failed: {type(exc).__name__}",
+        ) from exc
+
+    if resp.get("status") is not True:
+        raise DiscoveryError("NO_ARTIFACT", "download API returned non-True status")
+
+    atch_file_id = (resp.get("atchFileId") or "").strip()
+    if not _ATCH_FILE_ID_RE.match(atch_file_id):
+        raise DiscoveryError(
+            "DISCOVERY_PARSE_ERROR",
+            f"atchFileId {atch_file_id!r} does not match expected FILE_<digits> format",
+        )
+
+    raw_sn = str(resp.get("fileDetailSn") or "").strip()
+    if not raw_sn.isdigit() or int(raw_sn) < 1:
+        raise DiscoveryError(
+            "DISCOVERY_PARSE_ERROR",
+            f"fileDetailSn {raw_sn!r} is not a positive integer string",
+        )
+    file_detail_sn = raw_sn
+
+    return atch_file_id, file_detail_sn
+
+
+def _build_download_url(attachment_id: str, file_detail_sn: str) -> str:
+    qs = urlencode({"atchFileId": attachment_id, "fileDetailSn": file_detail_sn, "insertDataPrcus": "N"})
+    return f"https://www.data.go.kr{DOWNLOAD_PATH}?{qs}"
+
+
 def _parse_attachment(url: str) -> tuple[str, str]:
     """Return (atchFileId, fileDetailSn); both are required — no fallback."""
     params = parse_qs(urlparse(url).query)
@@ -218,6 +305,7 @@ def parse_download_identity(url: str) -> tuple[str, str]:
 def discover_latest_artifact(
     *,
     http_get: Optional[HttpGetFn] = None,
+    http_post: Optional[HttpPostFn] = None,
     known_attachment_id: Optional[str] = None,
     known_file_detail_sn: Optional[str] = None,
     known_effective_date: Optional[str] = None,
@@ -282,30 +370,38 @@ def discover_latest_artifact(
         csv_urls = _collect_csv_content_urls(json_ld_blocks)
 
         if not csv_urls:
-            raise DiscoveryError(
-                "NO_ARTIFACT",
-                "no CSV distribution contentUrl found in JSON-LD on page",
-            )
+            # Portal removed distribution[] from JSON-LD (~2026-09-15 change).
+            # Fall back: extract publicDataDetailPk from onclick, resolve via API.
+            detail_pk = _extract_detail_pk(html)
+            if detail_pk is None:
+                raise DiscoveryError(
+                    "NO_ARTIFACT",
+                    "no CSV distribution in JSON-LD and no fn_fileDataDown onclick found",
+                )
+            post = http_post or _default_http_post
+            attachment_id, file_detail_sn = _fetch_attachment_via_api(post, detail_pk)
+            download_url = _build_download_url(attachment_id, file_detail_sn)
+            _validate_download_url(download_url)
+        else:
+            for url in csv_urls:
+                _validate_download_url(url)
 
-        for url in csv_urls:
-            _validate_download_url(url)
+            # Dedupe by (attachment_id, file_detail_sn); distinct pairs = ambiguous
+            seen: dict[tuple[str, str], str] = {}
+            for url in csv_urls:
+                att_id, fdsn = _parse_attachment(url)
+                key = (att_id, fdsn)
+                if key not in seen:
+                    seen[key] = url
 
-        # Dedupe by (attachment_id, file_detail_sn); distinct pairs = ambiguous
-        seen: dict[tuple[str, str], str] = {}
-        for url in csv_urls:
-            att_id, fdsn = _parse_attachment(url)
-            key = (att_id, fdsn)
-            if key not in seen:
-                seen[key] = url
+            if len(seen) > 1:
+                raise DiscoveryError(
+                    "AMBIGUOUS_LATEST_ARTIFACT",
+                    f"multiple distinct CSV attachments found: {sorted(seen.keys())}",
+                )
 
-        if len(seen) > 1:
-            raise DiscoveryError(
-                "AMBIGUOUS_LATEST_ARTIFACT",
-                f"multiple distinct CSV attachments found: {sorted(seen.keys())}",
-            )
-
-        download_url = next(iter(seen.values()))
-        attachment_id, file_detail_sn = _parse_attachment(download_url)
+            download_url = next(iter(seen.values()))
+            attachment_id, file_detail_sn = _parse_attachment(download_url)
 
         artifact = CsiArtifactDescriptor(
             dataset_id=DATASET_ID,
