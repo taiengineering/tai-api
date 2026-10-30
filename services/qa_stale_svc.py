@@ -1,15 +1,14 @@
 """QA Stale Run Scanner — WO-TAI-QA-OPS-STALE-RUN-011.
 
 DB와 GitHub Actions 상태를 대조하여 장기 정체 Run을 감지하고 보고한다.
+감지·보고 전용: 자동 ERROR 전이 없음 (Callback 경합 방지).
 
 안전 원칙:
   - GitHub API 오류(Timeout/네트워크/429/5xx/인증실패)는 QA 실패가 아님 → 상태 유지
   - None 반환(API 조회 실패)은 ERROR 전이 사유가 될 수 없음
   - 정상 실행 중인 Run을 임의로 ERROR 처리하지 않음
-  - ERROR 전이 직전 DB 상태 재조회 (Callback 경합 보호)
-  - apply_results()를 통한 lifecycle 준수 전이 (직접 DB UPDATE 금지)
+  - Callback과의 경합: Scanner는 DB 상태를 변경하지 않음
   - github_run_id + github_run_attempt 양쪽 일치 확인 (잘못된 연결 방지)
-  - Slack 발송 실패는 감지 결과에 영향 없음
 
 QUEUED Stale (>30분):
   감지·보고만. 자동 ERROR 전이 없음.
@@ -17,12 +16,7 @@ QUEUED Stale (>30분):
 
 RUNNING Stale (>45분):
   GitHub 조회 가능한 경우에만 completed 확인.
-  5가지 조건 모두 충족 시 STALE_RUN_NO_CALLBACK으로 ERROR 전이:
-    1. DB Run이 여전히 RUNNING
-    2. GitHub Run이 completed
-    3. github_run_attempt 일치
-    4. DB에 결과 기록 없음 (Callback 누락)
-    5. 스캔 기준 유예시간 이미 경과 (calling > running_cutoff 시점 기준)
+  GitHub completed + Callback 미수신 → CALLBACK_MISSING_DETECTED (보고만, DB 상태 유지).
 """
 from __future__ import annotations
 
@@ -35,9 +29,6 @@ from typing import Any, Dict, List, Optional
 import httpx
 from httpx import NetworkError as _HttpxNetworkError, TimeoutException as _HttpxTimeout
 
-from services.qa_control_svc import apply_results
-from services.qa_notify_svc import QA_RUN_ERROR, build_qa_slack_payload
-from services.slack_dispatcher import send_slack
 from services.time import now_kst
 
 log = logging.getLogger("qa_stale")
@@ -171,23 +162,6 @@ def _has_results(supabase, run_id: str) -> bool:
     return bool(res.data)
 
 
-# ── Slack (fail-safe) ─────────────────────────────────────────────────────────
-
-async def _notify_stale(run: Dict[str, Any], error_code: str, summary: str) -> None:
-    """Stale run 감지 Slack 알림. 발송 실패는 조용히 흡수."""
-    try:
-        notif = {
-            "event_type":    QA_RUN_ERROR,
-            "trigger_type":  run.get("trigger_type"),
-            "run_id":        run["id"],
-            "error_summary": summary,
-        }
-        payload = build_qa_slack_payload(notif, is_run=True)
-        await send_slack(**payload)
-    except Exception as exc:
-        log.warning("[qa_stale] Slack notify failed run=%s: %s", run["id"], exc)
-
-
 # ── Stale scan entry point ────────────────────────────────────────────────────
 
 async def scan_stale_runs(supabase) -> Dict[str, Any]:
@@ -203,14 +177,14 @@ async def scan_stale_runs(supabase) -> Dict[str, Any]:
 
     action 종류:
       RUNNING stale:
-        STILL_ACTIVE        — GitHub in_progress → 유지
-        NOT_VERIFIED        — GitHub API 실패 → 유지
-        ATTEMPT_MISMATCH    — attempt 불일치 → 유지
-        GH_RUN_NOT_FOUND    — GitHub 404 → 보고만
-        NO_GH_ID            — github_run_id 없음 → 보고만
-        ALREADY_TRANSITIONED — 재조회 결과 더 이상 RUNNING 아님 → 무시
-        RESULTS_EXIST       — 결과 기록 있음 (Callback 처리 중) → 무시
-        ERRORED_STALE       — 5조건 충족 → apply_results(ERROR)
+        STILL_ACTIVE             — GitHub in_progress → 유지
+        NOT_VERIFIED             — GitHub API 실패 → 유지
+        ATTEMPT_MISMATCH         — attempt 불일치 → 유지
+        GH_RUN_NOT_FOUND         — GitHub 404 → 보고만
+        NO_GH_ID                 — github_run_id 없음 → 보고만
+        ALREADY_TRANSITIONED     — 재조회 결과 더 이상 RUNNING 아님 → 무시
+        RESULTS_EXIST            — 결과 기록 있음 (Callback 처리 중) → 무시
+        CALLBACK_MISSING_DETECTED — GitHub completed + Callback 미수신 → 보고만 (DB 유지)
       QUEUED stale:
         REPORTED            — 감지·보고만 (자동 ERROR 없음)
     """
@@ -257,11 +231,6 @@ async def scan_stale_runs(supabase) -> Dict[str, Any]:
             "trigger_type": run.get("trigger_type"),
             "action":       "REPORTED",
         })
-        await _notify_stale(
-            run,
-            "STALE_QUEUED",
-            f"QUEUED 상태 {_QUEUED_STALE_MINUTES}분 초과 — GitHub dispatch 미완료로 추정됨",
-        )
 
     # ── RUNNING stale: GitHub 대조 후 조건부 ERROR ────────────────────────────
     for run in running_stale:
@@ -369,48 +338,17 @@ async def scan_stale_runs(supabase) -> Dict[str, Any]:
 
         # 조건 5: 이미 running_cutoff 경과 (45분) — scan 진입 시점 기준으로 이미 충족
 
-        # 5조건 모두 충족 → STALE_RUN_NO_CALLBACK
+        # 4조건 모두 충족 → CALLBACK_MISSING_DETECTED (보고만, DB 상태 유지)
         log.warning(
-            "[qa_stale] STALE_RUN_NO_CALLBACK: run=%s gh_run=%d completed, no callback",
+            "[qa_stale] CALLBACK_MISSING_DETECTED: run=%s gh_run=%d completed, no callback",
             run_id, github_run_id,
         )
-        try:
-            apply_results(
-                supabase,
-                run_id=run_id,
-                new_status="ERROR",
-                github_run_id=None,
-                github_run_attempt=None,
-                head_sha=None,
-                branch_name=None,
-                run_started_at=None,
-                run_finished_at=now.isoformat(),
-                run_error_code="STALE_RUN_NO_CALLBACK",
-                run_error_summary=(
-                    f"GitHub run {github_run_id} (attempt {github_run_attempt}) "
-                    "completed but callback was never received"
-                ),
-                results=[],
-            )
-            result["running_processed"].append({
-                "run_id":    run_id,
-                "gh_run_id": github_run_id,
-                "gh_status": gh_status,
-                "action":    "ERRORED_STALE",
-            })
-            await _notify_stale(
-                current,
-                "STALE_RUN_NO_CALLBACK",
-                f"GitHub run {github_run_id} 완료 후 Callback 미수신 — STALE_RUN_NO_CALLBACK",
-            )
-        except Exception as exc:
-            log.error(
-                "[qa_stale] apply_results failed: run=%s: %s", run_id, exc,
-            )
-            result["errors"].append({
-                "run_id": run_id,
-                "error":  str(exc),
-            })
+        result["running_processed"].append({
+            "run_id":    run_id,
+            "gh_run_id": github_run_id,
+            "gh_status": gh_status,
+            "action":    "CALLBACK_MISSING_DETECTED",
+        })
 
     log.info(
         "[qa_stale] scan done: queued=%d running=%d errors=%d",

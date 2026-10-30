@@ -200,15 +200,15 @@ _ENV = {
 
 
 def _run_scan(supabase, mock_client=None, slack_side_effect=None):
-    """scan_stale_runs() 실행 — httpx.AsyncClient와 send_slack mock."""
+    """scan_stale_runs() 실행 — httpx.AsyncClient mock (Slack 발송 없음)."""
     from services.qa_stale_svc import scan_stale_runs
 
+    # Scanner는 Slack을 발송하지 않음 (R1-02/R1-03). mock은 call_count 검증용.
     send_slack_mock = AsyncMock(return_value=True)
     if slack_side_effect is not None:
         send_slack_mock.side_effect = slack_side_effect
 
-    with patch.dict(os.environ, _ENV, clear=False), \
-         patch("services.qa_stale_svc.send_slack", send_slack_mock):
+    with patch.dict(os.environ, _ENV, clear=False):
         if mock_client is not None:
             with patch("httpx.AsyncClient", return_value=mock_client):
                 result = asyncio.run(scan_stale_runs(supabase))
@@ -243,8 +243,8 @@ def test_E02_stale_queued_reported_no_error():
     assert result["queued_reported"][0]["action"] == "REPORTED"
     # ERROR 전이 없음
     assert result["errors"] == []
-    # Slack 알림 발송
-    assert slack_mock.call_count == 1
+    # Scanner는 Slack 발송 안 함 (R1-02)
+    assert slack_mock.call_count == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -277,45 +277,27 @@ def test_E04_running_github_in_progress_no_error():
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# E05: 장기 RUNNING + GitHub completed + Callback 누락 → ERRORED_STALE
+# E05: 장기 RUNNING + GitHub completed + Callback 누락 → CALLBACK_MISSING_DETECTED
 # ════════════════════════════════════════════════════════════════════════════════
 
-def test_E05_running_github_completed_no_callback_errored():
-    apply_log: List[Dict] = []
+def test_E05_running_github_completed_no_callback_detected():
     run = _run_row(run_id="r-002", started_at=_ago(60))
     reread = [_run_row(run_id="r-002", status="RUNNING")]
 
-    supabase = _SupaMock(
-        running_stale=[run],
-        reread_rows=reread,
-        has_results=False,
-        apply_called=apply_log,
-    )
+    supabase = _SupaMock(running_stale=[run], reread_rows=reread, has_results=False)
     gh_body = {"status": "completed", "run_attempt": 1}
     mc, _   = _patch_gh(_gh_resp(200, gh_body))
 
-    # apply_results는 실제 DB query를 하므로 내부 apply 호출을 patch
-    with patch("services.qa_stale_svc.apply_results") as mock_apply:
-        mock_apply.return_value = {
-            "run_id": "r-002", "inserted": 0, "skipped": 0,
-            "notifications": [], "run_notification": None,
-        }
-        result, slack_mock = _run_scan(supabase, mc)
+    result, slack_mock = _run_scan(supabase, mc)
 
     assert len(result["running_processed"]) == 1
     rec = result["running_processed"][0]
-    assert rec["action"] == "ERRORED_STALE"
+    # 감지·보고만 — DB 상태 변경 없음 (R1-01)
+    assert rec["action"] == "CALLBACK_MISSING_DETECTED"
     assert rec["gh_status"] == "completed"
     assert result["errors"] == []
-
-    # apply_results 호출 확인
-    assert mock_apply.call_count == 1
-    call_kw = mock_apply.call_args[1]
-    assert call_kw["new_status"] == "ERROR"
-    assert call_kw["run_error_code"] == "STALE_RUN_NO_CALLBACK"
-
-    # Slack 발송 확인
-    assert slack_mock.call_count >= 1
+    # Scanner는 Slack 발송 안 함 (R1-03)
+    assert slack_mock.call_count == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -328,11 +310,9 @@ def test_E06_github_timeout_not_verified():
     supabase = _SupaMock(running_stale=[run])
     mc, _    = _patch_gh(httpx.ReadTimeout("timeout", request=None))
 
-    with patch("services.qa_stale_svc.apply_results") as mock_apply:
-        result, _ = _run_scan(supabase, mc)
+    result, _ = _run_scan(supabase, mc)
 
     assert result["running_processed"][0]["action"] == "NOT_VERIFIED"
-    assert mock_apply.call_count == 0
     assert result["errors"] == []
 
 
@@ -345,11 +325,9 @@ def test_E07_github_rate_limit_not_verified():
     supabase = _SupaMock(running_stale=[run])
     mc, _    = _patch_gh(_gh_resp(429, {}))
 
-    with patch("services.qa_stale_svc.apply_results") as mock_apply:
-        result, _ = _run_scan(supabase, mc)
+    result, _ = _run_scan(supabase, mc)
 
     assert result["running_processed"][0]["action"] == "NOT_VERIFIED"
-    assert mock_apply.call_count == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -362,11 +340,9 @@ def test_E08_github_5xx_not_verified(status_code: int):
     supabase = _SupaMock(running_stale=[run])
     mc, _    = _patch_gh(_gh_resp(status_code, {}))
 
-    with patch("services.qa_stale_svc.apply_results") as mock_apply:
-        result, _ = _run_scan(supabase, mc)
+    result, _ = _run_scan(supabase, mc)
 
     assert result["running_processed"][0]["action"] == "NOT_VERIFIED"
-    assert mock_apply.call_count == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -379,11 +355,9 @@ def test_E09_github_auth_failure_not_verified(status_code: int):
     supabase = _SupaMock(running_stale=[run])
     mc, _    = _patch_gh(_gh_resp(status_code, {}))
 
-    with patch("services.qa_stale_svc.apply_results") as mock_apply:
-        result, _ = _run_scan(supabase, mc)
+    result, _ = _run_scan(supabase, mc)
 
     assert result["running_processed"][0]["action"] == "NOT_VERIFIED"
-    assert mock_apply.call_count == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -398,11 +372,9 @@ def test_E10_callback_race_already_transitioned():
     gh_body  = {"status": "completed", "run_attempt": 1}
     mc, _    = _patch_gh(_gh_resp(200, gh_body))
 
-    with patch("services.qa_stale_svc.apply_results") as mock_apply:
-        result, _ = _run_scan(supabase, mc)
+    result, _ = _run_scan(supabase, mc)
 
     assert result["running_processed"][0]["action"] == "ALREADY_TRANSITIONED"
-    assert mock_apply.call_count == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -437,11 +409,9 @@ def test_E13_attempt_mismatch_no_error():
     gh_body  = {"status": "completed", "run_attempt": 2}
     mc, _    = _patch_gh(_gh_resp(200, gh_body))
 
-    with patch("services.qa_stale_svc.apply_results") as mock_apply:
-        result, _ = _run_scan(supabase, mc)
+    result, _ = _run_scan(supabase, mc)
 
     assert result["running_processed"][0]["action"] == "ATTEMPT_MISMATCH"
-    assert mock_apply.call_count == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -459,36 +429,35 @@ def test_E14_duplicate_scan_already_transitioned():
     gh_body  = {"status": "completed", "run_attempt": 1}
     mc, _    = _patch_gh(_gh_resp(200, gh_body))
 
-    with patch("services.qa_stale_svc.apply_results") as mock_apply:
-        result, _ = _run_scan(supabase, mc)
+    result, _ = _run_scan(supabase, mc)
 
     assert result["running_processed"][0]["action"] == "ALREADY_TRANSITIONED"
-    assert mock_apply.call_count == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# E15: Slack 발송 실패 — scan 결과에 영향 없음
+# E15: Scanner는 Slack을 발송하지 않음 (R1-02/R1-03)
 # ════════════════════════════════════════════════════════════════════════════════
 
-def test_E15_slack_failure_does_not_affect_scan():
+def test_E15_scanner_does_not_send_slack():
+    """Scanner는 QUEUED/RUNNING stale 모두 Slack을 발송하지 않음."""
     run = _run_row(run_id="q-002", status="QUEUED", github_run_id=None, requested_at=_ago(40))
     supabase = _SupaMock(queued_stale=[run])
 
-    # Slack이 예외를 던져도 스캔 결과는 정상
-    result, _ = _run_scan(supabase, slack_side_effect=RuntimeError("slack down"))
+    result, slack_mock = _run_scan(supabase)
 
     assert len(result["queued_reported"]) == 1
     assert result["queued_reported"][0]["action"] == "REPORTED"
     assert result["errors"] == []
+    assert slack_mock.call_count == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# E16: 기존 QA Lifecycle 회귀 — apply_results 계약 유지
+# E16: Lifecycle 비침습 회귀 — Scanner는 DB 상태를 변경하지 않음
 # ════════════════════════════════════════════════════════════════════════════════
 
-def test_E16_apply_results_lifecycle_contract():
-    """RUNNING → ERROR 전이는 apply_results()를 통해서만 일어남.
-    직접 DB UPDATE 호출이 없음을 검증 (apply_results mock call_args 확인).
+def test_E16_scanner_does_not_mutate_db():
+    """Scanner는 GitHub completed + Callback 미수신 시 DB 상태를 변경하지 않음.
+    CALLBACK_MISSING_DETECTED 보고만. apply_results 호출 없음 (R1-01).
     """
     run = _run_row(run_id="r-010", started_at=_ago(60))
     reread = [_run_row(run_id="r-010", status="RUNNING")]
@@ -496,28 +465,13 @@ def test_E16_apply_results_lifecycle_contract():
     gh_body  = {"status": "completed", "run_attempt": 1}
     mc, _    = _patch_gh(_gh_resp(200, gh_body))
 
-    with patch("services.qa_stale_svc.apply_results") as mock_apply:
-        mock_apply.return_value = {
-            "run_id": "r-010", "inserted": 0, "skipped": 0,
-            "notifications": [], "run_notification": None,
-        }
-        result, _ = _run_scan(supabase, mc)
+    result, slack_mock = _run_scan(supabase, mc)
 
-    # apply_results를 통한 전이
-    assert mock_apply.call_count == 1
-    kw = mock_apply.call_args[1]
-
-    # lifecycle 계약: RUNNING → ERROR, error_code=STALE_RUN_NO_CALLBACK
-    assert kw["run_id"] == "r-010"
-    assert kw["new_status"] == "ERROR"
-    assert kw["run_error_code"] == "STALE_RUN_NO_CALLBACK"
-    # 결과 목록 없음 (Callback 누락 시나리오)
-    assert kw["results"] == []
-    # github_run_id는 None (기존 run에 이미 바인딩됨, 재바인딩 금지)
-    assert kw["github_run_id"] is None
-    assert kw["github_run_attempt"] is None
-
-    assert result["running_processed"][0]["action"] == "ERRORED_STALE"
+    rec = result["running_processed"][0]
+    assert rec["action"] == "CALLBACK_MISSING_DETECTED"
+    assert rec["gh_status"] == "completed"
+    assert result["errors"] == []
+    assert slack_mock.call_count == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -528,11 +482,9 @@ def test_running_stale_no_github_run_id():
     run = _run_row(run_id="r-011", github_run_id=None, started_at=_ago(60))
     supabase = _SupaMock(running_stale=[run])
 
-    with patch("services.qa_stale_svc.apply_results") as mock_apply:
-        result, _ = _run_scan(supabase)
+    result, _ = _run_scan(supabase)
 
     assert result["running_processed"][0]["action"] == "NO_GH_ID"
-    assert mock_apply.call_count == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -546,11 +498,9 @@ def test_running_results_exist_no_error():
     gh_body  = {"status": "completed", "run_attempt": 1}
     mc, _    = _patch_gh(_gh_resp(200, gh_body))
 
-    with patch("services.qa_stale_svc.apply_results") as mock_apply:
-        result, _ = _run_scan(supabase, mc)
+    result, _ = _run_scan(supabase, mc)
 
     assert result["running_processed"][0]["action"] == "RESULTS_EXIST"
-    assert mock_apply.call_count == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -562,11 +512,9 @@ def test_github_run_not_found_no_error():
     supabase = _SupaMock(running_stale=[run])
     mc, _    = _patch_gh(_gh_resp(404, {}))
 
-    with patch("services.qa_stale_svc.apply_results") as mock_apply:
-        result, _ = _run_scan(supabase, mc)
+    result, _ = _run_scan(supabase, mc)
 
     assert result["running_processed"][0]["action"] == "GH_RUN_NOT_FOUND"
-    assert mock_apply.call_count == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════════
