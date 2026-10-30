@@ -1,4 +1,4 @@
-"""TAI Slack Dispatcher v1.3.0
+"""TAI Slack Dispatcher v1.3.1
 모든 이벤트를 Slack 채널로 분리 발송. WO-SLACK-EVENT-HUB-001 로 event_type 라우팅과
 Block Kit 인자를 추가. 기존 severity 기반 라우팅은 회귀 없이 유지.
 
@@ -24,12 +24,13 @@ Block Kit 인자를 추가. 기존 severity 기반 라우팅은 회귀 없이 �
 - SLACK_WEBHOOK_ENABLED   : true/false (default: true)
 """
 import asyncio
+import math
 import os
 import logging
 from typing import List, Optional
 
 import httpx
-from httpx import TimeoutException as _HttpxTimeout
+from httpx import TimeoutException as _HttpxTimeout, NetworkError as _HttpxNetworkError
 
 logger = logging.getLogger("slack_dispatcher")
 
@@ -37,6 +38,21 @@ logger = logging.getLogger("slack_dispatcher")
 _RETRY_MAX = 2
 _RETRY_DELAYS = (2.0, 5.0)   # 1차·2차 재시도 대기(초)
 _RETRY_DELAY_CAP = 30.0       # Retry-After 상한(초)
+
+
+def _parse_retry_after(raw, default: float) -> float:
+    """Retry-After 헤더를 안전하게 파싱한다.
+
+    비정상 값(비숫자·NaN·무한대·음수)은 default를 반환한다.
+    유효한 값은 _RETRY_DELAY_CAP 이하로 제한한다.
+    """
+    try:
+        val = float(raw)
+    except (ValueError, TypeError):
+        return default
+    if not math.isfinite(val) or val < 0:
+        return default
+    return min(val, _RETRY_DELAY_CAP)
 
 # 채널 라우팅
 CHANNEL_ALERT = "alert"
@@ -258,10 +274,7 @@ async def send_slack(
                     return True
                 slack_err = body.get("error", "")
                 if slack_err == "ratelimited" and attempt < _RETRY_MAX:
-                    try:
-                        delay = min(float(resp.headers.get("Retry-After", _RETRY_DELAYS[attempt])), _RETRY_DELAY_CAP)
-                    except (ValueError, TypeError):
-                        delay = _RETRY_DELAYS[attempt]
+                    delay = _parse_retry_after(resp.headers.get("Retry-After"), _RETRY_DELAYS[attempt])
                     logger.warning("Slack ratelimited (ok=False), retry %d in %.1fs", attempt + 1, delay)
                     await asyncio.sleep(delay)
                     continue
@@ -272,10 +285,7 @@ async def send_slack(
                 if attempt >= _RETRY_MAX:
                     logger.error("Slack 429 rate limited, exhausted retries")
                     return False
-                try:
-                    delay = min(float(resp.headers.get("Retry-After", _RETRY_DELAYS[attempt])), _RETRY_DELAY_CAP)
-                except (ValueError, TypeError):
-                    delay = _RETRY_DELAYS[attempt]
+                delay = _parse_retry_after(resp.headers.get("Retry-After"), _RETRY_DELAYS[attempt])
                 logger.warning("Slack 429, retry %d in %.1fs", attempt + 1, delay)
                 await asyncio.sleep(delay)
                 continue
@@ -300,13 +310,17 @@ async def send_slack(
             logger.warning("Slack timeout, retry %d in %.1fs", attempt + 1, delay)
             await asyncio.sleep(delay)
 
-        except Exception as e:
+        except _HttpxNetworkError as e:
             if attempt >= _RETRY_MAX:
-                logger.exception("Slack dispatch failed after %d attempts: %s", _RETRY_MAX + 1, e)
+                logger.error("Slack network error after %d attempts: %s", _RETRY_MAX + 1, e)
                 return False
             delay = _RETRY_DELAYS[attempt]
-            logger.warning("Slack exception (%s), retry %d in %.1fs", type(e).__name__, attempt + 1, delay)
+            logger.warning("Slack network error (%s), retry %d in %.1fs", type(e).__name__, attempt + 1, delay)
             await asyncio.sleep(delay)
+
+        except Exception as e:
+            logger.exception("Slack dispatch error (non-retryable): %s", e)
+            return False
 
     return False
 

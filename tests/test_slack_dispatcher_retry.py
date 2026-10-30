@@ -412,3 +412,115 @@ def test_SR09d_ok_false_non_ratelimited_no_retry():
 
     assert result is False
     assert len(calls) == 1
+
+
+# ════════════════════════════════════════════════════════════════
+# SR-10~13: Retry-After 경계값 — _parse_retry_after 검증
+# ════════════════════════════════════════════════════════════════
+
+@pytest.mark.parametrize("header_value,expected_delay_key", [
+    ("-1",   "default"),   # 음수 → 기본 딜레이
+    ("nan",  "default"),   # NaN  → 기본 딜레이
+    ("inf",  "default"),   # 무한대 → 기본 딜레이
+    ("-inf", "default"),   # 음의 무한대 → 기본 딜레이
+])
+def test_SR10_to_SR12_invalid_retry_after_uses_default(header_value: str, expected_delay_key: str):
+    """음수/NaN/무한대 Retry-After → 기본 딜레이 사용."""
+    from services.slack_dispatcher import _RETRY_DELAYS
+
+    calls: List[int] = []
+
+    async def _mock_post(*a, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            return _resp(429, ok=False, headers={"Retry-After": header_value})
+        return _resp(200)
+
+    slept: List[float] = []
+
+    async def _fake_sleep(secs: float):
+        slept.append(secs)
+
+    with patch("httpx.AsyncClient") as MockClient, \
+         patch("services.slack_dispatcher.asyncio.sleep", side_effect=_fake_sleep):
+        mock_client_inst = MagicMock()
+        mock_client_inst.post = _mock_post
+        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client_inst)
+        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        env = _env()
+        with patch.dict(os.environ, env, clear=False):
+            from services.slack_dispatcher import send_slack
+            result = asyncio.run(send_slack("QA_RUN_ERROR", "INFO", f"Test retry-after={header_value}"))
+
+    assert result is True
+    assert len(slept) == 1
+    assert slept[0] == pytest.approx(_RETRY_DELAYS[0], abs=0.001)
+
+
+def test_SR13_retry_after_over_cap_clamped_to_30():
+    """Retry-After > 30 → 30초(_RETRY_DELAY_CAP)로 상한 적용."""
+    from services.slack_dispatcher import _RETRY_DELAY_CAP
+
+    calls: List[int] = []
+
+    async def _mock_post(*a, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            return _resp(429, ok=False, headers={"Retry-After": "60"})
+        return _resp(200)
+
+    slept: List[float] = []
+
+    async def _fake_sleep(secs: float):
+        slept.append(secs)
+
+    with patch("httpx.AsyncClient") as MockClient, \
+         patch("services.slack_dispatcher.asyncio.sleep", side_effect=_fake_sleep):
+        mock_client_inst = MagicMock()
+        mock_client_inst.post = _mock_post
+        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client_inst)
+        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        env = _env()
+        with patch.dict(os.environ, env, clear=False):
+            from services.slack_dispatcher import send_slack
+            result = asyncio.run(send_slack("QA_RUN_ERROR", "INFO", "Test retry-after=60"))
+
+    assert result is True
+    assert len(slept) == 1
+    assert slept[0] == pytest.approx(_RETRY_DELAY_CAP, abs=0.001)
+
+
+# ════════════════════════════════════════════════════════════════
+# SR-14: 일반 예외 → 재시도 없이 즉시 False
+# ════════════════════════════════════════════════════════════════
+
+def test_SR14_non_network_exception_no_retry():
+    """ValueError 등 프로그래밍 오류 → 재시도 없이 즉시 False 반환."""
+    calls: List[int] = []
+
+    async def _mock_post(*a, **kw):
+        calls.append(1)
+        raise ValueError("programming error")
+
+    slept: List[float] = []
+
+    async def _fake_sleep(secs: float):
+        slept.append(secs)
+
+    with patch("httpx.AsyncClient") as MockClient, \
+         patch("services.slack_dispatcher.asyncio.sleep", side_effect=_fake_sleep):
+        mock_client_inst = MagicMock()
+        mock_client_inst.post = _mock_post
+        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client_inst)
+        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        env = _env()
+        with patch.dict(os.environ, env, clear=False):
+            from services.slack_dispatcher import send_slack
+            result = asyncio.run(send_slack("QA_RUN_ERROR", "INFO", "Test ValueError"))
+
+    assert result is False
+    assert len(calls) == 1      # 재시도 없음
+    assert len(slept) == 0      # sleep 없음
