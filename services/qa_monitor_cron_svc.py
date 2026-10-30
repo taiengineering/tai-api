@@ -44,9 +44,12 @@ log = logging.getLogger("qa_monitor_cron")
 # Slack 발송 활성화 환경변수
 _ENV_SLACK_ENABLED = "QA_MONITOR_SLACK_ENABLED"
 
-# Cron 검사 시각 = Slot + _MONITOR_OFFSET_MINUTES
-# (qa_workflow_monitor_svc._GRACE_MINUTES = 60 과 동기화)
-_MONITOR_OFFSET_MINUTES = 60
+# 허용 예약 시각 UTC (hour, minute) → 대응 Slot (hour, minute)
+# scheduled_for = Slot + 60분 (qa_workflow_monitor_svc._GRACE_MINUTES = 60)
+_ALLOWED_SCHEDULED_FOR: Dict[tuple, tuple] = {
+    (11, 0): (10, 0),   # UTC 11:00 → QA Slot 10:00
+    (22, 0): (21, 0),   # UTC 22:00 → QA Slot 21:00
+}
 
 
 def _is_slack_enabled() -> bool:
@@ -57,16 +60,52 @@ def _is_slack_enabled() -> bool:
 def _slot_from_scheduled_for(scheduled_for_utc: str) -> str:
     """scheduled_for (ISO 8601) 에서 감시 대상 Slot UTC ISO 를 역산.
 
-    scheduled_for = Slot + _MONITOR_OFFSET_MINUTES
-    → Slot = scheduled_for - _MONITOR_OFFSET_MINUTES
+    Fail-Closed:
+      - timezone-aware 입력만 허용 (naive 거부)
+      - 입력을 UTC로 정규화
+      - 분·초·마이크로초 = 0 검증
+      - 허용 예약 시각 테이블(_ALLOWED_SCHEDULED_FOR)에 없으면 ValueError
+      - 파싱 실패 시 자동 Slot 선택 없음
+
+    Returns:
+      Slot UTC ISO 8601 문자열 ("YYYY-MM-DDTHH:MM:SSZ")
     """
+    if not isinstance(scheduled_for_utc, str) or not scheduled_for_utc.strip():
+        raise ValueError(f"scheduled_for 빈 값: {scheduled_for_utc!r}")
+
     try:
         dt = datetime.fromisoformat(scheduled_for_utc.replace("Z", "+00:00"))
     except (ValueError, AttributeError) as exc:
         raise ValueError(
-            f"scheduled_for 파싱 실패: {scheduled_for_utc!r}"
+            f"scheduled_for ISO 8601 파싱 실패: {scheduled_for_utc!r}"
         ) from exc
-    slot_dt = dt - timedelta(minutes=_MONITOR_OFFSET_MINUTES)
+
+    # timezone-aware 필수
+    if dt.tzinfo is None:
+        raise ValueError(
+            f"scheduled_for timezone 없음 (UTC 명시 필요): {scheduled_for_utc!r}"
+        )
+
+    # UTC 정규화
+    dt_utc = dt.astimezone(timezone.utc)
+
+    # 분·초·마이크로초 검증
+    if dt_utc.minute != 0 or dt_utc.second != 0 or dt_utc.microsecond != 0:
+        raise ValueError(
+            f"scheduled_for 분·초·마이크로초는 0이어야 함: {dt_utc.isoformat()}"
+        )
+
+    # 허용 예약 시각 검증 (Fail-Closed)
+    key = (dt_utc.hour, dt_utc.minute)
+    slot_hm = _ALLOWED_SCHEDULED_FOR.get(key)
+    if slot_hm is None:
+        allowed = [f"{h:02d}:{m:02d}Z" for h, m in sorted(_ALLOWED_SCHEDULED_FOR)]
+        raise ValueError(
+            f"비허용 예약 시각: {dt_utc.hour:02d}:{dt_utc.minute:02d}Z — "
+            f"허용 시각: {allowed}"
+        )
+
+    slot_dt = dt_utc.replace(hour=slot_hm[0], minute=slot_hm[1], second=0, microsecond=0)
     return slot_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -92,11 +131,8 @@ async def run_monitor_cron(
     """
     scheduled_slot_utc: Optional[str] = None
     if scheduled_for is not None:
-        try:
-            scheduled_slot_utc = _slot_from_scheduled_for(scheduled_for)
-        except ValueError as exc:
-            log.warning("[qa_monitor_cron] scheduled_for 변환 실패: %s", exc)
-            scheduled_slot_utc = None
+        # Fail-Closed: 예약 시각 오류 시 자동 Slot 선택 금지 — 호출자에게 전파
+        scheduled_slot_utc = _slot_from_scheduled_for(scheduled_for)
 
     monitor_result = await monitor_twice_daily(
         scheduled_slot_utc=scheduled_slot_utc,
@@ -113,17 +149,35 @@ async def run_monitor_cron(
                 "[qa_monitor_cron] Slack 활성화 시 supabase 클라이언트 필요 — 발송 건너뜀"
             )
         else:
-            slot_utc   = monitor_result.get("slot_utc", "")
+            slot_utc    = monitor_result.get("slot_utc", "")
             status_code = monitor_result.get("status_code", "")
-            dedupe_key  = f"{slot_utc}|{status_code}"
-            slack_msg   = monitor_result.get("slack_message") or {}
+            event_type  = "QA_WORKFLOW_MONITOR_ALERT"
+
+            # R1-03: repository|workflow|scheduled_slot_utc|event_type
+            # 동일 Workflow의 동일 예정 실행에 대한 관측 상태 변화 시 중복 발송 억제
+            from services.qa_workflow_monitor_svc import _cfg as _monitor_cfg
+            try:
+                _cfg_data = _monitor_cfg()
+                repo      = _cfg_data.get("repo", "tai-qa")
+                owner     = _cfg_data.get("owner", "taiengineering")
+                workflow  = _cfg_data.get("workflow", "qa-twice-daily.yml")
+            except RuntimeError:
+                repo     = os.environ.get("QA_MONITOR_REPO",     "tai-qa")
+                owner    = os.environ.get("QA_GITHUB_OWNER",    "taiengineering")
+                workflow = os.environ.get("QA_MONITOR_WORKFLOW", "qa-twice-daily.yml")
+
+            repository = f"{owner}/{repo}"
+            dedupe_key = f"{repository}|{workflow}|{slot_utc}|{event_type}"
+            slack_msg  = monitor_result.get("slack_message") or {}
 
             slack_payload: Dict[str, Any] = {
-                "event_type": "QA_WORKFLOW_MONITOR_ALERT",
-                "severity":   "WARNING",
-                "title":      slack_msg.get("text", f"QA Workflow Monitor: {status_code}"),
-                "detail":     f"slot={slot_utc} status={status_code}",
-                "blocks":     slack_msg.get("blocks"),
+                "event_type":  event_type,
+                "severity":    "WARNING",
+                "title":       slack_msg.get("text", f"QA Workflow Monitor: {status_code}"),
+                "detail":      f"slot={slot_utc} status={status_code}",
+                "blocks":      slack_msg.get("blocks"),
+                "repository":  repository,
+                "workflow":    workflow,
             }
 
             inserted, row_id = accept_monitor_notification(

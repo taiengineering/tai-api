@@ -137,8 +137,11 @@ async def send_monitor_notification(
 ) -> str:
     """단일 PENDING 행을 Claim → Send → Finish 처리.
 
-    반환: "SENT" | "UNKNOWN" | "FAILED" | "SKIPPED" (claim 실패)
-    실제 Slack 발송 실패는 UNKNOWN(재시도 불필요) 또는 FAILED(영구 실패).
+    반환:
+      "SENT"           — Slack 발송 성공 + DB 완료 기록 성공
+      "SENT_DB_FAILED" — Slack 발송 성공, DB 완료 기록 실패 (감사 증거 불완전)
+      "UNKNOWN"        — Slack 발송 실패 또는 결과 불명 (재발송 금지)
+      "SKIPPED"        — Claim 실패 (다른 Worker가 처리 중)
     """
     claim_token = _claim(supabase, row_id)
     if claim_token is None:
@@ -163,15 +166,25 @@ async def send_monitor_notification(
                 error_detail=f"exception: {str(exc)[:200]}")
         return "UNKNOWN"
 
-    if sent:
-        _finish(supabase, row_id, claim_token, "SENT", sent_at=_now())
+    if not sent:
+        _finish(supabase, row_id, claim_token, "UNKNOWN",
+                error_detail="send_slack returned False")
+        log.warning("[qa_monitor_outbox] UNKNOWN row_id=%s (send_slack=False)", row_id)
+        return "UNKNOWN"
+
+    # Slack 발송 성공 — DB 완료 기록 (R1-04: _finish 결과 검증)
+    finished = _finish(supabase, row_id, claim_token, "SENT", sent_at=_now())
+    if finished:
         log.info("[qa_monitor_outbox] SENT row_id=%s", row_id)
         return "SENT"
 
-    _finish(supabase, row_id, claim_token, "UNKNOWN",
-            error_detail="send_slack returned False")
-    log.warning("[qa_monitor_outbox] UNKNOWN row_id=%s (send_slack=False)", row_id)
-    return "UNKNOWN"
+    # Slack 발송 성공 + DB 기록 실패 — 감사 증거 불완전, 재발송 금지
+    log.warning(
+        "[qa_monitor_outbox] SENT_DB_FAILED row_id=%s "
+        "(Slack sent but DB _finish failed — possible CAS race)",
+        row_id,
+    )
+    return "SENT_DB_FAILED"
 
 
 def recover_stale_sending(supabase: Any) -> int:

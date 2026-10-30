@@ -453,3 +453,249 @@ class TestRegression:
 
         mock_accept.assert_not_called()
         assert result["outbox_status"] is None
+
+
+# ── R1-06: Additional R1 Correction Tests (R25-R39) ──────────────────────────
+
+class TestR1CronEntrypoints:
+    """R25-R26: Cron endpoint → service 연결 검증."""
+
+    def test_r25_run_monitor_cron_endpoint_calls_service(self, monkeypatch):
+        """R25: POST /internal/qa/run-monitor-cron → run_monitor_cron(dry_run=True) 호출."""
+        from fastapi.testclient import TestClient
+        from main import app
+        import services.qa_monitor_cron_svc as cron_svc_mod
+
+        monkeypatch.setenv("INTERNAL_API_SECRET", "test-secret")
+        mock_sb = MagicMock()
+
+        with (
+            patch("db.supabase_client.get_supabase", return_value=mock_sb),
+            patch.object(
+                cron_svc_mod,
+                "run_monitor_cron",
+                new=AsyncMock(return_value={"requires_alert": False, "slack_enabled": False, "outbox_status": None}),
+            ) as mock_run,
+        ):
+            client = TestClient(app)
+            resp = client.post(
+                "/internal/qa/run-monitor-cron",
+                json={},
+                headers={"X-Internal-Secret": "test-secret"},
+            )
+
+        assert resp.status_code == 200
+        mock_run.assert_called_once()
+        _, kwargs = mock_run.call_args
+        assert kwargs.get("dry_run") is True
+
+    def test_r26_run_stale_scan_endpoint_calls_service(self, monkeypatch):
+        """R26: POST /internal/qa/run-stale-scan → run_stale_scan_cron() 호출."""
+        from fastapi.testclient import TestClient
+        from main import app
+        import services.qa_monitor_cron_svc as cron_svc_mod
+
+        monkeypatch.setenv("INTERNAL_API_SECRET", "test-secret")
+
+        with patch.object(
+            cron_svc_mod,
+            "run_stale_scan_cron",
+            new=AsyncMock(return_value={"queued_stale": [], "running_stale": []}),
+        ) as mock_run:
+            client = TestClient(app)
+            resp = client.post(
+                "/internal/qa/run-stale-scan",
+                headers={"X-Internal-Secret": "test-secret"},
+            )
+
+        assert resp.status_code == 200
+        mock_run.assert_called_once()
+
+
+class TestR1SlotFromScheduledFor:
+    """R27-R34: _slot_from_scheduled_for() Fail-Closed 검증."""
+
+    def test_r27_utc_11_to_slot_10(self):
+        """R27: UTC 11:00 → Slot 10:00."""
+        result = cron_svc._slot_from_scheduled_for("2026-01-15T11:00:00+00:00")
+        assert result == "2026-01-15T10:00:00Z"
+
+    def test_r28_utc_22_to_slot_21(self):
+        """R28: UTC 22:00 → Slot 21:00."""
+        result = cron_svc._slot_from_scheduled_for("2026-01-15T22:00:00+00:00")
+        assert result == "2026-01-15T21:00:00Z"
+
+    def test_r29_non_standard_hour_raises(self):
+        """R29: 비허용 UTC 시각 (예: 10:00) → ValueError."""
+        with pytest.raises(ValueError, match="비허용 예약 시각"):
+            cron_svc._slot_from_scheduled_for("2026-01-15T10:00:00+00:00")
+
+    def test_r30_naive_datetime_raises(self):
+        """R30: timezone 없는 입력 → ValueError."""
+        with pytest.raises(ValueError, match="timezone 없음"):
+            cron_svc._slot_from_scheduled_for("2026-01-15T11:00:00")
+
+    def test_r31_non_zero_minute_raises(self):
+        """R31: 분이 0이 아닌 입력 → ValueError."""
+        with pytest.raises(ValueError, match="분·초·마이크로초"):
+            cron_svc._slot_from_scheduled_for("2026-01-15T11:30:00+00:00")
+
+    def test_r32_utc_plus9_02_is_utc_02_not_allowed(self):
+        """R32: KST 11:00 (UTC+9) = UTC 02:00 → 비허용."""
+        with pytest.raises(ValueError, match="비허용 예약 시각"):
+            cron_svc._slot_from_scheduled_for("2026-01-15T11:00:00+09:00")
+
+    def test_r33_kst_20_is_utc_11_slot_10(self):
+        """R33: KST 20:00 (UTC+9) = UTC 11:00 → Slot 10:00."""
+        result = cron_svc._slot_from_scheduled_for("2026-01-15T20:00:00+09:00")
+        assert result == "2026-01-15T10:00:00Z"
+
+    def test_r34_invalid_scheduled_for_no_auto_slot(self, monkeypatch):
+        """R34: 잘못된 scheduled_for → ValueError 전파, 자동 Slot 선택 없음."""
+        monkeypatch.setenv("QA_MONITOR_SLACK_ENABLED", "true")
+        with pytest.raises(ValueError):
+            asyncio.run(cron_svc.run_monitor_cron(
+                supabase=_make_supabase_mock(),
+                scheduled_for="2026-01-15T09:00:00+00:00",
+                dry_run=False,
+            ))
+
+
+class TestR1DedupKey:
+    """R35: 동일 Slot 다른 status_code → 동일 dedupe_key → DEDUPED."""
+
+    def test_r35_same_slot_different_status_code_is_deduped(self, monkeypatch):
+        """R35: 같은 slot_utc, 다른 status_code → 동일 dedupe_key → accept 중복 억제."""
+        monkeypatch.setenv("QA_MONITOR_SLACK_ENABLED", "true")
+
+        monitor_result_a = {
+            "requires_alert": True,
+            "status_code": "NO_RUN_FOUND",
+            "slot_utc": "2026-01-15T10:00:00Z",
+            "slack_message": {"text": "Alert A", "blocks": None},
+        }
+        monitor_result_b = {
+            "requires_alert": True,
+            "status_code": "STALE_RUN",
+            "slot_utc": "2026-01-15T10:00:00Z",
+            "slack_message": {"text": "Alert B", "blocks": None},
+        }
+
+        sb = _make_supabase_mock()
+
+        with (
+            patch("services.qa_monitor_cron_svc.monitor_twice_daily", new_callable=AsyncMock) as mock_mon,
+            patch("services.qa_monitor_cron_svc.accept_monitor_notification", return_value=(False, None)) as mock_accept,
+            patch("services.qa_workflow_monitor_svc._cfg", return_value={"repo": "tai-qa", "owner": "taiengineering", "workflow": "qa-twice-daily.yml"}),
+        ):
+            mock_mon.return_value = monitor_result_a
+            result_a = asyncio.run(cron_svc.run_monitor_cron(supabase=sb, dry_run=False))
+            key_a = mock_accept.call_args[1]["dedupe_key"] if mock_accept.called else None
+
+            mock_mon.return_value = monitor_result_b
+            result_b = asyncio.run(cron_svc.run_monitor_cron(supabase=sb, dry_run=False))
+            key_b = mock_accept.call_args[1]["dedupe_key"] if mock_accept.called else None
+
+        assert key_a is not None
+        assert key_b is not None
+        assert key_a == key_b, f"같은 slot, 다른 status_code여도 dedupe_key 동일해야 함: {key_a!r} vs {key_b!r}"
+        assert result_a["outbox_status"] == "DEDUPED"
+        assert result_b["outbox_status"] == "DEDUPED"
+
+
+class TestR1OutboxEvidence:
+    """R36-R38: Outbox 증거 무결성 검증."""
+
+    def test_r36_slack_sent_db_finish_fails_returns_sent_db_failed(self):
+        """R36: Slack 발송 성공 + _finish() 실패 → SENT_DB_FAILED."""
+        sb = _make_supabase_mock(
+            insert_data=[{"id": "row-r36"}],
+            update_data=[{"id": "row-r36"}],
+        )
+
+        # claim → CLAIMED (success), _start_sending → SENDING (success), _finish → [] (fail)
+        call_count = {"n": 0}
+        original_execute = sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute
+
+        def finish_fails_execute():
+            call_count["n"] += 1
+            mock_result = MagicMock()
+            # claim (call 1): success; _start_sending (call 2): success; _finish (call 3): fail
+            mock_result.data = [] if call_count["n"] >= 3 else [{"id": "row-r36"}]
+            return mock_result
+
+        sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.side_effect = finish_fails_execute
+
+        with patch("services.qa_monitor_outbox_svc.send_slack", new_callable=AsyncMock, return_value=True):
+            result = asyncio.run(outbox_svc.send_monitor_notification(
+                sb, "row-r36", {"event_type": "QA_WORKFLOW_MONITOR_ALERT"}
+            ))
+
+        assert result == "SENT_DB_FAILED"
+
+    def test_r37_unknown_state_skipped_on_reclaim(self):
+        """R37: UNKNOWN 상태 행 → _claim()이 PENDING 조건 미충족 → SKIPPED."""
+        sb = _make_supabase_mock(update_data=[])  # claim returns empty → no row updated
+
+        result = asyncio.run(outbox_svc.send_monitor_notification(
+            sb, "row-unknown", {"event_type": "QA_WORKFLOW_MONITOR_ALERT"}
+        ))
+
+        assert result == "SKIPPED"
+
+    def test_r38_outbox_sent_slack_sent_false_no_contradiction(self, monkeypatch):
+        """R38: outbox_status=SENT → slack_sent 필드는 False여도 모순 아님 (WP-D 계약)."""
+        monkeypatch.setenv("QA_MONITOR_SLACK_ENABLED", "true")
+        sb = _make_supabase_mock(insert_data=[{"id": "row-r38"}])
+
+        with (
+            patch(
+                "services.qa_monitor_cron_svc.monitor_twice_daily",
+                new_callable=AsyncMock,
+                return_value={
+                    "requires_alert": True,
+                    "status_code": "NO_RUN_FOUND",
+                    "slot_utc": "2026-01-15T10:00:00Z",
+                    "slack_message": {"text": "Alert", "blocks": None},
+                    "slack_sent": False,
+                },
+            ),
+            patch(
+                "services.qa_monitor_cron_svc.accept_monitor_notification",
+                return_value=(True, "row-r38"),
+            ),
+            patch(
+                "services.qa_monitor_cron_svc.send_monitor_notification",
+                new_callable=AsyncMock,
+                return_value="SENT",
+            ),
+            patch(
+                "services.qa_workflow_monitor_svc._cfg",
+                return_value={"repo": "tai-qa", "owner": "taiengineering", "workflow": "qa-twice-daily.yml"},
+            ),
+        ):
+            result = asyncio.run(cron_svc.run_monitor_cron(supabase=sb, dry_run=False))
+
+        assert result["outbox_status"] == "SENT"
+        assert result.get("slack_sent") is False  # WP-D: monitor_result.slack_sent 그대로 전달
+
+
+class TestR1Regression:
+    """R39: 기존 WP-D/E import 회귀 검증."""
+
+    def test_r39_wp_de_imports_intact(self):
+        """R39: WP-D/E 관련 심볼 import 가능 — 회귀 없음."""
+        from services.qa_monitor_cron_svc import run_monitor_cron, run_stale_scan_cron
+        from services.qa_monitor_outbox_svc import (
+            accept_monitor_notification,
+            send_monitor_notification,
+            recover_stale_sending,
+        )
+        from services.slack_dispatcher import EVENT_TYPE_CHANNEL
+
+        assert callable(run_monitor_cron)
+        assert callable(run_stale_scan_cron)
+        assert callable(accept_monitor_notification)
+        assert callable(send_monitor_notification)
+        assert callable(recover_stale_sending)
+        assert "QA_WORKFLOW_MONITOR_ALERT" in EVENT_TYPE_CHANNEL
