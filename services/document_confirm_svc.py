@@ -17,6 +17,7 @@ confirm(REVIEW_PENDING → APPROVED_BY_HUMAN)을 단일 psycopg2 트랜잭션으
 from __future__ import annotations
 
 import json
+from datetime import date as _date
 from typing import Any, Dict, Optional
 
 from services.document_confirm_authz import authorize_confirm
@@ -55,15 +56,60 @@ _TARGET_STATUS = "APPROVED_BY_HUMAN"
 _REQUIRED_FROM = "REVIEW_PENDING"
 _SNAPSHOT_SCHEMA_VERSION = 1
 _SCHEMA_STATUS_APPROVED = "APPROVED_FOR_RUNTIME_USE"
-# Evidence 후보 허용 상태 — DB CHECK 터미널 승인값 (R1-02 / C2-FINAL §2)
+# Evidence 후보·필드 허용 상태 — DB CHECK 계약 (최신 main d219a3463855)
 _ALLOWED_EVIDENCE_CANDIDATE_STATUSES: frozenset = frozenset({"APPROVED_BY_HUMAN"})
-# runtime_evidence_field 자체 상태 허용 목록 — DB CHECK 터미널 승인값 (R2-01 / C2-FINAL §3)
 _ALLOWED_EVIDENCE_FIELD_STATUSES: frozenset = frozenset({"APPROVED_BY_HUMAN"})
-# Evidence 연결 대상 field input_type 허용 목록 (현재 file만 지원)
-_ALLOWED_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"file"})
-# Evidence family / upload_type 허용 목록 (R2-03)
-_ALLOWED_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT"})
-_ALLOWED_UPLOAD_TYPES: frozenset = frozenset({"attachment"})
+# Evidence family 허용 목록 (DATE 추가 — Gate A)
+_ALLOWED_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT", "DATE"})
+# family 식별자
+_FILE_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT"})
+_DATE_EVIDENCE_FAMILIES: frozenset = frozenset({"DATE"})
+# upload_type 계약 — family별 독립 (E-01: 교차 조합 422 차단)
+_ALLOWED_UPLOAD_TYPES: frozenset = frozenset({"attachment"})       # ATTACHMENT 전용
+_DATE_UPLOAD_TYPES: frozenset = frozenset({"timestamp_auto"})      # DATE 전용 (P0 matrix 실측값)
+# input_type 계약 — family별 독립 (E-01)
+_FILE_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"file"})
+_DATE_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"date"})
+
+
+def _verify_date_evidence_value(
+    *,
+    date_value: Any,
+    ev_field_id: str,
+    field_key: str,
+) -> None:
+    """DATE 증적 필드 값 검증. FAIL-CLOSED.
+
+    YYYY-MM-DD 형식 + 실달력 유효성 검증.
+    fromisoformat()은 Python 3.11+ 에서 "20261015" (YYYYMMDD) 도 허용하므로
+    형식 사전 검증을 먼저 수행한다 (R2-03 / R3-04).
+    """
+    if date_value is None:
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: "
+            f"date value missing in runtime_data_json[{field_key!r}]",
+        )
+    if not isinstance(date_value, str):
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: "
+            f"date value must be str, got {type(date_value).__name__!r}",
+        )
+    if len(date_value) != 10 or date_value[4] != "-" or date_value[7] != "-":
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: "
+            f"date value {date_value!r} must be strictly YYYY-MM-DD format",
+        )
+    try:
+        _date.fromisoformat(date_value)
+    except ValueError:
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: "
+            f"date value {date_value!r} is not a valid calendar date",
+        )
 
 
 def _dict_cursor(conn):
@@ -114,7 +160,6 @@ def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id, schem
     connections = []
     for ev in evidence_fields:
         ev_id = str(ev.get("id") or "")
-        # R2-01: runtime_evidence_field.status must be APPROVED_BY_HUMAN (C2-FINAL §3)
         ev_status = str(ev.get("status") or "UNKNOWN")
         if ev_status not in _ALLOWED_EVIDENCE_FIELD_STATUSES:
             raise ConfirmError(
@@ -122,7 +167,6 @@ def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id, schem
                 f"evidence field {ev_id!r}: runtime_evidence_field.status={ev_status!r} "
                 f"not approved — only {sorted(_ALLOWED_EVIDENCE_FIELD_STATUSES)} allowed",
             )
-        # R2-03: evidence_family must be ATTACHMENT
         ev_family = str(ev.get("evidence_family") or "")
         if ev_family not in _ALLOWED_EVIDENCE_FAMILIES:
             raise ConfirmError(
@@ -130,14 +174,22 @@ def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id, schem
                 f"evidence field {ev_id!r}: evidence_family={ev_family!r} not supported "
                 f"(allowed: {sorted(_ALLOWED_EVIDENCE_FAMILIES)})",
             )
-        # R2-03: upload_type must be attachment
+        # upload_type — family별 독립 검증 (E-01: 교차 조합 422 차단)
         ev_upload_type = str(ev.get("upload_type") or "")
-        if ev_upload_type not in _ALLOWED_UPLOAD_TYPES:
-            raise ConfirmError(
-                422,
-                f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
-                f"(allowed: {sorted(_ALLOWED_UPLOAD_TYPES)})",
-            )
+        if ev_family in _FILE_EVIDENCE_FAMILIES:
+            if ev_upload_type not in _ALLOWED_UPLOAD_TYPES:
+                raise ConfirmError(
+                    422,
+                    f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
+                    f"for ATTACHMENT family (allowed: {sorted(_ALLOWED_UPLOAD_TYPES)})",
+                )
+        elif ev_family in _DATE_EVIDENCE_FAMILIES:
+            if ev_upload_type not in _DATE_UPLOAD_TYPES:
+                raise ConfirmError(
+                    422,
+                    f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
+                    f"for DATE family (allowed: {sorted(_DATE_UPLOAD_TYPES)})",
+                )
         evidence_candidate_id = str(ev.get("evidence_candidate_id") or "")
         if not evidence_candidate_id:
             raise ConfirmError(
@@ -196,6 +248,7 @@ def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id, schem
             "evidence_field": ev,
             "runtime_field": matched,
             "ev_candidate_status": str(efc.get("status") or "UNKNOWN"),
+            "ev_family": ev_family,
         })
     return connections
 
@@ -372,17 +425,19 @@ def confirm_document_atomic(
             except AttachmentError as e:
                 raise ConfirmError(422, "attachment image resolution failed: %s" % e)
 
-            # 14a-2. Evidence FK 연결 + FileSnapshot 검증 (OD-C023-01/02/05)
+            # 14a-2. Evidence FK 연결 + 검증 (OD-C023-01/02/05 / Gate A)
             schema_candidate_id = str(schema_row.get("schema_candidate_id") or "")
             ev_connections = _resolve_evidence_connections(
                 cur, evidence_fields, fields, schema_id, schema_candidate_id
             )
             attachment_evidence_manifest: list = []
+            date_evidence_manifest: list = []
             for ev_conn in ev_connections:
                 ev_field = ev_conn["evidence_field"]
                 rf = ev_conn["runtime_field"]
                 ev_candidate_status = ev_conn["ev_candidate_status"]
-                # R1-02: allowlist — CANDIDATE/UNKNOWN/REJECTED/null 전부 차단
+                ev_family = ev_conn["ev_family"]
+                # R1-02: candidate status — family 공통
                 if ev_candidate_status not in _ALLOWED_EVIDENCE_CANDIDATE_STATUSES:
                     raise ConfirmError(
                         422,
@@ -394,33 +449,64 @@ def confirm_document_atomic(
                     )
                 field_id = str(rf.get("id") or "")
                 field_key = str(rf.get("field_key") or "")
-                # R1-03-C: 연결 field input_type 반드시 지원되는 유형 (현재 file만)
                 input_type = str(rf.get("input_type") or "")
-                if input_type not in _ALLOWED_EVIDENCE_INPUT_TYPES:
-                    raise ConfirmError(
-                        422,
-                        f"evidence field {str(ev_field.get('id'))!r}: "
-                        f"connected field input_type={input_type!r} not supported "
-                        f"for evidence sealing (allowed: {sorted(_ALLOWED_EVIDENCE_INPUT_TYPES)})"
-                    )
-                snap = runtime_values.get(field_key)
-                if snap is None:
-                    raise ConfirmError(
-                        422,
-                        f"evidence field {str(ev_field.get('id'))!r}: "
-                        f"FileSnapshot missing in runtime_data_json[{field_key!r}]",
-                    )
-                try:
-                    manifest_entry = verify_file_snapshot_for_evidence(
-                        snapshot=snap,
-                        document_id=str(locked["id"]),
-                        field_id=field_id,
+
+                if ev_family in _FILE_EVIDENCE_FAMILIES:
+                    # E-01: ATTACHMENT — input_type must be file
+                    if input_type not in _FILE_EVIDENCE_INPUT_TYPES:
+                        raise ConfirmError(
+                            422,
+                            f"evidence field {str(ev_field.get('id'))!r}: "
+                            f"connected field input_type={input_type!r} not valid "
+                            f"for ATTACHMENT family (expected: file)",
+                        )
+                    snap = runtime_values.get(field_key)
+                    if snap is None:
+                        raise ConfirmError(
+                            422,
+                            f"evidence field {str(ev_field.get('id'))!r}: "
+                            f"FileSnapshot missing in runtime_data_json[{field_key!r}]",
+                        )
+                    try:
+                        manifest_entry = verify_file_snapshot_for_evidence(
+                            snapshot=snap,
+                            document_id=str(locked["id"]),
+                            field_id=field_id,
+                            field_key=field_key,
+                        )
+                    except AttachmentError as e:
+                        raise ConfirmError(422, f"evidence verification failed: {e}")
+                    manifest_entry["evidence_field_id"] = str(ev_field.get("id") or "")
+                    attachment_evidence_manifest.append(manifest_entry)
+
+                elif ev_family in _DATE_EVIDENCE_FAMILIES:
+                    # E-01: DATE — input_type must be date
+                    if input_type not in _DATE_EVIDENCE_INPUT_TYPES:
+                        raise ConfirmError(
+                            422,
+                            f"evidence field {str(ev_field.get('id'))!r}: "
+                            f"connected field input_type={input_type!r} not valid "
+                            f"for DATE family (expected: date)",
+                        )
+                    date_value = runtime_values.get(field_key)
+                    _verify_date_evidence_value(
+                        date_value=date_value,
+                        ev_field_id=str(ev_field.get("id") or ""),
                         field_key=field_key,
                     )
-                except AttachmentError as e:
-                    raise ConfirmError(422, f"evidence verification failed: {e}")
-                manifest_entry["evidence_field_id"] = str(ev_field.get("id") or "")
-                attachment_evidence_manifest.append(manifest_entry)
+                    date_evidence_manifest.append({
+                        "evidence_field_id":    str(ev_field.get("id") or ""),
+                        "field_id":             field_id,
+                        "field_key":            field_key,
+                        "date_value":           str(date_value),
+                        "value_source":         "USER_INPUT",
+                        "value_semantic_class": "PENDING_CLASSIFICATION",
+                        "evidence_family":      "DATE",
+                        "input_type":           "date",
+                    })
+
+            # 14a-3. manifest 병합 (clock_timestamp() 호출 전 — Step 순서 보존)
+            combined_evidence_manifest = attachment_evidence_manifest + date_evidence_manifest
 
             # 14b. 렌더 (05A) — 락 이후 값으로만, 서명 + 첨부 이미지 inline 포함
             render_doc = {
@@ -438,7 +524,7 @@ def confirm_document_atomic(
                     signature_images=sig_result.get("images"),
                     signature_manifest=sig_result.get("manifest"),
                     attachment_images=attachment_images,
-                    attachment_evidence_manifest=attachment_evidence_manifest,
+                    attachment_evidence_manifest=combined_evidence_manifest,
                 )
             except SchemaRenderError as e:
                 raise ConfirmError(422, "render failed: %s" % e)
