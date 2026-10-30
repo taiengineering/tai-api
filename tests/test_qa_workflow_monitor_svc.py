@@ -14,7 +14,7 @@
   D11  GitHub 인증 실패 (401/403) → GITHUB_API_NOT_VERIFIED
   D12  Workflow 비활성화 → WORKFLOW_DISABLED, requires_alert=True
   D13  UTC/KST 날짜 경계 (자정 전후) Slot 식별
-  D14  오전·오후 Slot 식별 (21:00Z / 11:00Z)
+  D14  오전·오후 Slot 식별 (21:00Z / 10:00Z)
   D15  동일 Slot 반복 관측 — 상태 코드 동일
   D16  중복 Slack 발송 방지: dry_run=True → slack_sent=False
   D17  Billing 의심(Job 없음)과 확인된 오류 구분 — BILLING_CONFIRMED 금지
@@ -111,7 +111,7 @@ def _gh_run(
     run_id: int = 10001,
     status: str = "completed",
     conclusion: str = "success",
-    created_at: str = "2026-10-30T11:00:05Z",
+    created_at: str = "2026-10-30T10:00:05Z",
 ) -> Dict[str, Any]:
     return {
         "id":          run_id,
@@ -144,7 +144,7 @@ def _env(monkeypatch):
 
 def test_D01_run_completed(monkeypatch):
     """completed Run 발견 → RUN_COMPLETED, requires_alert=False."""
-    slot = _slot_dt(11, 0) - timedelta(days=0)
+    slot = _slot_dt(10, 0) - timedelta(days=0)
     now  = slot + timedelta(minutes=70)
 
     run = _gh_run(status="completed", conclusion="success")
@@ -173,7 +173,7 @@ def test_D01_run_completed(monkeypatch):
 
 def test_D02_run_active(monkeypatch):
     """in_progress Run → RUN_ACTIVE, requires_alert=False."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     run = _gh_run(status="in_progress", conclusion=None)
@@ -197,7 +197,7 @@ def test_D02_run_active(monkeypatch):
 
 def test_D03_no_run_within_grace(monkeypatch):
     """Run 없음, 아직 60분 미경과 → requires_alert=False."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=30)   # 30분만 경과
 
     client = _FakeClient([
@@ -220,7 +220,7 @@ def test_D03_no_run_within_grace(monkeypatch):
 
 def test_D04_no_run_after_grace(monkeypatch):
     """Run 없음, 60분 이상 경과 → WORKFLOW_NOT_OBSERVED, requires_alert=True."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=90)
 
     client = _FakeClient([
@@ -244,7 +244,7 @@ def test_D04_no_run_after_grace(monkeypatch):
 
 def test_D05_run_created_job_not_started(monkeypatch):
     """completed Run이 있지만 Job 시작 증거 없음 → JOB_NOT_STARTED_SUSPECTED."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     run = _gh_run(status="completed", conclusion="failure")
@@ -269,7 +269,7 @@ def test_D05_run_created_job_not_started(monkeypatch):
 
 def test_D06_run_created_job_started(monkeypatch):
     """completed Run + Job 시작 증거 있음 → RUN_COMPLETED, requires_alert=False."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     run = _gh_run(status="completed", conclusion="success")
@@ -296,7 +296,7 @@ def test_D06_run_created_job_started(monkeypatch):
 
 def test_D07_test_failure_not_workflow_miss(monkeypatch):
     """conclusion=failure Run은 Workflow 미시작이 아닌 RUN_COMPLETED."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     run  = _gh_run(status="completed", conclusion="failure")
@@ -324,7 +324,7 @@ def test_D08_github_api_timeout(monkeypatch):
     """httpx Timeout → GITHUB_API_NOT_VERIFIED, requires_alert=False."""
     import httpx
 
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     class _TimeoutClient:
@@ -348,7 +348,7 @@ def test_D08_github_api_timeout(monkeypatch):
 
 def test_D09_github_rate_limited(monkeypatch):
     """HTTP 429 → GITHUB_API_NOT_VERIFIED."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     client = _FakeClient([_FakeResp(429)])
@@ -366,7 +366,7 @@ def test_D09_github_rate_limited(monkeypatch):
 
 def test_D10_github_server_error(monkeypatch):
     """HTTP 503 → GITHUB_API_NOT_VERIFIED."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     client = _FakeClient([_FakeResp(503)])
@@ -384,7 +384,7 @@ def test_D10_github_server_error(monkeypatch):
 
 def test_D11_github_auth_failure(monkeypatch):
     """HTTP 401 → GITHUB_API_NOT_VERIFIED."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     client = _FakeClient([_FakeResp(401)])
@@ -402,7 +402,7 @@ def test_D11_github_auth_failure(monkeypatch):
 
 def test_D12_workflow_disabled(monkeypatch):
     """state=disabled_manually → WORKFLOW_DISABLED, requires_alert=True."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     client = _FakeClient([_workflow_disabled_resp("disabled_manually")])
@@ -443,14 +443,14 @@ def test_D13_utc_kst_date_boundary():
 # ── D14: 오전·오후 Slot 식별 ─────────────────────────────────────────────────
 
 def test_D14_slot_identification_both_slots():
-    """11:00Z 및 21:00Z Slot 모두 resolve_scheduled_slot이 올바르게 반환한다."""
-    # Slot 11:00Z → now=12:30Z (70분 경과)
-    slot_11 = datetime(2026, 10, 30, 11, 0, 0, tzinfo=timezone.utc)
-    now_11  = datetime(2026, 10, 30, 12, 30, 0, tzinfo=timezone.utc)
-    r11 = svc.resolve_scheduled_slot(slot_11.strftime("%Y-%m-%dT%H:%M:%SZ"), now_utc=now_11)
-    assert r11.hour == 11
+    """10:00Z 및 21:00Z Slot 모두 resolve_scheduled_slot이 올바르게 반환한다."""
+    # Slot 10:00Z (KST 19:00) → now=11:30Z (90분 경과)
+    slot_10 = datetime(2026, 10, 30, 10, 0, 0, tzinfo=timezone.utc)
+    now_10  = datetime(2026, 10, 30, 11, 30, 0, tzinfo=timezone.utc)
+    r10 = svc.resolve_scheduled_slot(slot_10.strftime("%Y-%m-%dT%H:%M:%SZ"), now_utc=now_10)
+    assert r10.hour == 10
 
-    # Slot 21:00Z → now=22:30Z (90분 경과)
+    # Slot 21:00Z (KST 다음날 06:00) → now=22:30Z (90분 경과)
     slot_21 = datetime(2026, 10, 30, 21, 0, 0, tzinfo=timezone.utc)
     now_21  = datetime(2026, 10, 30, 22, 30, 0, tzinfo=timezone.utc)
     r21 = svc.resolve_scheduled_slot(slot_21.strftime("%Y-%m-%dT%H:%M:%SZ"), now_utc=now_21)
@@ -461,7 +461,7 @@ def test_D14_slot_identification_both_slots():
 
 def test_D15_repeated_observation_same_status(monkeypatch):
     """동일 Slot을 두 번 관측해도 동일 상태 코드 반환 (결과 멱등)."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     run = _gh_run(status="completed", conclusion="success")
@@ -487,7 +487,7 @@ def test_D15_repeated_observation_same_status(monkeypatch):
 
 def test_D16_dry_run_no_slack_sent(monkeypatch):
     """requires_alert=True 상황에서도 dry_run → slack_sent=False."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=90)
 
     send_called = []
@@ -518,7 +518,7 @@ def test_D16_dry_run_no_slack_sent(monkeypatch):
 
 def test_D17_billing_suspected_not_confirmed(monkeypatch):
     """Job이 없어도 BILLING_CONFIRMED 상태 코드를 부여하지 않는다."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     run = _gh_run(status="completed", conclusion="failure")
@@ -544,7 +544,7 @@ def test_D17_billing_suspected_not_confirmed(monkeypatch):
 
 def test_D18_no_github_dispatch(monkeypatch):
     """monitor_twice_daily는 dispatch_qa_run을 절대 호출하지 않는다."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     dispatch_called = []
@@ -577,7 +577,7 @@ def test_D18_no_github_dispatch(monkeypatch):
 
 def test_D19_no_db_mutation(monkeypatch):
     """monitor_twice_daily는 QA Run DB에 INSERT/UPDATE하지 않는다."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     run = _gh_run()
@@ -649,16 +649,16 @@ def test_D22b_invalid_slot_format():
 def test_D22c_auto_select_returns_most_recent_elapsed_slot():
     """auto-select는 60분 이상 경과한 Slot 중 가장 최근 것을 반환한다.
 
-    now=2026-10-31 12:30Z 기준:
-      - 11:00Z (90분 경과) → 유효
-      - 21:00Z from 2026-10-30 (15.5시간 경과) → 유효하지만 더 오래됨
-    → resolve는 11:00Z를 선택해야 한다.
+    now=2026-10-31 11:30Z 기준:
+      - 10:00Z (90분 경과) → 유효 (KST 19:00)
+      - 21:00Z from 2026-10-30 (14.5시간 경과) → 유효하지만 더 오래됨
+    → resolve는 10:00Z를 선택해야 한다.
     """
-    now_utc = datetime(2026, 10, 31, 12, 30, 0, tzinfo=timezone.utc)
+    now_utc = datetime(2026, 10, 31, 11, 30, 0, tzinfo=timezone.utc)
     resolved = svc.resolve_scheduled_slot(None, now_utc=now_utc)
 
-    # 가장 최근 유효 Slot: 2026-10-31 11:00Z (90분 경과)
-    assert resolved.hour == 11
+    # 가장 최근 유효 Slot: 2026-10-31 10:00Z (90분 경과)
+    assert resolved.hour == 10
     assert resolved.day == 31
     assert resolved.month == 10
 
@@ -680,7 +680,7 @@ def test_R1_01a_nonstandard_slot_rejected():
 
 def test_R1_01b_nonzero_seconds_rejected():
     """초 값이 0이 아닌 Slot → ValueError."""
-    slot = datetime(2026, 10, 30, 11, 0, 30, tzinfo=timezone.utc)  # 11:00:30Z
+    slot = datetime(2026, 10, 30, 10, 0, 30, tzinfo=timezone.utc)  # 10:00:30Z
     now  = slot + timedelta(minutes=90)
 
     with pytest.raises(ValueError, match="초·마이크로초"):
@@ -688,8 +688,8 @@ def test_R1_01b_nonzero_seconds_rejected():
 
 
 def test_R1_01c_standard_slots_accepted():
-    """표준 Slot 11:00Z 및 21:00Z는 정상 허용된다."""
-    for hour in (11, 21):
+    """표준 Slot 10:00Z 및 21:00Z는 정상 허용된다."""
+    for hour in (10, 21):
         slot = datetime(2026, 10, 30, hour, 0, 0, tzinfo=timezone.utc)
         now  = slot + timedelta(minutes=90)
 
@@ -705,7 +705,7 @@ def test_R1_01c_standard_slots_accepted():
 
 def test_R1_02a_completed_jobs_api_failure_not_verified(monkeypatch):
     """completed Run + Jobs API 429 → GITHUB_API_NOT_VERIFIED (RUN_COMPLETED 금지)."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     run = _gh_run(status="completed", conclusion="success")
@@ -730,7 +730,7 @@ def test_R1_02a_completed_jobs_api_failure_not_verified(monkeypatch):
 
 def test_R1_02b_completed_jobs_api_503_not_verified(monkeypatch):
     """completed Run + Jobs API 503 → GITHUB_API_NOT_VERIFIED."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     run = _gh_run(status="completed", conclusion="success")
@@ -768,7 +768,7 @@ def test_R1_02d_completed_none_jobs_not_verified():
 
 def test_R1_03a_queued_30min_run_active(monkeypatch):
     """queued + 30분 경과 → RUN_ACTIVE (유예 내)."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=30)
 
     run = _gh_run(status="queued", conclusion=None)
@@ -790,7 +790,7 @@ def test_R1_03a_queued_30min_run_active(monkeypatch):
 
 def test_R1_03b_queued_70min_no_jobs_suspected(monkeypatch):
     """queued + 70분 경과 + Job 없음 → JOB_NOT_STARTED_SUSPECTED."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     run = _gh_run(status="queued", conclusion=None)
@@ -813,7 +813,7 @@ def test_R1_03b_queued_70min_no_jobs_suspected(monkeypatch):
 
 def test_R1_03c_queued_70min_jobs_api_failure_not_verified(monkeypatch):
     """queued + 70분 + Jobs API 오류 → GITHUB_API_NOT_VERIFIED."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     run = _gh_run(status="queued", conclusion=None)
@@ -835,7 +835,7 @@ def test_R1_03c_queued_70min_jobs_api_failure_not_verified(monkeypatch):
 
 def test_R1_03d_normal_completed_preserved(monkeypatch):
     """R1 보정 후에도 정상 completed Run + Job 시작됨 → RUN_COMPLETED 유지."""
-    slot = _slot_dt(11, 0)
+    slot = _slot_dt(10, 0)
     now  = slot + timedelta(minutes=70)
 
     run = _gh_run(status="completed", conclusion="success")

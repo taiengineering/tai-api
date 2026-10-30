@@ -4,12 +4,12 @@ tai-qa 정기 Workflow(qa-twice-daily.yml)가 예정 시각에 실행되지 않�
 감지·보고 전용: QA Run DB 상태 변경 없음.
 
 정기 QA 예정 시각 (UTC):
-  - 21:00 UTC → KST 06:00
-  - 11:00 UTC → KST 20:00
+  - 21:00 UTC → KST 다음날 06:00
+  - 10:00 UTC → KST 19:00
 
 감시 검사 시각: 예정 시각 + 60분
-  - 21:00 UTC Run → 22:00 UTC 검사
-  - 11:00 UTC Run → 12:00 UTC 검사
+  - 21:00 UTC Run → 22:00 UTC 검사 (KST 07:00)
+  - 10:00 UTC Run → 11:00 UTC 검사 (KST 20:00)
 
 상태 코드:
   RUN_OBSERVED             — 정상 schedule Run 기록 확인
@@ -60,8 +60,8 @@ _GRACE_MINUTES = 60
 
 # 정기 QA Slot UTC 시각 (hour, minute)
 _SCHEDULE_SLOTS_UTC: List[Tuple[int, int]] = [
-    (21, 0),   # KST 06:00
-    (11, 0),   # KST 20:00
+    (21, 0),   # KST 다음날 06:00
+    (10, 0),   # KST 19:00
 ]
 
 # ── 상태 코드 ─────────────────────────────────────────────────────────────────
