@@ -308,7 +308,8 @@ def test_t12_kosha_construction_accidents_present():
     spec = registry.get("KOSHA_CONSTRUCTION_ACCIDENTS")
     assert spec.sync_mode == SourceMode.INCREMENTAL
     assert spec.source_kind == SourceKind.API
-    assert spec.auto_refresh_candidate is True
+    # BLOCKED: callApiId=1050 returns KOSHA Guide data; auto_refresh disabled until correct source confirmed.
+    assert spec.auto_refresh_candidate is False
 
 
 # ---------------------------------------------------------------------------
