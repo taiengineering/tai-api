@@ -1,18 +1,19 @@
 ---
 title: DOC260 DATE Gate B — Evidence 승인 작업지시서
 wo: WO-DOC260-DATE-GATE-B-EVIDENCE-APPROVAL-001
-status: WP_G_B03_LINEAGE_EVIDENCE_CLOSE_GPT_VI_PENDING
+status: GPT_R6_PASS_WITH_CORRECTIONS_PR181_MAIN_SYNC_PENDING
 collected_by: Claude Code
 created_date: 2026-10-30
-revision: R9
-review_required: GPT_WP_G_B03_LINEAGE_FINAL_IV
+revision: R10
+review_required: PR_181_OWNER_MERGE_GATE
 gpt_r1_verdict: PASS_WITH_GUARDS (2026-10-30)
 gpt_r2_verdict: PASS (2026-10-30)
 gpt_r3_verdict: STOP_SOT_MISMATCH (2026-10-30)
 gpt_r4_verdict: PASS_WITH_GUARDS (2026-10-31)
 gpt_r5_verdict: PASS_WITH_GUARDS (2026-10-31)
-gpt_r6_verdict: PENDING
-fe_pr181_status: READY_FOR_REVIEW (HEAD 50480e68, 2026-10-31)
+gpt_r6_verdict: PASS_WITH_CORRECTIONS (2026-10-31)
+gpt_r6_fe_verdict: PASS_WITH_GUARDS (2026-10-31)
+fe_pr181_status: MAIN_SYNC_REQUIRED (HEAD 50480e68 — 2커밋 미포함)
 wp_g_b01_status: CLOSED_FINAL (PR#742 1ce3c559 MERGED 2026-10-30)
 wp_g_b02_status: COMPLETE (2026-10-30)
 wp_g_b02_db_project: vwlahtguyggrhvslabax (taieng)
@@ -1624,4 +1625,98 @@ NEXT_GATE = GPT_WP_G_B03_LINEAGE_FINAL_IV
 ---
 
 *R8 생성: 2026-10-31 / WO-011 Evidence Close §18 추가 (commit 4cbfaabe)*  
-*R9 업데이트: 2026-10-31 / tai-admin PR #181 FE 계약 검증 완료 §19 추가 — GPT R6 Final IV 제출 준비*
+*R9 업데이트: 2026-10-31 / tai-admin PR #181 FE 계약 검증 완료 §19 추가 — GPT R6 Final IV 제출 준비*  
+*R10 업데이트: 2026-10-31 / GPT R6 Final IV PASS_WITH_CORRECTIONS 판정 §20 수록 — Corrections 이행*
+
+---
+
+---
+
+## 20. GPT R6 Final IV 판정 및 Corrections 이행
+
+**GPT_WP_G_B03_LINEAGE_FINAL_IV:** `PASS_WITH_CORRECTIONS` (2026-10-31)  
+**GPT_DOC260_DATE_FE_SOURCE_IV:** `PASS_WITH_GUARDS` (2026-10-31)  
+**CODE_CHANGE = 0 / DB_MUTATION = 0 / DEPLOY = 0**
+
+---
+
+### 20.1 GPT R6 검증 항목별 판정
+
+| 검증 항목 | GPT 판정 | 비고 |
+|---------|---------|------|
+| §17 데이터 계보 | PASS_WITH_GUARD | M-07 이관·후속 갱신 확인. 지속 동기화 미확정 |
+| G-06 커밋·Blob 증거 | PASS | R7 SHA + Blob SHA 일치 |
+| G-04 Alias 65/7 | **CORRECTION** | 65건 `ALIAS_PASS_BASIS` 표현 부정확 |
+| G-05 조문·버전 구분 | PASS | 조문 token ≠ 내용 검증 분리 타당 |
+| ARTICLE_ACTUALLY_VERIFIED=0 | PASS | 이번 조사 범위 내 미실시 기록 타당 |
+| CONTINUOUS_SYNC=UNVERIFIED | PASS | 증거 없는 부분 미확정 표현 타당 |
+| ELIGIBILITY_EVIDENCE_COMPLETE=0 | PASS | 5조건 전체 미충족 |
+| §19 FE 계약 | SOURCE PASS_WITH_GUARDS | DATE 분기 + F8 보존 확인 |
+
+---
+
+### 20.2 Correction 이행 — G-04 Alias 표현 정정
+
+**GPT 지적:** `d2d3d839` (건설산업기본법)은 law_alias 행이 없고 law_master 직접 일치임. 따라서 65건 전체를 `verified_by='INITIAL_BUILD'` 기반으로 표현하는 것은 부정확.
+
+**정정:**
+
+| 이전 표현 | 정정 표현 |
+|---------|---------|
+| `ALIAS_PASS_65_BASIS = law_alias.verified_by = 'INITIAL_BUILD'` | **65건 = law_master 직접 매칭 + alias verified_by='INITIAL_BUILD' 포함 잠정 매칭 집합 (7건 ALIAS_UNVERIFIED 제외 나머지)** |
+
+> §18.2 및 §18.6의 `ALIAS_PASS_65_BASIS` 표현은 이 정정으로 대체됨.  
+> 65건 전체를 신규 alias 분석 대상으로 재조사하지 않음 — 용어 보정만 적용.
+
+---
+
+### 20.3 Correction 이행 — 동기화 결론 정정
+
+**GPT 지적:** §17.4 "미러/동기화 관계 없음"과 §18.5 `CONTINUOUS_SYNC=UNVERIFIED` 동시 사용 불가.
+
+**최종 판정 (§17/§18 공통 적용):**
+
+| 항목 | 확정 내용 |
+|------|----------|
+| M-07 이관 사실 | 확인 (UUID 768/768 일치, production_semantic_repository comment) |
+| taieng 동결 | 확인 (2026-05-10 이후 법령 업데이트 없음) |
+| leg-prod 독립 갱신 | 확인 (4건 신규 law_version, 최신 2026-10-09) |
+| 지속 동기화 중단 | **UNVERIFIED** (동기화 코드/스케줄러 직접 확인 없음) |
+
+> §17.4의 "미러/동기화 관계 없음" 문구는 폐기. `CONTINUOUS_SYNC = UNVERIFIED` 유지.  
+> "이관 완료 + 이후 leg-prod 독립 갱신 확인" + "동기화 중단 미확인"이 정확한 표현.
+
+---
+
+### 20.4 Q1~Q3 — 본선 비선행 원칙 확정
+
+GPT R6 판정:
+
+> Q1 leg-prod SoT 확정은 이번 계보 비교만으로 불충분 (실제 API 조회 배선 미확인).  
+> Q1~Q3는 별도 정책 결정 — 이번 Gate에서 변경하지 않음.  
+> ELIGIBILITY_EVIDENCE_COMPLETE=0은 DATE FE 구현의 선행 조건이 아님.
+
+| 항목 | 최종 상태 |
+|------|----------|
+| Q1 법령 SoT 신규 확정 | 별도 Owner 정책 결정 — 이번 Gate 비변경 |
+| Q3 72건 승격 기준 | 본선 DATE 구현의 선행 조건으로 사용하지 않음 |
+| WP-G-B04 Allowlist 확장 | **HOLD** |
+| WP-G-B05 실제 승인 | **BLOCKED** |
+
+---
+
+### 20.5 다음 Gate — PR #181 main 정합화
+
+**GPT 지시:** "PR #181을 최신 main과 정합화하고, 소스·테스트를 검증하여 Owner Merge Gate에 제출"
+
+**현재 PR #181 상태:**
+
+| 항목 | 값 |
+|------|-----|
+| PR HEAD | `50480e68` |
+| main HEAD | `67e43de7` |
+| main 미포함 커밋 | `6a2396f7` (F8 multi_row), `67e43de7` (FM01 scaffold) |
+| git ancestry 차이 | **2커밋 미포함** (코드는 수동 통합됨, history 미정렬) |
+| 필요 작업 | PR branch → origin/main rebase (clean squash) |
+
+**NEXT_GATE:** `PR_181_MAIN_REBASE_AND_OWNER_MERGE_GATE`
