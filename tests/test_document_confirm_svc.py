@@ -844,7 +844,7 @@ def test_E24_09_candidate_evidence_status_blocks_confirm():
             "form_schema_id": SCHEMA_ID,
             "evidence_candidate_id": "efc-001",
             "evidence_type": "ATTACHMENT",
-            "status": "APPROVED_FOR_RUNTIME_USE",
+            "status": "APPROVED_BY_HUMAN",
             "evidence_family": "ATTACHMENT",
             "upload_type": "attachment",
         }],
@@ -878,7 +878,7 @@ def test_E24_02_evidence_connection_missing_candidate_id_blocks():
             "form_schema_id": SCHEMA_ID,
             "evidence_candidate_id": None,  # missing
             "evidence_type": "ATTACHMENT",
-            "status": "APPROVED_FOR_RUNTIME_USE",
+            "status": "APPROVED_BY_HUMAN",
             "evidence_family": "ATTACHMENT",
             "upload_type": "attachment",
         }],
@@ -911,7 +911,7 @@ def test_R1_T03_unknown_evidence_status_blocks():
         field_rows=[_field_ev("f-att", "attached_documents", input_type="file", field_candidate_id="fc-u")],
         evidence_field_rows=[{"id": "ev-u", "form_schema_id": SCHEMA_ID,
                                "evidence_candidate_id": "efc-u", "evidence_type": "ATTACHMENT",
-                               "status": "APPROVED_FOR_RUNTIME_USE",
+                               "status": "APPROVED_BY_HUMAN",
                                "evidence_family": "ATTACHMENT", "upload_type": "attachment"}],
         evidence_candidate_row={"id": "efc-u", "field_candidate_id": "fc-u",
                                  "status": "UNKNOWN", "schema_candidate_id": None},
@@ -941,7 +941,7 @@ def test_R1_T03b_null_evidence_status_blocks():
         field_rows=[_field_ev("f-null", "attached_documents", input_type="file", field_candidate_id="fc-n")],
         evidence_field_rows=[{"id": "ev-n", "form_schema_id": SCHEMA_ID,
                                "evidence_candidate_id": "efc-n", "evidence_type": "ATTACHMENT",
-                               "status": "APPROVED_FOR_RUNTIME_USE",
+                               "status": "APPROVED_BY_HUMAN",
                                "evidence_family": "ATTACHMENT", "upload_type": "attachment"}],
         evidence_candidate_row={"id": "efc-n", "field_candidate_id": "fc-n",
                                  "status": None, "schema_candidate_id": None},
@@ -998,10 +998,10 @@ def test_R1_T07_non_file_evidence_input_type_blocks():
         field_rows=[_field_ev("f-txt", "some_text", input_type="text", field_candidate_id="fc-txt")],
         evidence_field_rows=[{"id": "ev-txt", "form_schema_id": SCHEMA_ID,
                                "evidence_candidate_id": "efc-txt", "evidence_type": "TEXT_REF",
-                               "status": "APPROVED_FOR_RUNTIME_USE",
+                               "status": "APPROVED_BY_HUMAN",
                                "evidence_family": "ATTACHMENT", "upload_type": "attachment"}],
         evidence_candidate_row={"id": "efc-txt", "field_candidate_id": "fc-txt",
-                                 "status": "APPROVED_FOR_RUNTIME_USE", "schema_candidate_id": None},
+                                 "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None},
     )
     _install(conn)
     try:
@@ -1017,22 +1017,22 @@ def test_R1_T07_non_file_evidence_input_type_blocks():
 # ── R2 보강 테스트 (WO-024-R2) ──────────────────────────────────
 
 def _ev_row_approved(ev_id="ev-r2", efc_id="efc-r2"):
-    """Helper: runtime_evidence_field row that passes all R2 checks."""
+    """Helper: runtime_evidence_field row that passes all checks (APPROVED_BY_HUMAN)."""
     return {
         "id": ev_id,
         "form_schema_id": SCHEMA_ID,
         "evidence_candidate_id": efc_id,
         "evidence_type": "ATTACHMENT",
-        "status": "APPROVED_FOR_RUNTIME_USE",
+        "status": "APPROVED_BY_HUMAN",
         "evidence_family": "ATTACHMENT",
         "upload_type": "attachment",
     }
 
 
 def _efc_row_approved(efc_id="efc-r2", fc_id="fc-r2", sc_id="sc-001"):
-    """Helper: evidence_field_candidate row that passes all R2 checks."""
+    """Helper: evidence_field_candidate row that passes all checks (APPROVED_BY_HUMAN)."""
     return {"id": efc_id, "field_candidate_id": fc_id,
-            "status": "APPROVED_FOR_RUNTIME_USE", "schema_candidate_id": sc_id}
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": sc_id}
 
 
 def test_R2_T01_unapproved_evidence_field_status_blocks():
