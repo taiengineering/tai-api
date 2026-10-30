@@ -1,4 +1,4 @@
-"""TAI Slack Dispatcher v1.2.0
+"""TAI Slack Dispatcher v1.3.1
 모든 이벤트를 Slack 채널로 분리 발송. WO-SLACK-EVENT-HUB-001 로 event_type 라우팅과
 Block Kit 인자를 추가. 기존 severity 기반 라우팅은 회귀 없이 유지.
 
@@ -23,13 +23,36 @@ Block Kit 인자를 추가. 기존 severity 기반 라우팅은 회귀 없이 �
 - SLACK_CH_QA             : #auto-qa 채널 ID
 - SLACK_WEBHOOK_ENABLED   : true/false (default: true)
 """
+import asyncio
+import math
 import os
 import logging
 from typing import List, Optional
 
 import httpx
+from httpx import TimeoutException as _HttpxTimeout, NetworkError as _HttpxNetworkError
 
 logger = logging.getLogger("slack_dispatcher")
+
+# 재시도 정책: 최초 시도 포함 최대 3회 (_RETRY_MAX = 2 retries).
+_RETRY_MAX = 2
+_RETRY_DELAYS = (2.0, 5.0)   # 1차·2차 재시도 대기(초)
+_RETRY_DELAY_CAP = 30.0       # Retry-After 상한(초)
+
+
+def _parse_retry_after(raw, default: float) -> float:
+    """Retry-After 헤더를 안전하게 파싱한다.
+
+    비정상 값(비숫자·NaN·무한대·음수)은 default를 반환한다.
+    유효한 값은 _RETRY_DELAY_CAP 이하로 제한한다.
+    """
+    try:
+        val = float(raw)
+    except (ValueError, TypeError):
+        return default
+    if not math.isfinite(val) or val < 0:
+        return default
+    return min(val, _RETRY_DELAY_CAP)
 
 # 채널 라우팅
 CHANNEL_ALERT = "alert"
@@ -230,27 +253,76 @@ async def send_slack(
                 }]},
             ]
 
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                "https://slack.com/api/chat.postMessage",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json; charset=utf-8",
-                },
-                json=payload,
-            )
+    # Timeout/연결 오류 재시도 시 Slack이 이미 메시지를 수신했을 수 있다.
+    # Slack API는 idempotency key 미지원이므로 중복 전달이 발생할 수 있다.
+    # QA 관제 메시지는 누락보다 중복이 안전하므로 재시도를 허용한다.
+    for attempt in range(_RETRY_MAX + 1):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    "https://slack.com/api/chat.postMessage",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json; charset=utf-8",
+                    },
+                    json=payload,
+                )
+
             if resp.status_code == 200:
                 body = resp.json()
                 if body.get("ok"):
                     return True
-                logger.error(f"Slack API error: {body.get('error')}")
+                slack_err = body.get("error", "")
+                if slack_err == "ratelimited" and attempt < _RETRY_MAX:
+                    delay = _parse_retry_after(resp.headers.get("Retry-After"), _RETRY_DELAYS[attempt])
+                    logger.warning("Slack ratelimited (ok=False), retry %d in %.1fs", attempt + 1, delay)
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error("Slack API error: %s", slack_err)
                 return False
-            logger.error(f"Slack HTTP {resp.status_code}")
+
+            if resp.status_code == 429:
+                if attempt >= _RETRY_MAX:
+                    logger.error("Slack 429 rate limited, exhausted retries")
+                    return False
+                delay = _parse_retry_after(resp.headers.get("Retry-After"), _RETRY_DELAYS[attempt])
+                logger.warning("Slack 429, retry %d in %.1fs", attempt + 1, delay)
+                await asyncio.sleep(delay)
+                continue
+
+            if resp.status_code >= 500:
+                if attempt >= _RETRY_MAX:
+                    logger.error("Slack HTTP %d, exhausted retries", resp.status_code)
+                    return False
+                delay = _RETRY_DELAYS[attempt]
+                logger.warning("Slack HTTP %d, retry %d in %.1fs", resp.status_code, attempt + 1, delay)
+                await asyncio.sleep(delay)
+                continue
+
+            logger.error("Slack HTTP %d", resp.status_code)
             return False
-    except Exception as e:
-        logger.exception(f"Slack dispatch failed: {e}")
-        return False
+
+        except _HttpxTimeout as e:
+            if attempt >= _RETRY_MAX:
+                logger.error("Slack timeout after %d attempts: %s", _RETRY_MAX + 1, e)
+                return False
+            delay = _RETRY_DELAYS[attempt]
+            logger.warning("Slack timeout, retry %d in %.1fs", attempt + 1, delay)
+            await asyncio.sleep(delay)
+
+        except _HttpxNetworkError as e:
+            if attempt >= _RETRY_MAX:
+                logger.error("Slack network error after %d attempts: %s", _RETRY_MAX + 1, e)
+                return False
+            delay = _RETRY_DELAYS[attempt]
+            logger.warning("Slack network error (%s), retry %d in %.1fs", type(e).__name__, attempt + 1, delay)
+            await asyncio.sleep(delay)
+
+        except Exception as e:
+            logger.exception("Slack dispatch error (non-retryable): %s", e)
+            return False
+
+    return False
 
 
 def send_slack_sync(
