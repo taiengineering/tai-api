@@ -368,12 +368,14 @@ def test_s4_slack_api_ok_false_returns_false(monkeypatch):
 def test_s5_http_non200_returns_false(monkeypatch):
     _prepare_env(monkeypatch)
     from services import slack_dispatcher as sd
+    from services.slack_dispatcher import _RETRY_MAX
     rec = SentRecorder(status_code=500, body={})
     rec.install(monkeypatch, sd)
 
-    result = asyncio.run(sd.send_slack("INQUIRY_CREATED", "INFO", "t", blocks=[{"type": "section"}]))
+    with patch("services.slack_dispatcher.asyncio.sleep"):
+        result = asyncio.run(sd.send_slack("INQUIRY_CREATED", "INFO", "t", blocks=[{"type": "section"}]))
     assert result is False
-    assert len(rec.calls) == 1
+    assert len(rec.calls) == _RETRY_MAX + 1  # HTTP 5xx triggers full retry cycle
 
 
 def test_s6_network_exception_returns_false(monkeypatch, notify_client):
