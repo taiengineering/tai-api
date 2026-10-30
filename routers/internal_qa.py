@@ -196,6 +196,40 @@ async def post_run_results(
     }
 
 
+# ── Cron Run Registration models ─────────────────────────────────────────────
+
+class RegisterCronRunRequest(BaseModel):
+    github_run_id:      int
+    github_run_attempt: int
+    scenario_ids:       List[str]
+
+
+@router.post("/runs/register-cron")
+def register_cron_run(
+    body: RegisterCronRunRequest,
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
+):
+    """GitHub Actions 정기 QA 실행 등록 (twice-daily cron).
+
+    trigger_type=SCHEDULE, requested_by=github-cron.
+    (github_run_id, github_run_attempt) 중복 시 기존 run_id 반환 (idempotent).
+    HTTP 200 = 기존 run 반환. HTTP 201 = 신규 run 생성.
+    """
+    _check_secret(x_internal_secret)
+    supabase = get_supabase()
+    data = svc.register_cron_run(
+        supabase,
+        github_run_id=body.github_run_id,
+        github_run_attempt=body.github_run_attempt,
+        scenario_ids=body.scenario_ids,
+    )
+    http_status = status.HTTP_200_OK if data.get("idempotent") else status.HTTP_201_CREATED
+    return JSONResponse(
+        status_code=http_status,
+        content={"status": "success", "data": data},
+    )
+
+
 # ── Targeted Dispatch models ──────────────────────────────────────────────────
 
 class TargetedDispatchRequest(BaseModel):
