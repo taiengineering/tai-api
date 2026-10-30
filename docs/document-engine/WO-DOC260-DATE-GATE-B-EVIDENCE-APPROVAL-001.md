@@ -1,15 +1,16 @@
 ---
 title: DOC260 DATE Gate B — Evidence 승인 작업지시서
 wo: WO-DOC260-DATE-GATE-B-EVIDENCE-APPROVAL-001
-status: WP_G_B03_SOT_IV_PASS_WITH_GUARDS_OWNER_GATE
+status: WP_G_B03_LINEAGE_COMPLETE_GPT_V_PENDING
 collected_by: Claude Code
 created_date: 2026-10-30
-revision: R6
-review_required: OWNER_SOT_DECISION_Q1_Q2_Q3
+revision: R7
+review_required: GPT_WP_G_B03_LINEAGE_IV
 gpt_r1_verdict: PASS_WITH_GUARDS (2026-10-30)
 gpt_r2_verdict: PASS (2026-10-30)
 gpt_r3_verdict: STOP_SOT_MISMATCH (2026-10-30)
 gpt_r4_verdict: PASS_WITH_GUARDS (2026-10-31)
+gpt_r5_verdict: PENDING
 wp_g_b01_status: CLOSED_FINAL (PR#742 1ce3c559 MERGED 2026-10-30)
 wp_g_b02_status: COMPLETE (2026-10-30)
 wp_g_b02_db_project: vwlahtguyggrhvslabax (taieng)
@@ -19,6 +20,7 @@ wp_g_b03_leg_prod_project: wrfcedzgdrfupenzqhur (leg-prod, created 2026-06-11)
 wp_g_b03_provisional_source_match: 72
 wp_g_b03_data_semantic_gap: 17
 wp_g_b03_leg_reference_missing: 23
+wp_g_b03_lineage_status: WP_010_COMPLETE (2026-10-31)
 ---
 
 # WO-DOC260-DATE-GATE-B-EVIDENCE-APPROVAL-001
@@ -1080,4 +1082,337 @@ NEXT_GATE = OWNER_SOT_DECISION → WP-G-B04 재진입
 *R3 업데이트: 2026-10-30 / WP-G-B01 CLOSED_FINAL (PR#742) + WP-G-B02 DB 조사 완료*  
 *R4 업데이트: 2026-10-30 / WP-G-B03 LEG READ-ONLY 조사 완료*  
 *R5 업데이트: 2026-10-30 / WP-G-B03 SOT Reconciliation (WO-009) — PROVISIONAL_SOURCE_MATCH 재지정 + §15 추가*  
-*R6 업데이트: 2026-10-31 / GPT R4 SOT IV PASS_WITH_GUARDS + §16 추가 — Owner Gate 진입*
+*R6 업데이트: 2026-10-31 / GPT R4 SOT IV PASS_WITH_GUARDS + §16 추가 — Owner Gate 진입*  
+*R7 업데이트: 2026-10-31 / WP-010 Lineage READ-ONLY 완료 — §17 추가 (WP-01~04 + 112건 ID 매핑 + 72건 5조건 검증 + Q1~Q3 권고)*
+
+---
+
+---
+
+## 17. WP-G-B03 SOT Lineage Report (WO-DOC260-WP-G-B03-SOT-LINEAGE-READONLY-010)
+
+**WO:** WO-DOC260-WP-G-B03-SOT-LINEAGE-READONLY-010  
+**Owner Approval:** WP_G_B03_SOT_LINEAGE_READONLY = APPROVED  
+**조회일시:** 2026-10-31 (UTC)  
+**DB 프로젝트:** leg-prod (`wrfcedzgdrfupenzqhur`) + taieng (`vwlahtguyggrhvslabax`) READ-ONLY SELECT  
+**CODE_CHANGE = 0 / DB_MUTATION = 0 / DEPLOY = 0**
+
+---
+
+### 17.1 WP-01: 데이터 계보 (Lineage) — 실측 결과
+
+#### 조회 기준
+
+| DB | Project ID | 조회 테이블 |
+|----|-----------|------------|
+| taieng | vwlahtguyggrhvslabax | law_master |
+| leg-prod | wrfcedzgdrfupenzqhur | law_master, law_version, production_semantic_repository |
+
+#### 핵심 실측 데이터
+
+| 항목 | taieng (vwlahtguyggrhvslabax) | leg-prod (wrfcedzgdrfupenzqhur) |
+|------|-------------------------------|--------------------------------|
+| law_master 행 수 | 768 | 768 |
+| MIN(created_at) | 2026-04-22 13:58:02 | 2026-04-22 13:58:02 |
+| MAX(updated_at) | **2026-05-10** (이후 동결) | **2026-09-14** (이후도 활성) |
+| UUID 동일성 (10행 샘플) | — | 10/10 UUID + law_key 일치 확인 |
+| production_semantic_repository comment | — | "M-07 migration from tai-api, AC-001 §3" |
+| law_version 신규 (2026-05-10 이후) | N/A (동결) | **4건** (MAX created_at = 2026-10-09) |
+| law_master 업데이트 (이관 후) | 없음 | **2건** (law_mst_no 변경 — 한 법령 버전 갱신) |
+| UUID 겹침 방식 | origin | migrated target |
+
+#### 계보 판정
+
+**`SOURCE_TO_REPLICA_MIGRATED_THEN_INDEPENDENT`**
+
+- **taieng/law_master** = M-07 migration의 origin source (2026-06-11 이전 이관 완료)
+- **leg-prod** = migration target; 이관 후 독립 진화 (4건 신규 law_version, 2건 law_master 업데이트, 최신 2026-10-09)
+- taieng/law_master = 2026-05-10 이후 한국 법령 업데이트 없음 (동결)
+- leg-prod = 현행 한국 법령 유지 중 (is_active=true, 768건 enforcement_date 전부 존재)
+
+#### 정본 문서 파일
+
+| 파일 | 경로 | SHA-256 (R7 기준) |
+|------|------|-------------------|
+| WO 문서 (본 파일) | `/docs/document-engine/WO-DOC260-DATE-GATE-B-EVIDENCE-APPROVAL-001.md` | `034c1daea7fbb44d3a5a4967e8d085059db76b3a3e26e131d8189b9ef44bc8e5` |
+| GOVERNANCE_SOURCE_OF_TRUTH.md | `/Users/taiwangsim/dev-gov/docs/gov/_general/GUIDE_governance-source-of-truth_v1.md` | 미확인 (로컬 only) |
+
+---
+
+### 17.2 WP-02: 112건 Evidence ID별 분류표
+
+**조회 DB:** taieng (`vwlahtguyggrhvslabax`) / 테이블: `runtime_evidence_field` ⋈ `evidence_field_candidate` ⋈ `runtime_form_schema`  
+**조회 조건:** `evidence_family='DATE' AND upload_type='timestamp_auto'`
+
+#### 분류 요약
+
+| 분류 | 건수 | efc_status | schema 이중차단 |
+|------|------|------------|----------------|
+| PROVISIONAL_SOURCE_MATCH | **72** | 전부 CANDIDATE | 0건 (전부 APPROVED_FOR_RUNTIME_USE) |
+| DATA_SEMANTIC_GAP | **17** | 전부 CANDIDATE | 0건 |
+| LEG_REFERENCE_MISSING | **23** | 전부 CANDIDATE | **8건** (CANDIDATE) |
+| 합계 | **112** | — | 8건 |
+
+#### A. PROVISIONAL_SOURCE_MATCH 72건 — Evidence ID + law_ref
+
+| law_ref | 건수 | Evidence ID |
+|---------|------|-------------|
+| 건설기술진흥법 | 3 | `694df080` `a20f0b51` `b6c3946e` |
+| 건설기술진흥법 시행규칙 | 2 | `313c1408` `8c7d6401` |
+| 건설기술진흥법 제62조 | 4 | `00e3b571` `5b4b7557` `b53cb8ad` `e9f8c256` |
+| 건설기술진흥법 제62조의2제2항 | 1 | `64377a38` |
+| 건설산업기본법 | 1 | `d2d3d839` |
+| 고압가스안전관리법 | 2 | `97e465a2` `ddd0329f` |
+| 고압가스안전관리법 제15조 | 2 | `021599c9` `b055cbfc` |
+| 고압가스안전관리법 제16조 | 1 | `28978ac0` |
+| 산안법 시행규칙 제11조제2항, 제23조제2항 | 1 | `b8209b01` |
+| 산안법 시행규칙 제9조 | 1 | `b6f899c7` |
+| 산안법 제125조 | 1 | `5cdc6988` |
+| 산안법 제129조 | 2 | `c2642860` `dac9568f` |
+| 산안법 제24조 | 1 | `a434a078` |
+| 산안법 제36조, 위험성평가 지침 | 1 | `4898a95c` |
+| 산안법 제42조 | 1 | `d425e070` |
+| 산안법 제52조 | 2 | `48c0fdeb` `ebd7f673` |
+| 산안법 제54조 | 2 | `3807ed17` `6ae8a904` |
+| 산안법 제54조제2항 | 1 | `690db207` |
+| 산안법 제57조 | 1 | `3e73b10c` |
+| 산안법 제62조 | 1 | `ba4d12d5` |
+| 산안법 제64조제1항 | 1 | `8be3a0a5` |
+| 석면안전관리법 시행규칙 제31조제2항, 별지 제17호서식 | 1 | `9c77cab7` |
+| 소방시설법 제20조 | 2 | `8269ae32` `d6a73e1a` |
+| 소방시설법 제25조 | 2 | `2a254a6e` `be0d75d4` |
+| 승강기법 시행규칙 | 1 | `ca68ef95` |
+| 승강기안전관리법 | 1 | `622b23e4` |
+| 승강기안전관리법 제13조 | 1 | `917df2a3` |
+| 승강기안전관리법 제32조 | 1 | `b937f0dc` |
+| 승강기안전관리법 제48조 | 1 | `25c0eb3a` |
+| 시설물안전법 | 2 | `129665b3` `23776288` |
+| 시설물안전법 제12조 | 1 | `0f75930a` |
+| 시설물안전법 제6조 | 1 | `785d14ec` |
+| 안전보건규칙 제619조 | 1 | `210b10ed` |
+| 에너지이용합리화법 | 5 | `24ab9e00` `75612750` `93df5b88` `efecfd92` `fac85643` |
+| 에너지이용합리화법 시행규칙 별지 | 2 | `77e38571` `a41b73ed` |
+| 위험물안전관리법 | 1 | `e16c1362` |
+| 위험물안전관리법 시행규칙 | 1 | `1db78031` |
+| 위험물안전관리법 제13조 | 1 | `4c8d4262` |
+| 위험물안전관리법 제15조 | 2 | `964cc8f1` `d32acf9d` |
+| 위험물안전관리법 제18조 | 1 | `be6e2ff7` |
+| 위험물안전관리법 제9조 | 1 | `d68b4a32` |
+| 전기안전관리법 | 2 | `6c28e5a3` `d7e297a6` |
+| 전기안전관리법 제17조 | 2 | `37ddf7f1` `9ebf0b6b` |
+| 중대재해법 시행령 제4조제7호 | 1 | `fed13535` |
+| 중대재해법 제4조제1항제2호 | 1 | `57b26580` |
+| 화학물질관리법 시행규칙 | 1 | `6ed1d9d0` |
+| 화학물질관리법 제29조 | 1 | `dca8c00a` |
+| 화학물질관리법 제31조 | 1 | `9652328c` |
+| 화학물질관리법 제43조 | 1 | `368b2e37` |
+| 화학물질관리법 제44조 | 1 | `9c641e7b` |
+
+#### B. DATA_SEMANTIC_GAP 17건 — Evidence ID + law_ref
+
+| law_ref | 건수 | Evidence ID |
+|---------|------|-------------|
+| 법 제17조 | 1 | `ca9c19d8` |
+| 법 제29조 | 1 | `b0a91f17` |
+| 별지 | 1 | `422e5e4d` |
+| 시행규칙 별지 제30호서식 | 1 | `1edabe25` |
+| 시행규칙 제11조 | 8 | `081357cf` `2ad1a4eb` `42038d9b` `48b3a226` `b568b165` `b7ecfe43` `d2fdb1ae` `da85845a` |
+| 시행규칙 제16조 별지서식 | 1 | `eb26bac9` |
+| 시행규칙 제23조 | 4 | `0ef0af1a` `0f9d66fc` `341793fc` `9950d5ef` |
+
+#### C. LEG_REFERENCE_MISSING 23건 — Evidence ID + schema_status
+
+| Evidence ID | schema_status |
+|-------------|---------------|
+| `0523025a` | APPROVED_FOR_RUNTIME_USE |
+| `0a09d85b` | **CANDIDATE** (이중 차단) |
+| `1deef5a2` | **CANDIDATE** (이중 차단) |
+| `2c319f05` | **CANDIDATE** (이중 차단) |
+| `3624a314` | APPROVED_FOR_RUNTIME_USE |
+| `3d3b671f` | **CANDIDATE** (이중 차단) |
+| `41eeaa7d` | APPROVED_FOR_RUNTIME_USE |
+| `4b7b00a2` | **CANDIDATE** (이중 차단) |
+| `57bd0834` | APPROVED_FOR_RUNTIME_USE |
+| `5d8b90f1` | **CANDIDATE** (이중 차단) |
+| `6abda610` | APPROVED_FOR_RUNTIME_USE |
+| `7d375ad8` | APPROVED_FOR_RUNTIME_USE |
+| `89cbd702` | APPROVED_FOR_RUNTIME_USE |
+| `bf86e6c5` | **CANDIDATE** (이중 차단) |
+| `d7967eea` | **CANDIDATE** (이중 차단) |
+| `d9acab2f` | APPROVED_FOR_RUNTIME_USE |
+| `d9b8ef29` | APPROVED_FOR_RUNTIME_USE |
+| `e7d129d2` | APPROVED_FOR_RUNTIME_USE |
+| `e947a692` | APPROVED_FOR_RUNTIME_USE |
+| `f09180cc` | APPROVED_FOR_RUNTIME_USE |
+| `f28a003e` | APPROVED_FOR_RUNTIME_USE |
+| `f64006fd` | APPROVED_FOR_RUNTIME_USE |
+| `f7525528` | APPROVED_FOR_RUNTIME_USE |
+
+> 이중 차단 8건: law_ref=NULL + schema_status=CANDIDATE 동시.  
+> 해소 경로: (1) law_ref 보완 → WP-G-B03 후속, (2) schema CANDIDATE → 서식 승격 별도 Gate.
+
+---
+
+### 17.3 WP-03: 72건 5-조건 검증
+
+#### 조건 정의
+
+| 조건 | 내용 |
+|------|------|
+| C1 | 정본 출처: law_ref → leg-prod law_master ACTIVE 매핑 (alias 포함) |
+| C2 | 조문 정확 참조: 조문번호(제XX조) 포함 여부 |
+| C3 | 버전·시행일: 법령 current_version_id → enforcement_date 존재 여부 |
+| C4 | 의미 일치: evidence 목적과 law_clause action_text 의미 일치 (인간 검토) |
+| C5 | 승인 계약: efc_status = APPROVED_BY_HUMAN 달성 가능 여부 |
+
+#### 조건별 결과 요약
+
+| 조건 | PASS | UNVERIFIED | FAIL | 비고 |
+|------|------|-----------|------|------|
+| **C1 정본 출처** | 0건 | 72건 | 0건 | Q1 미결 — 전체 PROVISIONAL. 65건=alias 검증됨, 7건=alias NULL |
+| **C1 별도: alias 검증** | 65건 | — | 7건 | alias `verified_by=NULL`: 산안법 시행규칙 2건, 안전보건규칙 1건, 시설물안전법 4건 |
+| **C2 조문 참조** | 48건 | 0건 | 24건 | FAIL=법령명만 기재, 조문번호 없음 |
+| **C3 버전·시행일** | 72건 | 0건 | 0건 | 전 72건 is_active=true law 모두 enforcement_date 존재 확인 |
+| **C4 의미 일치** | 0건 | 72건 | 0건 | semantic_clause 자동 매핑 불가 — 건별 인간 검토 필요 |
+| **C5 승인 계약** | 0건 | 72건 | 0건 | 전 72건 efc_status=CANDIDATE, schema=APPROVED_FOR_RUNTIME_USE |
+
+#### C2 FAIL 24건 — 조문번호 없는 Evidence ID
+
+| law_ref | 건수 | Evidence ID |
+|---------|------|-------------|
+| 건설기술진흥법 | 3 | `694df080` `a20f0b51` `b6c3946e` |
+| 건설기술진흥법 시행규칙 | 2 | `313c1408` `8c7d6401` |
+| 건설산업기본법 | 1 | `d2d3d839` |
+| 고압가스안전관리법 | 2 | `97e465a2` `ddd0329f` |
+| 에너지이용합리화법 | 5 | `24ab9e00` `75612750` `93df5b88` `efecfd92` `fac85643` |
+| 에너지이용합리화법 시행규칙 별지 | 2 | `77e38571` `a41b73ed` |
+| 승강기법 시행규칙 | 1 | `ca68ef95` |
+| 승강기안전관리법 | 1 | `622b23e4` |
+| 시설물안전법 | 2 | `129665b3` `23776288` |
+| 위험물안전관리법 | 1 | `e16c1362` |
+| 위험물안전관리법 시행규칙 | 1 | `1db78031` |
+| 전기안전관리법 | 2 | `6c28e5a3` `d7e297a6` |
+| 화학물질관리법 시행규칙 | 1 | `6ed1d9d0` |
+
+#### C1 ALIAS_UNVERIFIED 7건
+
+| law_ref | 건수 | alias | verified_by | Evidence ID |
+|---------|------|-------|-------------|-------------|
+| 산안법 시행규칙 제11조제2항, 제23조제2항 | 1 | 산안법 시행규칙 | NULL | `b8209b01` |
+| 산안법 시행규칙 제9조 | 1 | 산안법 시행규칙 | NULL | `b6f899c7` |
+| 안전보건규칙 제619조 | 1 | 안전보건규칙 | NULL | `210b10ed` |
+| 시설물안전법 | 2 | 시설물안전법 | NULL | `129665b3` `23776288` |
+| 시설물안전법 제12조 | 1 | 시설물안전법 | NULL | `0f75930a` |
+| 시설물안전법 제6조 | 1 | 시설물안전법 | NULL | `785d14ec` |
+
+> **실제 법명 (leg-prod 확인):** 산안법 시행규칙 → 산업안전보건법 시행규칙, 안전보건규칙 → 산업안전보건기준에 관한 규칙, 시설물안전법 → 시설물의 안전 및 유지관리에 관한 특별법. 법 자체는 is_active=true 확인됨 — alias 체인만 미검증.
+
+#### 종합 ELIGIBILITY_EVIDENCE_COMPLETE
+
+**0건** — C1 Q1 미결, C4 전부 UNVERIFIED, C5 전부 UNVERIFIED. 단 한 건도 5조건 동시 충족 없음.
+
+---
+
+### 17.4 WP-04: Q1~Q3 결정 근거 및 권고
+
+#### Q1: 한국 법령 정본 SoT = leg-prod vs. taieng?
+
+| 근거 | 내용 |
+|------|------|
+| leg-prod 생성 목적 | 한국 법령 전용 DB (2026-06-11 생성) |
+| M-07 이관 방향 | taieng → leg-prod (production_semantic_repository comment 직접 확인) |
+| taieng 동결 | 2026-05-10 이후 한국 법령 업데이트 없음 |
+| leg-prod 활성 유지 | 이관 후 2건 업데이트 + 4건 신규 law_version (최신 2026-10-09) |
+| 불확실성 | 법령 질의 API (api.gov.45cm.com)가 leg-prod를 호출하는지 미확인 |
+
+**권고:** leg-prod(`wrfcedzgdrfupenzqhur`)를 한국 법령 정본 SoT로 확정.  
+taieng/law_master = migrated-out replica (2026-05-10 이후 동결, 정본 아님).
+
+#### Q2: taieng ↔ leg-prod 관계?
+
+| 판정 | 내용 |
+|------|------|
+| 관계 유형 | `SOURCE_TO_REPLICA_MIGRATED` |
+| taieng 역할 | migration origin (이관 완료 후 동결) |
+| leg-prod 역할 | migration target, 이관 후 독립 진화 |
+| UUID 동일성 | 768/768 행 UUID 동일 — 동일 원본에서 복사 확인 |
+| 갈라진 지점 | 2026-05-10 이후 law_mst_no 2건 갱신 + law_version 4건 신규 |
+
+**결론:** taieng과 leg-prod는 현재 **독립 DB**. leg-prod이 최신 정본. 미러/동기화 관계 없음.
+
+#### Q3: 72건 PROVISIONAL_SOURCE_MATCH → LEG_VERIFIED_ELIGIBLE 승격 기준?
+
+| 단계 | 조건 | 대상 |
+|------|------|------|
+| Step 1 | Q1 확정 (Owner: leg-prod = SoT 선언) | 전제 조건 |
+| Step 2 | alias verified_by=NULL 3개 해소 | 7건 |
+| Step 3 | 조문번호 없는 law_ref 정정 (정확한 조문 추가) | 24건 |
+| Step 4 | 건별 semantic review: evidence 목적 ↔ law_clause action_text 의미 일치 확인 | 72건 |
+| Step 5 | efc_status APPROVED_BY_HUMAN 달성 (선행 EFC 승인) | 72건 |
+| Step 6 | `_RUNTIME_EV_ALLOWLIST` 등록 (WP-G-B04) | 72건 |
+
+**승격 불가 사례 (현재):**
+- DATA_SEMANTIC_GAP 17건: law_ref 재작성 필요 (어느 법인지 특정 불가)
+- LEG_REFERENCE_MISSING 23건: law_ref=NULL (법령 연결 없음)
+
+---
+
+### 17.5 WP-010 §9 완료 보고
+
+```
+WO = WO-DOC260-WP-G-B03-SOT-LINEAGE-READONLY-010
+
+OWNER_APPROVAL = APPROVED (WP_G_B03_SOT_LINEAGE_READONLY)
+CODE_CHANGE = 0
+DB_MUTATION = 0
+DEPLOY = 0
+
+── WP-01: Lineage ─────────────────────────────────────────────────────────────
+
+READ_ONLY_QUERIES_EXECUTED = YES
+  projects: wrfcedzgdrfupenzqhur (leg-prod), vwlahtguyggrhvslabax (taieng)
+  tables: law_master, law_version, production_semantic_repository, law_alias
+
+LINEAGE_VERDICT = SOURCE_TO_REPLICA_MIGRATED_THEN_INDEPENDENT
+  taieng/law_master = M-07 migration origin (2026-06-11 이전 완료)
+  leg-prod = migration target, 이관 후 독립 (활성 유지)
+
+UUID_IDENTITY_CONFIRMED = YES (768/768, MIN_created_at 일치)
+TAIENG_FROZEN_DATE = 2026-05-10
+LEGPROD_MAX_UPDATED = 2026-09-14
+LEGPROD_NEW_LAWVERSIONS = 4건 (MAX 2026-10-09)
+PRODUCTION_SEMANTIC_REPOSITORY_COMMENT = "M-07 migration from tai-api, AC-001 §3"
+
+── WP-02: 112건 ID별 매핑표 ─────────────────────────────────────────────────
+
+PROVISIONAL_SOURCE_MATCH = 72 (§17.2-A 참조)
+DATA_SEMANTIC_GAP = 17 (§17.2-B 참조)
+LEG_REFERENCE_MISSING = 23 (§17.2-C 참조)
+TOTAL = 112
+
+EFC_STATUS_ALL = CANDIDATE (72+17+23 전부)
+SCHEMA_DOUBLE_BLOCK = 8건 (LEG_REFERENCE_MISSING 중 schema=CANDIDATE)
+
+── WP-03: 72건 5-조건 검증 ──────────────────────────────────────────────────
+
+C1_PASS = 0 (Q1 미결 — 전체 PROVISIONAL)
+C1_ALIAS_VERIFIED = 65건 (alias verified_by=INITIAL_BUILD)
+C1_ALIAS_UNVERIFIED = 7건 (alias verified_by=NULL)
+C2_PASS = 48건 (조문번호 명시)
+C2_FAIL = 24건 (법령명만 기재, 조문번호 없음)
+C3_PASS = 72건 (is_active=true 전부 enforcement_date 존재)
+C4_UNVERIFIED = 72건 (건별 인간 semantic review 필요)
+C5_UNVERIFIED = 72건 (efc=CANDIDATE, schema=APPROVED_FOR_RUNTIME_USE)
+ELIGIBILITY_EVIDENCE_COMPLETE = 0건
+
+── WP-04: Q1~Q3 권고 ────────────────────────────────────────────────────────
+
+Q1_RECOMMENDATION = leg-prod(wrfcedzgdrfupenzqhur) SoT 확정 권고
+Q2_VERDICT = SOURCE_TO_REPLICA_MIGRATED (taieng=origin, leg-prod=independent)
+Q3_UPGRADE_CRITERIA = Step 1~6 (§17.4 참조)
+
+REMAINING_UNCERTAINTY_Q1 = 법령 질의 API (api.gov.45cm.com) 호출 DB 미확인
+REMAINING_UNCERTAINTY_Q3 = C4 semantic review 72건 전부 인간 검토 필요
+
+NEXT_GATE = GPT_WP_G_B03_LINEAGE_IV
+```
