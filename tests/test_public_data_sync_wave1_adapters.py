@@ -167,6 +167,7 @@ def test_w1_06_strict_empty_first_page_accident_cases():
 
 
 def test_w1_06b_strict_empty_first_page_construction_accidents():
+    """Construction accidents function is BLOCKED — raises immediately regardless of API mock."""
     from routers.kosha_collect import KoshaFetchError, _collect_construction_accidents
     import json
 
@@ -180,7 +181,7 @@ def test_w1_06b_strict_empty_first_page_construction_accidents():
 
     with pytest.raises(KoshaFetchError) as exc_info:
         asyncio.run(_run())
-    assert exc_info.value.code == "SOURCE_EMPTY_UNEXPECTED"
+    assert exc_info.value.code == "CONSTRUCTION_ACCIDENTS_BLOCKED_WRONG_API_DATA"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -361,6 +362,40 @@ def test_w1_18c_construction_accidents_refresh_policy_daily():
     assert spec.refresh_policy == "DAILY"
 
 
+def test_w1_18d_construction_accidents_auto_refresh_disabled():
+    """RISK-4 guard: KOSHA_CONSTRUCTION_ACCIDENTS must NOT be an auto-refresh candidate
+    while the source function is BLOCKED (callApiId=1050 returns Guide data)."""
+    spec = registry.get("KOSHA_CONSTRUCTION_ACCIDENTS")
+    assert spec.auto_refresh_candidate is False
+
+
+def test_w1_18e_construction_accidents_adapter_run_returns_failed():
+    """KoshaIncrementalAdapter wrapping the BLOCKED function returns RunResult(FAILED)
+    rather than raising — scheduler bridge gets a structured FAILED result, not an exception."""
+    from services.public_data_sync.adapters.kosha_incremental import KoshaIncrementalAdapter
+    from services.public_data_sync.contracts import RunContext, RunStatus
+    from routers.kosha_collect import _collect_construction_accidents
+    from datetime import datetime, timezone
+    import os
+
+    adapter = KoshaIncrementalAdapter(
+        adapter_key="kosha_construction_accidents",
+        collect_fn=_collect_construction_accidents,
+        log_target="construction_accidents",
+    )
+    ctx = RunContext(
+        run_id="test-run",
+        source_id="KOSHA_CONSTRUCTION_ACCIDENTS",
+        trigger="MANUAL",
+        dry_run=False,
+        started_at=datetime.now(timezone.utc),
+    )
+    with patch.dict(os.environ, {"DATA_GO_KR_SERVICE_KEY": "test-key"}):
+        result = adapter.run(ctx)
+    assert result.status == RunStatus.FAILED
+    assert result.error_code == "CONSTRUCTION_ACCIDENTS_BLOCKED_WRONG_API_DATA"
+
+
 def test_w1_19_holiday_refresh_policy_daily():
     spec = registry.get("HOLIDAY")
     assert spec.refresh_policy == "DAILY"
@@ -475,7 +510,7 @@ def test_w1_p02_items_nonempty_total_zero_raises():
 
 
 def test_w1_p03_construction_items_empty_total_nonzero_raises():
-    """Construction: items=[] but totalCount>0 → SOURCE_EMPTY_UNEXPECTED."""
+    """Construction BLOCKED — raises before reaching API-response logic."""
     from routers.kosha_collect import KoshaFetchError, _collect_construction_accidents
     import json
 
@@ -489,11 +524,11 @@ def test_w1_p03_construction_items_empty_total_nonzero_raises():
 
     with pytest.raises(KoshaFetchError) as exc_info:
         asyncio.run(_run())
-    assert exc_info.value.code == "SOURCE_EMPTY_UNEXPECTED"
+    assert exc_info.value.code == "CONSTRUCTION_ACCIDENTS_BLOCKED_WRONG_API_DATA"
 
 
 def test_w1_p04_construction_items_nonempty_total_zero_raises():
-    """Construction: items=[...] but totalCount=0 → SOURCE_EMPTY_UNEXPECTED."""
+    """Construction BLOCKED — raises before reaching API-response logic."""
     from routers.kosha_collect import KoshaFetchError, _collect_construction_accidents
     import json
 
@@ -508,7 +543,7 @@ def test_w1_p04_construction_items_nonempty_total_zero_raises():
 
     with pytest.raises(KoshaFetchError) as exc_info:
         asyncio.run(_run())
-    assert exc_info.value.code == "SOURCE_EMPTY_UNEXPECTED"
+    assert exc_info.value.code == "CONSTRUCTION_ACCIDENTS_BLOCKED_WRONG_API_DATA"
 
 
 def test_w1_p05_get_last_collected_db_success_row_found(monkeypatch):

@@ -96,7 +96,8 @@ _SOURCES: list[SourceSpec] = [
         rate_limit_group="DATA_GO_KR_KOSHA",
         refresh_policy="DAILY",
         consumer_tags=("construction", "safety"),
-        auto_refresh_candidate=True,
+        auto_refresh_candidate=False,
+        notes="WP-B-9 BLOCKED: callApiId=1050 returns KOSHA Guide data. 1,039 contaminated rows in kosha_construction_accidents. auto_refresh=False until correct source confirmed.",
     ),
     # 7. KOSHA_CONSTRUCTION_SAFETY_LIGHT
     SourceSpec(

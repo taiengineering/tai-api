@@ -146,7 +146,11 @@ def _run_kosha_construction_safety_light(p):
 
 
 def _run_kosha_accident_cases(p):
-    return _kosha_http("/kosha-collect/accident-cases", timeout=p.get("timeout_seconds", 300))
+    return _kosha_http(
+        "/kosha-collect/run",
+        params={"target": "accident-cases"},
+        timeout=p.get("timeout_seconds", 300),
+    )
 
 
 def _run_kosha_safety_materials(p):
