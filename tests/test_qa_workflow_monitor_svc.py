@@ -661,3 +661,197 @@ def test_D22c_auto_select_returns_most_recent_elapsed_slot():
     assert resolved.hour == 11
     assert resolved.day == 31
     assert resolved.month == 10
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# R1 보정 테스트 (WO-012-R1)
+# ════════════════════════════════════════════════════════════════════════════
+
+# ── R1-01: Slot 검증 보정 ────────────────────────────────────────────────────
+
+def test_R1_01a_nonstandard_slot_rejected():
+    """비표준 시각 12:35Z → ValueError (오탐 방지)."""
+    slot = datetime(2026, 10, 30, 12, 35, 0, tzinfo=timezone.utc)
+    now  = slot + timedelta(minutes=90)
+
+    with pytest.raises(ValueError, match="유효하지 않은 Slot 시각"):
+        svc.resolve_scheduled_slot(slot.strftime("%Y-%m-%dT%H:%M:%SZ"), now_utc=now)
+
+
+def test_R1_01b_nonzero_seconds_rejected():
+    """초 값이 0이 아닌 Slot → ValueError."""
+    slot = datetime(2026, 10, 30, 11, 0, 30, tzinfo=timezone.utc)  # 11:00:30Z
+    now  = slot + timedelta(minutes=90)
+
+    with pytest.raises(ValueError, match="초·마이크로초"):
+        svc.resolve_scheduled_slot(slot.strftime("%Y-%m-%dT%H:%M:%SZ"), now_utc=now)
+
+
+def test_R1_01c_standard_slots_accepted():
+    """표준 Slot 11:00Z 및 21:00Z는 정상 허용된다."""
+    for hour in (11, 21):
+        slot = datetime(2026, 10, 30, hour, 0, 0, tzinfo=timezone.utc)
+        now  = slot + timedelta(minutes=90)
+
+        resolved = svc.resolve_scheduled_slot(
+            slot.strftime("%Y-%m-%dT%H:%M:%SZ"), now_utc=now
+        )
+        assert resolved.hour == hour
+        assert resolved.minute == 0
+        assert resolved.second == 0
+
+
+# ── R1-02: Jobs API 오류 분류 보정 ───────────────────────────────────────────
+
+def test_R1_02a_completed_jobs_api_failure_not_verified(monkeypatch):
+    """completed Run + Jobs API 429 → GITHUB_API_NOT_VERIFIED (RUN_COMPLETED 금지)."""
+    slot = _slot_dt(11, 0)
+    now  = slot + timedelta(minutes=70)
+
+    run = _gh_run(status="completed", conclusion="success")
+
+    client = _FakeClient([
+        _workflow_active_resp(),
+        _runs_resp([run]),
+        _FakeResp(429),      # Jobs API rate-limited
+    ])
+
+    with patch("services.qa_workflow_monitor_svc.httpx.AsyncClient", return_value=client):
+        result = asyncio.run(svc.monitor_twice_daily(
+            scheduled_slot_utc=slot.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            now_utc=now,
+        ))
+
+    assert result["status_code"] == svc.STATUS_GITHUB_API_NOT_VERIFIED, (
+        "Jobs API 조회 실패는 RUN_COMPLETED가 아닌 GITHUB_API_NOT_VERIFIED"
+    )
+    assert result["requires_alert"] is False
+
+
+def test_R1_02b_completed_jobs_api_503_not_verified(monkeypatch):
+    """completed Run + Jobs API 503 → GITHUB_API_NOT_VERIFIED."""
+    slot = _slot_dt(11, 0)
+    now  = slot + timedelta(minutes=70)
+
+    run = _gh_run(status="completed", conclusion="success")
+
+    client = _FakeClient([
+        _workflow_active_resp(),
+        _runs_resp([run]),
+        _FakeResp(503),
+    ])
+
+    with patch("services.qa_workflow_monitor_svc.httpx.AsyncClient", return_value=client):
+        result = asyncio.run(svc.monitor_twice_daily(
+            scheduled_slot_utc=slot.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            now_utc=now,
+        ))
+
+    assert result["status_code"] == svc.STATUS_GITHUB_API_NOT_VERIFIED
+
+
+def test_R1_02c_completed_empty_jobs_job_not_started():
+    """completed Run + Jobs API 200 + jobs=[] → JOB_NOT_STARTED_SUSPECTED."""
+    run = _gh_run(status="completed", conclusion="failure")
+    result = svc._classify_completed_run(run, jobs=[])
+    assert result == svc.STATUS_JOB_NOT_STARTED_SUSPECTED
+
+
+def test_R1_02d_completed_none_jobs_not_verified():
+    """completed Run + Jobs API 실패(None) → GITHUB_API_NOT_VERIFIED."""
+    run = _gh_run(status="completed", conclusion="success")
+    result = svc._classify_completed_run(run, jobs=None)
+    assert result == svc.STATUS_GITHUB_API_NOT_VERIFIED
+
+
+# ── R1-03: 장기 QUEUED 감지 보정 ─────────────────────────────────────────────
+
+def test_R1_03a_queued_30min_run_active(monkeypatch):
+    """queued + 30분 경과 → RUN_ACTIVE (유예 내)."""
+    slot = _slot_dt(11, 0)
+    now  = slot + timedelta(minutes=30)
+
+    run = _gh_run(status="queued", conclusion=None)
+
+    client = _FakeClient([
+        _workflow_active_resp(),
+        _runs_resp([run]),
+    ])
+
+    with patch("services.qa_workflow_monitor_svc.httpx.AsyncClient", return_value=client):
+        result = asyncio.run(svc.monitor_twice_daily(
+            scheduled_slot_utc=slot.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            now_utc=now,
+        ))
+
+    assert result["status_code"] == svc.STATUS_RUN_ACTIVE
+    assert result["requires_alert"] is False
+
+
+def test_R1_03b_queued_70min_no_jobs_suspected(monkeypatch):
+    """queued + 70분 경과 + Job 없음 → JOB_NOT_STARTED_SUSPECTED."""
+    slot = _slot_dt(11, 0)
+    now  = slot + timedelta(minutes=70)
+
+    run = _gh_run(status="queued", conclusion=None)
+
+    client = _FakeClient([
+        _workflow_active_resp(),
+        _runs_resp([run]),
+        _jobs_resp([]),      # Jobs API 200 + 비어있음
+    ])
+
+    with patch("services.qa_workflow_monitor_svc.httpx.AsyncClient", return_value=client):
+        result = asyncio.run(svc.monitor_twice_daily(
+            scheduled_slot_utc=slot.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            now_utc=now,
+        ))
+
+    assert result["status_code"] == svc.STATUS_JOB_NOT_STARTED_SUSPECTED
+    assert result["requires_alert"] is True
+
+
+def test_R1_03c_queued_70min_jobs_api_failure_not_verified(monkeypatch):
+    """queued + 70분 + Jobs API 오류 → GITHUB_API_NOT_VERIFIED."""
+    slot = _slot_dt(11, 0)
+    now  = slot + timedelta(minutes=70)
+
+    run = _gh_run(status="queued", conclusion=None)
+
+    client = _FakeClient([
+        _workflow_active_resp(),
+        _runs_resp([run]),
+        _FakeResp(429),      # Jobs API rate-limited
+    ])
+
+    with patch("services.qa_workflow_monitor_svc.httpx.AsyncClient", return_value=client):
+        result = asyncio.run(svc.monitor_twice_daily(
+            scheduled_slot_utc=slot.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            now_utc=now,
+        ))
+
+    assert result["status_code"] == svc.STATUS_GITHUB_API_NOT_VERIFIED
+
+
+def test_R1_03d_normal_completed_preserved(monkeypatch):
+    """R1 보정 후에도 정상 completed Run + Job 시작됨 → RUN_COMPLETED 유지."""
+    slot = _slot_dt(11, 0)
+    now  = slot + timedelta(minutes=70)
+
+    run = _gh_run(status="completed", conclusion="success")
+    job = _gh_job(started=True)
+
+    client = _FakeClient([
+        _workflow_active_resp(),
+        _runs_resp([run]),
+        _jobs_resp([job]),
+    ])
+
+    with patch("services.qa_workflow_monitor_svc.httpx.AsyncClient", return_value=client):
+        result = asyncio.run(svc.monitor_twice_daily(
+            scheduled_slot_utc=slot.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            now_utc=now,
+        ))
+
+    assert result["status_code"] == svc.STATUS_RUN_COMPLETED
+    assert result["requires_alert"] is False

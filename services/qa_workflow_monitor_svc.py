@@ -155,15 +155,25 @@ def resolve_scheduled_slot(
 
 
 def _validate_slot_format(dt: datetime) -> None:
-    """dt가 유효한 Schedule Slot 시각인지 확인.
+    """dt가 유효한 Schedule Slot 시각인지 검증. 유효하지 않으면 ValueError.
 
-    정확한 Slot 시각이 아니어도 경고만 기록한다 — 과거 Slot 재조회를 허용.
+    조건:
+      - (hour, minute) ∈ _SCHEDULE_SLOTS_UTC
+      - second == 0
+      - microsecond == 0
+
+    비표준 시각(예: 12:35Z)은 실제 정기 QA가 없는 윈도우를 감시하게 되어
+    오탐(WORKFLOW_NOT_OBSERVED)을 생성할 수 있으므로 허용하지 않는다.
     """
     h, m = dt.hour, dt.minute
     if (h, m) not in _SCHEDULE_SLOTS_UTC:
-        log.warning(
-            "[qa_wf_monitor] 비표준 Slot 시각: %02d:%02dZ (표준: %s)",
-            h, m, _SCHEDULE_SLOTS_UTC,
+        valid = [f"{h:02d}:{m:02d}Z" for h, m in _SCHEDULE_SLOTS_UTC]
+        raise ValueError(
+            f"유효하지 않은 Slot 시각: {h:02d}:{m:02d}Z — 허용 시각: {valid}"
+        )
+    if dt.second != 0 or dt.microsecond != 0:
+        raise ValueError(
+            f"Slot 시각의 초·마이크로초는 0이어야 합니다: {dt.isoformat()}"
         )
 
 
@@ -314,28 +324,53 @@ async def _get_run_jobs(
 
 # ── 상태 분류 ────────────────────────────────────────────────────────────────
 
-def _classify_run(run: Dict[str, Any], jobs: Optional[List[Dict[str, Any]]]) -> str:
-    """단일 Run의 상태 코드 결정.
+def _classify_completed_run(
+    run: Dict[str, Any],
+    jobs: Optional[List[Dict[str, Any]]],
+) -> str:
+    """completed Run의 상태 코드 결정.
 
-    Run 생성 여부 / status / conclusion / Job 시작 여부를 조합한다.
+    jobs=None : Jobs API 조회 실패 → GITHUB_API_NOT_VERIFIED
+                (None과 빈 목록의 의미를 혼용하지 않는다)
+    jobs=[]   : Jobs API 200 + Job 없음 → JOB_NOT_STARTED_SUSPECTED
+    jobs=[..] : started_at 있는 Job 존재 → RUN_COMPLETED
+                started_at 없는 Job만 존재 → JOB_NOT_STARTED_SUSPECTED
     """
-    gh_status     = run.get("status", "")      # queued / in_progress / completed
-    gh_conclusion = run.get("conclusion")       # success / failure / cancelled / None
+    if jobs is None:
+        log.warning(
+            "[qa_wf_monitor] completed run=%s Jobs API 조회 실패 → GITHUB_API_NOT_VERIFIED",
+            run.get("id"),
+        )
+        return STATUS_GITHUB_API_NOT_VERIFIED
 
-    if gh_status in ("queued", "in_progress"):
+    started_jobs = [j for j in jobs if j.get("started_at")]
+    if not started_jobs:
+        return STATUS_JOB_NOT_STARTED_SUSPECTED
+    return STATUS_RUN_COMPLETED
+
+
+def _classify_queued_run(
+    run: Dict[str, Any],
+    jobs: Optional[List[Dict[str, Any]]],
+    elapsed_minutes: float,
+) -> str:
+    """queued Run의 상태 코드 결정.
+
+    60분 미경과 : RUN_ACTIVE (GitHub 대기열 지연 허용)
+    60분 이상 + jobs=None  : Jobs API 조회 실패 → GITHUB_API_NOT_VERIFIED
+    60분 이상 + jobs=[]    : Job 시작 증거 없음 → JOB_NOT_STARTED_SUSPECTED
+    60분 이상 + jobs=[..] : Job 시작됨 → RUN_ACTIVE
+    """
+    if elapsed_minutes < _GRACE_MINUTES:
         return STATUS_RUN_ACTIVE
 
-    if gh_status == "completed":
-        if jobs is None:
-            return STATUS_RUN_COMPLETED
-        started_jobs = [j for j in jobs if j.get("started_at")]
-        if not started_jobs:
-            return STATUS_JOB_NOT_STARTED_SUSPECTED
-        return STATUS_RUN_COMPLETED
+    if jobs is None:
+        return STATUS_GITHUB_API_NOT_VERIFIED
 
-    # 알 수 없는 status — 관측 인정
-    log.warning("[qa_wf_monitor] 알 수 없는 Run status: %r conclusion=%r", gh_status, gh_conclusion)
-    return STATUS_RUN_OBSERVED
+    started_jobs = [j for j in jobs if j.get("started_at")]
+    if not started_jobs:
+        return STATUS_JOB_NOT_STARTED_SUSPECTED
+    return STATUS_RUN_ACTIVE
 
 
 # ── Slack 관제 메시지 생성 ───────────────────────────────────────────────────
@@ -564,24 +599,40 @@ async def monitor_twice_daily(
     run = sorted(runs, key=lambda r: r.get("created_at", ""), reverse=True)[0]
     run_id = run.get("id")
     gh_status = run.get("status", "")
+    elapsed_minutes = (now_utc - slot).total_seconds() / 60
 
-    # Job 조회: completed Run에서만 시작 여부 확인
+    # Job 조회 조건:
+    #   - completed: 항상 조회 (시작 증거 확인)
+    #   - queued + 60분 이상 경과: Billing 제한·대기열 장기 정체 감지
+    #   - in_progress: 조회 불필요 (Run 자체가 실행 중임을 GitHub이 확인)
     jobs: Optional[List[Dict[str, Any]]] = None
     if gh_status == "completed":
         jobs = await _get_run_jobs(cfg, run_id)
+    elif gh_status == "queued" and elapsed_minutes >= _GRACE_MINUTES:
+        jobs = await _get_run_jobs(cfg, run_id)
 
-    status_code = _classify_run(run, jobs)
+    # 상태 분류 (None과 [] 의미 구분)
+    if gh_status == "completed":
+        status_code = _classify_completed_run(run, jobs)
+    elif gh_status == "queued":
+        status_code = _classify_queued_run(run, jobs, elapsed_minutes)
+    elif gh_status == "in_progress":
+        status_code = STATUS_RUN_ACTIVE
+    else:
+        log.warning("[qa_wf_monitor] 알 수 없는 Run status: %r run_id=%s", gh_status, run_id)
+        status_code = STATUS_RUN_OBSERVED
 
     evidence: Dict[str, Any] = {
-        "run_id":          run_id,
-        "run_status":      gh_status,
-        "run_conclusion":  run.get("conclusion"),
-        "run_created_at":  run.get("created_at"),
-        "run_html_url":    run.get("html_url"),
+        "run_id":              run_id,
+        "run_status":          gh_status,
+        "run_conclusion":      run.get("conclusion"),
+        "run_created_at":      run.get("created_at"),
+        "run_html_url":        run.get("html_url"),
+        "elapsed_minutes":     round(elapsed_minutes, 1),
     }
     if jobs is not None:
-        evidence["job_count"]       = len(jobs)
-        evidence["jobs_started"]    = sum(1 for j in jobs if j.get("started_at"))
+        evidence["job_count"]    = len(jobs)
+        evidence["jobs_started"] = sum(1 for j in jobs if j.get("started_at"))
 
     requires_alert = status_code in _ALERT_STATUSES
     slack_msg: Optional[Dict[str, Any]] = None
