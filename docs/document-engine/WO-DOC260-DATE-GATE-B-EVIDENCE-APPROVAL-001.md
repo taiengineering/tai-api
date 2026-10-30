@@ -4,7 +4,7 @@ wo: WO-DOC260-DATE-GATE-B-EVIDENCE-APPROVAL-001
 status: WP_G_B03_LINEAGE_EVIDENCE_CLOSE_GPT_VI_PENDING
 collected_by: Claude Code
 created_date: 2026-10-30
-revision: R8
+revision: R9
 review_required: GPT_WP_G_B03_LINEAGE_FINAL_IV
 gpt_r1_verdict: PASS_WITH_GUARDS (2026-10-30)
 gpt_r2_verdict: PASS (2026-10-30)
@@ -12,6 +12,7 @@ gpt_r3_verdict: STOP_SOT_MISMATCH (2026-10-30)
 gpt_r4_verdict: PASS_WITH_GUARDS (2026-10-31)
 gpt_r5_verdict: PASS_WITH_GUARDS (2026-10-31)
 gpt_r6_verdict: PENDING
+fe_pr181_status: READY_FOR_REVIEW (HEAD 50480e68, 2026-10-31)
 wp_g_b01_status: CLOSED_FINAL (PR#742 1ce3c559 MERGED 2026-10-30)
 wp_g_b02_status: COMPLETE (2026-10-30)
 wp_g_b02_db_project: vwlahtguyggrhvslabax (taieng)
@@ -1566,3 +1567,61 @@ PROVISIONAL_SOURCE_MATCH = 72 (Q1 미결 유지)
 
 NEXT_GATE = GPT_WP_G_B03_LINEAGE_FINAL_IV
 ```
+
+---
+
+---
+
+## 19. tai-admin PR #181 FE 계약 검증 완료 (WO-DOC260-OBJ10-POSTACT-DATE-FE-MAINLINE-001)
+
+**WO:** WO-DOC260-OBJ10-POSTACT-DATE-FE-MAINLINE-001  
+**완료일:** 2026-10-31  
+**CODE_CHANGE = 0 (tai-api) / DB_MUTATION = 0 / DEPLOY = 0**  
+**§9 상태 갱신:** `tai-admin PR #181 병합: HOLD` → **READY_FOR_REVIEW (Owner 승인 대기)**
+
+---
+
+### 19.1 WP 완료 요약
+
+| WP | 내용 | 결과 |
+|----|------|------|
+| WP-A: main 리베이스 | multi_row F8(`6a2396f7`) + FM01(`67e43de7`) 병합 | **COMPLETE** |
+| WP-B: DATE 계약 검증 | timestamp_auto/date input_type 계약 FE 구현 확인 | **COMPLETE** |
+| WP-C: 테스트 | 141/141 PASS, Build ✓, TypeCheck(scope) ✓ | **COMPLETE** |
+
+### 19.2 FE DATE evidence 계약 확인
+
+| 항목 | 계약값 | FE 구현 확인 |
+|------|--------|-------------|
+| evidence_family 허용 | ATTACHMENT + DATE | ✅ (`useDocumentFormsEditor.ts`) |
+| DATE upload_type | `timestamp_auto` only | ✅ (교차 조합 차단 코드 확인) |
+| DATE input_type 기대값 | `date` | ✅ (`expectedInputType = 'date'`) |
+| ATTACHMENT upload_type | `attachment` only | ✅ (회귀 없음) |
+| Fail-close 코드 | `EVIDENCE_UPLOAD_TYPE_UNSUPPORTED`, `EVIDENCE_TYPE_UNSUPPORTED` | ✅ |
+
+**DATE-01~DATE-06 테스트 케이스 전부 PASS** — FE측 DATE evidence 계약 tai-api 계약과 정합 확인.
+
+### 19.3 PR #181 브랜치 현황
+
+| 항목 | 값 |
+|------|-----|
+| 브랜치 | `wo-doc260-mainline-date-support-001` |
+| HEAD 커밋 | `50480e68` |
+| 변경 파일 | `useDocumentFormsEditor.ts`, `document-formsFormat.ts`, `c2b_editor.test.ts` |
+| 테스트 | **141/141 PASS** (DATE-01~06 + F8-01~11 + 기존) |
+| 상태 | **READY_FOR_REVIEW** — Owner merge 승인 대기 |
+
+### 19.4 §9 차단 상태 갱신 (2026-10-31)
+
+| 항목 | 이전 상태 | 현재 상태 |
+|------|-----------|-----------|
+| tai-admin PR #181 병합 | HOLD | **READY_FOR_REVIEW (Owner 승인 대기)** |
+| DATE 112건 실제 승인 | BLOCKED | BLOCKED (불변) |
+| `_RUNTIME_EV_ALLOWLIST` 확장 | BLOCKED (Owner Gate) | BLOCKED (불변) |
+| 운영 DB INSERT/UPDATE/DELETE | 금지 | 금지 (불변) |
+| Gate C 진입 | BLOCKED | BLOCKED (불변) |
+
+---
+
+*R8 생성: 2026-10-31 / WO-011 Evidence Close §18 추가 (commit 4cbfaabe)*  
+*R9 업데이트: 2026-10-31 / tai-admin PR #181 FE 계약 검증 완료 §19 추가 — GPT R6 Final IV 제출 준비*
