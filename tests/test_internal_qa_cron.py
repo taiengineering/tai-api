@@ -13,6 +13,12 @@
   CR-10  신규 run: RUNNING 상태로 생성 (R2: QUEUED→COMPLETED 불가, RUNNING→COMPLETED 허용)
   CR-11  target insert 실패 시 run 롤백 시도 (R5)
   CR-12  rollback 실패도 원래 예외로 re-raise (R5: 불완전 run 잔존 0 시도)
+  CR-13  동일 GitHub identity + 다른 scenario_ids → 409 CRON_RUN_SCENARIO_DIVERGENCE
+  CR-14  rollback 실패 → ERROR status 갱신 시도
+  CR-15  skip_reason=BLOCKED_NO_QA_CREDENTIALS → ERROR run 생성, targets 없음, blocked=True
+  CR-16  BLOCKED 동일 github identity 재호출 → idempotent=True, blocked=True
+  CR-17  BLOCKED skip_reason + 비어있지 않은 scenario_ids → 422
+  CR-18  라우터: blocked=True, idempotent=False 시 send_slack(QA_RUN_ERROR) 호출 확인 (Mock)
 """
 from __future__ import annotations
 
@@ -353,3 +359,114 @@ def test_CR14_rollback_failure_attempts_error_status():
     assert any(u.get("run_status") == "ERROR" for u in error_updates), (
         f"expected ERROR status update, got: {error_updates}"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CR-15~18: BLOCKED_NO_QA_CREDENTIALS skip_reason
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _call_blocked(sb, github_run_id=88888, github_run_attempt=1):
+    return svc.register_cron_run(
+        sb,
+        github_run_id=github_run_id,
+        github_run_attempt=github_run_attempt,
+        scenario_ids=[],
+        skip_reason="BLOCKED_NO_QA_CREDENTIALS",
+    )
+
+
+def test_CR15_blocked_creates_error_run_no_targets():
+    """skip_reason=BLOCKED_NO_QA_CREDENTIALS → ERROR run 생성, targets 없음, blocked=True."""
+    inserted_row: dict = {}
+
+    class _BlockedQ(_Q):
+        def eq(self, *a, **k): return _Q(rows=[])   # no existing run
+        def insert(self, rows, **k):
+            data = rows if isinstance(rows, dict) else (rows[0] if rows else {})
+            inserted_row.update(data)
+            return _Q(rows=[{"id": "blocked-run-1"}])
+        def execute(self):
+            return type("R", (), {"data": self._rows})()
+
+    sb = _Supabase({"qa_runs": _BlockedQ(rows=[])})
+    data = _call_blocked(sb)
+
+    assert data["run_id"] == "blocked-run-1"
+    assert data["idempotent"] is False
+    assert data["blocked"] is True
+    assert data["scenario_ids"] == []
+    assert inserted_row["run_status"] == "ERROR"
+    assert inserted_row["error_code"] == "BLOCKED_NO_QA_CREDENTIALS"
+    assert inserted_row["trigger_type"] == "SCHEDULE"
+    assert inserted_row["requested_by"] == "github-cron"
+    assert "finished_at" in inserted_row, "ERROR run must have finished_at"
+
+
+def test_CR16_blocked_idempotent_returns_existing():
+    """동일 github identity로 재호출 시 기존 run_id 반환 (idempotent=True, blocked=True)."""
+    sb = _Supabase({
+        "qa_runs": _Q(rows=[{"id": "blocked-run-existing"}]),
+    })
+    data = _call_blocked(sb)
+    assert data["run_id"] == "blocked-run-existing"
+    assert data["idempotent"] is True
+    assert data["blocked"] is True
+    assert data["scenario_ids"] == []
+
+
+def test_CR17_blocked_with_nonempty_scenario_ids_422():
+    """BLOCKED_NO_QA_CREDENTIALS + 비어있지 않은 scenario_ids → 422."""
+    sb = _Supabase({"qa_runs": _Q()})
+    with pytest.raises(HTTPException) as exc:
+        svc.register_cron_run(
+            sb,
+            github_run_id=88888,
+            github_run_attempt=1,
+            scenario_ids=["P0-SAAS-001"],
+            skip_reason="BLOCKED_NO_QA_CREDENTIALS",
+        )
+    assert exc.value.status_code == 422
+
+
+def test_CR18_router_sends_slack_for_blocked_not_idempotent():
+    """라우터: blocked=True, idempotent=False → send_slack(QA_RUN_ERROR) 호출.
+    idempotent=True 재호출에서는 발송하지 않음 (중복 알림 억제)."""
+    import asyncio
+    import os
+    from unittest.mock import AsyncMock, patch, MagicMock
+
+    os.environ.setdefault("INTERNAL_API_SECRET", "test-secret")
+
+    blocked_data    = {"run_id": "blocked-run-slack", "scenario_ids": [], "idempotent": False, "blocked": True}
+    idempotent_data = {"run_id": "blocked-run-slack", "scenario_ids": [], "idempotent": True,  "blocked": True}
+
+    async def _test_new():
+        import routers.internal_qa as router_mod
+        from routers.internal_qa import RegisterCronRunRequest
+        body = RegisterCronRunRequest(
+            github_run_id=77777, github_run_attempt=1,
+            scenario_ids=[], skip_reason="BLOCKED_NO_QA_CREDENTIALS",
+        )
+        mock_slack = AsyncMock()
+        with patch.object(router_mod.svc, "register_cron_run", return_value=blocked_data), \
+             patch.object(router_mod, "send_slack", mock_slack), \
+             patch.object(router_mod, "get_supabase", return_value=MagicMock()):
+            await router_mod.register_cron_run(body, x_internal_secret="test-secret")
+        return mock_slack.call_count
+
+    async def _test_idempotent():
+        import routers.internal_qa as router_mod
+        from routers.internal_qa import RegisterCronRunRequest
+        body = RegisterCronRunRequest(
+            github_run_id=77777, github_run_attempt=1,
+            scenario_ids=[], skip_reason="BLOCKED_NO_QA_CREDENTIALS",
+        )
+        mock_slack = AsyncMock()
+        with patch.object(router_mod.svc, "register_cron_run", return_value=idempotent_data), \
+             patch.object(router_mod, "send_slack", mock_slack), \
+             patch.object(router_mod, "get_supabase", return_value=MagicMock()):
+            await router_mod.register_cron_run(body, x_internal_secret="test-secret")
+        return mock_slack.call_count
+
+    assert asyncio.run(_test_new()) == 1, "신규 BLOCKED run → send_slack 1회 호출"
+    assert asyncio.run(_test_idempotent()) == 0, "idempotent BLOCKED run → send_slack 호출 없음"

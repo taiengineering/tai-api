@@ -797,11 +797,15 @@ def create_targeted_run(
     return run
 
 
+_BLOCKED_NO_CREDS = "BLOCKED_NO_QA_CREDENTIALS"
+
+
 def register_cron_run(
     supabase,
     github_run_id:      int,
     github_run_attempt: int,
     scenario_ids:       List[str],
+    skip_reason:        Optional[str] = None,
 ) -> Dict[str, Any]:
     """GitHub Actions 정기 QA 실행 등록 (twice-daily cron).
 
@@ -809,10 +813,48 @@ def register_cron_run(
       기존 run 발견 → {run_id, scenario_ids, idempotent=True} 반환 (새 row 없음)
       신규          → SCHEDULE run + targets 생성 후 반환
 
+    skip_reason="BLOCKED_NO_QA_CREDENTIALS": QA 자격증명 전부 없는 경우.
+      scenario_ids=[] 필수. ERROR run 즉시 생성 (targets 없음). blocked=True 반환.
+      호출자(라우터)가 QA_RUN_ERROR Slack 발송 책임.
+
     trigger_type = SCHEDULE  (기존 CHECK 값 재사용, 마이그레이션 불필요)
     requested_by = github-cron  (scheduler='scheduler'과 구별)
     github_run_id/attempt는 apply_results 첫 바인딩이 아닌 생성 시 즉시 기록.
     """
+    # ── BLOCKED_NO_QA_CREDENTIALS 경로 ────────────────────────────────────────
+    if skip_reason == _BLOCKED_NO_CREDS:
+        if scenario_ids:
+            raise HTTPException(422, "BLOCKED_NO_QA_CREDENTIALS skip_reason은 scenario_ids가 빈 목록이어야 합니다")
+        existing_res = (
+            supabase.table("qa_runs")
+            .select("id")
+            .eq("github_run_id", github_run_id)
+            .eq("github_run_attempt", github_run_attempt)
+            .limit(1)
+            .execute()
+        )
+        if existing_res.data:
+            return {"run_id": existing_res.data[0]["id"], "scenario_ids": [], "idempotent": True, "blocked": True}
+        now = now_kst().isoformat()
+        run_res = supabase.table("qa_runs").insert({
+            "trigger_type":       "SCHEDULE",
+            "run_status":         "ERROR",
+            "error_code":         _BLOCKED_NO_CREDS,
+            "error_summary":      "No QA credentials configured — QA execution skipped",
+            "requested_by":       "github-cron",
+            "requested_at":       now,
+            "started_at":         now,
+            "finished_at":        now,
+            "github_run_id":      github_run_id,
+            "github_run_attempt": github_run_attempt,
+            "created_at":         now,
+            "updated_at":         now,
+        }).execute()
+        if not run_res.data:
+            raise HTTPException(500, "qa_run 생성 실패 (BLOCKED_NO_QA_CREDENTIALS)")
+        return {"run_id": run_res.data[0]["id"], "scenario_ids": [], "idempotent": False, "blocked": True}
+
+    # ── 정상 경로 ─────────────────────────────────────────────────────────────
     if not scenario_ids:
         raise HTTPException(422, "scenario_ids가 비어있습니다")
     if len(scenario_ids) > 100:
