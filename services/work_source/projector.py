@@ -317,4 +317,32 @@ def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, 
         ):
             out["object_drop_height_m"] = _h
 
+    # FM01 (WO025-F13-I02-DEFECT2): has_scaffold_at_ge_2m_subject_to_art56 any-TRUE.
+    # Whitelist (산안법 제56조 적용 비계 종류). Per-row: kind ∈ whitelist AND height_m ≥ 2.
+    # CONDITIONAL_HOLD (LEG SoT 미확인): LEANING_SCAFFOLD, HOOK_SCAFFOLD — 미발행.
+    # 제외 비계(달비계/달대비계/말비계/걸침비계)는 항상 미발행. absent = UNKNOWN (≠ FALSE).
+    _FM01_APPROVED_KINDS = frozenset({
+        "STEEL_PIPE_SCAFFOLD", "STEEL_FRAME_SCAFFOLD",
+        "MOBILE_SCAFFOLD", "SYSTEM_SCAFFOLD", "LOG",
+    })
+    _fm01_true = False
+    for _fm01_row in scaffold_active_rows:
+        # IV-06: is_dalbi 상충 — SUBJECT 코드 + 달비계 속성 동시 입력 → 해당 행 SKIP
+        if _truthy(_attrs(_fm01_row).get("is_dalbi")):
+            continue
+        _fm01_kind = _attrs(_fm01_row).get("scaffold_kind")
+        if _fm01_kind not in _FM01_APPROVED_KINDS:
+            continue
+        _fm01_h = _attrs(_fm01_row).get("height_m")
+        if (
+            isinstance(_fm01_h, (int, float))
+            and not isinstance(_fm01_h, bool)
+            and math.isfinite(_fm01_h)
+            and _fm01_h >= 2
+        ):
+            _fm01_true = True
+            break
+    if _fm01_true:
+        out["has_scaffold_at_ge_2m_subject_to_art56"] = True
+
     return out

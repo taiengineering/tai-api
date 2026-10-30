@@ -4,10 +4,14 @@ from typing import Annotated, Any, Dict, List, Optional
 
 import math
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, StrictBool, StrictInt, field_validator, model_validator
 
 
 class DiagnoseStep1Body(BaseModel):
+    # WO025-F13-I02-DEFECT2: trusted server projections channel.
+    # PrivateAttr — 외부 API 스키마 미노출, 직렬화 제외. projector 직접 출처만 설정 가능.
+    _tsp: Optional[Dict[str, Any]] = PrivateAttr(default=None)
+
     factory_id: Optional[str] = Field(None)
     sector: str = Field(...)
     input: Optional[Dict[str, Any]] = Field(default_factory=dict)

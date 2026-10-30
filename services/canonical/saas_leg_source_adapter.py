@@ -79,8 +79,14 @@ def build_saas_leg_step1(
         NON-DIRECT facts (L4 CONVERT/AGGREGATE/COMPOSITION) blocked until OBJ04.
     """
     facts: Dict[str, Any] = dict(source_facts or {})
+    # WO025-F13-I02-DEFECT2: fail-closed — projector 외 경로의 FM01 차단.
+    facts.pop("has_scaffold_at_ge_2m_subject_to_art56", None)
+    _projected_work: Dict[str, Any] = {}
     if work_rows:
-        facts = merge_or_raise(facts, work_rows=work_rows)
+        from services.work_source.projector import project_work_rows as _pw
+        _projected_work = _pw(work_rows)
+        facts = merge_or_raise(facts, projected=_projected_work)
+    _fm01_for_tsp = _projected_work.get("has_scaffold_at_ge_2m_subject_to_art56")
     if material_rows:
         projected = project_material_canonical_facts_from_rows(material_rows)
         if projected:
@@ -143,4 +149,8 @@ def build_saas_leg_step1(
             except (AttributeError, ValueError):
                 step1 = step1.model_copy(update={"elevator_count": _elev})
 
+    # WO025-F13-I02-DEFECT2: _tsp 설정 — 모든 model_copy 이후 (R4-04 정정).
+    # _projected_work 직접 출처만. source_facts / merged facts FM01 신뢰 금지.
+    if _fm01_for_tsp is True:
+        step1._tsp = {"has_scaffold_at_ge_2m_subject_to_art56": True}
     return step1
