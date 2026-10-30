@@ -327,3 +327,25 @@ def get_internal_run(
     supabase = get_supabase()
     run_data = svc.get_run(supabase, run_id)
     return {"status": "success", "data": run_data}
+
+
+# ── Stale Run Scan (WO-011) ───────────────────────────────────────────────────
+
+@router.post("/scan-stale")
+async def scan_stale_runs(
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
+):
+    """QUEUED/RUNNING 장기 정체 Run 스캔.
+
+    WO-TAI-QA-OPS-STALE-RUN-011.
+    - QUEUED >30분: 감지·보고 전용 (자동 ERROR 없음)
+    - RUNNING >45분: GitHub 상태 확인 후 STALE_RUN_NO_CALLBACK 조건 충족 시 ERROR 전이
+    - GitHub API 실패는 상태를 변경하지 않음 (NOT_VERIFIED)
+
+    활성화 연결: 별도 배포 Gate 대기 (WP-D와 함께 운영 스케줄 연결).
+    """
+    from services.qa_stale_svc import scan_stale_runs as _scan
+    _check_secret(x_internal_secret)
+    supabase = get_supabase()
+    result = await _scan(supabase)
+    return {"status": "ok", "data": result}
