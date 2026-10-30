@@ -149,8 +149,10 @@ class MemoryCsiPublicStore:
         self.fetched_unbounded = False
         self.writes = 0
 
-    def list_ready(self, *, q: Optional[str], page: int, page_size: int) -> ListResult:
+    def list_ready(self, *, q: Optional[str], page: int, page_size: int, min_deaths: int = 0) -> ListResult:
         ready = [r for r in self.rows if _ready(r)]
+        if min_deaths > 0:
+            ready = [r for r in ready if (r.get("death_count") or 0) >= min_deaths]
         if q:
             ready = [r for r in ready if _matches_q(r, q)]
         ready.sort(key=lambda r: str(r.get("content_id") or ""))
@@ -172,7 +174,7 @@ class SupabaseCsiPublicStore:
     def __init__(self, sb: Any):
         self.sb = sb
 
-    def list_ready(self, *, q: Optional[str], page: int, page_size: int) -> ListResult:
+    def list_ready(self, *, q: Optional[str], page: int, page_size: int, min_deaths: int = 0) -> ListResult:
         start = (page - 1) * page_size
         end = start + page_size - 1
         query = (
@@ -182,6 +184,8 @@ class SupabaseCsiPublicStore:
             .order("occurred_at", desc=True)
             .order("content_id")
         )
+        if min_deaths > 0:
+            query = query.gte("death_count", min_deaths)
         if q:
             safe = escape_ilike(sanitize_q(q) or "")
             clause = ",".join(f"{field}.ilike.%{safe}%" for field in SEARCH_FIELDS)
@@ -211,13 +215,13 @@ class SupabaseCsiPublicStore:
         return public_item(rows[0])
 
 
-def list_public_accidents(store, *, q: Optional[str] = None, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE) -> dict:
+def list_public_accidents(store, *, q: Optional[str] = None, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, min_deaths: int = 0) -> dict:
     if page < 1:
         raise PublicCsiQueryError("PAGE_INVALID")
     if page_size < 1 or page_size > MAX_PAGE_SIZE:
         raise PublicCsiQueryError("PAGE_SIZE_INVALID")
     term = sanitize_q(q)
-    result = store.list_ready(q=term, page=page, page_size=page_size)
+    result = store.list_ready(q=term, page=page, page_size=page_size, min_deaths=min_deaths)
     return {
         "items": result.items,
         "page": result.page,
