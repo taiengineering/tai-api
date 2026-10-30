@@ -48,6 +48,8 @@ _MISSING_TEXT = "(미입력)"
 _F8_FIELD_ID = "ad21a5f2-7452-401e-ba4f-59c1718ea83e"
 _F8_COL_KEYS = ("document_name", "submission_date", "submitted_to", "notes")
 _F8_COL_LABELS = ("문서명", "제출일", "제출처", "비고")
+_F8_ALLOWED_COLS = frozenset(_F8_COL_KEYS)
+_F8_MAX_ROWS = 50
 _MULTI_ROW_EMPTY_TEXT = "(미등록)"
 
 
@@ -113,6 +115,41 @@ def _value_to_text(value: Any, _path: str) -> str:
 
 def _esc(text: str) -> str:
     return html.escape(text, quote=True)
+
+
+def _assert_f8_multi_row(field_key: str, value: Any) -> None:
+    """F8 non-empty 배열 render 전 fail-close 검증 (WP-B R1).
+
+    absent/None/[] 는 이 함수를 호출하지 않는다 — 호출자가 분기한다.
+    잘못된 데이터를 조용히 (미등록)으로 숨기지 않는다.
+    """
+    if not isinstance(value, list):
+        raise _fail(
+            "F8 field %r: value must be a JSON array, got %s"
+            % (field_key, type(value).__name__)
+        )
+    if len(value) > _F8_MAX_ROWS:
+        raise _fail(
+            "F8 field %r: exceeds maximum of %d rows (got %d)"
+            % (field_key, _F8_MAX_ROWS, len(value))
+        )
+    for i, row in enumerate(value):
+        if not isinstance(row, dict):
+            raise _fail(
+                "F8 field %r row %d: must be a JSON object, got %s"
+                % (field_key, i, type(row).__name__)
+            )
+        for col_key, cell_val in row.items():
+            if col_key not in _F8_ALLOWED_COLS:
+                raise _fail(
+                    "F8 field %r row %d: disallowed column %r; "
+                    "allowed: %s" % (field_key, i, col_key, sorted(_F8_ALLOWED_COLS))
+                )
+            if not isinstance(cell_val, str):
+                raise _fail(
+                    "F8 field %r row %d column %r: must be a string, got %s"
+                    % (field_key, i, col_key, type(cell_val).__name__)
+                )
 
 
 def _render_multi_row_table(rows: list) -> str:
@@ -310,12 +347,15 @@ def _render_rows(
             raw = (data.get(key) if key is not None else None)
             if key is not None and key in data:
                 consumed.add(key)
-            if isinstance(raw, list) and len(raw) > 0:
-                state = "present"
-                cell_html = _render_multi_row_table(raw)
-            else:
+            if raw is None or raw == [] or (key is not None and key not in data):
+                # 필드 미입력 또는 빈 배열 → (미등록)
                 state = "missing"
                 cell_html = _esc(_MULTI_ROW_EMPTY_TEXT)
+            else:
+                # 존재하는 값: 잘못된 데이터를 조용히 숨기지 않는다 (fail-close)
+                _assert_f8_multi_row(key or fid, raw)
+                state = "present"
+                cell_html = _render_multi_row_table(raw)
             out.append(
                 '<tr data-field-id="%s" data-field-key="%s" data-input-type="%s" data-state="%s">'
                 "<th>%s</th><td>%s</td></tr>"

@@ -388,3 +388,95 @@ class TestWpBRenderer:
         assert tid.startswith("schema-renderer:2:sha256:")
         digest = tid.rsplit(":", 1)[1]
         assert len(digest) == 64
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# WP-B R1: 렌더러 fail-close 검증 (잘못된 DB 데이터 → SchemaRenderError)
+# ──────────────────────────────────────────────────────────────────────────────
+
+from services.document_schema_renderer import SchemaRenderError
+
+
+class TestWpBR1RendererFailClose:
+    """_assert_f8_multi_row: 렌더러 자체 입력 보호 (WP-B R1).
+
+    서버 저장 검증(WP-A)을 우회한 잘못된 DB 값이 렌더 경로로 유입되어도
+    조용히 (미등록)으로 숨기지 않고 SchemaRenderError 를 발생시킨다.
+    """
+
+    def _build_with_raw(self, raw_value):
+        return _build({_F8_FIELD_KEY: raw_value})
+
+    # ── 정상 케이스 유지 확인 ────────────────────────────────────────────────
+
+    def test_WpBR1_valid_rows_still_render_table(self):
+        """유효한 입력은 기존 4열 표 출력 유지"""
+        rows = [{"document_name": "계획서", "submission_date": "2026-01-01",
+                 "submitted_to": "발주처", "notes": ""}]
+        body = self._build_with_raw(rows)["rendered_body"]
+        assert "계획서" in body
+        assert "<th>문서명</th>" in body
+
+    def test_WpBR1_empty_list_still_shows_empty_marker(self):
+        """빈 배열 [] → 기존 (미등록) 출력 유지"""
+        body = self._build_with_raw([])["rendered_body"]
+        assert "(미등록)" in body
+        assert 'data-state="missing"' in body
+
+    def test_WpBR1_absent_key_still_shows_empty_marker(self):
+        """키 없음 → 기존 (미등록) 출력 유지"""
+        body = _build({})["rendered_body"]
+        assert "(미등록)" in body
+
+    # ── 거부 케이스 — SchemaRenderError ──────────────────────────────────────
+
+    def test_WpBR1_non_array_raises(self):
+        """배열 아닌 값 → SchemaRenderError"""
+        with pytest.raises(SchemaRenderError, match="JSON array"):
+            self._build_with_raw("문자열")
+
+    def test_WpBR1_dict_raises(self):
+        """dict → SchemaRenderError"""
+        with pytest.raises(SchemaRenderError, match="JSON array"):
+            self._build_with_raw({"document_name": "x"})
+
+    def test_WpBR1_integer_raises(self):
+        """정수 → SchemaRenderError"""
+        with pytest.raises(SchemaRenderError, match="JSON array"):
+            self._build_with_raw(42)
+
+    def test_WpBR1_fifty_one_rows_raises(self):
+        """51행 → SchemaRenderError"""
+        rows = [{"document_name": f"d{i}"} for i in range(51)]
+        with pytest.raises(SchemaRenderError, match="50"):
+            self._build_with_raw(rows)
+
+    def test_WpBR1_non_dict_row_raises(self):
+        """행이 객체가 아님 → SchemaRenderError"""
+        with pytest.raises(SchemaRenderError, match="JSON object"):
+            self._build_with_raw(["문자열행"])
+
+    def test_WpBR1_disallowed_column_raises(self):
+        """허용되지 않은 컬럼 → SchemaRenderError"""
+        with pytest.raises(SchemaRenderError, match="disallowed"):
+            self._build_with_raw([{"document_name": "x", "injected_col": "y"}])
+
+    def test_WpBR1_number_cell_raises(self):
+        """숫자 셀값 → SchemaRenderError"""
+        with pytest.raises(SchemaRenderError, match="string"):
+            self._build_with_raw([{"document_name": 42}])
+
+    def test_WpBR1_bool_cell_raises(self):
+        """bool 셀값 → SchemaRenderError"""
+        with pytest.raises(SchemaRenderError, match="string"):
+            self._build_with_raw([{"document_name": True}])
+
+    def test_WpBR1_list_cell_raises(self):
+        """배열 셀값 → SchemaRenderError"""
+        with pytest.raises(SchemaRenderError, match="string"):
+            self._build_with_raw([{"document_name": ["a"]}])
+
+    def test_WpBR1_null_cell_raises(self):
+        """null 셀값 → SchemaRenderError (string 계약 위반)"""
+        with pytest.raises(SchemaRenderError, match="string"):
+            self._build_with_raw([{"document_name": None}])
