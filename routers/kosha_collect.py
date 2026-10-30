@@ -222,18 +222,31 @@ async def _collect_accident_cases(
     sb = get_supabase()
     since = INIT_DATE if full_refresh else since_date
 
-    # WP-B-3: Pre-load ALL existing rows for arno→id mapping and data protection.
-    _ex = sb.table("kosha_accident_cases").select("id, title, content, raw_json").execute()
+    # WP-2: Paginated pre-load — Supabase default cap is 1 000 rows per request.
+    _SB_PAGE = 1000
     arno_to_id: dict[str, str] = {}
     arno_to_existing: dict[str, dict] = {}
-    for _r in (_ex.data or []):
-        _a = str((_r.get("raw_json") or {}).get("arno") or "").strip()
-        if _a:
-            arno_to_id[_a] = _r["id"]
-            arno_to_existing[_a] = {
-                "title":   str(_r.get("title")   or ""),
-                "content": str(_r.get("content") or ""),
-            }
+    _sb_from = 0
+    while True:
+        _ex = (
+            sb.table("kosha_accident_cases")
+            .select("id, title, content, raw_json")
+            .range(_sb_from, _sb_from + _SB_PAGE - 1)
+            .execute()
+        )
+        _page_rows = list(_ex.data or [])
+        for _r in _page_rows:
+            _a = str((_r.get("raw_json") or {}).get("arno") or "").strip()
+            if _a:
+                arno_to_id[_a] = _r["id"]
+                arno_to_existing[_a] = {
+                    "title":   str(_r.get("title")   or ""),
+                    "content": str(_r.get("content") or ""),
+                }
+        if len(_page_rows) < _SB_PAGE:
+            break
+        _sb_from += _SB_PAGE
+    log.info("[accident_cases] pre-load: %d arno→id mappings (%d rows scanned)", len(arno_to_id), _sb_from + len(_page_rows))
 
     # Pass 1: collect all pages.
     all_items: list[tuple[int, int, dict]] = []
@@ -310,11 +323,21 @@ async def _collect_accident_cases(
             "raw_json": it,
         })
 
-    # Pass 3: UPSERT after full validation (검증 전 UPSERT 금지).
+    # Pass 3: Batched UPSERT after full validation (검증 전 UPSERT 금지).
+    _UPSERT_BATCH = 500
     total_upserted = 0
     if safe_rows and not dry_run:
-        sb.table("kosha_accident_cases").upsert(safe_rows, on_conflict="id").execute()
-        total_upserted = len(safe_rows)
+        for _b_start in range(0, len(safe_rows), _UPSERT_BATCH):
+            _b = safe_rows[_b_start : _b_start + _UPSERT_BATCH]
+            try:
+                sb.table("kosha_accident_cases").upsert(_b, on_conflict="id").execute()
+                total_upserted += len(_b)
+            except Exception as _e:
+                log.error(
+                    "[accident_cases] UPSERT batch %d failed after %d upserted: %s",
+                    _b_start // _UPSERT_BATCH + 1, total_upserted, _e,
+                )
+                raise
 
     log_status = "dry_run" if dry_run else "success"
     _log("accident_cases", log_status, total_upserted)

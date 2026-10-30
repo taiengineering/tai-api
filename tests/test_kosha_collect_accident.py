@@ -1,6 +1,7 @@
 """
-WO-ACCIDENT-PROD-HOTFIX-005-R1 — unit tests for _collect_accident_cases.
+WO-ACCIDENT-PROD-HOTFIX-005-R2 — unit tests for _collect_accident_cases.
 T-01..T-10: field mapping, FAIL_CLOSED, duplicate detection, data protection, dry_run.
+T-11..T-13: paginated pre-load >1000, batched UPSERT split, partial UPSERT failure.
 Uses asyncio.run() — no pytest-asyncio dependency required.
 """
 from __future__ import annotations
@@ -19,11 +20,29 @@ def _make_item(arno: str, keyword: str = "테스트 제목", contents: str = "�
 
 
 def _mock_sb(existing_rows: list[dict] | None = None):
+    """Single-page pre-load mock (existing_rows < 1000).
+    Pre-load uses .select().range().execute() — first call returns existing_rows, next returns [].
+    """
     sb = MagicMock()
     existing_rows = existing_rows or []
-    # .table().select().execute() → existing rows
-    sb.table.return_value.select.return_value.execute.return_value = MagicMock(data=existing_rows)
-    # .table().upsert().execute() → success
+    _calls = [0]
+    def _preload_exec():
+        idx = _calls[0]; _calls[0] += 1
+        return MagicMock(data=existing_rows if idx == 0 else [])
+    sb.table.return_value.select.return_value.range.return_value.execute.side_effect = _preload_exec
+    sb.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+    return sb
+
+
+def _mock_sb_paginated(preload_pages: list[list[dict]]):
+    """Multi-page pre-load mock (existing rows span multiple 1000-row pages)."""
+    sb = MagicMock()
+    _calls = [0]
+    def _preload_exec():
+        idx = _calls[0]; _calls[0] += 1
+        page = preload_pages[idx] if idx < len(preload_pages) else []
+        return MagicMock(data=page)
+    sb.table.return_value.select.return_value.range.return_value.execute.side_effect = _preload_exec
     sb.table.return_value.upsert.return_value.execute.return_value = MagicMock()
     return sb
 
@@ -215,3 +234,93 @@ def test_t10_dry_run_no_dml(monkeypatch):
     assert result["upserted"] == 0
     assert result["valid_rows"] == 1
     sb.table.return_value.upsert.assert_not_called()
+
+
+def test_t11_preload_over_1000_preserves_page2_id(monkeypatch):
+    """T-11: 기존 rows > 1000 → 2nd 페이지 arno→id 매핑이 보존됨 (URL 불변)."""
+    from routers.kosha_collect import _collect_accident_cases
+
+    # page 1: exactly 1000 rows (triggers second pre-load request)
+    page1_rows = [
+        {"id": f"ID{i:04d}", "title": "t", "content": "c",
+         "raw_json": {"arno": f"ARNO{i:04d}"}}
+        for i in range(1000)
+    ]
+    # page 2: 1 row — this arno's id must survive collection
+    page2_rows = [{"id": "ID_PAGE2_EXISTING", "title": "old_title", "content": "old_content",
+                   "raw_json": {"arno": "ARNO_PAGE2"}}]
+
+    sb = _mock_sb_paginated([page1_rows, page2_rows])
+    captured: list[list] = []
+
+    def _capture_upsert(rows, **kw):
+        captured.append(list(rows))
+        return sb.table.return_value.upsert.return_value
+    sb.table.return_value.upsert.side_effect = _capture_upsert
+
+    monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: sb)
+    monkeypatch.setattr("routers.kosha_collect.KoshaAPI.get",
+                        AsyncMock(side_effect=[
+                            _make_resp([_make_item("ARNO_PAGE2", keyword="새 제목", contents="새 내용")]),
+                            _make_resp([]),
+                        ]))
+
+    result = _run(_collect_accident_cases(dry_run=False))
+    assert result["valid_rows"] == 1
+    # ID from 2nd pre-load page must be preserved — not replaced by arno string
+    assert captured[0][0]["id"] == "ID_PAGE2_EXISTING"
+
+
+def test_t12_batched_upsert_splits_at_500(monkeypatch):
+    """T-12: valid_rows=501 → UPSERT가 2회 분할 호출됨 (500 + 1)."""
+    from routers.kosha_collect import _collect_accident_cases
+
+    # 501 unique items across 6 API pages (100×5 + 1)
+    items = [_make_item(f"ARNO{i:04d}") for i in range(501)]
+    api_pages = [_make_resp(items[i * 100 : (i + 1) * 100]) for i in range(5)]
+    api_pages.append(_make_resp(items[500:501]))  # page 6: 1 item → loop stops
+
+    sb = _mock_sb()
+    upsert_call_sizes: list[int] = []
+
+    def _capture(rows, **kw):
+        upsert_call_sizes.append(len(list(rows)))
+        return sb.table.return_value.upsert.return_value
+    sb.table.return_value.upsert.side_effect = _capture
+
+    monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: sb)
+    monkeypatch.setattr("routers.kosha_collect.KoshaAPI.get",
+                        AsyncMock(side_effect=api_pages))
+
+    result = _run(_collect_accident_cases(dry_run=False))
+    assert result["valid_rows"] == 501
+    assert result["upserted"] == 501
+    assert len(upsert_call_sizes) == 2, f"expected 2 batches, got {upsert_call_sizes}"
+    assert upsert_call_sizes[0] == 500
+    assert upsert_call_sizes[1] == 1
+
+
+def test_t13_upsert_second_batch_raises_partial_count(monkeypatch):
+    """T-13: 2nd UPSERT 배치 실패 → RuntimeError 전파, 1st 배치 500건은 이미 저장."""
+    from routers.kosha_collect import _collect_accident_cases
+
+    items = [_make_item(f"ARNO{i:04d}") for i in range(501)]
+    api_pages = [_make_resp(items[i * 100 : (i + 1) * 100]) for i in range(5)]
+    api_pages.append(_make_resp(items[500:501]))
+
+    sb = _mock_sb()
+    call_count = [0]
+
+    def _fail_on_second(rows, **kw):
+        call_count[0] += 1
+        if call_count[0] == 2:
+            raise RuntimeError("UPSERT_BATCH_2_FAIL")
+        return sb.table.return_value.upsert.return_value
+    sb.table.return_value.upsert.side_effect = _fail_on_second
+
+    monkeypatch.setattr("routers.kosha_collect.get_supabase", lambda: sb)
+    monkeypatch.setattr("routers.kosha_collect.KoshaAPI.get",
+                        AsyncMock(side_effect=api_pages))
+
+    with pytest.raises(RuntimeError, match="UPSERT_BATCH_2_FAIL"):
+        _run(_collect_accident_cases(dry_run=False))
