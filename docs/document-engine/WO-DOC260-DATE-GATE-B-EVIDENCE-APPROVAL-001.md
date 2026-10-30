@@ -1,14 +1,15 @@
 ---
 title: DOC260 DATE Gate B — Evidence 승인 작업지시서
 wo: WO-DOC260-DATE-GATE-B-EVIDENCE-APPROVAL-001
-status: WP_G_B03_SOT_RECONCILIATION_PENDING_OWNER
+status: WP_G_B03_SOT_IV_PASS_WITH_GUARDS_OWNER_GATE
 collected_by: Claude Code
 created_date: 2026-10-30
-revision: R5
-review_required: WO-DOC260-WP-G-B03-SOT-RECONCILIATION-009
+revision: R6
+review_required: OWNER_SOT_DECISION_Q1_Q2_Q3
 gpt_r1_verdict: PASS_WITH_GUARDS (2026-10-30)
 gpt_r2_verdict: PASS (2026-10-30)
 gpt_r3_verdict: STOP_SOT_MISMATCH (2026-10-30)
+gpt_r4_verdict: PASS_WITH_GUARDS (2026-10-31)
 wp_g_b01_status: CLOSED_FINAL (PR#742 1ce3c559 MERGED 2026-10-30)
 wp_g_b02_status: COMPLETE (2026-10-30)
 wp_g_b02_db_project: vwlahtguyggrhvslabax (taieng)
@@ -1012,8 +1013,71 @@ NEXT_GATE = OWNER_SOT_DECISION → WP-G-B04 재진입
 
 ---
 
+---
+
+## 16. GPT R4 IV 결과 — GPT_WP_G_B03_SOT_IV (2026-10-31)
+
+**판정:** `PASS_WITH_GUARDS`  
+**WO:** WO-DOC260-WP-G-B03-SOT-RECONCILIATION-009
+
+### 16.1 검증 결과
+
+| 항목 | 판정 |
+|------|------|
+| R5 문서 보정 (PROVISIONAL_SOURCE_MATCH, §15) | **PASS** |
+| WP-G-B02 핵심 집계 독립검증 (운영 DB 직접 조회) | **PASS** |
+| 72건 잠정 재분류 | **PASS** |
+| 한국 법령 SoT 확정 | **PENDING** |
+| 112건 개별 Evidence UUID × 법령 참조 매핑표 | **PENDING** |
+| WP-G-B04 Allowlist 확장 | **HOLD** |
+
+### 16.2 WP-G-B02 독립검증 수치 대조
+
+| 항목 | Claude 보고 | GPT 실측 | 일치 |
+|------|------------|---------|------|
+| DATE Runtime Evidence | 112 | 112 | ✅ |
+| DISTINCT EFC | 112 | 112 | ✅ |
+| Runtime CANDIDATE | 112 | 112 | ✅ |
+| EFC CANDIDATE | 112 | 112 | ✅ |
+| law_ref NULL | 23 | 23 | ✅ |
+| 서식 연결 누락 | 0 | 0 | ✅ |
+| 기존 APPROVE 결정 | 0 | 0 | ✅ |
+
+### 16.3 Trigger 보완 사항
+
+트리거 `fn_validate_review_authority`는 도메인에 ACTIVE 승인 권한 존재 여부만 확인하며, 개별 승인자 신원·역할까지 검사하지 않는다. **기존 API의 사용자별 역할·권한 검사(role_code, reviewer_id)는 반드시 유지해야 한다.**
+
+### 16.4 미제출 증거 (PENDING)
+
+| 항목 | 상태 |
+|------|------|
+| 112건 개별 Evidence UUID × 법령 참조 연결 원본 분류표 | **미제출** — 법령 참조 문자열별 집계만 존재 |
+| GOVERNANCE_SOURCE_OF_TRUTH.md 원본 파일 SHA | **미제출** — 로컬 경로만 보고됨 |
+
+### 16.5 Q1~Q3 Owner 결정 권고 (GPT)
+
+| 결정 | GPT 권고 |
+|------|---------|
+| **Q1. 한국 법령 SoT** | `45cm-prj-db/governance` 정본 계약 유지. `leg-prod`는 후보로만 취급 — 정본 변경 선언 보류 |
+| **Q2. taieng ↔ leg-prod 관계** | 데이터 계보·동기화 방향·원천 식별자·최종 수정 이력 READ-ONLY 비교 후 결정 |
+| **Q3. 72건 승격 기준** | `law_master ACTIVE` 불충분. 정본 출처 + 조문·버전·시행일 + 의미 일치 + 승인 상태 + 서식 승인 상태 건별 확인 필요 |
+
+> **복합 참조 주의:** `산안법 제36조, 위험성평가 지침`처럼 일부 근거만 확인된 항목은 전체 검증으로 처리 불가.
+
+### 16.6 다음 단계 (GPT 권고)
+
+> "정본을 즉시 바꾸는 것이 아니라 `leg-prod`와 `taieng`의 READ-ONLY 데이터 계보 비교를 별도 Owner Gate로 승인하는 것."
+
+**Owner Gate 승인 요청 내용:**
+- `leg-prod`(`wrfcedzgdrfupenzqhur`) + `taieng`(`vwlahtguyggrhvslabax`) READ-ONLY 데이터 계보 비교
+- 목적: Q1~Q3 결정 근거 확보 + 112건 개별 매핑표 작성
+- 결과물: Q1~Q3 결정 + 72건 건별 검증 매핑표 → WP-G-B04 Allowlist 확장 진입 근거
+
+---
+
 *R1 생성: Claude Code 2026-10-30 / PR #741 Squash Commit `99381050` MERGED 이후*  
 *R2 보정: 2026-10-30 / GPT R2 IV PASS*  
 *R3 업데이트: 2026-10-30 / WP-G-B01 CLOSED_FINAL (PR#742) + WP-G-B02 DB 조사 완료*  
 *R4 업데이트: 2026-10-30 / WP-G-B03 LEG READ-ONLY 조사 완료*  
-*R5 업데이트: 2026-10-30 / WP-G-B03 SOT Reconciliation (WO-009) — PROVISIONAL_SOURCE_MATCH 재지정 + §15 추가*
+*R5 업데이트: 2026-10-30 / WP-G-B03 SOT Reconciliation (WO-009) — PROVISIONAL_SOURCE_MATCH 재지정 + §15 추가*  
+*R6 업데이트: 2026-10-31 / GPT R4 SOT IV PASS_WITH_GUARDS + §16 추가 — Owner Gate 진입*
