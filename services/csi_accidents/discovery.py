@@ -217,6 +217,7 @@ def _collect_csv_content_urls(json_ld_blocks: list[dict]) -> list[str]:
 _DETAIL_PK_RE = re.compile(
     r"fn_fileDataDown\s*\(\s*['\"]" + re.escape(DATASET_ID) + r"['\"]\s*,\s*['\"]([^'\"]+)['\"]",
 )
+_ATCH_FILE_ID_RE = re.compile(r"^FILE_\d+$")
 
 
 def _extract_detail_pk(html: str) -> Optional[str]:
@@ -250,25 +251,30 @@ def _fetch_attachment_via_api(post_fn: HttpPostFn, detail_pk: str) -> tuple[str,
             f"download API response parse failed: {type(exc).__name__}",
         ) from exc
 
-    if not resp.get("status"):
-        raise DiscoveryError("NO_ARTIFACT", "download API returned status=false")
+    if resp.get("status") is not True:
+        raise DiscoveryError("NO_ARTIFACT", "download API returned non-True status")
 
     atch_file_id = (resp.get("atchFileId") or "").strip()
-    file_detail_sn = str(resp.get("fileDetailSn") or "").strip()
+    if not _ATCH_FILE_ID_RE.match(atch_file_id):
+        raise DiscoveryError(
+            "DISCOVERY_PARSE_ERROR",
+            f"atchFileId {atch_file_id!r} does not match expected FILE_<digits> format",
+        )
 
-    if not atch_file_id:
-        raise DiscoveryError("DISCOVERY_PARSE_ERROR", "download API response missing atchFileId")
-    if not file_detail_sn:
-        raise DiscoveryError("DISCOVERY_PARSE_ERROR", "download API response missing fileDetailSn")
+    raw_sn = str(resp.get("fileDetailSn") or "").strip()
+    if not raw_sn.isdigit() or int(raw_sn) < 1:
+        raise DiscoveryError(
+            "DISCOVERY_PARSE_ERROR",
+            f"fileDetailSn {raw_sn!r} is not a positive integer string",
+        )
+    file_detail_sn = raw_sn
 
     return atch_file_id, file_detail_sn
 
 
 def _build_download_url(attachment_id: str, file_detail_sn: str) -> str:
-    return (
-        f"https://www.data.go.kr{DOWNLOAD_PATH}"
-        f"?atchFileId={attachment_id}&fileDetailSn={file_detail_sn}&insertDataPrcus=N"
-    )
+    qs = urlencode({"atchFileId": attachment_id, "fileDetailSn": file_detail_sn, "insertDataPrcus": "N"})
+    return f"https://www.data.go.kr{DOWNLOAD_PATH}?{qs}"
 
 
 def _parse_attachment(url: str) -> tuple[str, str]:

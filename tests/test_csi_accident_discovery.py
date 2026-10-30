@@ -826,28 +826,24 @@ def test_wpc09_post_missing_atch_file_id():
     assert result.error_code == "DISCOVERY_PARSE_ERROR"
 
 
-# ── WPC-10: fallback download URL validated — untrusted host rejected ─────────
+# ── WPC-10: _build_download_url always uses www.data.go.kr (API cannot inject host) ──
 
-def test_wpc10_fallback_url_untrusted_host_rejected():
+def test_wpc10_fallback_url_always_on_allowed_host():
+    """_build_download_url hardcodes www.data.go.kr — the POST API response cannot
+    inject a different host via atchFileId because the URL is constructed from
+    DOWNLOAD_PATH (constant), not from any field returned by the API."""
     http_get = _make_http_get(_META_CURRENT, _make_page_onclick())
-
-    def _bad_host_post(url: str, params: dict) -> bytes:
-        # Returns an atchFileId that _build_download_url will wrap in the
-        # known path — but inject a custom check by returning a host via POST.
-        # Actually: _build_download_url always uses www.data.go.kr. This test
-        # instead verifies the JSON-LD path rejection still works when the host
-        # is untrusted (existing P07/P08 cover that). So here we verify the
-        # fallback constructs a URL that passes _validate_download_url.
-        return json.dumps({"status": True, "atchFileId": ATCH_FILE_ID, "fileDetailSn": "1"}).encode()
-
-    result = discover_latest_artifact(http_get=http_get, http_post=_bad_host_post)
+    result = discover_latest_artifact(
+        http_get=http_get,
+        http_post=_make_http_post_ok(),
+    )
     assert result.status == "DISCOVERED"
     assert result.artifact is not None
-    # The download_url must be on the allowed host
     from urllib.parse import urlparse
     parsed = urlparse(result.artifact.download_url)
-    assert parsed.netloc in ALLOWED_DOWNLOAD_HOSTS
     assert parsed.scheme == "https"
+    assert parsed.netloc in ALLOWED_DOWNLOAD_HOSTS
+    assert parsed.path == DOWNLOAD_PATH
 
 
 # ── WPC-11: http_post signature is injectable (regression guard) ──────────────
@@ -856,3 +852,63 @@ def test_wpc11_http_post_is_injectable():
     import inspect
     sig = inspect.signature(discover_latest_artifact)
     assert "http_post" in sig.parameters
+
+
+# ── WPC-12: atchFileId with special/unsafe chars rejected → DISCOVERY_PARSE_ERROR ──
+
+def test_wpc12_atch_file_id_special_chars_rejected():
+    http_get = _make_http_get(_META_CURRENT, _make_page_onclick())
+    bad_ids = [
+        "FILE_123&evil=x",   # query injection
+        "FILE_123#anchor",   # fragment injection
+        "FILE_123?q=1",      # extra query param
+        "FILE_123\nfoo",     # newline
+        "FILE_abc123",       # non-digits after FILE_
+        "NOTFILE_123",       # wrong prefix
+        "",                  # empty
+    ]
+    for bad_id in bad_ids:
+        def _post(url: str, params: dict, bid: str = bad_id) -> bytes:
+            return json.dumps({"status": True, "atchFileId": bid, "fileDetailSn": "1"}).encode()
+        result = discover_latest_artifact(http_get=http_get, http_post=_post)
+        assert result.status == "FAILED", f"expected FAILED for atchFileId={bad_id!r}"
+        assert result.error_code == "DISCOVERY_PARSE_ERROR", f"wrong code for atchFileId={bad_id!r}"
+
+
+# ── WPC-13: fileDetailSn zero → DISCOVERY_PARSE_ERROR ────────────────────────
+
+def test_wpc13_file_detail_sn_zero_rejected():
+    http_get = _make_http_get(_META_CURRENT, _make_page_onclick())
+
+    def _zero_sn_post(url: str, params: dict) -> bytes:
+        return json.dumps({"status": True, "atchFileId": ATCH_FILE_ID, "fileDetailSn": "0"}).encode()
+
+    result = discover_latest_artifact(http_get=http_get, http_post=_zero_sn_post)
+    assert result.status == "FAILED"
+    assert result.error_code == "DISCOVERY_PARSE_ERROR"
+
+
+# ── WPC-14: fileDetailSn non-numeric variants → DISCOVERY_PARSE_ERROR ─────────
+
+def test_wpc14_file_detail_sn_nonnumeric_rejected():
+    http_get = _make_http_get(_META_CURRENT, _make_page_onclick())
+    bad_sns = ["abc", "1.5", "-1", "1a", ""]
+    for bad_sn in bad_sns:
+        def _post(url: str, params: dict, sn: str = bad_sn) -> bytes:
+            return json.dumps({"status": True, "atchFileId": ATCH_FILE_ID, "fileDetailSn": sn}).encode()
+        result = discover_latest_artifact(http_get=http_get, http_post=_post)
+        assert result.status == "FAILED", f"expected FAILED for fileDetailSn={bad_sn!r}"
+        assert result.error_code == "DISCOVERY_PARSE_ERROR", f"wrong code for fileDetailSn={bad_sn!r}"
+
+
+# ── WPC-15: status non-bool-True variants rejected → NO_ARTIFACT ─────────────
+
+def test_wpc15_status_non_bool_true_rejected():
+    http_get = _make_http_get(_META_CURRENT, _make_page_onclick())
+    bad_statuses = ["true", "True", 1, 0, None]
+    for bad_s in bad_statuses:
+        def _post(url: str, params: dict, s=bad_s) -> bytes:
+            return json.dumps({"status": s, "atchFileId": ATCH_FILE_ID, "fileDetailSn": "1"}).encode()
+        result = discover_latest_artifact(http_get=http_get, http_post=_post)
+        assert result.status == "FAILED", f"expected FAILED for status={bad_s!r}"
+        assert result.error_code == "NO_ARTIFACT", f"wrong code for status={bad_s!r}"
