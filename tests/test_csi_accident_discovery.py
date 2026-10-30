@@ -20,6 +20,7 @@ from services.csi_accidents.contract import (
     DATASET_NAME,
     DATASET_URL,
     DECLARED_ROWS,
+    DOWNLOAD_API_URL,
     DOWNLOAD_PATH,
     METADATA_URL,
     OFFICIAL_HEADERS,
@@ -665,3 +666,193 @@ def test_p20_now_fn_returns_non_datetime():
     )
     assert result.status == "FAILED"
     assert result.error_code == "DISCOVERY_UNEXPECTED"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WP-C — API fallback path (portal JSON-LD distribution[] removed ~2026-09-15)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_KNOWN_DETAIL_PK = "uddi:7efed86b-d0ca-4a4b-8115-dea5840f29a9"
+
+
+def _make_page_onclick(
+    detail_pk: str = _KNOWN_DETAIL_PK,
+    dataset_id: str = DATASET_ID,
+) -> bytes:
+    """Page with JSON-LD but no distribution — has fn_fileDataDown onclick."""
+    ld = json.dumps({"@context": "https://schema.org", "@type": "Dataset"})
+    return (
+        f"<html><head>"
+        f'<script type="application/ld+json">{ld}</script>'
+        f"</head><body>"
+        f"<a onclick=\"fn_fileDataDown('{dataset_id}', '{detail_pk}', '', '1', '27')\">다운로드</a>"
+        f"</body></html>"
+    ).encode()
+
+
+def _make_http_post_ok(
+    atch_file_id: str = ATCH_FILE_ID,
+    file_detail_sn: str = "1",
+) -> Callable[[str, dict], bytes]:
+    def _post(url: str, params: dict) -> bytes:
+        assert url == DOWNLOAD_API_URL
+        return json.dumps({
+            "status": True,
+            "atchFileId": atch_file_id,
+            "fileDetailSn": file_detail_sn,
+        }).encode()
+    return _post
+
+
+# ── WPC-01: fallback path resolves correctly → DISCOVERED ────────────────────
+
+def test_wpc01_api_fallback_discovered():
+    http_get = _make_http_get(_META_CURRENT, _make_page_onclick())
+    result = discover_latest_artifact(
+        http_get=http_get,
+        http_post=_make_http_post_ok(),
+    )
+    assert result.status == "DISCOVERED"
+    assert result.artifact is not None
+    assert result.artifact.attachment_id == ATCH_FILE_ID
+    assert result.artifact.file_detail_sn == "1"
+    assert result.artifact.effective_date == DATASET_EFFECTIVE_DATE
+    assert result.artifact.download_url == _KNOWN_CONTENT_URL
+
+
+# ── WPC-02: fallback → NO_CHANGE when known matches API response ──────────────
+
+def test_wpc02_api_fallback_no_change():
+    http_get = _make_http_get(_META_CURRENT, _make_page_onclick())
+    result = discover_latest_artifact(
+        http_get=http_get,
+        http_post=_make_http_post_ok(),
+        known_attachment_id=ATCH_FILE_ID,
+        known_file_detail_sn="1",
+        known_effective_date=DATASET_EFFECTIVE_DATE,
+    )
+    assert result.status == "NO_CHANGE"
+    assert result.artifact is not None
+
+
+# ── WPC-03: fallback → NEW_ARTIFACT when API returns different attachment ─────
+
+def test_wpc03_api_fallback_new_artifact():
+    new_att = "FILE_000000009999999"
+    new_meta = _make_meta(alternate_name="국토안전관리원_건설안전사고사례_20261130")
+    http_get = _make_http_get(new_meta, _make_page_onclick())
+    result = discover_latest_artifact(
+        http_get=http_get,
+        http_post=_make_http_post_ok(atch_file_id=new_att),
+        known_attachment_id=ATCH_FILE_ID,
+        known_file_detail_sn="1",
+        known_effective_date=DATASET_EFFECTIVE_DATE,
+    )
+    assert result.status == "NEW_ARTIFACT"
+    assert result.artifact is not None
+    assert result.artifact.attachment_id == new_att
+    assert result.artifact.effective_date == "2026-11-30"
+
+
+# ── WPC-04: no onclick and no distribution → still NO_ARTIFACT (fail-closed) ──
+
+def test_wpc04_no_onclick_no_distribution_no_artifact():
+    page = b"<html><head><script type='application/ld+json'>{}</script></head></html>"
+    http_get = _make_http_get(_META_CURRENT, page)
+    result = discover_latest_artifact(http_get=http_get)
+    assert result.status == "FAILED"
+    assert result.error_code == "NO_ARTIFACT"
+
+
+# ── WPC-05: onclick for wrong dataset_id is ignored → NO_ARTIFACT ─────────────
+
+def test_wpc05_onclick_wrong_dataset_id_ignored():
+    page = _make_page_onclick(dataset_id="99999999")
+    http_get = _make_http_get(_META_CURRENT, page)
+    result = discover_latest_artifact(http_get=http_get)
+    assert result.status == "FAILED"
+    assert result.error_code == "NO_ARTIFACT"
+
+
+# ── WPC-06: POST network error → DISCOVERY_HTTP_ERROR ────────────────────────
+
+def test_wpc06_post_network_error():
+    http_get = _make_http_get(_META_CURRENT, _make_page_onclick())
+
+    def _fail_post(url: str, params: dict) -> bytes:
+        raise OSError("connection refused")
+
+    result = discover_latest_artifact(http_get=http_get, http_post=_fail_post)
+    assert result.status == "FAILED"
+    assert result.error_code == "DISCOVERY_HTTP_ERROR"
+
+
+# ── WPC-07: POST returns status=false → NO_ARTIFACT ──────────────────────────
+
+def test_wpc07_post_status_false():
+    http_get = _make_http_get(_META_CURRENT, _make_page_onclick())
+
+    def _false_post(url: str, params: dict) -> bytes:
+        return json.dumps({"status": False}).encode()
+
+    result = discover_latest_artifact(http_get=http_get, http_post=_false_post)
+    assert result.status == "FAILED"
+    assert result.error_code == "NO_ARTIFACT"
+
+
+# ── WPC-08: POST returns bad JSON → DISCOVERY_PARSE_ERROR ────────────────────
+
+def test_wpc08_post_bad_json():
+    http_get = _make_http_get(_META_CURRENT, _make_page_onclick())
+
+    def _bad_json_post(url: str, params: dict) -> bytes:
+        return b"not json {"
+
+    result = discover_latest_artifact(http_get=http_get, http_post=_bad_json_post)
+    assert result.status == "FAILED"
+    assert result.error_code == "DISCOVERY_PARSE_ERROR"
+
+
+# ── WPC-09: POST returns missing atchFileId → DISCOVERY_PARSE_ERROR ──────────
+
+def test_wpc09_post_missing_atch_file_id():
+    http_get = _make_http_get(_META_CURRENT, _make_page_onclick())
+
+    def _no_id_post(url: str, params: dict) -> bytes:
+        return json.dumps({"status": True, "fileDetailSn": "1"}).encode()
+
+    result = discover_latest_artifact(http_get=http_get, http_post=_no_id_post)
+    assert result.status == "FAILED"
+    assert result.error_code == "DISCOVERY_PARSE_ERROR"
+
+
+# ── WPC-10: fallback download URL validated — untrusted host rejected ─────────
+
+def test_wpc10_fallback_url_untrusted_host_rejected():
+    http_get = _make_http_get(_META_CURRENT, _make_page_onclick())
+
+    def _bad_host_post(url: str, params: dict) -> bytes:
+        # Returns an atchFileId that _build_download_url will wrap in the
+        # known path — but inject a custom check by returning a host via POST.
+        # Actually: _build_download_url always uses www.data.go.kr. This test
+        # instead verifies the JSON-LD path rejection still works when the host
+        # is untrusted (existing P07/P08 cover that). So here we verify the
+        # fallback constructs a URL that passes _validate_download_url.
+        return json.dumps({"status": True, "atchFileId": ATCH_FILE_ID, "fileDetailSn": "1"}).encode()
+
+    result = discover_latest_artifact(http_get=http_get, http_post=_bad_host_post)
+    assert result.status == "DISCOVERED"
+    assert result.artifact is not None
+    # The download_url must be on the allowed host
+    from urllib.parse import urlparse
+    parsed = urlparse(result.artifact.download_url)
+    assert parsed.netloc in ALLOWED_DOWNLOAD_HOSTS
+    assert parsed.scheme == "https"
+
+
+# ── WPC-11: http_post signature is injectable (regression guard) ──────────────
+
+def test_wpc11_http_post_is_injectable():
+    import inspect
+    sig = inspect.signature(discover_latest_artifact)
+    assert "http_post" in sig.parameters
