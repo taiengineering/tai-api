@@ -465,6 +465,7 @@ def test_t18b_finish_no_duplicate_arg_typeerror():
     assert update_data["status"] == "SENT"
     assert update_data["claim_token"] is None
     assert update_data["slack_ts"] == "1234.5678"
+    assert update_data["sent_at"] == "2026-01-01T00:00:00+00:00"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -498,11 +499,13 @@ def test_t18c_process_relay_event_sent_transition_no_finish_mock():
                         with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
                             asyncio.run(process_relay_event("Ev-T18c"))
 
+    mock_ctx.post.assert_called_once()
     assert fake_sb.table.return_value.update.called
     update_data = fake_sb.table.return_value.update.call_args[0][0]
     assert update_data["status"] == "SENT"
     assert update_data["claim_token"] is None
     assert update_data.get("slack_ts") == "9999.0001"
+    assert update_data.get("sent_at") is not None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
