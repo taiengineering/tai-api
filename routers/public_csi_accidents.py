@@ -57,9 +57,10 @@ def public_csi_list(
     q: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    min_deaths: int = Query(0, ge=0, le=100),
 ):
     try:
-        return list_public_accidents(_store(), q=q, page=page, page_size=page_size)
+        return list_public_accidents(_store(), q=q, page=page, page_size=page_size, min_deaths=min_deaths)
     except PublicCsiQueryError as exc:
         raise _http(exc) from exc
 

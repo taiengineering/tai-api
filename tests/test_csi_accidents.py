@@ -1090,3 +1090,69 @@ def test_c62_content_type_remains_accident():
     pub = pathlib.Path("router_registry/public.py").read_text(encoding="utf-8")
     assert "routers.public_csi_accidents" in pub
     assert "content_type = CSI" not in pathlib.Path("services/csi_accidents/public.py").read_text(encoding="utf-8")
+
+
+def test_c63_min_deaths_zero_no_filter():
+    from services.csi_accidents.public import MemoryCsiPublicStore, list_public_accidents
+
+    u1 = "10000000-0000-4000-8000-000000000001"
+    u2 = "10000000-0000-4000-8000-000000000002"
+    store = MemoryCsiPublicStore(
+        [
+            _pub_row(u1, title="사망없음", death_count=0),
+            _pub_row(u2, title="사망1명", death_count=1, occurred="2021-01-01T00:00:00+09:00"),
+        ]
+    )
+    body = list_public_accidents(store, min_deaths=0)
+    assert body["total"] == 2
+
+
+def test_c64_min_deaths_one_filters_no_fatality():
+    from services.csi_accidents.public import MemoryCsiPublicStore, list_public_accidents
+
+    u1 = "20000000-0000-4000-8000-000000000001"
+    u2 = "20000000-0000-4000-8000-000000000002"
+    u3 = "20000000-0000-4000-8000-000000000003"
+    store = MemoryCsiPublicStore(
+        [
+            _pub_row(u1, title="사망없음", death_count=0),
+            _pub_row(u2, title="사망1명", death_count=1, occurred="2021-01-01T00:00:00+09:00"),
+            _pub_row(u3, title="사망2명", death_count=2, occurred="2022-01-01T00:00:00+09:00"),
+        ]
+    )
+    body = list_public_accidents(store, min_deaths=1)
+    assert body["total"] == 2
+    titles = {i["title"] for i in body["items"]}
+    assert titles == {"사망1명", "사망2명"}
+    assert all(i.get("death_count", 0) >= 1 for i in body["items"])
+
+
+def test_c65_min_deaths_http_param():
+    u1 = "30000000-0000-4000-8000-000000000001"
+    u2 = "30000000-0000-4000-8000-000000000002"
+    client, _, router = _csi_client(
+        [
+            _pub_row(u1, title="부상만", death_count=0, injury_count=2),
+            _pub_row(u2, title="사망포함", death_count=1, injury_count=0, occurred="2021-01-01T00:00:00+09:00"),
+        ]
+    )
+    try:
+        r0 = client.get("/public/accidents/csi?min_deaths=0")
+        assert r0.status_code == 200
+        assert r0.json()["total"] == 2
+
+        r1 = client.get("/public/accidents/csi?min_deaths=1")
+        assert r1.status_code == 200
+        body = r1.json()
+        assert body["total"] == 1
+        assert body["items"][0]["title"] == "사망포함"
+
+        r_neg = client.get("/public/accidents/csi?min_deaths=-1")
+        assert r_neg.status_code == 422
+    finally:
+        router.reset_csi_public()
+
+
+def test_c66_min_deaths_supabase_uses_gte():
+    src = inspect.getsource(__import__("services.csi_accidents.public", fromlist=["SupabaseCsiPublicStore"]).SupabaseCsiPublicStore.list_ready)
+    assert '.gte("death_count"' in src
