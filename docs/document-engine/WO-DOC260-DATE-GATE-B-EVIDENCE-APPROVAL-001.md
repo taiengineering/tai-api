@@ -1,12 +1,23 @@
 ---
 title: DOC260 DATE Gate B — Evidence 승인 작업지시서
 wo: WO-DOC260-DATE-GATE-B-EVIDENCE-APPROVAL-001
-status: DRAFT_R2_PENDING_GPT_IV
+status: WP_G_B03_SOT_RECONCILIATION_PENDING_OWNER
 collected_by: Claude Code
 created_date: 2026-10-30
-revision: R2
-review_required: GPT_GATE_B_CONTRACT_R2_IV
+revision: R5
+review_required: WO-DOC260-WP-G-B03-SOT-RECONCILIATION-009
 gpt_r1_verdict: PASS_WITH_GUARDS (2026-10-30)
+gpt_r2_verdict: PASS (2026-10-30)
+gpt_r3_verdict: STOP_SOT_MISMATCH (2026-10-30)
+wp_g_b01_status: CLOSED_FINAL (PR#742 1ce3c559 MERGED 2026-10-30)
+wp_g_b02_status: COMPLETE (2026-10-30)
+wp_g_b02_db_project: vwlahtguyggrhvslabax (taieng)
+wp_g_b03_status: SOT_RECONCILIATION_IN_PROGRESS (2026-10-30)
+wp_g_b03_governance_stop: 45cm-prj-db/governance = 45CM 자체 거버넌스 룰 (한국 법령 없음)
+wp_g_b03_leg_prod_project: wrfcedzgdrfupenzqhur (leg-prod, created 2026-06-11)
+wp_g_b03_provisional_source_match: 72
+wp_g_b03_data_semantic_gap: 17
+wp_g_b03_leg_reference_missing: 23
 ---
 
 # WO-DOC260-DATE-GATE-B-EVIDENCE-APPROVAL-001
@@ -549,33 +560,460 @@ _RUNTIME_EV_ALLOWLIST 계약:
 
 ---
 
-## 12. R2 후 다음 단계
+## 12. R2 후 다음 단계 (→ WP-G-B02 완료로 갱신)
 
 ```
 R2 산출물:
   - §11 R2-01~R2-05 계약 보정 완료
-  - 미확정 항목: R2-01(review_status DEFAULT), R2-03(governance RPC), R2-04(law_ref 컬럼)
   - G-B01 경로 A 계약 고정 → Owner 결정 Gate로 이관
 
-GPT_GATE_B_CONTRACT_R2_IV 요청:
-  - R2-01: review_status DB_VERIFY_REQUIRED 분류 타당성
-  - R2-02: 409 비멱등 + 중간 실패 재개 규칙 안전성
-  - R2-03: LEG 연결 계약 미확정 항목 처리
-  - R2-04: SQL 보정 및 law_ref 컬럼 조회 전략
-  - R2-05: 경로 A 계약 고정안 검토
+WP-G-B01: CLOSED_FINAL (PR#742 1ce3c559 MERGED 2026-10-30)
 
-GPT R2 IV PASS 후:
-  → Owner: G-B01 경로 A 구현 승인
-  → WP-G-B01: evidence-runtime-approve DATE 분기 추가 (Claude Code)
-  → WP-G-B02: READ-ONLY DB 조사 (DB 접근 승인)
-    - runtime_review_decision review_status DEFAULT 확인
-    - evidence_field_candidate / runtime_evidence_field law_ref 컬럼 여부
-    - DATE evidence 104건 현황 재확인
-  → WP-G-B03/04: LEG 분류 + governance RPC 연결 + Allowlist 확장 (Owner 승인)
+WP-G-B02: COMPLETE (2026-10-30) — §13 참조
+  - R2-01 review_status: DB_TRIGGER_HANDLES_IT (RESOLVED)
+  - law_ref: evidence_field_candidate.law_ref 컬럼 확인 (RESOLVED)
+  - DATE evidence: 112건 전부 CANDIDATE / prior decision 0건
+
+현재 차단 사유 (WP-G-B05 실행 불가):
+  1. efc_status = CANDIDATE (112건 전부) — 선행 EFC 승인 필요
+  2. prior APPROVE decision = 0건 — 선행 EVIDENCE APPROVE decision 없음
+  3. _RUNTIME_EV_ALLOWLIST 미등록 — 112건 ID 미포함
+  4. law_ref NULL 23건 — LEG 연결 미확보
+
+다음 Gate:
+  → WP-G-B03: LEG SoT 분류 (governance RPC 접근 승인 필요)
+  → WP-G-B04: Allowlist 확장 (WP-G-B02/03 완료 후 Owner 승인)
   → WP-G-B05: 실제 승인 실행 (Owner 별도 승인 Gate)
 ```
 
 ---
 
+## 13. WP-G-B02 DB 조사 결과 (2026-10-30)
+
+**조사 DB:** Supabase `vwlahtguyggrhvslabax` (taieng, ap-northeast-2, ACTIVE_HEALTHY)  
+**조사 유형:** READ-ONLY SELECT  
+**Goal:** `G-mvuwvdxl-00d5cc`
+
+### 13.1 R2-01: runtime_review_decision.review_status
+
+| 항목 | 결과 |
+|------|------|
+| `review_status` DEFAULT | `'PENDING'::text` |
+| BEFORE INSERT 트리거 | `trg_validate_review_authority` → `fn_validate_review_authority()` |
+| 트리거 핵심 동작 | `review_action = 'APPROVE'` → `review_status = 'APPROVED'` 자동 설정 |
+
+**결론: DB_TRIGGER_HANDLES_IT (RESOLVED)**  
+`evidence-approve` INSERT에 `review_status`를 포함하지 않아도 트리거가 자동 설정한다.  
+R2-01 우려 사항 해소 — 소스 코드 수정 불필요.
+
+#### 트리거 함수 요약 (`fn_validate_review_authority`)
+
+```
+1. review_domain에 ACTIVE authority 존재 확인 → 없으면 RAISE EXCEPTION
+2. 동일 entity에 APPROVED/REJECTED 중복 decision 차단 → 중복이면 RAISE EXCEPTION
+3. review_action 기반 review_status 자동 설정:
+   APPROVE → review_status = 'APPROVED', review_completed_at = now()
+   REJECT  → review_status = 'REJECTED', review_completed_at = now()
+   ESCALATE     → 'ESCALATED'
+   REOPEN       → 'REOPENED'
+   RETURN_FOR_EDIT → 'PENDING'
+```
+
+### 13.2 R2-SQL-2: DATE evidence 현황
+
+| 항목 | 값 |
+|------|-----|
+| 총 건수 | **112건** (계약 기준 104건 → +8건) |
+| status | 112건 전부 `CANDIDATE` |
+| upload_type | 112건 전부 `timestamp_auto` |
+| efc_status | 112건 전부 `CANDIDATE` (APPROVED_BY_HUMAN = 0건) |
+| form_schema_id 연결 | 112건 전부 연결 (schema_missing = 0) |
+| evidence_candidate_id | 112건 전부 연결 (efc_null = 0) |
+| law_ref NULL | **23건** (89건은 채워짐) |
+| prior APPROVE decision | **0건** (112건 전부 없음) |
+
+> 계약 기준값 수정: 104건 → **112건**  
+> law_ref NULL 기준값 수정: 15건 → **23건**
+
+### 13.3 R2-SQL-3: law_ref 컬럼 위치
+
+```
+law_ref 컬럼 존재 테이블 (public 스키마):
+  - evidence_field_candidate.law_ref  ← DATE evidence 기준 핵심 테이블
+  - field_candidate.law_ref
+  - checklist_item_candidate.law_ref
+  - document_forms.law_ref
+```
+
+**결론:** `evidence_field_candidate.law_ref` 컬럼 확인 (RESOLVED)  
+로컬 마이그레이션 부재로 확인 불가였던 R2-04 미확정 항목 해소.
+
+### 13.4 R2-SQL-4: 연결 무결성 및 차단 사유
+
+**WP-G-B05 실행 전 해소 필요 항목:**
+
+| 차단 사유 | 건수 | 해소 경로 |
+|-----------|------|-----------|
+| efc_status = CANDIDATE | 112건 전부 | WP-G-B04: 선행 EFC 승인 필요 |
+| prior APPROVE decision 없음 | 112건 전부 | 선행 EFC 승인 완료 후 자동 생성 |
+| _RUNTIME_EV_ALLOWLIST 미등록 | 112건 전부 | WP-G-B04: Owner 승인 후 확장 |
+| law_ref NULL | 23건 | WP-G-B03: LEG SoT 연결 후 재확인 |
+
+> **DATA_SEMANTIC_GAP vs law_ref NULL 교집합:** 실측 기준으로 재분류.  
+> law_ref NULL = 23건. DATA_SEMANTIC_GAP(GPT R1 분류 13건)과 직접 교집합 쿼리는  
+> governance RPC 접근 후 확인 가능 (WP-G-B03 범위).
+
+### 13.5 WP-G-B02 결론
+
+| 항목 | 상태 |
+|------|------|
+| R2-01 review_status 정합성 | ✅ RESOLVED — 트리거 자동 처리 |
+| DATE evidence 수 | ✅ 확인 — 112건 (수정) |
+| law_ref 컬럼 위치 | ✅ RESOLVED — evidence_field_candidate.law_ref |
+| 선행 승인 부재 | ⚠️ 확인 — 112건 전부 미승인 (WP-G-B03/04 필요) |
+| WP-G-B05 실행 가능 여부 | ❌ BLOCKED — 4개 차단 사유 미해소 |
+
+---
+
+---
+
+## 14. WP-G-B03 LEG READ-ONLY 조사 결과 (2026-10-30)
+
+**WO:** WO-DOC260-DATE-GATE-B-WP-G-B03-LEG-READONLY-008  
+**Owner Approval:** APPROVED (WP_G_B03_GOVERNANCE_RPC_READONLY = APPROVED)  
+**Goal:** `G-mvuwvdxl-00d5cc`  
+**CODE_CHANGE = 0 / DB_MUTATION = 0 / DEPLOY = 0**
+
+---
+
+### 14.1 STOP 조건 1 — governance SoT 불일치
+
+**STOP 발동:** `45cm-prj-db` (`iapzwbysfzootqnldtan`) `governance` 스키마에 한국 법령 없음.
+
+| 항목 | 결과 |
+|------|------|
+| governance items 총 수 | 408건 (CONSTITUTION 27 / CONTRACT 43 / GUIDE 42 / POLICY 202 / RULE 94) |
+| governance items 내용 | 45CM 자체 개발 거버넌스 룰 (ACS-×, AI-×, R-× 등) |
+| 한국 법령 데이터 | **없음** |
+| governance RPC 호출 여부 | **중단** — 한국 법령 검증에 사용 불가 |
+
+**실제 한국 법령 SoT:** `vwlahtguyggrhvslabax` (tai-api DB, taieng)  
+테이블: `law_master`, `law_alias`, `law_article`, `legal_obligations` 등 66종  
+이 DB는 WP-G-B02에서 이미 승인된 READ-ONLY 접근 범위 내.
+
+---
+
+### 14.2 B02 증거 재확인 (B02-01)
+
+| 항목 | WP-G-B02 보고 | 재확인 결과 | 일치 |
+|------|--------------|------------|------|
+| DATE evidence 총 수 | 112건 | **112건** | ✅ |
+| efc distinct count | 112건 | **112건** | ✅ |
+| efc_status = CANDIDATE | 112건 | **112건** | ✅ |
+| efc_status = APPROVED_BY_HUMAN | 0건 | **0건** | ✅ |
+| law_ref = NULL | 23건 | **23건** | ✅ |
+| prior APPROVE decision | 0건 | **0건** | ✅ |
+| form_schema 연결 정상 | 112건 | **112건** | ✅ |
+
+**B02 수치 전부 재확인 일치.**
+
+---
+
+### 14.3 B02-02 review_status Trigger 판정
+
+**판정: `R2_01_RESOLVED`**
+
+| 검증 항목 | 결과 |
+|-----------|------|
+| DEFAULT | `'PENDING'::text` — 트리거 없이 INSERT 시 PENDING 유지 |
+| 트리거명 | `trg_validate_review_authority` (BEFORE INSERT) |
+| 함수명 | `fn_validate_review_authority()` |
+| 권한 검증 | `runtime_review_authority` WHERE `authority_status = 'ACTIVE'` → 없으면 RAISE EXCEPTION |
+| 중복 차단 | 동일 entity + domain + action의 APPROVED/REJECTED 중복 → RAISE EXCEPTION |
+| review_status 전환 조건 | `review_action = 'APPROVE'` → `review_status = 'APPROVED'` (자동, 명시적 action 필요) |
+| 비공개 자동 승인 여부 | **없음** — authority 검증 + 명시적 APPROVE action 모두 필요 |
+
+> 트리거는 구조적 안전장치이며 unguarded auto-approval이 아님.  
+> `evidence-approve` INSERT에 `review_status` 미포함 → 트리거가 자동 설정 = 정합.
+
+---
+
+### 14.4 B02-03 DATA_SEMANTIC_GAP vs law_ref NULL 교집합
+
+| 항목 | 결과 |
+|------|------|
+| 원본 DATA_SEMANTIC_GAP 13건 ID 집합 | **복원 불가** — GPT R1 분류 기준 문서에 없음 |
+| 현재 law_ref NULL | **23건** (WP-G-B02 기준값 수정: 15→23) |
+| 교집합 여부 | **UNVERIFIED** — 원본 ID 집합 없어 비교 불가 |
+
+> 이후 분류: law_ref NULL = `LEG_REFERENCE_MISSING`, 법령 특정 불가 = `DATA_SEMANTIC_GAP`으로 재분류.
+
+---
+
+### 14.5 한국 법령 SoT 구조
+
+**`law_master` (tai-api DB):**
+- `law_key`, `law_name`, `law_name_short`, `law_status_code`, `is_active`
+- `law_status_code = 'ACTIVE'` + `is_active = true` = 현행법 (승인 상태)
+
+**`law_alias`:**
+- 약칭 → 정식명 매핑 (15건 확인)
+- 주요 매핑: `산안법` → `산업안전보건법`, `소방시설법` → `소방시설 설치 및 관리에 관한 법률`, `승강기안전관리법` → `승강기 안전관리법` 등
+
+**`evidence_field_candidate` 연결 방식:**
+- 직접 FK 없음 — `law_ref` text 필드만 존재
+- 법령 매핑은 alias 경유 text 비교로만 가능
+
+---
+
+### 14.6 B03 112건 대상별 법령 분류
+
+#### 최종 분류 요약
+
+| 분류 | 건수 | 기준 |
+|------|------|------|
+| **PROVISIONAL_SOURCE_MATCH** | **72** | law_ref → law_master ACTIVE 확인 (정본 SoT 미확정 — §15 참조) |
+| **DATA_SEMANTIC_GAP** | **17** | law_ref 있으나 법령 특정 불가 (시행규칙/법 번호만 기재) |
+| **LEG_REFERENCE_MISSING** | **23** | law_ref = NULL |
+| LEG_NOT_APPROVED | 0 | — |
+| UNVERIFIED | 0 | — |
+| **합계** | **112** | |
+
+#### PROVISIONAL_SOURCE_MATCH 72건 — law_ref별 law_master 매핑
+
+| law_ref | 건수 | law_master 정식명 | law_status_code |
+|---------|------|------------------|-----------------|
+| 건설기술진흥법 | 3 | 건설기술 진흥법 | ACTIVE |
+| 건설기술진흥법 시행규칙 | 2 | 건설기술 진흥법 시행규칙 | ACTIVE |
+| 건설기술진흥법 제62조 | 4 | 건설기술 진흥법 | ACTIVE |
+| 건설기술진흥법 제62조의2제2항 | 1 | 건설기술 진흥법 | ACTIVE |
+| 건설산업기본법 | 1 | 건설산업기본법 | ACTIVE |
+| 고압가스안전관리법 | 2 | 고압가스 안전관리법 | ACTIVE |
+| 고압가스안전관리법 제15조 | 2 | 고압가스 안전관리법 | ACTIVE |
+| 고압가스안전관리법 제16조 | 1 | 고압가스 안전관리법 | ACTIVE |
+| 산안법 시행규칙 제11조제2항, 제23조제2항 | 1 | 산업안전보건법 시행규칙 | ACTIVE |
+| 산안법 시행규칙 제9조 | 1 | 산업안전보건법 시행규칙 | ACTIVE |
+| 산안법 제125조 | 1 | 산업안전보건법 | ACTIVE |
+| 산안법 제129조 | 2 | 산업안전보건법 | ACTIVE |
+| 산안법 제24조 | 1 | 산업안전보건법 | ACTIVE |
+| 산안법 제36조, 위험성평가 지침 | 1 | 산업안전보건법 ACTIVE (복합 참조: 지침 부분 미검증) | ACTIVE |
+| 산안법 제42조 | 1 | 산업안전보건법 | ACTIVE |
+| 산안법 제52조 | 2 | 산업안전보건법 | ACTIVE |
+| 산안법 제54조 | 2 | 산업안전보건법 | ACTIVE |
+| 산안법 제54조제2항 | 1 | 산업안전보건법 | ACTIVE |
+| 산안법 제57조 | 1 | 산업안전보건법 | ACTIVE |
+| 산안법 제62조 | 1 | 산업안전보건법 | ACTIVE |
+| 산안법 제64조제1항 | 1 | 산업안전보건법 | ACTIVE |
+| 석면안전관리법 시행규칙 제31조제2항, 별지 제17호서식 | 1 | 석면안전관리법 시행규칙 | ACTIVE |
+| 소방시설법 제20조 | 2 | 소방시설 설치 및 관리에 관한 법률 | ACTIVE |
+| 소방시설법 제25조 | 2 | 소방시설 설치 및 관리에 관한 법률 | ACTIVE |
+| 승강기법 시행규칙 | 1 | 승강기 안전관리법 시행규칙 | ACTIVE |
+| 승강기안전관리법 | 1 | 승강기 안전관리법 | ACTIVE |
+| 승강기안전관리법 제13조 | 1 | 승강기 안전관리법 | ACTIVE |
+| 승강기안전관리법 제32조 | 1 | 승강기 안전관리법 | ACTIVE |
+| 승강기안전관리법 제48조 | 1 | 승강기 안전관리법 | ACTIVE |
+| 시설물안전법 | 2 | 시설물의 안전 및 유지관리에 관한 특별법 | ACTIVE |
+| 시설물안전법 제12조 | 1 | 시설물의 안전 및 유지관리에 관한 특별법 | ACTIVE |
+| 시설물안전법 제6조 | 1 | 시설물의 안전 및 유지관리에 관한 특별법 | ACTIVE |
+| 안전보건규칙 제619조 | 1 | 산업안전보건기준에 관한 규칙 | ACTIVE |
+| 에너지이용합리화법 | 5 | 에너지이용 합리화법 | ACTIVE |
+| 에너지이용합리화법 시행규칙 별지 | 2 | 에너지이용 합리화법 시행규칙 | ACTIVE |
+| 위험물안전관리법 | 1 | 위험물안전관리법 | ACTIVE |
+| 위험물안전관리법 시행규칙 | 1 | 위험물안전관리법 시행규칙 | ACTIVE |
+| 위험물안전관리법 제13조 | 1 | 위험물안전관리법 | ACTIVE |
+| 위험물안전관리법 제15조 | 2 | 위험물안전관리법 | ACTIVE |
+| 위험물안전관리법 제18조 | 1 | 위험물안전관리법 | ACTIVE |
+| 위험물안전관리법 제9조 | 1 | 위험물안전관리법 | ACTIVE |
+| 전기안전관리법 | 2 | 전기안전관리법 | ACTIVE |
+| 전기안전관리법 제17조 | 2 | 전기안전관리법 | ACTIVE |
+| 중대재해법 시행령 제4조제7호 | 1 | 중대재해 처벌 등에 관한 법률 시행령 | ACTIVE |
+| 중대재해법 제4조제1항제2호 | 1 | 중대재해 처벌 등에 관한 법률 | ACTIVE |
+| 화학물질관리법 시행규칙 | 1 | 화학물질관리법 시행규칙 | ACTIVE |
+| 화학물질관리법 제29조 | 1 | 화학물질관리법 | ACTIVE |
+| 화학물질관리법 제31조 | 1 | 화학물질관리법 | ACTIVE |
+| 화학물질관리법 제43조 | 1 | 화학물질관리법 | ACTIVE |
+| 화학물질관리법 제44조 | 1 | 화학물질관리법 | ACTIVE |
+
+> `PROVISIONAL_SOURCE_MATCH`은 정본 SoT 연결 증명 전 잠정 분류이며, evidence 승인 완료 아님.  
+> GPT III STOP_SOT_MISMATCH → Owner SoT 결정 전까지 `LEG_VERIFIED_ELIGIBLE`로 사용 금지. §15 참조.
+
+#### DATA_SEMANTIC_GAP 17건 — law_ref별
+
+| law_ref | 건수 | 차단 사유 |
+|---------|------|-----------|
+| 시행규칙 제11조 | 8 | 어느 법의 시행규칙인지 특정 불가 |
+| 시행규칙 제23조 | 4 | 어느 법의 시행규칙인지 특정 불가 |
+| 법 제17조 | 1 | 법 명칭 없음 — 특정 불가 |
+| 법 제29조 | 1 | 법 명칭 없음 — 특정 불가 |
+| 별지 | 1 | 서식 부호만 기재 — 법령 특정 불가 |
+| 시행규칙 별지 제30호서식 | 1 | 어느 법의 시행규칙인지 특정 불가 |
+| 시행규칙 제16조 별지서식 | 1 | 어느 법의 시행규칙인지 특정 불가 |
+
+#### LEG_REFERENCE_MISSING 23건 — 추가 차단 현황
+
+| 추가 차단 | 건수 |
+|-----------|------|
+| schema_status = CANDIDATE (이중 차단) | **8건** |
+| schema_status = APPROVED_FOR_RUNTIME_USE | 15건 |
+
+---
+
+### 14.7 WP-G-B03 §7 완료 보고
+
+```
+WO = WO-DOC260-DATE-GATE-B-WP-G-B03-LEG-READONLY-008
+
+OWNER_APPROVAL = APPROVED
+CODE_CHANGE = 0
+DB_MUTATION = 0
+DEPLOY = 0
+
+B02_DATE_COUNT = 112 (재확인)
+B02_EFC_DISTINCT_COUNT = 112 (재확인)
+B02_LAW_REF_NULL_COUNT = 23 (재확인)
+B02_CONNECTION_GAPS = 0 (schema/efc 연결 정상)
+B02_PRIOR_APPROVE_COUNT = 0 (재확인)
+B02_EVIDENCE_SOURCE = vwlahtguyggrhvslabax READ-ONLY SELECT
+B02_TRIGGER_VERDICT = R2_01_RESOLVED
+
+LEG_SOT_PROJECT = 45cm-prj-db (governance) → STOP: 한국 법령 없음
+LEG_SOT_ACTUAL = vwlahtguyggrhvslabax (tai-api DB: law_master/law_alias)
+GOVERNANCE_RPC_NAME = N/A (governance 스키마에 한국 법령 없음 — RPC 중단)
+GOVERNANCE_RPC_READONLY_VERIFIED = N/A (STOP 조건 1 발동)
+LEG_REFERENCE_MAPPING = law_alias 경유 text 비교 (직접 FK 없음)
+
+PROVISIONAL_SOURCE_MATCH = 72
+LEG_REFERENCE_MISSING = 23
+LEG_NOT_APPROVED = 0
+DATA_SEMANTIC_GAP = 17
+UNVERIFIED = 0
+CLASSIFICATION_TOTAL = 112
+
+ALLOWLIST_CHANGED = NO
+EFC_APPROVAL_EXECUTED = NO
+RUNTIME_APPROVAL_EXECUTED = NO
+
+NEXT_GATE = GPT_WP_G_B03_INDEPENDENT_VERIFICATION
+```
+
+---
+
+### 14.8 WP-G-B04/05 진입 전 조건
+
+| 분류 | 건수 | WP-G-B04 진입 가능 여부 |
+|------|------|------------------------|
+| PROVISIONAL_SOURCE_MATCH | 72 | 정본 SoT 확정 + Owner 승인 후 Allowlist 확장 후보 (§15) |
+| DATA_SEMANTIC_GAP | 17 | law_ref 정정 후 재분류 필요 |
+| LEG_REFERENCE_MISSING | 23 | law_ref 보완 필요 (8건 schema도 CANDIDATE) |
+
+**전체 112건 공통 차단 사유 (미해소):**
+1. efc_status = CANDIDATE (112건 전부) — 선행 EFC 승인 필요
+2. prior APPROVE decision = 0건
+3. `_RUNTIME_EV_ALLOWLIST` 미등록 (112건 전부)
+
+---
+
+---
+
+## 15. WP-G-B03 SoT Reconciliation (WO-DOC260-WP-G-B03-SOT-RECONCILIATION-009)
+
+**GPT III 판정:** `STOP_SOT_MISMATCH` (2026-10-30)  
+**원인:** WP-G-B03에서 `45cm-prj-db/governance` 대신 `vwlahtguyggrhvslabax/law_master`를 사용한 분류가 비승인 SoT 대체 적용으로 판정됨.  
+**CODE_CHANGE = 0 / DB_MUTATION = 0 / DEPLOY = 0**
+
+---
+
+### 15.1 S-01: Supabase 프로젝트 토폴로지 (전체)
+
+| 프로젝트 ID | 이름 | 역할 | 상태 |
+|------------|------|------|------|
+| `vwlahtguyggrhvslabax` | taieng | tai-api 운영 DB (runtime evidence 승인 저장소) | ACTIVE_HEALTHY |
+| `iapzwbysfzootqnldtan` | 45cm-prj-db | 45CM 거버넌스 items SoT (`governance` 스키마: Constitution/Contract/Policy/Rule/Guide 408건) | ACTIVE_HEALTHY |
+| `wrfcedzgdrfupenzqhur` | leg-prod | 한국 법령 전용 DB (2026-06-11 생성) | ACTIVE_HEALTHY |
+| `dtuzacscxjaqrcuxzosc` | 45cm-ops-db | 운영 지원 DB | ACTIVE_HEALTHY |
+| `xfcjqahwzcncmtfosjwu` | 45cm-mkt-db | 마케팅 DB | ACTIVE_HEALTHY |
+| `mlovagrawlaaffdgismb` | tai-chemical | 화학물질 관리 DB | ACTIVE_HEALTHY |
+
+### 15.2 S-01: 4-Role SoT 맵핑 (현재 파악된 사실)
+
+| 역할 | 현재 파악 | 정본 여부 |
+|------|-----------|-----------|
+| 한국 법령 원본 데이터 저장 | `wrfcedzgdrfupenzqhur` (leg-prod) — 한국 법령 전용 프로젝트, 2026-06-11 생성 | **미확정 — Owner 승인 필요** |
+| 45CM 법령 거버넌스 SoT | `iapzwbysfzootqnldtan` (45cm-prj-db) `governance` 스키마 | **확정** (GOVERNANCE_SOURCE_OF_TRUTH.md 기준) |
+| 법령 질의 API/RPC | `governance-api` (`api.gov.45cm.com`) — 현재 `45cm-prj-db` 경유 (단, 한국 법령은 governance 스키마 없음) | **법령 질의 경로 미확정** |
+| runtime evidence 승인 저장소 | `vwlahtguyggrhvslabax` (taieng) — `runtime_review_decision` 등 | **확정** (WP-G-B02 기준) |
+
+> **key finding:** `GOVERNANCE_SOURCE_OF_TRUTH.md`의 "법령" = **45CM 거버넌스 items 계층**이며 한국 법령(statute)이 아님.  
+> `vwlahtguyggrhvslabax`에 `law_master`/`law_alias` 등이 있으나 법령 SoT로 승인된 이력 없음.  
+> `leg-prod`(`wrfcedzgdrfupenzqhur`)가 한국 법령 전용 DB로 별도 존재 — Owner 확인 필요.
+
+---
+
+### 15.3 S-02: SoT 미선언 원칙
+
+> **금지:** Owner 승인 없이 어떤 프로젝트도 한국 법령 SoT로 선언하지 않는다.  
+> `vwlahtguyggrhvslabax/law_master` = 한국 법령 SoT 아님 (현재 판정).  
+> `wrfcedzgdrfupenzqhur` (leg-prod) = 전용 DB 존재 확인, 역할 확정 = Owner Gate.
+
+---
+
+### 15.4 S-03: 72건 분류 재지정
+
+| 원 분류 | 재지정 분류 | 적용 범위 |
+|---------|-------------|-----------|
+| `LEG_VERIFIED_ELIGIBLE` | **`PROVISIONAL_SOURCE_MATCH`** | §14.6 전체 (72건) |
+
+**이유:** `vwlahtguyggrhvslabax/law_master` text 비교는 정본 SoT 연결 증명이 아님.  
+law_ref → law_master ACTIVE 매핑은 **잠정 매핑**이며 법령 승인 근거 아님.
+
+**사용 금지:** `LEG_VERIFIED_ELIGIBLE` 용어는 정본 SoT 연결 + Owner 승인 전까지 사용 불가.
+
+---
+
+### 15.5 §7 SoT Reconciliation 완료 보고
+
+```
+WO = WO-DOC260-WP-G-B03-SOT-RECONCILIATION-009
+
+SOURCE_MAP_PATH = /Users/taiwangsim/dev-gov/docs/gov/_general/GUIDE_governance-source-of-truth_v1.md
+                 (Last verified: 2026-06-08)
+
+SUPABASE_TOPOLOGY_VERIFIED = YES (supabase_list_projects 실행, 2026-10-30)
+
+LEGAL_DATA_STORAGE_CANDIDATE = wrfcedzgdrfupenzqhur (leg-prod, created 2026-06-11)
+LEGAL_DATA_STORAGE_SOT_CONFIRMED = NO → OWNER_GATE_REQUIRED
+
+LEGAL_GOVERNANCE_SOT = iapzwbysfzootqnldtan / 45cm-prj-db / governance 스키마
+                      (45CM governance items: Constitution/Contract/Policy/Rule/Guide — 한국 법령 아님)
+
+RUNTIME_EVIDENCE_STORAGE = vwlahtguyggrhvslabax (taieng)
+
+PROVISIONAL_SOURCE_MATCH = 72
+DATA_SEMANTIC_GAP = 17
+LEG_REFERENCE_MISSING = 23
+
+SOT_MISMATCH_RESOLUTION = OWNER_GATE_REQUIRED
+  → Owner 결정 사항:
+     Q1. 한국 법령 정본 SoT = leg-prod(wrfcedzgdrfupenzqhur) vs. taieng(vwlahtguyggrhvslabax)?
+     Q2. vwlahtguyggrhvslabax/law_master와 wrfcedzgdrfupenzqhur 관계 (복사본/미러/독립)?
+     Q3. 72건 PROVISIONAL_SOURCE_MATCH → LEG_VERIFIED_ELIGIBLE 승격 기준?
+
+NEXT_GATE = OWNER_SOT_DECISION → WP-G-B04 재진입
+```
+
+---
+
+### 15.6 WP-G-B04/05 진입 전 추가 차단 사유
+
+| 차단 | 내용 |
+|------|------|
+| 한국 법령 SoT 미확정 | `leg-prod` vs. `taieng/law_master` Owner 결정 전 72건 LEG 승인 근거 불확실 |
+| PROVISIONAL_SOURCE_MATCH 격상 미승인 | Owner Q3 결정 없이 72건 Allowlist 진입 불가 |
+
+---
+
 *R1 생성: Claude Code 2026-10-30 / PR #741 Squash Commit `99381050` MERGED 이후*  
-*R2 보정: Claude Code 2026-10-30 / GPT_GATE_B_CONTRACT_IV = PASS_WITH_GUARDS 이후*
+*R2 보정: 2026-10-30 / GPT R2 IV PASS*  
+*R3 업데이트: 2026-10-30 / WP-G-B01 CLOSED_FINAL (PR#742) + WP-G-B02 DB 조사 완료*  
+*R4 업데이트: 2026-10-30 / WP-G-B03 LEG READ-ONLY 조사 완료*  
+*R5 업데이트: 2026-10-30 / WP-G-B03 SOT Reconciliation (WO-009) — PROVISIONAL_SOURCE_MATCH 재지정 + §15 추가*
