@@ -5,8 +5,8 @@ wo: WO-DOC260-MAINLINE-DATE-CONTRACT-GATE-002
 collected_by: Claude Code (DESIGN role)
 collected_date: 2026-10-30
 revised_date: 2026-10-30
-revision: R4_SOURCE_RESOLVED
-review_required: GPT_DATE_BE_CONTRACT_IV_R4
+revision: R4_FINAL_ERRATA
+review_required: NONE — GPT_DATE_BE_CONTRACT_IV_R4 CONDITIONAL_PASS 조건 충족
 ---
 
 # DATE_TIMESTAMP_AUTO_CONNECTION_GATE — WO-002 Gate 결과
@@ -39,16 +39,30 @@ review_required: GPT_DATE_BE_CONTRACT_IV_R4
 
 ## 3. FE 연결 상태 — GATE_PASS (차단 포함)
 
-### PR #181 검증 항목
+> **E-04 정정 (R4):** tai-admin main(`6a2396f7`)과 PR #181(`2cebf9c4`)을 구분한다.
+
+### tai-admin main (`6a2396f7`) 상태
 
 | 항목 | 판정 |
 |------|------|
 | `date` input_type FE 렌더링 | PASS — VTextField type="date" |
-| CANDIDATE 증적 차단 (CANDIDATE_ONLY → CHILD_STATUS_DRIFT) | PASS |
-| evidence_fields 존재 시 에디터 전체 차단 | PASS — EVIDENCE_CONTRACT_UNSUPPORTED |
-| `timestamp_auto` FE 구현 | NOT_FOUND — codebase에 없음 |
+| CANDIDATE 증적 차단 (`CHILD_STATUS_DRIFT`) | PASS |
+| `evidence_fields.length > 0` → 에디터 전체 차단 | PASS — `EVIDENCE_CONTRACT_UNSUPPORTED` |
+| DATE/ATTACHMENT 분기 처리 | 미구현 |
 
-### 에디터 활성화 조건 (현재)
+97종 DATE 증적 포함 서식은 tai-admin main 기준으로 **에디터 접근 전 차단** 상태.
+
+### PR #181 (`2cebf9c4`) Draft 상태
+
+| 항목 | 판정 |
+|------|------|
+| `date` input_type FE 렌더링 | PASS — VTextField type="date" |
+| CANDIDATE 증적 차단 (`EVIDENCE_LEGAL_UNKNOWN`) | PASS — `APPROVED_BY_HUMAN` 검증 |
+| DATE/ATTACHMENT 분기 루프 | **PASS** — family·upload_type·input_type 교차 조합 차단 포함 |
+| `upload_type = "timestamp_auto"` DATE 검증 | PASS — P0 matrix 실측값 기준 |
+| 미지원 family 차단 (`EVIDENCE_FAMILY_UNSUPPORTED`) | PASS |
+
+### 에디터 활성화 조건 (tai-admin main 기준)
 
 ```
 isEditorReady = availability === 'READY_FOR_EDIT'
@@ -57,9 +71,8 @@ isEditorReady = availability === 'READY_FOR_EDIT'
   && unsupportedReason === null
 ```
 
-`evidence_fields.length > 0` → `unsupportedReason = 'EVIDENCE_CONTRACT_UNSUPPORTED'` → 에디터 비활성.
-
-97종 DATE 증적 포함 서식은 현재 **에디터 접근 전 차단** 상태.
+tai-admin main: `evidence_fields.length > 0` → `unsupportedReason = 'EVIDENCE_CONTRACT_UNSUPPORTED'` → 에디터 비활성.  
+PR #181 (병합 후): 모든 evidence가 APPROVED_BY_HUMAN + 지원 family인 경우에만 `unsupportedReason = null`.
 
 ---
 
@@ -87,21 +100,25 @@ DATE 증적이 하나라도 포함된 서식의 확정 호출은 **전부 422로
 
 ## 5. `timestamp_auto` 의미 계약 — DESIGN_REQUIRED
 
-### 관찰 사실
+> **E-04 정정 (R4):** P0 evidence matrix 실측 + PR #181 검증으로 운영 DB 상태를 확인했다.
 
-- `timestamp_auto` 식별자가 현재 FE/BE codebase 어디에도 존재하지 않는다.
-- `evidence_family` 컬럼에 실제 저장된 값이 `"DATE"` 인지 `"timestamp_auto"` 인지 운영 DB에서 확인 필요.
+### 확인된 사실 (R4)
+
+- `evidence_family` 컬럼: 운영 DB에서 `"DATE"` 로 저장됨 (P0 matrix 전수 확인).
+- `upload_type` 컬럼: 운영 DB에서 `"timestamp_auto"` 로 저장됨 (P0 matrix 실측).
+- PR #181 (`2cebf9c4`): `upload_type !== 'timestamp_auto'` 검증 구현 완료.
+- BE codebase: `timestamp_auto` 처리 구현 없음 (설계 계약 대상, BE_CONTRACT WO-003 범위).
 - GPT IV 독립검증 판정: DATE 증적 104개에 서버 현재 시각을 자동 주입하는 방식은 허용 불가.
 
-### timestamp_auto 와 DATE 의 관계 (설계 후보)
+### timestamp_auto 와 DATE 의 관계
 
-| 개념 | 정의 | 현재 상태 |
-|------|------|-----------|
-| `DATE` | 사용자가 직접 입력하는 업무 날짜 | DB에 104건 CANDIDATE |
-| `timestamp_auto` | 서버가 자동 생성하는 타임스탬프 | 구현체 없음, 별도 계약 필요 |
-| `confirmed_at` | 문서 확정 시 서버 기록 (clock_timestamp) | 기존 인프라 구현 완료 |
+| 개념 | DB 컬럼 | 운영 값 | 현재 상태 |
+|------|---------|---------|-----------|
+| `DATE` | `evidence_family` | `"DATE"` | 104건 CANDIDATE |
+| `timestamp_auto` | `upload_type` | `"timestamp_auto"` | DB 식별자 확인, BE 처리 미구현 |
+| `confirmed_at` | `runtime_document_archive` | DB clock_timestamp | 기존 인프라 구현 완료 |
 
-**결론:** `timestamp_auto` 는 현재 104개 DATE 증적에 적용해서는 안 된다. `confirmed_at` 이 문서 수준 시스템 타임스탬프를 이미 담당한다.
+**결론:** `timestamp_auto` 는 upload 처리 방식을 나타내는 DB 식별자이며, 서버 자동 타임스탬프 생성 구현을 의미하지 않는다. `confirmed_at` 이 문서 수준 시스템 타임스탬프를 담당한다. DATE 증적 값은 사용자 입력을 그대로 보존한다.
 
 ---
 

@@ -5,8 +5,8 @@ wo: WO-DOC260-MAINLINE-DATE-BE-CONTRACT-003
 collected_by: Claude Code (DESIGN role)
 collected_date: 2026-10-30
 revised_date: 2026-10-30
-revision: R4_SOURCE_RESOLVED
-review_required: GPT_DATE_BE_CONTRACT_IV_R4
+revision: R4_FINAL_ERRATA
+review_required: NONE — GPT_DATE_BE_CONTRACT_IV_R4 CONDITIONAL_PASS 조건 충족
 ---
 
 # DATE_TIMESTAMP_AUTO_BE_CONTRACT — WO-003 설계 계약 (R1)
@@ -20,6 +20,12 @@ review_required: GPT_DATE_BE_CONTRACT_IV_R4
 > R1-02: DATE manifest에 `field_id`, `value_source`, `value_semantic_class` 추가.  
 > R1-03: 확정 트랜잭션 내 DATE manifest 생성 위치를 Step으로 명시.  
 > R1-04: FE DATE family 인식과 BE DATE 봉인 지원이 별도 Gate임을 명시.
+
+> **R4 FINAL_ERRATA (2026-10-30):** GPT_DATE_BE_CONTRACT_IV_R4 CONDITIONAL_PASS. 구현 필수 가드 정정.  
+> E-01: input_type 검증을 family 분기 내로 이동 (교차 조합 422 차단).  
+> E-02: §4.2 FE 예시를 PR #181 실제 rawEvidence 루프로 교체.  
+> E-03: USER_INPUT·PENDING_CLASSIFICATION 의미 제한 명시.  
+> E-04: CONNECTION_GATE §3·§5 오래된 기술 동기화.
 
 > **R4 SOURCE_IV_CONFLICT 해소 (2026-10-30):** WO-DOC260-MAINLINE-DATE-BE-CONTRACT-003-R3-SOURCE-RESOLUTION 수신.  
 > R3-01 RESOLVED: 로컬 브랜치가 main 대비 41커밋 뒤처진 상태였음. 최신 main(d219a3463855) 실측 →  
@@ -153,10 +159,9 @@ _ALLOWED_EVIDENCE_CANDIDATE_STATUSES = frozenset({"APPROVED_BY_HUMAN"})
 _ALLOWED_EVIDENCE_FIELD_STATUSES     = frozenset({"APPROVED_BY_HUMAN"})
 
 # 변경: DATE family 추가
-_ALLOWED_EVIDENCE_FAMILIES    = frozenset({"ATTACHMENT", "DATE"})
-_ALLOWED_EVIDENCE_INPUT_TYPES = frozenset({"file", "date"})
+_ALLOWED_EVIDENCE_FAMILIES = frozenset({"ATTACHMENT", "DATE"})
 
-# 신규: DATE family 식별자
+# 신규: DATE / FILE family 식별자
 _DATE_EVIDENCE_FAMILIES = frozenset({"DATE"})
 _FILE_EVIDENCE_FAMILIES = frozenset({"ATTACHMENT"})
 
@@ -165,7 +170,14 @@ _ALLOWED_UPLOAD_TYPES = frozenset({"attachment"})
 
 # 신규 (R2-02): DATE family upload_type — 운영 DB P0 matrix 실측값
 _DATE_UPLOAD_TYPES = frozenset({"timestamp_auto"})
+
+# 신규 (E-01): input_type을 family 분기별 독립 상수로 관리
+# — 통합 집합 사용 시 ATTACHMENT+date / DATE+file 교차 조합이 통과하는 문제를 방지
+_FILE_EVIDENCE_INPUT_TYPES = frozenset({"file"})
+_DATE_EVIDENCE_INPUT_TYPES = frozenset({"date"})
 ```
+
+> **E-01 근거:** `_ALLOWED_EVIDENCE_INPUT_TYPES = frozenset({"file", "date"})` 단일 집합으로 검사하면 evidence_family="ATTACHMENT"인 필드가 input_type="date"로 통과하거나, evidence_family="DATE"인 필드가 input_type="file"로 통과하는 교차 조합을 막지 못한다. family-specific 상수로 분리하고 각 분기에서 독립 검증한다.
 
 > **R2-02 근거:** `docs/document-engine/obj02/candidate-quality/05_P0_EVIDENCE_MATRIX.csv` 전체 DATE 행에서 `upload_type = "timestamp_auto"` 확인. 이 명칭은 upload 처리 방식을 나타내는 DB 식별자이며, 서버 자동 타임스탬프 생성이 구현됐다는 의미가 아니다.
 
@@ -231,12 +243,16 @@ for ev_conn in ev_connections:
     field_key  = str(rf.get("field_key") or "")
     input_type = str(rf.get("input_type") or "")
 
-    # R1-03-C: input_type 허용 목록 (DATE 추가됨)
-    if input_type not in _ALLOWED_EVIDENCE_INPUT_TYPES:
-        raise ConfirmError(422, ...)
-
+    # E-01: input_type 검증은 family 분기 내에서 family-specific 상수로 수행
+    # (ATTACHMENT+date / DATE+file 교차 조합 422 차단)
     if ev_family in _FILE_EVIDENCE_FAMILIES:
-        # 기존 ATTACHMENT 경로 (변경 없음)
+        # 기존 ATTACHMENT 경로
+        if input_type not in _FILE_EVIDENCE_INPUT_TYPES:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: input_type={input_type!r} not valid "
+                f"for ATTACHMENT family (expected: file)"
+            )
         snap = runtime_values.get(field_key)
         if snap is None:
             raise ConfirmError(422, ...)
@@ -248,6 +264,12 @@ for ev_conn in ev_connections:
 
     elif ev_family in _DATE_EVIDENCE_FAMILIES:
         # 신규 DATE 경로
+        if input_type not in _DATE_EVIDENCE_INPUT_TYPES:
+            raise ConfirmError(
+                422,
+                f"evidence field {ev_id!r}: input_type={input_type!r} not valid "
+                f"for DATE family (expected: date)"
+            )
         date_value = runtime_values.get(field_key)
         _verify_date_evidence_value(
             date_value=date_value,
@@ -402,7 +424,11 @@ snapshot_hash = compute_confirmed_snapshot_hash(
 
 모든 필드가 Python str → `datetime` / `UUID` / `Decimal` 객체 불포함 → `compute_confirmed_snapshot_hash()` FAIL-CLOSED 미발동.
 
-> **R1 추가:** str 타입이라는 사실만으로 법적 증적 무결성을 보증하지 않는다. `value_source = "USER_INPUT"` 와 `value_semantic_class` 필드는 날짜 값의 원천과 의미를 명시해 감사 추적에 사용된다. 법적 증적 무결성은 LEG Gate (Gate B) 를 통해 별도 검증한다.
+> **R1 추가:** str 타입이라는 사실만으로 법적 증적 무결성을 보증하지 않는다. `value_source = "USER_INPUT"` 와 `value_semantic_class` 필드는 날짜 값의 원천과 의미를 명시해 감사 추적에 사용된다. 법적 증적 무결성은 LEG Gate (Gate B) 를 통해 별도 검증한다.  
+>
+> **E-03 추가:** `value_source = "USER_INPUT"` 은 "사용자 입력 경로를 통해 runtime_data_json에 저장된 값임"을 기록하는 구조적 메타데이터다. 실제 입력자 신원이나 작성 경위를 법적으로 증명하는 감사 증거가 아니다. provenance = UNKNOWN 상태는 이 필드가 추가되어도 해소되지 않는다.  
+>
+> **E-03 추가:** `value_semantic_class = "PENDING_CLASSIFICATION"` 은 LEG Gate 통과 전 잠정 상태 표시다. 이 값이 manifest에 기록됐다는 사실이 LEG 승인 완료를 의미하지 않는다. LEG 승인은 evidence_field_candidate.status = `APPROVED_BY_HUMAN` 로만 판정한다.
 >
 > **R3-04 추가:** `value_semantic_class = "PENDING_CLASSIFICATION"` 은 감사 추적 전용 기록이다. 봉인 차단은 `_ALLOWED_EVIDENCE_CANDIDATE_STATUSES` 로 이미 수행되므로 `PENDING_CLASSIFICATION` 에 대한 별도 봉인 차단 분기를 추가하지 않는다. evidence_field_candidate.status ≠ `APPROVED_BY_HUMAN` 이면 §3.4 R1-02 검사에서 422로 차단된다 (R4-01 정정).
 
@@ -501,49 +527,55 @@ Step 19 (변경 없음): Seal UPDATE
 
 **PR #181은 이미 DATE/ATTACHMENT 분기 루프를 구현하고 있다.** tai-admin main의 단일 차단 코드(`evidence_fields.length > 0`)는 PR #181에 존재하지 않는다. 별도 "보정 필요" 계약을 추가하지 않는다.
 
-PR #181의 실제 구현 패턴 (2cebf9c40d79, `useDocumentFormsEditor.ts`):
+PR #181의 실제 구현 (2cebf9c40d79, `useDocumentFormsEditor.ts`) — 이 코드가 정본이다:
 
 ```typescript
-// R2-03: evidence_family allowlist — ATTACHMENT + DATE
-for (const evId of Object.keys(evidenceFieldMap)) {
-  const ev = evidenceFieldMap[evId]
-  
-  // family 검증: ATTACHMENT/DATE 이외 전부 EVIDENCE_FAMILY_UNSUPPORTED
-  if (ev.evidence_family !== 'ATTACHMENT' && ev.evidence_family !== 'DATE') {
-    unsupportedReason.value = `EVIDENCE_FAMILY_UNSUPPORTED:${ev.evidence_family ?? ''}`
-    return
-  }
-  // upload_type 계약 검증 (family별)
-  if (ev.evidence_family === 'ATTACHMENT' && ev.upload_type !== 'attachment') {
-    unsupportedReason.value = `EVIDENCE_UPLOAD_TYPE_UNSUPPORTED:${ev.upload_type ?? ''}`
-    return
-  }
-  if (ev.evidence_family === 'DATE' && ev.upload_type !== 'timestamp_auto') {
-    unsupportedReason.value = `EVIDENCE_UPLOAD_TYPE_UNSUPPORTED:${ev.upload_type ?? ''}`
-    return
-  }
-  // R1-01: runtime_evidence_field.status APPROVED_BY_HUMAN 검증
-  if (ev.status !== 'APPROVED_BY_HUMAN') {
-    unsupportedReason.value = 'EVIDENCE_LEGAL_UNKNOWN'
-    return
-  }
-  // R2-02: evidence_candidate_status APPROVED_BY_HUMAN 검증
-  const conn = resolvedConns.find(c => c.evidence_field_id === evId)
-  if (!conn) { unsupportedReason.value = 'EVIDENCE_CONNECTION_UNRESOLVED'; return }
-  if (conn.evidence_candidate_status !== 'APPROVED_BY_HUMAN') {
-    unsupportedReason.value = 'EVIDENCE_LEGAL_UNKNOWN'
-    return
-  }
-  // input_type 계약: DATE→date, ATTACHMENT→file
-  const expectedInputType = ev.evidence_family === 'DATE' ? 'date' : 'file'
-  if (conn.input_type !== expectedInputType) {
-    unsupportedReason.value = `EVIDENCE_TYPE_UNSUPPORTED:${conn.input_type}`
-    return
+// Evidence validation — FK-resolved connections required
+if (rawEvidence.length > 0) {
+  const resolvedConns: ResolvedEvidenceConnection[] = raw.resolved_evidence_connections ?? []
+  for (const ev of rawEvidence) {
+    const evId = String(ev.id)
+    // R2-03: family allowlist — ATTACHMENT + DATE 이외 전부 차단
+    if (ev.evidence_family !== 'ATTACHMENT' && ev.evidence_family !== 'DATE') {
+      unsupportedReason.value = `EVIDENCE_FAMILY_UNSUPPORTED:${ev.evidence_family ?? ''}`
+      return
+    }
+    // upload_type 계약 (family별 독립 검증 — 교차 조합 차단)
+    if (ev.evidence_family === 'ATTACHMENT' && ev.upload_type !== 'attachment') {
+      unsupportedReason.value = `EVIDENCE_UPLOAD_TYPE_UNSUPPORTED:${ev.upload_type ?? ''}`
+      return
+    }
+    if (ev.evidence_family === 'DATE' && ev.upload_type !== 'timestamp_auto') {
+      unsupportedReason.value = `EVIDENCE_UPLOAD_TYPE_UNSUPPORTED:${ev.upload_type ?? ''}`
+      return
+    }
+    // R1-01: runtime_evidence_field.status = APPROVED_BY_HUMAN
+    if (ev.status !== 'APPROVED_BY_HUMAN') {
+      unsupportedReason.value = 'EVIDENCE_LEGAL_UNKNOWN'
+      return
+    }
+    // connection 검증
+    const conn = resolvedConns.find(c => c.evidence_field_id === evId)
+    if (!conn || conn.status !== 'RESOLVED') {
+      unsupportedReason.value = 'EVIDENCE_CONNECTION_UNRESOLVED'
+      return
+    }
+    // R2-02: evidence_field_candidate.status = APPROVED_BY_HUMAN
+    if (conn.evidence_candidate_status !== 'APPROVED_BY_HUMAN') {
+      unsupportedReason.value = 'EVIDENCE_LEGAL_UNKNOWN'
+      return
+    }
+    // input_type 계약 (family별 독립 검증 — 교차 조합 차단)
+    const expectedInputType = ev.evidence_family === 'DATE' ? 'date' : 'file'
+    if (conn.input_type !== expectedInputType) {
+      unsupportedReason.value = `EVIDENCE_TYPE_UNSUPPORTED:${conn.input_type}`
+      return
+    }
   }
 }
 ```
 
-이 구현은 BE 계약(§3.2)의 `APPROVED_BY_HUMAN` 상태값과 정합이다.
+이 구현은 BE 계약(§3.2)의 `APPROVED_BY_HUMAN` 상태값, upload_type/input_type family별 독립 검증과 정합이다.
 
 **PR #181 Merge 조건:**
 1. BE_DATE_CODE_READY (Gate A) 완료
