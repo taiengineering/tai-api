@@ -445,6 +445,67 @@ def test_t18_sent_on_slack_ok():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# T18b: WO-008 — _finish() claim_token 중복 인자 결함 수정 검증
+# ─────────────────────────────────────────────────────────────────────────────
+def test_t18b_finish_no_duplicate_arg_typeerror():
+    """WO-008: _finish(row, token, 'SENT', ..., claim_token=None) — TypeError 없이 성공."""
+    fake_sb = MagicMock()
+    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        {"id": "row-T18b"}
+    ]
+    with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
+        result = _finish(
+            "row-T18b", "tok-T18b", "SENT",
+            sent_at="2026-01-01T00:00:00+00:00",
+            slack_ts="1234.5678",
+            claim_token=None,
+        )
+    assert result is True
+    update_data = fake_sb.table.return_value.update.call_args[0][0]
+    assert update_data["status"] == "SENT"
+    assert update_data["claim_token"] is None
+    assert update_data["slack_ts"] == "1234.5678"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T18c: WO-008 — process_relay_event E2E, _finish() Mock 없이 SENT 전이 확인
+# ─────────────────────────────────────────────────────────────────────────────
+def test_t18c_process_relay_event_sent_transition_no_finish_mock():
+    """WO-008: _finish() Mock 없이 Slack ok=true 경로 실행 — SENT 전이 + TypeError 없음."""
+    slack_resp = MagicMock()
+    slack_resp.status_code = 200
+    slack_resp.json.return_value = {"ok": True, "message": {"ts": "9999.0001"}}
+
+    fake_sb = MagicMock()
+    fake_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        {"id": "row-T18c"}
+    ]
+
+    with patch("services.slack_relay_svc._claim", return_value=("row-T18c", "tok-T18c")):
+        with patch("services.slack_relay_svc._start_sending", return_value=True):
+            with patch("services.slack_relay_svc._load_row", return_value={
+                "id": "row-T18c", "target_channel": _TARGET_CHANNEL,
+                "message_text": "relay test", "claim_token": "tok-T18c",
+                "status": "CLAIMED", "retry_count": 0,
+            }):
+                with patch("services.slack_relay_svc._get_bot_token", return_value="xoxb-test"):
+                    with patch("httpx.AsyncClient") as mock_httpx:
+                        mock_ctx = AsyncMock()
+                        mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
+                        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+                        mock_ctx.post = AsyncMock(return_value=slack_resp)
+                        mock_httpx.return_value = mock_ctx
+                        with patch("services.slack_relay_svc._get_supabase", return_value=fake_sb):
+                            asyncio.run(process_relay_event("Ev-T18c"))
+
+    assert fake_sb.table.return_value.update.called
+    update_data = fake_sb.table.return_value.update.call_args[0][0]
+    assert update_data["status"] == "SENT"
+    assert update_data["claim_token"] is None
+    assert update_data.get("slack_ts") == "9999.0001"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # T19: DB 복구 — PENDING 행 존재 시 run_relay_recovery_once 처리
 # (Mock chain: PENDING=.select.eq.order.limit.execute / RETRY=.select.eq.or_.order.limit.execute)
 # ─────────────────────────────────────────────────────────────────────────────
