@@ -65,10 +65,11 @@ def _http_execute(job: JobRow) -> Any:
     return body
 
 
-def execute_job(job: JobRow) -> Any:
+def execute_job(job: JobRow, *, claim_context: dict | None = None) -> Any:
     ep = job.handler or job.endpoint_url or ""
     if ep.startswith("direct://"):
-        return execute_direct(ep, job.payload)
+        payload = {**(job.payload or {}), **(claim_context or {})}
+        return execute_direct(ep, payload)
     return _http_execute(job)
 
 
@@ -142,7 +143,10 @@ def tick(
             status = "SUCCESS"
             detail: Any = None
             try:
-                detail = execute_job(job)
+                detail = execute_job(job, claim_context={
+                    "_scheduled_for": serialize_business_datetime(claim.scheduled_for),
+                    "_attempt_no": claim.attempt_no,
+                })
             except Exception as e:
                 status = "FAILED"
                 _exc_summary = getattr(e, "summary", None)

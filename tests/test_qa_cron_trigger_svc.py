@@ -1,4 +1,4 @@
-"""WO-TAI-QA-OPS-TIMED-TRIGGER-P0-005 — qa_cron_trigger_svc 계약 검증.
+"""WO-TAI-QA-OPS-TIMED-TRIGGER-P0-005-R2 — qa_cron_trigger_svc 계약 검증.
 
 테스트 항목:
   T01  current_slot_utc: now=10:05Z → 10:00Z 슬롯
@@ -19,6 +19,13 @@
   T16  trigger_qa_cron: 전체 흐름 성공 (trigger_source 포함)
   T17  trigger_qa_cron: GitHub 실패 → RuntimeError 전파
   T18  실제 GitHub API 호출 없음 — 모든 테스트 httpx mock 사용
+  --- R2 신규 ---
+  T19  R2-01: KST cron '0 6,19 * * *' → 06:00 KST = 21:00Z / 19:00 KST = 10:00Z
+  T20  R2-03: trigger_qa_cron(_scheduled_for 전달) → 전달값 사용
+  T21  R2-03: trigger_qa_cron(_scheduled_for 없음) → current_slot_utc 폴백
+  T22  R2-04: trigger_qa_cron(_attempt_no=2) → DISPATCH_SKIPPED_RETRY, GitHub 미호출
+  T23  R2-04: trigger_qa_cron(_attempt_no=1) → 정상 dispatch
+  T24  R2-04: DISPATCH_SKIPPED_RETRY 반환값 — 필수 키 확인
 
 실제 GitHub API 호출 없음. 실제 DB 변경 없음. Slack 발송 없음.
 """
@@ -244,8 +251,92 @@ def test_T17_trigger_qa_cron_github_failure_propagates():
 def test_T18_no_real_github_calls_in_all_tests():
     """모든 테스트가 httpx를 mock했는지 — 실제 네트워크 호출 없음을 보장."""
     import httpx
-    # httpx.AsyncClient가 실제 객체면 이 import는 통과됨.
-    # 테스트 내에서 실제 호출이 없었다는 것은 위 테스트들이 _patch_client를 통해 보장.
-    # 이 테스트는 import 회귀를 검사한다.
     assert hasattr(httpx, "AsyncClient")
     assert callable(httpx.AsyncClient)
+
+
+# ── T19~T24: R2 신규 검증 ────────────────────────────────────────────────────
+
+def test_T19_kst_cron_expr_maps_to_correct_utc_slots():
+    """R2-01: '0 6,19 * * *' KST → 06:00 KST = 21:00Z(전일) / 19:00 KST = 10:00Z."""
+    from zoneinfo import ZoneInfo
+    from services.scheduler.cron_grammar import next_fire_after
+
+    KST = ZoneInfo("Asia/Seoul")
+    # 기준: 2026-10-31 05:59 KST (= 20:59Z)
+    base_kst = datetime(2026, 10, 31, 5, 59, 0, tzinfo=KST)
+    nxt = next_fire_after("0 6,19 * * *", base_kst)
+    nxt_utc = nxt.astimezone(timezone.utc)
+    # 06:00 KST = 21:00 UTC (전날 기준은 같은 날 21:00 UTC)
+    assert nxt_utc.hour == 21 and nxt_utc.minute == 0, (
+        f"06:00 KST 이후 슬롯은 21:00Z여야 함, 실제: {nxt_utc}"
+    )
+
+    # 기준: 2026-10-31 18:59 KST (= 09:59Z)
+    base2_kst = datetime(2026, 10, 31, 18, 59, 0, tzinfo=KST)
+    nxt2 = next_fire_after("0 6,19 * * *", base2_kst)
+    nxt2_utc = nxt2.astimezone(timezone.utc)
+    # 19:00 KST = 10:00 UTC
+    assert nxt2_utc.hour == 10 and nxt2_utc.minute == 0, (
+        f"19:00 KST 이후 슬롯은 10:00Z여야 함, 실제: {nxt2_utc}"
+    )
+
+
+def test_T20_trigger_qa_cron_uses_passed_scheduled_for():
+    """R2-03: _scheduled_for가 payload에 있으면 그 값을 scheduled_for로 사용."""
+    slot_iso = "2026-10-31T21:00:00+00:00"
+    patcher, _ = _patch_client(204)
+    with patcher:
+        result = asyncio.run(svc.trigger_qa_cron({
+            "_scheduled_for": slot_iso,
+            "_attempt_no": 1,
+        }))
+    assert result["scheduled_for"] == slot_iso
+
+
+def test_T21_trigger_qa_cron_fallback_without_scheduled_for():
+    """R2-03: _scheduled_for 없으면 current_slot_utc(now()) 폴백."""
+    patcher, _ = _patch_client(204)
+    with patcher:
+        result = asyncio.run(svc.trigger_qa_cron({}))
+    # 폴백 결과도 valid ISO datetime이며 hour는 10 또는 21
+    slot_dt = datetime.fromisoformat(result["scheduled_for"])
+    assert slot_dt.hour in (10, 21) and slot_dt.minute == 0
+
+
+def test_T22_trigger_qa_cron_skips_on_retry():
+    """R2-04: _attempt_no > 1 → DISPATCH_SKIPPED_RETRY, GitHub 미호출."""
+    patcher, client = _patch_client(204)
+    with patcher:
+        result = asyncio.run(svc.trigger_qa_cron({
+            "_scheduled_for": "2026-10-31T21:00:00+00:00",
+            "_attempt_no": 2,
+        }))
+    assert result["status"] == "DISPATCH_SKIPPED_RETRY"
+    assert len(client.calls) == 0, "재처리 시 GitHub API 호출 없음"
+
+
+def test_T23_trigger_qa_cron_dispatches_on_attempt_one():
+    """R2-04: _attempt_no=1 → 정상 dispatch 실행."""
+    patcher, client = _patch_client(204)
+    with patcher:
+        result = asyncio.run(svc.trigger_qa_cron({
+            "_scheduled_for": "2026-10-31T10:00:00+00:00",
+            "_attempt_no": 1,
+        }))
+    assert result.get("dispatch_accepted_at") is not None
+    assert len(client.calls) == 1
+
+
+def test_T24_dispatch_skipped_retry_has_required_keys():
+    """R2-04: DISPATCH_SKIPPED_RETRY 반환값 — 필수 키 및 None 타임스탬프 확인."""
+    patcher, _ = _patch_client(204)
+    with patcher:
+        result = asyncio.run(svc.trigger_qa_cron({
+            "_attempt_no": 3,
+        }))
+    assert result["status"] == "DISPATCH_SKIPPED_RETRY"
+    assert result["dispatch_attempted_at"] is None
+    assert result["dispatch_accepted_at"] is None
+    assert result["github_job_started_at"] is None
+    assert result["trigger_source"] == "tai_scheduler"
