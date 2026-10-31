@@ -59,17 +59,20 @@ _SCHEMA_STATUS_APPROVED = "APPROVED_FOR_RUNTIME_USE"
 # Evidence 후보·필드 허용 상태 — DB CHECK 계약 (최신 main d219a3463855)
 _ALLOWED_EVIDENCE_CANDIDATE_STATUSES: frozenset = frozenset({"APPROVED_BY_HUMAN"})
 _ALLOWED_EVIDENCE_FIELD_STATUSES: frozenset = frozenset({"APPROVED_BY_HUMAN"})
-# Evidence family 허용 목록 (DATE 추가 — Gate A)
-_ALLOWED_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT", "DATE"})
+# Evidence family 허용 목록 (REPORT_NUMBER 추가 — WO-DOC260-P0E-REPORT-NUMBER-001)
+_ALLOWED_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT", "DATE", "REPORT_NUMBER"})
 # family 식별자
 _FILE_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT"})
 _DATE_EVIDENCE_FAMILIES: frozenset = frozenset({"DATE"})
+_REPORT_NUMBER_FAMILIES: frozenset = frozenset({"REPORT_NUMBER"})
 # upload_type 계약 — family별 독립 (E-01: 교차 조합 422 차단)
 _ALLOWED_UPLOAD_TYPES: frozenset = frozenset({"attachment"})       # ATTACHMENT 전용
 _DATE_UPLOAD_TYPES: frozenset = frozenset({"timestamp_auto"})      # DATE 전용 (P0 matrix 실측값)
+_REPORT_NUMBER_UPLOAD_TYPES: frozenset = frozenset({"inspector_identity"})  # REPORT_NUMBER 전용
 # input_type 계약 — family별 독립 (E-01)
 _FILE_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"file"})
 _DATE_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"date"})
+_REPORT_NUMBER_INPUT_TYPES: frozenset = frozenset({"text"})
 
 
 def _verify_date_evidence_value(
@@ -109,6 +112,38 @@ def _verify_date_evidence_value(
             422,
             f"evidence field {ev_field_id!r}: "
             f"date value {date_value!r} is not a valid calendar date",
+        )
+
+
+def _verify_report_number_value(
+    *,
+    text_value: Any,
+    ev_field_id: str,
+    field_key: str,
+) -> None:
+    """REPORT_NUMBER 증적 필드 값 검증. FAIL-CLOSED.
+
+    실제 문자열(str) 타입 + 비어있지 않음 검증.
+    숫자·배열·객체·None·공백 전용 문자열 모두 차단 (R1-03-D).
+    """
+    if text_value is None:
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: "
+            f"REPORT_NUMBER value missing in runtime_data_json[{field_key!r}]",
+        )
+    if not isinstance(text_value, str):
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: "
+            f"REPORT_NUMBER value must be str, got {type(text_value).__name__!r}",
+        )
+    if not text_value.strip():
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: "
+            f"REPORT_NUMBER value must not be empty or whitespace-only "
+            f"in runtime_data_json[{field_key!r}]",
         )
 
 
@@ -189,6 +224,13 @@ def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id, schem
                     422,
                     f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
                     f"for DATE family (allowed: {sorted(_DATE_UPLOAD_TYPES)})",
+                )
+        elif ev_family in _REPORT_NUMBER_FAMILIES:
+            if ev_upload_type not in _REPORT_NUMBER_UPLOAD_TYPES:
+                raise ConfirmError(
+                    422,
+                    f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
+                    f"for REPORT_NUMBER family (allowed: {sorted(_REPORT_NUMBER_UPLOAD_TYPES)})",
                 )
         evidence_candidate_id = str(ev.get("evidence_candidate_id") or "")
         if not evidence_candidate_id:
@@ -432,6 +474,7 @@ def confirm_document_atomic(
             )
             attachment_evidence_manifest: list = []
             date_evidence_manifest: list = []
+            report_number_evidence_manifest: list = []
             for ev_conn in ev_connections:
                 ev_field = ev_conn["evidence_field"]
                 rf = ev_conn["runtime_field"]
@@ -505,8 +548,38 @@ def confirm_document_atomic(
                         "input_type":           "date",
                     })
 
+                elif ev_family in _REPORT_NUMBER_FAMILIES:
+                    # E-01: REPORT_NUMBER — input_type must be text
+                    if input_type not in _REPORT_NUMBER_INPUT_TYPES:
+                        raise ConfirmError(
+                            422,
+                            f"evidence field {str(ev_field.get('id'))!r}: "
+                            f"connected field input_type={input_type!r} not valid "
+                            f"for REPORT_NUMBER family (expected: text)",
+                        )
+                    text_value = runtime_values.get(field_key)
+                    _verify_report_number_value(
+                        text_value=text_value,
+                        ev_field_id=str(ev_field.get("id") or ""),
+                        field_key=field_key,
+                    )
+                    report_number_evidence_manifest.append({
+                        "evidence_field_id":    str(ev_field.get("id") or ""),
+                        "field_id":             field_id,
+                        "field_key":            field_key,
+                        "text_value":           str(text_value),
+                        "value_source":         "USER_INPUT",
+                        "value_semantic_class": "REPORT_NUMBER",
+                        "evidence_family":      "REPORT_NUMBER",
+                        "input_type":           "text",
+                    })
+
             # 14a-3. manifest 병합 (clock_timestamp() 호출 전 — Step 순서 보존)
-            combined_evidence_manifest = attachment_evidence_manifest + date_evidence_manifest
+            combined_evidence_manifest = (
+                attachment_evidence_manifest
+                + date_evidence_manifest
+                + report_number_evidence_manifest
+            )
 
             # 14b. 렌더 (05A) — 락 이후 값으로만, 서명 + 첨부 이미지 inline 포함
             render_doc = {

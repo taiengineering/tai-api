@@ -1321,3 +1321,265 @@ def test_C3_T10_error_message_no_leg_gate():
             f"C3-T10: 에러 메시지에 'evidence approval gate' 포함 필요. got: {e.detail!r}"
         )
     assert conn.rolled_back
+
+
+# ── REPORT_NUMBER evidence 테스트 (WO-DOC260-P0E-REPORT-NUMBER-001-R2) ──────────
+
+def _ev_row_report_number(ev_id="ev-rn", efc_id="efc-rn"):
+    """Helper: runtime_evidence_field row for REPORT_NUMBER family."""
+    return {
+        "id": ev_id,
+        "form_schema_id": SCHEMA_ID,
+        "evidence_candidate_id": efc_id,
+        "evidence_type": "REPORT_NUMBER",
+        "status": "APPROVED_BY_HUMAN",
+        "evidence_family": "REPORT_NUMBER",
+        "upload_type": "inspector_identity",
+    }
+
+
+def test_RN_T01_report_number_family_passes_r2_blocked_r1():
+    """RN-T01: REPORT_NUMBER family는 R2-03(family check)를 통과하고 R1-02(승인 게이트)에서 차단."""
+    conn = FakeConn(
+        locked_row=locked(),
+        field_rows=[_field_ev("f-rn", "registration_number", input_type="text", field_candidate_id="fc-rn")],
+        evidence_field_rows=[_ev_row_report_number()],
+        evidence_candidate_row={
+            "id": "efc-rn",
+            "field_candidate_id": "fc-rn",
+            "status": "CANDIDATE",    # 미승인 → R1-02 차단
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False, "expected ConfirmError"
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "evidence approval gate" in e.detail
+    assert conn.rolled_back
+
+
+def test_RN_T02_report_number_empty_string_blocks():
+    """RN-T02: REPORT_NUMBER evidence 빈 문자열 → 422 (R1-03-D)."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"registration_number": ""}),
+        field_rows=[_field_ev("f-rn", "registration_number", input_type="text", field_candidate_id="fc-rn")],
+        evidence_field_rows=[_ev_row_report_number()],
+        evidence_candidate_row={
+            "id": "efc-rn",
+            "field_candidate_id": "fc-rn",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "REPORT_NUMBER" in e.detail
+        assert "registration_number" in e.detail
+    assert conn.rolled_back
+
+
+def test_RN_T03_report_number_non_string_blocks():
+    """RN-T03: REPORT_NUMBER evidence 숫자값 → 422 (R1-03-D). 숫자·배열·객체 차단."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"registration_number": 12345}),
+        field_rows=[_field_ev("f-rn", "registration_number", input_type="text", field_candidate_id="fc-rn")],
+        evidence_field_rows=[_ev_row_report_number()],
+        evidence_candidate_row={
+            "id": "efc-rn",
+            "field_candidate_id": "fc-rn",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "REPORT_NUMBER" in e.detail
+        assert "str" in e.detail or "int" in e.detail
+    assert conn.rolled_back
+
+
+def test_RN_T04_report_number_wrong_upload_type_blocks():
+    """RN-T04: REPORT_NUMBER + upload_type=attachment → 422 (R2-03 교차 조합 차단)."""
+    conn = FakeConn(
+        locked_row=locked(),
+        field_rows=[_field_ev("f-rn", "registration_number", input_type="text", field_candidate_id="fc-rn")],
+        evidence_field_rows=[{
+            **_ev_row_report_number(),
+            "upload_type": "attachment",
+        }],
+        evidence_candidate_row={
+            "id": "efc-rn",
+            "field_candidate_id": "fc-rn",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "upload_type" in e.detail
+        assert "attachment" in e.detail
+    assert conn.rolled_back
+
+
+def test_RN_T05_report_number_valid_string_confirm_succeeds():
+    """RN-T05: REPORT_NUMBER 정상 문자열 + APPROVED_BY_HUMAN → Confirm 성공.
+
+    R1-04 요건: 승인된 REPORT_NUMBER + 정상 문자열 → Confirm 및 Snapshot 성공.
+    """
+    conn = FakeConn(
+        locked_row=locked(runtime={"registration_number": "ABC-12345-2026"}),
+        field_rows=[_field_ev("f-rn", "registration_number", input_type="text", field_candidate_id="fc-rn")],
+        evidence_field_rows=[_ev_row_report_number()],
+        evidence_candidate_row={
+            "id": "efc-rn",
+            "field_candidate_id": "fc-rn",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    out = confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료", current_user=user())
+    assert conn.committed and not conn.rolled_back
+    assert out["status"] == "APPROVED_BY_HUMAN"
+
+
+# ---------------------------------------------------------------------------
+# DATE family tests (DT-T01 ~ DT-T04)
+# ---------------------------------------------------------------------------
+
+def _ev_row_date(ev_id="ev-dt", efc_id="efc-dt"):
+    """Helper: runtime_evidence_field row for DATE family."""
+    return {
+        "id": ev_id,
+        "form_schema_id": SCHEMA_ID,
+        "evidence_candidate_id": efc_id,
+        "evidence_type": "DATE",
+        "status": "APPROVED_BY_HUMAN",
+        "evidence_family": "DATE",
+        "upload_type": "timestamp_auto",
+    }
+
+
+def test_DT_T01_date_valid_confirm_succeeds():
+    """DT-T01: DATE 정상 날짜 + APPROVED_BY_HUMAN → Confirm 성공, DATE Manifest 포함."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"inspection_date": "2026-10-31"}),
+        field_rows=[_field_ev("f-dt", "inspection_date", input_type="date", field_candidate_id="fc-dt")],
+        evidence_field_rows=[_ev_row_date()],
+        evidence_candidate_row={
+            "id": "efc-dt",
+            "field_candidate_id": "fc-dt",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    captured: list = []
+
+    def spy_render(*args, **kwargs):
+        captured.append(kwargs.get("attachment_evidence_manifest", []))
+        return {
+            "rendered_body": "<html/>",
+            "source_trace_snapshot": [],
+            "template_identity": "tpl",
+            "evidence_manifest": kwargs.get("attachment_evidence_manifest", []),
+        }
+
+    with (
+        patch("services.document_confirm_svc.build_render_artifacts", side_effect=spy_render),
+        patch("services.document_confirm_svc.compute_confirmed_snapshot_hash", return_value="a" * 64),
+    ):
+        out = confirm_document_atomic(DOC_ID, actor_id=None, comment="날짜확인", current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+    assert out["status"] == "APPROVED_BY_HUMAN"
+    assert len(captured) == 1
+    date_entries = [m for m in captured[0] if m.get("evidence_family") == "DATE"]
+    assert len(date_entries) == 1
+    assert date_entries[0]["date_value"] == "2026-10-31"
+    assert date_entries[0]["value_source"] == "USER_INPUT"
+    assert date_entries[0]["input_type"] == "date"
+
+
+def test_DT_T02_date_invalid_calendar_blocks():
+    """DT-T02: DATE 2026-02-30 (달력에 없는 날) → 422."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"inspection_date": "2026-02-30"}),
+        field_rows=[_field_ev("f-dt", "inspection_date", input_type="date", field_candidate_id="fc-dt")],
+        evidence_field_rows=[_ev_row_date()],
+        evidence_candidate_row={
+            "id": "efc-dt",
+            "field_candidate_id": "fc-dt",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "DATE" in e.detail or "date" in e.detail.lower()
+    assert conn.rolled_back
+
+
+def test_DT_T03_date_wrong_format_blocks():
+    """DT-T03: DATE "20261031" (대시 없는 포맷) → 422."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"inspection_date": "20261031"}),
+        field_rows=[_field_ev("f-dt", "inspection_date", input_type="date", field_candidate_id="fc-dt")],
+        evidence_field_rows=[_ev_row_date()],
+        evidence_candidate_row={
+            "id": "efc-dt",
+            "field_candidate_id": "fc-dt",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "DATE" in e.detail or "date" in e.detail.lower()
+    assert conn.rolled_back
+
+
+def test_DT_T04_date_empty_string_blocks():
+    """DT-T04: DATE 빈 문자열 → 422."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"inspection_date": ""}),
+        field_rows=[_field_ev("f-dt", "inspection_date", input_type="date", field_candidate_id="fc-dt")],
+        evidence_field_rows=[_ev_row_date()],
+        evidence_candidate_row={
+            "id": "efc-dt",
+            "field_candidate_id": "fc-dt",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "DATE" in e.detail or "date" in e.detail.lower()
+    assert conn.rolled_back
