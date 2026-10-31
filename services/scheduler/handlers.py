@@ -235,6 +235,11 @@ def _run_qa_scheduler_tick(p):
     return asyncio.run(scheduler_tick(_sb()))
 
 
+def _run_qa_cron_trigger(p):
+    from services.qa_cron_trigger_svc import trigger_qa_cron
+    return asyncio.run(trigger_qa_cron(p))
+
+
 def _run_public_data_sync_tick(p):
     from services.public_data_sync.scheduler_bridge import tick_public_data_sources
     limit = int(p.get("limit", 2))
@@ -375,6 +380,7 @@ def register_direct_handlers() -> dict[str, Handler]:
         "direct://shared_search_reconcile":   _run_shared_search_reconcile,
         "direct://saas_recurring_billing":    _run_saas_recurring_billing,
         "direct://qa_scheduler_tick":         _run_qa_scheduler_tick,
+        "direct://qa_cron_trigger":           _run_qa_cron_trigger,
         "direct://public_data_sync_tick":     _run_public_data_sync_tick,
         "direct://leg_law_refresh":           _run_leg_law_refresh,
     })
