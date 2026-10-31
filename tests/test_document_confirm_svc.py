@@ -1933,3 +1933,214 @@ def test_MT_T11_not_required_measurement_candidate_still_blocks():
         assert e.http_status == 422
         assert "evidence approval gate" in e.detail
     assert conn.rolled_back
+
+# PHOTO family tests (PT-T01 ~ PT-T06)
+# ---------------------------------------------------------------------------
+
+_PHOTO_FIELD_ID  = "f-pt"
+_PHOTO_STORAGE   = "storage://company-docs/attachments/document/%s/%s/abc123.jpg" % (DOC_ID, _PHOTO_FIELD_ID)
+
+def _ev_row_photo(ev_id="ev-pt", efc_id="efc-pt"):
+    """Helper: runtime_evidence_field row for PHOTO family."""
+    return {
+        "id": ev_id,
+        "form_schema_id": SCHEMA_ID,
+        "evidence_candidate_id": efc_id,
+        "evidence_type": "PHOTO",
+        "status": "APPROVED_BY_HUMAN",
+        "evidence_family": "PHOTO",
+        "upload_type": "image_upload",
+    }
+
+
+def _photo_snap(field_key="photos", field_id=_PHOTO_FIELD_ID, mime="image/jpeg"):
+    """Helper: minimal valid FileSnapshot for a photo field."""
+    return {
+        "_type": "file_snapshot",
+        "version": 1,
+        "field_id": field_id,
+        "field_key": field_key,
+        "storage_ref": _PHOTO_STORAGE,
+        "sha256": "a" * 64,
+        "mime_type": mime,
+        "byte_size": 1024,
+        "original_file_name": "photo.jpg",
+        "uploaded_by_user_id": "user-1",
+        "uploaded_at": "2026-10-31T00:00:00Z",
+    }
+
+
+def test_PT_T01_not_required_photo_no_image_confirm_succeeds():
+    """PT-T01: NOT_REQUIRED PHOTO 이미지 없음 → Confirm 성공, PHOTO Manifest 미포함."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"photos": None}),
+        field_rows=[_field_ev("f-pt", "photos", input_type="image",
+                              field_candidate_id="fc-pt", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_photo()],
+        evidence_candidate_row={
+            "id": "efc-pt", "field_candidate_id": "fc-pt",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    captured: list = []
+
+    def spy_render(*args, **kwargs):
+        captured.append(kwargs.get("attachment_evidence_manifest", []))
+        return {"rendered_body": "<html/>", "source_trace_snapshot": [], "template_identity": "tpl",
+                "evidence_manifest": []}
+
+    with (
+        patch("services.document_confirm_svc.build_render_artifacts", side_effect=spy_render),
+        patch("services.document_confirm_svc.compute_confirmed_snapshot_hash", return_value="a" * 64),
+        patch("services.document_confirm_svc.resolve_attachment_images_for_render", return_value={}),
+    ):
+        out = confirm_document_atomic(DOC_ID, actor_id=None, comment="공사일지", current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+    assert out["status"] == "APPROVED_BY_HUMAN"
+    assert len(captured) == 1
+    photo_entries = [m for m in captured[0] if m.get("evidence_family") == "PHOTO"]
+    assert len(photo_entries) == 0
+
+
+def test_PT_T02_valid_photo_creates_manifest():
+    """PT-T02: 정상 사진 + resolver 결과 포함 → Manifest 생성."""
+    snap = _photo_snap()
+    conn = FakeConn(
+        locked_row=locked(runtime={"photos": snap}),
+        field_rows=[_field_ev("f-pt", "photos", input_type="image",
+                              field_candidate_id="fc-pt", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_photo()],
+        evidence_candidate_row={
+            "id": "efc-pt", "field_candidate_id": "fc-pt",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    captured: list = []
+
+    def spy_render(*args, **kwargs):
+        captured.append(kwargs.get("attachment_evidence_manifest", []))
+        return {"rendered_body": "<html/>", "source_trace_snapshot": [], "template_identity": "tpl",
+                "evidence_manifest": []}
+
+    with (
+        patch("services.document_confirm_svc.build_render_artifacts", side_effect=spy_render),
+        patch("services.document_confirm_svc.compute_confirmed_snapshot_hash", return_value="a" * 64),
+        patch("services.document_confirm_svc.resolve_attachment_images_for_render",
+              return_value={"photos": "data:image/jpeg;base64,/9j/"}),
+    ):
+        out = confirm_document_atomic(DOC_ID, actor_id=None, comment="공사일지", current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+    assert len(captured) == 1
+    photo_entries = [m for m in captured[0] if m.get("evidence_family") == "PHOTO"]
+    assert len(photo_entries) == 1
+    assert photo_entries[0]["input_type"] == "image"
+    assert photo_entries[0]["mime_type"] == "image/jpeg"
+    assert photo_entries[0]["sha256"] == "a" * 64
+    assert photo_entries[0]["value_semantic_class"] == "PHOTO"
+
+
+def test_PT_T03_snapshot_not_in_resolver_result_blocks():
+    """PT-T03: Snapshot 존재하나 step 14a-1 결과에 field_key 없음 → 422."""
+    snap = _photo_snap()
+    conn = FakeConn(
+        locked_row=locked(runtime={"photos": snap}),
+        field_rows=[_field_ev("f-pt", "photos", input_type="image",
+                              field_candidate_id="fc-pt", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_photo()],
+        evidence_candidate_row={
+            "id": "efc-pt", "field_candidate_id": "fc-pt",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        with patch("services.document_confirm_svc.resolve_attachment_images_for_render",
+                   return_value={}):  # field_key 없음
+            confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "not verified by image resolver" in e.detail
+    assert conn.rolled_back
+
+
+def test_PT_T04_photo_wrong_mime_blocks():
+    """PT-T04: MIME=application/pdf (비이미지) → 422."""
+    snap = _photo_snap(mime="application/pdf")
+    conn = FakeConn(
+        locked_row=locked(runtime={"photos": snap}),
+        field_rows=[_field_ev("f-pt", "photos", input_type="image",
+                              field_candidate_id="fc-pt", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_photo()],
+        evidence_candidate_row={
+            "id": "efc-pt", "field_candidate_id": "fc-pt",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        with patch("services.document_confirm_svc.resolve_attachment_images_for_render",
+                   return_value={"photos": "data:image/jpeg;base64,/9j/"}):
+            confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "image allowlist" in e.detail
+    assert conn.rolled_back
+
+
+def test_PT_T05_photo_candidate_evidence_blocks():
+    """PT-T05: PHOTO + CANDIDATE evidence → 422 (evidence approval gate 유지)."""
+    snap = _photo_snap()
+    conn = FakeConn(
+        locked_row=locked(runtime={"photos": snap}),
+        field_rows=[_field_ev("f-pt", "photos", input_type="image",
+                              field_candidate_id="fc-pt", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_photo()],
+        evidence_candidate_row={
+            "id": "efc-pt", "field_candidate_id": "fc-pt",
+            "status": "CANDIDATE", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        with patch("services.document_confirm_svc.resolve_attachment_images_for_render",
+                   return_value={"photos": "data:image/jpeg;base64,/9j/"}):
+            confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "evidence approval gate" in e.detail
+    assert conn.rolled_back
+
+
+def test_PT_T06_photo_wrong_upload_type_blocks():
+    """PT-T06: PHOTO + upload_type=attachment → 422 (교차 조합 차단)."""
+    conn = FakeConn(
+        locked_row=locked(runtime={}),
+        field_rows=[_field_ev("f-pt", "photos", input_type="image",
+                              field_candidate_id="fc-pt", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[{
+            **_ev_row_photo(),
+            "upload_type": "attachment",
+        }],
+        evidence_candidate_row={
+            "id": "efc-pt", "field_candidate_id": "fc-pt",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        with patch("services.document_confirm_svc.resolve_attachment_images_for_render",
+                   return_value={}):
+            confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "upload_type" in e.detail
+        assert "attachment" in e.detail
+    assert conn.rolled_back
