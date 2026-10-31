@@ -60,28 +60,32 @@ _SCHEMA_STATUS_APPROVED = "APPROVED_FOR_RUNTIME_USE"
 # Evidence 후보·필드 허용 상태 — DB CHECK 계약 (최신 main d219a3463855)
 _ALLOWED_EVIDENCE_CANDIDATE_STATUSES: frozenset = frozenset({"APPROVED_BY_HUMAN"})
 _ALLOWED_EVIDENCE_FIELD_STATUSES: frozenset = frozenset({"APPROVED_BY_HUMAN"})
-# Evidence family 허용 목록 (PHOTO 추가 — WO-DOC260-P0E-PHOTO-001)
-_ALLOWED_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT", "DATE", "REPORT_NUMBER", "MEASUREMENT", "PHOTO"})
+# Evidence family 허용 목록 (SIGNATURE 추가 — WO-DOC260-OBJ10-G6-SIGNATURE-BATCH-001)
+_ALLOWED_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT", "DATE", "REPORT_NUMBER", "MEASUREMENT", "PHOTO", "SIGNATURE"})
 # family 식별자
 _FILE_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT"})
 _DATE_EVIDENCE_FAMILIES: frozenset = frozenset({"DATE"})
 _REPORT_NUMBER_FAMILIES: frozenset = frozenset({"REPORT_NUMBER"})
 _MEASUREMENT_FAMILIES: frozenset = frozenset({"MEASUREMENT"})
 _PHOTO_FAMILIES: frozenset = frozenset({"PHOTO"})
+_SIGNATURE_FAMILIES: frozenset = frozenset({"SIGNATURE"})
 # upload_type 계약 — family별 독립 (E-01: 교차 조합 422 차단)
 _ALLOWED_UPLOAD_TYPES: frozenset = frozenset({"attachment"})               # ATTACHMENT 전용
 _DATE_UPLOAD_TYPES: frozenset = frozenset({"timestamp_auto"})              # DATE 전용
 _REPORT_NUMBER_UPLOAD_TYPES: frozenset = frozenset({"inspector_identity"}) # REPORT_NUMBER 전용
 _MEASUREMENT_UPLOAD_TYPES: frozenset = frozenset({"measurement_input"})    # MEASUREMENT 전용
 _PHOTO_UPLOAD_TYPES: frozenset = frozenset({"image_upload"})               # PHOTO 전용
+_SIGNATURE_UPLOAD_TYPES: frozenset = frozenset({"signature"})              # SIGNATURE 전용
 # input_type 계약 — family별 독립 (E-01)
 _FILE_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"file"})
 _DATE_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"date"})
 _REPORT_NUMBER_INPUT_TYPES: frozenset = frozenset({"text"})
 _MEASUREMENT_INPUT_TYPES: frozenset = frozenset({"measurement", "date"})
 _PHOTO_INPUT_TYPES: frozenset = frozenset({"image"})
+_SIGNATURE_INPUT_TYPES: frozenset = frozenset({"signature"})
 _MEASUREMENT_OPTIONAL_STATUS: str = "NOT_REQUIRED"   # runtime_field.required_status — 선택 입력
 _PHOTO_OPTIONAL_STATUS: str = "NOT_REQUIRED"         # PHOTO 선택 필드 동일 계약
+_SIGNATURE_OPTIONAL_STATUS: str = "NOT_REQUIRED"     # SIGNATURE 선택 필드 동일 계약
 
 
 def _verify_date_evidence_value(
@@ -201,6 +205,48 @@ def _verify_image_snapshot_for_evidence(
             422,
             f"evidence field {ev_field_id!r}: PHOTO snapshot field_key={field_key!r} "
             f"not verified by image resolver (step 14a-1) — confirm blocked",
+        )
+
+
+def _verify_signature_snapshot_for_evidence(
+    *,
+    snapshot: Any,
+    field_id: str,
+    field_key: str,
+    ev_field_id: str,
+    signature_images: Dict[str, str],
+) -> None:
+    """SIGNATURE 증적 signature_snapshot 경량 검증. FAIL-CLOSED.
+
+    Step 14a (resolve_signature_images_for_render) 검증 결과를 신뢰.
+    Storage 재다운로드·SHA256 재계산·PNG 재검증 없음.
+    추가로 확인: _type·field binding·step 14a 통과 여부.
+    """
+    if not isinstance(snapshot, dict) or snapshot.get("_type") != "signature_snapshot":
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: SIGNATURE snapshot malformed "
+            f"in runtime_data_json[{field_key!r}]",
+        )
+    if snapshot.get("field_key") != field_key:
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: SIGNATURE snapshot field_key mismatch "
+            f"snap={snapshot.get('field_key')!r} expected={field_key!r}",
+        )
+    snap_field_id = str(snapshot.get("field_id") or "")
+    if snap_field_id != field_id:
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: SIGNATURE snapshot field_id mismatch "
+            f"snap={snap_field_id!r} expected={field_id!r}",
+        )
+    # Step 14a가 해당 필드를 검증·해석했어야 함 — 결과에 없으면 차단
+    if field_key not in signature_images:
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: SIGNATURE field_key={field_key!r} "
+            f"not verified by signature resolver (step 14a) — confirm blocked",
         )
 
 
@@ -334,6 +380,13 @@ def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id, schem
                     422,
                     f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
                     f"for PHOTO family (allowed: {sorted(_PHOTO_UPLOAD_TYPES)})",
+                )
+        elif ev_family in _SIGNATURE_FAMILIES:
+            if ev_upload_type not in _SIGNATURE_UPLOAD_TYPES:
+                raise ConfirmError(
+                    422,
+                    f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
+                    f"for SIGNATURE family (allowed: {sorted(_SIGNATURE_UPLOAD_TYPES)})",
                 )
         evidence_candidate_id = str(ev.get("evidence_candidate_id") or "")
         if not evidence_candidate_id:
@@ -580,6 +633,13 @@ def confirm_document_atomic(
             report_number_evidence_manifest: list = []
             measurement_evidence_manifest: list = []
             photo_evidence_manifest: list = []
+            signature_evidence_manifest: list = []
+            # R2-01: step 14a 기검증 manifest 항목 조회 — 출처(type/source) 보존용
+            _sig_manifest_by_key: Dict[str, Dict] = {
+                e.get("field_key", ""): e
+                for e in (sig_result.get("manifest") or [])
+                if e.get("field_key")
+            }
             for ev_conn in ev_connections:
                 ev_field = ev_conn["evidence_field"]
                 rf = ev_conn["runtime_field"]
@@ -779,6 +839,49 @@ def confirm_document_atomic(
                             "input_type":           "image",
                         })
 
+                elif ev_family in _SIGNATURE_FAMILIES:
+                    # E-01: SIGNATURE — input_type must be signature
+                    if input_type not in _SIGNATURE_INPUT_TYPES:
+                        raise ConfirmError(
+                            422,
+                            f"evidence field {str(ev_field.get('id'))!r}: "
+                            f"connected field input_type={input_type!r} not valid "
+                            f"for SIGNATURE family (expected: signature)",
+                        )
+                    ev_id_str = str(ev_field.get("id") or "")
+                    req_status = str(rf.get("required_status") or "")
+                    is_optional = req_status == _SIGNATURE_OPTIONAL_STATUS
+                    snap = runtime_values.get(field_key)
+                    if is_optional and snap is None:
+                        pass  # NOT_REQUIRED — 서명 없으면 manifest 제외
+                    else:
+                        if snap is None:
+                            raise ConfirmError(
+                                422,
+                                f"evidence field {ev_id_str!r}: SIGNATURE value missing "
+                                f"in runtime_data_json[{field_key!r}]",
+                            )
+                        _verify_signature_snapshot_for_evidence(
+                            snapshot=snap,
+                            field_id=field_id,
+                            field_key=field_key,
+                            ev_field_id=ev_id_str,
+                            signature_images=sig_result.get("images") or {},
+                        )
+                        # R2-01: step 14a 기검증 manifest 항목 재사용 — type·source 보존
+                        # _verify_signature_snapshot_for_evidence() 통과 = field_key가 sig_result["images"]에 존재
+                        # → _sig_manifest_by_key[field_key]도 반드시 존재 (resolve_signature_images_for_render 계약)
+                        _base_sig = dict(_sig_manifest_by_key.get(field_key) or {})
+                        signature_evidence_manifest.append({
+                            **_base_sig,                        # type, source, signer_user_id, signed_at, storage_ref, sha256, mime_type, byte_size 보존
+                            "field_id":             field_id,   # _base_sig 없을 때도 보장
+                            "field_key":            field_key,  # _base_sig 없을 때도 보장 (_sig_ev_keys 계산에 필요)
+                            "evidence_field_id":    ev_id_str,
+                            "evidence_family":      "SIGNATURE",
+                            "value_semantic_class": "SIGNATURE",
+                            "input_type":           "signature",
+                        })
+
             # 14a-3. manifest 병합 (clock_timestamp() 호출 전 — Step 순서 보존)
             combined_evidence_manifest = (
                 attachment_evidence_manifest
@@ -786,7 +889,19 @@ def confirm_document_atomic(
                 + report_number_evidence_manifest
                 + measurement_evidence_manifest
                 + photo_evidence_manifest
+                + signature_evidence_manifest
             )
+
+            # 14a-4. Signature manifest 중복 제거 (R1 — WO-DOC260-OBJ10-G6-SIGNATURE-BATCH-001)
+            # build_render_artifacts는 signature_manifest + attachment_evidence_manifest를
+            # evidence_manifest로 합산한다. SIGNATURE evidence가 있는 field_key는
+            # combined_evidence_manifest 경로로 이미 기록되므로 render 경로(sig_result["manifest"])
+            # 에서 제외해 이중 기록을 막는다.
+            _sig_ev_keys = frozenset(e["field_key"] for e in signature_evidence_manifest)
+            filtered_sig_manifest = [
+                entry for entry in (sig_result.get("manifest") or [])
+                if entry.get("field_key") not in _sig_ev_keys
+            ]
 
             # 14b. 렌더 (05A) — 락 이후 값으로만, 서명 + 첨부 이미지 inline 포함
             render_doc = {
@@ -802,7 +917,7 @@ def confirm_document_atomic(
                     fields=fields,
                     checklists=checklists,
                     signature_images=sig_result.get("images"),
-                    signature_manifest=sig_result.get("manifest"),
+                    signature_manifest=filtered_sig_manifest,
                     attachment_images=attachment_images,
                     attachment_evidence_manifest=combined_evidence_manifest,
                 )

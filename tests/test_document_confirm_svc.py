@@ -2144,3 +2144,386 @@ def test_PT_T06_photo_wrong_upload_type_blocks():
         assert "upload_type" in e.detail
         assert "attachment" in e.detail
     assert conn.rolled_back
+
+
+# ---------------------------------------------------------------------------
+# SIGNATURE family tests (SG-T01 ~ SG-T07)
+# ---------------------------------------------------------------------------
+
+_SIG_FIELD_ID  = "f-sg"
+_SIG_STORAGE   = "storage://company-docs/signatures/document/%s/%s/sig.png" % (DOC_ID, _SIG_FIELD_ID)
+
+def _ev_row_signature(ev_id="ev-sg", efc_id="efc-sg"):
+    """Helper: runtime_evidence_field row for SIGNATURE family."""
+    return {
+        "id": ev_id,
+        "form_schema_id": SCHEMA_ID,
+        "evidence_candidate_id": efc_id,
+        "evidence_type": "SIGNATURE",
+        "status": "APPROVED_BY_HUMAN",
+        "evidence_family": "SIGNATURE",
+        "upload_type": "signature",
+    }
+
+
+def _signature_snap(field_key="inspector_signature", field_id=_SIG_FIELD_ID):
+    """Helper: minimal valid signature_snapshot for a signature field."""
+    return {
+        "_type": "signature_snapshot",
+        "version": 1,
+        "field_id": field_id,
+        "field_key": field_key,
+        "storage_ref": _SIG_STORAGE,
+        "sha256": "b" * 64,
+        "mime_type": "image/png",
+        "byte_size": 2048,
+        "signer_user_id": "user-1",
+        "signed_at": "2026-10-31T09:00:00Z",
+        "source": "signature_pad",
+    }
+
+
+def test_SG_T01_not_required_signature_no_snap_confirm_succeeds():
+    """SG-T01: NOT_REQUIRED SIGNATURE 서명 없음 → Confirm 성공, SIGNATURE Manifest 미포함."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"inspector_signature": None}),
+        field_rows=[_field_ev(_SIG_FIELD_ID, "inspector_signature", input_type="signature",
+                              field_candidate_id="fc-sg", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_signature()],
+        evidence_candidate_row={
+            "id": "efc-sg", "field_candidate_id": "fc-sg",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    captured: list = []
+
+    def spy_render(*args, **kwargs):
+        captured.append(kwargs.get("attachment_evidence_manifest", []))
+        return {"rendered_body": "<html/>", "source_trace_snapshot": [], "template_identity": "tpl",
+                "evidence_manifest": []}
+
+    with (
+        patch("services.document_confirm_svc.build_render_artifacts", side_effect=spy_render),
+        patch("services.document_confirm_svc.compute_confirmed_snapshot_hash", return_value="a" * 64),
+        patch("services.document_confirm_svc.resolve_attachment_images_for_render", return_value={}),
+        patch("services.document_confirm_svc.resolve_signature_images_for_render",
+              return_value={"images": {}, "manifest": []}),
+    ):
+        out = confirm_document_atomic(DOC_ID, actor_id=None, comment="서명서", current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+    assert out["status"] == "APPROVED_BY_HUMAN"
+    assert len(captured) == 1
+    sig_entries = [m for m in captured[0] if m.get("evidence_family") == "SIGNATURE"]
+    assert len(sig_entries) == 0
+
+
+def test_SG_T02_valid_signature_creates_manifest():
+    """SG-T02: 정상 서명 + resolver 결과 포함 → Manifest 생성, type/source/signer_user_id/signed_at 포함."""
+    snap = _signature_snap()
+    conn = FakeConn(
+        locked_row=locked(runtime={"inspector_signature": snap}),
+        field_rows=[_field_ev(_SIG_FIELD_ID, "inspector_signature", input_type="signature",
+                              field_candidate_id="fc-sg", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_signature()],
+        evidence_candidate_row={
+            "id": "efc-sg", "field_candidate_id": "fc-sg",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    captured: list = []
+
+    def spy_render(*args, **kwargs):
+        captured.append(kwargs.get("attachment_evidence_manifest", []))
+        return {"rendered_body": "<html/>", "source_trace_snapshot": [], "template_identity": "tpl",
+                "evidence_manifest": []}
+
+    # step 14a가 실제 생성하는 manifest 항목 형태 — R2-01 이후 이를 기반으로 증적 항목 생성
+    fake_sig_manifest = [{
+        "type": "signature", "field_id": _SIG_FIELD_ID,
+        "field_key": "inspector_signature", "storage_ref": _SIG_STORAGE,
+        "sha256": "b" * 64, "mime_type": "image/png", "byte_size": 2048,
+        "signer_user_id": "user-1", "signed_at": "2026-10-31T09:00:00Z",
+        "source": "PROFILE_SIGNATURE",
+    }]
+
+    with (
+        patch("services.document_confirm_svc.build_render_artifacts", side_effect=spy_render),
+        patch("services.document_confirm_svc.compute_confirmed_snapshot_hash", return_value="a" * 64),
+        patch("services.document_confirm_svc.resolve_attachment_images_for_render", return_value={}),
+        patch("services.document_confirm_svc.resolve_signature_images_for_render",
+              return_value={"images": {"inspector_signature": "data:image/png;base64,iVBOR"},
+                            "manifest": fake_sig_manifest}),
+    ):
+        out = confirm_document_atomic(DOC_ID, actor_id=None, comment="서명서", current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+    assert len(captured) == 1
+    sig_entries = [m for m in captured[0] if m.get("evidence_family") == "SIGNATURE"]
+    assert len(sig_entries) == 1
+    e = sig_entries[0]
+    assert e["input_type"] == "signature"
+    assert e["mime_type"] == "image/png"
+    assert e["sha256"] == "b" * 64
+    assert e["type"] == "signature"             # R2-01: type 보존
+    assert e["source"] == "PROFILE_SIGNATURE"  # R2-01: source 보존
+    assert e["value_semantic_class"] == "SIGNATURE"
+    assert e["signer_user_id"] == "user-1"
+    assert e["signed_at"] == "2026-10-31T09:00:00Z"
+
+
+def test_SG_T03_snapshot_not_in_resolver_result_blocks():
+    """SG-T03: Snapshot 존재하나 step 14a 결과에 field_key 없음 → 422."""
+    snap = _signature_snap()
+    conn = FakeConn(
+        locked_row=locked(runtime={"inspector_signature": snap}),
+        field_rows=[_field_ev(_SIG_FIELD_ID, "inspector_signature", input_type="signature",
+                              field_candidate_id="fc-sg", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_signature()],
+        evidence_candidate_row={
+            "id": "efc-sg", "field_candidate_id": "fc-sg",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        with (
+            patch("services.document_confirm_svc.resolve_attachment_images_for_render", return_value={}),
+            patch("services.document_confirm_svc.resolve_signature_images_for_render",
+                  return_value={"images": {}, "manifest": []}),  # field_key 없음
+        ):
+            confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "not verified by signature resolver" in e.detail
+    assert conn.rolled_back
+
+
+def test_SG_T04_malformed_snapshot_type_blocks():
+    """SG-T04: snapshot._type != 'signature_snapshot' → 422 (형식 오류)."""
+    bad_snap = {**_signature_snap(), "_type": "file_snapshot"}
+    conn = FakeConn(
+        locked_row=locked(runtime={"inspector_signature": bad_snap}),
+        field_rows=[_field_ev(_SIG_FIELD_ID, "inspector_signature", input_type="signature",
+                              field_candidate_id="fc-sg", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_signature()],
+        evidence_candidate_row={
+            "id": "efc-sg", "field_candidate_id": "fc-sg",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        with (
+            patch("services.document_confirm_svc.resolve_attachment_images_for_render", return_value={}),
+            patch("services.document_confirm_svc.resolve_signature_images_for_render",
+                  return_value={"images": {"inspector_signature": "data:image/png;base64,iVBOR"}, "manifest": []}),
+        ):
+            confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "SIGNATURE snapshot malformed" in e.detail
+    assert conn.rolled_back
+
+
+def test_SG_T05_candidate_evidence_blocks():
+    """SG-T05: SIGNATURE + CANDIDATE evidence → 422 (evidence approval gate 유지)."""
+    snap = _signature_snap()
+    conn = FakeConn(
+        locked_row=locked(runtime={"inspector_signature": snap}),
+        field_rows=[_field_ev(_SIG_FIELD_ID, "inspector_signature", input_type="signature",
+                              field_candidate_id="fc-sg", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_signature()],
+        evidence_candidate_row={
+            "id": "efc-sg", "field_candidate_id": "fc-sg",
+            "status": "CANDIDATE", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        with (
+            patch("services.document_confirm_svc.resolve_attachment_images_for_render", return_value={}),
+            patch("services.document_confirm_svc.resolve_signature_images_for_render",
+                  return_value={"images": {"inspector_signature": "data:image/png;base64,iVBOR"}, "manifest": []}),
+        ):
+            confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "evidence approval gate" in e.detail
+    assert conn.rolled_back
+
+
+def test_SG_T06_wrong_upload_type_blocks():
+    """SG-T06: SIGNATURE + upload_type=attachment → 422 (교차 조합 차단)."""
+    conn = FakeConn(
+        locked_row=locked(runtime={}),
+        field_rows=[_field_ev(_SIG_FIELD_ID, "inspector_signature", input_type="signature",
+                              field_candidate_id="fc-sg", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[{
+            **_ev_row_signature(),
+            "upload_type": "attachment",
+        }],
+        evidence_candidate_row={
+            "id": "efc-sg", "field_candidate_id": "fc-sg",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        with (
+            patch("services.document_confirm_svc.resolve_attachment_images_for_render", return_value={}),
+            patch("services.document_confirm_svc.resolve_signature_images_for_render",
+                  return_value={"images": {}, "manifest": []}),
+        ):
+            confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "upload_type" in e.detail
+        assert "attachment" in e.detail
+    assert conn.rolled_back
+
+
+def test_SG_T07_wrong_input_type_blocks():
+    """SG-T07: SIGNATURE evidence + input_type=image (불일치) → 422."""
+    conn = FakeConn(
+        locked_row=locked(runtime={}),
+        field_rows=[_field_ev(_SIG_FIELD_ID, "inspector_signature", input_type="image",
+                              field_candidate_id="fc-sg", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_signature()],
+        evidence_candidate_row={
+            "id": "efc-sg", "field_candidate_id": "fc-sg",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        with (
+            patch("services.document_confirm_svc.resolve_attachment_images_for_render", return_value={}),
+            patch("services.document_confirm_svc.resolve_signature_images_for_render",
+                  return_value={"images": {}, "manifest": []}),
+        ):
+            confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "SIGNATURE family" in e.detail
+    assert conn.rolled_back
+
+
+def test_SG_T08_sig_manifest_dedup_filters_evidence_covered_fields():
+    """SG-T08 (R1): sig_result["manifest"]에 field_key가 있고 SIGNATURE evidence도 있을 때
+    build_render_artifacts에 전달되는 signature_manifest에서 해당 field_key가 제거된다.
+    이중 기록 방지 검증."""
+    snap = _signature_snap()
+    conn = FakeConn(
+        locked_row=locked(runtime={"inspector_signature": snap}),
+        field_rows=[_field_ev(_SIG_FIELD_ID, "inspector_signature", input_type="signature",
+                              field_candidate_id="fc-sg", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_signature()],
+        evidence_candidate_row={
+            "id": "efc-sg", "field_candidate_id": "fc-sg",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    captured_render_kwargs: list = []
+
+    def spy_render(*args, **kwargs):
+        captured_render_kwargs.append(kwargs)
+        return {"rendered_body": "<html/>", "source_trace_snapshot": [], "template_identity": "tpl",
+                "evidence_manifest": []}
+
+    # sig_result["manifest"]에 inspector_signature가 이미 들어있는 경우를 시뮬레이션
+    fake_sig_manifest_entry = {
+        "type": "signature", "field_id": _SIG_FIELD_ID,
+        "field_key": "inspector_signature", "storage_ref": _SIG_STORAGE,
+        "sha256": "b" * 64, "mime_type": "image/png", "byte_size": 2048,
+        "signer_user_id": "user-1", "signed_at": "2026-10-31T09:00:00Z", "source": "signature_pad",
+    }
+
+    with (
+        patch("services.document_confirm_svc.build_render_artifacts", side_effect=spy_render),
+        patch("services.document_confirm_svc.compute_confirmed_snapshot_hash", return_value="a" * 64),
+        patch("services.document_confirm_svc.resolve_attachment_images_for_render", return_value={}),
+        patch("services.document_confirm_svc.resolve_signature_images_for_render",
+              return_value={"images": {"inspector_signature": "data:image/png;base64,iVBOR"},
+                            "manifest": [fake_sig_manifest_entry]}),
+    ):
+        out = confirm_document_atomic(DOC_ID, actor_id=None, comment="서명서", current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+    assert len(captured_render_kwargs) == 1
+    kw = captured_render_kwargs[0]
+
+    # signature_manifest에서 inspector_signature 제거됐어야 함 (이중 기록 방지)
+    sig_manifest_passed = kw.get("signature_manifest", [])
+    assert all(e.get("field_key") != "inspector_signature" for e in sig_manifest_passed), \
+        "inspector_signature가 signature_manifest에 남아 이중 기록 발생"
+
+    # combined_evidence_manifest에는 SIGNATURE evidence entry가 있어야 함
+    ev_manifest_passed = kw.get("attachment_evidence_manifest", [])
+    sig_ev_entries = [e for e in ev_manifest_passed if e.get("evidence_family") == "SIGNATURE"]
+    assert len(sig_ev_entries) == 1
+    assert sig_ev_entries[0]["field_key"] == "inspector_signature"
+
+
+def test_SG_T09_final_evidence_manifest_exactly_one_entry_with_provenance():
+    """SG-T09 (R2): 증적 서명 1건 → 최종 evidence_manifest에 정확히 1건, 출처(type/source) 보존.
+    build_render_artifacts를 실제 호출하여 signature_manifest + combined_evidence_manifest 합산 결과 검증."""
+    snap = _signature_snap()
+    conn = FakeConn(
+        locked_row=locked(runtime={"inspector_signature": snap}),
+        field_rows=[_field_ev(_SIG_FIELD_ID, "inspector_signature", input_type="signature",
+                              field_candidate_id="fc-sg", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_signature()],
+        evidence_candidate_row={
+            "id": "efc-sg", "field_candidate_id": "fc-sg",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    captured_evidence: list = []
+
+    def spy_hash(**kwargs):
+        captured_evidence.append(kwargs.get("evidence_manifest", []))
+        return "a" * 64
+
+    # sig_result["manifest"] 항목 — step 14a가 storage 검증 후 생성하는 형태
+    fake_sig_manifest_entry = {
+        "type": "signature", "field_id": _SIG_FIELD_ID,
+        "field_key": "inspector_signature", "storage_ref": _SIG_STORAGE,
+        "sha256": "b" * 64, "mime_type": "image/png", "byte_size": 2048,
+        "signer_user_id": "user-1", "signed_at": "2026-10-31T09:00:00Z",
+        "source": "PROFILE_SIGNATURE",
+    }
+
+    with (
+        patch("services.document_confirm_svc.compute_confirmed_snapshot_hash", side_effect=spy_hash),
+        patch("services.document_confirm_svc.resolve_attachment_images_for_render", return_value={}),
+        patch("services.document_confirm_svc.resolve_signature_images_for_render",
+              return_value={"images": {"inspector_signature": "data:image/png;base64,iVBOR"},
+                            "manifest": [fake_sig_manifest_entry]}),
+    ):
+        out = confirm_document_atomic(DOC_ID, actor_id=None, comment="서명서", current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+    assert len(captured_evidence) == 1
+    final_ev = captured_evidence[0]
+
+    # 최종 evidence_manifest에 inspector_signature가 정확히 1건 (이중 기록 없음)
+    sig_entries = [e for e in final_ev if e.get("field_key") == "inspector_signature"]
+    assert len(sig_entries) == 1, f"expected 1 signature entry, got {len(sig_entries)}"
+
+    e = sig_entries[0]
+    assert e.get("type") == "signature"             # type 보존
+    assert e.get("source") == "PROFILE_SIGNATURE"  # source 보존
+    assert e.get("evidence_field_id") == "ev-sg"   # 증적 연결 정보 추가
+    assert e.get("evidence_family") == "SIGNATURE"
+    assert e.get("signer_user_id") == "user-1"
+    assert e.get("signed_at") == "2026-10-31T09:00:00Z"
