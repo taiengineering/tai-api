@@ -59,20 +59,23 @@ _SCHEMA_STATUS_APPROVED = "APPROVED_FOR_RUNTIME_USE"
 # Evidence 후보·필드 허용 상태 — DB CHECK 계약 (최신 main d219a3463855)
 _ALLOWED_EVIDENCE_CANDIDATE_STATUSES: frozenset = frozenset({"APPROVED_BY_HUMAN"})
 _ALLOWED_EVIDENCE_FIELD_STATUSES: frozenset = frozenset({"APPROVED_BY_HUMAN"})
-# Evidence family 허용 목록 (REPORT_NUMBER 추가 — WO-DOC260-P0E-REPORT-NUMBER-001)
-_ALLOWED_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT", "DATE", "REPORT_NUMBER"})
+# Evidence family 허용 목록 (MEASUREMENT 추가 — WO-DOC260-P0E-MEASUREMENT-001)
+_ALLOWED_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT", "DATE", "REPORT_NUMBER", "MEASUREMENT"})
 # family 식별자
 _FILE_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT"})
 _DATE_EVIDENCE_FAMILIES: frozenset = frozenset({"DATE"})
 _REPORT_NUMBER_FAMILIES: frozenset = frozenset({"REPORT_NUMBER"})
+_MEASUREMENT_FAMILIES: frozenset = frozenset({"MEASUREMENT"})
 # upload_type 계약 — family별 독립 (E-01: 교차 조합 422 차단)
-_ALLOWED_UPLOAD_TYPES: frozenset = frozenset({"attachment"})       # ATTACHMENT 전용
-_DATE_UPLOAD_TYPES: frozenset = frozenset({"timestamp_auto"})      # DATE 전용 (P0 matrix 실측값)
-_REPORT_NUMBER_UPLOAD_TYPES: frozenset = frozenset({"inspector_identity"})  # REPORT_NUMBER 전용
+_ALLOWED_UPLOAD_TYPES: frozenset = frozenset({"attachment"})               # ATTACHMENT 전용
+_DATE_UPLOAD_TYPES: frozenset = frozenset({"timestamp_auto"})              # DATE 전용
+_REPORT_NUMBER_UPLOAD_TYPES: frozenset = frozenset({"inspector_identity"}) # REPORT_NUMBER 전용
+_MEASUREMENT_UPLOAD_TYPES: frozenset = frozenset({"measurement_input"})    # MEASUREMENT 전용
 # input_type 계약 — family별 독립 (E-01)
 _FILE_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"file"})
 _DATE_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"date"})
 _REPORT_NUMBER_INPUT_TYPES: frozenset = frozenset({"text"})
+_MEASUREMENT_INPUT_TYPES: frozenset = frozenset({"measurement", "date"})
 
 
 def _verify_date_evidence_value(
@@ -112,6 +115,37 @@ def _verify_date_evidence_value(
             422,
             f"evidence field {ev_field_id!r}: "
             f"date value {date_value!r} is not a valid calendar date",
+        )
+
+
+def _verify_measurement_value(
+    *,
+    measurement_value: Any,
+    ev_field_id: str,
+    field_key: str,
+) -> None:
+    """MEASUREMENT 증적 필드 값 검증 (measurement input_type 전용). FAIL-CLOSED.
+
+    비어있지 않은 문자열(str) 타입 검증.
+    수치·텍스트 모두 str로 저장되므로 Number 강제 변환 없음 (WO-DOC260-P0E-MEASUREMENT-001 계약).
+    """
+    if measurement_value is None:
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: "
+            f"MEASUREMENT value missing in runtime_data_json[{field_key!r}]",
+        )
+    if not isinstance(measurement_value, str):
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: "
+            f"MEASUREMENT value must be str, got {type(measurement_value).__name__!r}",
+        )
+    if not measurement_value.strip():
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: "
+            f"MEASUREMENT value in runtime_data_json[{field_key!r}] is blank",
         )
 
 
@@ -231,6 +265,13 @@ def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id, schem
                     422,
                     f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
                     f"for REPORT_NUMBER family (allowed: {sorted(_REPORT_NUMBER_UPLOAD_TYPES)})",
+                )
+        elif ev_family in _MEASUREMENT_FAMILIES:
+            if ev_upload_type not in _MEASUREMENT_UPLOAD_TYPES:
+                raise ConfirmError(
+                    422,
+                    f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
+                    f"for MEASUREMENT family (allowed: {sorted(_MEASUREMENT_UPLOAD_TYPES)})",
                 )
         evidence_candidate_id = str(ev.get("evidence_candidate_id") or "")
         if not evidence_candidate_id:
@@ -475,6 +516,7 @@ def confirm_document_atomic(
             attachment_evidence_manifest: list = []
             date_evidence_manifest: list = []
             report_number_evidence_manifest: list = []
+            measurement_evidence_manifest: list = []
             for ev_conn in ev_connections:
                 ev_field = ev_conn["evidence_field"]
                 rf = ev_conn["runtime_field"]
@@ -574,11 +616,57 @@ def confirm_document_atomic(
                         "input_type":           "text",
                     })
 
+                elif ev_family in _MEASUREMENT_FAMILIES:
+                    # E-01: MEASUREMENT — input_type must be measurement or date
+                    if input_type not in _MEASUREMENT_INPUT_TYPES:
+                        raise ConfirmError(
+                            422,
+                            f"evidence field {str(ev_field.get('id'))!r}: "
+                            f"connected field input_type={input_type!r} not valid "
+                            f"for MEASUREMENT family (expected: measurement or date)",
+                        )
+                    ev_id_str = str(ev_field.get("id") or "")
+                    if input_type == "date":
+                        date_value = runtime_values.get(field_key)
+                        _verify_date_evidence_value(
+                            date_value=date_value,
+                            ev_field_id=ev_id_str,
+                            field_key=field_key,
+                        )
+                        measurement_evidence_manifest.append({
+                            "evidence_field_id":    ev_id_str,
+                            "field_id":             field_id,
+                            "field_key":            field_key,
+                            "date_value":           str(date_value),
+                            "value_source":         "USER_INPUT",
+                            "value_semantic_class": "PENDING_CLASSIFICATION",
+                            "evidence_family":      "MEASUREMENT",
+                            "input_type":           "date",
+                        })
+                    else:
+                        measurement_value = runtime_values.get(field_key)
+                        _verify_measurement_value(
+                            measurement_value=measurement_value,
+                            ev_field_id=ev_id_str,
+                            field_key=field_key,
+                        )
+                        measurement_evidence_manifest.append({
+                            "evidence_field_id":    ev_id_str,
+                            "field_id":             field_id,
+                            "field_key":            field_key,
+                            "text_value":           str(measurement_value),
+                            "value_source":         "USER_INPUT",
+                            "value_semantic_class": "MEASUREMENT",
+                            "evidence_family":      "MEASUREMENT",
+                            "input_type":           "measurement",
+                        })
+
             # 14a-3. manifest 병합 (clock_timestamp() 호출 전 — Step 순서 보존)
             combined_evidence_manifest = (
                 attachment_evidence_manifest
                 + date_evidence_manifest
                 + report_number_evidence_manifest
+                + measurement_evidence_manifest
             )
 
             # 14b. 렌더 (05A) — 락 이후 값으로만, 서명 + 첨부 이미지 inline 포함

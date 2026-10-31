@@ -1583,3 +1583,222 @@ def test_DT_T04_date_empty_string_blocks():
         assert e.http_status == 422
         assert "DATE" in e.detail or "date" in e.detail.lower()
     assert conn.rolled_back
+
+
+# ---------------------------------------------------------------------------
+# MEASUREMENT family tests (MT-T01 ~ MT-T07)
+# ---------------------------------------------------------------------------
+
+def _ev_row_measurement(ev_id="ev-mt", efc_id="efc-mt"):
+    """Helper: runtime_evidence_field row for MEASUREMENT family."""
+    return {
+        "id": ev_id,
+        "form_schema_id": SCHEMA_ID,
+        "evidence_candidate_id": efc_id,
+        "evidence_type": "MEASUREMENT",
+        "status": "APPROVED_BY_HUMAN",
+        "evidence_family": "MEASUREMENT",
+        "upload_type": "measurement_input",
+    }
+
+
+def test_MT_T01_measurement_valid_string_confirm_succeeds():
+    """MT-T01: MEASUREMENT measurement 정상 문자열 → Confirm 성공, Manifest 포함."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"oxygen_level": "21.0"}),
+        field_rows=[_field_ev("f-mt", "oxygen_level", input_type="measurement", field_candidate_id="fc-mt")],
+        evidence_field_rows=[_ev_row_measurement()],
+        evidence_candidate_row={
+            "id": "efc-mt",
+            "field_candidate_id": "fc-mt",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    captured: list = []
+
+    def spy_render(*args, **kwargs):
+        captured.append(kwargs.get("attachment_evidence_manifest", []))
+        return {
+            "rendered_body": "<html/>",
+            "source_trace_snapshot": [],
+            "template_identity": "tpl",
+            "evidence_manifest": kwargs.get("attachment_evidence_manifest", []),
+        }
+
+    with (
+        patch("services.document_confirm_svc.build_render_artifacts", side_effect=spy_render),
+        patch("services.document_confirm_svc.compute_confirmed_snapshot_hash", return_value="a" * 64),
+    ):
+        out = confirm_document_atomic(DOC_ID, actor_id=None, comment="측정완료", current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+    assert out["status"] == "APPROVED_BY_HUMAN"
+    assert len(captured) == 1
+    mt_entries = [m for m in captured[0] if m.get("evidence_family") == "MEASUREMENT"]
+    assert len(mt_entries) == 1
+    assert mt_entries[0]["text_value"] == "21.0"
+    assert mt_entries[0]["input_type"] == "measurement"
+    assert mt_entries[0]["value_source"] == "USER_INPUT"
+    assert mt_entries[0]["value_semantic_class"] == "MEASUREMENT"
+
+
+def test_MT_T02_measurement_date_subtype_valid_confirm_succeeds():
+    """MT-T02: MEASUREMENT date 서브타입 정상 날짜 → Confirm 성공, Manifest 포함."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"measurement_datetime": "2026-10-31"}),
+        field_rows=[_field_ev("f-mt", "measurement_datetime", input_type="date", field_candidate_id="fc-mt")],
+        evidence_field_rows=[_ev_row_measurement()],
+        evidence_candidate_row={
+            "id": "efc-mt",
+            "field_candidate_id": "fc-mt",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    captured: list = []
+
+    def spy_render(*args, **kwargs):
+        captured.append(kwargs.get("attachment_evidence_manifest", []))
+        return {
+            "rendered_body": "<html/>",
+            "source_trace_snapshot": [],
+            "template_identity": "tpl",
+            "evidence_manifest": kwargs.get("attachment_evidence_manifest", []),
+        }
+
+    with (
+        patch("services.document_confirm_svc.build_render_artifacts", side_effect=spy_render),
+        patch("services.document_confirm_svc.compute_confirmed_snapshot_hash", return_value="a" * 64),
+    ):
+        out = confirm_document_atomic(DOC_ID, actor_id=None, comment="측정완료", current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+    assert out["status"] == "APPROVED_BY_HUMAN"
+    assert len(captured) == 1
+    mt_entries = [m for m in captured[0] if m.get("evidence_family") == "MEASUREMENT"]
+    assert len(mt_entries) == 1
+    assert mt_entries[0]["date_value"] == "2026-10-31"
+    assert mt_entries[0]["input_type"] == "date"
+    assert mt_entries[0]["value_semantic_class"] == "PENDING_CLASSIFICATION"
+
+
+def test_MT_T03_measurement_candidate_status_blocks():
+    """MT-T03: MEASUREMENT CANDIDATE → 422 evidence approval gate."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"oxygen_level": "21.0"}),
+        field_rows=[_field_ev("f-mt", "oxygen_level", input_type="measurement", field_candidate_id="fc-mt")],
+        evidence_field_rows=[_ev_row_measurement()],
+        evidence_candidate_row={
+            "id": "efc-mt",
+            "field_candidate_id": "fc-mt",
+            "status": "CANDIDATE",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "evidence approval gate" in e.detail
+    assert conn.rolled_back
+
+
+def test_MT_T04_measurement_empty_string_blocks():
+    """MT-T04: MEASUREMENT 빈 문자열 → 422."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"oxygen_level": ""}),
+        field_rows=[_field_ev("f-mt", "oxygen_level", input_type="measurement", field_candidate_id="fc-mt")],
+        evidence_field_rows=[_ev_row_measurement()],
+        evidence_candidate_row={
+            "id": "efc-mt",
+            "field_candidate_id": "fc-mt",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "MEASUREMENT" in e.detail
+    assert conn.rolled_back
+
+
+def test_MT_T05_measurement_non_string_blocks():
+    """MT-T05: MEASUREMENT 숫자 타입 → 422 (문자열 강제 아님)."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"oxygen_level": 21.0}),
+        field_rows=[_field_ev("f-mt", "oxygen_level", input_type="measurement", field_candidate_id="fc-mt")],
+        evidence_field_rows=[_ev_row_measurement()],
+        evidence_candidate_row={
+            "id": "efc-mt",
+            "field_candidate_id": "fc-mt",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "MEASUREMENT" in e.detail
+    assert conn.rolled_back
+
+
+def test_MT_T06_measurement_wrong_upload_type_blocks():
+    """MT-T06: MEASUREMENT + upload_type=attachment → 422 (교차 조합 차단)."""
+    conn = FakeConn(
+        locked_row=locked(),
+        field_rows=[_field_ev("f-mt", "oxygen_level", input_type="measurement", field_candidate_id="fc-mt")],
+        evidence_field_rows=[{
+            **_ev_row_measurement(),
+            "upload_type": "attachment",
+        }],
+        evidence_candidate_row={
+            "id": "efc-mt",
+            "field_candidate_id": "fc-mt",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "upload_type" in e.detail
+        assert "attachment" in e.detail
+    assert conn.rolled_back
+
+
+def test_MT_T07_measurement_date_invalid_calendar_blocks():
+    """MT-T07: MEASUREMENT date 서브타입 + 달력에 없는 날짜 → 422."""
+    conn = FakeConn(
+        locked_row=locked(runtime={"measurement_datetime": "2026-02-30"}),
+        field_rows=[_field_ev("f-mt", "measurement_datetime", input_type="date", field_candidate_id="fc-mt")],
+        evidence_field_rows=[_ev_row_measurement()],
+        evidence_candidate_row={
+            "id": "efc-mt",
+            "field_candidate_id": "fc-mt",
+            "status": "APPROVED_BY_HUMAN",
+            "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 422
+        assert "date" in e.detail.lower() or "DATE" in e.detail
+    assert conn.rolled_back
