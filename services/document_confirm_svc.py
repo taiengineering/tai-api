@@ -888,6 +888,17 @@ def confirm_document_atomic(
                 + signature_evidence_manifest
             )
 
+            # 14a-4. Signature manifest 중복 제거 (R1 — WO-DOC260-OBJ10-G6-SIGNATURE-BATCH-001)
+            # build_render_artifacts는 signature_manifest + attachment_evidence_manifest를
+            # evidence_manifest로 합산한다. SIGNATURE evidence가 있는 field_key는
+            # combined_evidence_manifest 경로로 이미 기록되므로 render 경로(sig_result["manifest"])
+            # 에서 제외해 이중 기록을 막는다.
+            _sig_ev_keys = frozenset(e["field_key"] for e in signature_evidence_manifest)
+            filtered_sig_manifest = [
+                entry for entry in (sig_result.get("manifest") or [])
+                if entry.get("field_key") not in _sig_ev_keys
+            ]
+
             # 14b. 렌더 (05A) — 락 이후 값으로만, 서명 + 첨부 이미지 inline 포함
             render_doc = {
                 "id": locked["id"],
@@ -902,7 +913,7 @@ def confirm_document_atomic(
                     fields=fields,
                     checklists=checklists,
                     signature_images=sig_result.get("images"),
-                    signature_manifest=sig_result.get("manifest"),
+                    signature_manifest=filtered_sig_manifest,
                     attachment_images=attachment_images,
                     attachment_evidence_manifest=combined_evidence_manifest,
                 )

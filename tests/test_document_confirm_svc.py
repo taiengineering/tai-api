@@ -2402,3 +2402,60 @@ def test_SG_T07_wrong_input_type_blocks():
         assert e.http_status == 422
         assert "SIGNATURE family" in e.detail
     assert conn.rolled_back
+
+
+def test_SG_T08_sig_manifest_dedup_filters_evidence_covered_fields():
+    """SG-T08 (R1): sig_result["manifest"]에 field_key가 있고 SIGNATURE evidence도 있을 때
+    build_render_artifacts에 전달되는 signature_manifest에서 해당 field_key가 제거된다.
+    이중 기록 방지 검증."""
+    snap = _signature_snap()
+    conn = FakeConn(
+        locked_row=locked(runtime={"inspector_signature": snap}),
+        field_rows=[_field_ev(_SIG_FIELD_ID, "inspector_signature", input_type="signature",
+                              field_candidate_id="fc-sg", required_status="NOT_REQUIRED")],
+        evidence_field_rows=[_ev_row_signature()],
+        evidence_candidate_row={
+            "id": "efc-sg", "field_candidate_id": "fc-sg",
+            "status": "APPROVED_BY_HUMAN", "schema_candidate_id": None,
+        },
+    )
+    _install(conn)
+    captured_render_kwargs: list = []
+
+    def spy_render(*args, **kwargs):
+        captured_render_kwargs.append(kwargs)
+        return {"rendered_body": "<html/>", "source_trace_snapshot": [], "template_identity": "tpl",
+                "evidence_manifest": []}
+
+    # sig_result["manifest"]에 inspector_signature가 이미 들어있는 경우를 시뮬레이션
+    fake_sig_manifest_entry = {
+        "type": "signature", "field_id": _SIG_FIELD_ID,
+        "field_key": "inspector_signature", "storage_ref": _SIG_STORAGE,
+        "sha256": "b" * 64, "mime_type": "image/png", "byte_size": 2048,
+        "signer_user_id": "user-1", "signed_at": "2026-10-31T09:00:00Z", "source": "signature_pad",
+    }
+
+    with (
+        patch("services.document_confirm_svc.build_render_artifacts", side_effect=spy_render),
+        patch("services.document_confirm_svc.compute_confirmed_snapshot_hash", return_value="a" * 64),
+        patch("services.document_confirm_svc.resolve_attachment_images_for_render", return_value={}),
+        patch("services.document_confirm_svc.resolve_signature_images_for_render",
+              return_value={"images": {"inspector_signature": "data:image/png;base64,iVBOR"},
+                            "manifest": [fake_sig_manifest_entry]}),
+    ):
+        out = confirm_document_atomic(DOC_ID, actor_id=None, comment="서명서", current_user=user())
+
+    assert conn.committed and not conn.rolled_back
+    assert len(captured_render_kwargs) == 1
+    kw = captured_render_kwargs[0]
+
+    # signature_manifest에서 inspector_signature 제거됐어야 함 (이중 기록 방지)
+    sig_manifest_passed = kw.get("signature_manifest", [])
+    assert all(e.get("field_key") != "inspector_signature" for e in sig_manifest_passed), \
+        "inspector_signature가 signature_manifest에 남아 이중 기록 발생"
+
+    # combined_evidence_manifest에는 SIGNATURE evidence entry가 있어야 함
+    ev_manifest_passed = kw.get("attachment_evidence_manifest", [])
+    sig_ev_entries = [e for e in ev_manifest_passed if e.get("evidence_family") == "SIGNATURE"]
+    assert len(sig_ev_entries) == 1
+    assert sig_ev_entries[0]["field_key"] == "inspector_signature"
