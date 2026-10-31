@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional
 from services.document_confirm_authz import authorize_confirm
 from services.document_attachment_svc import (
     AttachmentError,
+    ALLOWED_IMAGE_MIME_TYPES,
     resolve_attachment_images_for_render,
     verify_file_snapshot_for_evidence,
 )
@@ -59,24 +60,28 @@ _SCHEMA_STATUS_APPROVED = "APPROVED_FOR_RUNTIME_USE"
 # Evidence 후보·필드 허용 상태 — DB CHECK 계약 (최신 main d219a3463855)
 _ALLOWED_EVIDENCE_CANDIDATE_STATUSES: frozenset = frozenset({"APPROVED_BY_HUMAN"})
 _ALLOWED_EVIDENCE_FIELD_STATUSES: frozenset = frozenset({"APPROVED_BY_HUMAN"})
-# Evidence family 허용 목록 (MEASUREMENT 추가 — WO-DOC260-P0E-MEASUREMENT-001)
-_ALLOWED_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT", "DATE", "REPORT_NUMBER", "MEASUREMENT"})
+# Evidence family 허용 목록 (PHOTO 추가 — WO-DOC260-P0E-PHOTO-001)
+_ALLOWED_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT", "DATE", "REPORT_NUMBER", "MEASUREMENT", "PHOTO"})
 # family 식별자
 _FILE_EVIDENCE_FAMILIES: frozenset = frozenset({"ATTACHMENT"})
 _DATE_EVIDENCE_FAMILIES: frozenset = frozenset({"DATE"})
 _REPORT_NUMBER_FAMILIES: frozenset = frozenset({"REPORT_NUMBER"})
 _MEASUREMENT_FAMILIES: frozenset = frozenset({"MEASUREMENT"})
+_PHOTO_FAMILIES: frozenset = frozenset({"PHOTO"})
 # upload_type 계약 — family별 독립 (E-01: 교차 조합 422 차단)
 _ALLOWED_UPLOAD_TYPES: frozenset = frozenset({"attachment"})               # ATTACHMENT 전용
 _DATE_UPLOAD_TYPES: frozenset = frozenset({"timestamp_auto"})              # DATE 전용
 _REPORT_NUMBER_UPLOAD_TYPES: frozenset = frozenset({"inspector_identity"}) # REPORT_NUMBER 전용
 _MEASUREMENT_UPLOAD_TYPES: frozenset = frozenset({"measurement_input"})    # MEASUREMENT 전용
+_PHOTO_UPLOAD_TYPES: frozenset = frozenset({"image_upload"})               # PHOTO 전용
 # input_type 계약 — family별 독립 (E-01)
 _FILE_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"file"})
 _DATE_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"date"})
 _REPORT_NUMBER_INPUT_TYPES: frozenset = frozenset({"text"})
 _MEASUREMENT_INPUT_TYPES: frozenset = frozenset({"measurement", "date"})
+_PHOTO_INPUT_TYPES: frozenset = frozenset({"image"})
 _MEASUREMENT_OPTIONAL_STATUS: str = "NOT_REQUIRED"   # runtime_field.required_status — 선택 입력
+_PHOTO_OPTIONAL_STATUS: str = "NOT_REQUIRED"         # PHOTO 선택 필드 동일 계약
 
 
 def _verify_date_evidence_value(
@@ -147,6 +152,55 @@ def _verify_measurement_value(
             422,
             f"evidence field {ev_field_id!r}: "
             f"MEASUREMENT value in runtime_data_json[{field_key!r}] is blank",
+        )
+
+
+def _verify_image_snapshot_for_evidence(
+    *,
+    snapshot: Any,
+    field_id: str,
+    field_key: str,
+    ev_field_id: str,
+    attachment_images: Dict[str, str],
+) -> None:
+    """PHOTO 증적 image snapshot 경량 검증. FAIL-CLOSED.
+
+    Step 14a-1 (resolve_attachment_images_for_render strict=True) 검증 결과를 신뢰.
+    Storage 재다운로드·SHA256 재계산 없음.
+    추가로 확인: _type·field binding·MIME 4종·step 14a-1 통과 여부.
+    """
+    if not isinstance(snapshot, dict) or snapshot.get("_type") != "file_snapshot":
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: PHOTO snapshot malformed "
+            f"in runtime_data_json[{field_key!r}]",
+        )
+    if snapshot.get("field_key") != field_key:
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: PHOTO snapshot field_key mismatch "
+            f"snap={snapshot.get('field_key')!r} expected={field_key!r}",
+        )
+    snap_field_id = str(snapshot.get("field_id") or "")
+    if snap_field_id != field_id:
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: PHOTO snapshot field_id mismatch "
+            f"snap={snap_field_id!r} expected={field_id!r}",
+        )
+    mime_type = str(snapshot.get("mime_type") or "")
+    if mime_type not in ALLOWED_IMAGE_MIME_TYPES:
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: PHOTO snapshot mime_type={mime_type!r} "
+            f"not in image allowlist (JPEG/PNG/GIF/WebP only)",
+        )
+    # Step 14a-1이 해당 필드를 검증·해석했어야 함 — 결과에 없으면 차단
+    if field_key not in attachment_images:
+        raise ConfirmError(
+            422,
+            f"evidence field {ev_field_id!r}: PHOTO snapshot field_key={field_key!r} "
+            f"not verified by image resolver (step 14a-1) — confirm blocked",
         )
 
 
@@ -273,6 +327,13 @@ def _resolve_evidence_connections(cur, evidence_fields, fields, schema_id, schem
                     422,
                     f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
                     f"for MEASUREMENT family (allowed: {sorted(_MEASUREMENT_UPLOAD_TYPES)})",
+                )
+        elif ev_family in _PHOTO_FAMILIES:
+            if ev_upload_type not in _PHOTO_UPLOAD_TYPES:
+                raise ConfirmError(
+                    422,
+                    f"evidence field {ev_id!r}: upload_type={ev_upload_type!r} not supported "
+                    f"for PHOTO family (allowed: {sorted(_PHOTO_UPLOAD_TYPES)})",
                 )
         evidence_candidate_id = str(ev.get("evidence_candidate_id") or "")
         if not evidence_candidate_id:
@@ -518,6 +579,7 @@ def confirm_document_atomic(
             date_evidence_manifest: list = []
             report_number_evidence_manifest: list = []
             measurement_evidence_manifest: list = []
+            photo_evidence_manifest: list = []
             for ev_conn in ev_connections:
                 ev_field = ev_conn["evidence_field"]
                 rf = ev_conn["runtime_field"]
@@ -674,12 +736,56 @@ def confirm_document_atomic(
                                 "input_type":           "measurement",
                             })
 
+                elif ev_family in _PHOTO_FAMILIES:
+                    # E-01: PHOTO — input_type must be image
+                    if input_type not in _PHOTO_INPUT_TYPES:
+                        raise ConfirmError(
+                            422,
+                            f"evidence field {str(ev_field.get('id'))!r}: "
+                            f"connected field input_type={input_type!r} not valid "
+                            f"for PHOTO family (expected: image)",
+                        )
+                    ev_id_str = str(ev_field.get("id") or "")
+                    req_status = str(rf.get("required_status") or "")
+                    is_optional = req_status == _PHOTO_OPTIONAL_STATUS
+                    snap = runtime_values.get(field_key)
+                    if is_optional and snap is None:
+                        pass  # NOT_REQUIRED — 이미지 없으면 manifest 제외
+                    else:
+                        if snap is None:
+                            raise ConfirmError(
+                                422,
+                                f"evidence field {ev_id_str!r}: PHOTO value missing "
+                                f"in runtime_data_json[{field_key!r}]",
+                            )
+                        _verify_image_snapshot_for_evidence(
+                            snapshot=snap,
+                            field_id=field_id,
+                            field_key=field_key,
+                            ev_field_id=ev_id_str,
+                            attachment_images=attachment_images,
+                        )
+                        photo_evidence_manifest.append({
+                            "evidence_field_id":    ev_id_str,
+                            "field_id":             field_id,
+                            "field_key":            field_key,
+                            "storage_ref":          str(snap.get("storage_ref") or ""),
+                            "sha256":               str(snap.get("sha256") or ""),
+                            "mime_type":            str(snap.get("mime_type") or ""),
+                            "byte_size":            snap.get("byte_size"),
+                            "value_source":         "USER_INPUT",
+                            "value_semantic_class": "PHOTO",
+                            "evidence_family":      "PHOTO",
+                            "input_type":           "image",
+                        })
+
             # 14a-3. manifest 병합 (clock_timestamp() 호출 전 — Step 순서 보존)
             combined_evidence_manifest = (
                 attachment_evidence_manifest
                 + date_evidence_manifest
                 + report_number_evidence_manifest
                 + measurement_evidence_manifest
+                + photo_evidence_manifest
             )
 
             # 14b. 렌더 (05A) — 락 이후 값으로만, 서명 + 첨부 이미지 inline 포함
