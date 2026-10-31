@@ -153,8 +153,8 @@ async def trigger_qa_cron(payload: dict | None = None) -> dict:
             "실행 순서를 확인할 수 없어 발화를 차단합니다."
         )
     attempt_no = int(_raw_attempt)
-    # R3-01: 재처리(attempt_no > 1) 시 GitHub 재전송 차단 — 스케줄러가 FAILED로 기록
-    if attempt_no > 1:
+    # 정확히 1인 경우만 허용 — 0, 음수, 재시도(≥2) 모두 차단
+    if attempt_no != 1:
         raise RuntimeError(
             f"DISPATCH_BLOCKED_RETRY: attempt_no={attempt_no}, "
             f"scheduled_for={scheduled_for_iso} — "

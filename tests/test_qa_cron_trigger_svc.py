@@ -361,6 +361,30 @@ def test_T26_trigger_qa_cron_blocked_without_attempt_no():
     assert len(client.calls) == 0, "_attempt_no 없으면 GitHub API 호출 없음"
 
 
+def test_T27_trigger_qa_cron_blocked_on_zero_attempt():
+    """R3-FINAL-01: _attempt_no=0 → RuntimeError DISPATCH_BLOCKED_RETRY, GitHub 미호출."""
+    patcher, client = _patch_client(204)
+    with patcher:
+        with pytest.raises(RuntimeError, match="DISPATCH_BLOCKED_RETRY"):
+            asyncio.run(svc.trigger_qa_cron({
+                "_scheduled_for": "2026-10-31T21:00:00+09:00",
+                "_attempt_no": 0,
+            }))
+    assert len(client.calls) == 0
+
+
+def test_T28_trigger_qa_cron_blocked_on_negative_attempt():
+    """R3-FINAL-01: _attempt_no=-1 → RuntimeError DISPATCH_BLOCKED_RETRY, GitHub 미호출."""
+    patcher, client = _patch_client(204)
+    with patcher:
+        with pytest.raises(RuntimeError, match="DISPATCH_BLOCKED_RETRY"):
+            asyncio.run(svc.trigger_qa_cron({
+                "_scheduled_for": "2026-10-31T21:00:00+09:00",
+                "_attempt_no": -1,
+            }))
+    assert len(client.calls) == 0
+
+
 def test_T25_kst_scheduled_for_converted_to_utc_in_result():
     """R3-03: KST _scheduled_for → UTC 변환 후 result.scheduled_for에 기록.
 
