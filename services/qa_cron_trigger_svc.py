@@ -1,10 +1,10 @@
-"""QA Twice-Daily Timed Trigger — WO-TAI-QA-OPS-TIMED-TRIGGER-P0-005-R2.
+"""QA Twice-Daily Timed Trigger — WO-TAI-QA-OPS-TIMED-TRIGGER-P0-005-R3.
 
 GitHub Actions schedule 지연(최대 수 시간)을 우회하기 위해 TAI 스케줄러에서
 qa-twice-daily.yml을 workflow_dispatch로 정시(KST 06:00 / 19:00) 발화한다.
 
 cron_job_master: '0 6,19 * * *' KST (= 21:00Z + 10:00Z UTC)
-dispatcher.py: claim_context(_scheduled_for, _attempt_no)를 payload에 전달한다.
+dispatcher.py: claim_context(_scheduled_for, _attempt_no)를 qa_cron_trigger에만 전달.
 
 contract:
   - 환경변수: QA_GITHUB_TOKEN (필수, 절대 log 출력 금지)
@@ -13,12 +13,14 @@ contract:
               QA_GITHUB_WORKFLOW_TWICE_DAILY (기본: qa-twice-daily.yml)
               QA_GITHUB_REF     (기본: main)
   - 발화 대상: qa-twice-daily.yml — inputs 없음 (workflow가 자체 결정)
-  - scheduled_for: dispatcher가 전달한 _scheduled_for 우선, 없으면 current_slot_utc(now) 폴백
-  - 재처리 차단: _attempt_no > 1 이면 GitHub 미전송, DISPATCH_SKIPPED_RETRY 반환
+  - scheduled_for: dispatcher claim_context._scheduled_for 필수 (KST ISO → UTC 변환)
+                   없으면 DISPATCH_BLOCKED_NO_SCHEDULE RuntimeError — 임의 발화 금지
+  - 재처리 차단: _attempt_no > 1 이면 DISPATCH_BLOCKED_RETRY RuntimeError
+                이전 발화 결과를 확인할 수 없어 재전송 차단. GitHub 미전송 단정 금지.
   - 실패 시: RuntimeError 전파, no retry
 
 4개 타임스탬프 (cron_job_log.detail에 기록):
-  scheduled_for         — claim.scheduled_for 기준 UTC 시각 (dispatcher 전달값 우선)
+  scheduled_for         — claim.scheduled_for KST → UTC 변환값
   dispatch_attempted_at — GitHub API POST 직전
   dispatch_accepted_at  — GitHub HTTP 200/204 수신 시각
   github_job_started_at — None (비동기 확인 불가 — workflow monitor가 추후 갱신)
@@ -128,37 +130,33 @@ async def trigger_qa_cron(payload: dict | None = None) -> dict:
 
     dispatcher.py가 claim_context(_scheduled_for, _attempt_no)를 payload에 주입한다.
 
-    _scheduled_for: claim.scheduled_for — 스케줄러가 전달하는 정규 예약 시각 (UTC ISO)
-                    없으면 current_slot_utc(now()) 폴백
-    _attempt_no: > 1이면 재처리 — GitHub 미전송, DISPATCH_SKIPPED_RETRY 반환
+    _scheduled_for: claim.scheduled_for — KST ISO (serialize_business_datetime 형식)
+                    없으면 RuntimeError DISPATCH_BLOCKED_NO_SCHEDULE — 임의 발화 금지
+    _attempt_no:    > 1이면 RuntimeError DISPATCH_BLOCKED_RETRY
+                    스케줄러가 FAILED로 기록하도록 예외를 전파한다.
     """
     p = payload or {}
-    attempt_no = int(p.get("_attempt_no", 1))
 
-    # R2-04: 재처리(attempt_no > 1) 시 GitHub 자동 재전송 금지
-    if attempt_no > 1:
-        log.warning(
-            "[qa_cron_trigger] DISPATCH_SKIPPED_RETRY attempt_no=%s scheduled_for=%s",
-            attempt_no,
-            p.get("_scheduled_for"),
-        )
-        return {
-            "status":                "DISPATCH_SKIPPED_RETRY",
-            "reason":               f"attempt_no={attempt_no} — 재처리 시 자동 재전송 금지",
-            "scheduled_for":         p.get("_scheduled_for"),
-            "dispatch_attempted_at": None,
-            "dispatch_accepted_at":  None,
-            "github_job_started_at": None,
-            "trigger_source":        "tai_scheduler",
-        }
-
-    # R2-03: dispatcher 전달값 우선, 없으면 now() 폴백
+    # R3-03: _scheduled_for 없으면 임의 발화 차단 (스케줄러 claim_context 필수)
     scheduled_for_iso = p.get("_scheduled_for")
-    if scheduled_for_iso:
-        scheduled_for = datetime.fromisoformat(scheduled_for_iso)
-    else:
-        now = datetime.now(timezone.utc)
-        scheduled_for = current_slot_utc(now)
+    if not scheduled_for_iso:
+        raise RuntimeError(
+            "DISPATCH_BLOCKED_NO_SCHEDULE: _scheduled_for 미전달 — "
+            "스케줄러 claim_context 없이 임의 발화를 차단합니다."
+        )
+
+    # R3-01: 재처리(attempt_no > 1) 시 GitHub 재전송 차단 — 스케줄러가 FAILED로 기록
+    attempt_no = int(p.get("_attempt_no", 1))
+    if attempt_no > 1:
+        raise RuntimeError(
+            f"DISPATCH_BLOCKED_RETRY: attempt_no={attempt_no}, "
+            f"scheduled_for={scheduled_for_iso} — "
+            "이전 발화 결과를 확인할 수 없어 재전송을 차단합니다. "
+            "실제 발화 여부는 GitHub Actions 로그를 확인하십시오."
+        )
+
+    # KST ISO → UTC 변환 (serialize_business_datetime은 +09:00 반환)
+    scheduled_for = datetime.fromisoformat(scheduled_for_iso).astimezone(timezone.utc)
 
     result = await dispatch_qa_twice_daily(scheduled_for)
     result["trigger_source"] = "tai_scheduler"

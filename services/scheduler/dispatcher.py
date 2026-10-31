@@ -143,10 +143,16 @@ def tick(
             status = "SUCCESS"
             detail: Any = None
             try:
-                detail = execute_job(job, claim_context={
-                    "_scheduled_for": serialize_business_datetime(claim.scheduled_for),
-                    "_attempt_no": claim.attempt_no,
-                })
+                _ep = job.handler or job.endpoint_url or ""
+                _ctx = (
+                    {
+                        "_scheduled_for": serialize_business_datetime(claim.scheduled_for),
+                        "_attempt_no": claim.attempt_no,
+                    }
+                    if _ep == "direct://qa_cron_trigger"
+                    else None
+                )
+                detail = execute_job(job, claim_context=_ctx)
             except Exception as e:
                 status = "FAILED"
                 _exc_summary = getattr(e, "summary", None)
