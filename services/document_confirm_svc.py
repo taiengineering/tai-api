@@ -76,6 +76,7 @@ _FILE_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"file"})
 _DATE_EVIDENCE_INPUT_TYPES: frozenset = frozenset({"date"})
 _REPORT_NUMBER_INPUT_TYPES: frozenset = frozenset({"text"})
 _MEASUREMENT_INPUT_TYPES: frozenset = frozenset({"measurement", "date"})
+_MEASUREMENT_OPTIONAL_STATUS: str = "NOT_REQUIRED"   # runtime_field.required_status — 선택 입력
 
 
 def _verify_date_evidence_value(
@@ -626,40 +627,52 @@ def confirm_document_atomic(
                             f"for MEASUREMENT family (expected: measurement or date)",
                         )
                     ev_id_str = str(ev_field.get("id") or "")
+                    # R1: runtime_field.required_status 반영 — NOT_REQUIRED 선택 필드는 빈 값 허용
+                    req_status = str(rf.get("required_status") or "")
+                    is_optional = req_status == _MEASUREMENT_OPTIONAL_STATUS
                     if input_type == "date":
                         date_value = runtime_values.get(field_key)
-                        _verify_date_evidence_value(
-                            date_value=date_value,
-                            ev_field_id=ev_id_str,
-                            field_key=field_key,
-                        )
-                        measurement_evidence_manifest.append({
-                            "evidence_field_id":    ev_id_str,
-                            "field_id":             field_id,
-                            "field_key":            field_key,
-                            "date_value":           str(date_value),
-                            "value_source":         "USER_INPUT",
-                            "value_semantic_class": "PENDING_CLASSIFICATION",
-                            "evidence_family":      "MEASUREMENT",
-                            "input_type":           "date",
-                        })
+                        if is_optional and (date_value is None or str(date_value).strip() == ""):
+                            pass  # NOT_REQUIRED — 값 없으면 manifest 제외
+                        else:
+                            _verify_date_evidence_value(
+                                date_value=date_value,
+                                ev_field_id=ev_id_str,
+                                field_key=field_key,
+                            )
+                            measurement_evidence_manifest.append({
+                                "evidence_field_id":    ev_id_str,
+                                "field_id":             field_id,
+                                "field_key":            field_key,
+                                "date_value":           str(date_value),
+                                "value_source":         "USER_INPUT",
+                                "value_semantic_class": "PENDING_CLASSIFICATION",
+                                "evidence_family":      "MEASUREMENT",
+                                "input_type":           "date",
+                            })
                     else:
                         measurement_value = runtime_values.get(field_key)
-                        _verify_measurement_value(
-                            measurement_value=measurement_value,
-                            ev_field_id=ev_id_str,
-                            field_key=field_key,
-                        )
-                        measurement_evidence_manifest.append({
-                            "evidence_field_id":    ev_id_str,
-                            "field_id":             field_id,
-                            "field_key":            field_key,
-                            "text_value":           str(measurement_value),
-                            "value_source":         "USER_INPUT",
-                            "value_semantic_class": "MEASUREMENT",
-                            "evidence_family":      "MEASUREMENT",
-                            "input_type":           "measurement",
-                        })
+                        if is_optional and (
+                            measurement_value is None
+                            or (isinstance(measurement_value, str) and not measurement_value.strip())
+                        ):
+                            pass  # NOT_REQUIRED — 값 없으면 manifest 제외
+                        else:
+                            _verify_measurement_value(
+                                measurement_value=measurement_value,
+                                ev_field_id=ev_id_str,
+                                field_key=field_key,
+                            )
+                            measurement_evidence_manifest.append({
+                                "evidence_field_id":    ev_id_str,
+                                "field_id":             field_id,
+                                "field_key":            field_key,
+                                "text_value":           str(measurement_value),
+                                "value_source":         "USER_INPUT",
+                                "value_semantic_class": "MEASUREMENT",
+                                "evidence_family":      "MEASUREMENT",
+                                "input_type":           "measurement",
+                            })
 
             # 14a-3. manifest 병합 (clock_timestamp() 호출 전 — Step 순서 보존)
             combined_evidence_manifest = (
