@@ -349,6 +349,18 @@ def test_T24_retry_raises_not_returns_success():
     assert len(client.calls) == 0
 
 
+def test_T26_trigger_qa_cron_blocked_without_attempt_no():
+    """R3-FINAL: _attempt_no 누락 시 RuntimeError DISPATCH_BLOCKED_NO_ATTEMPT_NO, GitHub 미호출."""
+    patcher, client = _patch_client(204)
+    with patcher:
+        with pytest.raises(RuntimeError, match="DISPATCH_BLOCKED_NO_ATTEMPT_NO"):
+            asyncio.run(svc.trigger_qa_cron({
+                "_scheduled_for": "2026-10-31T21:00:00+09:00",
+                # _attempt_no 의도적 누락
+            }))
+    assert len(client.calls) == 0, "_attempt_no 없으면 GitHub API 호출 없음"
+
+
 def test_T25_kst_scheduled_for_converted_to_utc_in_result():
     """R3-03: KST _scheduled_for → UTC 변환 후 result.scheduled_for에 기록.
 
