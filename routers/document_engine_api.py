@@ -37,6 +37,7 @@ from services.document_confirm_svc import confirm_document_atomic, ConfirmError
 from services.document_signature_svc import SignatureError, apply_profile_to_document
 from services.document_attachment_svc import AttachmentError, upload_file_to_field, get_file_signed_url, remove_file_from_field
 from services.document_engine.catalog_resolver import resolve_catalog_runtime_schema
+from services.document_engine.r2_route_policy import get_provision_policy
 from services.document_engine.renderer import html_to_pdf as _html_to_pdf
 from services.document_engine.generator import render_html as _render_html, render_pdf as _render_pdf
 from services.document_engine.auto_source_readmodel import list_auto_documents
@@ -202,6 +203,42 @@ def create_document(
         if factory_id is None and body.factory_id:
             _ensure_factory_own(sb, body.factory_id, current_user)
             factory_id = body.factory_id
+
+    # ── R2 route policy guard ───────────────────────────────────────────────
+    # Only A_INTERNAL documents may be created via web-edit.
+    # Look up doc_id from form_schema → catalog_document → document_forms.
+    _schema_cat = (
+        sb.table("runtime_form_schema")
+        .select("catalog_document_id")
+        .eq("id", str(body.form_schema_id))
+        .execute()
+    )
+    if _schema_cat.data:
+        _cat_id = _schema_cat.data[0].get("catalog_document_id")
+        if _cat_id:
+            _df = (
+                sb.table("document_forms")
+                .select("doc_id")
+                .eq("id", _cat_id)
+                .execute()
+            )
+            if _df.data:
+                _doc_id_str = _df.data[0].get("doc_id", "")
+                _policy = get_provision_policy(_doc_id_str)
+                if _policy is not None and not _policy["web_edit_allowed"]:
+                    raise HTTPException(
+                        status_code=422,
+                        detail={
+                            "code": "ROUTE_POLICY_BLOCKED",
+                            "doc_id": _doc_id_str,
+                            "route_group": _policy["route_group"],
+                            "investment_decision": _policy["investment_decision"],
+                            "message": (
+                                f"문서 생성 불가: {_doc_id_str}의 route_group={_policy['route_group']}. "
+                                "웹편집 생성은 A_INTERNAL 문서만 허용됩니다."
+                            ),
+                        },
+                    )
 
     try:
         if source_inspection_id:
@@ -769,7 +806,11 @@ def get_catalog_runtime(doc_id: str):
         raise HTTPException(500, str(e))
 
     availability = resolved["availability"]
-    can_create = availability == "READY_FOR_EDIT"
+    schema_ready = availability == "READY_FOR_EDIT"
+
+    provision_policy = get_provision_policy(doc_id)
+    web_edit_allowed = provision_policy["web_edit_allowed"] if provision_policy else None
+    can_create = schema_ready and (web_edit_allowed is not False)
 
     runtime_block = {
         "active_schema_id": resolved.get("active_schema_id"),
@@ -778,6 +819,7 @@ def get_catalog_runtime(doc_id: str):
         "candidate_schema_status": resolved.get("candidate_schema_status"),
         "availability": availability,
         "can_create": can_create,
+        "provision_policy": provision_policy,
     }
 
     return {
