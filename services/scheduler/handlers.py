@@ -25,6 +25,22 @@ def _rpc(name: str, payload: dict) -> Any:
     return res.data if hasattr(res, "data") else res
 
 
+def _mkt_http(path: str, timeout: int = 120) -> dict:
+    import requests
+    base = os.environ.get("MKT_API_URL", "").rstrip("/")
+    if not base:
+        raise RuntimeError("MKT_API_URL not set")
+    token = os.environ.get("MKT_GA4_COLLECTOR_TOKEN", "")
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    url = base + path
+    resp = requests.post(url, json={}, headers=headers, timeout=timeout)
+    try:
+        body = resp.json()
+    except Exception:
+        body = {"text": resp.text[:500]}
+    return {"http_status": resp.status_code, "body": body, "url": url}
+
+
 def _kosha_http(path: str, params: dict | None = None, timeout: int = 300) -> dict:
     import requests
     base = os.environ.get("INTERNAL_API_URL", "https://api.taieng.co.kr")
@@ -255,6 +271,22 @@ def _run_public_data_sync_tick(p):
     return {"executed": len(results), "results": results}
 
 
+def _run_mkt_ga4_collect(p):
+    result = _mkt_http("/api/mkt/ga4/collect", timeout=p.get("timeout_seconds", 120))
+    if result["http_status"] >= 400:
+        raise RuntimeError(
+            f"GA4 collect failed: HTTP {result['http_status']} — {str(result.get('body', ''))[:200]}"
+        )
+    body = result.get("body", {})
+    if not body.get("ok") or body.get("partial"):
+        # DB inserts for succeeded datasets already committed — raise only to mark scheduler FAILED
+        raise RuntimeError(
+            f"GA4 collect partial/incomplete: ok={body.get('ok')}, partial={body.get('partial')} — "
+            f"{str(body.get('results', ''))[:300]}"
+        )
+    return result
+
+
 def _run_leg_law_refresh(p):
     """Trigger used-law form refresh via LEG API (WO-TAI-LEG-USED-LAW-REFRESH-001).
 
@@ -383,6 +415,7 @@ def register_direct_handlers() -> dict[str, Handler]:
         "direct://qa_cron_trigger":           _run_qa_cron_trigger,
         "direct://public_data_sync_tick":     _run_public_data_sync_tick,
         "direct://leg_law_refresh":           _run_leg_law_refresh,
+        "direct://mkt_ga4_collect":           _run_mkt_ga4_collect,
     })
     return DIRECT_HANDLERS
 
