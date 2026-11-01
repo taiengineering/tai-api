@@ -271,10 +271,11 @@ def test_DT_T05_attachment_family_regression():
 # ─── DT-T06: 미지원 evidence_family → 422 ────────────────────────────────────
 
 def test_DT_T06_unsupported_family_422():
-    """DT-T06: evidence_family='SIGNATURE' 등 미지원 → 422."""
+    """DT-T06: evidence_family='APPROVAL_MARK' 등 미지원 → 422.
+    SIGNATURE는 WO-DOC260-OBJ10-WPA에서 지원 추가됨. 여전히 미지원인 APPROVAL_MARK로 검증."""
     conn = _FakeConn(_FakeCursor(
-        ev_family="SIGNATURE",
-        ev_upload_type="manual",
+        ev_family="APPROVAL_MARK",
+        ev_upload_type="signature",
     ))
 
     with pytest.raises(HTTPException) as exc_info:
