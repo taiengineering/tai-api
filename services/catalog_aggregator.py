@@ -136,6 +136,7 @@ def compute_channel_state(
     *,
     factory_scope_verified: bool = False,
     active_instance_exists: bool = False,
+    route_group: Optional[str] = None,
 ) -> CatalogChannels:
     """
     record_type: 'SAAS' | 'REFERENCE_CMS'
@@ -145,6 +146,7 @@ def compute_channel_state(
     rights_state: document_forms.doc_format for SAAS records
     factory_scope_verified: True only when caller confirms factory-level access (default False → BLOCKED)
     active_instance_exists: True only when caller confirms an active document instance exists
+    route_group: R2 classification (A_INTERNAL | B_OFFICIAL | E_EXTERNAL | F_SCOPE_OUT | U_UNRESOLVED)
     """
     if record_type == "REFERENCE_CMS":
         ref_download = (
@@ -203,9 +205,15 @@ def compute_channel_state(
             reason="file_url present but binary fetch and version confirmation required",
         )
 
-    # WEB_EDIT: requires APPROVED schema AND confirmed factory scope.
+    # WEB_EDIT: requires APPROVED schema AND confirmed factory scope AND A_INTERNAL route_group.
     # Catalog context cannot confirm factory scope → fail-closed (BLOCKED) unless explicitly verified.
-    if schema_status == "APPROVED_FOR_RUNTIME_USE" and factory_scope_verified:
+    _route_blocked = route_group is not None and route_group != "A_INTERNAL"
+    if _route_blocked:
+        web_edit = ChannelState(
+            state="BLOCKED",
+            reason=f"R2 route_group={route_group}; web-edit requires A_INTERNAL",
+        )
+    elif schema_status == "APPROVED_FOR_RUNTIME_USE" and factory_scope_verified:
         web_edit = ChannelState(
             state="READY",
             reason="Schema approved for runtime use; factory scope verified",
