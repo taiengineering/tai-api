@@ -83,17 +83,38 @@ def test_H03_401_raises(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# H04: HTTP 200 partial=True → returns result (scheduler → SUCCESS, body.partial=True)
+# H04: HTTP 200 partial=True → raises RuntimeError (scheduler → FAILED)
+#      DB inserts for succeeded rows already committed; raise is signal only.
 # ---------------------------------------------------------------------------
 
-def test_H04_200_partial_returns_result(monkeypatch):
+def test_H04_200_partial_raises(monkeypatch):
     monkeypatch.setattr(
         handlers_mod, "_mkt_http",
         lambda path, timeout=120: {"http_status": 200, "body": _partial_body(), "url": "http://x/api/mkt/ga4/collect"},
     )
-    result = handlers_mod._run_mkt_ga4_collect({})
-    assert result["http_status"] == 200
-    assert result["body"]["partial"] is True
+    with pytest.raises(RuntimeError, match="partial"):
+        handlers_mod._run_mkt_ga4_collect({})
+
+
+# ---------------------------------------------------------------------------
+# H04b: HTTP 200 ok=False, partial=False (all failed) → raises RuntimeError
+# ---------------------------------------------------------------------------
+
+def test_H04b_200_all_failed_raises(monkeypatch):
+    all_failed_body = {
+        "ok": False, "partial": False,
+        "source_latest_date": "2026-11-01",
+        "collected_at": "2026-11-01T00:00:00+00:00",
+        "periods": [1, 7, 30],
+        "results": {f"{ds}_p{p}": {"status": "COLLECTION_FAILED", "inserted": True}
+                    for ds in ("ACQUISITION", "BEHAVIOR", "FUNNEL") for p in (1, 7, 30)},
+    }
+    monkeypatch.setattr(
+        handlers_mod, "_mkt_http",
+        lambda path, timeout=120: {"http_status": 200, "body": all_failed_body, "url": "http://x/api/mkt/ga4/collect"},
+    )
+    with pytest.raises(RuntimeError, match="partial/incomplete"):
+        handlers_mod._run_mkt_ga4_collect({})
 
 
 # ---------------------------------------------------------------------------

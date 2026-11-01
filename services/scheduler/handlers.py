@@ -272,6 +272,13 @@ def _run_mkt_ga4_collect(p):
         raise RuntimeError(
             f"GA4 collect failed: HTTP {result['http_status']} — {str(result.get('body', ''))[:200]}"
         )
+    body = result.get("body", {})
+    if not body.get("ok") or body.get("partial"):
+        # DB inserts for succeeded datasets already committed — raise only to mark scheduler FAILED
+        raise RuntimeError(
+            f"GA4 collect partial/incomplete: ok={body.get('ok')}, partial={body.get('partial')} — "
+            f"{str(body.get('results', ''))[:300]}"
+        )
     return result
 
 
