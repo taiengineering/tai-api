@@ -1,4 +1,6 @@
 """SaaS Core — 인증·사용자·회사·시설·기본설정 라우터."""
+import os
+
 ROUTERS = [
     {"module": "routers.auth"},
     # GET /users/roles 가 users.GET /{user_id} 에 잡히지 않도록 users 보다 먼저 등록
@@ -48,3 +50,11 @@ ROUTERS = [
     # WO-008: factory legal-classification (GET+POST/confirm, service-role-only table)
     {"module": "routers.factory_legal_classification"},
 ]
+
+# WO-034: 합성 데이터 전용 — 비활성 환경에서 라우터 자체 제외 (R2-01)
+# DIGITIZATION_SYNTHETIC_ENABLED=true 설정 시에만 등록 → 운영 환경 자동 비활성
+if os.getenv("DIGITIZATION_SYNTHETIC_ENABLED", "false").lower() == "true":
+    ROUTERS.append(
+        # WO-034: OBJ01 문서 디지털화 Intake/Preflight (POST /admin/companies/{id}/digitization/intake)
+        {"module": "routers.onboarding_digitization"},
+    )
