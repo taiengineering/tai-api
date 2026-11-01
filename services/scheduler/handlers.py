@@ -267,7 +267,12 @@ def _run_public_data_sync_tick(p):
 
 
 def _run_mkt_ga4_collect(p):
-    return _mkt_http("/api/mkt/ga4/collect", timeout=p.get("timeout_seconds", 120))
+    result = _mkt_http("/api/mkt/ga4/collect", timeout=p.get("timeout_seconds", 120))
+    if result["http_status"] >= 400:
+        raise RuntimeError(
+            f"GA4 collect failed: HTTP {result['http_status']} — {str(result.get('body', ''))[:200]}"
+        )
+    return result
 
 
 def _run_leg_law_refresh(p):
