@@ -346,6 +346,26 @@ _RUNTIME_EV_ALLOWLIST: frozenset = frozenset({
     "e1793f5c-aba8-4700-9dce-2ae2b449117b",  # DOC-FAC-022 첨부서류
 })
 
+# WO-DOC260-OBJ10-WPA-RUNTIME-APPROVAL-EXTENSION-001
+# evidence_family → 허용 upload_type (1:1 매핑)
+_FAMILY_UPLOAD_TYPES: dict[str, str] = {
+    "ATTACHMENT":    "attachment",
+    "DATE":          "timestamp_auto",
+    "MEASUREMENT":   "measurement_input",
+    "SIGNATURE":     "signature",
+    "REPORT_NUMBER": "inspector_identity",
+}
+
+# evidence_family → 허용 runtime_field.input_type 집합
+# MEASUREMENT는 measurement(직접 입력) 또는 date(시점 기록) 모두 허용
+_FAMILY_INPUT_TYPES: dict[str, frozenset] = {
+    "ATTACHMENT":    frozenset({"file"}),
+    "DATE":          frozenset({"date"}),
+    "MEASUREMENT":   frozenset({"measurement", "date"}),
+    "SIGNATURE":     frozenset({"signature"}),
+    "REPORT_NUMBER": frozenset({"text"}),
+}
+
 
 @router.post("/evidence-runtime-approve")
 def bridge_evidence_runtime_approve(
@@ -362,10 +382,13 @@ def bridge_evidence_runtime_approve(
       1b. runtime_evidence_field_id ∈ _RUNTIME_EV_ALLOWLIST (Owner Gate 범위 제한)
       2. runtime_review_authority 권한 검증 (AND 조건)
       3. runtime_evidence_field.status = CANDIDATE
-      4. evidence_family/upload_type 정합 (G-B01):
-           ATTACHMENT: upload_type = attachment, input_type = file
-           DATE:       upload_type = timestamp_auto, input_type = date
-           교차 조합 → 422
+      4. evidence_family/upload_type/input_type 정합 (_FAMILY_UPLOAD_TYPES/_FAMILY_INPUT_TYPES):
+           ATTACHMENT:    upload_type=attachment,         input_type=file
+           DATE:          upload_type=timestamp_auto,     input_type=date
+           MEASUREMENT:   upload_type=measurement_input,  input_type=measurement|date
+           SIGNATURE:     upload_type=signature,          input_type=signature
+           REPORT_NUMBER: upload_type=inspector_identity, input_type=text
+           교차 조합 또는 미정의 family → 422
       5. evidence_field_candidate.status = APPROVED_BY_HUMAN (선행 후보 승인 완료)
       6. EVIDENCE APPROVE decision 존재 (efc_id 기준, review_status=APPROVED)
       7. runtime_form_schema.status = APPROVED_FOR_RUNTIME_USE
@@ -449,27 +472,20 @@ def bridge_evidence_runtime_approve(
                     "Cannot re-approve.",
                 )
 
-            # [3] evidence_family / upload_type 정합 검증 (G-B01: DATE 지원 추가)
+            # [3] evidence_family / upload_type 정합 검증 (WO-DOC260-OBJ10-WPA)
             ev_family = ev["evidence_family"]
-            if ev_family == "ATTACHMENT":
-                if ev["upload_type"] != "attachment":
-                    raise HTTPException(
-                        422,
-                        f"upload_type={ev['upload_type']!r} not valid for ATTACHMENT family "
-                        "(expected attachment)",
-                    )
-            elif ev_family == "DATE":
-                if ev["upload_type"] != "timestamp_auto":
-                    raise HTTPException(
-                        422,
-                        f"upload_type={ev['upload_type']!r} not valid for DATE family "
-                        "(expected timestamp_auto)",
-                    )
-            else:
+            if ev_family not in _FAMILY_UPLOAD_TYPES:
                 raise HTTPException(
                     422,
                     f"evidence_family={ev_family!r} not supported "
-                    "(supported: ATTACHMENT, DATE)",
+                    f"(supported: {', '.join(sorted(_FAMILY_UPLOAD_TYPES))})",
+                )
+            expected_upload_type = _FAMILY_UPLOAD_TYPES[ev_family]
+            if ev["upload_type"] != expected_upload_type:
+                raise HTTPException(
+                    422,
+                    f"upload_type={ev['upload_type']!r} not valid for {ev_family} family "
+                    f"(expected {expected_upload_type!r})",
                 )
 
             evidence_candidate_id = str(ev.get("evidence_candidate_id") or "")
@@ -549,12 +565,12 @@ def bridge_evidence_runtime_approve(
                 raise HTTPException(422, "ambiguous connection — multiple runtime_fields matched")
 
             rf = dict(matched_fields[0])
-            expected_input_type = "file" if ev_family == "ATTACHMENT" else "date"
-            if rf["input_type"] != expected_input_type:
+            allowed_input_types = _FAMILY_INPUT_TYPES[ev_family]
+            if rf["input_type"] not in allowed_input_types:
                 raise HTTPException(
                     422,
                     f"connected runtime_field.input_type={rf['input_type']!r} not valid "
-                    f"for {ev_family} family (expected {expected_input_type!r})",
+                    f"for {ev_family} family (expected one of: {sorted(allowed_input_types)})",
                 )
 
             # [8] 중복 RUNTIME_EVIDENCE_APPROVE decision 차단
