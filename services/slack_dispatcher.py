@@ -97,6 +97,7 @@ EVENT_TYPE_CHANNEL = {
     "QA_FLAKY_DETECTED":       CHANNEL_QA,
     "QA_RECOVERED":            CHANNEL_QA,
     "QA_RUN_ERROR":            CHANNEL_QA,
+    "QA_RUN_COMPLETED":        CHANNEL_QA,
 }
 
 # WO-SLACK-EVENT-HUB-001 PR-③: event_type → admin 링크 (전부 LIST · 딥링크 미지원 확인됨).
@@ -113,6 +114,7 @@ QA_ADMIN_BUTTON_EVENTS = {
     "QA_FLAKY_DETECTED",
     "QA_RECOVERED",
     "QA_RUN_ERROR",
+    "QA_RUN_COMPLETED",
 }
 EVENT_TYPE_ADMIN_PATH = {
     "INQUIRY_CREATED":          "/inquiry-list",
@@ -126,6 +128,7 @@ EVENT_TYPE_ADMIN_PATH = {
     "QA_FLAKY_DETECTED":   "/qa/dashboard",
     "QA_RECOVERED":        "/qa/dashboard",
     "QA_RUN_ERROR":        "/qa/dashboard",
+    "QA_RUN_COMPLETED":    "/qa/dashboard",
 }
 
 # severity → 이모지
