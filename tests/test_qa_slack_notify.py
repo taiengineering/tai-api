@@ -1030,3 +1030,179 @@ def test_QN09_flaky_preserves_fail_error_summary():
     assert notifs[0]["error_summary"] == "locator timeout", (
         "FLAKY must carry error_summary from the FAIL attempt, not from the final PASS"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-RUN: WO-TAI-QA-OPS-NORMAL-COMPLETION-NOTIFY-001
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sched_run_row(status="RUNNING"):
+    row = dict(_run_row(status))
+    row["trigger_type"] = "SCHEDULE"
+    return row
+
+
+def _sched_mutable_run_q(status="RUNNING"):
+    class _SMQ(_Q):
+        def update(self, *a, **k): return _Q(rows=[_sched_run_row(status)])
+    return _SMQ(rows=[_sched_run_row(status)])
+
+
+def _sched_call(sb, results=None, new_status="COMPLETED"):
+    return svc.apply_results(
+        sb,
+        run_id="run-1",
+        new_status=new_status,
+        github_run_id=None,
+        github_run_attempt=None,
+        head_sha=None,
+        branch_name=None,
+        run_started_at=None,
+        run_finished_at=None,
+        run_error_code=None,
+        run_error_summary=None,
+        results=results or [],
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-RUN-01: SCHEDULE + RUNNING→COMPLETED + 1 PASS → QA_RUN_COMPLETED
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN_RUN_01_schedule_completed_all_pass():
+    sb = _Supabase({
+        "qa_runs":        _sched_mutable_run_q("RUNNING"),
+        "qa_items":       _qa_items_q(),
+        "qa_run_targets": _targets_q(),
+        "qa_run_results": _ResultsQ(current=[], history=[]),
+    })
+    data = _sched_call(sb, results=[_new_result("PASS")])
+    assert data["run_notification"] is not None
+    assert data["run_notification"]["event_type"] == "QA_RUN_COMPLETED"
+    assert data["run_notification"]["trigger_type"] == "SCHEDULE"
+    assert data["run_notification"]["pass_count"] == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-RUN-02: SCHEDULE + COMPLETED + no targets → no run_notification
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN_RUN_02_schedule_completed_empty_targets():
+    sb = _Supabase({
+        "qa_runs":        _sched_mutable_run_q("RUNNING"),
+        "qa_items":       _Q(rows=[]),
+        "qa_run_targets": _Q(rows=[]),  # no targets
+        "qa_run_results": _ResultsQ(current=[], history=[]),
+    })
+    data = _sched_call(sb, results=[])
+    assert data["run_notification"] is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-RUN-03: SCHEDULE + COMPLETED + 1 FAIL result → no run_notification
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN_RUN_03_schedule_completed_has_fail():
+    sb = _Supabase({
+        "qa_runs":        _sched_mutable_run_q("RUNNING"),
+        "qa_items":       _qa_items_q(),
+        "qa_run_targets": _targets_q(),
+        "qa_run_results": _ResultsQ(current=[], history=[]),
+    })
+    data = _sched_call(sb, results=[_new_result("FAIL")])
+    assert data["run_notification"] is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-RUN-04: MANUAL + COMPLETED + all PASS → no run_notification
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN_RUN_04_manual_completed_all_pass_no_notify():
+    sb = _Supabase({
+        "qa_runs":        _mutable_run_q("RUNNING"),  # trigger_type=MANUAL
+        "qa_items":       _qa_items_q(),
+        "qa_run_targets": _targets_q(),
+        "qa_run_results": _ResultsQ(current=[], history=[]),
+    })
+    data = svc.apply_results(
+        sb, run_id="run-1", new_status="COMPLETED",
+        github_run_id=None, github_run_attempt=None,
+        head_sha=None, branch_name=None,
+        run_started_at=None, run_finished_at=None,
+        run_error_code=None, run_error_summary=None,
+        results=[_new_result("PASS")],
+    )
+    assert data["run_notification"] is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-RUN-05: SCHEDULE + already COMPLETED → no run_notification (idempotent)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN_RUN_05_schedule_already_completed_no_double_notify():
+    sb = _Supabase({
+        "qa_runs":        _sched_mutable_run_q("COMPLETED"),
+        "qa_items":       _Q(rows=[]),
+        "qa_run_targets": _Q(rows=[]),
+        "qa_run_results": _ResultsQ(current=[], history=[]),
+    })
+    data = _sched_call(sb, results=[])
+    assert data["run_notification"] is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-RUN-06: SCHEDULE + COMPLETED + FLAKY (FAIL+PASS) → no run_notification
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN_RUN_06_schedule_completed_flaky_no_notify():
+    sb = _Supabase({
+        "qa_runs":        _sched_mutable_run_q("RUNNING"),
+        "qa_items":       _qa_items_q(),
+        "qa_run_targets": _targets_q(),
+        "qa_run_results": _ResultsQ(current=[], history=[]),
+    })
+    data = _sched_call(sb, results=[_new_result("FAIL", 1), _new_result("PASS", 2)])
+    assert data["run_notification"] is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-RUN-07: SCHEDULE + COMPLETED + not all targets covered → no run_notification
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN_RUN_07_schedule_completed_missing_target_result():
+    # Two targets but only one result submitted
+    sb = _Supabase({
+        "qa_runs":        _sched_mutable_run_q("RUNNING"),
+        "qa_items":       _qa_items_q(),
+        "qa_run_targets": _Q(rows=[{"qa_item_id": "item-1"}, {"qa_item_id": "item-2"}]),
+        "qa_run_results": _ResultsQ(current=[], history=[]),
+    })
+    data = _sched_call(sb, results=[_new_result("PASS")])  # only item-1 result
+    assert data["run_notification"] is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-RUN-08: QA_RUN_COMPLETED formatter — INFO severity, 정기점검 정상 title
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN_RUN_08_run_completed_formatter():
+    notif = {
+        "event_type":   notify.QA_RUN_COMPLETED,
+        "run_id":       "run-sched-1",
+        "trigger_type": "SCHEDULE",
+        "pass_count":   5,
+        "github_run_id": 9876,
+        "head_sha":     "abcdef1234567890",
+    }
+    payload = notify.build_qa_slack_payload(notif, is_run=True)
+    assert payload["severity"] == "INFO"
+    assert payload["title"] == "TAI QA 정기점검 정상"
+    text = payload["blocks"][0]["text"]["text"]
+    assert "✅" in text
+    assert "INFO" in text
+    assert "정기점검 정상" in text
+    assert "SCHEDULE" in text
+    assert "run-sched-1" in text
+    assert "5건 전부 PASS" in text
+    assert "9876" in text
+    assert "abcdef12" in text

@@ -1311,6 +1311,42 @@ def apply_results(
                     "error_code":       error_source.get("error_code"),
                 })
 
+    # Run-level normal completion notification (SCHEDULE only, all targets PASS)
+    if (
+        run_notification is None
+        and new_status == "COMPLETED"
+        and current_status not in _FINAL_STATUSES
+        and run.get("trigger_type") == "SCHEDULE"
+    ):
+        _tgts = (
+            supabase.table("qa_run_targets")
+            .select("qa_item_id")
+            .eq("run_id", run_id)
+            .execute()
+        )
+        _all_target_ids = {t["qa_item_id"] for t in (_tgts.data or [])}
+        if _all_target_ids:
+            _results_by_item: Dict[str, List] = defaultdict(list)
+            for (iid, _attempt), row in existing_map.items():
+                _results_by_item[iid].append(row)
+            for row in to_insert:
+                _results_by_item[row["qa_item_id"]].append(row)
+            if _all_target_ids <= set(_results_by_item.keys()):
+                if all(
+                    derive_effective_status(
+                        sorted(_results_by_item[iid], key=lambda a: a.get("attempt", 1))
+                    ) == "PASS"
+                    for iid in _all_target_ids
+                ):
+                    run_notification = {
+                        "event_type":    "QA_RUN_COMPLETED",
+                        "run_id":        run_id,
+                        "trigger_type":  run.get("trigger_type"),
+                        "github_run_id": github_run_id if github_run_id is not None else run.get("github_run_id"),
+                        "head_sha":      head_sha or run.get("head_sha"),
+                        "pass_count":    len(_all_target_ids),
+                    }
+
     if to_insert:
         supabase.table("qa_run_results").insert(to_insert).execute()
 

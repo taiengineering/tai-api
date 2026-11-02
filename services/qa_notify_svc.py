@@ -15,6 +15,7 @@ QA_BLOCKED_DETECTED = "QA_BLOCKED_DETECTED"
 QA_FLAKY_DETECTED   = "QA_FLAKY_DETECTED"
 QA_RECOVERED        = "QA_RECOVERED"
 QA_RUN_ERROR        = "QA_RUN_ERROR"
+QA_RUN_COMPLETED    = "QA_RUN_COMPLETED"
 
 EVENT_SEVERITY: Dict[str, str] = {
     QA_FAIL_DETECTED:    "HIGH",
@@ -22,6 +23,7 @@ EVENT_SEVERITY: Dict[str, str] = {
     QA_FLAKY_DETECTED:   "WARNING",
     QA_RECOVERED:        "INFO",
     QA_RUN_ERROR:        "HIGH",
+    QA_RUN_COMPLETED:    "INFO",
 }
 
 _EVENT_TITLE: Dict[str, str] = {
@@ -30,6 +32,7 @@ _EVENT_TITLE: Dict[str, str] = {
     QA_FLAKY_DETECTED:   "QA FLAKY 감지",
     QA_RECOVERED:        "QA 정상 복구",
     QA_RUN_ERROR:        "QA 실행 시스템 오류",
+    QA_RUN_COMPLETED:    "TAI QA 정기점검 정상",
 }
 
 _SEVERITY_EMOJI: Dict[str, str] = {
@@ -50,13 +53,19 @@ def _blocks_text(notif: Dict[str, Any], *, is_run: bool = False) -> str:
     lines: List[str] = [f"*{emoji} [{severity}] {title}*"]
 
     if is_run:
-        # QA 인프라 실패 — item context 없음
+        # QA 인프라 실패 또는 정기점검 정상 완료 — item context 없음
         lines.append("")
         lines.append("구간\t\tScheduler → GitHub Actions")
         if notif.get("trigger_type"):
             lines.append(f"Trigger\t\t{notif['trigger_type']}")
         if notif.get("run_id"):
             lines.append(f"Run ID\t\t{notif['run_id']}")
+        if notif.get("pass_count") is not None:
+            lines.append(f"결과\t\t{notif['pass_count']}건 전부 PASS")
+        if notif.get("github_run_id"):
+            lines.append(f"GitHub Run\t{notif['github_run_id']}")
+        if notif.get("head_sha"):
+            lines.append(f"HEAD\t\t{notif['head_sha'][:8]}")
         if notif.get("error_summary"):
             lines.append(f"\n오류\n{notif['error_summary']}")
         return "\n".join(lines)
