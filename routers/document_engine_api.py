@@ -37,6 +37,7 @@ from services.document_confirm_svc import confirm_document_atomic, ConfirmError
 from services.document_signature_svc import SignatureError, apply_profile_to_document
 from services.document_attachment_svc import AttachmentError, upload_file_to_field, get_file_signed_url, remove_file_from_field
 from services.document_engine.catalog_resolver import resolve_catalog_runtime_schema
+from services.document_engine.r2_route_policy import get_provision_policy
 from services.document_engine.renderer import html_to_pdf as _html_to_pdf
 from services.document_engine.generator import render_html as _render_html, render_pdf as _render_pdf
 from services.document_engine.auto_source_readmodel import list_auto_documents
@@ -771,6 +772,8 @@ def get_catalog_runtime(doc_id: str):
     availability = resolved["availability"]
     can_create = availability == "READY_FOR_EDIT"
 
+    provision_policy = get_provision_policy(doc_id)
+
     runtime_block = {
         "active_schema_id": resolved.get("active_schema_id"),
         "active_schema_status": resolved.get("active_schema_status"),
@@ -778,6 +781,7 @@ def get_catalog_runtime(doc_id: str):
         "candidate_schema_status": resolved.get("candidate_schema_status"),
         "availability": availability,
         "can_create": can_create,
+        "provision_policy": provision_policy,
     }
 
     return {
