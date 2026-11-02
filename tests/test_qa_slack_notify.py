@@ -1078,9 +1078,12 @@ def test_QN_RUN_01_schedule_completed_all_pass():
     })
     data = _sched_call(sb, results=[_new_result("PASS")])
     assert data["run_notification"] is not None
-    assert data["run_notification"]["event_type"] == "QA_RUN_COMPLETED"
-    assert data["run_notification"]["trigger_type"] == "SCHEDULE"
-    assert data["run_notification"]["pass_count"] == 1
+    rn = data["run_notification"]
+    assert rn["event_type"] == "QA_RUN_COMPLETED"
+    assert rn["trigger_type"] == "SCHEDULE"
+    assert rn["pass_count"] == 1
+    assert rn["finished_at"] is not None
+    assert "+09:00" in rn["finished_at"]  # KST
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1208,7 +1211,7 @@ def test_QN_RUN_08_run_completed_formatter():
     assert "5건 PASS" in text
     assert "정기 검사 범위 한정" in text
     assert "2026-11-02T19:00:05" in text
-    assert "actions/runs/9876" in text
+    assert "taiengineering/tai-qa/actions/runs/9876" in text
     assert "Actions #9876" in text
     assert "abcdef12" in text
 
@@ -1251,3 +1254,42 @@ def test_QN_RUN_10_run_completed_no_github_run_id():
     assert "3건 PASS" in text
     assert "06:00:08" in text
     assert "actions/runs" not in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-RUN-11: run_finished_at=None (실제 콜백 형태) → now_kst() fallback으로 KST 시각 포함
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN_RUN_11_completed_at_populated_without_callback_time():
+    sb = _Supabase({
+        "qa_runs":        _sched_mutable_run_q("RUNNING"),
+        "qa_items":       _qa_items_q(),
+        "qa_run_targets": _targets_q(),
+        "qa_run_results": _ResultsQ(current=[], history=[]),
+    })
+    # run_finished_at 미전송 (실제 tai-qa 콜백과 동일)
+    data = _sched_call(sb, results=[_new_result("PASS")])
+    rn = data["run_notification"]
+    assert rn is not None
+    assert rn["finished_at"] is not None, "finished_at must use now_kst() fallback"
+    assert "+09:00" in rn["finished_at"], "finished_at must be KST"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-RUN-12: GitHub 링크가 taiengineering/tai-qa를 가리켜야 한다
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN_RUN_12_github_link_points_to_tai_qa():
+    notif = {
+        "event_type":    notify.QA_RUN_COMPLETED,
+        "run_id":        "run-sched-3",
+        "trigger_type":  "SCHEDULE",
+        "pass_count":    2,
+        "github_run_id": 55555,
+        "head_sha":      None,
+        "finished_at":   "2026-11-02T06:00:10+09:00",
+    }
+    payload = notify.build_qa_slack_payload(notif, is_run=True)
+    text = payload["blocks"][0]["text"]["text"]
+    assert "taiengineering/tai-qa/actions/runs/55555" in text
+    assert "taiengineering/tai-api" not in text

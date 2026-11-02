@@ -1345,7 +1345,7 @@ def apply_results(
                         "github_run_id": github_run_id if github_run_id is not None else run.get("github_run_id"),
                         "head_sha":      head_sha or run.get("head_sha"),
                         "pass_count":    len(_all_target_ids),
-                        "finished_at":   run_finished_at or run.get("finished_at"),
+                        "finished_at":   run_finished_at or run.get("finished_at") or now,
                     }
 
     if to_insert:

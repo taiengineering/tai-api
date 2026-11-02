@@ -44,7 +44,7 @@ _SEVERITY_EMOJI: Dict[str, str] = {
 
 _ALERT_EVENTS = frozenset({QA_FAIL_DETECTED, QA_BLOCKED_DETECTED, QA_FLAKY_DETECTED})
 
-_GITHUB_ACTIONS_BASE = "https://github.com/taiengineering/tai-api/actions/runs"
+_GITHUB_ACTIONS_BASE = "https://github.com/taiengineering/tai-qa/actions/runs"
 
 
 def _blocks_text(notif: Dict[str, Any], *, is_run: bool = False) -> str:
