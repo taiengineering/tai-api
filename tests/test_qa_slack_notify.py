@@ -1182,7 +1182,7 @@ def test_QN_RUN_07_schedule_completed_missing_target_result():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# QN-RUN-08: QA_RUN_COMPLETED formatter — INFO severity, 정기점검 정상 title
+# QN-RUN-08: QA_RUN_COMPLETED formatter — INFO severity, 범위 한정, KST 시각, GitHub 링크
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_QN_RUN_08_run_completed_formatter():
@@ -1193,6 +1193,7 @@ def test_QN_RUN_08_run_completed_formatter():
         "pass_count":   5,
         "github_run_id": 9876,
         "head_sha":     "abcdef1234567890",
+        "finished_at":  "2026-11-02T19:00:05+09:00",
     }
     payload = notify.build_qa_slack_payload(notif, is_run=True)
     assert payload["severity"] == "INFO"
@@ -1201,8 +1202,52 @@ def test_QN_RUN_08_run_completed_formatter():
     assert "✅" in text
     assert "INFO" in text
     assert "정기점검 정상" in text
+    assert "승인된 정기 QA 검사 범위" in text
     assert "SCHEDULE" in text
     assert "run-sched-1" in text
-    assert "5건 전부 PASS" in text
-    assert "9876" in text
+    assert "5건 PASS" in text
+    assert "정기 검사 범위 한정" in text
+    assert "2026-11-02T19:00:05" in text
+    assert "actions/runs/9876" in text
+    assert "Actions #9876" in text
     assert "abcdef12" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-RUN-09: QA_RUN_ERROR 포맷 불변 — "Scheduler → GitHub Actions" 유지
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN_RUN_09_run_error_format_unchanged():
+    notif = {
+        "event_type":   notify.QA_RUN_ERROR,
+        "run_id":       "run-err-1",
+        "trigger_type": "SCHEDULE",
+        "error_summary": "runner timeout",
+    }
+    payload = notify.build_qa_slack_payload(notif, is_run=True)
+    text = payload["blocks"][0]["text"]["text"]
+    assert "Scheduler → GitHub Actions" in text
+    assert "runner timeout" in text
+    assert "승인된 정기 QA 검사 범위" not in text
+    assert "정기 검사 범위 한정" not in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QN-RUN-10: QA_RUN_COMPLETED github_run_id=None → GitHub 링크 생략
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_QN_RUN_10_run_completed_no_github_run_id():
+    notif = {
+        "event_type":   notify.QA_RUN_COMPLETED,
+        "run_id":       "run-sched-2",
+        "trigger_type": "SCHEDULE",
+        "pass_count":   3,
+        "github_run_id": None,
+        "head_sha":     None,
+        "finished_at":  "2026-11-02T06:00:08+09:00",
+    }
+    payload = notify.build_qa_slack_payload(notif, is_run=True)
+    text = payload["blocks"][0]["text"]["text"]
+    assert "3건 PASS" in text
+    assert "06:00:08" in text
+    assert "actions/runs" not in text

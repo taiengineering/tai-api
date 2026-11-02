@@ -44,6 +44,8 @@ _SEVERITY_EMOJI: Dict[str, str] = {
 
 _ALERT_EVENTS = frozenset({QA_FAIL_DETECTED, QA_BLOCKED_DETECTED, QA_FLAKY_DETECTED})
 
+_GITHUB_ACTIONS_BASE = "https://github.com/taiengineering/tai-api/actions/runs"
+
 
 def _blocks_text(notif: Dict[str, Any], *, is_run: bool = False) -> str:
     event_type = notif["event_type"]
@@ -53,17 +55,23 @@ def _blocks_text(notif: Dict[str, Any], *, is_run: bool = False) -> str:
     lines: List[str] = [f"*{emoji} [{severity}] {title}*"]
 
     if is_run:
-        # QA 인프라 실패 또는 정기점검 정상 완료 — item context 없음
         lines.append("")
-        lines.append("구간\t\tScheduler → GitHub Actions")
+        if event_type == QA_RUN_COMPLETED:
+            lines.append("구간\t\t승인된 정기 QA 검사 범위")
+        else:
+            lines.append("구간\t\tScheduler → GitHub Actions")
         if notif.get("trigger_type"):
             lines.append(f"Trigger\t\t{notif['trigger_type']}")
         if notif.get("run_id"):
             lines.append(f"Run ID\t\t{notif['run_id']}")
+        if notif.get("finished_at"):
+            lines.append(f"완료 시각\t{notif['finished_at']}")
         if notif.get("pass_count") is not None:
-            lines.append(f"결과\t\t{notif['pass_count']}건 전부 PASS")
-        if notif.get("github_run_id"):
-            lines.append(f"GitHub Run\t{notif['github_run_id']}")
+            lines.append(f"검사 결과\t{notif['pass_count']}건 PASS (정기 검사 범위 한정)")
+        github_run_id = notif.get("github_run_id")
+        if github_run_id:
+            gh_link = f"<{_GITHUB_ACTIONS_BASE}/{github_run_id}|Actions #{github_run_id}>"
+            lines.append(f"GitHub Run\t{gh_link}")
         if notif.get("head_sha"):
             lines.append(f"HEAD\t\t{notif['head_sha'][:8]}")
         if notif.get("error_summary"):
