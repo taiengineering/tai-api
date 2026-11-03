@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 
 from db.supabase_client import get_supabase
+from services.document_engine.r2_route_policy import get_provision_policy
 
 log = logging.getLogger(__name__)
 
@@ -44,12 +45,24 @@ def list_document_forms(
     res = query.order("doc_id").range(start, end).execute()
     items = res.data or []
     _enrich_with_availability(supabase, items)
+    _enrich_with_route_group(items)
     return {
         "items": items,
         "total": int(res.count or 0),
         "page": page,
         "per_page": per_page,
     }
+
+
+def _enrich_with_route_group(items: list[dict]) -> None:
+    """Attaches route_group from R2 policy to each list item (in-memory, no DB).
+
+    None when doc_id is absent or not registered in the R2 matrix.
+    """
+    for item in items:
+        doc_id = item.get("doc_id")
+        policy = get_provision_policy(doc_id) if doc_id else None
+        item["route_group"] = policy["route_group"] if policy else None
 
 
 _APPROVED = "APPROVED_FOR_RUNTIME_USE"
