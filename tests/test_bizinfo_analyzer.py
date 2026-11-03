@@ -11,8 +11,10 @@ Test categories:
   EXCLUDE path       — A-02
   HOLD paths         — A-03 to A-10 (error, hallucination, negation, low confidence …)
   Layer 1 contract   — A-11 to A-13 (IN_SCOPE pass-through, OUT_OF_SCOPE pass-through,
-                                      OUT_OF_SCOPE skip when explicitly enabled)
+                                      layer1_verdict recorded but no bypass)
   Cross-cutting      — A-14 to A-17 (basis safety, immutability, literals, non-empty)
+  R1 corrections     — A-18 to A-21 (exclude+safety, full-text exclusion,
+                                      non-string field coercion, no skip_layer1_exclude)
 """
 from __future__ import annotations
 
@@ -242,10 +244,10 @@ def test_A11_layer1_in_scope_passes_through_layer2():
     assert any("cited_verified" in b for b in result.basis)
 
 
-def test_A12_layer1_out_of_scope_passes_through_by_default():
-    """A-12: skip_layer1_exclude=False(기본값) — OUT_OF_SCOPE도 Layer 2 통과. [SYNTHETIC]
+def test_A12_layer1_out_of_scope_passes_through_layer2():
+    """A-12: layer1_verdict=OUT_OF_SCOPE → Layer 2 LLM 판정을 그대로 거침. [SYNTHETIC]
 
-    누락률 평가 전에는 Layer 1 OUT_OF_SCOPE를 즉시 제외하지 않는다.
+    skip 경로가 없으므로 LLM mock 결과가 그대로 반영된다.
     """
     rec = _record(
         title="중소기업 수출지원사업",
@@ -255,35 +257,30 @@ def test_A12_layer1_out_of_scope_passes_through_by_default():
         rec,
         llm_call_fn=_mock_llm("EXCLUDE", "해외 판로 개척"),
         layer1_verdict="OUT_OF_SCOPE",
-        skip_layer1_exclude=False,
     )
     assert result.verdict == "EXCLUDE"
     assert any("cited_verified" in b for b in result.basis)
 
 
-def test_A13_layer1_out_of_scope_skip_when_enabled():
-    """A-13: skip_layer1_exclude=True + layer1_verdict=OUT_OF_SCOPE → LLM 호출 없이 EXCLUDE.
+def test_A13_layer1_verdict_recorded_llm_always_called():
+    """A-13: layer1_verdict 전달 여부와 무관하게 LLM은 항상 호출된다. [SYNTHETIC]
 
-    품질 평가 후 활성화되는 비용 절감 경로. 이 테스트는 LLM이 실제로
-    호출되지 않음을 추가로 검증한다.
-    [SYNTHETIC]
+    skip_layer1_exclude 파라미터가 제거됐으므로 layer1_verdict="OUT_OF_SCOPE"여도
+    LLM 호출이 반드시 발생해야 한다.
     """
     called: list[bool] = []
 
     def _tracking_fn(system_msg: str, user_msg: str) -> dict:
         called.append(True)
-        return {"verdict": "INCLUDE", "cited_evidence": "X", "confidence": "high"}
+        return {"verdict": "EXCLUDE", "cited_evidence": "해외 판로", "confidence": "high"}
 
     rec = _record(title="수출지원", summary="해외 판로를 지원합니다.")
-    result = analyze_relevance(
+    analyze_relevance(
         rec,
         llm_call_fn=_tracking_fn,
         layer1_verdict="OUT_OF_SCOPE",
-        skip_layer1_exclude=True,
     )
-    assert result.verdict == "EXCLUDE"
-    assert not called, "LLM must not be called when skip_layer1_exclude is True"
-    assert any("layer1_out_of_scope_skip" in b for b in result.basis)
+    assert called, "LLM must always be called regardless of layer1_verdict"
 
 
 # ---------------------------------------------------------------------------
@@ -354,3 +351,74 @@ def test_A17_basis_is_non_empty_tuple():
     result = analyze_relevance(rec, llm_call_fn=_mock_error())
     assert isinstance(result.basis, tuple)
     assert len(result.basis) >= 1
+
+
+# ---------------------------------------------------------------------------
+# R1 corrections
+# ---------------------------------------------------------------------------
+
+
+def test_A18_hold_exclude_with_safety_keyword_in_source():
+    """A-18: EXCLUDE 판정인데 원문에 직접 산업안전 키워드 존재 → HOLD (exclude_safety_signal_present).
+
+    R1-01: 원문에 '산업재해'가 포함돼 있으면 LLM EXCLUDE를 자동 확정할 수 없다.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="중소기업 지원사업",
+        summary="해외 판로 개척을 지원합니다. 산업재해 예방 설비는 본 사업 범위에 포함됩니다.",
+    )
+    result = analyze_relevance(
+        rec,
+        llm_call_fn=_mock_llm("EXCLUDE", "해외 판로 개척을 지원합니다"),
+    )
+    assert result.verdict == "HOLD"
+    assert any("exclude_safety_signal_present" in b for b in result.basis)
+
+
+def test_A19_hold_include_full_text_exclusion_outside_window():
+    """A-19: INCLUDE 판정인데 원문 전체에 제외 마커 존재 (인용 위치 ±50자 밖) → HOLD.
+
+    R1-02: _cited_in_negation_context 창 밖에 있더라도 full_text_exclusion_conflict.
+    안전설비지원제외 마커를 인용 구절에서 충분히 떨어뜨려 창 밖에 위치시킨다.
+    [SYNTHETIC]
+    """
+    padding = "가" * 200
+    rec = _record(
+        title="안전보건 지원사업",
+        summary=f"산업재해 예방을 위한 안전설비를 지원합니다. {padding} 안전설비 지원 제외.",
+    )
+    result = analyze_relevance(
+        rec,
+        llm_call_fn=_mock_llm("INCLUDE", "산업재해 예방을 위한 안전설비를 지원합니다"),
+    )
+    assert result.verdict == "HOLD"
+    assert any("full_text_exclusion_conflict" in b for b in result.basis)
+
+
+def test_A20_hold_non_string_verdict_field():
+    """A-20: verdict 필드가 정수 등 비문자열 → 예외 없이 HOLD (invalid_verdict).
+
+    R1-03: _safe_str() 적용으로 str() 변환 후 검증한다.
+    42는 허용된 verdict 값이 아니므로 HOLD.
+    [SYNTHETIC]
+    """
+    rec = _record(title="테스트", summary="테스트 요약")
+
+    def _fn(s, u):
+        return {"verdict": 42, "cited_evidence": "테스트", "confidence": "high"}
+
+    result = analyze_relevance(rec, llm_call_fn=_fn)
+    assert result.verdict == "HOLD"
+    assert any("invalid_verdict" in b for b in result.basis)
+
+
+def test_A21_no_skip_layer1_exclude_parameter():
+    """A-21: analyze_relevance 시그니처에 skip_layer1_exclude 파라미터 없음.
+
+    R1-04: 품질 평가 미완료 상태에서 bypass 경로 제거.
+    [SYNTHETIC]
+    """
+    import inspect
+    sig = inspect.signature(analyze_relevance)
+    assert "skip_layer1_exclude" not in sig.parameters

@@ -15,13 +15,15 @@ Verdict contract:
 
 Verification is code-level (independent of LLM self-report):
   1. cited_evidence exists verbatim in the original text (compact match).
-  2. cited_evidence is not surrounded by negation/exclusion context.
-  3. confidence == "high" for INCLUDE or EXCLUDE.
+  2. cited_evidence is not surrounded by negation/exclusion context (window).
+  3. INCLUDE: no full-text exclusion marker present in original text.
+  4. EXCLUDE: no direct industrial-safety keyword present in full text.
+  5. confidence == "high" for INCLUDE or EXCLUDE.
   Any failure → HOLD.
 
 Layer 1 (selector.py) verdicts do NOT auto-confirm here.
-  skip_layer1_exclude=False by default; enable only after quality evaluation
-  confirms acceptable miss-rate on real sample data.
+  layer1_verdict is recorded for future quality-gate evaluation.
+  No bypass path is active until quality evaluation approves one.
 """
 from __future__ import annotations
 
@@ -30,6 +32,10 @@ from dataclasses import dataclass
 from typing import Callable, Literal, Optional
 
 from services.bizinfo.normalizer import NormalizedSourceRecord
+from services.bizinfo.selector import (
+    _DIRECT_SAFETY          as _LAYER1_DIRECT_SAFETY,
+    _SAFETY_EXCLUSION_COMPACT as _LAYER1_EXCLUSION_COMPACT,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -112,6 +118,15 @@ def _build_prompt(title: str, summary: str, support_target: str) -> tuple[str, s
 # ---------------------------------------------------------------------------
 
 
+def _safe_str(value: object) -> str:
+    """Coerce any LLM response field value to str without raising."""
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _cited_in_negation_context(
     compact_cited: str, compact_original: str
 ) -> bool:
@@ -132,7 +147,7 @@ def _verify(
     original_support_target: str,
 ) -> AnalysisResult:
     """Verify LLM response with code-level checks.  Returns HOLD on any failure."""
-    verdict = (raw.get("verdict") or "").strip().upper()
+    verdict = _safe_str(raw.get("verdict")).strip().upper()
     if verdict not in {"INCLUDE", "EXCLUDE", "HOLD"}:
         return AnalysisResult(verdict="HOLD", basis=("invalid_verdict",))
 
@@ -140,11 +155,11 @@ def _verify(
         return AnalysisResult(verdict="HOLD", basis=("llm_hold",))
 
     # INCLUDE / EXCLUDE require high confidence and verifiable evidence
-    confidence = (raw.get("confidence") or "").strip().lower()
+    confidence = _safe_str(raw.get("confidence")).strip().lower()
     if confidence != "high":
         return AnalysisResult(verdict="HOLD", basis=("low_confidence",))
 
-    cited = (raw.get("cited_evidence") or "").strip()
+    cited = _safe_str(raw.get("cited_evidence")).strip()
     if not cited:
         return AnalysisResult(verdict="HOLD", basis=("missing_cited_evidence",))
 
@@ -162,10 +177,19 @@ def _verify(
     if compact_cited not in compact_combined:
         return AnalysisResult(verdict="HOLD", basis=("cited_not_in_source",))
 
-    # Negation context check: only for INCLUDE.
-    # For EXCLUDE, negation near cited evidence is expected and meaningful.
-    if verdict == "INCLUDE" and _cited_in_negation_context(compact_cited, compact_combined):
-        return AnalysisResult(verdict="HOLD", basis=("negation_context",))
+    if verdict == "INCLUDE":
+        # Window check: negation particle within ±50 chars of citation.
+        if _cited_in_negation_context(compact_cited, compact_combined):
+            return AnalysisResult(verdict="HOLD", basis=("negation_context",))
+        # R1-02: full-text exclusion marker anywhere in source overrides INCLUDE.
+        compact_full = compact_combined
+        if any(marker in compact_full for marker in _LAYER1_EXCLUSION_COMPACT):
+            return AnalysisResult(verdict="HOLD", basis=("full_text_exclusion_conflict",))
+
+    if verdict == "EXCLUDE":
+        # R1-01: direct safety keyword anywhere in source → cannot auto-exclude.
+        if any(kw in combined_lc for kw in _LAYER1_DIRECT_SAFETY):
+            return AnalysisResult(verdict="HOLD", basis=("exclude_safety_signal_present",))
 
     return AnalysisResult(
         verdict=verdict,
@@ -215,28 +239,20 @@ def analyze_relevance(
     record: NormalizedSourceRecord,
     *,
     llm_call_fn: Callable[[str, str], dict],
-    skip_layer1_exclude: bool = False,
     layer1_verdict: Optional[str] = None,
 ) -> AnalysisResult:
     """Classify one NormalizedSourceRecord using LLM semantic analysis.
 
-    llm_call_fn:          callable(system_msg, user_msg) -> dict.
-                          Must be injected; never use a default that calls a
-                          real API without explicit approval.
-    skip_layer1_exclude:  When True and layer1_verdict == "OUT_OF_SCOPE",
-                          returns EXCLUDE immediately without an LLM call.
-                          DISABLED by default — enable only after quality
-                          evaluation confirms acceptable miss-rate.
-    layer1_verdict:       Optional Layer 1 (selector.py) verdict string.
+    llm_call_fn:     callable(system_msg, user_msg) -> dict.
+                     Must be injected; never use a default that calls a
+                     real API without explicit approval.
+    layer1_verdict:  Optional Layer 1 (selector.py) verdict string.
+                     Passed through for future quality-gate use; does not
+                     change the classification path until a quality evaluation
+                     gate approves a bypass.
 
     The original record is never modified.
     """
-    if skip_layer1_exclude and layer1_verdict == "OUT_OF_SCOPE":
-        return AnalysisResult(
-            verdict="EXCLUDE",
-            basis=("layer1_out_of_scope_skip",),
-        )
-
     title          = record.title          or ""
     summary        = record.summary        or ""
     support_target = record.support_target or ""
