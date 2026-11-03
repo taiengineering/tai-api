@@ -53,7 +53,8 @@ class DateRange:
 @dataclass(frozen=True)
 class ParseFailure:
     """Returned instead of NormalizedSourceRecord when mandatory fields are absent."""
-    source_kind: Literal["PROGRAM", "EVENT"]
+    # str (not Literal) — allows "UNKNOWN" for unrecognized source_kind inputs
+    source_kind: str
     raw_key:     Optional[str]   # pblancId / eventInfoId if present
     reasons:     tuple[str, ...]
 
@@ -104,7 +105,7 @@ def normalize_bizinfo_record(
     # R1-01: reject unknown kind — never silently fall through to EVENT
     if kind not in ("PROGRAM", "EVENT"):
         return ParseFailure(
-            source_kind="PROGRAM",
+            source_kind="UNKNOWN",
             raw_key=None,
             reasons=("invalid_source_kind",),
         )
@@ -299,8 +300,10 @@ def _validate_external_url(raw: object) -> tuple[Optional[str], Optional[str]]:
     if parsed.scheme not in _ALLOWED_EXTERNAL_SCHEMES:
         return None, "non_web_scheme"
 
-    # R1-03: require a real domain (netloc must contain a dot)
-    if not parsed.netloc or "." not in parsed.netloc:
+    # R1-03 / FINAL-FIX: require a valid domain
+    # parsed.hostname strips port and userinfo; split(".")rejects ".." or "a..b"
+    host = parsed.hostname or ""
+    if not host or "." not in host or not all(label for label in host.split(".")):
         return None, "missing_host"
 
     return raw, None

@@ -324,10 +324,12 @@ def test_C11_event_and_program_periods_independent():
 
 
 def test_C12_invalid_kind_returns_failure():
-    """C-12: PROGRAM·EVENT 이외의 kind → ParseFailure (EVENT로 자동 전환 금지)."""
+    """C-12: PROGRAM·EVENT 이외의 kind → ParseFailure, source_kind="UNKNOWN"."""
     result = normalize_bizinfo_record("INVALID_KIND", _prog(), _NOW)  # type: ignore[arg-type]
     assert isinstance(result, ParseFailure)
     assert any("invalid_source_kind" in r for r in result.reasons)
+    # must not misrepresent the rejected kind as a known source type
+    assert result.source_kind == "UNKNOWN"
 
 
 def test_C13_malformed_bizinfo_url_safe():
@@ -345,17 +347,19 @@ def test_C13_malformed_bizinfo_url_safe():
 
 
 def test_C14_hostless_external_url_rejected():
-    """C-14: 호스트 없는 외부 URL 거부."""
+    """C-14: 호스트 없는 / 비정상 도메인 외부 URL 거부."""
     no_host_urls = [
-        "https:///path/only",   # no host
-        "http://localhost/test",  # no dot — not a real domain
+        "https:///path/only",    # no host
+        "http://localhost/test", # no dot — not a real domain
+        "https://../path",       # double-dot pseudo-host
+        "https://a..b/path",     # empty label in domain
     ]
     for url in no_host_urls:
         rec = normalize_bizinfo_record(
             "EVENT", _event(orginlUrlAdres=url), _NOW
         )
         assert isinstance(rec, NormalizedSourceRecord), f"must not raise for {repr(url)}"
-        assert rec.origin_url is None
+        assert rec.origin_url is None, f"should reject {repr(url)}"
         for e in rec.parse_errors:
             assert url not in e
 
