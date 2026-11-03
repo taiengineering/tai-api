@@ -3,17 +3,20 @@
 Converts a single raw 기업마당 API item dict into NormalizedSourceRecord.
 Pure function — no DB, no network, no storage.
 
-Confirmed source fields (SRC-A):
-  PROGRAM: pblancId, pblancNm, pblancUrl, reqstBeginEndDe, jrsdInsttNm
+Confirmed source fields (real-data verified, OBJ-BZI-003-REAL-DATA-EVIDENCE-FIX-001):
+  PROGRAM: pblancId, pblancNm, pblancUrl, reqstBeginEndDe, jrsdInsttNm, excInsttNm
+           bsnsSumryCn, trgetNm, hashtags, updtPnttm
   EVENT:   eventInfoId, nttNm, bizinfoUrl, eventBeginEndDe, rceptPd, originOrg
+           orginlUrlAdres, nttCn, hashtags, updtPnttm
 
-EVIDENCE_PENDING fields (field name unverified in independent review):
-  PROGRAM: origin_url field name
-  EVENT:   orginlUrlAdres (Claude Code SRC-A report, GPT independent confirm pending)
-  Both:    source_updated_at (no API field confirmed)
+EVIDENCE_PENDING:
+  PROGRAM: origin_url — rceptEngnHmpgUrl is application page, not original notice
+  Both:    source_updated_at — OBJ-BZI-004 이관
 """
 from __future__ import annotations
 
+import html as _html
+import re as _re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Literal, Optional
@@ -82,6 +85,15 @@ class NormalizedSourceRecord:
 
     parse_errors:     list[str] = field(default_factory=list)
     evidence_pending: list[str] = field(default_factory=list)
+
+    # -- OBJ-BZI-003 content fields ----------------------------------------
+    # HTML stripped to plain text for relevance analysis.
+    # PROGRAM: bsnsSumryCn / EVENT: nttCn
+    summary:        Optional[str] = None
+    # PROGRAM only: trgetNm verbatim
+    support_target: Optional[str] = None
+    # Parsed from comma-separated response hashtags field
+    hashtags:       list[str]     = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +182,9 @@ def _normalize_program(raw: dict, retrieved_at: datetime) -> NormalizedSourceRec
         source_updated_at=None,
         parse_errors=errors,
         evidence_pending=evidence,
+        summary=_strip_html(raw.get("bsnsSumryCn")),
+        support_target=_str_or_none(raw.get("trgetNm")),
+        hashtags=_parse_hashtags(raw.get("hashtags")),
     )
 
 
@@ -225,6 +240,8 @@ def _normalize_event(raw: dict, retrieved_at: datetime) -> NormalizedSourceRecor
         source_updated_at=None,
         parse_errors=errors,
         evidence_pending=evidence,
+        summary=_strip_html(raw.get("nttCn")),
+        hashtags=_parse_hashtags(raw.get("hashtags")),
     )
 
 
@@ -448,3 +465,49 @@ def _str_or_none(value: object) -> Optional[str]:
         return None
     s = str(value).strip()
     return s if s else None
+
+
+def _strip_html(raw: object) -> Optional[str]:
+    """Convert HTML to plain analysis text.
+
+    Removes script/style blocks with content, converts block tags to spaces,
+    strips remaining markup, decodes HTML entities, normalises whitespace.
+    Returns None when the result is empty.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    text = raw
+    # Remove script and style blocks entirely (content excluded from analysis)
+    text = _re.sub(
+        r'<(script|style)\b[^>]*>.*?</\1>',
+        '', text,
+        flags=_re.DOTALL | _re.IGNORECASE,
+    )
+    # Block-level closing tags → whitespace separator
+    text = _re.sub(r'<br\s*/?>', ' ', text, flags=_re.IGNORECASE)
+    text = _re.sub(
+        r'</(p|div|li|tr|td|th|h[1-6]|blockquote|article|section)>',
+        ' ', text,
+        flags=_re.IGNORECASE,
+    )
+    # Remove all remaining tags
+    text = _re.sub(r'<[^>]+>', '', text)
+    # Decode HTML entities (&amp; &nbsp; &lt; &gt; &#xNN; etc.)
+    text = _html.unescape(text)
+    # Normalise whitespace
+    text = ' '.join(text.split())
+    return text if text else None
+
+
+def _parse_hashtags(raw: object) -> list[str]:
+    """Parse comma-separated hashtag string into a deduplicated ordered list."""
+    if not raw or not isinstance(raw, str):
+        return []
+    seen: set[str] = set()
+    result: list[str] = []
+    for tag in raw.split(','):
+        tag = tag.strip()
+        if tag and tag not in seen:
+            seen.add(tag)
+            result.append(tag)
+    return result
