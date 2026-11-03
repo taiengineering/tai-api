@@ -386,3 +386,94 @@ def test_E07_compact_date_short_digits_rejected():
     assert isinstance(rec, NormalizedSourceRecord)
     assert rec.event_period is not None
     assert rec.event_period.parse_note == "format_error"
+
+
+# ---------------------------------------------------------------------------
+# OBJ-BZI-003 필드 확장 테스트
+# ---------------------------------------------------------------------------
+
+
+def test_P09_program_summary_extracted():
+    """P-09: bsnsSumryCn → summary HTML 스트립 후 추출."""
+    raw = _prog(bsnsSumryCn="<p>안전설비 지원사업 요약입니다.</p>")
+    rec = normalize_bizinfo_record("PROGRAM", raw, _NOW)
+    assert isinstance(rec, NormalizedSourceRecord)
+    assert rec.summary == "안전설비 지원사업 요약입니다."
+
+
+def test_P10_program_html_stripped():
+    """P-10: bsnsSumryCn HTML 태그·엔티티 정제."""
+    raw = _prog(bsnsSumryCn="<p>지원 &amp; 혜택</p><br/>산재&nbsp;예방")
+    rec = normalize_bizinfo_record("PROGRAM", raw, _NOW)
+    assert isinstance(rec, NormalizedSourceRecord)
+    assert rec.summary is not None
+    assert "<p>" not in rec.summary
+    assert "&amp;" not in rec.summary
+    assert "지원 & 혜택" in rec.summary
+    assert "산재" in rec.summary
+
+
+def test_P11_program_hashtags_parsed():
+    """P-11: hashtags 쉼표 구분 문자열 → list, 중복 제거."""
+    raw = _prog(hashtags="인력,부산,안전보호구,중대재해,인력")
+    rec = normalize_bizinfo_record("PROGRAM", raw, _NOW)
+    assert isinstance(rec, NormalizedSourceRecord)
+    assert rec.hashtags == ["인력", "부산", "안전보호구", "중대재해"]
+
+
+def test_P12_program_support_target():
+    """P-12: trgetNm → support_target."""
+    raw = _prog(trgetNm="소기업, 소상공인")
+    rec = normalize_bizinfo_record("PROGRAM", raw, _NOW)
+    assert isinstance(rec, NormalizedSourceRecord)
+    assert rec.support_target == "소기업, 소상공인"
+
+
+def test_P13_program_missing_bsnsSumryCn():
+    """P-13: bsnsSumryCn 없음 → summary=None."""
+    raw = _prog()
+    raw.pop("bsnsSumryCn", None)
+    rec = normalize_bizinfo_record("PROGRAM", raw, _NOW)
+    assert isinstance(rec, NormalizedSourceRecord)
+    assert rec.summary is None
+
+
+def test_E08_event_summary_from_nttCn():
+    """E-08: nttCn → summary HTML 스트립 후 추출."""
+    raw = _event(nttCn="<p>산업안전보건 교육 행사입니다.</p>")
+    rec = normalize_bizinfo_record("EVENT", raw, _NOW)
+    assert isinstance(rec, NormalizedSourceRecord)
+    assert rec.summary == "산업안전보건 교육 행사입니다."
+
+
+def test_E09_event_no_support_target():
+    """E-09: EVENT는 trgetNm 없음 → support_target=None."""
+    rec = normalize_bizinfo_record("EVENT", _event(), _NOW)
+    assert isinstance(rec, NormalizedSourceRecord)
+    assert rec.support_target is None
+
+
+def test_C16_script_style_excluded():
+    """C-16: script·style 블록 내용 summary에서 제외."""
+    raw = _prog(
+        bsnsSumryCn=(
+            "<p>지원사업 설명</p>"
+            "<script>alert('xss')</script>"
+            "<style>.x{color:red}</style>"
+            "<p>안전 관련 내용</p>"
+        )
+    )
+    rec = normalize_bizinfo_record("PROGRAM", raw, _NOW)
+    assert isinstance(rec, NormalizedSourceRecord)
+    assert rec.summary is not None
+    assert "alert" not in rec.summary
+    assert "color:red" not in rec.summary
+    assert "안전 관련 내용" in rec.summary
+
+
+def test_C17_html_entities_decoded():
+    """C-17: HTML 엔티티 디코딩 (&lt; &gt; &nbsp; &#xAB; 등)."""
+    raw = _prog(bsnsSumryCn="매출&lt;1억&gt;&nbsp;기업 지원")
+    rec = normalize_bizinfo_record("PROGRAM", raw, _NOW)
+    assert isinstance(rec, NormalizedSourceRecord)
+    assert rec.summary == "매출<1억> 기업 지원"
