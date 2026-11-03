@@ -55,14 +55,16 @@ def list_document_forms(
 
 
 def _enrich_with_route_group(items: list[dict]) -> None:
-    """Attaches route_group from R2 policy to each list item (in-memory, no DB).
+    """Attaches route_group and official_status from R2 policy to each list item (in-memory, no DB).
 
     None when doc_id is absent or not registered in the R2 matrix.
+    official_status is non-None only for B_OFFICIAL documents (CONDITIONAL_APPROVED | HOLD).
     """
     for item in items:
         doc_id = item.get("doc_id")
         policy = get_provision_policy(doc_id) if doc_id else None
         item["route_group"] = policy["route_group"] if policy else None
+        item["official_status"] = policy["official_status"] if policy else None
 
 
 _APPROVED = "APPROVED_FOR_RUNTIME_USE"
