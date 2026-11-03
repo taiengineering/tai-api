@@ -199,11 +199,14 @@ def test_S12_out_of_scope_financial_export():
     )
     result = review_relevance(rec)
     assert result.verdict == "OUT_OF_SCOPE"
-    assert any("no_safety_signal" in b for b in result.basis)
+    assert any("non_safety:" in b for b in result.basis)
 
 
-def test_S13_out_of_scope_unrelated_event():
-    """S-13: 반도체 품질관리 행사, 안전 무관 → OUT_OF_SCOPE. [REAL 유형: EVEN_069227]"""
+def test_S13_review_unrelated_event_no_non_safety_markers():
+    """S-13: 반도체 품질관리 행사 — 비안전 목적 마커 없음 → REVIEW_REQUIRED. [REAL 유형: EVEN_069227]
+
+    R1-02: 비안전 목적 마커 없이 안전 키워드 부재만으로는 OUT_OF_SCOPE 불가.
+    """
     rec = _record(
         source_kind="EVENT",
         source_id="BIZINFO_EVENT",
@@ -215,7 +218,7 @@ def test_S13_out_of_scope_unrelated_event():
         ),
     )
     result = review_relevance(rec)
-    assert result.verdict == "OUT_OF_SCOPE"
+    assert result.verdict == "REVIEW_REQUIRED"
 
 
 def test_S14_out_of_scope_fishing_subsidy():
@@ -293,3 +296,74 @@ def test_S19_review_no_summary_with_adjacent_keyword():
     )
     result = review_relevance(rec)
     assert result.verdict == "REVIEW_REQUIRED"
+
+
+# ---------------------------------------------------------------------------
+# R1 regression tests (WO-TAI-BIZINFO-OBJ-003-SOURCE-IV-R1)
+# ---------------------------------------------------------------------------
+
+
+def test_S20_review_safety_signal_with_marketing_purpose():
+    """S-20: 산업안전 키워드 + 해외 판로·수출 마케팅 목적 공존 → REVIEW_REQUIRED (R1-01).
+
+    IN_SCOPE 자동 확정 금지: 안전 키워드가 있어도 비안전 목적 마커가 함께 있으면
+    목적이 불확실하므로 REVIEW_REQUIRED로 하강한다.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="산업안전 기술사업화 해외 판로 개척 지원",
+        summary=(
+            "산업안전 분야 기술을 보유한 기업의 해외 판로 개척 및 "
+            "수출 마케팅을 지원합니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("purpose_conflict:" in b for b in result.basis)
+    assert any("safety_signal:" in b for b in result.basis)
+
+
+def test_S21_in_scope_r1_added_direct_keywords():
+    """S-21: 끼임사고 예방·위험기계 방호덮개 — R1 추가 키워드 → IN_SCOPE (R1-02).
+
+    키워드 누락만으로 OUT_OF_SCOPE 처리 금지: '끼임', '위험기계', '방호'는
+    R1에서 _DIRECT_SAFETY에 추가된 키워드이며 안전 목적이 명확하다.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="위험기계 방호덮개 설치 지원사업",
+        summary=(
+            "끼임사고를 예방하기 위해 위험기계에 방호덮개를 설치하는 "
+            "비용을 지원합니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+
+
+def test_S22_out_of_scope_explicit_non_safety_markers():
+    """S-22: 명시적 비안전 목적 마커(농업인·농촌·운전자금) + 안전 키워드 없음 → OUT_OF_SCOPE.
+
+    R1-02: 비안전 목적 마커가 존재하고 안전 신호가 전혀 없을 때만 OUT_OF_SCOPE.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[강원] 2026년 농업인 지원사업 모집",
+        summary=(
+            "농촌 지역 농업인의 경영 안정을 위한 운전자금 지원사업입니다. "
+            "농업 경영체 등록 필수."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "OUT_OF_SCOPE"
+    assert any("non_safety:" in b for b in result.basis)
+
+
+def test_S23_in_scope_unaffected_by_r1():
+    """S-23: 비안전 마커 없는 기존 IN_SCOPE 케이스는 R1 이후에도 유지. [SYNTHETIC]"""
+    rec = _record(
+        title="[부산] 중대재해 예방 안전보건 지원사업",
+        summary="산업재해 예방 활동 및 위험성평가 컨설팅을 지원합니다.",
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
