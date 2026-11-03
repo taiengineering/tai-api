@@ -30,7 +30,7 @@ VALUES
      'direct://qa_product_change_detection',
      'DIRECT',
      'QA',
-     '매일 06:15/19:15 KST — product-change-detection.yml workflow_dispatch, PLAN_ONLY, force_run=false (M5-A, WO-TAI-QA-M5A-SCHEDULER-BRIDGE-001)',
+     '매일 06:15/19:15 KST — M5-A 변경 감지 PLAN_ONLY',
      60,
      false)
 ON CONFLICT (job_code) DO NOTHING;
