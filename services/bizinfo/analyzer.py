@@ -118,15 +118,6 @@ def _build_prompt(title: str, summary: str, support_target: str) -> tuple[str, s
 # ---------------------------------------------------------------------------
 
 
-def _safe_str(value: object) -> str:
-    """Coerce any LLM response field value to str without raising."""
-    if isinstance(value, str):
-        return value
-    if value is None:
-        return ""
-    return str(value)
-
-
 def _cited_in_negation_context(
     compact_cited: str, compact_original: str
 ) -> bool:
@@ -147,7 +138,10 @@ def _verify(
     original_support_target: str,
 ) -> AnalysisResult:
     """Verify LLM response with code-level checks.  Returns HOLD on any failure."""
-    verdict = _safe_str(raw.get("verdict")).strip().upper()
+    raw_verdict = raw.get("verdict")
+    if not isinstance(raw_verdict, str):
+        return AnalysisResult(verdict="HOLD", basis=("invalid_verdict",))
+    verdict = raw_verdict.strip().upper()
     if verdict not in {"INCLUDE", "EXCLUDE", "HOLD"}:
         return AnalysisResult(verdict="HOLD", basis=("invalid_verdict",))
 
@@ -155,11 +149,19 @@ def _verify(
         return AnalysisResult(verdict="HOLD", basis=("llm_hold",))
 
     # INCLUDE / EXCLUDE require high confidence and verifiable evidence
-    confidence = _safe_str(raw.get("confidence")).strip().lower()
+    raw_confidence = raw.get("confidence")
+    if not isinstance(raw_confidence, str):
+        return AnalysisResult(verdict="HOLD", basis=("low_confidence",))
+    confidence = raw_confidence.strip().lower()
     if confidence != "high":
         return AnalysisResult(verdict="HOLD", basis=("low_confidence",))
 
-    cited = _safe_str(raw.get("cited_evidence")).strip()
+    raw_cited = raw.get("cited_evidence")
+    if raw_cited is None:
+        return AnalysisResult(verdict="HOLD", basis=("missing_cited_evidence",))
+    if not isinstance(raw_cited, str):
+        return AnalysisResult(verdict="HOLD", basis=("invalid_cited_evidence_type",))
+    cited = raw_cited.strip()
     if not cited:
         return AnalysisResult(verdict="HOLD", basis=("missing_cited_evidence",))
 

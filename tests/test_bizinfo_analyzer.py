@@ -422,3 +422,23 @@ def test_A21_no_skip_layer1_exclude_parameter():
     import inspect
     sig = inspect.signature(analyze_relevance)
     assert "skip_layer1_exclude" not in sig.parameters
+
+
+def test_A22_hold_non_string_cited_evidence_despite_match_in_source():
+    """A-22: cited_evidence=42 (비문자열) + 원문에 '42' 존재 → HOLD (invalid_cited_evidence_type).
+
+    R1-03 보완: str()로 변환해 인용 근거로 수용하지 않는다.
+    원문 "42개 중소기업"에 '42'가 존재하더라도 비문자열 인용은 차단된다.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="안전보건 지원사업",
+        summary="42개 중소기업을 대상으로 안전설비 설치를 지원합니다.",
+    )
+
+    def _fn(s, u):
+        return {"verdict": "INCLUDE", "cited_evidence": 42, "confidence": "high"}
+
+    result = analyze_relevance(rec, llm_call_fn=_fn)
+    assert result.verdict == "HOLD"
+    assert any("invalid_cited_evidence_type" in b for b in result.basis)
