@@ -20,6 +20,12 @@ from typing import Literal, Optional
 from urllib.parse import urlsplit
 
 # ---------------------------------------------------------------------------
+# Format → expected length map (strict digit count enforcement)
+# ---------------------------------------------------------------------------
+
+_FMT_LENGTHS: dict[str, int] = {"%Y-%m-%d": 10, "%Y%m%d": 8}
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -95,6 +101,13 @@ def normalize_bizinfo_record(
     raw must be a single item dict — list handling is the caller's responsibility.
     retrieved_at must be supplied by the caller; never substituted for source_updated_at.
     """
+    # R1-01: reject unknown kind — never silently fall through to EVENT
+    if kind not in ("PROGRAM", "EVENT"):
+        return ParseFailure(
+            source_kind="PROGRAM",
+            raw_key=None,
+            reasons=("invalid_source_kind",),
+        )
     if kind == "PROGRAM":
         return _normalize_program(raw, retrieved_at)
     return _normalize_event(raw, retrieved_at)
@@ -239,7 +252,11 @@ def _validate_bizinfo_url(
         absolute = _BIZINFO_BASE + raw
         return absolute, None
 
-    parsed = urlsplit(raw)
+    # R1-03: guard against malformed URLs that urlsplit cannot parse
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return None, "malformed_url"
 
     # Block userinfo (user@host) — possible credential exposure
     if parsed.username or parsed.password:
@@ -270,7 +287,11 @@ def _validate_external_url(raw: object) -> tuple[Optional[str], Optional[str]]:
     if not raw:
         return None, None
 
-    parsed = urlsplit(raw)
+    # R1-03: guard against malformed URLs that urlsplit cannot parse
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return None, "malformed_url"
 
     if parsed.username or parsed.password:
         return None, "userinfo_in_url"
@@ -278,7 +299,8 @@ def _validate_external_url(raw: object) -> tuple[Optional[str], Optional[str]]:
     if parsed.scheme not in _ALLOWED_EXTERNAL_SCHEMES:
         return None, "non_web_scheme"
 
-    if not parsed.netloc:
+    # R1-03: require a real domain (netloc must contain a dot)
+    if not parsed.netloc or "." not in parsed.netloc:
         return None, "missing_host"
 
     return raw, None
@@ -294,10 +316,12 @@ def _parse_date_range_hyphened(
     errors: list[str],
 ) -> Optional[DateRange]:
     """Parse 'YYYY-MM-DD ~ YYYY-MM-DD' (PROGRAM reqstBeginEndDe)."""
-    if not raw or not isinstance(raw, str):
+    if raw is None or not isinstance(raw, str):
         return None
     raw = raw.strip()
     if not raw:
+        # R1-02: record an error — empty application period is noteworthy
+        errors.append("reqstBeginEndDe:empty")
         return None
     return _split_and_parse(raw, errors, fmt="%Y-%m-%d", field_tag="reqstBeginEndDe")
 
@@ -399,6 +423,11 @@ def _try_parse_date(s: str, fmt: str = "") -> Optional[date]:
         return None
     candidates = [fmt] if fmt else ["%Y-%m-%d", "%Y%m%d"]
     for f in candidates:
+        # R1-04: enforce exact character length before strptime
+        # Python parses "2026111" as 2026-11-01 with %Y%m%d — reject it
+        expected_len = _FMT_LENGTHS.get(f)
+        if expected_len is not None and len(s) != expected_len:
+            continue
         try:
             return datetime.strptime(s, f).date()
         except ValueError:

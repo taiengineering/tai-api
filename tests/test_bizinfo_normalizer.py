@@ -72,10 +72,12 @@ def test_P01_program_normal():
 
 
 def test_P02_program_empty_application_period():
-    """P-02: reqstBeginEndDe 공백."""
+    """P-02: reqstBeginEndDe 공백 → application_period=None, parse_errors에 기록."""
     rec = normalize_bizinfo_record("PROGRAM", _prog(reqstBeginEndDe=""), _NOW)
     assert isinstance(rec, NormalizedSourceRecord)
     assert rec.application_period is None
+    # R1-02: empty period must be recorded, not silently dropped
+    assert any("reqstBeginEndDe" in e for e in rec.parse_errors)
 
 
 def test_P03_program_missing_id():
@@ -314,3 +316,69 @@ def test_C11_event_and_program_periods_independent():
     rec2 = normalize_bizinfo_record("EVENT", _event(), _NOW)
     assert isinstance(rec2, NormalizedSourceRecord)
     assert rec2.application_period is None
+
+
+# ---------------------------------------------------------------------------
+# R1 보정 테스트
+# ---------------------------------------------------------------------------
+
+
+def test_C12_invalid_kind_returns_failure():
+    """C-12: PROGRAM·EVENT 이외의 kind → ParseFailure (EVENT로 자동 전환 금지)."""
+    result = normalize_bizinfo_record("INVALID_KIND", _prog(), _NOW)  # type: ignore[arg-type]
+    assert isinstance(result, ParseFailure)
+    assert any("invalid_source_kind" in r for r in result.reasons)
+
+
+def test_C13_malformed_bizinfo_url_safe():
+    """C-13: 파싱 불가 bizinfo URL → bizinfo_url=None, 예외 없이 처리."""
+    malformed_urls = [
+        "https://[invalid-ipv6",       # broken IPv6
+        "https://\x00evil.com/path",   # null byte
+    ]
+    for url in malformed_urls:
+        rec = normalize_bizinfo_record("PROGRAM", _prog(pblancUrl=url), _NOW)
+        assert isinstance(rec, NormalizedSourceRecord), f"must not raise for {repr(url)}"
+        assert rec.bizinfo_url is None
+        for e in rec.parse_errors:
+            assert url not in e
+
+
+def test_C14_hostless_external_url_rejected():
+    """C-14: 호스트 없는 외부 URL 거부."""
+    no_host_urls = [
+        "https:///path/only",   # no host
+        "http://localhost/test",  # no dot — not a real domain
+    ]
+    for url in no_host_urls:
+        rec = normalize_bizinfo_record(
+            "EVENT", _event(orginlUrlAdres=url), _NOW
+        )
+        assert isinstance(rec, NormalizedSourceRecord), f"must not raise for {repr(url)}"
+        assert rec.origin_url is None
+        for e in rec.parse_errors:
+            assert url not in e
+
+
+def test_P08_date_short_digits_rejected():
+    """P-08: YYYY-MM-DD 자릿수 부족 (2026-11-1) → format_error."""
+    rec = normalize_bizinfo_record(
+        "PROGRAM",
+        _prog(reqstBeginEndDe="2026-11-1 ~ 2026-11-30"),
+        _NOW,
+    )
+    assert isinstance(rec, NormalizedSourceRecord)
+    assert rec.application_period is not None
+    assert rec.application_period.parse_note == "format_error"
+
+
+def test_E07_compact_date_short_digits_rejected():
+    """E-07: YYYYMMDD 7자리 (2026111) → format_error (Python strptime 허용값 차단)."""
+    rec = normalize_bizinfo_record(
+        "EVENT",
+        _event(eventBeginEndDe="2026111 ~ 20261103"),
+        _NOW,
+    )
+    assert isinstance(rec, NormalizedSourceRecord)
+    assert rec.event_period is not None
+    assert rec.event_period.parse_note == "format_error"
