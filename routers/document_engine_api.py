@@ -204,6 +204,35 @@ def create_document(
             _ensure_factory_own(sb, body.factory_id, current_user)
             factory_id = body.factory_id
 
+    # OD-DOC260-ROUTE-001 DRAFT — web_edit_allowed gate for POST /documents
+    # CONTRACT_CHANGE_PENDING: r2_route_policy.py header + WP-01 WO doc explicitly state
+    # "provision policy is READ-ONLY; does not add blocking conditions to POST /documents."
+    # This guard requires Owner approval of OD-DOC260-ROUTE-001 before production activation.
+    # Fail-open: unknown form_schema_id or missing policy lookup → creation proceeds unchanged.
+    _rfs_res = (
+        sb.table("runtime_form_schema")
+        .select("catalog_document_id")
+        .eq("id", str(body.form_schema_id))
+        .limit(1)
+        .execute()
+    )
+    if _rfs_res.data:
+        _cat_id = (_rfs_res.data[0].get("catalog_document_id") or "").strip()
+        if _cat_id:
+            _df_res = (
+                sb.table("document_forms")
+                .select("doc_id")
+                .eq("id", _cat_id)
+                .limit(1)
+                .execute()
+            )
+            if _df_res.data:
+                _creation_policy = get_provision_policy(
+                    _df_res.data[0].get("doc_id") or ""
+                )
+                if _creation_policy is not None and not _creation_policy["web_edit_allowed"]:
+                    raise HTTPException(403, "NEW_CREATION_NOT_PERMITTED")
+
     try:
         if source_inspection_id:
             result = svc.create_document(
