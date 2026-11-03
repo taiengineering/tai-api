@@ -367,3 +367,62 @@ def test_S23_in_scope_unaffected_by_r1():
     )
     result = review_relevance(rec)
     assert result.verdict == "IN_SCOPE"
+
+
+# ---------------------------------------------------------------------------
+# FINAL-FIX tests (WO-TAI-BIZINFO-OBJ-003-IV-FINAL-FIX)
+# ---------------------------------------------------------------------------
+
+
+def test_S24_review_safety_keyword_in_exclusion_context():
+    """S-24: 제목·요약에 안전 키워드 있지만 요약에서 안전 설비 지원이 제외됨 → REVIEW_REQUIRED.
+
+    FINAL-FIX: "안전설비 지원 제외" compact marker → IN_SCOPE 자동 확정 차단.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="산업안전 지원사업 안내",
+        summary=(
+            "이 사업은 산업안전 설비 지원 제외. "
+            "일반 제품 디자인 개선을 지원합니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("safety_negated:" in b for b in result.basis)
+
+
+def test_S25_review_safety_product_exhibition_unrelated():
+    """S-25: 산업안전 제품 전시·홍보, 본문에 "산업안전과 무관" 명시 → REVIEW_REQUIRED.
+
+    FINAL-FIX: 전시·홍보 목적 공고에서 안전 관련성이 명시적으로 부정될 때
+    IN_SCOPE 자동 확정 차단.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="산업안전 제품 전시 및 홍보 지원사업",
+        summary=(
+            "산업안전 관련 제품의 전시 및 마케팅을 지원합니다. "
+            "이 사업은 산업안전과 무관한 일반 제조업도 참여 가능합니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("safety_negated:" in b for b in result.basis)
+
+
+def test_S26_in_scope_direct_safety_support_no_exclusion():
+    """S-26: 산업재해 예방설비 설치비 지원 — 직접 목적 확인, 부정 표현 없음 → IN_SCOPE 유지.
+
+    FINAL-FIX 이후에도 명확한 직접 지원 목적은 IN_SCOPE로 유지됨을 보장.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="산업재해 예방설비 설치비 지원사업",
+        summary=(
+            "산업재해 예방을 위한 안전설비 설치 비용을 지원합니다. "
+            "중소기업 대상."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"

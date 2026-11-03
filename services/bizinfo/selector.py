@@ -13,6 +13,11 @@ R1 corrections (WO-TAI-BIZINFO-OBJ-003-SOURCE-IV-R1):
   - OUT_OF_SCOPE requires positive evidence of non-safety purpose;
     keyword absence alone does not confirm out-of-scope.
 
+FINAL-FIX corrections (WO-TAI-BIZINFO-OBJ-003-IV-FINAL-FIX):
+  - IN_SCOPE is blocked when safety keywords appear in a negating context
+    (e.g. "안전설비 지원 제외", "산업안전과 무관"); detected via
+    _SAFETY_EXCLUSION_COMPACT compact-form markers in the summary.
+
 IN_SCOPE is a candidate signal, not a content-publication approval.
 OBJ-BZI-005 human editorial gate is required before public display.
 """
@@ -93,6 +98,19 @@ _NON_SAFETY_PURPOSE: frozenset[str] = frozenset({
     "어업경영체",
 })
 
+# Compact-form markers indicating the safety aspect is explicitly negated or
+# excluded in the summary (e.g. "안전 설비 지원 제외", "산업안전과 무관").
+# Matched against whitespace-collapsed summary text only.
+# When present alongside safety keywords, IN_SCOPE cannot be confirmed.
+_SAFETY_EXCLUSION_COMPACT: frozenset[str] = frozenset({
+    "산업안전과무관",      # 산업안전과 무관한 ~
+    "안전과무관",          # 안전과 무관한 ~
+    "지원대상아님",        # 지원 대상 아님
+    "안전설비지원제외",    # 안전 설비 지원 제외
+    "안전지원제외",        # 안전 지원 제외
+    "산업안전제외",        # 산업안전 제외
+})
+
 
 # ---------------------------------------------------------------------------
 # Public contract
@@ -141,6 +159,11 @@ def review_relevance(record: NormalizedSourceRecord) -> RelevanceDecision:
         kw for kw in _NON_SAFETY_PURPOSE
         if kw in _summary_compact or kw in _title_compact
     ]
+    # FINAL-FIX: explicit negation of safety relevance within the summary
+    exclusion_hits = [
+        kw for kw in _SAFETY_EXCLUSION_COMPACT
+        if kw in _summary_compact
+    ]
 
     # ------------------------------------------------------------------
     # IN_SCOPE paths — require confirmed safety PURPOSE
@@ -149,12 +172,14 @@ def review_relevance(record: NormalizedSourceRecord) -> RelevanceDecision:
 
     # Purpose verified in both title and summary
     if title_direct and summary_direct:
-        if non_safety_hits:
-            # Safety keywords present but purpose appears to be marketing/export
+        if non_safety_hits or exclusion_hits:
+            # Safety keywords present but purpose is marketing/export OR
+            # safety relevance is explicitly negated in summary
             return RelevanceDecision(
                 verdict="REVIEW_REQUIRED",
                 basis=(
                     tuple(f"purpose_conflict:{kw}" for kw in non_safety_hits[:2]) +
+                    tuple(f"safety_negated:{kw}"   for kw in exclusion_hits[:2]) +
                     tuple(f"safety_signal:{kw}"    for kw in (title_direct + summary_direct)[:2])
                 ),
             )
@@ -168,11 +193,12 @@ def review_relevance(record: NormalizedSourceRecord) -> RelevanceDecision:
 
     # Strong multi-keyword evidence inside summary alone
     if len(summary_direct) >= 2:
-        if non_safety_hits:
+        if non_safety_hits or exclusion_hits:
             return RelevanceDecision(
                 verdict="REVIEW_REQUIRED",
                 basis=(
                     tuple(f"purpose_conflict:{kw}" for kw in non_safety_hits[:2]) +
+                    tuple(f"safety_negated:{kw}"   for kw in exclusion_hits[:2]) +
                     tuple(f"summary:{kw}"          for kw in summary_direct[:2])
                 ),
             )
