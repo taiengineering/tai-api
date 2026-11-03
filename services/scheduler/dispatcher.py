@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 LEASE = timedelta(minutes=15)
 DEFAULT_TICK_CAP = 20
 
+# claim_context(_scheduled_for, _attempt_no)를 payload에 주입할 핸들러 목록.
+# 여기 등록된 핸들러만 스케줄러 claim 정보를 받아 임의 발화를 차단할 수 있다.
+_CLAIM_CONTEXT_HANDLERS = frozenset({
+    "direct://qa_cron_trigger",
+    "direct://qa_product_change_detection",
+})
+
 _BLOCKED_DETAIL_KEYS = frozenset({
     "bill_key", "billing_key", "card_number", "inicis_raw",
     "sign_key", "iniapi_key", "inicis_secret",
@@ -149,7 +156,7 @@ def tick(
                         "_scheduled_for": serialize_business_datetime(claim.scheduled_for),
                         "_attempt_no": claim.attempt_no,
                     }
-                    if _ep == "direct://qa_cron_trigger"
+                    if _ep in _CLAIM_CONTEXT_HANDLERS
                     else None
                 )
                 detail = execute_job(job, claim_context=_ctx)
