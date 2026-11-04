@@ -153,6 +153,16 @@ def _approved_program(
     editorial = repo.get_editorial("PROGRAM", source_key)
     rights    = repo.get_rights("PROGRAM", source_key)
     approval  = repo.get_approval("PROGRAM", source_key)
+
+    # Identity validation — ensure retrieved records belong to this announcement
+    if editorial is not None and (editorial.source_key != source_key or editorial.source_kind != "PROGRAM"):
+        editorial = None
+    if rights is not None and rights.source_key != source_key:
+        rights = None
+    if approval is not None and (approval.source_key != source_key or approval.source_kind != "PROGRAM"):
+        approval = None
+
+    relevance = repo.get_relevance_verdict("PROGRAM", source_key) or "REVIEW_REQUIRED"
     pstatus   = program_status(record)
     change    = ChangeRecord(
         source_key=source_key,
@@ -164,7 +174,7 @@ def _approved_program(
     )
     eligibility = check_publication_eligibility(
         record, pstatus, change, editorial, rights, approval,
-        relevance_verdict="INCLUDE",   # repository only holds confirmed records
+        relevance_verdict=relevance,
     )
     if not eligibility.eligible:
         return None
@@ -182,6 +192,16 @@ def _approved_event(
     editorial = repo.get_editorial("EVENT", source_key)
     rights    = repo.get_rights("EVENT", source_key)
     approval  = repo.get_approval("EVENT", source_key)
+
+    # Identity validation — ensure retrieved records belong to this announcement
+    if editorial is not None and (editorial.source_key != source_key or editorial.source_kind != "EVENT"):
+        editorial = None
+    if rights is not None and rights.source_key != source_key:
+        rights = None
+    if approval is not None and (approval.source_key != source_key or approval.source_kind != "EVENT"):
+        approval = None
+
+    relevance = repo.get_relevance_verdict("EVENT", source_key) or "REVIEW_REQUIRED"
     estatus   = event_status(record)
     change    = ChangeRecord(
         source_key=source_key,
@@ -193,7 +213,7 @@ def _approved_event(
     )
     eligibility = check_publication_eligibility(
         record, estatus, change, editorial, rights, approval,
-        relevance_verdict="INCLUDE",
+        relevance_verdict=relevance,
     )
     if not eligibility.eligible:
         return None

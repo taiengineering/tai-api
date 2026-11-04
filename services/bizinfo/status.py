@@ -124,10 +124,9 @@ def _date_status(
         return "CLOSED"
     if start is not None and today < start:
         return "UPCOMING"
-    # start <= today <= end (or one side missing but other is consistent)
-    if start is not None and today >= start:
-        if end is None or today <= end:
-            return "OPEN"
+    # OPEN only when both dates bracket today — missing end date is not proof of ongoing
+    if start is not None and end is not None and start <= today <= end:
+        return "OPEN"
     return "UNKNOWN"
 
 

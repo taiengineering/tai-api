@@ -154,6 +154,8 @@ def _fully_seeded_repo(
     repo.seed_rights(_rights(event_key))
     repo.seed_approval(_approval("PROGRAM", program_key))
     repo.seed_approval(_approval("EVENT", event_key))
+    repo.seed_relevance("PROGRAM", program_key, "INCLUDE")
+    repo.seed_relevance("EVENT", event_key, "INCLUDE")
     return repo
 
 
@@ -215,6 +217,7 @@ def test_S02_event_two_axes_independent():
     repo.seed_editorial(_editorial("EVENT", "EVEN_TEST_001"))
     repo.seed_rights(_rights("EVEN_TEST_001"))
     repo.seed_approval(_approval("EVENT", "EVEN_TEST_001"))
+    repo.seed_relevance("EVENT", "EVEN_TEST_001", "INCLUDE")
     client = _client(repo)
 
     r = client.get("/public/bizinfo/events/EVEN_TEST_001")
@@ -257,12 +260,13 @@ def test_S04_no_editorial_not_visible():
     assert not eligibility.eligible
     assert COND_EDITORIAL in eligibility.failed_conditions
 
-    # Router also excludes it
+    # Router also excludes it — relevance seeded INCLUDE to isolate C-4 failure
     repo = InMemoryBizinfoRepository()
     repo.seed_record(rec, _first_change(rec))
     # no editorial seeded → not eligible
     repo.seed_rights(_rights(rec.source_key))
     repo.seed_approval(_approval("PROGRAM", rec.source_key))
+    repo.seed_relevance("PROGRAM", rec.source_key, "INCLUDE")
     client = _client(repo)
     r = client.get("/public/bizinfo/programs/PBLN_TEST_001")
     assert r.status_code == 404
@@ -464,3 +468,67 @@ def test_U08_router_storage_gate_pending_returns_503():
     r      = client.get("/public/bizinfo/programs")
     assert r.status_code == 503
     assert "BIZINFO_STORAGE_GATE_PENDING" in r.text
+
+
+# ===========================================================================
+# R: R1 보정 검증 — 고객 정보 오공개 위험 3건
+# ===========================================================================
+
+
+def test_R01_relevance_exclude_blocked_in_api():
+    """R-01: 관련성 EXCLUDE → 목록·상세 모두 차단됨."""
+    rec = _program_record()
+    repo = InMemoryBizinfoRepository()
+    repo.seed_record(rec, _first_change(rec))
+    repo.seed_editorial(_editorial("PROGRAM", rec.source_key))
+    repo.seed_rights(_rights(rec.source_key))
+    repo.seed_approval(_approval("PROGRAM", rec.source_key))
+    repo.seed_relevance("PROGRAM", rec.source_key, "EXCLUDE")
+    client = _client(repo)
+
+    items = client.get("/public/bizinfo/programs").json()
+    assert all(i["source_key"] != rec.source_key for i in items)
+
+    r = client.get(f"/public/bizinfo/programs/{rec.source_key}")
+    assert r.status_code == 404
+
+
+def test_R02_relevance_hold_blocked_in_api():
+    """R-02: 관련성 HOLD → 목록·상세 모두 차단됨."""
+    rec = _program_record()
+    repo = InMemoryBizinfoRepository()
+    repo.seed_record(rec, _first_change(rec))
+    repo.seed_editorial(_editorial("PROGRAM", rec.source_key))
+    repo.seed_rights(_rights(rec.source_key))
+    repo.seed_approval(_approval("PROGRAM", rec.source_key))
+    repo.seed_relevance("PROGRAM", rec.source_key, "HOLD")
+    client = _client(repo)
+
+    items = client.get("/public/bizinfo/programs").json()
+    assert all(i["source_key"] != rec.source_key for i in items)
+
+    r = client.get(f"/public/bizinfo/programs/{rec.source_key}")
+    assert r.status_code == 404
+
+
+def test_R03_no_end_date_past_start_date_is_unknown():
+    """R-03: 종료일 없는 과거 시작일 → OPEN이 아닌 UNKNOWN.
+
+    시작일이 지났더라도 종료일을 모르면 접수 계속 여부를 확정할 수 없다.
+    """
+    # PROGRAM: start in past, end missing
+    rec = _program_record(app_start=date(2026, 10, 1), app_end=None)
+    status = program_status(rec, as_of=_TODAY)
+    assert status.application_status == "UNKNOWN"
+    assert status.has_dates  # start date is known
+
+    # EVENT reception: start in past, end missing
+    erec = _event_record(
+        rcp_start=date(2026, 10, 1),
+        rcp_end=None,
+        evt_start=date(2026, 11, 20),
+        evt_end=date(2026, 11, 25),
+    )
+    estatus = event_status(erec, as_of=_TODAY)
+    assert estatus.reception_status == "UNKNOWN"
+    assert estatus.progress_status  == "UPCOMING"  # Nov 20 is in the future

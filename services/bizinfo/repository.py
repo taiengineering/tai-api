@@ -84,6 +84,14 @@ class BizinfoRepository(Protocol):
         """Return content approval record, or None if not yet approved."""
         ...
 
+    def get_relevance_verdict(
+        self,
+        source_kind: str,
+        source_key: str,
+    ) -> Optional[str]:
+        """Return the selector/analyzer relevance verdict, or None if not assessed."""
+        ...
+
     def list_eligible_keys(
         self,
         source_kind: str,
@@ -123,6 +131,10 @@ class InMemoryBizinfoRepository:
     _approvals:  dict[tuple[str, str], ContentApprovalRecord] = field(
         default_factory=dict
     )
+    # Relevance verdicts from selector/analyzer (IN_SCOPE/INCLUDE/EXCLUDE/HOLD/etc.)
+    _relevance:  dict[tuple[str, str], str] = field(
+        default_factory=dict
+    )
 
     def _key(self, source_kind: str, source_key: str) -> tuple[str, str]:
         return (source_kind, source_key)
@@ -156,6 +168,11 @@ class InMemoryBizinfoRepository:
     ) -> Optional[ContentApprovalRecord]:
         return self._approvals.get(self._key(source_kind, source_key))
 
+    def get_relevance_verdict(
+        self, source_kind: str, source_key: str
+    ) -> Optional[str]:
+        return self._relevance.get(self._key(source_kind, source_key))
+
     def list_eligible_keys(
         self, source_kind: str, limit: int = 50, offset: int = 0
     ) -> list[str]:
@@ -188,4 +205,10 @@ class InMemoryBizinfoRepository:
         self, approval: ContentApprovalRecord
     ) -> "InMemoryBizinfoRepository":
         self._approvals[self._key(approval.source_kind, approval.source_key)] = approval
+        return self
+
+    def seed_relevance(
+        self, source_kind: str, source_key: str, verdict: str
+    ) -> "InMemoryBizinfoRepository":
+        self._relevance[self._key(source_kind, source_key)] = verdict
         return self
