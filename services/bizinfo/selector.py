@@ -51,6 +51,17 @@ SCOPE_REALIGN-001 (WO-TAI-BIZINFO-SAFETY-SCOPE-REALIGN-001):
   - 소방·시설안전·공공안전은 산업안전과 다르다는 이유만으로 OUT_OF_SCOPE
     처리하지 않는다. 비안전 목적 마커와 결합 시 purpose_conflict → REVIEW.
 
+SCOPE_REALIGN-001-R2 (WO-TAI-BIZINFO-SAFETY-SCOPE-REALIGN-001-R2):
+  안전관리 교육 누락 및 제품안전 오탐 최소 보정.
+  - `안전관리전문` 추가 (_DIRECT_SAFETY_COMPACT Group D):
+    "안전관리 전문인력" / "안전관리 전문교육" 패턴 포착.
+    화학물질 안전관리 전문인력 양성, 전통시장 안전관리 전문교육 등 IN_SCOPE.
+  - `제품안전`을 _INCIDENTAL_SAFE_MARKERS로 이동:
+    제목에만 있을 때만 purpose_conflict 충돌로 처리.
+    요약에만 등장(예: "화학제품안전법" 법률 명칭 인용)할 때는 부수 문구로 간주.
+    OUT_OF_SCOPE 경로는 non_safety_hits를 그대로 사용하므로 제품안전 목적
+    레코드(생활용품·어린이제품)는 여전히 OUT_OF_SCOPE로 처리됨.
+
 SCOPE_REALIGN-001-R1 (WO-TAI-BIZINFO-SAFETY-SCOPE-REALIGN-001-R1):
   제품안전 제외 기준 반영 및 판정 오류 보정.
   - `안전검사`를 _DIRECT_SAFETY에서 제거: 단독으로는 제품안전(생활용품·어린이제품)과
@@ -148,6 +159,9 @@ _DIRECT_SAFETY_COMPACT: frozenset[str] = frozenset({
     # (C) Fire / facility / occupational environment (SCOPE_REALIGN-001)
     "소방안전시설",      # "소방안전 시설" 지원 — 직접 소방안전목적 (소방법)
     "작업환경개선",      # "작업환경 개선" — 산업안전보건법 의무 개선 지원
+    # (D) Safety management professional training (SCOPE_REALIGN-001-R2)
+    "안전관리전문",      # "안전관리 전문인력" / "안전관리 전문교육" 패턴
+                        # 화학물질 안전관리 전문인력 양성, 전통시장 안전관리 전문교육 등
 })
 
 # Smart factory / AI / digital transformation terms that MAY enable
@@ -228,7 +242,9 @@ _NON_SAFETY_PURPOSE: frozenset[str] = frozenset({
     "생활용품",     # 생활용품 KC인증·안전검사 — 소비자 제품 안전, 사업장 안전 아님
     "어린이제품",   # 어린이제품 안전검사·인증 — 소비자 제품 안전, 사업장 안전 아님
     "kc인증",       # KC 인증 — 제품 출시용 안전 인증, 현장 설치 지원 아님
-    "제품안전",     # 제품 자체의 안전성 검사·인증 — 사업장 안전관리 목적 아님
+    "제품안전",     # 제품 자체 안전성 검사·인증 목적 — _INCIDENTAL_SAFE_MARKERS에도 등재
+                   # (SCOPE_REALIGN-001-R2): 요약에만 등장(예: 법률명 인용)하면 충돌 아님,
+                   # 제목에 있으면 purpose_conflict 차단, OUT_OF_SCOPE 경로에서는 항상 사용
     # NOTE: "농어촌민박" intentionally excluded — 지원 대상 업종이지 사업 목적이 아님.
     # 소방안전시설 지원이 농어촌민박 대상이어도 소방안전이 목적이면 IN_SCOPE (SCOPE_REALIGN-001-R1).
     # NOTE: "창업기업" intentionally excluded — 창업기업 여부는 신청 자격 조건이며,
@@ -268,6 +284,7 @@ _SAFETY_EXCLUSION_COMPACT: frozenset[str] = frozenset({
 # (the OUT_OF_SCOPE path uses full non_safety_hits, not conflict_hits).
 _INCIDENTAL_SAFE_MARKERS: frozenset[str] = frozenset({
     "개인정보",   # 개인정보 처리방침 안내 등 보조문구에 등장하는 경우 무시
+    "제품안전",   # 화학제품안전법 등 법률 명칭 인용 시 무시; 제목에 있으면 purpose_conflict (SCOPE_REALIGN-001-R2)
 })
 
 

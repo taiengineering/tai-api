@@ -895,3 +895,70 @@ def test_S48_out_of_scope_product_kc_certification():
     result = review_relevance(rec)
     assert result.verdict == "OUT_OF_SCOPE"
     assert any("kc인증" in b for b in result.basis)
+
+
+# ---------------------------------------------------------------------------
+# SCOPE_REALIGN-001-R2 — 안전관리 교육 누락 보정 및 제품안전 오탐 최소 수정
+# ---------------------------------------------------------------------------
+
+
+def test_S49_in_scope_chemical_safety_management_professional():
+    """S-49 (R2-TC-01): 화학물질 안전관리 전문인력 양성 — 요약에 화학제품안전법 인용 →
+    IN_SCOPE. `안전관리전문` 직접 안전 신호(Group D) + `제품안전` 요약 전용 무시.
+
+    GPT Final IV 오분류 지적 사례 (EVEN_000000000068790 유형).
+    기존 R1 로직: `제품안전` → non_safety_hits → adjacent(화학물질) + non_safety → OUT_OF_SCOPE.
+    R2 보정: `제품안전` _INCIDENTAL_SAFE_MARKERS 이동 → 요약만 등장 시 충돌 없음.
+             `안전관리전문` → title_direct 히트 → IN_SCOPE (직접 안전 목적 확인).
+    [REAL 유형: EVEN_000000000068790 — 화학물질 안전관리 전문인력 양성사업]
+    """
+    rec = _record(
+        title="[전국] 2026년 화학물질 안전관리 전문인력 양성사업",
+        summary=(
+            "화학물질을 취급하는 사업장의 안전관리 전문인력 역량 강화를 위한 교육을 "
+            "지원합니다. 화학제품안전법 및 화학물질관리법에 따른 의무 교육 이수 비용 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("안전관리전문" in b for b in result.basis)
+
+
+def test_S50_in_scope_traditional_market_safety_management_training():
+    """S-50 (R2-TC-02): 전통시장 안전관리 전문교육 → IN_SCOPE.
+    `안전관리전문` compact 히트 — 직접 안전 교육 목적 확인.
+
+    GPT Final IV 지적 사례 (EVEN_000000000069262 유형).
+    [REAL 유형: EVEN_000000000069262 — 전통시장 안전관리 전문교육]
+    """
+    rec = _record(
+        title="[전국] 2026년 전통시장 안전관리 전문교육 운영",
+        summary=(
+            "전통시장 상인 및 관리자를 대상으로 화재·전기 안전관리 전문 교육을 "
+            "실시합니다. 소방법·전기안전관리법에 따른 의무 안전교육 이수 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("안전관리전문" in b for b in result.basis)
+
+
+def test_S51_out_of_scope_product_safety_title_still_excluded():
+    """S-51 (R2-보호): `제품안전`이 제목에 있으면 여전히 purpose_conflict → OUT_OF_SCOPE.
+
+    SCOPE_REALIGN-001-R2 보호 사례:
+    `제품안전`을 _INCIDENTAL_SAFE_MARKERS로 이동하더라도, 제목에 등장하면
+    non_safety_conflict_hits에 포함 → purpose_conflict → IN_SCOPE 차단.
+    요약에 직접 안전 신호가 있어도 제목 기반 충돌이 우선.
+    [SYNTHETIC — R2 _INCIDENTAL_SAFE_MARKERS 경계 조건]
+    """
+    rec = _record(
+        title="[전국] 2026년 섬유·의류 제품안전 인증 비용 지원사업",
+        summary=(
+            "섬유 및 의류 제조 중소기업의 제품안전 인증(KC·안전기준) 취득 비용을 "
+            "지원합니다. 소비자 보호를 위한 제품 안전성 인증 취득 절차 비용 보전."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "OUT_OF_SCOPE"
+    assert any("제품안전" in b for b in result.basis)
