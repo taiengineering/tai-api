@@ -4,13 +4,16 @@ WO-TAI-BIZINFO-STAGE-B-INTEGRATED-IMPLEMENTATION-001
 
 Prefix: /public/bizinfo
 
-NOT registered in router_registry (STORAGE_GATE + RIGHTS_GATE pending).
+NOT registered in router_registry (RIGHTS_GATE pending).
 Router is intentionally dormant following the kosha_public_msds pattern.
 
+STORAGE_GATE 승인 완료 — DB 테이블 준비 완료 시 BIZINFO_STORAGE_ENABLED=1 설정으로 활성화.
+
 Activation requires:
-  1. STORAGE_GATE Owner approval (DB tables + migration)
-  2. RIGHTS_GATE Owner approval (content publication)
-  3. Explicit router registration in router_registry/public.py
+  1. sql/20261104_bizinfo_tables.sql Supabase 실행
+  2. BIZINFO_STORAGE_ENABLED=1 환경변수 설정
+  3. RIGHTS_GATE Owner approval (content publication)
+  4. Explicit router registration in router_registry/public.py
 
 In development / local integration tests, inject a repository instance
 directly via the dependency override mechanism.
@@ -27,6 +30,7 @@ conditions.  Content that has not been approved is never returned.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -41,6 +45,7 @@ from services.bizinfo.approval import (
 )
 from services.bizinfo.normalizer import NormalizedSourceRecord
 from services.bizinfo.repository import BizinfoRepository, InMemoryBizinfoRepository
+from services.bizinfo.supabase_repository import SupabaseBizinfoRepository
 from services.bizinfo.status import (
     ChangeRecord,
     EventStatus,
@@ -58,10 +63,33 @@ router = APIRouter(
 )
 
 # ---------------------------------------------------------------------------
+# Repository initialization (STORAGE_GATE)
+# ---------------------------------------------------------------------------
+
+
+def _build_repository() -> Optional[BizinfoRepository]:
+    """BIZINFO_STORAGE_ENABLED=1 이면 SupabaseBizinfoRepository를 반환.
+
+    환경변수가 없거나 비어있으면 None 반환 → get_repository()가 503 반환.
+    DB 테이블이 없는 상태에서 실 클라이언트를 초기화하면 런타임 오류가 발생하므로
+    sql/20261104_bizinfo_tables.sql 실행 완료 후 활성화할 것.
+    """
+    if not os.environ.get("BIZINFO_STORAGE_ENABLED"):
+        return None
+    try:
+        from db.supabase_client import get_supabase
+        sb = get_supabase()
+        return SupabaseBizinfoRepository(sb)
+    except Exception:
+        logger.exception("BIZINFO_STORAGE_ENABLED=1이지만 Supabase 클라이언트 초기화 실패")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Dependency injection — repository
 # ---------------------------------------------------------------------------
 
-_repo: Optional[BizinfoRepository] = None
+_repo: Optional[BizinfoRepository] = _build_repository()
 
 
 def get_repository() -> BizinfoRepository:
