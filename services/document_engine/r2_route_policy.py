@@ -301,23 +301,51 @@ _OFFICIAL_STATUS: dict[str, str] = {
 _WEB_EDIT_ALLOWED_GROUP = "A_INTERNAL"
 
 # U_UNRESOLVED 제출 경로 분류 (WP-C, WP-03 조사 결과 기반 READ-ONLY 표시 주석)
-# 출처: WP-03 CLOSED_CONDITIONAL 조사 결과 — 확인된 항목만 등록
-# 나머지 U_UNRESOLVED → G6_UNRESOLVED (기본값, 추측 금지)
+# 출처: WP-03 document_submission_analysis.csv — 확인된 항목만 등록
+# 미등록 U_UNRESOLVED → None (NOT_MAPPED): WP-03 조사 미완료 또는 미분류
 #
-# G1_DUAL_PATH  : TAI 작성·저장 가능 + 외부 제출 경로 별도 (법적 제출 의무 미확정)
-# G2_PORTAL_CONFIRMED: 기관 포털 연결 확인됨 (M8 구현 완료)
-# G3_AGENCY_CHANNEL  : 전송 채널 확인됨, 실제 접수·수리 미확인 (HOLD)
-# G6_UNRESOLVED: 기본값 — 추가 근거 없음
+# G1_DUAL_PATH        : TAI 작성·저장 + 외부 제출 별도 (이중경로 확인)
+# G2_PORTAL_CONFIRMED : 기관 포털 연결 확인됨 (M8 구현 완료)
+# G3_AGENCY_CHANNEL   : 팝빌/이메일 전송 채널 확인됨, 기관 접수·수리 미확인
+# G6_UNRESOLVED       : WP-03에서 명시 미확정 분류 (별도 목록 확인 필요)
+# None                : WP-03 조사 대상이나 미분류 (NOT_MAPPED)
 _SUBMISSION_CATEGORY: dict[str, str] = {
-    # G2_PORTAL_CONFIRMED: M8에서 포털 버튼 구현 완료 (WP-03 G2 확인 2종)
+    # G2_PORTAL_CONFIRMED: M8 포털 버튼 구현 완료 (2종)
     'DOC-BLD-001': 'G2_PORTAL_CONFIRMED',
     'DOC-CON-009': 'G2_PORTAL_CONFIRMED',
-    # G3_AGENCY_CHANNEL: 팝빌 전송 채널 확인됨 (WP-03 G3 4종)
-    'DOC-BLD-004': 'G3_AGENCY_CHANNEL',
-    'DOC-CHEM-006': 'G3_AGENCY_CHANNEL',
-    'DOC-CON-LAW-010': 'G3_AGENCY_CHANNEL',
-    'DOC-OSH-018': 'G3_AGENCY_CHANNEL',
-    # G1_DUAL_PATH: 이중경로 확인됨 (WP-03 G1 12종)
+    # G3_AGENCY_CHANNEL: WP-03 CSV tai_auto=true + 팩스/이메일 외부 기관 제출
+    # — 전송 채널 확인됨, 기관 실제 접수·수리 미확인 (28종)
+    # 기존 4종
+    'DOC-BLD-004': 'G3_AGENCY_CHANNEL',   # 소방안전관리자 선임신고서 (소방서, 팝빌)
+    'DOC-CHEM-006': 'G3_AGENCY_CHANNEL',  # 화학사고 즉시신고서 (지방환경관서, 팝빌)
+    'DOC-CON-LAW-010': 'G3_AGENCY_CHANNEL',  # 정기안전점검 결과보고서 (발주청/안전원, 이메일)
+    'DOC-OSH-018': 'G3_AGENCY_CHANNEL',   # 사고보고서 (고용노동부, 팝빌)
+    # WP-03 CSV 추가 확인 24종
+    'DOC-BLD-008': 'G3_AGENCY_CHANNEL',   # 전기안전관리자 선임신고서 (한국전기안전공사, 팝빌)
+    'DOC-BLD-013': 'G3_AGENCY_CHANNEL',   # 승강기 사고 보고서 (한국승강기안전공단, 팝빌)
+    'DOC-CHEM-007': 'G3_AGENCY_CHANNEL',  # 화학사고 조사보고서 (지방환경관서, 팝빌/이메일)
+    'DOC-CHEM-009': 'G3_AGENCY_CHANNEL',  # 유해화학물질 관리자 선임신고서 (지방환경관서, 팝빌)
+    'DOC-FAC-001': 'G3_AGENCY_CHANNEL',   # 가스안전관리자 선임신고서 (한국가스안전공사, 팝빌)
+    'DOC-FAC-010': 'G3_AGENCY_CHANNEL',   # 위험물 사고 보고서 (소방본부, 팝빌)
+    'DOC-FAC-012': 'G3_AGENCY_CHANNEL',   # 보일러 관리자 선임신고서 (한국에너지공단, 팝빌)
+    'DOC-OSH-003': 'G3_AGENCY_CHANNEL',   # 산업재해조사표 (고용노동부, 팝빌/노동포털)
+    'DOC-OSH-008': 'G3_AGENCY_CHANNEL',   # 유해위험방지계획서 (KOSHA, 이메일)
+    'DOC-OSH-009': 'G3_AGENCY_CHANNEL',   # 안전관리자 선임보고서 (고용노동부, 팝빌)
+    'DOC-OSH-010': 'G3_AGENCY_CHANNEL',   # 보건관리자 선임보고서 (고용노동부, 팝빌)
+    'DOC-OSH-011': 'G3_AGENCY_CHANNEL',   # 산업보건의 선임보고서 (고용노동부, 팝빌)
+    'DOC-OSH-019': 'G3_AGENCY_CHANNEL',   # 산업재해발생보고서 (고용노동부, 팝빌)
+    'DOC-OSH-023': 'G3_AGENCY_CHANNEL',   # 안전관리자 선임신고서 (고용노동부, 팝빌)
+    'DOC-OSH-024': 'G3_AGENCY_CHANNEL',   # 보건관리자 선임신고서 (고용노동부, 팝빌)
+    'DOC-OSH-025': 'G3_AGENCY_CHANNEL',   # 산업보건의 선임신고서 (고용노동부, 팝빌)
+    'DOC-OSH-026': 'G3_AGENCY_CHANNEL',   # 안전관리자 변경신고서 (고용노동부, 팝빌)
+    'DOC-OSH-027': 'G3_AGENCY_CHANNEL',   # 보건관리자 변경신고서 (고용노동부, 팝빌)
+    'DOC-OSH-028': 'G3_AGENCY_CHANNEL',   # 산업보건의 변경신고서 (고용노동부, 팝빌)
+    'DOC-OSH-029': 'G3_AGENCY_CHANNEL',   # 안전관리자 해임신고서 (고용노동부, 팝빌)
+    'DOC-OSH-030': 'G3_AGENCY_CHANNEL',   # 보건관리자 해임신고서 (고용노동부, 팝빌)
+    'DOC-OSH-031': 'G3_AGENCY_CHANNEL',   # 산업보건의 해임신고서 (고용노동부, 팝빌)
+    'DOC-OSH-032': 'G3_AGENCY_CHANNEL',   # 산업재해조사표 제출서 (고용노동부, 팝빌)
+    'DOC-OSH-033': 'G3_AGENCY_CHANNEL',   # 유해위험방지계획서 제출서 (KOSHA, 이메일)
+    # G1_DUAL_PATH: TAI 작성·저장 + 외부 제출 별도 (이중경로 확인, 12종)
     'DOC-BLD-015': 'G1_DUAL_PATH',
     'DOC-CON-034': 'G1_DUAL_PATH',
     'DOC-SERA-011': 'G1_DUAL_PATH',
@@ -344,8 +372,9 @@ def get_provision_policy(doc_id: str) -> Optional[dict]:
           "official_status": str | None,  # CONDITIONAL_APPROVED | HOLD — B_OFFICIAL only, else None
           "web_edit_allowed": bool,  # True only for A_INTERNAL
           "submission_category": str | None,
-              # U_UNRESOLVED only: G1_DUAL_PATH | G2_PORTAL_CONFIRMED | G3_AGENCY_CHANNEL | G6_UNRESOLVED
-              # None for all non-U_UNRESOLVED groups
+              # U_UNRESOLVED: G1_DUAL_PATH | G2_PORTAL_CONFIRMED | G3_AGENCY_CHANNEL | G6_UNRESOLVED
+              #   None (NOT_MAPPED) if WP-03 research incomplete or doc not yet classified
+              # non-U_UNRESOLVED: always None
         }
         None if doc_id is not registered in the R2 matrix.
     """
@@ -354,7 +383,7 @@ def get_provision_policy(doc_id: str) -> Optional[dict]:
         return None
     route_group, investment_decision = entry
     if route_group == "U_UNRESOLVED":
-        submission_category = _SUBMISSION_CATEGORY.get(doc_id, "G6_UNRESOLVED")
+        submission_category = _SUBMISSION_CATEGORY.get(doc_id)  # None = NOT_MAPPED (WP-03 미분류)
     else:
         submission_category = None
     return {
