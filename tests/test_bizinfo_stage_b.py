@@ -31,12 +31,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from services.bizinfo.approval import (
+    ALLOWED_RIGHTS_BASIS,
     COND_APPROVAL_RECORD,
+    COND_ATTRIBUTION,
     COND_EDITORIAL,
     COND_RELEVANCE,
     COND_RIGHTS,
     COND_SOURCE_LINK,
     COND_STATUS_PRESENT,
+    RIGHTS_BASIS_FACTS_ONLY_ATTRIBUTED,
     ContentApprovalRecord,
     EditorialContent,
     RightsRecord,
@@ -120,7 +123,7 @@ def _editorial(source_kind: str, source_key: str) -> EditorialContent:
 def _rights(source_key: str) -> RightsRecord:
     return RightsRecord(
         source_key=source_key,
-        rights_basis="공공저작물 자유이용허락 (KOGL 제1유형)",
+        rights_basis=RIGHTS_BASIS_FACTS_ONLY_ATTRIBUTED,
         confirmed_at=_NOW,
         confirmed_by="reviewer-001",
     )
@@ -394,6 +397,22 @@ def test_U04_publication_conditions_individual_failure():
     e = check_publication_eligibility(rec_nourl, status, change, ed, ri, ap, relevance_verdict="INCLUDE")
     assert COND_SOURCE_LINK in e.failed_conditions
 
+    # C-2b: attribution name (source_org) missing
+    rec_noorg = _program_record()
+    object.__setattr__(rec_noorg, "source_org", None)
+    e = check_publication_eligibility(rec_noorg, status, change, ed, ri, ap, relevance_verdict="INCLUDE")
+    assert COND_ATTRIBUTION in e.failed_conditions
+
+    # C-5b: rights_basis not in ALLOWED_RIGHTS_BASIS
+    ri_invalid = RightsRecord(
+        source_key=rec.source_key,
+        rights_basis="INVALID_BASIS",
+        confirmed_at=_NOW,
+        confirmed_by="reviewer-001",
+    )
+    e = check_publication_eligibility(rec, status, change, ed, ri_invalid, ap, relevance_verdict="INCLUDE")
+    assert COND_RIGHTS in e.failed_conditions
+
     # C-4: editorial missing
     e = check_publication_eligibility(rec, status, change, None, ri, ap, relevance_verdict="INCLUDE")
     assert COND_EDITORIAL in e.failed_conditions
@@ -509,6 +528,50 @@ def test_R02_relevance_hold_blocked_in_api():
 
     r = client.get(f"/public/bizinfo/programs/{rec.source_key}")
     assert r.status_code == 404
+
+
+def test_R04_invalid_rights_basis_blocked():
+    """R-04: ALLOWED_RIGHTS_BASIS 외 rights_basis → C-5 실패 → 공개 차단.
+
+    기업마당 원문·PDF 복제를 의미하는 비승인 근거는 공개 조건을 통과하지 못한다.
+    """
+    rec    = _program_record()
+    status = program_status(rec, as_of=_TODAY)
+    change = _first_change(rec)
+    ed     = _editorial("PROGRAM", rec.source_key)
+    ap     = _approval("PROGRAM", rec.source_key)
+
+    ri_invalid = RightsRecord(
+        source_key=rec.source_key,
+        rights_basis="공공저작물 자유이용허락 (KOGL 제1유형)",  # 미승인 근거
+        confirmed_at=_NOW,
+        confirmed_by="reviewer-001",
+    )
+    e = check_publication_eligibility(
+        rec, status, change, ed, ri_invalid, ap, relevance_verdict="INCLUDE"
+    )
+    assert not e.eligible
+    assert COND_RIGHTS in e.failed_conditions
+
+
+def test_R05_missing_source_org_blocked():
+    """R-05: source_org 없음 → C-2b(attribution) 실패 → 공개 차단.
+
+    출처명이 없으면 고객 화면에 출처를 표기할 수 없어 공개를 차단한다.
+    """
+    rec_noorg = _program_record()
+    object.__setattr__(rec_noorg, "source_org", None)
+    status = program_status(rec_noorg, as_of=_TODAY)
+    change = _first_change(rec_noorg)
+    ed     = _editorial("PROGRAM", rec_noorg.source_key)
+    ri     = _rights(rec_noorg.source_key)
+    ap     = _approval("PROGRAM", rec_noorg.source_key)
+
+    e = check_publication_eligibility(
+        rec_noorg, status, change, ed, ri, ap, relevance_verdict="INCLUDE"
+    )
+    assert not e.eligible
+    assert COND_ATTRIBUTION in e.failed_conditions
 
 
 def test_R03_no_end_date_past_start_date_is_unknown():

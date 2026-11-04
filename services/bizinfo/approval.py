@@ -105,10 +105,27 @@ class PublicationEligibility:
 # Condition codes (used in failed_conditions)
 COND_RELEVANCE        = "relevance_unconfirmed"   # C-1
 COND_SOURCE_LINK      = "source_link_missing"     # C-2
+COND_ATTRIBUTION      = "attribution_name_missing"# C-2b
 COND_STATUS_PRESENT   = "status_not_present"      # C-3
 COND_EDITORIAL        = "editorial_missing"       # C-4
 COND_RIGHTS           = "rights_unconfirmed"      # C-5
 COND_APPROVAL_RECORD  = "approval_record_missing" # C-6
+
+# ---------------------------------------------------------------------------
+# Rights basis vocabulary (RIGHTS_GATE approved codes)
+# ---------------------------------------------------------------------------
+# FACTS_ONLY_TAI_ORIGINAL_ATTRIBUTED:
+#   TAI가 공고 사실정보를 활용해 독립적으로 작성한 해설 + 출처 표기.
+#   외부 저작권자의 이용허락이 아닌 내부 편집 정책 판단 기록이다.
+#   기업마당 원문·PDF·사진·표의 복제는 이 코드로 허용되지 않는다.
+#
+# 추가 코드 등록은 RIGHTS_GATE Owner 별도 승인 필요.
+
+RIGHTS_BASIS_FACTS_ONLY_ATTRIBUTED = "FACTS_ONLY_TAI_ORIGINAL_ATTRIBUTED"
+
+ALLOWED_RIGHTS_BASIS: frozenset[str] = frozenset({
+    RIGHTS_BASIS_FACTS_ONLY_ATTRIBUTED,
+})
 
 
 # ---------------------------------------------------------------------------
@@ -143,9 +160,13 @@ def check_publication_eligibility(
     if relevance_verdict not in ("IN_SCOPE", "INCLUDE"):
         failed.append(COND_RELEVANCE)
 
-    # C-2: official source and origin link present
+    # C-2: official source URL present (공고별 원문 경로)
     if not record.bizinfo_url and not record.origin_url:
         failed.append(COND_SOURCE_LINK)
+
+    # C-2b: attribution name present (공식 출처명 — 고객 화면 표기용)
+    if not record.source_org:
+        failed.append(COND_ATTRIBUTION)
 
     # C-3: status present and last_checked_at available
     # status.last_checked_at is always set (from retrieved_at)
@@ -161,8 +182,10 @@ def check_publication_eligibility(
     if editorial is None or not editorial.explanation.strip() or not editorial.guidance.strip():
         failed.append(COND_EDITORIAL)
 
-    # C-5: source rights confirmed
-    if rights is None:
+    # C-5: rights confirmed with an approved basis
+    # rights_basis must be in ALLOWED_RIGHTS_BASIS to ensure TAI original content
+    # and to block unapproved external content reuse (PDF, photos, verbatim copy).
+    if rights is None or rights.rights_basis not in ALLOWED_RIGHTS_BASIS:
         failed.append(COND_RIGHTS)
 
     # C-6: explicit content approval record
