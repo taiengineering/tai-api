@@ -160,12 +160,13 @@ def check_publication_eligibility(
     if relevance_verdict not in ("IN_SCOPE", "INCLUDE"):
         failed.append(COND_RELEVANCE)
 
-    # C-2: official source URL present (공고별 원문 경로)
-    if not record.bizinfo_url and not record.origin_url:
+    # C-2: bizinfo_url required (고객 화면에서 원문 링크로 직접 표시)
+    # origin_url만 있고 bizinfo_url이 없으면 고객에게 공식 링크를 제공할 수 없다.
+    if not record.bizinfo_url:
         failed.append(COND_SOURCE_LINK)
 
-    # C-2b: attribution name present (공식 출처명 — 고객 화면 표기용)
-    if not record.source_org:
+    # C-2b: attribution name present and non-empty (공식 출처명 — 고객 화면 표기용)
+    if not record.source_org or not record.source_org.strip():
         failed.append(COND_ATTRIBUTION)
 
     # C-3: status present and last_checked_at available
@@ -182,14 +183,19 @@ def check_publication_eligibility(
     if editorial is None or not editorial.explanation.strip() or not editorial.guidance.strip():
         failed.append(COND_EDITORIAL)
 
-    # C-5: rights confirmed with an approved basis
-    # rights_basis must be in ALLOWED_RIGHTS_BASIS to ensure TAI original content
-    # and to block unapproved external content reuse (PDF, photos, verbatim copy).
-    if rights is None or rights.rights_basis not in ALLOWED_RIGHTS_BASIS:
+    # C-5: rights confirmed with approved basis and an identified reviewer
+    # rights_basis must be in ALLOWED_RIGHTS_BASIS (TAI original + attribution only).
+    # confirmed_by must identify a real human reviewer — empty string is blocked.
+    if (
+        rights is None
+        or rights.rights_basis not in ALLOWED_RIGHTS_BASIS
+        or not rights.confirmed_by.strip()
+    ):
         failed.append(COND_RIGHTS)
 
-    # C-6: explicit content approval record
-    if approval is None:
+    # C-6: explicit content approval by an identified approver
+    # approved_by must identify a real human — empty string is blocked.
+    if approval is None or not approval.approved_by.strip():
         failed.append(COND_APPROVAL_RECORD)
 
     return PublicationEligibility(
