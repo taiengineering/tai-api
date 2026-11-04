@@ -8,11 +8,12 @@ WO-DOC260-WPC-DOCUMENT-FIRST-004 — source file download endpoint
   T03 — route_group=F_SCOPE_OUT 문서 → 404 (서버 차단)
   T03b — route_group=A_INTERNAL 문서 → 404 (웹생성 경로 사용)
   T04 — 유효 doc_id + 활성 문서 + 스토리지 성공 → 200 + octet-stream + attachment
-  T05 — 스토리지 접근 실패 (Exception) → 503 (파일 없음 404와 구분)
+  T05 — 스토리지 일반 Exception → 503 (파일 없음 404와 구분)
   T06 — 경로 조작 시도 (형식 검증으로 차단) → None 반환
   T07 — 경로 계산 성공이지만 document_forms에 없음 → 404
   T08 — 스토리지 반환 bytes 비어 있음 → 404 (파일 미연결 상태)
   T09 — 기존 목록 엔드포인트 회귀 (source-file 추가로 중단 금지)
+  T10 — StorageApiError(status=400, Object not found) → 404 (스토리지 SDK 예외 → 파일없음)
 
 FORM647 단위 테스트 (인프라 검증 — 현재 라우터 미연결):
   flSeq(document_forms.file_url) ≠ FORM647 ek. doc_id→ek 크로스워크 미확립.
@@ -353,6 +354,31 @@ class TestSourceFileEndpoint(unittest.TestCase):
         app.dependency_overrides[get_current_user] = lambda: _MOCK_USER
 
         sb = _make_sb([{"id": "uuid-1", "doc_id": _TEST_DOC_ID}], b"")
+
+        with patch("routers.document_forms.get_verified_path", return_value=_TEST_STORAGE_PATH), \
+             patch("routers.document_forms.get_provision_policy",
+                   return_value={"route_group": "U_UNRESOLVED", "investment_decision": "HOLD"}), \
+             patch("routers.document_forms.get_supabase", return_value=sb):
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get(f"/document-forms/{_TEST_DOC_ID}/source-file")
+
+        self.assertEqual(resp.status_code, 404)
+
+    # T10: StorageApiError(400) → 404 (Supabase SDK "Object not found" 처리)
+    def test_T10_storage_api_error_not_found_returns_404(self):
+        """T10 — StorageApiError(status=400) → 404 (스토리지 SDK 파일 없음 예외)."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers.document_forms import router
+        from routers.auth import get_current_user
+        from storage3.exceptions import StorageApiError
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: _MOCK_USER
+
+        sb = _make_sb([{"id": "uuid-1", "doc_id": _TEST_DOC_ID}],
+                      StorageApiError("Object not found", "404", 400))
 
         with patch("routers.document_forms.get_verified_path", return_value=_TEST_STORAGE_PATH), \
              patch("routers.document_forms.get_provision_policy",

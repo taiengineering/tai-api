@@ -6,6 +6,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response as _FileResponse
 
+from storage3.exceptions import StorageApiError
+
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user, get_current_user_optional
 from services.company_scope import _require_admin
@@ -116,9 +118,16 @@ def get_source_file(
     if not form_res.data:
         raise HTTPException(status_code=404, detail="서식 문서를 찾을 수 없습니다.")
 
-    # Gate 5: doc_forms/ 직접 경로 — 파일 없음(None/empty) vs. 접근 실패(Exception) 구분
+    # Gate 5: doc_forms/ 직접 경로 — 파일 없음(404) vs. 접근 실패(503) 구분
+    # Supabase storage SDK는 파일 없음도 StorageApiError(status=400)로 반환한다.
+    # status 400 = "Object not found" → 404. 그 외 SDK 오류 = 503.
     try:
         file_bytes: bytes = supabase.storage.from_(source_file_bucket()).download(storage_path)
+    except StorageApiError as exc:
+        status = int(exc.status) if exc.status else 0
+        if status in (400, 404):
+            raise HTTPException(status_code=404, detail="서식 파일을 아직 제공하지 않습니다.")
+        raise HTTPException(status_code=503, detail="서식 파일을 불러올 수 없습니다. 잠시 후 다시 시도해 주세요.")
     except Exception:
         raise HTTPException(status_code=503, detail="서식 파일을 불러올 수 없습니다. 잠시 후 다시 시도해 주세요.")
 
