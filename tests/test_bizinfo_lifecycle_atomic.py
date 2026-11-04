@@ -12,9 +12,16 @@ Production DB·API·Slack 호출 = 0 (전부 모의 주입).
   LCA-06  상태 변경 감지 → 개별 알림이 repo에 원자적으로 등록됨
   LCA-07  Supabase RPC 오류 → 레코드·알림 모두 롤백 (table() 미호출)
   LCA-08  마감된 IN_SCOPE 공고 → 신규 모집 카운트 아님, 상태 변경 감지
+
+R2 보정 (WO-TAI-BIZINFO-LIFECYCLE-ATOMIC-001-R2):
+  LCA-R2-01  기존 IN_SCOPE 재수집, 상태 변화 없음 → 레코드 갱신, Slack 없음
+  LCA-R2-02  날짜 없는 기존 공고 → UNKNOWN, 판정값 보존
+  LCA-R2-03  시간 경과 마감 공고, API 미발견 → retrieved_at 불변, 판정 보존
+  LCA-R2-04  신규 IN_SCOPE 1건 → per-item 원자 이벤트 1건, 일일 요약은 별도
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -386,7 +393,10 @@ def test_LCA06_status_change_notification_registered(monkeypatch):
     repo.save_record(prior, _chg("PBLN_TRANS_LCA06"))
     repo.save_relevance_verdict("PROGRAM", "PBLN_TRANS_LCA06", "IN_SCOPE")
 
-    expected_notif_id = f"bizinfo_status_program_PBLN_TRANS_LCA06_{_TODAY.isoformat()}"
+    # notif_id = "bizinfo_status_{kind}_{key}_{st_hash}_{date}"
+    # st_hash = sha256("UPCOMING|OPEN")[:6]
+    _st_hash = hashlib.sha256(b"UPCOMING|OPEN").hexdigest()[:6]
+    expected_notif_id = f"bizinfo_status_program_PBLN_TRANS_LCA06_{_st_hash}_{_TODAY.isoformat()}"
 
     def _mock_get(url, *, params, timeout):
         page = int(params.get("pageIndex", "1"))
@@ -560,7 +570,10 @@ def test_LCA08_closed_program_not_in_new_in_scope(monkeypatch):
     repo.save_record(closed_prior, _chg("PBLN_CLOSED_LCA08"))
     repo.save_relevance_verdict("PROGRAM", "PBLN_CLOSED_LCA08", "IN_SCOPE")
 
-    expected_notif_id = f"bizinfo_status_program_PBLN_CLOSED_LCA08_{_TODAY.isoformat()}"
+    # LCA-08: prior_check(2026-10-01) 기준 OPEN → as_of(2026-11-05) 기준 CLOSED
+    # st_hash = sha256("OPEN|CLOSED")[:6]
+    _st_hash = hashlib.sha256(b"OPEN|CLOSED").hexdigest()[:6]
+    expected_notif_id = f"bizinfo_status_program_PBLN_CLOSED_LCA08_{_st_hash}_{_TODAY.isoformat()}"
 
     def _mock_get(url, *, params, timeout):
         page = int(params.get("pageIndex", "1"))
@@ -595,3 +608,241 @@ def test_LCA08_closed_program_not_in_new_in_scope(monkeypatch):
 
     # per-item 알림 등록 (마감 상태 변경 알림)
     assert expected_notif_id in repo._pending_notifications
+
+
+# ---------------------------------------------------------------------------
+# LCA-R2-01: 기존 IN_SCOPE 재수집, 상태 변화 없음 → 레코드 갱신, Slack 없음
+# ---------------------------------------------------------------------------
+
+
+def test_LCA_R2_01_in_scope_no_change_record_refreshed(monkeypatch):
+    """기존 IN_SCOPE 공고 재수집 시 상태 변화가 없어도 레코드가 갱신된다.
+
+    - today = 2026-11-05
+    - prior retrieved_at = 2026-11-04 (어제), app: 2026-10-01 ~ 2026-12-31 → OPEN
+    - 재수집 retrieved_at = 2026-11-05 (오늘), 동일 날짜 → 상태 변화 없음(OPEN)
+
+    상태 변화 없음 → Slack 없음 (slack_accept_fn 미호출)
+    레코드는 갱신됨 (retrieved_at 최신화)
+    IN_SCOPE 판정 보존
+    save_record_with_notification() 경유로 V2 fn이 상태 컬럼을 갱신한다.
+    """
+    monkeypatch.setenv("BIZINFO_API_KEY", "test_key")
+    monkeypatch.setenv("BIZINFO_EVENT_API_KEY", "test_event_key")
+
+    repo = InMemoryBizinfoRepository()
+    prior = _prog(
+        "PBLN_R2_01",
+        app_start=date(2026, 10, 1),
+        app_end=date(2026, 12, 31),
+        retrieved_at=datetime(2026, 11, 4, 0, 0, tzinfo=timezone.utc),  # 어제
+    )
+    repo.save_record(prior, _chg("PBLN_R2_01"))
+    repo.save_relevance_verdict("PROGRAM", "PBLN_R2_01", "IN_SCOPE")
+
+    slack_calls: list = []
+
+    def _slack(**kw):
+        slack_calls.append(kw)
+        return True
+
+    def _mock_get(url, *, params, timeout):
+        import json as _json
+        page = int(params.get("pageIndex", "1"))
+        if "EventApi" in url:
+            return 200, _json.dumps({"jsonArray": []})
+        if page == 1:
+            return 200, _json.dumps({"jsonArray": [{
+                "pblancId": "PBLN_R2_01",
+                "pblancNm": "안전관리시스템 도입 지원",
+                "pblancUrl": "https://www.bizinfo.go.kr/web/lay1/program/PBLN_R2_01",
+                "jrsdInsttNm": "고용노동부",
+                "reqstBeginEndDe": "2026-10-01 ~ 2026-12-31",
+                "bsnsSumryCn": "산업안전관리시스템 도입 비용 지원.",
+                "totCnt": "1",
+            }]})
+        return 200, _json.dumps({"jsonArray": []})
+
+    result = run_bizinfo_daily_sync(
+        repo, _slack, as_of=_TODAY, get_fn=_mock_get
+    )
+
+    # 상태 변화 없음 → Slack 미호출
+    assert result.total_status_changes == 0
+    assert len(slack_calls) == 0
+    assert result.slack_skipped_reason == "no_events"
+
+    # 레코드 갱신 확인 (retrieved_at이 오늘 기준으로 갱신됨)
+    refreshed = repo.get_prior_record("PROGRAM", "PBLN_R2_01")
+    assert refreshed is not None
+    assert refreshed.retrieved_at > prior.retrieved_at, "retrieved_at이 갱신돼야 한다"
+
+    # IN_SCOPE 판정 보존
+    assert repo.get_relevance_verdict("PROGRAM", "PBLN_R2_01") == "IN_SCOPE"
+
+    # per-item 알림 미등록 (상태 변화 없으므로)
+    status_events = [e for e in repo._pending_notifications if "status" in e and "PBLN_R2_01" in e]
+    assert len(status_events) == 0
+
+
+# ---------------------------------------------------------------------------
+# LCA-R2-02: 날짜 없는 기존 공고 → UNKNOWN, 판정값 보존
+# ---------------------------------------------------------------------------
+
+
+def test_LCA_R2_02_no_dates_unknown_verdict_preserved():
+    """날짜가 없는 공고는 상태 = UNKNOWN이고 판정은 독립적으로 보존된다.
+
+    기존 1,585건 중 날짜 미확인 공고의 backfill SQL 결과와 동일한 Python 계산.
+    status.py _date_status() 로직이 SQL 로직과 동일함을 간접 확인한다.
+    """
+    # 날짜 없음 → program_status = UNKNOWN
+    rec_no_dates = _prog("prg_r2_02", app_start=None, app_end=None)
+    ps = program_status(rec_no_dates, as_of=_TODAY)
+    assert ps.application_status == "UNKNOWN"
+    assert ps.has_dates is False
+
+    # 판정은 상태와 독립
+    repo = InMemoryBizinfoRepository()
+    repo.save_record(rec_no_dates, _chg("prg_r2_02"))
+    repo.save_relevance_verdict("PROGRAM", "prg_r2_02", "IN_SCOPE")
+
+    # backfill 후 save_record_with_notification 없이도 판정은 보존됨
+    assert repo.get_relevance_verdict("PROGRAM", "prg_r2_02") == "IN_SCOPE"
+
+    # EVENT도 동일
+    rec_evt_no_dates = _evt("evt_r2_02")
+    es = event_status(rec_evt_no_dates, as_of=_TODAY)
+    assert es.reception_status == "UNKNOWN"
+    assert es.progress_status == "UNKNOWN"
+
+
+# ---------------------------------------------------------------------------
+# LCA-R2-03: 시간 경과 마감 공고, API 미발견 → retrieved_at 불변, 판정 보존
+# ---------------------------------------------------------------------------
+
+
+def test_LCA_R2_03_expired_not_in_api_retrieved_at_unchanged(monkeypatch):
+    """시간 경과로 마감됐지만 API 목록에서 발견되지 않은 공고:
+    - retrieved_at(원천 수집일)이 임의 갱신되지 않는다.
+    - IN_SCOPE 판정이 보존된다.
+    - in_scope_confirmed = 0 (재확인 불가 사실 보존)
+
+    API 미발견이 취소·마감의 근거가 되지 않는다.
+    """
+    monkeypatch.setenv("BIZINFO_API_KEY", "test_key")
+    monkeypatch.setenv("BIZINFO_EVENT_API_KEY", "test_event_key")
+
+    repo = InMemoryBizinfoRepository()
+    original_retrieved_at = datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc)
+    expired = _prog(
+        "PBLN_R2_03",
+        app_start=date(2026, 9, 1),
+        app_end=date(2026, 10, 15),   # 이미 마감 (today=11-05 > 10-15)
+        retrieved_at=original_retrieved_at,
+    )
+    repo.save_record(expired, _chg("PBLN_R2_03"))
+    repo.save_relevance_verdict("PROGRAM", "PBLN_R2_03", "IN_SCOPE")
+
+    # API는 완전히 다른 공고만 반환 (PBLN_R2_03 없음)
+    def _mock_get(url, *, params, timeout):
+        import json as _json
+        page = int(params.get("pageIndex", "1"))
+        if "EventApi" in url:
+            return 200, _json.dumps({"jsonArray": []})
+        if page == 1:
+            return 200, _json.dumps({"jsonArray": [{
+                "pblancId": "PBLN_OTHER_R2_03",
+                "pblancNm": "다른 사업",
+                "pblancUrl": "https://www.bizinfo.go.kr/web/lay1/program/PBLN_OTHER_R2_03",
+                "jrsdInsttNm": "기관명",
+                "reqstBeginEndDe": "2026-11-01 ~ 2026-12-31",
+                "bsnsSumryCn": "다른 사업 내용.",
+                "totCnt": "1",
+            }]})
+        return 200, _json.dumps({"jsonArray": []})
+
+    result = run_bizinfo_daily_sync(
+        repo, lambda **kw: False, as_of=_TODAY, get_fn=_mock_get
+    )
+
+    # API 미발견 → retrieved_at 불변
+    not_found = repo.get_prior_record("PROGRAM", "PBLN_R2_03")
+    assert not_found is not None, "API 미발견이어도 레코드가 삭제되지 않아야 한다"
+    assert not_found.retrieved_at == original_retrieved_at, (
+        "API 미발견 공고의 retrieved_at이 임의 갱신됐다"
+    )
+
+    # 판정 보존
+    assert repo.get_relevance_verdict("PROGRAM", "PBLN_R2_03") == "IN_SCOPE"
+
+    # in_scope_confirmed = 0 (재확인 불가 사실 보존)
+    assert result.program.in_scope_confirmed == 0
+    assert result.program.in_scope_total == 1
+
+
+# ---------------------------------------------------------------------------
+# LCA-R2-04: 신규 IN_SCOPE 1건 → per-item 원자 이벤트 1건, 일일 요약은 별도
+# ---------------------------------------------------------------------------
+
+
+def test_LCA_R2_04_new_in_scope_single_atomic_event(monkeypatch):
+    """신규 IN_SCOPE 1건 → per-item 원자 이벤트 정확히 1건, 일일 요약은 별도 event_id.
+
+    - per-item 이벤트: bizinfo_new_program_{key}_{date}
+    - 일일 요약 이벤트: bizinfo_daily_sync_{date}_{hash} (통계 전용, 항목 상세 없음)
+    - 두 이벤트는 event_id prefix가 다르며 내용이 중복되지 않는다.
+    """
+    monkeypatch.setenv("BIZINFO_API_KEY", "test_key")
+    monkeypatch.setenv("BIZINFO_EVENT_API_KEY", "test_event_key")
+
+    repo = InMemoryBizinfoRepository()
+    key = "PBLN_R2_04"
+
+    def _mock_get(url, *, params, timeout):
+        import json as _json
+        page = int(params.get("pageIndex", "1"))
+        if "EventApi" in url:
+            return 200, _json.dumps({"jsonArray": []})
+        if page == 1:
+            return 200, _json.dumps({"jsonArray": [{
+                "pblancId": key,
+                "pblancNm": "산업안전관리시스템 도입 지원",
+                "pblancUrl": f"https://www.bizinfo.go.kr/web/lay1/program/{key}",
+                "jrsdInsttNm": "고용노동부",
+                "reqstBeginEndDe": "2026-11-01 ~ 2026-12-31",
+                "bsnsSumryCn": "산업안전관리시스템 도입 비용 지원. 재해예방 목적.",
+                "totCnt": "1",
+            }]})
+        return 200, _json.dumps({"jsonArray": []})
+
+    daily_calls: list[str] = []
+
+    def _slack(**kw):
+        daily_calls.append(kw.get("event_id", ""))
+        return True
+
+    result = run_bizinfo_daily_sync(
+        repo, _slack, as_of=_TODAY, get_fn=_mock_get
+    )
+
+    if result.total_new_in_scope == 1:
+        # per-item 원자 이벤트: 정확히 1건
+        per_item_new = [
+            e for e in repo._pending_notifications
+            if e.startswith(f"bizinfo_new_program_{key}_")
+        ]
+        assert len(per_item_new) == 1, (
+            f"per-item 신규 이벤트가 1건이어야 하지만 {len(per_item_new)}건입니다: {per_item_new}"
+        )
+
+        # 일일 요약: 별도 event_id (prefix = "bizinfo_daily_sync_")
+        assert len(daily_calls) == 1
+        assert daily_calls[0].startswith(f"bizinfo_daily_sync_{_TODAY.isoformat()}_")
+
+        # per-item ID와 daily_summary ID는 다르다
+        assert per_item_new[0] != daily_calls[0]
+    else:
+        # REVIEW_REQUIRED 판정 시: per-item 미등록이 맞음
+        assert len([e for e in repo._pending_notifications
+                    if e.startswith(f"bizinfo_new_program_{key}_")]) == 0

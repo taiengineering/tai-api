@@ -16,14 +16,17 @@ WO-TAI-BIZINFO-LIFECYCLE-ATOMIC-001 R1 추가:
   신규 공고 → 항상 판정
   마감(CLOSED) 상태여도 IN_SCOPE 판정은 보존됨 (관련성 ≠ 모집 상태)
 
-Slack 알림 경로 (이중):
-  1. 개별 알림 (원자적): save_record_with_notification()
+Slack 알림 경로 (이원화):
+  1. 개별 알림 (원자적 기본 경로): save_record_with_notification()
      - 신규 IN_SCOPE → event_id = "bizinfo_new_{kind}_{key}_{date}"
-     - 상태 변경      → event_id = "bizinfo_status_{kind}_{key}_{date}"
+     - 상태 변경      → event_id = "bizinfo_status_{kind}_{key}_{st_hash}_{date}"
+                       st_hash: sha256(old|new)[:6] — 같은 날 다른 전환 충돌 방지
      - relay log에 PENDING으로 등록 → relay worker가 처리
-  2. 일일 요약 알림 (slack_accept_fn 경유):
+     - 항목별 상세 내용(제목·기관·날짜·링크)을 포함
+  2. 일일 요약 알림 (slack_accept_fn 경유 — 통계 전용):
      - event_id = "bizinfo_daily_sync_{date}_{content_hash}"
      - 같은 날 동일 내용 재실행 차단
+     - 개별 알림 중복 방지: 항목 상세 내용 없이 집계 수치만 포함
 
 API 개별 조회 미제공:
   페이지 목록 탐색으로 기존 IN_SCOPE 공고를 재확인한다.
@@ -289,9 +292,14 @@ def _sync_kind(
                     if status_ev:
                         result.status_changes.append(status_ev)
                         # 상태 변경: 저장 + 개별 알림을 단일 원자 호출
+                        # 같은 날 동일 공고에서 다른 전환이 발생해도 충돌하지 않도록
+                        # old/new 상태 해시를 포함한다.
+                        _st_hash = hashlib.sha256(
+                            f"{status_ev.old_status}|{status_ev.new_status}".encode()
+                        ).hexdigest()[:6]
                         notif_id = (
                             f"bizinfo_status_{source_kind.lower()}_{key}"
-                            f"_{as_of.isoformat()}"
+                            f"_{_st_hash}_{as_of.isoformat()}"
                         )
                         repo.save_record_with_notification(
                             normalized, change,
@@ -302,7 +310,10 @@ def _sync_kind(
                             sender_id="bizinfo_daily_sync",
                         )
                     else:
-                        repo.save_record(normalized, change)
+                        # 상태 변화 없음 — Slack 없이 V2 fn 경유 저장
+                        # (save_record() 직접 경로는 V2 fn을 거치지 않아
+                        #  recruitment_status 등 상태 컬럼이 갱신되지 않는다.)
+                        repo.save_record_with_notification(normalized, change)
                 else:
                     # 비IN_SCOPE 기존 공고 — 판정 확인 (캐시 우선)
                     existing = _verdict_cache.get(key)
@@ -417,7 +428,12 @@ def run_bizinfo_daily_sync(
 
 
 def build_slack_message(result: BizinfoDailySyncResult, run_date: date) -> str:
-    """일일 동기화 결과를 Slack 메시지 형식으로 변환."""
+    """일일 동기화 실행 통계를 Slack 메시지 형식으로 변환.
+
+    개별 신규 확정·상태 변경은 save_record_with_notification()이 각각
+    별도 per-item 이벤트로 등록해 상세 내용을 전달한다.
+    이 메시지는 실행 통계 요약이므로 항목별 상세 내용을 반복하지 않는다.
+    """
     kst_str = run_date.strftime("%Y-%m-%d") + " 13:00"
 
     all_new = result.program.new_in_scope + result.event.new_in_scope
@@ -428,38 +444,15 @@ def build_slack_message(result: BizinfoDailySyncResult, run_date: date) -> str:
         "",
         f"신규 안전 관련 확정: {len(all_new)}건",
         f"기존 공고 상태 변경: {len(all_changes)}건",
+        "",
+        (
+            f"수집: PROGRAM {result.program.fetched}건"
+            f" / EVENT {result.event.fetched}건"
+        ),
     ]
 
-    if all_new:
-        lines.append("")
-        lines.append("*신규 확정*")
-        for ev in all_new:
-            rec = ev.record
-            lines.append(f"• *{rec.title}*")
-            if rec.source_org:
-                lines.append(f"  기관: {rec.source_org}")
-            if rec.support_target:
-                lines.append(f"  지원대상: {rec.support_target}")
-            ap = rec.application_period
-            if ap and (ap.start or ap.end):
-                s = ap.start.isoformat() if ap.start else "미정"
-                e = ap.end.isoformat() if ap.end else "미정"
-                lines.append(f"  접수기간: {s} ~ {e}")
-            ep = rec.event_period
-            if ep and (ep.start or ep.end):
-                s = ep.start.isoformat() if ep.start else "미정"
-                e = ep.end.isoformat() if ep.end else "미정"
-                lines.append(f"  행사기간: {s} ~ {e}")
-            if rec.bizinfo_url:
-                lines.append(f"  링크: {rec.bizinfo_url}")
-
-    if all_changes:
-        lines.append("")
-        lines.append("*상태 변경*")
-        for ev in all_changes:
-            lines.append(f"• *{ev.title}*")
-            lines.append(f"  변경: {ev.old_status} → {ev.new_status}")
-            if ev.bizinfo_url:
-                lines.append(f"  링크: {ev.bizinfo_url}")
+    total_errors = len(result.program.api_errors) + len(result.event.api_errors)
+    if total_errors:
+        lines.append(f"API 오류: {total_errors}건")
 
     return "\n".join(lines)
