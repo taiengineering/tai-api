@@ -314,10 +314,9 @@ _SUBMISSION_CATEGORY: dict[str, str] = {
     # G2_PORTAL_CONFIRMED: M8 포털 버튼 구현 완료 (2종)
     'DOC-BLD-001': 'G2_PORTAL_CONFIRMED',
     'DOC-CON-009': 'G2_PORTAL_CONFIRMED',
-    # G2_PORTAL_CANDIDATE: WP-03 CSV submit_portal 확인됨, M8 미구현 (24종)
+    # G2_PORTAL_CANDIDATE: WP-03 CSV submit_portal 확인됨, M8 미구현 (23종)
     # DOC-CON-005: 착공신고서 (eais.go.kr 세움터) — tai_auto=false, CSV submit_portal 확인
     'DOC-CON-005': 'G2_PORTAL_CANDIDATE',   # 착공신고서 (eais.go.kr 세움터)
-    'DOC-CHEM-007': 'G2_PORTAL_CANDIDATE',  # 화학사고 조사보고서 (icis.me.go.kr)
     'DOC-BLD-008': 'G2_PORTAL_CANDIDATE',   # 전기안전관리자 선임신고서 (safety.kesco.or.kr)
     'DOC-BLD-013': 'G2_PORTAL_CANDIDATE',   # 승강기 사고 보고서 (elsafe.or.kr)
     'DOC-CHEM-009': 'G2_PORTAL_CANDIDATE',  # 유해화학물질 관리자 선임신고서 (icis.me.go.kr)
@@ -340,11 +339,10 @@ _SUBMISSION_CATEGORY: dict[str, str] = {
     'DOC-OSH-031': 'G2_PORTAL_CANDIDATE',   # 산업보건의 해임신고서 (labor.moel.go.kr)
     'DOC-OSH-032': 'G2_PORTAL_CANDIDATE',   # 산업재해조사표 제출서 (labor.moel.go.kr)
     'DOC-OSH-033': 'G2_PORTAL_CANDIDATE',   # 유해위험방지계획서 제출서 (kosha.or.kr)
-    # G3_AGENCY_CHANNEL: 팝빌/이메일이 유일한 제출 채널, 별도 기관 포털 없음 (5종)
+    # G3_AGENCY_CHANNEL: 팝빌/이메일이 유일한 제출 채널, 별도 기관 포털 없음 (4종)
     'DOC-BLD-004': 'G3_AGENCY_CHANNEL',     # 소방안전관리자 선임신고서 (소방서, 팝빌)
     'DOC-CHEM-006': 'G3_AGENCY_CHANNEL',    # 화학사고 즉시신고서 (지방환경관서, 팝빌)
     'DOC-CON-LAW-010': 'G3_AGENCY_CHANNEL', # 정기안전점검 결과보고서 (발주청/안전원, 이메일)
-    'DOC-FAC-010': 'G3_AGENCY_CHANNEL',     # 위험물 사고 보고서 (소방서, 팝빌 팩스)
     'DOC-OSH-018': 'G3_AGENCY_CHANNEL',     # 사고보고서 (고용노동부, 팝빌)
     # G1_DUAL_PATH: TAI 작성·저장 + 외부 제출 별도 (이중경로 확인, 12종)
     'DOC-BLD-015': 'G1_DUAL_PATH',
