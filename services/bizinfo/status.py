@@ -197,8 +197,16 @@ def event_status(
     evt_raw = _date_status(record.event_period,     today)
 
     reception: EventReceptionStatus = rcp_raw  # type: ignore[assignment]
-    # Map OPEN → ONGOING for event progress axis
-    progress: EventProgressStatus = "ONGOING" if evt_raw == "OPEN" else evt_raw  # type: ignore[assignment]
+    # Map date-status values to progress axis:
+    #   OPEN   → ONGOING  (행사 진행 중)
+    #   CLOSED → ENDED    (행사 종료 — EventProgressStatus에 CLOSED 없음)
+    _PROGRESS_MAP: dict[str, EventProgressStatus] = {
+        "UPCOMING": "UPCOMING",
+        "OPEN":     "ONGOING",
+        "CLOSED":   "ENDED",
+        "UNKNOWN":  "UNKNOWN",
+    }
+    progress: EventProgressStatus = _PROGRESS_MAP[evt_raw]
 
     rp = record.reception_period
     ep = record.event_period

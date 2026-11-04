@@ -116,9 +116,11 @@ def test_S05_review_title_keyword_no_summary():
 
 
 def test_S06_review_single_keyword_summary_only():
-    """S-06: 요약에 직접 키워드 1개만 → REVIEW_REQUIRED (확인 불충분). [SYNTHETIC]"""
+    """S-06: 요약에 직접 키워드 1개만 → REVIEW_REQUIRED (확인 불충분). [SYNTHETIC]
+    SCOPE_REALIGN-001: 제목에 직접 안전 키워드 없음, 요약에만 안전보건 1개 → REVIEW_REQUIRED.
+    """
     rec = _record(
-        title="소규모 사업장 작업환경 개선 사업",
+        title="소규모 사업장 근무 환경 개선 지원 사업",
         summary="작업현장 개선을 통해 안전보건 환경을 조성합니다.",
     )
     result = review_relevance(rec)
@@ -426,3 +428,537 @@ def test_S26_in_scope_direct_safety_support_no_exclusion():
     )
     result = review_relevance(rec)
     assert result.verdict == "IN_SCOPE"
+
+
+# ---------------------------------------------------------------------------
+# R2 regression tests (WO-TAI-BIZINFO-SAFETY-RELEVANCE-DB-001)
+# ---------------------------------------------------------------------------
+
+
+def test_S27_in_scope_compact_safety_management_personnel():
+    """S-27: "안전관리 인력" (공백 포함) → compact 매칭 → IN_SCOPE.
+
+    R2: 안전관리 인력은 산업안전보건법상 법정 의무 인력이다. 제목의 공백이
+    keyword를 split하더라도 compact 형식으로 감지해야 한다.
+    [REAL 유형: PBLN_000000000126712 — 자동차 부품업종 안전관리 인력 고용지원사업]
+    """
+    rec = _record(
+        title="[울산] 2026년 자동차 부품업종 안전관리 인력 고용지원사업 참여기업 모집 공고",
+        summary=(
+            "울산지역 자동차 부품업종 안전관리 인력의 지역정착 및 "
+            "안전관리자 장기근속 지원금, 안전관리자 선임 정착 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("안전관리인력" in b or "안전관리자" in b for b in result.basis)
+
+
+def test_S28_review_required_jungdae_simin_jaehae():
+    """S-28: "중대시민재해" 교육 — 중대재해처벌법 준수 목적이지만 산업재해가 아닌
+    소비자 제품 안전. "중대재해" 키워드가 "중대시민재해" 내부에 없으므로 직접 매칭
+    안 됨 → REVIEW_REQUIRED 유지.
+
+    R2: "중대재해" ⊄ "중대시민재해" (부분문자열 아님) — 오탐 없음 확인.
+    [REAL 유형: EVEN_000000000069465 — 원료·제조물 분야 중대시민재해 교육]
+    """
+    rec = _record(
+        source_kind="EVENT",
+        source_id="BIZINFO_EVENT",
+        source_key="EVEN_TEST_SIMIN",
+        title="[전국] 원료ㆍ제조물 분야 중대시민재해 교육 개최",
+        summary=(
+            "원료ㆍ제조물을 생산ㆍ제조ㆍ판매ㆍ유통하는 사업장을 대상으로 "
+            "중대재해처벌법과 관계법령의 주요 내용, 안전ㆍ보건 의무사항 및 "
+            "통합이행 안전ㆍ보건 체계 구축방법 안내."
+        ),
+    )
+    result = review_relevance(rec)
+    # 중대재해는 중대시민재해의 부분문자열이 아님 → 직접 안전 키워드 미매칭
+    # 안전ㆍ보건(중간점)은 안전보건(연속)과 다름 → adjacent/no_evidence
+    assert result.verdict == "REVIEW_REQUIRED"
+
+
+def test_S29_in_scope_rural_accommodation_fire_safety_facility():
+    """S-29: 농어촌민박 소방안전시설 지원 — 소방안전시설(direct compact) + 농어촌민박
+    → IN_SCOPE.
+
+    SCOPE_REALIGN-001-R1: 농어촌민박은 지원 대상 업종이지 사업 목적이 아님.
+    _NON_SAFETY_PURPOSE에서 제거. 소방안전시설 지원이 농어촌민박 대상이어도
+    실제 목적이 소방안전시설 설치이면 IN_SCOPE.
+    "지원 대상 업종이 다르다는 이유만으로 안전 관련 사업을 제외하지 않는다."
+    [REAL 유형: PBLN_000000000127526 — 여수시 농어촌민박 소방안전시설 지원]
+    """
+    rec = _record(
+        title="[전남광주] 여수시 2026년 농어촌민박 소방안전시설 지원 사업 모집 공고",
+        summary=(
+            "농어촌민박업소의 쾌적하고 안전한 여가 공간을 마련하여 방문객 편의 제공 및 "
+            "농어촌관광 활성화를 도모하고자 소방안전시설 지원 사업에 참여할 "
+            "농어촌민박업소를 모집합니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("소방안전시설" in b for b in result.basis)
+
+
+def test_S30_out_of_scope_personal_data_safety():
+    """S-30: 개인정보 안전조치 모니터링 — '안전' 단어 포함이지만 데이터 보안 목적.
+    '개인정보' 비안전 마커 → OUT_OF_SCOPE.
+
+    R2: 개인정보보호는 산업안전과 무관한 별도 법적 의무 영역.
+    [REAL 유형: PBLN_000000000122104 — 중소사업자 개인정보 안전조치 모니터링 지원]
+    """
+    rec = _record(
+        title="2026년 중소사업자 개인정보 안전조치 모니터링 지원 사업 공고",
+        summary=(
+            "개인정보보호위원회에서 중소사업자를 대상으로 개인정보 안전조치 의무 "
+            "이행 여부를 모니터링하고 개선을 지원하는 사업입니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "OUT_OF_SCOPE"
+    assert any("개인정보" in b for b in result.basis)
+
+
+def test_S31_in_scope_health_manager_selection_support():
+    """S-31: 보건관리자 선임 지원 — R2 추가 키워드 → IN_SCOPE.
+
+    보건관리자는 산업안전보건법상 안전관리자와 동급 법정 의무 인력이다.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[경기] 2026년 소규모사업장 보건관리자 선임 지원사업",
+        summary=(
+            "50인 미만 소규모사업장의 산업재해 예방을 위해 보건관리자 선임 비용을 "
+            "지원합니다. 직업병 예방 및 건강검진 연계 포함."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("보건관리자" in b or "산업재해" in b for b in result.basis)
+
+
+def test_S32_review_required_fire_safety_no_non_safety_marker():
+    """S-32: 소방시설 지원이지만 비안전 목적 마커 없음 → REVIEW_REQUIRED 유지.
+
+    R2: adjacent 신호만으로는 OUT_OF_SCOPE 불가. 비안전 목적이 명시적으로
+    확인되지 않으면 REVIEW_REQUIRED로 유지.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[인천] 2026년 소규모 제조업체 소방시설 개선 지원사업",
+        summary=(
+            "소규모 제조업체의 화재 예방을 위한 소방시설 개선 비용을 지원합니다. "
+            "50인 미만 제조업 사업장 대상."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("소방" in b for b in result.basis)
+
+
+# ---------------------------------------------------------------------------
+# DISCOVERY-001 — 기술형 안전 및 디지털전환 탐색 테스트
+# ---------------------------------------------------------------------------
+
+
+def test_S34_in_scope_smart_safety_solution_title_and_summary():
+    """S-34: 스마트 안전솔루션 구축·도입 지원 — 제목+요약 모두 기술형 안전 직접 신호
+    → IN_SCOPE.
+
+    DISCOVERY-001: _DIRECT_SAFETY_COMPACT (B) 안전기술 확장.
+    구미 국가산업단지 스마트 안전솔루션 지원사업 유형 (PBLN_000000000127340 실증).
+    [REAL 유형: PBLN_000000000127340]
+    """
+    rec = _record(
+        title="[경북] 2026년 구미 국가산업단지 스마트 안전솔루션 서비스 수혜기업 모집",
+        summary=(
+            "산업단지 안전관리 고도화를 위한 스마트 안전솔루션 구축 지원. "
+            "안전 모니터링 시스템 설치 및 운영 지원금 포함."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("스마트안전" in b or "안전솔루션" in b or "안전모니터링" in b
+               for b in result.basis)
+
+
+def test_S35_review_required_smart_factory_tech_adoption():
+    """S-35: 스마트공장 구축 지원 — 직접 안전 신호 없음, TECH_ADOPTION 신호 존재
+    → REVIEW_REQUIRED (basis: tech_adoption:스마트공장).
+
+    DISCOVERY-001: _TECH_ADOPTION 경로. 안전관리 활용 가능성은 있으나
+    실제 지원 범위 미확인 단계. 일반 no_confirming_evidence와 구별.
+    [SYNTHETIC — 스마트 제조혁신 지원사업 유형]
+    """
+    rec = _record(
+        title="[전국] 2027년 스마트공장 구축 및 고도화 지원사업 통합 공고",
+        summary=(
+            "제조업 중소기업의 스마트공장 구축·고도화를 지원합니다. "
+            "MES·ERP·로봇자동화·AI 품질검사 시스템 도입 비용 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("tech_adoption" in b for b in result.basis)
+    assert any("스마트공장" in b for b in result.basis)
+
+
+def test_S36_review_required_smart_factory_startup_eligibility():
+    """S-36: 창업기업 스마트공장 지원 — 창업기업 여부는 신청 자격 조건,
+    비안전 목적의 근거가 아님 → REVIEW_REQUIRED (TECH_ADOPTION 경로).
+
+    DISCOVERY-001-R1: "창업기업"은 _NON_SAFETY_PURPOSE에서 제외.
+    스마트공장 도입 지원은 안전관리 소프트웨어 도입 가능성이 있으므로
+    OUT_OF_SCOPE 자동 판정 금지.
+    [SYNTHETIC — DISCOVERY-001-R1 창업기업 자격조건 수정]
+    """
+    rec = _record(
+        title="[전국] 2026년 창업기업 스마트공장 도입 지원사업",
+        summary=(
+            "창업 3년 이내 초기 기업의 스마트공장 도입을 위한 바우처를 지원합니다. "
+            "창업기업 전용 사업으로 기존 제조업 사업장은 대상 아님."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("tech_adoption" in b for b in result.basis)
+    assert any("스마트공장" in b for b in result.basis)
+
+
+def test_S37_in_scope_smart_factory_with_direct_safety_signal():
+    """S-37: 스마트공장 + 직접 안전 신호(안전관리자) 공존 → IN_SCOPE.
+    직접 안전 경로가 TECH_ADOPTION보다 우선하여 판정.
+
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[경기] 2026년 중소 제조업 스마트공장 및 안전관리자 선임 통합 지원",
+        summary=(
+            "스마트공장 구축과 함께 안전관리자 선임 지원금을 함께 신청 가능합니다. "
+            "50인 미만 제조업 사업장 대상."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("안전관리자" in b for b in result.basis)
+
+
+def test_S38_review_required_jejo_ax_saas_tech_adoption():
+    """S-38: 제조AX + SaaS 솔루션 매칭 사업 — 직접 안전 신호 없음,
+    TECH_ADOPTION 신호(제조ax, saas) 존재 → REVIEW_REQUIRED.
+
+    DISCOVERY-001-R1: _TECH_ADOPTION에 제조AX 추가 검증.
+    성남시 제조AX 솔루션 매칭 지원사업 유형 (PBLN_000000000127610 실증).
+    [REAL 유형: PBLN_000000000127610]
+    """
+    rec = _record(
+        title="[경기] 2026년 성남시 제조AX 솔루션 매칭 지원사업",
+        summary=(
+            "제조업 중소기업의 AI 전환(AX)을 위해 SaaS 형태의 솔루션 도입을 지원합니다. "
+            "AI 기반 품질검사, 공정최적화, 에너지 모니터링 솔루션 매칭."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("tech_adoption" in b for b in result.basis)
+    assert any("제조ax" in b or "saas" in b for b in result.basis)
+
+
+def test_S39_review_required_ai_platform_no_direct_safety():
+    """S-39: 인공지능 플랫폼 도입 지원 — 직접 안전 신호 없음,
+    TECH_ADOPTION 신호(인공지능) 존재 → REVIEW_REQUIRED.
+
+    DISCOVERY-001-R1: _TECH_ADOPTION에 인공지능 추가 검증.
+    AI 플랫폼 구축 지원이 안전관리 소프트웨어 도입으로 연결될 수 있는지
+    인간 검토 필요.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[전국] 2026년 중소기업 인공지능 플랫폼 도입 지원사업",
+        summary=(
+            "제조·물류·서비스 중소기업의 인공지능 솔루션 도입을 지원합니다. "
+            "AI 기반 수요예측, 공정최적화, IoT 센서 연동 플랫폼 구축 비용 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("tech_adoption" in b for b in result.basis)
+    assert any("인공지능" in b or "iot" in b or "센서" in b for b in result.basis)
+
+
+def test_S42_in_scope_fire_prevention_direct():
+    """S-42: 화재예방 + 안전점검 — 소방·점검 직접 안전 목적 확인 → IN_SCOPE.
+
+    SCOPE_REALIGN-001: 화재예방·안전점검을 _DIRECT_SAFETY에 추가.
+    소방안전은 산업안전과 다르다는 이유만으로 OUT_OF_SCOPE 금지.
+    [SYNTHETIC — Domain 4: 소방·화재안전]
+    """
+    rec = _record(
+        title="[인천] 2026년 사업장 화재예방 안전점검 지원사업 모집",
+        summary=(
+            "제조업 사업장의 화재예방 체계 구축과 안전점검을 지원합니다. "
+            "소방시설 점검 및 화재예방 계획 수립 비용 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("화재예방" in b or "안전점검" in b for b in result.basis)
+
+
+def test_S43_review_required_disaster_safety_adjacent():
+    """S-43: 재난안전 사업 — 공공·산업 양방향 가능 → REVIEW_REQUIRED (adjacent 신호).
+
+    SCOPE_REALIGN-001: 재난안전을 _ADJACENT_SIGNAL에 추가.
+    목적이 확인되지 않은 재난안전 사업은 REVIEW_REQUIRED로 분류 대기.
+    [SYNTHETIC — Domain 4: 재난안전]
+    """
+    rec = _record(
+        title="[전국] 2026년 중소기업 재난안전 대응 역량 강화 지원",
+        summary=(
+            "재난안전 대응 계획 수립 및 대응 훈련을 지원합니다. "
+            "중소기업 사업장 대상."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("재난안전" in b for b in result.basis)
+
+
+def test_S44_in_scope_occupational_health_hazardous_factors():
+    """S-44: 유해인자 관리 + 직업병 예방 — 산업보건 직접 목적 확인 → IN_SCOPE.
+
+    SCOPE_REALIGN-001: 유해인자·직업병을 _DIRECT_SAFETY에 추가.
+    산업안전보건법 의무관리 대상으로 TAI Safe 핵심 범위.
+    [SYNTHETIC — Domain 5: 산업보건·유해인자]
+    """
+    rec = _record(
+        title="[경기] 2026년 소규모 사업장 유해인자 관리 지원사업",
+        summary=(
+            "직업병 예방을 위해 소규모 사업장의 유해인자 측정·관리를 지원합니다. "
+            "산업안전보건법 의무관리 항목 개선 비용 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("유해인자" in b or "직업병" in b for b in result.basis)
+
+
+def test_S40_review_required_startup_eligibility_only():
+    """S-40: 창업기업 대상 사업, 기술 도입 신호 없음 → REVIEW_REQUIRED (eligibility:창업기업).
+
+    DISCOVERY-002: _STARTUP_ELIGIBILITY_MARKERS — 창업기업 자격조건만 존재하는 레코드는
+    tech_adoption 후보와 basis로 명확히 구별된다.
+    - basis "eligibility:창업기업" → 창업기업 전용 사업으로 분류 대기
+    - basis "tech_adoption:xxx"  → 기술 도입 잠재 후보 (별도 처리)
+    [REAL 유형: PBLN_000000000125634 — 여성 창업기업 초기물품 지원사업]
+    """
+    rec = _record(
+        title="[강원] 2026년 지역 여성 창업기업 초기물품 지원사업 참여기업 모집 정정 공고",
+        summary=(
+            "창업 3년 이내 여성 창업기업에 초기 사무용품·집기 구매비용을 지원합니다. "
+            "창업기업 전용 사업으로 기존 제조업 사업장은 대상이 아닙니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("eligibility:창업기업" in b for b in result.basis)
+    # tech_adoption 후보와 혼동되지 않음
+    assert not any("tech_adoption" in b for b in result.basis)
+
+
+def test_S41_review_required_startup_tech_adoption_takes_precedence():
+    """S-41: 창업기업 + 스마트공장 공존 시 tech_adoption 경로 우선, eligibility 미발동.
+
+    DISCOVERY-002: TECH_ADOPTION 경로가 ELIGIBILITY 경로보다 먼저 평가된다.
+    두 집단의 처리 우선순위 확인.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[전국] 2026년 창업기업 스마트공장 도입 지원사업",
+        summary=(
+            "창업 3년 이내 초기 기업의 스마트공장 도입을 위한 바우처를 지원합니다. "
+            "창업기업 전용 사업으로 기존 제조업 사업장은 대상 아님."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("tech_adoption" in b for b in result.basis)
+    assert any("스마트공장" in b for b in result.basis)
+    # eligibility 단독 basis로 처리되지 않음
+    assert not all("eligibility" in b for b in result.basis)
+
+
+def test_S33_in_scope_safety_primary_privacy_boilerplate_incidental():
+    """S-33: 산업안전 주 목적 사업에서 '개인정보 처리방침' 문구가 본문 하단에
+    부수적으로 등장 → IN_SCOPE 유지. 개인정보가 제목에 없으면 충돌 마커로
+    작동하지 않는다.
+
+    R1-03: _INCIDENTAL_SAFE_MARKERS 경계 조건.
+    - 개인정보가 제목에 있으면 → 충돌 마커 (purpose_conflict 발생 가능)
+    - 개인정보가 요약에만 있으면 → 보조 문구로 간주, IN_SCOPE 유지
+    [S-30(개인정보 주목적 → OUT_OF_SCOPE)과 구별]
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[전국] 2026년 소규모사업장 산업안전 환경개선 지원사업",
+        summary=(
+            "50인 미만 소규모 사업장의 산업재해 예방을 위한 안전보건 환경개선을 "
+            "지원합니다. 신청서 작성 시 수집되는 사업장 정보는 개인정보 처리방침에 "
+            "따라 처리됩니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    # 개인정보는 제목에 없으므로 purpose_conflict로 보고되지 않아야 함
+    assert not any("purpose_conflict:개인정보" in b for b in result.basis)
+
+
+# ---------------------------------------------------------------------------
+# SCOPE_REALIGN-001-R1 — 제품안전 제외·업종 기준 보정 (TC-01~06)
+# ---------------------------------------------------------------------------
+
+
+def test_S45_out_of_scope_product_safety_inspection():
+    """S-45 (TC-01): 소상공인 생활용품·어린이제품 안전검사 지원 → OUT_OF_SCOPE.
+
+    SCOPE_REALIGN-001-R1: 판매 제품의 안전검사 지원은 사업장 안전관리와 무관.
+    `안전검사`를 _DIRECT_SAFETY에서 제거 + `생활용품`·`어린이제품`을 _NON_SAFETY_PURPOSE에 추가.
+    [REAL 유형: PBLN_000000000124676 — 소상공인 안전검사 지원사업(생활용품·어린이제품)]
+    """
+    rec = _record(
+        title="[서울] 2026년 하반기 소상공인 안전검사 지원사업 공고(생활용품 및 어린이제품)",
+        summary=(
+            "소상공인이 제조·판매하는 생활용품 및 어린이제품의 안전검사 비용을 지원합니다. "
+            "KC 인증·안전성 시험 비용 지원. 소비자 제품 안전성 확보를 목적으로 합니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "OUT_OF_SCOPE"
+    assert any("생활용품" in b or "어린이제품" in b or "kc인증" in b for b in result.basis)
+
+
+def test_S46_in_scope_safety_industry_exhibition():
+    """S-46 (TC-03): 재난안전산업 육성지원 — 안전산업 직접 지원 → IN_SCOPE.
+
+    SCOPE_REALIGN-001-R1: `안전산업`을 _DIRECT_SAFETY에 추가.
+    안전산업 분야 기업 사업화·박람회 참가 지원은 일반 마케팅 지원과 구별.
+    [REAL 유형: PBLN_000000000125095 — 울산 재난안전산업 육성지원사업 박람회 참가지원]
+    """
+    rec = _record(
+        title="[울산] 2026년 재난안전산업 육성지원사업 대한민국 안전산업 박람회 참가지원",
+        summary=(
+            "재난안전산업 분야 기업의 대한민국 안전산업 박람회 참가 비용을 지원합니다. "
+            "안전산업 제품·서비스 사업화 역량 강화를 목적으로 합니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("안전산업" in b for b in result.basis)
+
+
+def test_S47_in_scope_dangerous_machinery_safety_inspection():
+    """S-47 (TC-06): 위험기계 안전검사 비용 지원 → IN_SCOPE.
+
+    SCOPE_REALIGN-001-R1: `안전검사`가 _DIRECT_SAFETY에서 제거되었으나
+    `위험기계`가 _DIRECT_SAFETY에 있어 위험기계 안전검사 사업은 정상 포착.
+    제품안전 제외 로직이 현장 설비 안전검사를 차단하지 않음을 보장.
+    [SYNTHETIC — TC-06 현장 설비 안전검사 경계 사례]
+    """
+    rec = _record(
+        title="[전국] 2026년 위험기계 안전검사 비용 지원사업 공고",
+        summary=(
+            "프레스·크레인·리프트 등 위험기계 사용 사업장의 법정 안전검사 비용을 지원합니다. "
+            "산업안전보건법 의무 안전검사 대상 위험기계 사업장 신청 가능."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("위험기계" in b for b in result.basis)
+
+
+def test_S48_out_of_scope_product_kc_certification():
+    """S-48 (TC-06): 판매용 안전장비 KC 인증 지원 → OUT_OF_SCOPE.
+
+    SCOPE_REALIGN-001-R1: `kc인증`을 _NON_SAFETY_PURPOSE에 추가.
+    제품 출시를 위한 KC 인증 비용 지원은 현장 안전 목적이 아님.
+    [SYNTHETIC — TC-06 제품 인증과 현장 설치의 경계 사례]
+    """
+    rec = _record(
+        title="[전국] 2026년 중소기업 안전장비 KC 인증 비용 지원사업",
+        summary=(
+            "안전 관련 제품을 제조·판매하는 중소기업의 KC 인증 취득 비용을 지원합니다. "
+            "소비자 제품 안전성 인증 취득 절차 간소화 및 비용 절감을 목적으로 합니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "OUT_OF_SCOPE"
+    assert any("kc인증" in b for b in result.basis)
+
+
+# ---------------------------------------------------------------------------
+# SCOPE_REALIGN-001-R2 — 안전관리 교육 누락 보정 및 제품안전 오탐 최소 수정
+# ---------------------------------------------------------------------------
+
+
+def test_S49_in_scope_chemical_safety_management_professional():
+    """S-49 (R2-TC-01): 화학물질 안전관리 전문인력 양성 — 요약에 화학제품안전법 인용 →
+    IN_SCOPE. `안전관리전문` 직접 안전 신호(Group D) + `제품안전` 요약 전용 무시.
+
+    GPT Final IV 오분류 지적 사례 (EVEN_000000000068790 유형).
+    기존 R1 로직: `제품안전` → non_safety_hits → adjacent(화학물질) + non_safety → OUT_OF_SCOPE.
+    R2 보정: `제품안전` _INCIDENTAL_SAFE_MARKERS 이동 → 요약만 등장 시 충돌 없음.
+             `안전관리전문` → title_direct 히트 → IN_SCOPE (직접 안전 목적 확인).
+    [REAL 유형: EVEN_000000000068790 — 화학물질 안전관리 전문인력 양성사업]
+    """
+    rec = _record(
+        title="[전국] 2026년 화학물질 안전관리 전문인력 양성사업",
+        summary=(
+            "화학물질을 취급하는 사업장의 안전관리 전문인력 역량 강화를 위한 교육을 "
+            "지원합니다. 화학제품안전법 및 화학물질관리법에 따른 의무 교육 이수 비용 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("안전관리전문" in b for b in result.basis)
+
+
+def test_S50_in_scope_traditional_market_safety_management_training():
+    """S-50 (R2-TC-02): 전통시장 안전관리 전문교육 → IN_SCOPE.
+    `안전관리전문` compact 히트 — 직접 안전 교육 목적 확인.
+
+    GPT Final IV 지적 사례 (EVEN_000000000069262 유형).
+    [REAL 유형: EVEN_000000000069262 — 전통시장 안전관리 전문교육]
+    """
+    rec = _record(
+        title="[전국] 2026년 전통시장 안전관리 전문교육 운영",
+        summary=(
+            "전통시장 상인 및 관리자를 대상으로 화재·전기 안전관리 전문 교육을 "
+            "실시합니다. 소방법·전기안전관리법에 따른 의무 안전교육 이수 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("안전관리전문" in b for b in result.basis)
+
+
+def test_S51_out_of_scope_product_safety_title_still_excluded():
+    """S-51 (R2-보호): `제품안전`이 제목에 있으면 여전히 purpose_conflict → OUT_OF_SCOPE.
+
+    SCOPE_REALIGN-001-R2 보호 사례:
+    `제품안전`을 _INCIDENTAL_SAFE_MARKERS로 이동하더라도, 제목에 등장하면
+    non_safety_conflict_hits에 포함 → purpose_conflict → IN_SCOPE 차단.
+    요약에 직접 안전 신호가 있어도 제목 기반 충돌이 우선.
+    [SYNTHETIC — R2 _INCIDENTAL_SAFE_MARKERS 경계 조건]
+    """
+    rec = _record(
+        title="[전국] 2026년 섬유·의류 제품안전 인증 비용 지원사업",
+        summary=(
+            "섬유 및 의류 제조 중소기업의 제품안전 인증(KC·안전기준) 취득 비용을 "
+            "지원합니다. 소비자 보호를 위한 제품 안전성 인증 취득 절차 비용 보전."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "OUT_OF_SCOPE"
+    assert any("제품안전" in b for b in result.basis)

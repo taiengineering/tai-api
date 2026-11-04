@@ -49,6 +49,8 @@ class _Q:
     def __init__(self, rows: list[dict] | None = None):
         self._rows: list[dict] = rows or []
         self.last_upsert: Optional[dict] = None
+        self.last_update: Optional[dict] = None
+        self.update_calls: int = 0
 
     def select(self, *a, **k):   return self
     def eq(self, *a, **k):       return self
@@ -60,6 +62,11 @@ class _Q:
 
     def upsert(self, row, **k):
         self.last_upsert = row
+        return self
+
+    def update(self, data, **k):
+        self.last_update = data
+        self.update_calls += 1
         return self
 
     def execute(self):

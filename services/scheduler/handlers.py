@@ -276,6 +276,62 @@ def _run_public_data_sync_tick(p):
     return {"executed": len(results), "results": results}
 
 
+def _run_bizinfo_daily_sync(p):
+    import asyncio
+    from services.bizinfo.daily_sync import run_bizinfo_daily_sync
+    from services.bizinfo.supabase_repository import SupabaseBizinfoRepository
+    from services.slack_relay_svc import accept_relay_event, process_relay_event
+
+    repo = SupabaseBizinfoRepository(_sb())
+    max_pages = int(p.get("max_pages", 5))
+
+    # 일별 요약 Slack은 비활성화 — 개별 공고 알림만 per-item atomic path로 전송한다.
+    # (daily summary를 _slack_fn으로 처리하면 per-item 알림과 내용이 중복된다.)
+    def _slack_fn(**kwargs):
+        return False
+
+    result = run_bizinfo_daily_sync(repo, _slack_fn, max_pages=max_pages)
+
+    # 개별 공고 알림: SQL fn이 PENDING 등록한 event_id를 순서대로 전송
+    per_item_sent = 0
+    for notif_id in result.all_per_item_notif_ids:
+        asyncio.run(process_relay_event(notif_id))
+        per_item_sent += 1
+
+    # API 오류 발생 시 FAILED 처리 — 이미 저장된 데이터는 보존되지만 스케줄 로그에 실패 기록
+    all_api_errors = result.program.api_errors + result.event.api_errors
+    if all_api_errors:
+        raise RuntimeError(
+            f"bizinfo_daily_sync API 오류 {len(all_api_errors)}건 — "
+            + "; ".join(all_api_errors[:3])
+        )
+
+    return {
+        "run_at":               result.run_at.isoformat(),
+        "program_fetched":      result.program.fetched,
+        "program_new_saved":    result.program.new_records_saved,
+        "program_new_in_scope": len(result.program.new_in_scope),
+        "program_status_changes": len(result.program.status_changes),
+        "program_in_scope_total": result.program.in_scope_total,
+        "program_in_scope_confirmed": result.program.in_scope_confirmed,
+        "event_fetched":        result.event.fetched,
+        "event_new_saved":      result.event.new_records_saved,
+        "event_new_in_scope":   len(result.event.new_in_scope),
+        "event_status_changes": len(result.event.status_changes),
+        "event_in_scope_total": result.event.in_scope_total,
+        "event_in_scope_confirmed": result.event.in_scope_confirmed,
+        # process_relay_event() 호출 건수 — Slack 전송 성공 보장 아님
+        # (전송 실패 시 RETRY/UNKNOWN으로 남고 run_relay_recovery_once가 재시도)
+        "per_item_relay_dispatched": per_item_sent,
+        # 일별 요약은 의도적으로 비활성화됨 (per-item 알림과 중복 방지)
+        # result.slack_skipped_reason 에는 "duplicate_event_id"가 기록되지만
+        # 실제 이유는 운영 정책상 비활성화이므로 여기서 교정한다.
+        "slack_event_accepted": False,
+        "slack_event_id":       result.slack_event_id,
+        "slack_skipped_reason": "daily_summary_disabled",
+    }
+
+
 def _run_mkt_ga4_collect(p):
     result = _mkt_http("/api/mkt/ga4/collect", timeout=p.get("timeout_seconds", 120))
     if result["http_status"] >= 400:
@@ -420,8 +476,9 @@ def register_direct_handlers() -> dict[str, Handler]:
         "direct://qa_cron_trigger":                 _run_qa_cron_trigger,
         "direct://qa_product_change_detection":     _run_qa_product_change_detection,
         "direct://public_data_sync_tick":           _run_public_data_sync_tick,
-        "direct://leg_law_refresh":           _run_leg_law_refresh,
-        "direct://mkt_ga4_collect":           _run_mkt_ga4_collect,
+        "direct://leg_law_refresh":                 _run_leg_law_refresh,
+        "direct://mkt_ga4_collect":                 _run_mkt_ga4_collect,
+        "direct://bizinfo_daily_safety_sync":       _run_bizinfo_daily_sync,
     })
     return DIRECT_HANDLERS
 
