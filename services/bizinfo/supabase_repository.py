@@ -170,6 +170,58 @@ class SupabaseBizinfoRepository:
             .execute()
         )
 
+    def save_record_with_notification(
+        self,
+        record: NormalizedSourceRecord,
+        change: ChangeRecord,
+        *,
+        relevance_verdict: Optional[str] = None,
+        notif_event_id: Optional[str] = None,
+        relay_channel: Optional[str] = None,
+        target_channel: Optional[str] = None,
+        message_text: Optional[str] = None,
+        sender_id: Optional[str] = None,
+    ) -> bool:
+        """Single RPC call to fn_save_bizinfo_with_notification.
+
+        Atomically writes to bizinfo_source_records and optionally registers
+        a PENDING notification in slack_relay_event_log within one PG transaction.
+        Returns True if a new notification was registered.
+        """
+        row = _record_to_row(record, change)
+        params: dict = {
+            "p_source_kind":        row["source_kind"],
+            "p_source_key":         row["source_key"],
+            "p_title":              row["title"],
+            "p_source_org":         row["source_org"],
+            "p_origin_url":         row["origin_url"],
+            "p_bizinfo_url":        row["bizinfo_url"],
+            "p_retrieved_at":       row["retrieved_at"],
+            "p_source_updated_at":  row["source_updated_at"],
+            "p_summary":            row["summary"],
+            "p_support_target":     row["support_target"],
+            "p_hashtags":           row["hashtags"],
+            "p_parse_errors":       row["parse_errors"],
+            "p_evidence_pending":   row["evidence_pending"],
+            "p_application_start":  row["application_start"],
+            "p_application_end":    row["application_end"],
+            "p_event_start":        row["event_start"],
+            "p_event_end":          row["event_end"],
+            "p_reception_start":    row["reception_start"],
+            "p_reception_end":      row["reception_end"],
+            "p_change_verdict":     row["change_verdict"],
+            "p_changed_fields":     row["changed_fields"],
+            "p_relevance_verdict":  relevance_verdict,
+            "p_notif_event_id":     notif_event_id,
+            "p_relay_channel":      relay_channel,
+            "p_target_channel":     target_channel,
+            "p_message_text":       message_text,
+            "p_sender_id":          sender_id,
+        }
+        resp = self._sb.rpc("fn_save_bizinfo_with_notification", params).execute()
+        result = resp.data or {}
+        return bool(result.get("notif_registered"))
+
     def get_editorial(
         self,
         source_kind: str,

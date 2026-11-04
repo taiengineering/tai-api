@@ -119,6 +119,29 @@ class BizinfoRepository(Protocol):
         """Return source_keys whose relevance_verdict is IN_SCOPE."""
         ...
 
+    def save_record_with_notification(
+        self,
+        record: NormalizedSourceRecord,
+        change: ChangeRecord,
+        *,
+        relevance_verdict: Optional[str] = None,
+        notif_event_id: Optional[str] = None,
+        relay_channel: Optional[str] = None,
+        target_channel: Optional[str] = None,
+        message_text: Optional[str] = None,
+        sender_id: Optional[str] = None,
+    ) -> bool:
+        """Atomically save a record and optionally register a PENDING notification.
+
+        Single DB transaction (via fn_save_bizinfo_with_notification RPC in production).
+        Returns True if a new notification was registered, False otherwise.
+        When notif_event_id is None, always returns False.
+
+        relevance_verdict preservation: IN_SCOPE / OUT_OF_SCOPE are never
+        overwritten by a subsequent call.
+        """
+        ...
+
 
 # ---------------------------------------------------------------------------
 # In-memory stub — integration tests and dev only
@@ -152,6 +175,10 @@ class InMemoryBizinfoRepository:
     # Relevance verdicts from selector/analyzer (IN_SCOPE/INCLUDE/EXCLUDE/HOLD/etc.)
     _relevance:  dict[tuple[str, str], str] = field(
         default_factory=dict
+    )
+    # Registered notification event_ids (simulates ON CONFLICT DO NOTHING)
+    _pending_notifications: set[str] = field(
+        default_factory=set
     )
 
     def _key(self, source_kind: str, source_key: str) -> tuple[str, str]:
@@ -211,6 +238,31 @@ class InMemoryBizinfoRepository:
             key for (kind, key), verdict in self._relevance.items()
             if kind == source_kind and verdict == "IN_SCOPE"
         ][offset : offset + limit]
+
+    def save_record_with_notification(
+        self,
+        record: NormalizedSourceRecord,
+        change: ChangeRecord,
+        *,
+        relevance_verdict: Optional[str] = None,
+        notif_event_id: Optional[str] = None,
+        relay_channel: Optional[str] = None,
+        target_channel: Optional[str] = None,
+        message_text: Optional[str] = None,
+        sender_id: Optional[str] = None,
+    ) -> bool:
+        self.save_record(record, change)
+        if relevance_verdict is not None:
+            k = self._key(record.source_kind, record.source_key)
+            existing = self._relevance.get(k)
+            if existing not in ("IN_SCOPE", "OUT_OF_SCOPE"):
+                self._relevance[k] = relevance_verdict
+        if notif_event_id is not None:
+            if notif_event_id not in self._pending_notifications:
+                self._pending_notifications.add(notif_event_id)
+                return True
+            return False
+        return False
 
     # -- Seed helpers (test/dev only) --------------------------------------
 
