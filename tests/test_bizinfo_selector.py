@@ -116,9 +116,11 @@ def test_S05_review_title_keyword_no_summary():
 
 
 def test_S06_review_single_keyword_summary_only():
-    """S-06: 요약에 직접 키워드 1개만 → REVIEW_REQUIRED (확인 불충분). [SYNTHETIC]"""
+    """S-06: 요약에 직접 키워드 1개만 → REVIEW_REQUIRED (확인 불충분). [SYNTHETIC]
+    SCOPE_REALIGN-001: 제목에 직접 안전 키워드 없음, 요약에만 안전보건 1개 → REVIEW_REQUIRED.
+    """
     rec = _record(
-        title="소규모 사업장 작업환경 개선 사업",
+        title="소규모 사업장 근무 환경 개선 지원 사업",
         summary="작업현장 개선을 통해 안전보건 환경을 조성합니다.",
     )
     result = review_relevance(rec)
@@ -477,12 +479,14 @@ def test_S28_review_required_jungdae_simin_jaehae():
     assert result.verdict == "REVIEW_REQUIRED"
 
 
-def test_S29_out_of_scope_rural_accommodation_fire_safety():
-    """S-29: 농어촌민박 소방안전시설 지원 — 소방(adjacent) + 농어촌민박(non_safety)
-    → 인접 신호만 있고 비안전 목적 확인 → OUT_OF_SCOPE.
+def test_S29_review_required_rural_accommodation_fire_safety():
+    """S-29: 농어촌민박 소방안전시설 지원 — 소방안전시설(direct compact) + 농어촌민박(non_safety)
+    → purpose_conflict → REVIEW_REQUIRED.
 
-    R2: adjacent 신호만 있고 비안전 목적이 명확히 확인된 경우 OUT_OF_SCOPE.
-    TAI Safe 고객군(산업현장)이 아닌 농촌 숙박시설 대상.
+    SCOPE_REALIGN-001: "소방안전시설"은 직접 안전 목적 compact 용어로 확장됨.
+    "소방·시설안전은 산업안전과 다르다는 이유만으로 OUT_OF_SCOPE 금지" 적용.
+    농어촌민박은 비산업 대상 마커이므로 purpose_conflict → REVIEW_REQUIRED.
+    인간 검토에서 최종 OUT_OF_SCOPE 판단 (TAI 고객군 = 산업현장).
     [REAL 유형: PBLN_000000000127526 — 여수시 농어촌민박 소방안전시설 지원]
     """
     rec = _record(
@@ -494,9 +498,9 @@ def test_S29_out_of_scope_rural_accommodation_fire_safety():
         ),
     )
     result = review_relevance(rec)
-    assert result.verdict == "OUT_OF_SCOPE"
-    assert any("농어촌민박" in b for b in result.basis)
-    assert any("adjacent_overridden" in b or "non_safety" in b for b in result.basis)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("purpose_conflict:농어촌민박" in b for b in result.basis)
+    assert any("safety_signal:" in b for b in result.basis)
 
 
 def test_S30_out_of_scope_personal_data_safety():
@@ -683,6 +687,63 @@ def test_S39_review_required_ai_platform_no_direct_safety():
     assert result.verdict == "REVIEW_REQUIRED"
     assert any("tech_adoption" in b for b in result.basis)
     assert any("인공지능" in b or "iot" in b or "센서" in b for b in result.basis)
+
+
+def test_S42_in_scope_fire_prevention_direct():
+    """S-42: 화재예방 + 안전점검 — 소방·점검 직접 안전 목적 확인 → IN_SCOPE.
+
+    SCOPE_REALIGN-001: 화재예방·안전점검을 _DIRECT_SAFETY에 추가.
+    소방안전은 산업안전과 다르다는 이유만으로 OUT_OF_SCOPE 금지.
+    [SYNTHETIC — Domain 4: 소방·화재안전]
+    """
+    rec = _record(
+        title="[인천] 2026년 사업장 화재예방 안전점검 지원사업 모집",
+        summary=(
+            "제조업 사업장의 화재예방 체계 구축과 안전점검을 지원합니다. "
+            "소방시설 점검 및 화재예방 계획 수립 비용 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("화재예방" in b or "안전점검" in b for b in result.basis)
+
+
+def test_S43_review_required_disaster_safety_adjacent():
+    """S-43: 재난안전 사업 — 공공·산업 양방향 가능 → REVIEW_REQUIRED (adjacent 신호).
+
+    SCOPE_REALIGN-001: 재난안전을 _ADJACENT_SIGNAL에 추가.
+    목적이 확인되지 않은 재난안전 사업은 REVIEW_REQUIRED로 분류 대기.
+    [SYNTHETIC — Domain 4: 재난안전]
+    """
+    rec = _record(
+        title="[전국] 2026년 중소기업 재난안전 대응 역량 강화 지원",
+        summary=(
+            "재난안전 대응 계획 수립 및 대응 훈련을 지원합니다. "
+            "중소기업 사업장 대상."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("재난안전" in b for b in result.basis)
+
+
+def test_S44_in_scope_occupational_health_hazardous_factors():
+    """S-44: 유해인자 관리 + 직업병 예방 — 산업보건 직접 목적 확인 → IN_SCOPE.
+
+    SCOPE_REALIGN-001: 유해인자·직업병을 _DIRECT_SAFETY에 추가.
+    산업안전보건법 의무관리 대상으로 TAI Safe 핵심 범위.
+    [SYNTHETIC — Domain 5: 산업보건·유해인자]
+    """
+    rec = _record(
+        title="[경기] 2026년 소규모 사업장 유해인자 관리 지원사업",
+        summary=(
+            "직업병 예방을 위해 소규모 사업장의 유해인자 측정·관리를 지원합니다. "
+            "산업안전보건법 의무관리 항목 개선 비용 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("유해인자" in b or "직업병" in b for b in result.basis)
 
 
 def test_S40_review_required_startup_eligibility_only():

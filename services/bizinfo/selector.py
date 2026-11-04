@@ -38,7 +38,18 @@ DISCOVERY-002 additions (WO-TAI-BIZINFO-SAFETY-DISCOVERY-002):
   - _STARTUP_ELIGIBILITY_MARKERS: 창업기업·예비창업 등 신청 자격 조건 표현.
     tech_adoption 신호 없이 자격 조건만 존재하는 레코드는 REVIEW_REQUIRED에
     basis "eligibility:xxx"로 기록된다.
-    목적: TECH_ADOPTION 90건과 창업기업 자격조건 ~43건을 basis로 분리.
+    목적: TECH_ADOPTION 90건과 창업기업 자격조건 ~76건을 basis로 분리.
+
+SCOPE_REALIGN-001 (WO-TAI-BIZINFO-SAFETY-SCOPE-REALIGN-001):
+  최종 목표 재확정 — 안전·안전관리 관련 모든 분야를 선별 범위로 포함.
+  - _DIRECT_SAFETY 확장: 화재예방·유해인자·직업병·안전점검·안전검사·안전사고
+    (소방·화재, 산업보건, 시설안전, 점검·검사 의무 분야)
+  - _DIRECT_SAFETY_COMPACT Group C: 소방안전시설·작업환경개선
+    (소방법·산업안전보건법 직접 의무 지원)
+  - _ADJACENT_SIGNAL 확장: 재난안전·시설안전
+    (공공·산업 양방향 가능 → REVIEW_REQUIRED; 목적 미확인)
+  - 소방·시설안전·공공안전은 산업안전과 다르다는 이유만으로 OUT_OF_SCOPE
+    처리하지 않는다. 비안전 목적 마커와 결합 시 purpose_conflict → REVIEW.
 
 IN_SCOPE is a candidate signal, not a content-publication approval.
 OBJ-BZI-005 human editorial gate is required before public display.
@@ -54,10 +65,15 @@ from services.bizinfo.normalizer import NormalizedSourceRecord
 # Keyword sets
 # ---------------------------------------------------------------------------
 
-# Direct industrial-safety terms.  A hit in both title and summary (purpose
-# verifiable) or two or more hits inside the summary alone (strong evidence)
-# qualifies for IN_SCOPE — unless a non-safety purpose marker is also present.
+# Direct safety-related terms covering all safety domains.
+# A hit in both title and summary (purpose verifiable) or two or more hits
+# inside the summary alone (strong evidence) qualifies for IN_SCOPE —
+# unless a non-safety purpose marker is also present.
+#
+# SCOPE_REALIGN-001: 안전·안전관리 전체 분야를 포함한다.
+# 소방·재해·보건·시설안전은 산업안전과 다르다는 이유만으로 제외하지 않는다.
 _DIRECT_SAFETY: frozenset[str] = frozenset({
+    # Domain 1 — 산업안전·재해예방
     "산업안전",
     "산업재해",
     "중대재해",
@@ -82,14 +98,25 @@ _DIRECT_SAFETY: frozenset[str] = frozenset({
     "안전진단",
     "유해위험",      # 유해위험요인 개선
     "위험기계",      # 위험기계 방호
+    "안전사고",      # 안전사고 예방·대응 (SCOPE_REALIGN-001)
+    # Domain 3 — 안전시설·보호구·장비 점검·검사
+    "안전점검",      # 시설·장비 안전점검 의무 (SCOPE_REALIGN-001)
+    "안전검사",      # 위험기계 안전검사 등 법정 의무 (SCOPE_REALIGN-001)
+    # Domain 4 — 소방·화재안전
+    "화재예방",      # 화재 예방 (소방법 의무; 산업시설 직접 적용) (SCOPE_REALIGN-001)
+    # Domain 5 — 산업보건·유해인자
+    "유해인자",      # 유해인자 관리 (산업안전보건법 의무관리 대상) (SCOPE_REALIGN-001)
+    "직업병",        # 직업병 예방·관리 (산업보건 법정 의무) (SCOPE_REALIGN-001)
 })
 
 # Compact-form (whitespace-collapsed) direct safety phrases.
-# Two sub-groups:
+# Three sub-groups:
 #   (A) Safety management personnel terms — 법정 의무 인력 선임·고용 지원
 #   (B) Safety technology/system terms — 안전관리 소프트웨어·시스템 구축 지원
 #       (DISCOVERY-001: 스마트 안전솔루션 등 기술형 안전지원 포함)
-# Both sub-groups follow the same IN_SCOPE evidence paths as _DIRECT_SAFETY.
+#   (C) Fire/facility/occupational safety — 소방·시설·작업환경 직접 의무 지원
+#       (SCOPE_REALIGN-001: 소방·시설안전을 직접 안전목적으로 처리)
+# All sub-groups follow the same IN_SCOPE evidence paths as _DIRECT_SAFETY.
 _DIRECT_SAFETY_COMPACT: frozenset[str] = frozenset({
     # (A) Personnel
     "안전관리인력",       # "안전관리 인력" 고용·선임 지원
@@ -105,6 +132,9 @@ _DIRECT_SAFETY_COMPACT: frozenset[str] = frozenset({
     "재해예방시스템",    # "재해예방 시스템" 구축
     "안전관리소프트웨어", # "안전관리 소프트웨어" 도입
     "산업안전솔루션",    # "산업안전 솔루션" 구축
+    # (C) Fire / facility / occupational environment (SCOPE_REALIGN-001)
+    "소방안전시설",      # "소방안전 시설" 지원 — 직접 소방안전목적 (소방법)
+    "작업환경개선",      # "작업환경 개선" — 산업안전보건법 의무 개선 지원
 })
 
 # Smart factory / AI / digital transformation terms that MAY enable
@@ -139,7 +169,8 @@ _TECH_ADOPTION: frozenset[str] = frozenset({
 })
 
 # Adjacent / review-zone terms.  Presence raises REVIEW_REQUIRED;
-# alone they do not confirm industrial-safety purpose.
+# alone they do not confirm safety purpose — human review needed.
+# SCOPE_REALIGN-001: 재난안전·시설안전 추가 (공공·산업 양방향 가능).
 _ADJACENT_SIGNAL: frozenset[str] = frozenset({
     "소방",
     "화학물질",
@@ -150,6 +181,8 @@ _ADJACENT_SIGNAL: frozenset[str] = frozenset({
     "안전교육",
     "iso45001",
     "법정의무교육",
+    "재난안전",    # 재난안전 (공공·산업 대상 모두 가능 — 목적 확인 필요) (SCOPE_REALIGN-001)
+    "시설안전",    # 시설안전 (건물·공장·공공시설 가능 — 목적 확인 필요) (SCOPE_REALIGN-001)
 })
 
 # Compact-form markers (no spaces) indicating a NON-industrial-safety purpose.
