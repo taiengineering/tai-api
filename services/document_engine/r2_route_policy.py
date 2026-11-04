@@ -300,6 +300,38 @@ _OFFICIAL_STATUS: dict[str, str] = {
 
 _WEB_EDIT_ALLOWED_GROUP = "A_INTERNAL"
 
+# U_UNRESOLVED 제출 경로 분류 (WP-C, WP-03 조사 결과 기반 READ-ONLY 표시 주석)
+# 출처: WP-03 CLOSED_CONDITIONAL 조사 결과 — 확인된 항목만 등록
+# 나머지 U_UNRESOLVED → G6_UNRESOLVED (기본값, 추측 금지)
+#
+# G1_DUAL_PATH  : TAI 작성·저장 가능 + 외부 제출 경로 별도 (법적 제출 의무 미확정)
+# G2_PORTAL_CONFIRMED: 기관 포털 연결 확인됨 (M8 구현 완료)
+# G3_AGENCY_CHANNEL  : 전송 채널 확인됨, 실제 접수·수리 미확인 (HOLD)
+# G6_UNRESOLVED: 기본값 — 추가 근거 없음
+_SUBMISSION_CATEGORY: dict[str, str] = {
+    # G2_PORTAL_CONFIRMED: M8에서 포털 버튼 구현 완료 (WP-03 G2 확인 2종)
+    'DOC-BLD-001': 'G2_PORTAL_CONFIRMED',
+    'DOC-CON-009': 'G2_PORTAL_CONFIRMED',
+    # G3_AGENCY_CHANNEL: 팝빌 전송 채널 확인됨 (WP-03 G3 4종)
+    'DOC-BLD-004': 'G3_AGENCY_CHANNEL',
+    'DOC-CHEM-006': 'G3_AGENCY_CHANNEL',
+    'DOC-CON-LAW-010': 'G3_AGENCY_CHANNEL',
+    'DOC-OSH-018': 'G3_AGENCY_CHANNEL',
+    # G1_DUAL_PATH: 이중경로 확인됨 (WP-03 G1 12종)
+    'DOC-BLD-015': 'G1_DUAL_PATH',
+    'DOC-CON-034': 'G1_DUAL_PATH',
+    'DOC-SERA-011': 'G1_DUAL_PATH',
+    'DOC-CON-001': 'G1_DUAL_PATH',
+    'DOC-CON-LAW-008': 'G1_DUAL_PATH',
+    'DOC-CON-LAW-009': 'G1_DUAL_PATH',
+    'DOC-FAC-004': 'G1_DUAL_PATH',
+    'DOC-FAC-006': 'G1_DUAL_PATH',
+    'DOC-FAC-011': 'G1_DUAL_PATH',
+    'DOC-FAC-015': 'G1_DUAL_PATH',
+    'DOC-FAC-018': 'G1_DUAL_PATH',
+    'DOC-SERA-009': 'G1_DUAL_PATH',
+}
+
 
 def get_provision_policy(doc_id: str) -> Optional[dict]:
     """Return R2 provision policy for a doc_id, or None if not in the matrix.
@@ -311,6 +343,9 @@ def get_provision_policy(doc_id: str) -> Optional[dict]:
           "investment_decision": str, # KEEP | STOP | HOLD
           "official_status": str | None,  # CONDITIONAL_APPROVED | HOLD — B_OFFICIAL only, else None
           "web_edit_allowed": bool,  # True only for A_INTERNAL
+          "submission_category": str | None,
+              # U_UNRESOLVED only: G1_DUAL_PATH | G2_PORTAL_CONFIRMED | G3_AGENCY_CHANNEL | G6_UNRESOLVED
+              # None for all non-U_UNRESOLVED groups
         }
         None if doc_id is not registered in the R2 matrix.
     """
@@ -318,12 +353,17 @@ def get_provision_policy(doc_id: str) -> Optional[dict]:
     if entry is None:
         return None
     route_group, investment_decision = entry
+    if route_group == "U_UNRESOLVED":
+        submission_category = _SUBMISSION_CATEGORY.get(doc_id, "G6_UNRESOLVED")
+    else:
+        submission_category = None
     return {
         "doc_id": doc_id,
         "route_group": route_group,
         "investment_decision": investment_decision,
         "official_status": _OFFICIAL_STATUS.get(doc_id),
         "web_edit_allowed": route_group == _WEB_EDIT_ALLOWED_GROUP,
+        "submission_category": submission_category,
     }
 
 
