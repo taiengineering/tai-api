@@ -479,14 +479,14 @@ def test_S28_review_required_jungdae_simin_jaehae():
     assert result.verdict == "REVIEW_REQUIRED"
 
 
-def test_S29_review_required_rural_accommodation_fire_safety():
-    """S-29: 농어촌민박 소방안전시설 지원 — 소방안전시설(direct compact) + 농어촌민박(non_safety)
-    → purpose_conflict → REVIEW_REQUIRED.
+def test_S29_in_scope_rural_accommodation_fire_safety_facility():
+    """S-29: 농어촌민박 소방안전시설 지원 — 소방안전시설(direct compact) + 농어촌민박
+    → IN_SCOPE.
 
-    SCOPE_REALIGN-001: "소방안전시설"은 직접 안전 목적 compact 용어로 확장됨.
-    "소방·시설안전은 산업안전과 다르다는 이유만으로 OUT_OF_SCOPE 금지" 적용.
-    농어촌민박은 비산업 대상 마커이므로 purpose_conflict → REVIEW_REQUIRED.
-    인간 검토에서 최종 OUT_OF_SCOPE 판단 (TAI 고객군 = 산업현장).
+    SCOPE_REALIGN-001-R1: 농어촌민박은 지원 대상 업종이지 사업 목적이 아님.
+    _NON_SAFETY_PURPOSE에서 제거. 소방안전시설 지원이 농어촌민박 대상이어도
+    실제 목적이 소방안전시설 설치이면 IN_SCOPE.
+    "지원 대상 업종이 다르다는 이유만으로 안전 관련 사업을 제외하지 않는다."
     [REAL 유형: PBLN_000000000127526 — 여수시 농어촌민박 소방안전시설 지원]
     """
     rec = _record(
@@ -498,9 +498,8 @@ def test_S29_review_required_rural_accommodation_fire_safety():
         ),
     )
     result = review_relevance(rec)
-    assert result.verdict == "REVIEW_REQUIRED"
-    assert any("purpose_conflict:농어촌민박" in b for b in result.basis)
-    assert any("safety_signal:" in b for b in result.basis)
+    assert result.verdict == "IN_SCOPE"
+    assert any("소방안전시설" in b for b in result.basis)
 
 
 def test_S30_out_of_scope_personal_data_safety():
@@ -814,3 +813,85 @@ def test_S33_in_scope_safety_primary_privacy_boilerplate_incidental():
     assert result.verdict == "IN_SCOPE"
     # 개인정보는 제목에 없으므로 purpose_conflict로 보고되지 않아야 함
     assert not any("purpose_conflict:개인정보" in b for b in result.basis)
+
+
+# ---------------------------------------------------------------------------
+# SCOPE_REALIGN-001-R1 — 제품안전 제외·업종 기준 보정 (TC-01~06)
+# ---------------------------------------------------------------------------
+
+
+def test_S45_out_of_scope_product_safety_inspection():
+    """S-45 (TC-01): 소상공인 생활용품·어린이제품 안전검사 지원 → OUT_OF_SCOPE.
+
+    SCOPE_REALIGN-001-R1: 판매 제품의 안전검사 지원은 사업장 안전관리와 무관.
+    `안전검사`를 _DIRECT_SAFETY에서 제거 + `생활용품`·`어린이제품`을 _NON_SAFETY_PURPOSE에 추가.
+    [REAL 유형: PBLN_000000000124676 — 소상공인 안전검사 지원사업(생활용품·어린이제품)]
+    """
+    rec = _record(
+        title="[서울] 2026년 하반기 소상공인 안전검사 지원사업 공고(생활용품 및 어린이제품)",
+        summary=(
+            "소상공인이 제조·판매하는 생활용품 및 어린이제품의 안전검사 비용을 지원합니다. "
+            "KC 인증·안전성 시험 비용 지원. 소비자 제품 안전성 확보를 목적으로 합니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "OUT_OF_SCOPE"
+    assert any("생활용품" in b or "어린이제품" in b or "kc인증" in b for b in result.basis)
+
+
+def test_S46_in_scope_safety_industry_exhibition():
+    """S-46 (TC-03): 재난안전산업 육성지원 — 안전산업 직접 지원 → IN_SCOPE.
+
+    SCOPE_REALIGN-001-R1: `안전산업`을 _DIRECT_SAFETY에 추가.
+    안전산업 분야 기업 사업화·박람회 참가 지원은 일반 마케팅 지원과 구별.
+    [REAL 유형: PBLN_000000000125095 — 울산 재난안전산업 육성지원사업 박람회 참가지원]
+    """
+    rec = _record(
+        title="[울산] 2026년 재난안전산업 육성지원사업 대한민국 안전산업 박람회 참가지원",
+        summary=(
+            "재난안전산업 분야 기업의 대한민국 안전산업 박람회 참가 비용을 지원합니다. "
+            "안전산업 제품·서비스 사업화 역량 강화를 목적으로 합니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("안전산업" in b for b in result.basis)
+
+
+def test_S47_in_scope_dangerous_machinery_safety_inspection():
+    """S-47 (TC-06): 위험기계 안전검사 비용 지원 → IN_SCOPE.
+
+    SCOPE_REALIGN-001-R1: `안전검사`가 _DIRECT_SAFETY에서 제거되었으나
+    `위험기계`가 _DIRECT_SAFETY에 있어 위험기계 안전검사 사업은 정상 포착.
+    제품안전 제외 로직이 현장 설비 안전검사를 차단하지 않음을 보장.
+    [SYNTHETIC — TC-06 현장 설비 안전검사 경계 사례]
+    """
+    rec = _record(
+        title="[전국] 2026년 위험기계 안전검사 비용 지원사업 공고",
+        summary=(
+            "프레스·크레인·리프트 등 위험기계 사용 사업장의 법정 안전검사 비용을 지원합니다. "
+            "산업안전보건법 의무 안전검사 대상 위험기계 사업장 신청 가능."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("위험기계" in b for b in result.basis)
+
+
+def test_S48_out_of_scope_product_kc_certification():
+    """S-48 (TC-06): 판매용 안전장비 KC 인증 지원 → OUT_OF_SCOPE.
+
+    SCOPE_REALIGN-001-R1: `kc인증`을 _NON_SAFETY_PURPOSE에 추가.
+    제품 출시를 위한 KC 인증 비용 지원은 현장 안전 목적이 아님.
+    [SYNTHETIC — TC-06 제품 인증과 현장 설치의 경계 사례]
+    """
+    rec = _record(
+        title="[전국] 2026년 중소기업 안전장비 KC 인증 비용 지원사업",
+        summary=(
+            "안전 관련 제품을 제조·판매하는 중소기업의 KC 인증 취득 비용을 지원합니다. "
+            "소비자 제품 안전성 인증 취득 절차 간소화 및 비용 절감을 목적으로 합니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "OUT_OF_SCOPE"
+    assert any("kc인증" in b for b in result.basis)

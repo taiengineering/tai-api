@@ -51,6 +51,16 @@ SCOPE_REALIGN-001 (WO-TAI-BIZINFO-SAFETY-SCOPE-REALIGN-001):
   - 소방·시설안전·공공안전은 산업안전과 다르다는 이유만으로 OUT_OF_SCOPE
     처리하지 않는다. 비안전 목적 마커와 결합 시 purpose_conflict → REVIEW.
 
+SCOPE_REALIGN-001-R1 (WO-TAI-BIZINFO-SAFETY-SCOPE-REALIGN-001-R1):
+  제품안전 제외 기준 반영 및 판정 오류 보정.
+  - `안전검사`를 _DIRECT_SAFETY에서 제거: 단독으로는 제품안전(생활용품·어린이제품)과
+    현장안전(위험기계)을 구별할 수 없음. 위험기계 안전검사는 `위험기계` 키워드로 처리.
+  - `안전산업` 추가: 재난안전산업·안전산업 박람회 등 안전산업 직접 지원을 포함.
+  - `농어촌민박` _NON_SAFETY_PURPOSE에서 제거: 지원 대상 업종이지 사업 목적이 아님.
+    소방안전시설 지원 대상이 농어촌민박이어도 소방안전이 목적이면 IN_SCOPE.
+  - 제품안전 마커 추가: 생활용품·어린이제품·kc인증·제품안전은 판매 제품 안전성 검사
+    목적임 → _NON_SAFETY_PURPOSE 등재, 직접 안전 신호 없을 때 OUT_OF_SCOPE.
+
 IN_SCOPE is a candidate signal, not a content-publication approval.
 OBJ-BZI-005 human editorial gate is required before public display.
 """
@@ -99,14 +109,17 @@ _DIRECT_SAFETY: frozenset[str] = frozenset({
     "유해위험",      # 유해위험요인 개선
     "위험기계",      # 위험기계 방호
     "안전사고",      # 안전사고 예방·대응 (SCOPE_REALIGN-001)
-    # Domain 3 — 안전시설·보호구·장비 점검·검사
+    # Domain 3 — 안전시설·보호구·장비 점검
     "안전점검",      # 시설·장비 안전점검 의무 (SCOPE_REALIGN-001)
-    "안전검사",      # 위험기계 안전검사 등 법정 의무 (SCOPE_REALIGN-001)
+    # 주의: "안전검사" 단독은 제품안전(KC인증)과 현장안전(위험기계)을 구별할 수 없어
+    # _DIRECT_SAFETY에서 제외. 위험기계 안전검사는 "위험기계" 키워드로 포착.
     # Domain 4 — 소방·화재안전
     "화재예방",      # 화재 예방 (소방법 의무; 산업시설 직접 적용) (SCOPE_REALIGN-001)
     # Domain 5 — 산업보건·유해인자
     "유해인자",      # 유해인자 관리 (산업안전보건법 의무관리 대상) (SCOPE_REALIGN-001)
     "직업병",        # 직업병 예방·관리 (산업보건 법정 의무) (SCOPE_REALIGN-001)
+    # Domain 6 — 안전산업 직접 지원 (SCOPE_REALIGN-001-R1)
+    "안전산업",      # 안전산업 분야 기업 사업화·박람회 등 직접 지원 (재난안전산업 포함)
 })
 
 # Compact-form (whitespace-collapsed) direct safety phrases.
@@ -202,14 +215,22 @@ _NON_SAFETY_PURPOSE: frozenset[str] = frozenset({
     "운전자금",
     "이차보전",
     "어업인",
-    "어촌",
+    # "어촌"은 "농어촌" 내 부분 문자열 충돌(소방안전시설+농어촌민박 사례)로 제외.
+    # 어촌 단독 사업은 어업인·어업경영체 등 다른 마커로 포착.
     "농업인",
     "농촌",
     "투자유치",
     "특례보증",
     "어업경영체",
-    "농어촌민박",   # 농촌 숙박시설 — 산업현장 아님 (R2: adjacent+non_safety → OUT)
     "개인정보",     # 개인정보보호·안전조치 — 데이터 보안, 산업안전 아님
+    # 제품안전 목적 마커 (SCOPE_REALIGN-001-R1):
+    # 판매·유통 제품의 안전성 검사·인증 지원은 현장·시설 안전관리와 무관.
+    "생활용품",     # 생활용품 KC인증·안전검사 — 소비자 제품 안전, 사업장 안전 아님
+    "어린이제품",   # 어린이제품 안전검사·인증 — 소비자 제품 안전, 사업장 안전 아님
+    "kc인증",       # KC 인증 — 제품 출시용 안전 인증, 현장 설치 지원 아님
+    "제품안전",     # 제품 자체의 안전성 검사·인증 — 사업장 안전관리 목적 아님
+    # NOTE: "농어촌민박" intentionally excluded — 지원 대상 업종이지 사업 목적이 아님.
+    # 소방안전시설 지원이 농어촌민박 대상이어도 소방안전이 목적이면 IN_SCOPE (SCOPE_REALIGN-001-R1).
     # NOTE: "창업기업" intentionally excluded — 창업기업 여부는 신청 자격 조건이며,
     # 비안전 목적의 근거가 아님 (DISCOVERY-001-R1). 창업기업 스마트공장 지원은
     # 안전관리 소프트웨어 도입 가능성이 있으므로 REVIEW_REQUIRED로 처리.
