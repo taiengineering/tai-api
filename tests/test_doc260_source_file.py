@@ -271,6 +271,56 @@ class TestSourceFileEndpoint(unittest.TestCase):
             resp = client.get(f"/document-forms/{_TEST_DOC_ID}/source-file")
         self.assertEqual(resp.status_code, 404)
 
+    # T03c: A_INTERNAL + source_download_exception=True → 통과 (HWP 충돌 6종 예외)
+    def test_T03c_ainternal_exception_allowed(self):
+        """T03c — A_INTERNAL + source_download_exception=True → 200 (BLD-011/CON-047~051 예외)."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers.document_forms import router
+        from routers.auth import get_current_user
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: _MOCK_USER
+
+        sb = _make_sb([{"id": "uuid-1", "doc_id": _TEST_DOC_ID}], _TEST_FILE_BYTES)
+
+        with patch("routers.document_forms.get_verified_path", return_value=_TEST_STORAGE_PATH), \
+             patch("routers.document_forms.get_provision_policy",
+                   return_value={
+                       "route_group": "A_INTERNAL",
+                       "investment_decision": "KEEP",
+                       "source_download_exception": True,
+                   }), \
+             patch("routers.document_forms.get_supabase", return_value=sb):
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get(f"/document-forms/{_TEST_DOC_ID}/source-file")
+        self.assertEqual(resp.status_code, 200)
+
+    # T03d: A_INTERNAL + source_download_exception=False → 차단 (일반 웹작성 경로)
+    def test_T03d_ainternal_no_exception_blocked(self):
+        """T03d — A_INTERNAL + source_download_exception=False → 404 (예외 미해당)."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers.document_forms import router
+        from routers.auth import get_current_user
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: _MOCK_USER
+
+        with patch("routers.document_forms.get_verified_path", return_value=_TEST_STORAGE_PATH), \
+             patch("routers.document_forms.get_provision_policy",
+                   return_value={
+                       "route_group": "A_INTERNAL",
+                       "investment_decision": "KEEP",
+                       "source_download_exception": False,
+                   }), \
+             patch("routers.document_forms.get_supabase", return_value=MagicMock()):
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get(f"/document-forms/{_TEST_DOC_ID}/source-file")
+        self.assertEqual(resp.status_code, 404)
+
     # T04: 성공
     def test_T04_success(self):
         """T04 — 성공 → 200 + octet-stream + attachment + no-store."""

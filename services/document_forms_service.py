@@ -69,6 +69,9 @@ def _enrich_with_route_group(items: list[dict]) -> None:
         item["route_group"] = policy["route_group"] if policy else None
         item["official_status"] = policy["official_status"] if policy else None
         item["submission_category"] = policy["submission_category"] if policy else None
+        item["source_download_exception"] = (
+            policy.get("source_download_exception", False) if policy else False
+        )
 
 
 _APPROVED = "APPROVED_FOR_RUNTIME_USE"
