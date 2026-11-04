@@ -18,6 +18,12 @@ R2 보정 (WO-TAI-BIZINFO-LIFECYCLE-ATOMIC-001-R2):
   LCA-R2-02  날짜 없는 기존 공고 → UNKNOWN, 판정값 보존
   LCA-R2-03  시간 경과 마감 공고, API 미발견 → retrieved_at 불변, 판정 보존
   LCA-R2-04  신규 IN_SCOPE 1건 → per-item 원자 이벤트 1건, 일일 요약은 별도
+
+R3 보정 (WO-TAI-BIZINFO-LIFECYCLE-ATOMIC-001-R3):
+  LCA-R3-01  _slack_fn=False 시 per-item 알림 미전송, result.all_per_item_notif_ids에 추적
+  LCA-R3-02  상태 변경 per-item → result.all_per_item_notif_ids + _pending_notifications 양쪽 등록
+  LCA-R3-03  backfill SQL 파일이 schema SQL 파일과 별도로 존재한다
+  LCA-R3-04  날짜 없는 공고 → UNKNOWN 보장 (암묵적 OPEN 판정 금지)
 """
 from __future__ import annotations
 
@@ -846,3 +852,207 @@ def test_LCA_R2_04_new_in_scope_single_atomic_event(monkeypatch):
         # REVIEW_REQUIRED 판정 시: per-item 미등록이 맞음
         assert len([e for e in repo._pending_notifications
                     if e.startswith(f"bizinfo_new_program_{key}_")]) == 0
+
+
+# ---------------------------------------------------------------------------
+# LCA-R3-01: _slack_fn=False 시 daily summary 비전송, per-item 알림 result에 추적
+# ---------------------------------------------------------------------------
+
+
+def test_LCA_R3_01_slack_fn_false_per_item_ids_tracked(monkeypatch):
+    """handlers.py 신규 패턴 검증: _slack_fn이 항상 False 반환 시
+
+    - daily summary Slack 미전송 (slack_event_accepted = False)
+    - 신규 IN_SCOPE 공고 per-item 알림은 repo에 PENDING 등록됨
+    - result.all_per_item_notif_ids에 해당 ID가 포함됨
+    - handlers.py가 all_per_item_notif_ids를 순회해 process_relay_event 호출 가능
+
+    _slack_fn=False → accept_relay_event 미호출 → daily summary PENDING 미생성.
+    per-item은 SQL fn(save_record_with_notification) 경로로 별도 PENDING 생성.
+    """
+    monkeypatch.setenv("BIZINFO_API_KEY", "test_key")
+    monkeypatch.setenv("BIZINFO_EVENT_API_KEY", "test_event_key")
+
+    repo = InMemoryBizinfoRepository()
+    key = "PBLN_R3_01"
+
+    def _mock_get(url, *, params, timeout):
+        import json as _json
+        page = int(params.get("pageIndex", "1"))
+        if "EventApi" in url:
+            return 200, _json.dumps({"jsonArray": []})
+        if page == 1:
+            return 200, _json.dumps({"jsonArray": [{
+                "pblancId": key,
+                "pblancNm": "산업재해 예방 안전관리 지원",
+                "pblancUrl": f"https://www.bizinfo.go.kr/web/lay1/program/{key}",
+                "jrsdInsttNm": "고용노동부",
+                "reqstBeginEndDe": "2026-11-01 ~ 2026-12-31",
+                "bsnsSumryCn": "산업재해 예방을 위한 안전관리 비용 지원. 위험요인 제거.",
+                "totCnt": "1",
+            }]})
+        return 200, _json.dumps({"jsonArray": []})
+
+    # handlers.py 신규 패턴: _slack_fn은 항상 False 반환
+    result = run_bizinfo_daily_sync(
+        repo, lambda **kw: False, as_of=_TODAY, get_fn=_mock_get
+    )
+
+    # daily summary 비전송
+    assert result.slack_event_accepted is False
+
+    if result.total_new_in_scope == 1:
+        # per-item ID가 result에 추적됨
+        assert len(result.all_per_item_notif_ids) == 1
+        per_item_id = result.all_per_item_notif_ids[0]
+        assert per_item_id.startswith(f"bizinfo_new_program_{key}_")
+
+        # per-item ID가 _pending_notifications에 등록됨 (PENDING 상태)
+        assert per_item_id in repo._pending_notifications, (
+            f"per-item ID {per_item_id!r}가 _pending_notifications에 없습니다: "
+            f"{repo._pending_notifications}"
+        )
+    else:
+        # REVIEW_REQUIRED 등: per-item 미등록이 맞음
+        assert len(result.all_per_item_notif_ids) == 0
+
+
+# ---------------------------------------------------------------------------
+# LCA-R3-02: 상태 변경 per-item → result.all_per_item_notif_ids + _pending_notifications
+# ---------------------------------------------------------------------------
+
+
+def test_LCA_R3_02_status_change_per_item_in_result_and_pending(monkeypatch):
+    """상태 변경(OPEN→CLOSED) 발생 시 per-item ID가 result와 repo 양쪽에 기록된다.
+
+    - result.all_per_item_notif_ids에 status change ID 포함
+    - repo._pending_notifications에 동일 ID 존재
+    - handlers.py가 순회해 process_relay_event 호출 가능한 경로 확인
+    """
+    monkeypatch.setenv("BIZINFO_API_KEY", "test_key")
+    monkeypatch.setenv("BIZINFO_EVENT_API_KEY", "test_event_key")
+
+    repo = InMemoryBizinfoRepository()
+    key = "PBLN_R3_02"
+
+    # prior: OPEN (10-01 ~ 10-31), retrieved_at = Oct-01
+    prior = _prog(
+        key,
+        app_start=date(2026, 10, 1),
+        app_end=date(2026, 10, 31),
+        retrieved_at=datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc),
+    )
+    repo.save_record(prior, _chg(key))
+    repo.save_relevance_verdict("PROGRAM", key, "IN_SCOPE")
+
+    _st_hash = hashlib.sha256(b"OPEN|CLOSED").hexdigest()[:6]
+    expected_notif_id = (
+        f"bizinfo_status_program_{key}_{_st_hash}_{_TODAY.isoformat()}"
+    )
+
+    def _mock_get(url, *, params, timeout):
+        import json as _json
+        page = int(params.get("pageIndex", "1"))
+        if "EventApi" in url:
+            return 200, _json.dumps({"jsonArray": []})
+        if page == 1:
+            return 200, _json.dumps({"jsonArray": [{
+                "pblancId": key,
+                "pblancNm": "안전관리시스템 도입 지원",
+                "pblancUrl": f"https://www.bizinfo.go.kr/web/lay1/program/{key}",
+                "jrsdInsttNm": "고용노동부",
+                "reqstBeginEndDe": "2026-10-01 ~ 2026-10-31",
+                "bsnsSumryCn": "산업안전관리시스템 도입 비용 지원.",
+                "totCnt": "1",
+            }]})
+        return 200, _json.dumps({"jsonArray": []})
+
+    result = run_bizinfo_daily_sync(
+        repo, lambda **kw: False, as_of=_TODAY, get_fn=_mock_get
+    )
+
+    assert result.total_status_changes == 1
+
+    # result.all_per_item_notif_ids에 포함 (handlers.py 순회 대상)
+    assert expected_notif_id in result.all_per_item_notif_ids, (
+        f"상태 변경 per-item ID가 result.all_per_item_notif_ids에 없습니다: "
+        f"{result.all_per_item_notif_ids}"
+    )
+
+    # repo._pending_notifications에 등록됨 (process_relay_event 호출 가능)
+    assert expected_notif_id in repo._pending_notifications, (
+        f"상태 변경 per-item ID가 _pending_notifications에 없습니다: "
+        f"{repo._pending_notifications}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# LCA-R3-03: backfill SQL 파일이 schema SQL 파일과 별도로 존재한다
+# ---------------------------------------------------------------------------
+
+
+def test_LCA_R3_03_backfill_sql_file_exists_separately():
+    """20261106_bizinfo_status_backfill.sql 이 별도 파일로 존재한다.
+
+    schema 파일(status_columns.sql)에서 DML이 분리되어
+    GATE-DB-SCHEMA / GATE-DB-BACKFILL 를 별도 승인할 수 있다.
+    """
+    import pathlib
+
+    migrations_dir = pathlib.Path(__file__).parent.parent / "migrations"
+    schema_file   = migrations_dir / "20261106_bizinfo_status_columns.sql"
+    backfill_file = migrations_dir / "20261106_bizinfo_status_backfill.sql"
+
+    assert schema_file.exists(), f"schema 파일 없음: {schema_file}"
+    assert backfill_file.exists(), f"backfill 파일 없음: {backfill_file}"
+
+    schema_sql   = schema_file.read_text(encoding="utf-8")
+    backfill_sql = backfill_file.read_text(encoding="utf-8")
+
+    # schema 파일에 UPDATE 문 없음 (DML 분리 확인)
+    assert "UPDATE public.bizinfo_source_records" not in schema_sql, (
+        "schema 파일에 UPDATE 문이 남아있다 — DML 분리가 불완전하다"
+    )
+
+    # backfill 파일에 UPDATE 문 있음
+    assert "UPDATE public.bizinfo_source_records" in backfill_sql, (
+        "backfill 파일에 UPDATE 문이 없다"
+    )
+
+    # backfill 파일에 WHERE status_as_of IS NULL 조건 있음 (멱등성 보장)
+    assert "WHERE status_as_of IS NULL" in backfill_sql, (
+        "backfill 파일에 멱등성 조건(WHERE status_as_of IS NULL)이 없다"
+    )
+
+
+# ---------------------------------------------------------------------------
+# LCA-R3-04: 날짜 없는 공고 → UNKNOWN 보장 (암묵적 OPEN 판정 금지)
+# ---------------------------------------------------------------------------
+
+
+def test_LCA_R3_04_no_dates_never_open():
+    """날짜가 없는 공고는 어떤 경우에도 OPEN/ONGOING으로 판정되지 않는다.
+
+    API 미발견 또는 날짜 미확인 공고를 "현재 모집 중"으로 오판하는 버그를 방지한다.
+    _date_status 로직: start=None AND end=None → UNKNOWN (OPEN 아님).
+    """
+    # PROGRAM: 날짜 모두 없음
+    rec_no_dates = _prog("prg_r3_04", app_start=None, app_end=None)
+    ps = program_status(rec_no_dates, as_of=_TODAY)
+    assert ps.application_status == "UNKNOWN"
+    assert ps.application_status != "OPEN"
+
+    # PROGRAM: 시작일만 있음 (end=None → OPEN 불가)
+    rec_start_only = _prog("prg_r3_04b", app_start=date(2026, 11, 1), app_end=None)
+    ps2 = program_status(rec_start_only, as_of=_TODAY)
+    assert ps2.application_status != "OPEN", (
+        "종료일 없는 공고가 OPEN으로 판정됐다 — 양쪽 날짜 모두 필수"
+    )
+
+    # EVENT: 접수 날짜 모두 없음
+    rec_evt_no_dates = _evt("evt_r3_04")
+    es = event_status(rec_evt_no_dates, as_of=_TODAY)
+    assert es.reception_status == "UNKNOWN"
+    assert es.progress_status == "UNKNOWN"
+    assert es.reception_status != "OPEN"
+    assert es.progress_status != "ONGOING"

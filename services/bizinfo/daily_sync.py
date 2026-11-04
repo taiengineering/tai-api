@@ -106,6 +106,9 @@ class SyncKindResult:
     in_scope_total: int = 0       # DB에 있는 기존 IN_SCOPE 건수
     in_scope_confirmed: int = 0   # 이번 탐색에서 재발견된 건수
     api_errors: list[str] = field(default_factory=list)
+    # 이번 실행에서 성공적으로 등록된 per-item 원자 알림 event_id 목록
+    # (handlers.py에서 process_relay_event() 호출에 사용)
+    per_item_notif_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -129,6 +132,14 @@ class BizinfoDailySyncResult:
     @property
     def total_status_changes(self) -> int:
         return len(self.program.status_changes) + len(self.event.status_changes)
+
+    @property
+    def all_per_item_notif_ids(self) -> list[str]:
+        """이번 실행에서 성공적으로 등록된 모든 per-item 알림 event_id.
+
+        handlers.py에서 process_relay_event()를 직접 호출하는 데 사용한다.
+        """
+        return self.program.per_item_notif_ids + self.event.per_item_notif_ids
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +276,7 @@ def _sync_kind(
                         f"bizinfo_new_{source_kind.lower()}_{key}"
                         f"_{as_of.isoformat()}"
                     )
-                    repo.save_record_with_notification(
+                    registered = repo.save_record_with_notification(
                         normalized, change,
                         relevance_verdict="IN_SCOPE",
                         notif_event_id=notif_id,
@@ -274,6 +285,8 @@ def _sync_kind(
                         message_text=_build_new_in_scope_message(normalized, decision),
                         sender_id="bizinfo_daily_sync",
                     )
+                    if registered:
+                        result.per_item_notif_ids.append(notif_id)
                     result.new_in_scope.append(
                         NewInScopeEvent(record=normalized, decision=decision)
                     )
@@ -301,7 +314,7 @@ def _sync_kind(
                             f"bizinfo_status_{source_kind.lower()}_{key}"
                             f"_{_st_hash}_{as_of.isoformat()}"
                         )
-                        repo.save_record_with_notification(
+                        registered = repo.save_record_with_notification(
                             normalized, change,
                             notif_event_id=notif_id,
                             relay_channel="direct://bizinfo_daily_sync",
@@ -309,6 +322,8 @@ def _sync_kind(
                             message_text=_build_status_change_message(status_ev),
                             sender_id="bizinfo_daily_sync",
                         )
+                        if registered:
+                            result.per_item_notif_ids.append(notif_id)
                     else:
                         # 상태 변화 없음 — Slack 없이 V2 fn 경유 저장
                         # (save_record() 직접 경로는 V2 fn을 거치지 않아

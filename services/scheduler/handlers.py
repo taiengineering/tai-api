@@ -285,13 +285,18 @@ def _run_bizinfo_daily_sync(p):
     repo = SupabaseBizinfoRepository(_sb())
     max_pages = int(p.get("max_pages", 5))
 
+    # 일별 요약 Slack은 비활성화 — 개별 공고 알림만 per-item atomic path로 전송한다.
+    # (daily summary를 _slack_fn으로 처리하면 per-item 알림과 내용이 중복된다.)
     def _slack_fn(**kwargs):
-        accepted = accept_relay_event(**kwargs)
-        if accepted:
-            asyncio.run(process_relay_event(kwargs["event_id"]))
-        return accepted
+        return False
 
     result = run_bizinfo_daily_sync(repo, _slack_fn, max_pages=max_pages)
+
+    # 개별 공고 알림: SQL fn이 PENDING 등록한 event_id를 순서대로 전송
+    per_item_sent = 0
+    for notif_id in result.all_per_item_notif_ids:
+        asyncio.run(process_relay_event(notif_id))
+        per_item_sent += 1
 
     # API 오류 발생 시 FAILED 처리 — 이미 저장된 데이터는 보존되지만 스케줄 로그에 실패 기록
     all_api_errors = result.program.api_errors + result.event.api_errors
@@ -315,7 +320,8 @@ def _run_bizinfo_daily_sync(p):
         "event_status_changes": len(result.event.status_changes),
         "event_in_scope_total": result.event.in_scope_total,
         "event_in_scope_confirmed": result.event.in_scope_confirmed,
-        # relay 접수 여부 (실제 Slack 전송 완료는 slack_relay_event_log 참조)
+        "per_item_notif_sent":  per_item_sent,
+        # relay 접수 여부 (일별 요약 비활성화 — per_item_notif_sent 참조)
         "slack_event_accepted": result.slack_event_accepted,
         "slack_event_id":       result.slack_event_id,
         "slack_skipped_reason": result.slack_skipped_reason,
