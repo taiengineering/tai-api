@@ -11,7 +11,7 @@
   T08  dispatch_qa_twice_daily: GitHub 200 → 성공 (204 외 200도 허용)
   T09  dispatch_qa_twice_daily: GitHub 422 → RuntimeError, no retry
   T10  dispatch_qa_twice_daily: GitHub 500 → RuntimeError, no retry
-  T11  dispatch_qa_twice_daily: inputs 없음 — payload에 "inputs" 키 없음
+  T11  dispatch_qa_twice_daily: inputs.run_level=all — 06:00/19:00 슬롯 공통 전달
   T12  dispatch_qa_twice_daily: github_job_started_at=None 보장
   T13  dispatch_qa_twice_daily: QA_GITHUB_TOKEN 미설정 → RuntimeError
   T14  dispatch_qa_twice_daily: QA_GITHUB_WORKFLOW_TWICE_DAILY env 반영
@@ -28,6 +28,9 @@
   T24  R3-01: _attempt_no=3 → RuntimeError DISPATCH_BLOCKED_RETRY (성공 기록 불가) [R3 보정]
   --- R3 신규 ---
   T25  R3-03: KST scheduled_for → UTC 변환 후 result.scheduled_for에 기록
+  --- A2-R2 신규 ---
+  T29  A2-R2: dispatch payload inputs.run_level=all — 06:00 슬롯
+  T30  A2-R2: dispatch payload inputs.run_level=all — 19:00 슬롯
 
 실제 GitHub API 호출 없음. 실제 DB 변경 없음. Slack 발송 없음.
 """
@@ -185,15 +188,15 @@ def test_T10_dispatch_500_raises_no_retry():
     assert len(client.calls) == 1, "재시도 없음"
 
 
-def test_T11_dispatch_payload_has_no_inputs_key():
-    """qa-twice-daily.yml은 inputs 없음 — POST body에 'inputs' 키 없어야 함."""
+def test_T11_dispatch_payload_includes_run_level_all():
+    """A2-R2: inputs.run_level=all — 06:00/19:00 슬롯 공통 전달."""
     patcher, client = _patch_client(204)
     slot = _utcnow(21, 0)
     with patcher:
         asyncio.run(svc.dispatch_qa_twice_daily(slot))
     posted_json = client.calls[0]["json"]
-    assert "inputs" not in posted_json
     assert posted_json.get("ref") == "main"
+    assert posted_json.get("inputs") == {"run_level": "all"}
 
 
 def test_T12_github_job_started_at_is_none():
@@ -383,6 +386,24 @@ def test_T28_trigger_qa_cron_blocked_on_negative_attempt():
                 "_attempt_no": -1,
             }))
     assert len(client.calls) == 0
+
+
+def test_T29_morning_slot_dispatches_run_level_all():
+    """A2-R2: 06:00 KST (= 21:00Z) 슬롯 → inputs.run_level=all."""
+    patcher, client = _patch_client(204)
+    slot_21z = _utcnow(21, 0)
+    with patcher:
+        asyncio.run(svc.dispatch_qa_twice_daily(slot_21z))
+    assert client.calls[0]["json"]["inputs"]["run_level"] == "all"
+
+
+def test_T30_evening_slot_dispatches_run_level_all():
+    """A2-R2: 19:00 KST (= 10:00Z) 슬롯 → inputs.run_level=all."""
+    patcher, client = _patch_client(204)
+    slot_10z = _utcnow(10, 0)
+    with patcher:
+        asyncio.run(svc.dispatch_qa_twice_daily(slot_10z))
+    assert client.calls[0]["json"]["inputs"]["run_level"] == "all"
 
 
 def test_T25_kst_scheduled_for_converted_to_utc_in_result():
