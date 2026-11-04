@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from db.supabase_client import get_supabase
 from services.document_engine.r2_route_policy import get_provision_policy
+from services.document_engine.source_file_allowlist import list_available_doc_ids
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ def list_document_forms(
     items = res.data or []
     _enrich_with_availability(supabase, items)
     _enrich_with_route_group(items)
+    _enrich_with_source_file_availability(supabase, items)
     return {
         "items": items,
         "total": int(res.count or 0),
@@ -129,6 +131,20 @@ def _enrich_with_availability(supabase: Any, items: list[dict]) -> None:
             item["schema_availability"] = "PREPARING"
         else:
             item["schema_availability"] = "NO_SCHEMA"
+
+
+def _enrich_with_source_file_availability(supabase: Any, items: list[dict]) -> None:
+    """페이지 items의 doc_id가 Storage doc_forms/ 에 실제 파일을 보유하는지 일괄 확인.
+
+    Storage 목록을 한 번만 조회해 source_file_available 필드를 설정한다.
+    조회 실패 시 전체 False (보수적: 버튼 미표시).
+    file_url IS NOT NULL ≠ 파일 보유 — law.go.kr 참조 URL과 Storage 파일은 별개.
+    """
+    if not items:
+        return
+    available = list_available_doc_ids(supabase)
+    for item in items:
+        item["source_file_available"] = item.get("doc_id") in available
 
 
 def get_document_form(doc_id: str) -> Dict[str, Any]:

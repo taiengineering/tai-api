@@ -16,6 +16,9 @@ WO-DOC260-WPC-DOCUMENT-FIRST-004 — source file download endpoint
   T10 — StorageApiError(status=400, Object not found) → 404 (스토리지 SDK 예외 → 파일없음)
   T11 — StorageApiError(status=400, 비-not-found 메시지) → 503 (다른 SDK 오류 구분)
   T12 — B_OFFICIAL + official_status=HOLD → 404 (Gate 2b 차단)
+  T13 — list_available_doc_ids: Storage 목록 → doc_id 집합 반환
+  T14 — list_available_doc_ids: Storage 오류 → 빈 집합 (보수적 처리)
+  T15 — _enrich_with_source_file_availability: 파일 있는 항목 True, 없는 항목 False
 
 FORM647 단위 테스트 (인프라 검증 — 현재 라우터 미연결):
   flSeq(document_forms.file_url) ≠ FORM647 ek. doc_id→ek 크로스워크 미확립.
@@ -456,6 +459,62 @@ class TestSourceFileEndpoint(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json().get("status"), "success")
+
+
+class TestSourceFileAvailability(unittest.TestCase):
+    """T13~T15 — source_file_available 목록 enrichment."""
+
+    # T13: list_available_doc_ids Storage 정상 응답 → doc_id 집합
+    def test_T13_list_available_doc_ids_returns_set(self):
+        """T13 — Storage 목록 조회 성공 → doc_id frozenset 반환."""
+        from services.document_engine.source_file_allowlist import list_available_doc_ids
+
+        sb = MagicMock()
+        sb.storage.from_.return_value.list.return_value = [
+            {"name": "DOC-FAC-020.hwp"},
+            {"name": "DOC-FAC-022.hwp"},
+            {"name": "readme.txt"},   # .hwp 아님 → 제외
+        ]
+
+        result = list_available_doc_ids(sb)
+
+        self.assertIn("DOC-FAC-020", result)
+        self.assertIn("DOC-FAC-022", result)
+        self.assertNotIn("readme.txt", result)
+        self.assertNotIn("readme", result)
+
+    # T14: list_available_doc_ids Storage 오류 → 빈 집합
+    def test_T14_list_available_doc_ids_storage_error_returns_empty(self):
+        """T14 — Storage 조회 실패 → frozenset() (보수적: 버튼 미표시)."""
+        from services.document_engine.source_file_allowlist import list_available_doc_ids
+
+        sb = MagicMock()
+        sb.storage.from_.return_value.list.side_effect = Exception("connection error")
+
+        result = list_available_doc_ids(sb)
+
+        self.assertEqual(result, frozenset())
+
+    # T15: _enrich_with_source_file_availability — 파일 있는/없는 항목 구분
+    def test_T15_enrich_source_file_availability(self):
+        """T15 — Storage에 있는 doc_id → True, 없는 doc_id(DOC-FAC-019 등) → False."""
+        from services.document_forms_service import _enrich_with_source_file_availability
+
+        sb = MagicMock()
+        # DOC-FAC-020은 있고, DOC-FAC-019는 없음 (file_url 있어도 Storage 파일 없는 케이스)
+        sb.storage.from_.return_value.list.return_value = [
+            {"name": "DOC-FAC-020.hwp"},
+        ]
+
+        items = [
+            {"doc_id": "DOC-FAC-020", "file_url": "https://www.law.go.kr/..."},
+            {"doc_id": "DOC-FAC-019", "file_url": "https://www.law.go.kr/...flSeq=123"},
+        ]
+
+        _enrich_with_source_file_availability(sb, items)
+
+        self.assertTrue(items[0]["source_file_available"])
+        self.assertFalse(items[1]["source_file_available"])
 
 
 if __name__ == "__main__":
