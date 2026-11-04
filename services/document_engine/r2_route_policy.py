@@ -306,45 +306,42 @@ _WEB_EDIT_ALLOWED_GROUP = "A_INTERNAL"
 #
 # G1_DUAL_PATH        : TAI 작성·저장 + 외부 제출 별도 (이중경로 확인)
 # G2_PORTAL_CONFIRMED : 기관 포털 연결 확인됨 (M8 구현 완료)
-# G3_AGENCY_CHANNEL   : 팝빌/이메일 전송 채널 확인됨, 기관 접수·수리 미확인
+# G2_PORTAL_CANDIDATE : 기관 포털 URL 확인됨 (M8 미구현, 고객 직접 접속 필요)
+# G3_AGENCY_CHANNEL   : 팝빌/이메일이 유일한 제출 채널, 별도 기관 포털 없음
 # G6_UNRESOLVED       : WP-03에서 명시 미확정 분류 (별도 목록 확인 필요)
 # None                : WP-03 조사 대상이나 미분류 (NOT_MAPPED)
 _SUBMISSION_CATEGORY: dict[str, str] = {
     # G2_PORTAL_CONFIRMED: M8 포털 버튼 구현 완료 (2종)
     'DOC-BLD-001': 'G2_PORTAL_CONFIRMED',
     'DOC-CON-009': 'G2_PORTAL_CONFIRMED',
-    # G3_AGENCY_CHANNEL: WP-03 CSV tai_auto=true + 팩스/이메일 외부 기관 제출
-    # — 전송 채널 확인됨, 기관 실제 접수·수리 미확인 (28종)
-    # 기존 4종
-    'DOC-BLD-004': 'G3_AGENCY_CHANNEL',   # 소방안전관리자 선임신고서 (소방서, 팝빌)
-    'DOC-CHEM-006': 'G3_AGENCY_CHANNEL',  # 화학사고 즉시신고서 (지방환경관서, 팝빌)
-    'DOC-CON-LAW-010': 'G3_AGENCY_CHANNEL',  # 정기안전점검 결과보고서 (발주청/안전원, 이메일)
-    'DOC-OSH-018': 'G3_AGENCY_CHANNEL',   # 사고보고서 (고용노동부, 팝빌)
-    # WP-03 CSV 추가 확인 24종
-    'DOC-BLD-008': 'G3_AGENCY_CHANNEL',   # 전기안전관리자 선임신고서 (한국전기안전공사, 팝빌)
-    'DOC-BLD-013': 'G3_AGENCY_CHANNEL',   # 승강기 사고 보고서 (한국승강기안전공단, 팝빌)
-    'DOC-CHEM-007': 'G3_AGENCY_CHANNEL',  # 화학사고 조사보고서 (지방환경관서, 팝빌/이메일)
-    'DOC-CHEM-009': 'G3_AGENCY_CHANNEL',  # 유해화학물질 관리자 선임신고서 (지방환경관서, 팝빌)
-    'DOC-FAC-001': 'G3_AGENCY_CHANNEL',   # 가스안전관리자 선임신고서 (한국가스안전공사, 팝빌)
-    'DOC-FAC-010': 'G3_AGENCY_CHANNEL',   # 위험물 사고 보고서 (소방본부, 팝빌)
-    'DOC-FAC-012': 'G3_AGENCY_CHANNEL',   # 보일러 관리자 선임신고서 (한국에너지공단, 팝빌)
-    'DOC-OSH-003': 'G3_AGENCY_CHANNEL',   # 산업재해조사표 (고용노동부, 팝빌/노동포털)
-    'DOC-OSH-008': 'G3_AGENCY_CHANNEL',   # 유해위험방지계획서 (KOSHA, 이메일)
-    'DOC-OSH-009': 'G3_AGENCY_CHANNEL',   # 안전관리자 선임보고서 (고용노동부, 팝빌)
-    'DOC-OSH-010': 'G3_AGENCY_CHANNEL',   # 보건관리자 선임보고서 (고용노동부, 팝빌)
-    'DOC-OSH-011': 'G3_AGENCY_CHANNEL',   # 산업보건의 선임보고서 (고용노동부, 팝빌)
-    'DOC-OSH-019': 'G3_AGENCY_CHANNEL',   # 산업재해발생보고서 (고용노동부, 팝빌)
-    'DOC-OSH-023': 'G3_AGENCY_CHANNEL',   # 안전관리자 선임신고서 (고용노동부, 팝빌)
-    'DOC-OSH-024': 'G3_AGENCY_CHANNEL',   # 보건관리자 선임신고서 (고용노동부, 팝빌)
-    'DOC-OSH-025': 'G3_AGENCY_CHANNEL',   # 산업보건의 선임신고서 (고용노동부, 팝빌)
-    'DOC-OSH-026': 'G3_AGENCY_CHANNEL',   # 안전관리자 변경신고서 (고용노동부, 팝빌)
-    'DOC-OSH-027': 'G3_AGENCY_CHANNEL',   # 보건관리자 변경신고서 (고용노동부, 팝빌)
-    'DOC-OSH-028': 'G3_AGENCY_CHANNEL',   # 산업보건의 변경신고서 (고용노동부, 팝빌)
-    'DOC-OSH-029': 'G3_AGENCY_CHANNEL',   # 안전관리자 해임신고서 (고용노동부, 팝빌)
-    'DOC-OSH-030': 'G3_AGENCY_CHANNEL',   # 보건관리자 해임신고서 (고용노동부, 팝빌)
-    'DOC-OSH-031': 'G3_AGENCY_CHANNEL',   # 산업보건의 해임신고서 (고용노동부, 팝빌)
-    'DOC-OSH-032': 'G3_AGENCY_CHANNEL',   # 산업재해조사표 제출서 (고용노동부, 팝빌)
-    'DOC-OSH-033': 'G3_AGENCY_CHANNEL',   # 유해위험방지계획서 제출서 (KOSHA, 이메일)
+    # G2_PORTAL_CANDIDATE: WP-03 CSV submit_portal 확인됨, M8 미구현 (22종)
+    'DOC-BLD-008': 'G2_PORTAL_CANDIDATE',   # 전기안전관리자 선임신고서 (safety.kesco.or.kr)
+    'DOC-BLD-013': 'G2_PORTAL_CANDIDATE',   # 승강기 사고 보고서 (elsafe.or.kr)
+    'DOC-CHEM-009': 'G2_PORTAL_CANDIDATE',  # 유해화학물질 관리자 선임신고서 (icis.me.go.kr)
+    'DOC-FAC-001': 'G2_PORTAL_CANDIDATE',   # 가스안전관리자 선임신고서 (kgs.or.kr)
+    'DOC-FAC-012': 'G2_PORTAL_CANDIDATE',   # 보일러 관리자 선임신고서 (energy.or.kr)
+    'DOC-OSH-003': 'G2_PORTAL_CANDIDATE',   # 산업재해조사표 (labor.moel.go.kr)
+    'DOC-OSH-008': 'G2_PORTAL_CANDIDATE',   # 유해위험방지계획서 (kosha.or.kr)
+    'DOC-OSH-009': 'G2_PORTAL_CANDIDATE',   # 안전관리자 선임보고서 (labor.moel.go.kr)
+    'DOC-OSH-010': 'G2_PORTAL_CANDIDATE',   # 보건관리자 선임보고서 (labor.moel.go.kr)
+    'DOC-OSH-011': 'G2_PORTAL_CANDIDATE',   # 산업보건의 선임보고서 (labor.moel.go.kr)
+    'DOC-OSH-019': 'G2_PORTAL_CANDIDATE',   # 산업재해발생보고서 (labor.moel.go.kr)
+    'DOC-OSH-023': 'G2_PORTAL_CANDIDATE',   # 안전관리자 선임신고서 (labor.moel.go.kr)
+    'DOC-OSH-024': 'G2_PORTAL_CANDIDATE',   # 보건관리자 선임신고서 (labor.moel.go.kr)
+    'DOC-OSH-025': 'G2_PORTAL_CANDIDATE',   # 산업보건의 선임신고서 (labor.moel.go.kr)
+    'DOC-OSH-026': 'G2_PORTAL_CANDIDATE',   # 안전관리자 변경신고서 (labor.moel.go.kr)
+    'DOC-OSH-027': 'G2_PORTAL_CANDIDATE',   # 보건관리자 변경신고서 (labor.moel.go.kr)
+    'DOC-OSH-028': 'G2_PORTAL_CANDIDATE',   # 산업보건의 변경신고서 (labor.moel.go.kr)
+    'DOC-OSH-029': 'G2_PORTAL_CANDIDATE',   # 안전관리자 해임신고서 (labor.moel.go.kr)
+    'DOC-OSH-030': 'G2_PORTAL_CANDIDATE',   # 보건관리자 해임신고서 (labor.moel.go.kr)
+    'DOC-OSH-031': 'G2_PORTAL_CANDIDATE',   # 산업보건의 해임신고서 (labor.moel.go.kr)
+    'DOC-OSH-032': 'G2_PORTAL_CANDIDATE',   # 산업재해조사표 제출서 (labor.moel.go.kr)
+    'DOC-OSH-033': 'G2_PORTAL_CANDIDATE',   # 유해위험방지계획서 제출서 (kosha.or.kr)
+    # G3_AGENCY_CHANNEL: 팝빌/이메일이 유일한 제출 채널, 별도 기관 포털 없음 (4종)
+    'DOC-BLD-004': 'G3_AGENCY_CHANNEL',     # 소방안전관리자 선임신고서 (소방서, 팝빌)
+    'DOC-CHEM-006': 'G3_AGENCY_CHANNEL',    # 화학사고 즉시신고서 (지방환경관서, 팝빌)
+    'DOC-CON-LAW-010': 'G3_AGENCY_CHANNEL', # 정기안전점검 결과보고서 (발주청/안전원, 이메일)
+    'DOC-OSH-018': 'G3_AGENCY_CHANNEL',     # 사고보고서 (고용노동부, 팝빌)
     # G1_DUAL_PATH: TAI 작성·저장 + 외부 제출 별도 (이중경로 확인, 12종)
     'DOC-BLD-015': 'G1_DUAL_PATH',
     'DOC-CON-034': 'G1_DUAL_PATH',
@@ -372,7 +369,8 @@ def get_provision_policy(doc_id: str) -> Optional[dict]:
           "official_status": str | None,  # CONDITIONAL_APPROVED | HOLD — B_OFFICIAL only, else None
           "web_edit_allowed": bool,  # True only for A_INTERNAL
           "submission_category": str | None,
-              # U_UNRESOLVED: G1_DUAL_PATH | G2_PORTAL_CONFIRMED | G3_AGENCY_CHANNEL | G6_UNRESOLVED
+              # U_UNRESOLVED: G1_DUAL_PATH | G2_PORTAL_CONFIRMED | G2_PORTAL_CANDIDATE
+              #               | G3_AGENCY_CHANNEL | G6_UNRESOLVED
               #   None (NOT_MAPPED) if WP-03 research incomplete or doc not yet classified
               # non-U_UNRESOLVED: always None
         }
