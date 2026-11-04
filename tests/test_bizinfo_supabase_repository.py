@@ -315,3 +315,59 @@ def test_SR15_list_eligible_keys_empty():
     repo = SupabaseBizinfoRepository(sb)
     result = repo.list_eligible_keys("PROGRAM")
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# R1 보정 테스트
+# ---------------------------------------------------------------------------
+
+
+def test_SR16_save_relevance_verdict_calls_update():
+    """save_relevance_verdict가 UPDATE를 호출하고 verdict 값을 전달한다."""
+    q = _Q([])
+    # update() 호출 추적을 위해 _Q에 last_update 추가
+    q.last_update = None
+
+    class _QWithUpdate(_Q):
+        def update(self, data, **k):
+            self.last_update = data
+            return self
+
+    q2 = _QWithUpdate([])
+    sb = _Supabase({"bizinfo_source_records": q2})
+    repo = SupabaseBizinfoRepository(sb)
+    repo.save_relevance_verdict("PROGRAM", "PBLN_TEST_001", "INCLUDE")
+    assert q2.last_update is not None
+    assert q2.last_update["relevance_verdict"] == "INCLUDE"
+    assert "updated_at" in q2.last_update
+
+
+def test_SR17_updated_at_is_real_timestamp_not_string_function():
+    """save_record의 updated_at이 ISO 타임스탬프 문자열이다 — 'now()' 금지."""
+    q = _Q([])
+    sb = _Supabase({"bizinfo_source_records": q})
+    repo = SupabaseBizinfoRepository(sb)
+    repo.save_record(_make_record(), _make_change())
+    assert q.last_upsert is not None
+    updated_at = q.last_upsert.get("updated_at")
+    assert updated_at != "now()", "updated_at은 SQL 함수 문자열이 아닌 실제 타임스탬프여야 한다"
+    # ISO 형식 검증 (datetime.fromisoformat으로 파싱 가능해야 함)
+    from datetime import datetime
+    parsed = datetime.fromisoformat(updated_at)
+    assert parsed is not None
+
+
+def test_SR18_bizinfo_storage_enabled_zero_does_not_activate(monkeypatch):
+    """BIZINFO_STORAGE_ENABLED=0은 비활성 — 정확히 '1'일 때만 활성화."""
+    monkeypatch.setenv("BIZINFO_STORAGE_ENABLED", "0")
+    from routers.bizinfo_public import _build_repository
+    result = _build_repository()
+    assert result is None
+
+
+def test_SR19_bizinfo_storage_enabled_empty_string_does_not_activate(monkeypatch):
+    """BIZINFO_STORAGE_ENABLED='' (빈 문자열)은 비활성."""
+    monkeypatch.setenv("BIZINFO_STORAGE_ENABLED", "")
+    from routers.bizinfo_public import _build_repository
+    result = _build_repository()
+    assert result is None

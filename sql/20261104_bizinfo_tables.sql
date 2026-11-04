@@ -95,3 +95,23 @@ CREATE TABLE IF NOT EXISTS public.bizinfo_editorial_content (
 CREATE INDEX IF NOT EXISTS idx_bizinfo_editorial_approved
   ON public.bizinfo_editorial_content (source_kind, approved_at)
   WHERE approved_at IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- 3. RLS — anon / authenticated 접근 차단 (R1-01 보정)
+-- ---------------------------------------------------------------------------
+-- 두 테이블 모두 서비스 역할(service_role)만 읽고 쓸 수 있다.
+-- PostgREST Data API로의 직접 접근을 차단한다.
+
+ALTER TABLE public.bizinfo_source_records    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bizinfo_editorial_content ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE public.bizinfo_source_records    FROM anon, authenticated;
+REVOKE ALL ON TABLE public.bizinfo_editorial_content FROM anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 4. 변경 이력 보존 한계 (범위 명시)
+-- ---------------------------------------------------------------------------
+-- UPSERT는 (source_kind, source_key) 기준으로 최신 스냅샷만 보존한다.
+-- changed_fields / change_verdict 컬럼으로 직전 변경 여부를 추적하지만
+-- 전체 버전 이력 보존(audit log 테이블)은 이 STORAGE_GATE 범위 밖이다.
+-- 이력 보존이 필요하면 별도 Owner 승인을 받아 추가 테이블을 생성할 것.

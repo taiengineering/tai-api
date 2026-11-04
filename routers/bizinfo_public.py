@@ -74,7 +74,7 @@ def _build_repository() -> Optional[BizinfoRepository]:
     DB 테이블이 없는 상태에서 실 클라이언트를 초기화하면 런타임 오류가 발생하므로
     sql/20261104_bizinfo_tables.sql 실행 완료 후 활성화할 것.
     """
-    if not os.environ.get("BIZINFO_STORAGE_ENABLED"):
+    if os.environ.get("BIZINFO_STORAGE_ENABLED") != "1":
         return None
     try:
         from db.supabase_client import get_supabase

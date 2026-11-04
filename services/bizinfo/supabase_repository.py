@@ -124,7 +124,7 @@ def _record_to_row(record: NormalizedSourceRecord, change: ChangeRecord) -> dict
         "reception_end":      rp.end.isoformat()   if rp and rp.end   else None,
         "change_verdict":     change.verdict,
         "changed_fields":     list(change.changed_fields),
-        "updated_at":         "now()",
+        "updated_at":         datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -270,6 +270,24 @@ class SupabaseBizinfoRepository:
         if not resp.data:
             return None
         return resp.data[0].get("relevance_verdict")
+
+    def save_relevance_verdict(
+        self,
+        source_kind: str,
+        source_key: str,
+        verdict: str,
+    ) -> None:
+        """선별·분석기 판정을 bizinfo_source_records에 저장한다.
+
+        레코드가 없으면 아무 작업도 하지 않는다 (save_record 선행 필요).
+        """
+        (
+            self._sb.table(_SRC)
+            .update({"relevance_verdict": verdict, "updated_at": datetime.now(timezone.utc).isoformat()})
+            .eq("source_kind", source_kind)
+            .eq("source_key", source_key)
+            .execute()
+        )
 
     def list_eligible_keys(
         self,

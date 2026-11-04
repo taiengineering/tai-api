@@ -92,6 +92,15 @@ class BizinfoRepository(Protocol):
         """Return the selector/analyzer relevance verdict, or None if not assessed."""
         ...
 
+    def save_relevance_verdict(
+        self,
+        source_kind: str,
+        source_key: str,
+        verdict: str,
+    ) -> None:
+        """Persist the selector/analyzer verdict for an existing record."""
+        ...
+
     def list_eligible_keys(
         self,
         source_kind: str,
@@ -172,6 +181,11 @@ class InMemoryBizinfoRepository:
         self, source_kind: str, source_key: str
     ) -> Optional[str]:
         return self._relevance.get(self._key(source_kind, source_key))
+
+    def save_relevance_verdict(
+        self, source_kind: str, source_key: str, verdict: str
+    ) -> None:
+        self._relevance[self._key(source_kind, source_key)] = verdict
 
     def list_eligible_keys(
         self, source_kind: str, limit: int = 50, offset: int = 0
