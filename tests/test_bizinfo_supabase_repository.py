@@ -49,6 +49,8 @@ class _Q:
     def __init__(self, rows: list[dict] | None = None):
         self._rows: list[dict] = rows or []
         self.last_upsert: Optional[dict] = None
+        self.last_update: Optional[dict] = None
+        self.update_calls: int = 0
 
     def select(self, *a, **k):   return self
     def eq(self, *a, **k):       return self
@@ -60,6 +62,11 @@ class _Q:
 
     def upsert(self, row, **k):
         self.last_upsert = row
+        return self
+
+    def update(self, data, **k):
+        self.last_update = data
+        self.update_calls += 1
         return self
 
     def execute(self):
@@ -371,3 +378,51 @@ def test_SR19_bizinfo_storage_enabled_empty_string_does_not_activate(monkeypatch
     from routers.bizinfo_public import _build_repository
     result = _build_repository()
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# R1-02: apply_verdict_corrections 사전 검증·원자적 반영 테스트
+# ---------------------------------------------------------------------------
+
+
+def test_SR20_apply_verdict_corrections_success():
+    """SR-20: apply_verdict_corrections — 사전 검증 통과 시 전체 반영.
+
+    모든 대상이 REVIEW_REQUIRED일 때 corrections 개수만큼 update가 호출된다.
+    반환값 = corrections 건수.
+    """
+    q = _Q([{"relevance_verdict": "REVIEW_REQUIRED"}])
+    sb = _Supabase({"bizinfo_source_records": q})
+    repo = SupabaseBizinfoRepository(sb)
+
+    corrections = [
+        ("PROGRAM", "PBLN_000000000126712", "IN_SCOPE"),
+        ("PROGRAM", "PBLN_000000000122104", "OUT_OF_SCOPE"),
+    ]
+    result = repo.apply_verdict_corrections(corrections, expected_current="REVIEW_REQUIRED")
+
+    assert result == 2
+    assert q.update_calls == 2
+    assert q.last_update is not None
+    assert q.last_update["relevance_verdict"] == "OUT_OF_SCOPE"
+    assert "updated_at" in q.last_update
+
+
+def test_SR21_apply_verdict_corrections_precheck_fails_no_partial():
+    """SR-21: apply_verdict_corrections — 사전 검증 실패 시 RuntimeError, 부분 반영 없음.
+
+    대상 레코드가 expected_current가 아닐 때 (이미 IN_SCOPE 등):
+    - RuntimeError 발생
+    - update_calls == 0 (어떤 반영도 없음)
+    """
+    q = _Q([{"relevance_verdict": "IN_SCOPE"}])  # REVIEW_REQUIRED 아님
+    sb = _Supabase({"bizinfo_source_records": q})
+    repo = SupabaseBizinfoRepository(sb)
+
+    corrections = [
+        ("PROGRAM", "PBLN_000000000126712", "IN_SCOPE"),
+    ]
+    with pytest.raises(RuntimeError, match="Pre-check failed"):
+        repo.apply_verdict_corrections(corrections, expected_current="REVIEW_REQUIRED")
+
+    assert q.update_calls == 0, "사전 검증 실패 시 update가 호출되어서는 안 됨"

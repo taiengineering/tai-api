@@ -289,6 +289,40 @@ class SupabaseBizinfoRepository:
             .execute()
         )
 
+    def apply_verdict_corrections(
+        self,
+        corrections: list[tuple[str, str, str]],
+        expected_current: str = "REVIEW_REQUIRED",
+    ) -> int:
+        """판정 수정을 사전 검증 후 반영한다.
+
+        corrections: (source_kind, source_key, new_verdict) 튜플 목록.
+        전체 항목의 현재 판정이 expected_current인지 확인한 뒤 반영한다.
+        하나라도 조건 불일치 시 아무것도 반영하지 않고 RuntimeError를 발생시킨다.
+        변경 대상 컬럼: relevance_verdict, updated_at.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        for source_kind, source_key, _ in corrections:
+            current = self.get_relevance_verdict(source_kind, source_key)
+            if current != expected_current:
+                raise RuntimeError(
+                    f"Pre-check failed: {source_key} current={current!r}, "
+                    f"expected={expected_current!r}. No changes applied."
+                )
+
+        for source_kind, source_key, new_verdict in corrections:
+            (
+                self._sb.table(_SRC)
+                .update({"relevance_verdict": new_verdict, "updated_at": now_iso})
+                .eq("source_kind", source_kind)
+                .eq("source_key", source_key)
+                .eq("relevance_verdict", expected_current)
+                .execute()
+            )
+
+        return len(corrections)
+
     def list_eligible_keys(
         self,
         source_kind: str,

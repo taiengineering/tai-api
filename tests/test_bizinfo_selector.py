@@ -553,3 +553,28 @@ def test_S32_review_required_fire_safety_no_non_safety_marker():
     result = review_relevance(rec)
     assert result.verdict == "REVIEW_REQUIRED"
     assert any("소방" in b for b in result.basis)
+
+
+def test_S33_in_scope_safety_primary_privacy_boilerplate_incidental():
+    """S-33: 산업안전 주 목적 사업에서 '개인정보 처리방침' 문구가 본문 하단에
+    부수적으로 등장 → IN_SCOPE 유지. 개인정보가 제목에 없으면 충돌 마커로
+    작동하지 않는다.
+
+    R1-03: _INCIDENTAL_SAFE_MARKERS 경계 조건.
+    - 개인정보가 제목에 있으면 → 충돌 마커 (purpose_conflict 발생 가능)
+    - 개인정보가 요약에만 있으면 → 보조 문구로 간주, IN_SCOPE 유지
+    [S-30(개인정보 주목적 → OUT_OF_SCOPE)과 구별]
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[전국] 2026년 소규모사업장 산업안전 환경개선 지원사업",
+        summary=(
+            "50인 미만 소규모 사업장의 산업재해 예방을 위한 안전보건 환경개선을 "
+            "지원합니다. 신청서 작성 시 수집되는 사업장 정보는 개인정보 처리방침에 "
+            "따라 처리됩니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    # 개인정보는 제목에 없으므로 purpose_conflict로 보고되지 않아야 함
+    assert not any("purpose_conflict:개인정보" in b for b in result.basis)

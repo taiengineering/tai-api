@@ -128,6 +128,16 @@ _SAFETY_EXCLUSION_COMPACT: frozenset[str] = frozenset({
     "산업안전제외",        # 산업안전 제외
 })
 
+# Non-safety markers that only block IN_SCOPE when they appear in the TITLE.
+# When found only in the summary, they are treated as incidental (e.g. a
+# boilerplate privacy notice at the bottom of an industrial-safety grant
+# announcement) and do NOT downgrade a confirmed title+summary safety signal.
+# These markers still count toward OUT_OF_SCOPE when they are the main purpose
+# (the OUT_OF_SCOPE path uses full non_safety_hits, not conflict_hits).
+_INCIDENTAL_SAFE_MARKERS: frozenset[str] = frozenset({
+    "개인정보",   # 개인정보 처리방침 안내 등 보조문구에 등장하는 경우 무시
+})
+
 
 # ---------------------------------------------------------------------------
 # Public contract
@@ -186,6 +196,12 @@ def review_relevance(record: NormalizedSourceRecord) -> RelevanceDecision:
         kw for kw in _SAFETY_EXCLUSION_COMPACT
         if kw in _summary_compact
     ]
+    # R1-03: incidental-safe markers (e.g. 개인정보) only block IN_SCOPE
+    # when in the title; summary-only appearance is treated as boilerplate.
+    non_safety_conflict_hits = [
+        kw for kw in non_safety_hits
+        if kw not in _INCIDENTAL_SAFE_MARKERS or kw in _title_compact
+    ]
 
     # ------------------------------------------------------------------
     # IN_SCOPE paths — require confirmed safety PURPOSE
@@ -194,13 +210,13 @@ def review_relevance(record: NormalizedSourceRecord) -> RelevanceDecision:
 
     # Purpose verified in both title and summary
     if title_direct and summary_direct:
-        if non_safety_hits or exclusion_hits:
+        if non_safety_conflict_hits or exclusion_hits:
             # Safety keywords present but purpose is marketing/export OR
             # safety relevance is explicitly negated in summary
             return RelevanceDecision(
                 verdict="REVIEW_REQUIRED",
                 basis=(
-                    tuple(f"purpose_conflict:{kw}" for kw in non_safety_hits[:2]) +
+                    tuple(f"purpose_conflict:{kw}" for kw in non_safety_conflict_hits[:2]) +
                     tuple(f"safety_negated:{kw}"   for kw in exclusion_hits[:2]) +
                     tuple(f"safety_signal:{kw}"    for kw in (title_direct + summary_direct)[:2])
                 ),
@@ -215,11 +231,11 @@ def review_relevance(record: NormalizedSourceRecord) -> RelevanceDecision:
 
     # Strong multi-keyword evidence inside summary alone
     if len(summary_direct) >= 2:
-        if non_safety_hits or exclusion_hits:
+        if non_safety_conflict_hits or exclusion_hits:
             return RelevanceDecision(
                 verdict="REVIEW_REQUIRED",
                 basis=(
-                    tuple(f"purpose_conflict:{kw}" for kw in non_safety_hits[:2]) +
+                    tuple(f"purpose_conflict:{kw}" for kw in non_safety_conflict_hits[:2]) +
                     tuple(f"safety_negated:{kw}"   for kw in exclusion_hits[:2]) +
                     tuple(f"summary:{kw}"          for kw in summary_direct[:2])
                 ),
