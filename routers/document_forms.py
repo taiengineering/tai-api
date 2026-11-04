@@ -99,6 +99,10 @@ def get_source_file(
         rg = provision_policy.get("route_group")
         if rg in ("F_SCOPE_OUT", "A_INTERNAL"):
             raise HTTPException(status_code=404, detail="서식 파일 다운로드를 지원하지 않는 문서입니다.")
+        # Gate 2b: B_OFFICIAL → CONDITIONAL_APPROVED만 허용 (HOLD·미확정 차단)
+        # DOC-FAC-024, DOC-FAC-029, DOC-OSH-065는 파일 보유이지만 official_status=HOLD.
+        if rg == "B_OFFICIAL" and provision_policy.get("official_status") != "CONDITIONAL_APPROVED":
+            raise HTTPException(status_code=404, detail="서식 파일 다운로드를 지원하지 않는 문서입니다.")
 
     # Gate 3: 경로 무결성 방어적 재확인
     if not storage_path.startswith("doc_forms/") or ".." in storage_path:
@@ -119,13 +123,17 @@ def get_source_file(
         raise HTTPException(status_code=404, detail="서식 문서를 찾을 수 없습니다.")
 
     # Gate 5: doc_forms/ 직접 경로 — 파일 없음(404) vs. 접근 실패(503) 구분
-    # Supabase storage SDK는 파일 없음도 StorageApiError(status=400)로 반환한다.
-    # status 400 = "Object not found" → 404. 그 외 SDK 오류 = 503.
+    # Supabase SDK: 파일 없음 → StorageApiError(message="Object not found", code="404", status=400).
+    # 다른 SDK 400(잘못된 버킷·권한 등)은 503; "Object not found" 메시지/code=404만 404로 처리.
     try:
         file_bytes: bytes = supabase.storage.from_(source_file_bucket()).download(storage_path)
     except StorageApiError as exc:
         status = int(exc.status) if exc.status else 0
-        if status in (400, 404):
+        is_not_found = status in (400, 404) and (
+            "not found" in (getattr(exc, "message", "") or "").lower()
+            or getattr(exc, "code", "") == "404"
+        )
+        if is_not_found:
             raise HTTPException(status_code=404, detail="서식 파일을 아직 제공하지 않습니다.")
         raise HTTPException(status_code=503, detail="서식 파일을 불러올 수 없습니다. 잠시 후 다시 시도해 주세요.")
     except Exception:
