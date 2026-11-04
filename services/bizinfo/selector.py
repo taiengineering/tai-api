@@ -18,6 +18,15 @@ FINAL-FIX corrections (WO-TAI-BIZINFO-OBJ-003-IV-FINAL-FIX):
     (e.g. "안전설비 지원 제외", "산업안전과 무관"); detected via
     _SAFETY_EXCLUSION_COMPACT compact-form markers in the summary.
 
+DISCOVERY-001 additions (WO-TAI-BIZINFO-SAFETY-DISCOVERY-001):
+  - _DIRECT_SAFETY_COMPACT extended with safety technology/system terms
+    (e.g. "스마트 안전솔루션", "안전관리 시스템") → same IN_SCOPE paths
+    as personnel compact terms.
+  - _TECH_ADOPTION: smart factory / AI / DX terms that have potential for
+    safety management adoption. When present without any direct safety signal,
+    these produce REVIEW_REQUIRED with basis "tech_adoption:..." to distinguish
+    tech-potential records from generic no_confirming_evidence records.
+
 IN_SCOPE is a candidate signal, not a content-publication approval.
 OBJ-BZI-005 human editorial gate is required before public display.
 """
@@ -63,14 +72,48 @@ _DIRECT_SAFETY: frozenset[str] = frozenset({
 })
 
 # Compact-form (whitespace-collapsed) direct safety phrases.
-# Used to match multi-word terms like "안전관리 인력" that contain spaces
-# in natural text but form a single unambiguous safety concept.
-# These are matched against _title_compact and _summary_compact only.
+# Two sub-groups:
+#   (A) Safety management personnel terms — 법정 의무 인력 선임·고용 지원
+#   (B) Safety technology/system terms — 안전관리 소프트웨어·시스템 구축 지원
+#       (DISCOVERY-001: 스마트 안전솔루션 등 기술형 안전지원 포함)
+# Both sub-groups follow the same IN_SCOPE evidence paths as _DIRECT_SAFETY.
 _DIRECT_SAFETY_COMPACT: frozenset[str] = frozenset({
+    # (A) Personnel
     "안전관리인력",       # "안전관리 인력" 고용·선임 지원
     "안전보건관리담당자",  # "안전보건관리 담당자" 선임 지원 (소규모사업장)
     "안전보건담당자",     # "안전보건 담당자" 선임·지원
     "안전관리인원",       # "안전관리 인원" 채용 지원
+    # (B) Safety technology/systems
+    "스마트안전솔루션",   # "스마트 안전솔루션" 구축·도입 지원 (e.g. PBLN_127340)
+    "스마트안전",        # "스마트 안전" 솔루션·관리 등
+    "안전솔루션",        # "안전 솔루션" 도입 지원
+    "안전관리시스템",    # "안전관리 시스템" 구축 지원
+    "안전모니터링",      # "안전 모니터링" 시스템 지원
+    "재해예방시스템",    # "재해예방 시스템" 구축
+    "안전관리소프트웨어", # "안전관리 소프트웨어" 도입
+    "산업안전솔루션",    # "산업안전 솔루션" 구축
+})
+
+# Smart factory / AI / digital transformation terms that MAY enable
+# safety management adoption — but do not confirm it without further evidence.
+# Records reaching this path receive REVIEW_REQUIRED with basis "tech_adoption:..."
+# to distinguish them from generic no_confirming_evidence records.
+# Human review should check whether the specific support scope includes
+# safety management software/systems.
+_TECH_ADOPTION: frozenset[str] = frozenset({
+    "스마트공장",   # 스마트공장 구축·고도화 지원사업
+    "스마트팩토리", # smart factory (English transliteration)
+    "ai팩토리",    # AI 팩토리 프로그램
+    "스마트제조",   # 스마트 제조혁신
+    "제조혁신",    # 제조혁신 바우처 (e.g. PBLN_127589)
+    "예지보전",    # 예지보전 — 설비 고장 예측, 안전 연계 가능
+    "디지털트윈",  # 디지털 트윈 — 현장 시뮬레이션 안전 연계 가능
+    "공정자동화",  # 공정 자동화 — 위험작업 자동화
+    "스마트설비",  # 스마트 설비 도입
+    "디지털전환",  # 디지털 전환 (DX) (e.g. PBLN_127587, PBLN_124841)
+    "스마트공정",  # 스마트 공정 최적화
+    "제조ai",     # 제조 AI 도입
+    "ai전환",     # AI 전환 (AX)
 })
 
 # Adjacent / review-zone terms.  Presence raises REVIEW_REQUIRED;
@@ -202,6 +245,13 @@ def review_relevance(record: NormalizedSourceRecord) -> RelevanceDecision:
         kw for kw in non_safety_hits
         if kw not in _INCIDENTAL_SAFE_MARKERS or kw in _title_compact
     ]
+    # DISCOVERY-001: smart factory / AI / DX adoption potential signals.
+    # Computed unconditionally; only used in the TECH_ADOPTION path at the
+    # bottom of the function when no direct or tech-safety signal was found.
+    tech_adoption_hits = [
+        kw for kw in _TECH_ADOPTION
+        if kw in _title_compact or kw in _summary_compact
+    ]
 
     # ------------------------------------------------------------------
     # IN_SCOPE paths — require confirmed safety PURPOSE
@@ -286,6 +336,19 @@ def review_relevance(record: NormalizedSourceRecord) -> RelevanceDecision:
         return RelevanceDecision(
             verdict="OUT_OF_SCOPE",
             basis=tuple(f"non_safety:{kw}" for kw in non_safety_hits[:3]),
+        )
+
+    # ------------------------------------------------------------------
+    # TECH_ADOPTION_POTENTIAL — no direct/tech safety signal confirmed,
+    # but smart factory / AI / DX terms present.  Richer basis than
+    # no_confirming_evidence; human review should verify support scope.
+    # Non-safety purpose records are already handled above (OUT_OF_SCOPE).
+    # ------------------------------------------------------------------
+
+    if tech_adoption_hits and has_summary:
+        return RelevanceDecision(
+            verdict="REVIEW_REQUIRED",
+            basis=tuple(f"tech_adoption:{kw}" for kw in tech_adoption_hits[:3]),
         )
 
     # ------------------------------------------------------------------

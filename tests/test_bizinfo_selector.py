@@ -555,6 +555,90 @@ def test_S32_review_required_fire_safety_no_non_safety_marker():
     assert any("소방" in b for b in result.basis)
 
 
+# ---------------------------------------------------------------------------
+# DISCOVERY-001 — 기술형 안전 및 디지털전환 탐색 테스트
+# ---------------------------------------------------------------------------
+
+
+def test_S34_in_scope_smart_safety_solution_title_and_summary():
+    """S-34: 스마트 안전솔루션 구축·도입 지원 — 제목+요약 모두 기술형 안전 직접 신호
+    → IN_SCOPE.
+
+    DISCOVERY-001: _DIRECT_SAFETY_COMPACT (B) 안전기술 확장.
+    구미 국가산업단지 스마트 안전솔루션 지원사업 유형 (PBLN_000000000127340 실증).
+    [REAL 유형: PBLN_000000000127340]
+    """
+    rec = _record(
+        title="[경북] 2026년 구미 국가산업단지 스마트 안전솔루션 서비스 수혜기업 모집",
+        summary=(
+            "산업단지 안전관리 고도화를 위한 스마트 안전솔루션 구축 지원. "
+            "안전 모니터링 시스템 설치 및 운영 지원금 포함."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("스마트안전" in b or "안전솔루션" in b or "안전모니터링" in b
+               for b in result.basis)
+
+
+def test_S35_review_required_smart_factory_tech_adoption():
+    """S-35: 스마트공장 구축 지원 — 직접 안전 신호 없음, TECH_ADOPTION 신호 존재
+    → REVIEW_REQUIRED (basis: tech_adoption:스마트공장).
+
+    DISCOVERY-001: _TECH_ADOPTION 경로. 안전관리 활용 가능성은 있으나
+    실제 지원 범위 미확인 단계. 일반 no_confirming_evidence와 구별.
+    [SYNTHETIC — 스마트 제조혁신 지원사업 유형]
+    """
+    rec = _record(
+        title="[전국] 2027년 스마트공장 구축 및 고도화 지원사업 통합 공고",
+        summary=(
+            "제조업 중소기업의 스마트공장 구축·고도화를 지원합니다. "
+            "MES·ERP·로봇자동화·AI 품질검사 시스템 도입 비용 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("tech_adoption" in b for b in result.basis)
+    assert any("스마트공장" in b for b in result.basis)
+
+
+def test_S36_out_of_scope_smart_factory_with_non_safety_purpose():
+    """S-36: 스마트공장 지원이지만 비안전 목적 명확 (창업기업 대상)
+    → OUT_OF_SCOPE (non_safety 우선).
+
+    DISCOVERY-001: TECH_ADOPTION이 있어도 비안전 목적이 확인되면 OUT_OF_SCOPE.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[전국] 2026년 창업기업 스마트공장 도입 지원사업",
+        summary=(
+            "창업 3년 이내 초기 기업의 스마트공장 도입을 위한 바우처를 지원합니다. "
+            "창업기업 전용 사업으로 기존 제조업 사업장은 대상 아님."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "OUT_OF_SCOPE"
+    assert any("창업기업" in b for b in result.basis)
+
+
+def test_S37_in_scope_smart_factory_with_direct_safety_signal():
+    """S-37: 스마트공장 + 직접 안전 신호(안전관리자) 공존 → IN_SCOPE.
+    직접 안전 경로가 TECH_ADOPTION보다 우선하여 판정.
+
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[경기] 2026년 중소 제조업 스마트공장 및 안전관리자 선임 통합 지원",
+        summary=(
+            "스마트공장 구축과 함께 안전관리자 선임 지원금을 함께 신청 가능합니다. "
+            "50인 미만 제조업 사업장 대상."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("안전관리자" in b for b in result.basis)
+
+
 def test_S33_in_scope_safety_primary_privacy_boilerplate_incidental():
     """S-33: 산업안전 주 목적 사업에서 '개인정보 처리방침' 문구가 본문 하단에
     부수적으로 등장 → IN_SCOPE 유지. 개인정보가 제목에 없으면 충돌 마커로
