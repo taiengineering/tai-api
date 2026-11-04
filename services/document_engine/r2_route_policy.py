@@ -300,6 +300,70 @@ _OFFICIAL_STATUS: dict[str, str] = {
 
 _WEB_EDIT_ALLOWED_GROUP = "A_INTERNAL"
 
+# U_UNRESOLVED 제출 경로 분류 (WP-C, WP-03 조사 결과 기반 READ-ONLY 표시 주석)
+# 출처: WP-03 document_submission_analysis.csv — 확인된 항목만 등록
+# 미등록 U_UNRESOLVED → None (NOT_MAPPED): WP-03 조사 미완료 또는 미분류
+#
+# G1_DUAL_PATH        : TAI 작성·저장 + 외부 제출 별도 (이중경로 확인)
+# G2_PORTAL_CONFIRMED : 기관 포털 연결 확인됨 (M8 구현 완료)
+# G2_PORTAL_CANDIDATE : 기관 포털 URL 확인됨 (M8 미구현, 고객 직접 접속 필요)
+# G3_AGENCY_CHANNEL   : 팝빌/이메일이 유일한 제출 채널, 별도 기관 포털 없음
+# G6_UNRESOLVED       : WP-03에서 명시 미확정 분류 (별도 목록 확인 필요)
+# None                : WP-03 조사 대상이나 미분류 (NOT_MAPPED)
+_SUBMISSION_CATEGORY: dict[str, str] = {
+    # G2_PORTAL_CONFIRMED: M8 포털 버튼 구현 완료 (2종)
+    'DOC-BLD-001': 'G2_PORTAL_CONFIRMED',
+    'DOC-CON-009': 'G2_PORTAL_CONFIRMED',
+    # G2_PORTAL_CANDIDATE: 기관 포털 URL 확인됨, M8 미구현 (23종)
+    # 접수기관·URL 검증 2026-11-04 (에이전트 조사 기반)
+    # ※ BLD-008 접수기관 보정: safety.kesco.or.kr(KESCO)→keea.or.kr(한국전기기술인협회)
+    # ※ BLD-013 도메인 보정: elsafe.or.kr→elevator.go.kr(국가승강기정보센터·KOELSA운영)
+    # ※ CHEM-009 도메인 보정: icis.me.go.kr→icis.mcee.go.kr(화관법민원24, 환경부)
+    # ※ FAC-001 분기: 도시가스(법)→지자체, LPG(법)→cyber.kgs.or.kr — Owner 결정 대기
+    # ※ OSH-008/033 제조업 URL: portal.kosha.or.kr 로그인 후 메뉴 탐색 필요 (공동인증서)
+    'DOC-CON-005': 'G2_PORTAL_CANDIDATE',   # 착공신고서 (www.eais.go.kr 세움터)
+    'DOC-BLD-008': 'G2_PORTAL_CANDIDATE',   # 전기안전관리자 선임신고서 (keea.or.kr — KEEA, 정부24 확인)
+    'DOC-BLD-013': 'G2_PORTAL_CANDIDATE',   # 승강기 사고 보고서 (elevator.go.kr — KOELSA 운영)
+    'DOC-CHEM-009': 'G2_PORTAL_CANDIDATE',  # 유해화학물질 관리자 선임신고서 (icis.mcee.go.kr — 화관법민원24)
+    'DOC-FAC-001': 'G2_PORTAL_CANDIDATE',   # 가스안전관리자 선임신고서 (cyber.kgs.or.kr — LPG, 도시가스는 지자체)
+    'DOC-FAC-012': 'G2_PORTAL_CANDIDATE',   # 보일러 관리자 선임신고서 (min24.energy.or.kr — 한국에너지공단)
+    'DOC-OSH-003': 'G2_PORTAL_CANDIDATE',   # 산업재해조사표 (labor.moel.go.kr, AH038)
+    'DOC-OSH-008': 'G2_PORTAL_CANDIDATE',   # 유해위험방지계획서 — 제조업 (portal.kosha.or.kr, URL HOLD)
+    'DOC-OSH-009': 'G2_PORTAL_CANDIDATE',   # 안전관리자 선임보고서 (labor.moel.go.kr, AD032)
+    'DOC-OSH-010': 'G2_PORTAL_CANDIDATE',   # 보건관리자 선임보고서 (labor.moel.go.kr, AD032)
+    'DOC-OSH-011': 'G2_PORTAL_CANDIDATE',   # 산업보건의 선임보고서 (labor.moel.go.kr, AD032)
+    'DOC-OSH-019': 'G2_PORTAL_CANDIDATE',   # 산업재해발생보고서 (labor.moel.go.kr, AH038 통합 여부 미확인)
+    'DOC-OSH-023': 'G2_PORTAL_CANDIDATE',   # 안전관리자 선임신고서 (labor.moel.go.kr, AD032)
+    'DOC-OSH-024': 'G2_PORTAL_CANDIDATE',   # 보건관리자 선임신고서 (labor.moel.go.kr, AD032)
+    'DOC-OSH-025': 'G2_PORTAL_CANDIDATE',   # 산업보건의 선임신고서 (labor.moel.go.kr, AD032)
+    'DOC-OSH-026': 'G2_PORTAL_CANDIDATE',   # 안전관리자 변경신고서 (labor.moel.go.kr, 변경 form 코드 미확인)
+    'DOC-OSH-027': 'G2_PORTAL_CANDIDATE',   # 보건관리자 변경신고서 (labor.moel.go.kr, 변경 form 코드 미확인)
+    'DOC-OSH-028': 'G2_PORTAL_CANDIDATE',   # 산업보건의 변경신고서 (labor.moel.go.kr, 변경 form 코드 미확인)
+    'DOC-OSH-029': 'G2_PORTAL_CANDIDATE',   # 안전관리자 해임신고서 (labor.moel.go.kr, SN113)
+    'DOC-OSH-030': 'G2_PORTAL_CANDIDATE',   # 보건관리자 해임신고서 (labor.moel.go.kr, SN113)
+    'DOC-OSH-031': 'G2_PORTAL_CANDIDATE',   # 산업보건의 해임신고서 (labor.moel.go.kr, SN113)
+    'DOC-OSH-032': 'G2_PORTAL_CANDIDATE',   # 산업재해조사표 제출서 (labor.moel.go.kr, AH038)
+    'DOC-OSH-033': 'G2_PORTAL_CANDIDATE',   # 유해위험방지계획서 제출서 — 제조업 (portal.kosha.or.kr, URL HOLD)
+    # G3_AGENCY_CHANNEL: 팝빌/이메일이 유일한 제출 채널, 별도 기관 포털 없음 (4종)
+    'DOC-BLD-004': 'G3_AGENCY_CHANNEL',     # 소방안전관리자 선임신고서 (소방서, 팝빌)
+    'DOC-CHEM-006': 'G3_AGENCY_CHANNEL',    # 화학사고 즉시신고서 (지방환경관서, 팝빌)
+    'DOC-CON-LAW-010': 'G3_AGENCY_CHANNEL', # 정기안전점검 결과보고서 (발주청/안전원, 이메일)
+    'DOC-OSH-018': 'G3_AGENCY_CHANNEL',     # 사고보고서 (고용노동부, 팝빌)
+    # G1_DUAL_PATH: TAI 작성·저장 + 외부 제출 별도 (이중경로 확인, 12종)
+    'DOC-BLD-015': 'G1_DUAL_PATH',
+    'DOC-CON-034': 'G1_DUAL_PATH',
+    'DOC-SERA-011': 'G1_DUAL_PATH',
+    'DOC-CON-001': 'G1_DUAL_PATH',
+    'DOC-CON-LAW-008': 'G1_DUAL_PATH',
+    'DOC-CON-LAW-009': 'G1_DUAL_PATH',
+    'DOC-FAC-004': 'G1_DUAL_PATH',
+    'DOC-FAC-006': 'G1_DUAL_PATH',
+    'DOC-FAC-011': 'G1_DUAL_PATH',
+    'DOC-FAC-015': 'G1_DUAL_PATH',
+    'DOC-FAC-018': 'G1_DUAL_PATH',
+    'DOC-SERA-009': 'G1_DUAL_PATH',
+}
+
 
 def get_provision_policy(doc_id: str) -> Optional[dict]:
     """Return R2 provision policy for a doc_id, or None if not in the matrix.
@@ -311,6 +375,11 @@ def get_provision_policy(doc_id: str) -> Optional[dict]:
           "investment_decision": str, # KEEP | STOP | HOLD
           "official_status": str | None,  # CONDITIONAL_APPROVED | HOLD — B_OFFICIAL only, else None
           "web_edit_allowed": bool,  # True only for A_INTERNAL
+          "submission_category": str | None,
+              # U_UNRESOLVED: G1_DUAL_PATH | G2_PORTAL_CONFIRMED | G2_PORTAL_CANDIDATE
+              #               | G3_AGENCY_CHANNEL | G6_UNRESOLVED
+              #   None (NOT_MAPPED) if WP-03 research incomplete or doc not yet classified
+              # non-U_UNRESOLVED: always None
         }
         None if doc_id is not registered in the R2 matrix.
     """
@@ -318,12 +387,17 @@ def get_provision_policy(doc_id: str) -> Optional[dict]:
     if entry is None:
         return None
     route_group, investment_decision = entry
+    if route_group == "U_UNRESOLVED":
+        submission_category = _SUBMISSION_CATEGORY.get(doc_id)  # None = NOT_MAPPED (WP-03 미분류)
+    else:
+        submission_category = None
     return {
         "doc_id": doc_id,
         "route_group": route_group,
         "investment_decision": investment_decision,
         "official_status": _OFFICIAL_STATUS.get(doc_id),
         "web_edit_allowed": route_group == _WEB_EDIT_ALLOWED_GROUP,
+        "submission_category": submission_category,
     }
 
 
