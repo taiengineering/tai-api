@@ -314,7 +314,9 @@ _SUBMISSION_CATEGORY: dict[str, str] = {
     # G2_PORTAL_CONFIRMED: M8 포털 버튼 구현 완료 (2종)
     'DOC-BLD-001': 'G2_PORTAL_CONFIRMED',
     'DOC-CON-009': 'G2_PORTAL_CONFIRMED',
-    # G2_PORTAL_CANDIDATE: WP-03 CSV submit_portal 확인됨, M8 미구현 (22종)
+    # G2_PORTAL_CANDIDATE: WP-03 CSV submit_portal 확인됨, M8 미구현 (23종)
+    # DOC-CON-005: 착공신고서 (eais.go.kr 세움터) — tai_auto=false, CSV submit_portal 확인
+    'DOC-CON-005': 'G2_PORTAL_CANDIDATE',   # 착공신고서 (eais.go.kr 세움터)
     'DOC-BLD-008': 'G2_PORTAL_CANDIDATE',   # 전기안전관리자 선임신고서 (safety.kesco.or.kr)
     'DOC-BLD-013': 'G2_PORTAL_CANDIDATE',   # 승강기 사고 보고서 (elsafe.or.kr)
     'DOC-CHEM-009': 'G2_PORTAL_CANDIDATE',  # 유해화학물질 관리자 선임신고서 (icis.me.go.kr)
