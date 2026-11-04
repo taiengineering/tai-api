@@ -60,13 +60,13 @@ def _ok(body: dict):
 def _program_body(items: list | dict, total: int = None) -> dict:
     if total is None:
         total = len(items) if isinstance(items, list) else 1
-    return {"jsonArray": {"totalCount": str(total), "item": items}}
+    return {"jsonArray": {"totCnt": str(total), "item": items}}
 
 
 def _event_body(items: list | dict, total: int = None) -> dict:
     if total is None:
         total = len(items) if isinstance(items, list) else 1
-    return {"jsonArray": {"totalCount": str(total), "item": items}}
+    return {"jsonArray": {"totCnt": str(total), "item": items}}
 
 
 _PROGRAM_ITEM = {
@@ -335,3 +335,44 @@ def test_F20_normalizer_compatible(monkeypatch):
         result = normalize_bizinfo_record("PROGRAM", item, batch.retrieved_at)
         # Must not raise; returns NormalizedSourceRecord or ParseFailure
         assert result is not None
+
+
+def test_F21_request_params_match_official_contract(monkeypatch):
+    """F-21: get_fn 호출 시 공식 기업마당 API 파라미터 계약 준수. [SYNTHETIC]
+
+    crtfcKey / dataType=json / pageIndex / pageUnit 사용.
+    구 파라미터명(serviceKey / pageNo / numOfRows) 미사용.
+    """
+    _env(monkeypatch)
+    captured: dict = {}
+
+    def _fn(url, *, params=None, timeout=None):
+        captured["url"]    = url
+        captured["params"] = params or {}
+        return 200, json.dumps(_program_body([_PROGRAM_ITEM]))
+
+    fetch_source_batch("PROGRAM", page=2, size=5, get_fn=_fn)
+
+    p = captured["params"]
+    assert "crtfcKey"  in p,                        "crtfcKey 없음"
+    assert p.get("dataType")  == "json",            "dataType≠json"
+    assert p.get("pageIndex") == "2",               "pageIndex 불일치"
+    assert p.get("pageUnit")  == "5",               "pageUnit 불일치"
+    assert "serviceKey" not in p,                   "구 파라미터 serviceKey 잔존"
+    assert "pageNo"     not in p,                   "구 파라미터 pageNo 잔존"
+    assert "numOfRows"  not in p,                   "구 파라미터 numOfRows 잔존"
+
+
+def test_F22_response_body_too_large(monkeypatch):
+    """F-22: 응답 본문이 5 MB 초과 → ERR_INVALID_RESPONSE. [SYNTHETIC]
+
+    kr_get은 수신 전 크기 제한 불가 — 수신 후 차단.
+    """
+    _env(monkeypatch)
+
+    def _fn(url, *, params=None, timeout=None):
+        return 200, "x" * (5 * 1024 * 1024 + 1)
+
+    batch = fetch_source_batch("PROGRAM", get_fn=_fn)
+    assert batch.error_code == ERR_INVALID_RESPONSE
+    assert batch.items == ()

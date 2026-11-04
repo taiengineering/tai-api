@@ -33,14 +33,17 @@ from typing import Callable, Literal, Optional
 # Constants
 # ---------------------------------------------------------------------------
 
-_PROGRAM_API_URL = "https://www.bizinfo.go.kr/uss/rss/bizInfoPList.do"
-_EVENT_API_URL   = "https://www.bizinfo.go.kr/uss/rss/bizInfoEList.do"
+_PROGRAM_API_URL = "https://www.bizinfo.go.kr/uss/rss/bizinfoApi.do"
+_EVENT_API_URL   = "https://www.bizinfo.go.kr/uss/rss/bizinfoEventApi.do"
 
 _ENV_KEY_PROGRAM = "BIZINFO_API_KEY"
 _ENV_KEY_EVENT   = "BIZINFO_EVENT_API_KEY"
 
-_MAX_PAGE_SIZE   = 100
-_TIMEOUT_SECONDS = 25
+_MAX_PAGE_SIZE    = 100
+_TIMEOUT_SECONDS  = 25
+# Post-download guard only — kr_get (curl_cffi) cannot cap download size
+# pre-receipt.  5 MB is generous for a single paginated page.
+_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
 # Auth error key name that 기업마당 API uses when the service key is invalid.
 # Presence of this key in the response body signals AUTH_FAIL regardless of
@@ -136,11 +139,19 @@ def _has_auth_error(data: dict) -> bool:
 def _extract_items(data: dict) -> tuple[tuple[dict, ...], int]:
     """Extract items tuple and total_count from a parsed API response dict.
 
-    기업마당 wraps results in {"jsonArray": {"item": [...], "totalCount": "N"}}.
+    기업마당 wraps results in {"jsonArray": {"item": [...], "totCnt": "N"}}.
     When only one item exists the API may return item as a dict rather than
     a one-element list — both forms are normalised to a tuple of dicts.
+    Falls back to "totalCount" key when "totCnt" is absent.
     """
-    array = data.get("jsonArray") or data
+    array_candidate = data.get("jsonArray")
+    if isinstance(array_candidate, dict):
+        array = array_candidate
+    elif array_candidate is None:
+        array = data
+    else:
+        return (), 0
+
     raw_items = array.get("item")
 
     if raw_items is None:
@@ -153,8 +164,9 @@ def _extract_items(data: dict) -> tuple[tuple[dict, ...], int]:
     else:
         items = ()
 
+    total_key = "totCnt" if "totCnt" in array else "totalCount"
     try:
-        total = int(array.get("totalCount", 0))
+        total = int(array.get(total_key, 0))
     except (ValueError, TypeError):
         total = len(items)
 
@@ -209,9 +221,10 @@ def fetch_source_batch(
 
     url = _api_url(source_kind)
     params = {
-        "serviceKey": api_key,
-        "pageNo":     str(page),
-        "numOfRows":  str(size),
+        "crtfcKey":  api_key,
+        "dataType":  "json",
+        "pageIndex": str(page),
+        "pageUnit":  str(size),
     }
 
     try:
@@ -219,6 +232,9 @@ def fetch_source_batch(
     except Exception as exc:
         code = ERR_TIMEOUT if _is_timeout_error(exc) else ERR_HTTP_ERROR
         return _error_batch(source_kind, retrieved_at, page, size, code)
+
+    if len(text.encode("utf-8", errors="replace")) > _MAX_RESPONSE_BYTES:
+        return _error_batch(source_kind, retrieved_at, page, size, ERR_INVALID_RESPONSE)
 
     if status_code == 401:
         return _error_batch(source_kind, retrieved_at, page, size, ERR_AUTH_FAIL)
