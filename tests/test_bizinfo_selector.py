@@ -602,12 +602,14 @@ def test_S35_review_required_smart_factory_tech_adoption():
     assert any("스마트공장" in b for b in result.basis)
 
 
-def test_S36_out_of_scope_smart_factory_with_non_safety_purpose():
-    """S-36: 스마트공장 지원이지만 비안전 목적 명확 (창업기업 대상)
-    → OUT_OF_SCOPE (non_safety 우선).
+def test_S36_review_required_smart_factory_startup_eligibility():
+    """S-36: 창업기업 스마트공장 지원 — 창업기업 여부는 신청 자격 조건,
+    비안전 목적의 근거가 아님 → REVIEW_REQUIRED (TECH_ADOPTION 경로).
 
-    DISCOVERY-001: TECH_ADOPTION이 있어도 비안전 목적이 확인되면 OUT_OF_SCOPE.
-    [SYNTHETIC]
+    DISCOVERY-001-R1: "창업기업"은 _NON_SAFETY_PURPOSE에서 제외.
+    스마트공장 도입 지원은 안전관리 소프트웨어 도입 가능성이 있으므로
+    OUT_OF_SCOPE 자동 판정 금지.
+    [SYNTHETIC — DISCOVERY-001-R1 창업기업 자격조건 수정]
     """
     rec = _record(
         title="[전국] 2026년 창업기업 스마트공장 도입 지원사업",
@@ -617,8 +619,9 @@ def test_S36_out_of_scope_smart_factory_with_non_safety_purpose():
         ),
     )
     result = review_relevance(rec)
-    assert result.verdict == "OUT_OF_SCOPE"
-    assert any("창업기업" in b for b in result.basis)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("tech_adoption" in b for b in result.basis)
+    assert any("스마트공장" in b for b in result.basis)
 
 
 def test_S37_in_scope_smart_factory_with_direct_safety_signal():
@@ -637,6 +640,49 @@ def test_S37_in_scope_smart_factory_with_direct_safety_signal():
     result = review_relevance(rec)
     assert result.verdict == "IN_SCOPE"
     assert any("안전관리자" in b for b in result.basis)
+
+
+def test_S38_review_required_jejo_ax_saas_tech_adoption():
+    """S-38: 제조AX + SaaS 솔루션 매칭 사업 — 직접 안전 신호 없음,
+    TECH_ADOPTION 신호(제조ax, saas) 존재 → REVIEW_REQUIRED.
+
+    DISCOVERY-001-R1: _TECH_ADOPTION에 제조AX 추가 검증.
+    성남시 제조AX 솔루션 매칭 지원사업 유형 (PBLN_000000000127610 실증).
+    [REAL 유형: PBLN_000000000127610]
+    """
+    rec = _record(
+        title="[경기] 2026년 성남시 제조AX 솔루션 매칭 지원사업",
+        summary=(
+            "제조업 중소기업의 AI 전환(AX)을 위해 SaaS 형태의 솔루션 도입을 지원합니다. "
+            "AI 기반 품질검사, 공정최적화, 에너지 모니터링 솔루션 매칭."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("tech_adoption" in b for b in result.basis)
+    assert any("제조ax" in b or "saas" in b for b in result.basis)
+
+
+def test_S39_review_required_ai_platform_no_direct_safety():
+    """S-39: 인공지능 플랫폼 도입 지원 — 직접 안전 신호 없음,
+    TECH_ADOPTION 신호(인공지능) 존재 → REVIEW_REQUIRED.
+
+    DISCOVERY-001-R1: _TECH_ADOPTION에 인공지능 추가 검증.
+    AI 플랫폼 구축 지원이 안전관리 소프트웨어 도입으로 연결될 수 있는지
+    인간 검토 필요.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[전국] 2026년 중소기업 인공지능 플랫폼 도입 지원사업",
+        summary=(
+            "제조·물류·서비스 중소기업의 인공지능 솔루션 도입을 지원합니다. "
+            "AI 기반 수요예측, 공정최적화, IoT 센서 연동 플랫폼 구축 비용 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("tech_adoption" in b for b in result.basis)
+    assert any("인공지능" in b or "iot" in b or "센서" in b for b in result.basis)
 
 
 def test_S33_in_scope_safety_primary_privacy_boilerplate_incidental():

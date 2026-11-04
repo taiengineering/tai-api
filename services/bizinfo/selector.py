@@ -27,6 +27,13 @@ DISCOVERY-001 additions (WO-TAI-BIZINFO-SAFETY-DISCOVERY-001):
     these produce REVIEW_REQUIRED with basis "tech_adoption:..." to distinguish
     tech-potential records from generic no_confirming_evidence records.
 
+DISCOVERY-001-R1 corrections (WO-TAI-BIZINFO-SAFETY-DISCOVERY-001):
+  - _TECH_ADOPTION extended with 제조AX, 인공지능, SaaS, IoT, 센서,
+    영상분석, 안전관제 — previously uncovered digital/AI platform terms.
+  - "창업기업" removed from _NON_SAFETY_PURPOSE: 창업기업 여부는 신청
+    자격 조건이지 비안전 목적의 근거가 아님. 창업기업 스마트공장 지원은
+    안전관리 소프트웨어 도입 가능성 검토 대상 (REVIEW_REQUIRED 유지).
+
 IN_SCOPE is a candidate signal, not a content-publication approval.
 OBJ-BZI-005 human editorial gate is required before public display.
 """
@@ -101,6 +108,7 @@ _DIRECT_SAFETY_COMPACT: frozenset[str] = frozenset({
 # Human review should check whether the specific support scope includes
 # safety management software/systems.
 _TECH_ADOPTION: frozenset[str] = frozenset({
+    # DISCOVERY-001 original terms:
     "스마트공장",   # 스마트공장 구축·고도화 지원사업
     "스마트팩토리", # smart factory (English transliteration)
     "ai팩토리",    # AI 팩토리 프로그램
@@ -114,6 +122,14 @@ _TECH_ADOPTION: frozenset[str] = frozenset({
     "스마트공정",  # 스마트 공정 최적화
     "제조ai",     # 제조 AI 도입
     "ai전환",     # AI 전환 (AX)
+    # DISCOVERY-001-R1 additions — digital/AI platform terms:
+    "제조ax",    # 제조 AX (AI Transformation) (e.g. PBLN_127610)
+    "인공지능",  # 인공지능 솔루션 도입·활용 지원
+    "saas",      # SaaS 솔루션 구독·도입 지원
+    "iot",       # IoT 센서·기기 연결 지원
+    "센서",      # 센서 기반 시스템 — 안전 모니터링 연계 가능
+    "영상분석",  # 영상 분석 AI — CCTV 위험 감지 연계 가능
+    "안전관제",  # 안전 관제 시스템 — 통합 안전 모니터링
 })
 
 # Adjacent / review-zone terms.  Presence raises REVIEW_REQUIRED;
@@ -150,12 +166,14 @@ _NON_SAFETY_PURPOSE: frozenset[str] = frozenset({
     "어촌",
     "농업인",
     "농촌",
-    "창업기업",
     "투자유치",
     "특례보증",
     "어업경영체",
     "농어촌민박",   # 농촌 숙박시설 — 산업현장 아님 (R2: adjacent+non_safety → OUT)
     "개인정보",     # 개인정보보호·안전조치 — 데이터 보안, 산업안전 아님
+    # NOTE: "창업기업" intentionally excluded — 창업기업 여부는 신청 자격 조건이며,
+    # 비안전 목적의 근거가 아님 (DISCOVERY-001-R1). 창업기업 스마트공장 지원은
+    # 안전관리 소프트웨어 도입 가능성이 있으므로 REVIEW_REQUIRED로 처리.
 })
 
 # Compact-form markers indicating the safety aspect is explicitly negated or
