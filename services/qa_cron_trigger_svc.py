@@ -90,8 +90,10 @@ async def dispatch_qa_twice_daily(scheduled_for: datetime) -> dict:
         f"{_GITHUB_API}/repos/{cfg['owner']}/{cfg['repo']}"
         f"/actions/workflows/{cfg['workflow']}/dispatches"
     )
-    # qa-twice-daily.yml은 workflow_dispatch inputs 없음
-    payload = {"ref": cfg["ref"]}
+    payload = {
+        "ref": cfg["ref"],
+        "inputs": {"run_level": "all"},
+    }
     headers = {
         "Authorization":        f"Bearer {cfg['token']}",
         "Accept":               "application/vnd.github+json",
