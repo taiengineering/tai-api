@@ -305,3 +305,20 @@ class SupabaseBizinfoRepository:
             .execute()
         )
         return [row["source_key"] for row in (resp.data or [])]
+
+    def list_in_scope_keys(
+        self,
+        source_kind: str,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[str]:
+        resp = (
+            self._sb.table(_SRC)
+            .select("source_key")
+            .eq("source_kind", source_kind)
+            .eq("relevance_verdict", "IN_SCOPE")
+            .order("source_key")
+            .range(offset, offset + limit - 1)
+            .execute()
+        )
+        return [row["source_key"] for row in (resp.data or [])]

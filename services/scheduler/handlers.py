@@ -276,6 +276,44 @@ def _run_public_data_sync_tick(p):
     return {"executed": len(results), "results": results}
 
 
+def _run_bizinfo_daily_sync(p):
+    import asyncio
+    from services.bizinfo.daily_sync import run_bizinfo_daily_sync
+    from services.bizinfo.supabase_repository import SupabaseBizinfoRepository
+    from services.slack_relay_svc import accept_relay_event, process_relay_event
+
+    repo = SupabaseBizinfoRepository(_sb())
+    max_pages = int(p.get("max_pages", 5))
+
+    def _slack_fn(**kwargs):
+        accepted = accept_relay_event(**kwargs)
+        if accepted:
+            asyncio.run(process_relay_event(kwargs["event_id"]))
+        return accepted
+
+    result = run_bizinfo_daily_sync(repo, _slack_fn, max_pages=max_pages)
+    return {
+        "run_at":               result.run_at.isoformat(),
+        "program_fetched":      result.program.fetched,
+        "program_new_saved":    result.program.new_records_saved,
+        "program_new_in_scope": len(result.program.new_in_scope),
+        "program_status_changes": len(result.program.status_changes),
+        "program_in_scope_total": result.program.in_scope_total,
+        "program_in_scope_confirmed": result.program.in_scope_confirmed,
+        "program_api_errors":   result.program.api_errors,
+        "event_fetched":        result.event.fetched,
+        "event_new_saved":      result.event.new_records_saved,
+        "event_new_in_scope":   len(result.event.new_in_scope),
+        "event_status_changes": len(result.event.status_changes),
+        "event_in_scope_total": result.event.in_scope_total,
+        "event_in_scope_confirmed": result.event.in_scope_confirmed,
+        "event_api_errors":     result.event.api_errors,
+        "slack_sent":           result.slack_sent,
+        "slack_event_id":       result.slack_event_id,
+        "slack_skipped_reason": result.slack_skipped_reason,
+    }
+
+
 def _run_mkt_ga4_collect(p):
     result = _mkt_http("/api/mkt/ga4/collect", timeout=p.get("timeout_seconds", 120))
     if result["http_status"] >= 400:
@@ -420,8 +458,9 @@ def register_direct_handlers() -> dict[str, Handler]:
         "direct://qa_cron_trigger":                 _run_qa_cron_trigger,
         "direct://qa_product_change_detection":     _run_qa_product_change_detection,
         "direct://public_data_sync_tick":           _run_public_data_sync_tick,
-        "direct://leg_law_refresh":           _run_leg_law_refresh,
-        "direct://mkt_ga4_collect":           _run_mkt_ga4_collect,
+        "direct://leg_law_refresh":                 _run_leg_law_refresh,
+        "direct://mkt_ga4_collect":                 _run_mkt_ga4_collect,
+        "direct://bizinfo_daily_safety_sync":       _run_bizinfo_daily_sync,
     })
     return DIRECT_HANDLERS
 

@@ -110,6 +110,15 @@ class BizinfoRepository(Protocol):
         """Return source_keys of announcements cleared for public display."""
         ...
 
+    def list_in_scope_keys(
+        self,
+        source_kind: str,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[str]:
+        """Return source_keys whose relevance_verdict is IN_SCOPE."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # In-memory stub — integration tests and dev only
@@ -193,6 +202,14 @@ class InMemoryBizinfoRepository:
         return [
             key for (kind, key) in self._approvals
             if kind == source_kind
+        ][offset : offset + limit]
+
+    def list_in_scope_keys(
+        self, source_kind: str, limit: int = 200, offset: int = 0
+    ) -> list[str]:
+        return [
+            key for (kind, key), verdict in self._relevance.items()
+            if kind == source_kind and verdict == "IN_SCOPE"
         ][offset : offset + limit]
 
     # -- Seed helpers (test/dev only) --------------------------------------
