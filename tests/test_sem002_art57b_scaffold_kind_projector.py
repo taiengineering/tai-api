@@ -23,7 +23,11 @@ from __future__ import annotations
 from clients.leg_runtime_client import _LEG_INPUT_FIELDS, build_facility
 from services.canonical.leg_input_contract import build_unified_leg_input
 from services.work_source.merge import merge_or_raise
-from services.work_source.projector import project_work_row, project_work_rows
+from services.work_source.projector import (
+    _SCAFFOLD_DEEPEN_BOOL_FIELDS,
+    project_work_row,
+    project_work_rows,
+)
 from services.work_source.registry import WORK_TYPES, registry_public
 
 
@@ -34,14 +38,27 @@ ART57A_FIELD = (
 
 
 # =========================================================================
-# Registry: scaffold_kind is a declared enum with 3 options
+# Registry: scaffold_kind is a declared enum with 12 options
 # =========================================================================
+_EXPECTED_KIND_CODES = [
+    "STEEL_PIPE_SCAFFOLD", "STEEL_FRAME_SCAFFOLD", "SUSPENDED_GONDOLA_SCAFFOLD",
+    "WORK_CHAIR_SUSPENDED_SCAFFOLD", "HANGING_SCAFFOLD", "HORSE_TRESTLE_SCAFFOLD",
+    "MOBILE_SCAFFOLD", "SYSTEM_SCAFFOLD", "LEANING_SCAFFOLD", "HOOK_SCAFFOLD",
+    "LOG", "OTHER",
+]
+_EXPECTED_KIND_LABELS = [
+    "강관비계", "강관틀비계", "달비계(곤돌라형)", "달비계(작업의자형)",
+    "달대비계", "말비계", "이동식비계", "시스템비계",
+    "걸침비계", "선박비계(걸침형)", "통나무비계", "기타 비계",
+]
+
+
 def test_registry_declares_scaffold_kind_enum():
     attrs = WORK_TYPES["SCAFFOLD"]["attributes"]
     assert "scaffold_kind" in attrs
     assert attrs["scaffold_kind"]["type"] == "enum"
     codes = [o["code"] for o in attrs["scaffold_kind"]["options"]]
-    assert codes == ["STEEL_PIPE", "LOG", "OTHER"]
+    assert codes == _EXPECTED_KIND_CODES
 
 
 def test_registry_public_carries_scaffold_kind_options():
@@ -52,8 +69,8 @@ def test_registry_public_carries_scaffold_kind_options():
     assert kind_attr["label"] == "비계 종류"
     codes = [o["code"] for o in kind_attr["options"]]
     labels = [o["label"] for o in kind_attr["options"]]
-    assert codes == ["STEEL_PIPE", "LOG", "OTHER"]
-    assert labels == ["강관비계", "통나무비계", "기타 비계"]
+    assert codes == _EXPECTED_KIND_CODES
+    assert labels == _EXPECTED_KIND_LABELS
 
 
 def test_registry_public_boolean_attributes_still_have_no_options_key():
@@ -197,7 +214,9 @@ def test_P9_transport_projected_fact_reaches_build_facility():
             attributes={"scaffold_kind": "LOG"},
         ),
     ]
-    assert project_work_rows(rows) == {"has_scaffold": True, ART57B_FIELD: True}
+    # WO-092 R01: LOG is a resolved kind → B-3 emits False for all unset scaffold_kind_is_* fields.
+    _deepen_false = {f: False for f in _SCAFFOLD_DEEPEN_BOOL_FIELDS}
+    assert project_work_rows(rows) == {"has_scaffold": True, ART57B_FIELD: True, **_deepen_false}
 
     merged = merge_or_raise(explicit={}, work_rows=rows)
     assert merged.get(ART57B_FIELD) is True

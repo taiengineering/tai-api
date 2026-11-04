@@ -9,6 +9,28 @@ import math
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 
+_ALL_RESOLVED_SCAFFOLD_KINDS: frozenset = frozenset({
+    "STEEL_PIPE_SCAFFOLD", "STEEL_FRAME_SCAFFOLD", "SUSPENDED_GONDOLA_SCAFFOLD",
+    "WORK_CHAIR_SUSPENDED_SCAFFOLD", "HANGING_SCAFFOLD", "HORSE_TRESTLE_SCAFFOLD",
+    "MOBILE_SCAFFOLD", "SYSTEM_SCAFFOLD", "LEANING_SCAFFOLD", "HOOK_SCAFFOLD",
+    "LOG", "OTHER",
+    # STEEL_PIPE 제외 — 레거시; Art.57B True 보존, 신규 종류별 False 생성 금지
+})
+
+_SCAFFOLD_DEEPEN_BOOL_FIELDS: tuple = (
+    "scaffold_kind_is_steel_pipe_scaffold",
+    "scaffold_kind_is_steel_frame_scaffold",
+    "scaffold_kind_is_suspended_gondola_scaffold",
+    "scaffold_kind_is_work_chair_suspended_scaffold",
+    "scaffold_kind_is_hanging_scaffold",
+    "scaffold_kind_is_horse_trestle_scaffold",
+    "scaffold_kind_is_mobile_scaffold",
+    "scaffold_kind_is_system_scaffold",
+    "scaffold_kind_is_leaning_scaffold",
+    "scaffold_kind_is_hook_scaffold",
+)
+
+
 def _attrs(row: Mapping[str, Any]) -> Dict[str, Any]:
     raw = row.get("attributes") or {}
     return dict(raw) if isinstance(raw, dict) else {}
@@ -237,6 +259,7 @@ def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, 
 
     # P01 C2: collect active SCAFFOLD rows for single-row numeric projection
     scaffold_active_rows: List[Mapping[str, Any]] = []
+    _scaffold_has_unresolved: bool = False
 
     # P02 C2: collect active GRINDING rows for single-row numeric projection
     grinding_active_rows: List[Mapping[str, Any]] = []
@@ -262,6 +285,9 @@ def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, 
         # P01 C2: track active SCAFFOLD rows
         if row.get("active") is True and row.get("work_type") == "SCAFFOLD":
             scaffold_active_rows.append(row)
+            _sk = _attrs(row).get("scaffold_kind")
+            if not isinstance(_sk, str) or _sk not in _ALL_RESOLVED_SCAFFOLD_KINDS:
+                _scaffold_has_unresolved = True
 
         # P02 C2: track active GRINDING rows
         if row.get("active") is True and row.get("work_type") == "GRINDING":
@@ -316,6 +342,13 @@ def project_work_rows(rows: Optional[Iterable[Mapping[str, Any]]]) -> Dict[str, 
             and _h >= 0
         ):
             out["object_drop_height_m"] = _h
+
+    # B-3 (WO-092 R01): 모든 활성 비계 행의 scaffold_kind가 resolved set 내 문자열인 경우에만
+    # scaffold_kind_is_* 미방출 필드를 False로 방출. STEEL_PIPE·미등록·null → UNKNOWN 유지.
+    if scaffold_active_rows and not _scaffold_has_unresolved:
+        for _f in _SCAFFOLD_DEEPEN_BOOL_FIELDS:
+            if _f not in out:
+                out[_f] = False
 
     # FM01 (WO025-F13-I02-DEFECT2): has_scaffold_at_ge_2m_subject_to_art56 any-TRUE.
     # Whitelist (산안법 제56조 적용 비계 종류). Per-row: kind ∈ whitelist AND height_m ≥ 2.
