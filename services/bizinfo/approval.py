@@ -105,10 +105,27 @@ class PublicationEligibility:
 # Condition codes (used in failed_conditions)
 COND_RELEVANCE        = "relevance_unconfirmed"   # C-1
 COND_SOURCE_LINK      = "source_link_missing"     # C-2
+COND_ATTRIBUTION      = "attribution_name_missing"# C-2b
 COND_STATUS_PRESENT   = "status_not_present"      # C-3
 COND_EDITORIAL        = "editorial_missing"       # C-4
 COND_RIGHTS           = "rights_unconfirmed"      # C-5
 COND_APPROVAL_RECORD  = "approval_record_missing" # C-6
+
+# ---------------------------------------------------------------------------
+# Rights basis vocabulary (RIGHTS_GATE approved codes)
+# ---------------------------------------------------------------------------
+# FACTS_ONLY_TAI_ORIGINAL_ATTRIBUTED:
+#   TAI가 공고 사실정보를 활용해 독립적으로 작성한 해설 + 출처 표기.
+#   외부 저작권자의 이용허락이 아닌 내부 편집 정책 판단 기록이다.
+#   기업마당 원문·PDF·사진·표의 복제는 이 코드로 허용되지 않는다.
+#
+# 추가 코드 등록은 RIGHTS_GATE Owner 별도 승인 필요.
+
+RIGHTS_BASIS_FACTS_ONLY_ATTRIBUTED = "FACTS_ONLY_TAI_ORIGINAL_ATTRIBUTED"
+
+ALLOWED_RIGHTS_BASIS: frozenset[str] = frozenset({
+    RIGHTS_BASIS_FACTS_ONLY_ATTRIBUTED,
+})
 
 
 # ---------------------------------------------------------------------------
@@ -143,9 +160,14 @@ def check_publication_eligibility(
     if relevance_verdict not in ("IN_SCOPE", "INCLUDE"):
         failed.append(COND_RELEVANCE)
 
-    # C-2: official source and origin link present
-    if not record.bizinfo_url and not record.origin_url:
+    # C-2: bizinfo_url required (고객 화면에서 원문 링크로 직접 표시)
+    # origin_url만 있고 bizinfo_url이 없으면 고객에게 공식 링크를 제공할 수 없다.
+    if not record.bizinfo_url:
         failed.append(COND_SOURCE_LINK)
+
+    # C-2b: attribution name present and non-empty (공식 출처명 — 고객 화면 표기용)
+    if not record.source_org or not record.source_org.strip():
+        failed.append(COND_ATTRIBUTION)
 
     # C-3: status present and last_checked_at available
     # status.last_checked_at is always set (from retrieved_at)
@@ -161,12 +183,19 @@ def check_publication_eligibility(
     if editorial is None or not editorial.explanation.strip() or not editorial.guidance.strip():
         failed.append(COND_EDITORIAL)
 
-    # C-5: source rights confirmed
-    if rights is None:
+    # C-5: rights confirmed with approved basis and an identified reviewer
+    # rights_basis must be in ALLOWED_RIGHTS_BASIS (TAI original + attribution only).
+    # confirmed_by must identify a real human reviewer — empty string is blocked.
+    if (
+        rights is None
+        or rights.rights_basis not in ALLOWED_RIGHTS_BASIS
+        or not rights.confirmed_by.strip()
+    ):
         failed.append(COND_RIGHTS)
 
-    # C-6: explicit content approval record
-    if approval is None:
+    # C-6: explicit content approval by an identified approver
+    # approved_by must identify a real human — empty string is blocked.
+    if approval is None or not approval.approved_by.strip():
         failed.append(COND_APPROVAL_RECORD)
 
     return PublicationEligibility(

@@ -31,12 +31,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from services.bizinfo.approval import (
+    ALLOWED_RIGHTS_BASIS,
     COND_APPROVAL_RECORD,
+    COND_ATTRIBUTION,
     COND_EDITORIAL,
     COND_RELEVANCE,
     COND_RIGHTS,
     COND_SOURCE_LINK,
     COND_STATUS_PRESENT,
+    RIGHTS_BASIS_FACTS_ONLY_ATTRIBUTED,
     ContentApprovalRecord,
     EditorialContent,
     RightsRecord,
@@ -120,7 +123,7 @@ def _editorial(source_kind: str, source_key: str) -> EditorialContent:
 def _rights(source_key: str) -> RightsRecord:
     return RightsRecord(
         source_key=source_key,
-        rights_basis="공공저작물 자유이용허락 (KOGL 제1유형)",
+        rights_basis=RIGHTS_BASIS_FACTS_ONLY_ATTRIBUTED,
         confirmed_at=_NOW,
         confirmed_by="reviewer-001",
     )
@@ -387,12 +390,61 @@ def test_U04_publication_conditions_individual_failure():
     e = check_publication_eligibility(rec, status, change, ed, ri, ap, relevance_verdict="HOLD")
     assert COND_RELEVANCE in e.failed_conditions
 
-    # C-2: source link missing
+    # C-2: bizinfo_url missing (origin_url만 있어도 차단)
     rec_nourl = _program_record()
     object.__setattr__(rec_nourl, "bizinfo_url", None)
     object.__setattr__(rec_nourl, "origin_url",  None)
     e = check_publication_eligibility(rec_nourl, status, change, ed, ri, ap, relevance_verdict="INCLUDE")
     assert COND_SOURCE_LINK in e.failed_conditions
+
+    # C-2 R1-02: bizinfo_url=None이지만 origin_url 있음 → 여전히 COND_SOURCE_LINK
+    rec_origin_only = _program_record()
+    object.__setattr__(rec_origin_only, "bizinfo_url", None)
+    # origin_url은 _program_record() 기본값으로 설정돼 있음
+    e = check_publication_eligibility(rec_origin_only, status, change, ed, ri, ap, relevance_verdict="INCLUDE")
+    assert COND_SOURCE_LINK in e.failed_conditions
+
+    # C-2b: attribution name (source_org) missing
+    rec_noorg = _program_record()
+    object.__setattr__(rec_noorg, "source_org", None)
+    e = check_publication_eligibility(rec_noorg, status, change, ed, ri, ap, relevance_verdict="INCLUDE")
+    assert COND_ATTRIBUTION in e.failed_conditions
+
+    # C-2b R1-02: source_org 공백만 있는 경우도 차단
+    rec_wsorg = _program_record()
+    object.__setattr__(rec_wsorg, "source_org", "   ")
+    e = check_publication_eligibility(rec_wsorg, status, change, ed, ri, ap, relevance_verdict="INCLUDE")
+    assert COND_ATTRIBUTION in e.failed_conditions
+
+    # C-5b: rights_basis not in ALLOWED_RIGHTS_BASIS
+    ri_invalid = RightsRecord(
+        source_key=rec.source_key,
+        rights_basis="INVALID_BASIS",
+        confirmed_at=_NOW,
+        confirmed_by="reviewer-001",
+    )
+    e = check_publication_eligibility(rec, status, change, ed, ri_invalid, ap, relevance_verdict="INCLUDE")
+    assert COND_RIGHTS in e.failed_conditions
+
+    # C-5 R1-01: confirmed_by 비어있음 → COND_RIGHTS
+    ri_noreviewer = RightsRecord(
+        source_key=rec.source_key,
+        rights_basis=RIGHTS_BASIS_FACTS_ONLY_ATTRIBUTED,
+        confirmed_at=_NOW,
+        confirmed_by="",
+    )
+    e = check_publication_eligibility(rec, status, change, ed, ri_noreviewer, ap, relevance_verdict="INCLUDE")
+    assert COND_RIGHTS in e.failed_conditions
+
+    # C-6 R1-01: approved_by 비어있음 → COND_APPROVAL_RECORD
+    ap_noapprover = ContentApprovalRecord(
+        source_kind="PROGRAM",
+        source_key=rec.source_key,
+        approved_at=_NOW,
+        approved_by="",
+    )
+    e = check_publication_eligibility(rec, status, change, ed, ri, ap_noapprover, relevance_verdict="INCLUDE")
+    assert COND_APPROVAL_RECORD in e.failed_conditions
 
     # C-4: editorial missing
     e = check_publication_eligibility(rec, status, change, None, ri, ap, relevance_verdict="INCLUDE")
@@ -511,6 +563,50 @@ def test_R02_relevance_hold_blocked_in_api():
     assert r.status_code == 404
 
 
+def test_R04_invalid_rights_basis_blocked():
+    """R-04: ALLOWED_RIGHTS_BASIS 외 rights_basis → C-5 실패 → 공개 차단.
+
+    기업마당 원문·PDF 복제를 의미하는 비승인 근거는 공개 조건을 통과하지 못한다.
+    """
+    rec    = _program_record()
+    status = program_status(rec, as_of=_TODAY)
+    change = _first_change(rec)
+    ed     = _editorial("PROGRAM", rec.source_key)
+    ap     = _approval("PROGRAM", rec.source_key)
+
+    ri_invalid = RightsRecord(
+        source_key=rec.source_key,
+        rights_basis="공공저작물 자유이용허락 (KOGL 제1유형)",  # 미승인 근거
+        confirmed_at=_NOW,
+        confirmed_by="reviewer-001",
+    )
+    e = check_publication_eligibility(
+        rec, status, change, ed, ri_invalid, ap, relevance_verdict="INCLUDE"
+    )
+    assert not e.eligible
+    assert COND_RIGHTS in e.failed_conditions
+
+
+def test_R05_missing_source_org_blocked():
+    """R-05: source_org 없음 → C-2b(attribution) 실패 → 공개 차단.
+
+    출처명이 없으면 고객 화면에 출처를 표기할 수 없어 공개를 차단한다.
+    """
+    rec_noorg = _program_record()
+    object.__setattr__(rec_noorg, "source_org", None)
+    status = program_status(rec_noorg, as_of=_TODAY)
+    change = _first_change(rec_noorg)
+    ed     = _editorial("PROGRAM", rec_noorg.source_key)
+    ri     = _rights(rec_noorg.source_key)
+    ap     = _approval("PROGRAM", rec_noorg.source_key)
+
+    e = check_publication_eligibility(
+        rec_noorg, status, change, ed, ri, ap, relevance_verdict="INCLUDE"
+    )
+    assert not e.eligible
+    assert COND_ATTRIBUTION in e.failed_conditions
+
+
 def test_R03_no_end_date_past_start_date_is_unknown():
     """R-03: 종료일 없는 과거 시작일 → OPEN이 아닌 UNKNOWN.
 
@@ -532,3 +628,105 @@ def test_R03_no_end_date_past_start_date_is_unknown():
     estatus = event_status(erec, as_of=_TODAY)
     assert estatus.reception_status == "UNKNOWN"
     assert estatus.progress_status  == "UPCOMING"  # Nov 20 is in the future
+
+
+# ===========================================================================
+# RG: RIGHTS_GATE R1 보정 검증
+# ===========================================================================
+
+
+def test_RG01_empty_confirmed_by_blocked():
+    """RG-01: rights.confirmed_by 비어있음 → C-5 실패 → 공개 차단."""
+    rec    = _program_record()
+    status = program_status(rec, as_of=_TODAY)
+    change = _first_change(rec)
+    ed     = _editorial("PROGRAM", rec.source_key)
+    ap     = _approval("PROGRAM", rec.source_key)
+
+    ri_empty = RightsRecord(
+        source_key=rec.source_key,
+        rights_basis=RIGHTS_BASIS_FACTS_ONLY_ATTRIBUTED,
+        confirmed_at=_NOW,
+        confirmed_by="",   # 빈 승인자
+    )
+    e = check_publication_eligibility(
+        rec, status, change, ed, ri_empty, ap, relevance_verdict="INCLUDE"
+    )
+    assert not e.eligible
+    assert COND_RIGHTS in e.failed_conditions
+
+
+def test_RG02_empty_approved_by_blocked():
+    """RG-02: approval.approved_by 비어있음 → C-6 실패 → 공개 차단."""
+    rec    = _program_record()
+    status = program_status(rec, as_of=_TODAY)
+    change = _first_change(rec)
+    ed     = _editorial("PROGRAM", rec.source_key)
+    ri     = _rights(rec.source_key)
+
+    ap_empty = ContentApprovalRecord(
+        source_kind="PROGRAM",
+        source_key=rec.source_key,
+        approved_at=_NOW,
+        approved_by="",   # 빈 승인자
+    )
+    e = check_publication_eligibility(
+        rec, status, change, ed, ri, ap_empty, relevance_verdict="INCLUDE"
+    )
+    assert not e.eligible
+    assert COND_APPROVAL_RECORD in e.failed_conditions
+
+
+def test_RG03_whitespace_only_source_org_blocked():
+    """RG-03: source_org 공백만 있는 경우 → C-2b 실패 → 공개 차단."""
+    rec_ws = _program_record()
+    object.__setattr__(rec_ws, "source_org", "   ")
+    status = program_status(rec_ws, as_of=_TODAY)
+    change = _first_change(rec_ws)
+    ed     = _editorial("PROGRAM", rec_ws.source_key)
+    ri     = _rights(rec_ws.source_key)
+    ap     = _approval("PROGRAM", rec_ws.source_key)
+
+    e = check_publication_eligibility(
+        rec_ws, status, change, ed, ri, ap, relevance_verdict="INCLUDE"
+    )
+    assert not e.eligible
+    assert COND_ATTRIBUTION in e.failed_conditions
+
+
+def test_RG04_origin_url_only_no_bizinfo_url_blocked():
+    """RG-04: bizinfo_url 없고 origin_url만 있으면 → C-2 실패 → 공개 차단.
+
+    고객 화면은 bizinfo_url을 원문 링크로 사용하므로
+    bizinfo_url 없이는 공식 공고를 열어볼 수 없다.
+    """
+    rec_origin_only = _program_record()
+    object.__setattr__(rec_origin_only, "bizinfo_url", None)
+    # origin_url은 _program_record() 기본값으로 설정돼 있음
+    status = program_status(rec_origin_only, as_of=_TODAY)
+    change = _first_change(rec_origin_only)
+    ed     = _editorial("PROGRAM", rec_origin_only.source_key)
+    ri     = _rights(rec_origin_only.source_key)
+    ap     = _approval("PROGRAM", rec_origin_only.source_key)
+
+    e = check_publication_eligibility(
+        rec_origin_only, status, change, ed, ri, ap, relevance_verdict="INCLUDE"
+    )
+    assert not e.eligible
+    assert COND_SOURCE_LINK in e.failed_conditions
+
+
+def test_RG05_full_valid_data_passes_all_conditions():
+    """RG-05: 모든 조건 충족 — INCLUDE 판정, 실패 조건 없음."""
+    rec    = _program_record()
+    status = program_status(rec, as_of=_TODAY)
+    change = _first_change(rec)
+    ed     = _editorial("PROGRAM", rec.source_key)
+    ri     = _rights(rec.source_key)
+    ap     = _approval("PROGRAM", rec.source_key)
+
+    e = check_publication_eligibility(
+        rec, status, change, ed, ri, ap, relevance_verdict="INCLUDE"
+    )
+    assert e.eligible
+    assert e.failed_conditions == ()
