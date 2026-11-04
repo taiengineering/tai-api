@@ -1,5 +1,12 @@
 """WO-TAI-BIZINFO-DAILY-SYNC-SLACK-001 — 일일 수집·상태 갱신·Slack 알림.
 
+WO-TAI-BIZINFO-LIFECYCLE-ATOMIC-001 R1 추가:
+  신규 IN_SCOPE 공고 저장 및 기존 IN_SCOPE 공고 상태 변경을
+  save_record_with_notification()으로 원자적으로 처리한다.
+  - 신규 IN_SCOPE: relevance_verdict + 개별 Slack 알림이 단일 PG 트랜잭션
+  - 기존 IN_SCOPE 상태 변경: 레코드 갱신 + 알림이 단일 PG 트랜잭션
+  GATE-CODE: 이 연결은 Owner Code Auth 승인 후 활성화된다.
+
 기존 TAI bizinfo 모듈을 조합해 매일 KST 13:00에 실행되는 일일 동기화 엔진.
 실제 스케줄 활성화·Slack 발송은 별도 Owner 승인 Gate.
 
@@ -7,16 +14,16 @@
   기존 IN_SCOPE, OUT_OF_SCOPE → 보존 (덮어쓰지 않음)
   기존 REVIEW_REQUIRED 또는 None → 신규 판정으로 업데이트
   신규 공고 → 항상 판정
+  마감(CLOSED) 상태여도 IN_SCOPE 판정은 보존됨 (관련성 ≠ 모집 상태)
 
-Slack 중복 방지:
-  event_id = "bizinfo_daily_sync_{YYYY-MM-DD}_{content_hash}" — 내용 기반 중복 방지
-  같은 날 내용이 동일한 재실행은 차단, 새로 발견한 공고·변경은 별도 알림 허용
-  accept_relay_event() 중복 시 False → 재전송 없음, 기존 이벤트 재처리 경로 유지
-
-알림 유실 주의 (KNOWN_LIMITATION):
-  DB 저장 후 Slack 접수 전 프로세스 중단 시, 다음 실행에서 해당 공고는
-  "기존 공고"로 처리되어 알림이 재생성되지 않는다.
-  완전한 at-least-once 보장은 별도 Gate (알림 상태 추적 스키마 필요).
+Slack 알림 경로 (이중):
+  1. 개별 알림 (원자적): save_record_with_notification()
+     - 신규 IN_SCOPE → event_id = "bizinfo_new_{kind}_{key}_{date}"
+     - 상태 변경      → event_id = "bizinfo_status_{kind}_{key}_{date}"
+     - relay log에 PENDING으로 등록 → relay worker가 처리
+  2. 일일 요약 알림 (slack_accept_fn 경유):
+     - event_id = "bizinfo_daily_sync_{date}_{content_hash}"
+     - 같은 날 동일 내용 재실행 차단
 
 API 개별 조회 미제공:
   페이지 목록 탐색으로 기존 IN_SCOPE 공고를 재확인한다.
@@ -171,6 +178,37 @@ def _detect_status_change(
     )
 
 
+def _build_new_in_scope_message(
+    record: NormalizedSourceRecord,
+    decision: RelevanceDecision,
+) -> str:
+    """신규 IN_SCOPE 공고 개별 Slack 알림 메시지 (save_record_with_notification 용)."""
+    lines = [f"*[신규 확정]* {record.title}"]
+    if record.source_org:
+        lines.append(f"기관: {record.source_org}")
+    if record.support_target:
+        lines.append(f"지원대상: {record.support_target}")
+    ap = record.application_period
+    if ap and (ap.start or ap.end):
+        s = ap.start.isoformat() if ap.start else "미정"
+        e = ap.end.isoformat() if ap.end else "미정"
+        lines.append(f"접수기간: {s} ~ {e}")
+    if record.bizinfo_url:
+        lines.append(f"링크: {record.bizinfo_url}")
+    return "\n".join(lines)
+
+
+def _build_status_change_message(status_ev: StatusChangeEvent) -> str:
+    """기존 IN_SCOPE 공고 상태 변경 개별 Slack 알림 메시지 (save_record_with_notification 용)."""
+    lines = [
+        f"*[상태변경]* {status_ev.title}",
+        f"{status_ev.old_status} → {status_ev.new_status}",
+    ]
+    if status_ev.bizinfo_url:
+        lines.append(f"링크: {status_ev.bizinfo_url}")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Kind-level sync
 # ---------------------------------------------------------------------------
@@ -215,16 +253,32 @@ def _sync_kind(
             is_new = prior is None
             change = detect_change(prior, normalized)
 
-            # 최신 공고 내용 저장 (항상)
-            repo.save_record(normalized, change)
-
             if is_new:
                 result.new_records_saved += 1
                 decision = review_relevance(normalized)
-                repo.save_relevance_verdict(source_kind, key, decision.verdict)
                 if decision.verdict == "IN_SCOPE":
+                    # 신규 IN_SCOPE: 저장 + 판정 + 개별 알림을 단일 원자 호출
+                    notif_id = (
+                        f"bizinfo_new_{source_kind.lower()}_{key}"
+                        f"_{as_of.isoformat()}"
+                    )
+                    repo.save_record_with_notification(
+                        normalized, change,
+                        relevance_verdict="IN_SCOPE",
+                        notif_event_id=notif_id,
+                        relay_channel="direct://bizinfo_daily_sync",
+                        target_channel=_SLACK_CHANNEL,
+                        message_text=_build_new_in_scope_message(normalized, decision),
+                        sender_id="bizinfo_daily_sync",
+                    )
                     result.new_in_scope.append(
                         NewInScopeEvent(record=normalized, decision=decision)
+                    )
+                else:
+                    # 비IN_SCOPE 신규: 저장 + 판정 (알림 없음)
+                    repo.save_record_with_notification(
+                        normalized, change,
+                        relevance_verdict=decision.verdict,
                     )
             else:
                 # 기존 공고 — 판정 보호 적용
@@ -234,6 +288,21 @@ def _sync_kind(
                     status_ev = _detect_status_change(prior, normalized, as_of)
                     if status_ev:
                         result.status_changes.append(status_ev)
+                        # 상태 변경: 저장 + 개별 알림을 단일 원자 호출
+                        notif_id = (
+                            f"bizinfo_status_{source_kind.lower()}_{key}"
+                            f"_{as_of.isoformat()}"
+                        )
+                        repo.save_record_with_notification(
+                            normalized, change,
+                            notif_event_id=notif_id,
+                            relay_channel="direct://bizinfo_daily_sync",
+                            target_channel=_SLACK_CHANNEL,
+                            message_text=_build_status_change_message(status_ev),
+                            sender_id="bizinfo_daily_sync",
+                        )
+                    else:
+                        repo.save_record(normalized, change)
                 else:
                     # 비IN_SCOPE 기존 공고 — 판정 확인 (캐시 우선)
                     existing = _verdict_cache.get(key)
@@ -243,10 +312,16 @@ def _sync_kind(
                             _verdict_cache[key] = existing
 
                     if existing not in _VERDICTS_TO_PRESERVE:
-                        # REVIEW_REQUIRED 또는 None → 재판정
+                        # REVIEW_REQUIRED 또는 None → 재판정, 저장 + 판정 원자 호출
                         decision = review_relevance(normalized)
-                        repo.save_relevance_verdict(source_kind, key, decision.verdict)
+                        repo.save_record_with_notification(
+                            normalized, change,
+                            relevance_verdict=decision.verdict,
+                        )
                         _verdict_cache[key] = decision.verdict
+                    else:
+                        # IN_SCOPE/OUT_OF_SCOPE 보존 → 레코드만 갱신
+                        repo.save_record(normalized, change)
 
         if len(batch.items) < _PAGE_SIZE:
             break  # 마지막 페이지
