@@ -3,7 +3,7 @@
 Production DB·API·Slack 호출 = 0 (전부 모의 주입).
 
 커버리지:
-  DS-01  매일 13:00 KST 시간 계산 — 크론 표현식 검증
+  DS-01  실제 등록 SQL cron 표현식 → KST 13:00 검증
   DS-02  PROGRAM 수집 — 신규 공고 저장
   DS-03  EVENT 수집 — 신규 공고 저장
   DS-04  신규 OUT_OF_SCOPE → 알림 없음
@@ -15,14 +15,20 @@ Production DB·API·Slack 호출 = 0 (전부 모의 주입).
   DS-10  API 실패 → 상태 변경 없음
   DS-11  API 목록에서 기존 공고 미발견 → confirmed=0, 취소 판정 없음
   DS-12  기존 OUT_OF_SCOPE 판정 보호
-  DS-13  동일 실행 재시도 → 중복 알림 없음
-  DS-14  Slack 실패 → event_id 캡처됨 (재처리 가능)
+  DS-13  동일 내용 재실행 → 중복 알림 없음 (content-based dedup)
+  DS-14  Slack 접수 성공 → event_id 캡처됨 (재처리 가능)
   DS-15  기존 1,585건 데이터 보존 — sync가 기존 레코드를 삭제하지 않음
   DS-16  편집 승인·MKT 발행 기능에 영향 없음
+  DS-17  같은 날 2회 실행 — 새 IN_SCOPE 발견 시 별도 알림 생성
+  DS-18  기존 IN_SCOPE 모두 확인 후에도 뒤 페이지 계속 탐색
+  DS-19  UTC/KST 날짜 경계 — KST 기준 prior_check 사용
+  DS-20  프로세스 복구 한계 — DB 저장 후 중단 시 다음 실행 복구 불가 (별도 Gate)
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 from unittest.mock import MagicMock
 
@@ -217,15 +223,26 @@ def _get_fn_combined(program_items: list, event_items: list):
 # ---------------------------------------------------------------------------
 
 def test_DS01_cron_expression_1pm_kst():
-    """'0 13 * * *'은 Asia/Seoul KST 기준 매일 13:00 (UTC 04:00)."""
+    """실제 등록 SQL의 cron 표현식을 읽어 KST 13:00 발화 검증.
+
+    테스트와 배포 설정이 동일한 소스를 참조해 불일치를 방지한다.
+    """
     from services.scheduler.cron_grammar import next_fire_at_or_after
     from zoneinfo import ZoneInfo
 
-    t0 = datetime(2026, 11, 5, 3, 59, 0, tzinfo=ZoneInfo("Asia/Seoul"))
-    next_fire = next_fire_at_or_after("0 13 * * *", t0)
+    sql_path = Path(__file__).parent.parent / "migrations" / "20261104_bizinfo_daily_sync_cron.sql"
+    sql_text = sql_path.read_text(encoding="utf-8")
+
+    # cron_job_master VALUES 블록에서 cron 표현식 추출
+    match = re.search(r"'(\d+\s+\d+\s+\*\s+\*\s+\*)'", sql_text)
+    assert match, "SQL에서 cron 표현식을 찾지 못했습니다"
+    cron_expr = match.group(1)
+
     kst = ZoneInfo("Asia/Seoul")
+    t0 = datetime(2026, 11, 5, 3, 59, 0, tzinfo=kst)
+    next_fire = next_fire_at_or_after(cron_expr, t0)
     fire_kst = next_fire.astimezone(kst)
-    assert fire_kst.hour == 13
+    assert fire_kst.hour == 13, f"KST 13:00이어야 함, 실제: {fire_kst.hour}:00 (cron='{cron_expr}')"
     assert fire_kst.minute == 0
 
 
@@ -296,7 +313,7 @@ def test_DS04_new_out_of_scope_no_alert(monkeypatch):
     result = run_bizinfo_daily_sync(repo, slack_fn, as_of=_TODAY, get_fn=gfn)
     assert result.total_new_in_scope == 0
     assert len(calls) == 0
-    assert result.slack_skipped_reason in ("no_events", None) or not result.slack_sent
+    assert result.slack_skipped_reason in ("no_events", None) or not result.slack_event_accepted
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +356,9 @@ def test_DS06_new_in_scope_alert_once(monkeypatch):
     result = run_bizinfo_daily_sync(repo, slack_fn, as_of=_TODAY, get_fn=gfn)
     assert result.total_new_in_scope == 1
     assert len(calls) == 1
-    assert result.slack_event_id == f"bizinfo_daily_sync_{_TODAY.isoformat()}"
+    assert result.slack_event_accepted is True
+    assert result.slack_event_id is not None
+    assert result.slack_event_id.startswith(f"bizinfo_daily_sync_{_TODAY.isoformat()}_")
 
 
 # ---------------------------------------------------------------------------
@@ -554,14 +573,16 @@ def test_DS13_no_duplicate_on_retry(monkeypatch):
 
     # 1회 실행
     r1 = run_bizinfo_daily_sync(repo, _dedup_slack, as_of=_TODAY, get_fn=gfn)
-    assert r1.slack_sent is True
+    assert r1.slack_event_accepted is True
+    first_event_id = r1.slack_event_id
 
     # 2회 실행 — 별도 repo로 동일 아이템이 다시 신규로 발견되지만
-    # event_id가 같아 Slack accept가 False를 반환 → duplicate_event_id
+    # 같은 내용 → 같은 content_hash → 같은 event_id → duplicate_event_id
     repo2 = InMemoryBizinfoRepository()
     r2 = run_bizinfo_daily_sync(repo2, _dedup_slack, as_of=_TODAY, get_fn=gfn)
-    assert r2.slack_sent is False
+    assert r2.slack_event_accepted is False
     assert r2.slack_skipped_reason == "duplicate_event_id"
+    assert r2.slack_event_id == first_event_id  # 동일 내용 → 동일 event_id
 
 
 # ---------------------------------------------------------------------------
@@ -582,8 +603,10 @@ def test_DS14_slack_event_id_captured_for_retry(monkeypatch):
     slack_fn, calls = _make_slack_accept(return_true=True)
 
     result = run_bizinfo_daily_sync(repo, slack_fn, as_of=_TODAY, get_fn=gfn)
-    assert result.slack_event_id == f"bizinfo_daily_sync_{_TODAY.isoformat()}"
-    assert result.slack_event_id in calls
+    # event_id = "bizinfo_daily_sync_{날짜}_{content_hash}" 형식
+    assert result.slack_event_id is not None
+    assert result.slack_event_id.startswith(f"bizinfo_daily_sync_{_TODAY.isoformat()}_")
+    assert result.slack_event_id in calls  # relay 접수 확인
 
 
 # ---------------------------------------------------------------------------
@@ -662,3 +685,176 @@ def test_DS16_editorial_approval_unaffected(monkeypatch):
     assert ed_after.explanation == "TAI 해설 텍스트"
     assert ap_after is not None
     assert ap_after.approved_by == "approver-01"
+
+
+# ---------------------------------------------------------------------------
+# DS-17: 같은 날 2회 실행 — 새 IN_SCOPE 발견 시 별도 알림 생성
+# ---------------------------------------------------------------------------
+
+def test_DS17_new_content_on_second_run_same_day(monkeypatch):
+    """같은 날 2회 실행에서 새 IN_SCOPE 공고가 발견되면 다른 event_id로 별도 알림이 생성된다.
+
+    content-based fingerprint 덕분에 같은 날 발견한 새 내용은 1회차 알림과 별개로 처리된다.
+    """
+    monkeypatch.setenv("BIZINFO_API_KEY", "test_key")
+    monkeypatch.setenv("BIZINFO_EVENT_API_KEY", "test_event_key")
+
+    accepted_ids: list = []
+
+    def _dedup_slack(**kwargs):
+        eid = kwargs["event_id"]
+        if eid in accepted_ids:
+            return False
+        accepted_ids.append(eid)
+        return True
+
+    # 1회 실행: item A만 있음
+    raw_a = _make_raw_program("PBLN_SAF_A", "산업안전관리시스템 지원")
+    raw_a["bsnsSumryCn"] = "산업안전관리시스템 도입 지원. 재해예방."
+    repo1 = InMemoryBizinfoRepository()
+    r1 = run_bizinfo_daily_sync(
+        repo1, _dedup_slack, as_of=_TODAY,
+        get_fn=_get_fn_combined(program_items=[raw_a], event_items=[]),
+    )
+    assert r1.slack_event_accepted is True
+    id_first = r1.slack_event_id
+
+    # 2회 실행: item A + item B (신규)
+    raw_b = _make_raw_program("PBLN_SAF_B", "재해예방 장비 지원")
+    raw_b["bsnsSumryCn"] = "재해예방 장비 구입 비용 지원. 산업안전관리."
+    repo2 = InMemoryBizinfoRepository()
+    r2 = run_bizinfo_daily_sync(
+        repo2, _dedup_slack, as_of=_TODAY,
+        get_fn=_get_fn_combined(program_items=[raw_a, raw_b], event_items=[]),
+    )
+    assert r2.slack_event_accepted is True, "새 내용이 있으면 별도 알림이 허용돼야 한다"
+    assert r2.slack_event_id != id_first, "다른 내용 → 다른 event_id"
+
+
+# ---------------------------------------------------------------------------
+# DS-18: 기존 IN_SCOPE 모두 확인 후에도 뒤 페이지 계속 탐색
+# ---------------------------------------------------------------------------
+
+def test_DS18_continues_scan_after_in_scope_confirmed(monkeypatch):
+    """기존 IN_SCOPE 공고가 모두 발견돼도 max_pages까지 탐색을 계속해 신규 공고를 누락하지 않는다."""
+    monkeypatch.setenv("BIZINFO_API_KEY", "test_key")
+    monkeypatch.setenv("BIZINFO_EVENT_API_KEY", "test_event_key")
+    # _PAGE_SIZE=1로 낮춰 각 페이지에 1건씩 반환
+    monkeypatch.setattr("services.bizinfo.daily_sync._PAGE_SIZE", 1)
+
+    repo = InMemoryBizinfoRepository()
+    prior = _make_prior_program(key="PBLN_KNOWN_PAGE1")
+    repo.save_record(prior, _make_change("PBLN_KNOWN_PAGE1"))
+    repo.save_relevance_verdict("PROGRAM", "PBLN_KNOWN_PAGE1", "IN_SCOPE")
+
+    # Page 1: known IN_SCOPE
+    # Page 2: 중간 비IN_SCOPE 공고
+    # Page 3: 신규 공고 (뒤 페이지에만 존재)
+    p1 = _make_raw_program("PBLN_KNOWN_PAGE1", "안전관리시스템 지원")
+    p2 = _make_raw_program("PBLN_MIDDLE_P2", "다른 분야 지원")
+    p3 = _make_raw_program("PBLN_NEW_PAGE3", "재해예방 안전장비 지원")
+
+    def _multipage_get(url, *, params, timeout):
+        import json
+        page = int(params.get("pageIndex", "1"))
+        if "EventApi" in url:
+            return 200, json.dumps({"jsonArray": []})
+        # PAGE_SIZE=1이므로 totCnt를 실제 항목 수로 설정
+        if page == 1:
+            return 200, json.dumps({"jsonArray": [{**p1, "totCnt": "3"}]})
+        elif page == 2:
+            return 200, json.dumps({"jsonArray": [{**p2, "totCnt": "3"}]})
+        elif page == 3:
+            return 200, json.dumps({"jsonArray": [{**p3, "totCnt": "3"}]})
+        return 200, json.dumps({"jsonArray": []})
+
+    slack_fn, _ = _make_slack_accept()
+    result = run_bizinfo_daily_sync(repo, slack_fn, as_of=_TODAY,
+                                   get_fn=_multipage_get, max_pages=3)
+
+    assert result.program.fetched == 3, "3페이지 모두 수집돼야 한다"
+    assert repo.get_prior_record("PROGRAM", "PBLN_NEW_PAGE3") is not None, \
+        "page 3의 신규 공고가 저장돼야 한다"
+
+
+# ---------------------------------------------------------------------------
+# DS-19: UTC/KST 날짜 경계 — KST 기준 prior_check 사용
+# ---------------------------------------------------------------------------
+
+def test_DS19_kst_date_boundary_prior_check(monkeypatch):
+    """UTC 자정 전후 수집된 공고의 prior_check는 KST 날짜 기준이다.
+
+    retrieved_at = 2026-11-04 15:30 UTC = 2026-11-05 00:30 KST
+    KST 날짜 = 2026-11-05 (오늘, as_of 와 동일)
+    app_start = 2026-11-05 → prior_check와 as_of 모두 KST 11-05 → 같은 상태 → 변경 없음
+
+    UTC 날짜로 계산했다면 prior_check = 11-04 → UPCOMING vs as_of=11-05 → OPEN
+    → 잘못된 상태 변경 경보가 발생한다.
+    """
+    monkeypatch.setenv("BIZINFO_API_KEY", "test_key")
+    monkeypatch.setenv("BIZINFO_EVENT_API_KEY", "test_event_key")
+
+    repo = InMemoryBizinfoRepository()
+    # UTC Nov 4 15:30 = KST Nov 5 00:30 (오늘 KST)
+    prior = _make_prior_program(
+        key="PBLN_KST_001",
+        app_start=date(2026, 11, 5),   # 오늘 시작
+        app_end=date(2026, 12, 31),
+        retrieved_at=datetime(2026, 11, 4, 15, 30, 0, tzinfo=timezone.utc),
+    )
+    repo.save_record(prior, _make_change("PBLN_KST_001"))
+    repo.save_relevance_verdict("PROGRAM", "PBLN_KST_001", "IN_SCOPE")
+
+    raw = _make_raw_program("PBLN_KST_001", "안전관리시스템 지원",
+                            app_start="2026-11-05", app_end="2026-12-31")
+    gfn = _get_fn_combined(program_items=[raw], event_items=[])
+    slack_fn, _ = _make_slack_accept()
+
+    result = run_bizinfo_daily_sync(repo, slack_fn, as_of=_TODAY, get_fn=gfn)
+    assert result.total_status_changes == 0, (
+        "KST 같은 날 수집된 공고는 prior_check=as_of이므로 상태 변경으로 보고하지 않아야 한다"
+    )
+
+
+# ---------------------------------------------------------------------------
+# DS-20: 프로세스 복구 한계 — DB 저장 후 중단 시 다음 실행에서 복구 불가
+# ---------------------------------------------------------------------------
+
+def test_DS20_process_crash_recovery_known_limitation(monkeypatch):
+    """DB 저장 후 Slack 접수 전 프로세스 중단 시 다음 실행에서 알림 복구 불가.
+
+    KNOWN_LIMITATION: at-least-once Slack 보장은 별도 Gate가 필요하다.
+    현재 구현에서는 이미 저장된 공고를 "기존 공고"로 처리하므로
+    재실행에서 신규 알림이 생성되지 않는다.
+    """
+    monkeypatch.setenv("BIZINFO_API_KEY", "test_key")
+    monkeypatch.setenv("BIZINFO_EVENT_API_KEY", "test_event_key")
+
+    repo = InMemoryBizinfoRepository()
+
+    # 이전 실행에서 DB 저장은 성공했지만 Slack 접수 전 중단된 상황 시뮬레이션:
+    # DB에는 IN_SCOPE로 저장돼 있지만 Slack 이벤트 미생성
+    # prior와 raw 날짜를 동일하게 맞춰 상태 변경이 발생하지 않도록 함
+    prior = _make_prior_program(
+        key="PBLN_CRASH_001",
+        title="산업안전관리시스템 지원",
+        app_start=date(2026, 10, 1),
+        app_end=date(2026, 12, 31),
+        retrieved_at=datetime(2026, 11, 4, 0, 0, tzinfo=timezone.utc),  # 어제
+    )
+    repo.save_record(prior, _make_change("PBLN_CRASH_001"))
+    repo.save_relevance_verdict("PROGRAM", "PBLN_CRASH_001", "IN_SCOPE")
+
+    raw = _make_raw_program("PBLN_CRASH_001", "산업안전관리시스템 지원",
+                            app_start="2026-10-01", app_end="2026-12-31")
+    gfn = _get_fn_combined(program_items=[raw], event_items=[])
+    slack_fn, calls = _make_slack_accept()
+
+    result = run_bizinfo_daily_sync(repo, slack_fn, as_of=_TODAY, get_fn=gfn)
+
+    # 이미 known_in_scope에 있고 상태 변경도 없으므로 알림이 생성되지 않음
+    # → 이것이 현재의 known limitation
+    assert result.total_new_in_scope == 0
+    assert result.total_status_changes == 0
+    assert result.slack_skipped_reason == "no_events"
+    assert len(calls) == 0  # Slack 접수 없음 — 복구 불가 확인

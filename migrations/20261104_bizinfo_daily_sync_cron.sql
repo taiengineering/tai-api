@@ -4,8 +4,8 @@
 -- STATUS: CODE_ONLY — DB 적용 미승인 / is_active=false 고정
 -- STOP=GPT_BIZINFO_DAILY_SYNC_SOURCE_IV
 --
--- 실행 주기: 매일 KST 13:00 (= UTC 04:00)
---   '0 4 * * *'
+-- 실행 주기: 매일 KST 13:00
+--   '0 13 * * *' — TAI 스케줄러는 cron을 Asia/Seoul(KST)로 해석한다
 --
 -- ■ 운영 활성화 전 필수 해소 조건
 --   GATE-1: Slack 실 발송 Owner 승인
@@ -25,7 +25,7 @@ INSERT INTO public.cron_job_master
 VALUES
     ('bizinfo_daily_safety_sync',
      '기업마당 안전 관련 일일 동기화',
-     '0 4 * * *',                   -- KST 13:00 (= UTC 04:00)
+     '0 13 * * *',                  -- KST 13:00 (TAI 스케줄러: Asia/Seoul 기준)
      false,                         -- GATE-1/2/3 해소 전 비활성 고정
      'direct://bizinfo_daily_safety_sync',
      'DIRECT',

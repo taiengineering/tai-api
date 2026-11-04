@@ -9,19 +9,31 @@
   신규 공고 → 항상 판정
 
 Slack 중복 방지:
-  event_id = "bizinfo_daily_sync_{YYYY-MM-DD}" — 하루 1회 메시지
+  event_id = "bizinfo_daily_sync_{YYYY-MM-DD}_{content_hash}" — 내용 기반 중복 방지
+  같은 날 내용이 동일한 재실행은 차단, 새로 발견한 공고·변경은 별도 알림 허용
   accept_relay_event() 중복 시 False → 재전송 없음, 기존 이벤트 재처리 경로 유지
+
+알림 유실 주의 (KNOWN_LIMITATION):
+  DB 저장 후 Slack 접수 전 프로세스 중단 시, 다음 실행에서 해당 공고는
+  "기존 공고"로 처리되어 알림이 재생성되지 않는다.
+  완전한 at-least-once 보장은 별도 Gate (알림 상태 추적 스키마 필요).
 
 API 개별 조회 미제공:
   페이지 목록 탐색으로 기존 IN_SCOPE 공고를 재확인한다.
   탐색 범위 내에서 발견되지 않은 공고는 "미확인"으로 기록하고,
   취소·마감으로 판정하지 않는다.
+  기존 IN_SCOPE 공고가 모두 확인되더라도 max_pages까지 탐색을 계속해
+  뒤 페이지의 신규 공고를 누락하지 않는다.
+
+기준 시간대:
+  모든 날짜 계산은 KST(Asia/Seoul, UTC+9) 기준이다.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Literal, Optional
 
 from services.bizinfo.api_access import fetch_source_batch
@@ -45,6 +57,7 @@ _PAGE_SIZE = 100
 _MAX_PAGES = 5         # 기본 최대 500건 탐색
 _SLACK_CHANNEL = "C0CCQKVQCQP"
 _VERDICTS_TO_PRESERVE = frozenset({"IN_SCOPE", "OUT_OF_SCOPE"})
+_KST = timezone(timedelta(hours=9))
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +107,8 @@ class BizinfoDailySyncResult:
     event: SyncKindResult = field(
         default_factory=lambda: SyncKindResult("EVENT")
     )
-    slack_sent: bool = False
+    # True = relay가 이벤트를 접수함. 실제 Slack 전송 여부는 slack_relay_event_log에서 확인.
+    slack_event_accepted: bool = False
     slack_event_id: Optional[str] = None
     slack_skipped_reason: Optional[str] = None
 
@@ -129,11 +143,12 @@ def _detect_status_change(
 ) -> Optional[StatusChangeEvent]:
     """이전 공고와 현재 공고의 상태를 비교해 의미 있는 변화를 반환.
 
-    이전 상태는 prior.retrieved_at.date()를 기준으로,
-    현재 상태는 as_of(오늘)를 기준으로 계산한다.
+    이전 상태는 prior.retrieved_at의 KST 날짜를 기준으로,
+    현재 상태는 as_of(오늘 KST)를 기준으로 계산한다.
     날짜 변경 없이 시간 경과만으로 발생하는 전환(UPCOMING→OPEN 등)도 포함된다.
+    UTC 자정 전후(예: UTC 15:30 = KST 00:30)에 수집된 공고도 KST 날짜로 올바르게 비교한다.
     """
-    prior_check = prior.retrieved_at.date()
+    prior_check = prior.retrieved_at.astimezone(_KST).date()
     source_kind = current.source_kind
 
     if source_kind == "PROGRAM":
@@ -236,10 +251,6 @@ def _sync_kind(
         if len(batch.items) < _PAGE_SIZE:
             break  # 마지막 페이지
 
-        # 모든 known IN_SCOPE를 확인했으면 조기 종료 (page >= 2 이후)
-        if page >= 2 and known_in_scope.issubset(confirmed):
-            break
-
     result.in_scope_confirmed = len(confirmed)
     return result
 
@@ -265,7 +276,7 @@ def run_bizinfo_daily_sync(
     get_fn:          HTTP 함수 주입 (None = kr_get 기본값)
     max_pages:       API 최대 탐색 페이지 수
     """
-    today = as_of or datetime.now(timezone.utc).date()
+    today = as_of or datetime.now(_KST).date()
     run_at = datetime.now(timezone.utc)
     result = BizinfoDailySyncResult(run_at=run_at)
 
@@ -298,7 +309,15 @@ def run_bizinfo_daily_sync(
     has_events = result.total_new_in_scope > 0 or result.total_status_changes > 0
     if has_events:
         message = build_slack_message(result, today)
-        event_id = f"bizinfo_daily_sync_{today.isoformat()}"
+        # 내용 기반 fingerprint — 같은 내용의 재실행은 차단, 새 내용은 별도 알림 허용
+        all_new = result.program.new_in_scope + result.event.new_in_scope
+        all_changes = result.program.status_changes + result.event.status_changes
+        content_parts = sorted(
+            [ev.record.source_key for ev in all_new] +
+            [f"{ev.source_key}:{ev.old_status}:{ev.new_status}" for ev in all_changes]
+        )
+        content_hash = hashlib.sha256("|".join(content_parts).encode()).hexdigest()[:8]
+        event_id = f"bizinfo_daily_sync_{today.isoformat()}_{content_hash}"
         accepted = slack_accept_fn(
             event_id=event_id,
             relay_channel="direct://bizinfo_daily_sync",
@@ -308,7 +327,7 @@ def run_bizinfo_daily_sync(
             source_message_ts=None,
         )
         result.slack_event_id = event_id
-        result.slack_sent = accepted
+        result.slack_event_accepted = accepted
         if not accepted:
             result.slack_skipped_reason = "duplicate_event_id"
     else:
