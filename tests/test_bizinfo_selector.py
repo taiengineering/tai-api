@@ -426,3 +426,130 @@ def test_S26_in_scope_direct_safety_support_no_exclusion():
     )
     result = review_relevance(rec)
     assert result.verdict == "IN_SCOPE"
+
+
+# ---------------------------------------------------------------------------
+# R2 regression tests (WO-TAI-BIZINFO-SAFETY-RELEVANCE-DB-001)
+# ---------------------------------------------------------------------------
+
+
+def test_S27_in_scope_compact_safety_management_personnel():
+    """S-27: "안전관리 인력" (공백 포함) → compact 매칭 → IN_SCOPE.
+
+    R2: 안전관리 인력은 산업안전보건법상 법정 의무 인력이다. 제목의 공백이
+    keyword를 split하더라도 compact 형식으로 감지해야 한다.
+    [REAL 유형: PBLN_000000000126712 — 자동차 부품업종 안전관리 인력 고용지원사업]
+    """
+    rec = _record(
+        title="[울산] 2026년 자동차 부품업종 안전관리 인력 고용지원사업 참여기업 모집 공고",
+        summary=(
+            "울산지역 자동차 부품업종 안전관리 인력의 지역정착 및 "
+            "안전관리자 장기근속 지원금, 안전관리자 선임 정착 지원."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("안전관리인력" in b or "안전관리자" in b for b in result.basis)
+
+
+def test_S28_review_required_jungdae_simin_jaehae():
+    """S-28: "중대시민재해" 교육 — 중대재해처벌법 준수 목적이지만 산업재해가 아닌
+    소비자 제품 안전. "중대재해" 키워드가 "중대시민재해" 내부에 없으므로 직접 매칭
+    안 됨 → REVIEW_REQUIRED 유지.
+
+    R2: "중대재해" ⊄ "중대시민재해" (부분문자열 아님) — 오탐 없음 확인.
+    [REAL 유형: EVEN_000000000069465 — 원료·제조물 분야 중대시민재해 교육]
+    """
+    rec = _record(
+        source_kind="EVENT",
+        source_id="BIZINFO_EVENT",
+        source_key="EVEN_TEST_SIMIN",
+        title="[전국] 원료ㆍ제조물 분야 중대시민재해 교육 개최",
+        summary=(
+            "원료ㆍ제조물을 생산ㆍ제조ㆍ판매ㆍ유통하는 사업장을 대상으로 "
+            "중대재해처벌법과 관계법령의 주요 내용, 안전ㆍ보건 의무사항 및 "
+            "통합이행 안전ㆍ보건 체계 구축방법 안내."
+        ),
+    )
+    result = review_relevance(rec)
+    # 중대재해는 중대시민재해의 부분문자열이 아님 → 직접 안전 키워드 미매칭
+    # 안전ㆍ보건(중간점)은 안전보건(연속)과 다름 → adjacent/no_evidence
+    assert result.verdict == "REVIEW_REQUIRED"
+
+
+def test_S29_out_of_scope_rural_accommodation_fire_safety():
+    """S-29: 농어촌민박 소방안전시설 지원 — 소방(adjacent) + 농어촌민박(non_safety)
+    → 인접 신호만 있고 비안전 목적 확인 → OUT_OF_SCOPE.
+
+    R2: adjacent 신호만 있고 비안전 목적이 명확히 확인된 경우 OUT_OF_SCOPE.
+    TAI Safe 고객군(산업현장)이 아닌 농촌 숙박시설 대상.
+    [REAL 유형: PBLN_000000000127526 — 여수시 농어촌민박 소방안전시설 지원]
+    """
+    rec = _record(
+        title="[전남광주] 여수시 2026년 농어촌민박 소방안전시설 지원 사업 모집 공고",
+        summary=(
+            "농어촌민박업소의 쾌적하고 안전한 여가 공간을 마련하여 방문객 편의 제공 및 "
+            "농어촌관광 활성화를 도모하고자 소방안전시설 지원 사업에 참여할 "
+            "농어촌민박업소를 모집합니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "OUT_OF_SCOPE"
+    assert any("농어촌민박" in b for b in result.basis)
+    assert any("adjacent_overridden" in b or "non_safety" in b for b in result.basis)
+
+
+def test_S30_out_of_scope_personal_data_safety():
+    """S-30: 개인정보 안전조치 모니터링 — '안전' 단어 포함이지만 데이터 보안 목적.
+    '개인정보' 비안전 마커 → OUT_OF_SCOPE.
+
+    R2: 개인정보보호는 산업안전과 무관한 별도 법적 의무 영역.
+    [REAL 유형: PBLN_000000000122104 — 중소사업자 개인정보 안전조치 모니터링 지원]
+    """
+    rec = _record(
+        title="2026년 중소사업자 개인정보 안전조치 모니터링 지원 사업 공고",
+        summary=(
+            "개인정보보호위원회에서 중소사업자를 대상으로 개인정보 안전조치 의무 "
+            "이행 여부를 모니터링하고 개선을 지원하는 사업입니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "OUT_OF_SCOPE"
+    assert any("개인정보" in b for b in result.basis)
+
+
+def test_S31_in_scope_health_manager_selection_support():
+    """S-31: 보건관리자 선임 지원 — R2 추가 키워드 → IN_SCOPE.
+
+    보건관리자는 산업안전보건법상 안전관리자와 동급 법정 의무 인력이다.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[경기] 2026년 소규모사업장 보건관리자 선임 지원사업",
+        summary=(
+            "50인 미만 소규모사업장의 산업재해 예방을 위해 보건관리자 선임 비용을 "
+            "지원합니다. 직업병 예방 및 건강검진 연계 포함."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "IN_SCOPE"
+    assert any("보건관리자" in b or "산업재해" in b for b in result.basis)
+
+
+def test_S32_review_required_fire_safety_no_non_safety_marker():
+    """S-32: 소방시설 지원이지만 비안전 목적 마커 없음 → REVIEW_REQUIRED 유지.
+
+    R2: adjacent 신호만으로는 OUT_OF_SCOPE 불가. 비안전 목적이 명시적으로
+    확인되지 않으면 REVIEW_REQUIRED로 유지.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[인천] 2026년 소규모 제조업체 소방시설 개선 지원사업",
+        summary=(
+            "소규모 제조업체의 화재 예방을 위한 소방시설 개선 비용을 지원합니다. "
+            "50인 미만 제조업 사업장 대상."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("소방" in b for b in result.basis)

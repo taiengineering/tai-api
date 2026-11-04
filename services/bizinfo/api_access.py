@@ -139,12 +139,28 @@ def _has_auth_error(data: dict) -> bool:
 def _extract_items(data: dict) -> tuple[tuple[dict, ...], int]:
     """Extract items tuple and total_count from a parsed API response dict.
 
-    기업마당 wraps results in {"jsonArray": {"item": [...], "totCnt": "N"}}.
-    When only one item exists the API may return item as a dict rather than
-    a one-element list — both forms are normalised to a tuple of dicts.
-    Falls back to "totalCount" key when "totCnt" is absent.
+    실제 기업마당 API 응답 형식 (SRC-A 실증):
+      {"jsonArray": [{...item, "totCnt": "N"}, ...]}
+      jsonArray는 list이며, totCnt는 각 item 내부에 포함된다.
+
+    하위 호환 형식 (문서 기준):
+      {"jsonArray": {"item": [...], "totCnt": "N"}}
+      item이 단일 dict일 때 list 대신 dict가 올 수 있음.
     """
     array_candidate = data.get("jsonArray")
+
+    # 실제 응답: jsonArray = list of item dicts (totCnt은 각 item 내부)
+    if isinstance(array_candidate, list):
+        items: tuple[dict, ...] = tuple(i for i in array_candidate if isinstance(i, dict))
+        total = 0
+        if items:
+            try:
+                total = int(items[0].get("totCnt", 0))
+            except (ValueError, TypeError):
+                total = len(items)
+        return items, total
+
+    # 문서 기준 형식: jsonArray = {"item": [...], "totCnt": "N"}
     if isinstance(array_candidate, dict):
         array = array_candidate
     elif array_candidate is None:
@@ -158,7 +174,7 @@ def _extract_items(data: dict) -> tuple[tuple[dict, ...], int]:
         return (), 0
 
     if isinstance(raw_items, dict):
-        items: tuple[dict, ...] = (raw_items,)
+        items = (raw_items,)
     elif isinstance(raw_items, list):
         items = tuple(i for i in raw_items if isinstance(i, dict))
     else:

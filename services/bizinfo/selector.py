@@ -46,6 +46,8 @@ _DIRECT_SAFETY: frozenset[str] = frozenset({
     "안전일터",
     "안전동행",
     "안전관리자",
+    "보건관리자",    # 안전관리자와 동급 법정 의무 인력 (산업안전보건법)
+    "안전관리담당자",  # 소규모사업장 법정 의무
     "위험성평가",
     "방호장치",
     "방호",          # 방호덮개, 방호망 등 — 위험기계 보호 장치
@@ -58,6 +60,17 @@ _DIRECT_SAFETY: frozenset[str] = frozenset({
     "안전진단",
     "유해위험",      # 유해위험요인 개선
     "위험기계",      # 위험기계 방호
+})
+
+# Compact-form (whitespace-collapsed) direct safety phrases.
+# Used to match multi-word terms like "안전관리 인력" that contain spaces
+# in natural text but form a single unambiguous safety concept.
+# These are matched against _title_compact and _summary_compact only.
+_DIRECT_SAFETY_COMPACT: frozenset[str] = frozenset({
+    "안전관리인력",       # "안전관리 인력" 고용·선임 지원
+    "안전보건관리담당자",  # "안전보건관리 담당자" 선임 지원 (소규모사업장)
+    "안전보건담당자",     # "안전보건 담당자" 선임·지원
+    "안전관리인원",       # "안전관리 인원" 채용 지원
 })
 
 # Adjacent / review-zone terms.  Presence raises REVIEW_REQUIRED;
@@ -81,6 +94,8 @@ _ADJACENT_SIGNAL: frozenset[str] = frozenset({
 #   - R1-01: downgrade IN_SCOPE candidate to REVIEW_REQUIRED when safety keywords
 #            appear alongside marketing/export purpose
 #   - R1-02: confirm OUT_OF_SCOPE only when these appear without any safety signal
+#   - R2: when only adjacent (not direct) safety signal exists alongside a confirmed
+#         non-safety purpose → OUT_OF_SCOPE (e.g. 농어촌민박 소방시설)
 _NON_SAFETY_PURPOSE: frozenset[str] = frozenset({
     "판로개척",
     "수출마케팅",
@@ -96,6 +111,8 @@ _NON_SAFETY_PURPOSE: frozenset[str] = frozenset({
     "투자유치",
     "특례보증",
     "어업경영체",
+    "농어촌민박",   # 농촌 숙박시설 — 산업현장 아님 (R2: adjacent+non_safety → OUT)
+    "개인정보",     # 개인정보보호·안전조치 — 데이터 보안, 산업안전 아님
 })
 
 # Compact-form markers indicating the safety aspect is explicitly negated or
@@ -150,6 +167,11 @@ def review_relevance(record: NormalizedSourceRecord) -> RelevanceDecision:
 
     title_direct   = [kw for kw in _DIRECT_SAFETY   if kw in title_lc]
     summary_direct = [kw for kw in _DIRECT_SAFETY   if kw in summary_lc]
+
+    # R2: compact-form multi-word direct safety phrases (e.g. "안전관리 인력")
+    title_direct   = title_direct   + [kw for kw in _DIRECT_SAFETY_COMPACT if kw in _title_compact]
+    summary_direct = summary_direct + [kw for kw in _DIRECT_SAFETY_COMPACT if kw in _summary_compact]
+
     adjacent_hits  = [
         kw for kw in _ADJACENT_SIGNAL
         if kw in title_lc or kw in summary_lc
@@ -219,7 +241,20 @@ def review_relevance(record: NormalizedSourceRecord) -> RelevanceDecision:
             basis.append("summary_missing")
         return RelevanceDecision(verdict="REVIEW_REQUIRED", basis=tuple(basis))
 
-    # Adjacent / review-zone keyword found
+    # R2: adjacent safety signal overridden by confirmed non-safety purpose.
+    # When only adjacent (not direct) safety keywords appear alongside an
+    # explicit non-safety purpose marker, the purpose evidence wins.
+    # e.g. 농어촌민박 소방안전시설: 소방=adjacent, 농어촌민박=non_safety → OUT_OF_SCOPE.
+    if adjacent_hits and non_safety_hits and has_summary:
+        return RelevanceDecision(
+            verdict="OUT_OF_SCOPE",
+            basis=(
+                tuple(f"non_safety:{kw}"        for kw in non_safety_hits[:2]) +
+                tuple(f"adjacent_overridden:{kw}" for kw in adjacent_hits[:1])
+            ),
+        )
+
+    # Adjacent / review-zone keyword found (no non-safety purpose confirmed)
     if adjacent_hits:
         return RelevanceDecision(
             verdict="REVIEW_REQUIRED",
