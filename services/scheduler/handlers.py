@@ -292,6 +292,15 @@ def _run_bizinfo_daily_sync(p):
         return accepted
 
     result = run_bizinfo_daily_sync(repo, _slack_fn, max_pages=max_pages)
+
+    # API 오류 발생 시 FAILED 처리 — 이미 저장된 데이터는 보존되지만 스케줄 로그에 실패 기록
+    all_api_errors = result.program.api_errors + result.event.api_errors
+    if all_api_errors:
+        raise RuntimeError(
+            f"bizinfo_daily_sync API 오류 {len(all_api_errors)}건 — "
+            + "; ".join(all_api_errors[:3])
+        )
+
     return {
         "run_at":               result.run_at.isoformat(),
         "program_fetched":      result.program.fetched,
@@ -300,15 +309,14 @@ def _run_bizinfo_daily_sync(p):
         "program_status_changes": len(result.program.status_changes),
         "program_in_scope_total": result.program.in_scope_total,
         "program_in_scope_confirmed": result.program.in_scope_confirmed,
-        "program_api_errors":   result.program.api_errors,
         "event_fetched":        result.event.fetched,
         "event_new_saved":      result.event.new_records_saved,
         "event_new_in_scope":   len(result.event.new_in_scope),
         "event_status_changes": len(result.event.status_changes),
         "event_in_scope_total": result.event.in_scope_total,
         "event_in_scope_confirmed": result.event.in_scope_confirmed,
-        "event_api_errors":     result.event.api_errors,
-        "slack_sent":           result.slack_sent,
+        # relay 접수 여부 (실제 Slack 전송 완료는 slack_relay_event_log 참조)
+        "slack_event_accepted": result.slack_event_accepted,
         "slack_event_id":       result.slack_event_id,
         "slack_skipped_reason": result.slack_skipped_reason,
     }
