@@ -320,11 +320,15 @@ def _run_bizinfo_daily_sync(p):
         "event_status_changes": len(result.event.status_changes),
         "event_in_scope_total": result.event.in_scope_total,
         "event_in_scope_confirmed": result.event.in_scope_confirmed,
-        "per_item_notif_sent":  per_item_sent,
-        # relay 접수 여부 (일별 요약 비활성화 — per_item_notif_sent 참조)
-        "slack_event_accepted": result.slack_event_accepted,
+        # process_relay_event() 호출 건수 — Slack 전송 성공 보장 아님
+        # (전송 실패 시 RETRY/UNKNOWN으로 남고 run_relay_recovery_once가 재시도)
+        "per_item_relay_dispatched": per_item_sent,
+        # 일별 요약은 의도적으로 비활성화됨 (per-item 알림과 중복 방지)
+        # result.slack_skipped_reason 에는 "duplicate_event_id"가 기록되지만
+        # 실제 이유는 운영 정책상 비활성화이므로 여기서 교정한다.
+        "slack_event_accepted": False,
         "slack_event_id":       result.slack_event_id,
-        "slack_skipped_reason": result.slack_skipped_reason,
+        "slack_skipped_reason": "daily_summary_disabled",
     }
 
 
