@@ -103,6 +103,7 @@ def _make_record(row: dict):
 def _basis_category(basis: tuple[str, ...]) -> str:
     for b in basis:
         if b.startswith("tech_adoption:"):   return "TECH_ADOPTION"
+        if b.startswith("eligibility:"):     return "ELIGIBILITY_ONLY"
         if "title:" in b or "summary:" in b:  return "DIRECT_SAFETY_TECH_OR_DIRECT"
         if b.startswith("signal:"):           return "SINGLE_DIRECT"
         if b.startswith("adjacent:"):         return "ADJACENT"
@@ -142,6 +143,7 @@ def main() -> None:
     basis_counts: dict[str, int] = defaultdict(int)
     changes: list[dict] = []
     tech_adoption_records: list[dict] = []
+    eligibility_records: list[dict] = []
     direct_safety_tech_records: list[dict] = []
     priority_results: list[dict] = []
     specific_keys: set[str] = set(args.keys)
@@ -174,6 +176,9 @@ def main() -> None:
         if cat == "TECH_ADOPTION":
             tech_adoption_records.append(item)
 
+        if cat == "ELIGIBILITY_ONLY":
+            eligibility_records.append(item)
+
         # direct safety tech = IN_SCOPE and basis has compact tech term
         if new_verdict == "IN_SCOPE" and any(
             kw in b
@@ -189,19 +194,19 @@ def main() -> None:
 
     # -- report --
     _print_summary(total, old_counts, new_counts, basis_counts,
-                   changes, tech_adoption_records, direct_safety_tech_records,
-                   priority_results, args.verbose)
+                   changes, tech_adoption_records, eligibility_records,
+                   direct_safety_tech_records, priority_results, args.verbose)
 
 
 def _print_summary(
     total, old_counts, new_counts, basis_counts,
-    changes, tech_adoption, direct_safety_tech,
-    priority_results, verbose
+    changes, tech_adoption, eligibility_only,
+    direct_safety_tech, priority_results, verbose
 ) -> None:
     sep = "─" * 60
 
     print(sep)
-    print("WO-TAI-BIZINFO-SAFETY-DISCOVERY-001  전수 분석 결과")
+    print("WO-TAI-BIZINFO-SAFETY-DISCOVERY-002  전수 분석 결과")
     print(sep)
     print(f"  분석 대상: {total}건")
     print()
@@ -217,9 +222,18 @@ def _print_summary(
         print(f"  {v:<20} {o:>8} {n:>8}  {delta:>6}{mark}")
     print()
 
-    print("── 판정 근거 분류 (신규 기준) ────────────────────")
-    for cat, cnt in sorted(basis_counts.items(), key=lambda x: -x[1]):
-        print(f"  {cat:<35} {cnt:>5}건")
+    print("── 판정 근거 분류 (신규 기준) — REVIEW_REQUIRED 세부 ─")
+    ordered_cats = [
+        "DIRECT_SAFETY_TECH_OR_DIRECT", "SINGLE_DIRECT",
+        "ADJACENT", "TECH_ADOPTION", "ELIGIBILITY_ONLY",
+        "NO_EVIDENCE", "NO_CONTENT",
+        "NON_SAFETY", "CONFLICT", "NEGATED", "OTHER",
+    ]
+    for cat in ordered_cats:
+        cnt = basis_counts.get(cat, 0)
+        if cnt:
+            marker = " ★" if cat in ("TECH_ADOPTION", "ELIGIBILITY_ONLY") else ""
+            print(f"  {cat:<35} {cnt:>5}건{marker}")
     print()
 
     print("── 판정 변경 건수 ───────────────────────────────")
@@ -236,7 +250,13 @@ def _print_summary(
     print()
 
     print(f"── TECH_ADOPTION_POTENTIAL (스마트공장·AI·DX) {len(tech_adoption)}건 ─")
+    print("   [★ 기술 도입 잠재 후보 — 안전 용도 미확인, 인간 검토 필요]")
     _show_items(tech_adoption, verbose)
+    print()
+
+    print(f"── ELIGIBILITY_ONLY (창업기업 등 자격조건 REVIEW) {len(eligibility_only)}건 ─")
+    print("   [★ 창업·초기기업 자격조건 — 기술 도입 신호 없음, TECH_ADOPTION 집단과 별도 처리]")
+    _show_items(eligibility_only, verbose)
     print()
 
     if priority_results:

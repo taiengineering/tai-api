@@ -34,6 +34,12 @@ DISCOVERY-001-R1 corrections (WO-TAI-BIZINFO-SAFETY-DISCOVERY-001):
     자격 조건이지 비안전 목적의 근거가 아님. 창업기업 스마트공장 지원은
     안전관리 소프트웨어 도입 가능성 검토 대상 (REVIEW_REQUIRED 유지).
 
+DISCOVERY-002 additions (WO-TAI-BIZINFO-SAFETY-DISCOVERY-002):
+  - _STARTUP_ELIGIBILITY_MARKERS: 창업기업·예비창업 등 신청 자격 조건 표현.
+    tech_adoption 신호 없이 자격 조건만 존재하는 레코드는 REVIEW_REQUIRED에
+    basis "eligibility:xxx"로 기록된다.
+    목적: TECH_ADOPTION 90건과 창업기업 자격조건 ~43건을 basis로 분리.
+
 IN_SCOPE is a candidate signal, not a content-publication approval.
 OBJ-BZI-005 human editorial gate is required before public display.
 """
@@ -176,6 +182,17 @@ _NON_SAFETY_PURPOSE: frozenset[str] = frozenset({
     # 안전관리 소프트웨어 도입 가능성이 있으므로 REVIEW_REQUIRED로 처리.
 })
 
+# Startup / early-stage company eligibility markers.
+# These are APPLICANT ELIGIBILITY criteria, not evidence of non-safety purpose.
+# Records with ONLY these markers (no direct safety or tech_adoption signal)
+# receive REVIEW_REQUIRED with basis "eligibility:xxx" — distinct from both
+# TECH_ADOPTION records and generic "no_confirming_evidence" records.
+# Separates ~43 startup-eligibility records from ~90 tech-adoption records.
+_STARTUP_ELIGIBILITY_MARKERS: frozenset[str] = frozenset({
+    "창업기업",   # 창업기업 대상 사업 — 신청 자격 조건 (DISCOVERY-001-R1)
+    "예비창업",   # 예비창업자 프로그램
+})
+
 # Compact-form markers indicating the safety aspect is explicitly negated or
 # excluded in the summary (e.g. "안전 설비 지원 제외", "산업안전과 무관").
 # Matched against whitespace-collapsed summary text only.
@@ -268,6 +285,13 @@ def review_relevance(record: NormalizedSourceRecord) -> RelevanceDecision:
     # bottom of the function when no direct or tech-safety signal was found.
     tech_adoption_hits = [
         kw for kw in _TECH_ADOPTION
+        if kw in _title_compact or kw in _summary_compact
+    ]
+    # DISCOVERY-002: startup / early-stage eligibility markers.
+    # Only used to label REVIEW_REQUIRED when no tech or safety signal exists.
+    # Separates ~43 창업기업-only records from ~90 tech_adoption records.
+    eligibility_hits = [
+        kw for kw in _STARTUP_ELIGIBILITY_MARKERS
         if kw in _title_compact or kw in _summary_compact
     ]
 
@@ -367,6 +391,19 @@ def review_relevance(record: NormalizedSourceRecord) -> RelevanceDecision:
         return RelevanceDecision(
             verdict="REVIEW_REQUIRED",
             basis=tuple(f"tech_adoption:{kw}" for kw in tech_adoption_hits[:3]),
+        )
+
+    # ------------------------------------------------------------------
+    # ELIGIBILITY_ONLY — startup/early-stage applicant eligibility markers,
+    # no tech or safety signal confirmed.
+    # Distinguishes 창업기업-only records from generic no_confirming_evidence.
+    # basis "eligibility:xxx" separates ~43 창업기업 records from ~90 tech_adoption.
+    # ------------------------------------------------------------------
+
+    if eligibility_hits and has_summary:
+        return RelevanceDecision(
+            verdict="REVIEW_REQUIRED",
+            basis=tuple(f"eligibility:{kw}" for kw in eligibility_hits[:2]),
         )
 
     # ------------------------------------------------------------------

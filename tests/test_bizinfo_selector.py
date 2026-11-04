@@ -685,6 +685,51 @@ def test_S39_review_required_ai_platform_no_direct_safety():
     assert any("인공지능" in b or "iot" in b or "센서" in b for b in result.basis)
 
 
+def test_S40_review_required_startup_eligibility_only():
+    """S-40: 창업기업 대상 사업, 기술 도입 신호 없음 → REVIEW_REQUIRED (eligibility:창업기업).
+
+    DISCOVERY-002: _STARTUP_ELIGIBILITY_MARKERS — 창업기업 자격조건만 존재하는 레코드는
+    tech_adoption 후보와 basis로 명확히 구별된다.
+    - basis "eligibility:창업기업" → 창업기업 전용 사업으로 분류 대기
+    - basis "tech_adoption:xxx"  → 기술 도입 잠재 후보 (별도 처리)
+    [REAL 유형: PBLN_000000000125634 — 여성 창업기업 초기물품 지원사업]
+    """
+    rec = _record(
+        title="[강원] 2026년 지역 여성 창업기업 초기물품 지원사업 참여기업 모집 정정 공고",
+        summary=(
+            "창업 3년 이내 여성 창업기업에 초기 사무용품·집기 구매비용을 지원합니다. "
+            "창업기업 전용 사업으로 기존 제조업 사업장은 대상이 아닙니다."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("eligibility:창업기업" in b for b in result.basis)
+    # tech_adoption 후보와 혼동되지 않음
+    assert not any("tech_adoption" in b for b in result.basis)
+
+
+def test_S41_review_required_startup_tech_adoption_takes_precedence():
+    """S-41: 창업기업 + 스마트공장 공존 시 tech_adoption 경로 우선, eligibility 미발동.
+
+    DISCOVERY-002: TECH_ADOPTION 경로가 ELIGIBILITY 경로보다 먼저 평가된다.
+    두 집단의 처리 우선순위 확인.
+    [SYNTHETIC]
+    """
+    rec = _record(
+        title="[전국] 2026년 창업기업 스마트공장 도입 지원사업",
+        summary=(
+            "창업 3년 이내 초기 기업의 스마트공장 도입을 위한 바우처를 지원합니다. "
+            "창업기업 전용 사업으로 기존 제조업 사업장은 대상 아님."
+        ),
+    )
+    result = review_relevance(rec)
+    assert result.verdict == "REVIEW_REQUIRED"
+    assert any("tech_adoption" in b for b in result.basis)
+    assert any("스마트공장" in b for b in result.basis)
+    # eligibility 단독 basis로 처리되지 않음
+    assert not all("eligibility" in b for b in result.basis)
+
+
 def test_S33_in_scope_safety_primary_privacy_boilerplate_incidental():
     """S-33: 산업안전 주 목적 사업에서 '개인정보 처리방침' 문구가 본문 하단에
     부수적으로 등장 → IN_SCOPE 유지. 개인정보가 제목에 없으면 충돌 마커로
