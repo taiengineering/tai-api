@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import re
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -40,6 +41,10 @@ from supabase import Client
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
+from services.document_engine.form647_mapping import (
+    get_form647_detail,
+    form647_storage_path,
+)
 
 log = logging.getLogger("reference_forms")
 
@@ -57,6 +62,14 @@ _MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # matches reference-forms bucket file_si
 
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._\-]")
 _ALLOWED_BUCKETS = frozenset({"reference-forms", "reference-forms-preview"})
+
+# FORM647 — f647-{ek} 슬러그 처리
+_FORM647_EK_RE = re.compile(r"^f647-(\d+)$")
+_FORM647_FILE_TYPES = frozenset({"hwp", "pdf"})
+_FORM647_MIME = {"hwp": "application/x-hwp", "pdf": "application/pdf"}
+_FORM647_EXT = {"hwp": ".hwp", "pdf": ".pdf"}
+_FORM647_BUCKET = "form-originals"
+_FORM647_SAFE_NAME_RE = re.compile(r"[^\w\s가-힣\-]")
 
 
 def _safe_filename(relative_path: str) -> str:
@@ -97,6 +110,106 @@ def _parse_storage_ref(raw_ref: str, expected_bucket: str) -> str:
         raise HTTPException(status_code=500, detail="STORAGE_REF_INVALID")
 
     return path
+
+
+# ---------------------------------------------------------------------------
+# FORM647 helpers
+# ---------------------------------------------------------------------------
+
+def _form647_safe_filename(title: str, ext: str) -> str:
+    safe = _FORM647_SAFE_NAME_RE.sub("_", title).strip()
+    return (safe or "서식")[:80] + ext
+
+
+def _get_form647_response(slug: str, ek: int) -> dict:
+    """f647-{ek} 슬러그 상세 응답을 구성한다. Gate 미통과·미발견 시 404."""
+    detail = get_form647_detail(ek)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+
+    title = detail["frozen_name"]
+    description = "법령별 서식" if detail["api_target"] == "licbyl" else "행정규칙별 서식"
+
+    _ORDER = {"pdf": 0, "hwp": 1}
+    qa_pass_files = sorted(
+        [
+            {
+                "file_id": ft.lower(),
+                "format": ft.lower(),
+                "has_preview": False,
+                "sha256": None,
+                "filename": _form647_safe_filename(title, _FORM647_EXT[ft.lower()]),
+            }
+            for ft in detail["file_types"]
+            if ft.lower() in _FORM647_FILE_TYPES
+        ],
+        key=lambda f: _ORDER.get(f["format"], 9),
+    )
+    formats = [f["format"] for f in qa_pass_files]
+
+    return {
+        "status": "ok",
+        "data": {
+            "slug": slug,
+            "title": title,
+            "description": description,
+            "body_html": "",
+            "source_name": "국가법령정보센터",
+            "published_at": None,
+            "qa_pass_files": qa_pass_files,
+            "formats": formats,
+            "related_forms": [],
+        },
+    }
+
+
+def _download_form647_file(
+    slug: str, ek: int, file_type: str, sb: Client
+) -> Response:
+    """f647-{ek} 파일을 form-originals 버킷에서 프록시한다. Gate 미통과 시 404."""
+    detail = get_form647_detail(ek)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    if file_type not in detail["file_types"] and file_type.upper() not in detail["file_types"]:
+        raise HTTPException(status_code=404, detail="FILE_NOT_FOUND")
+
+    ft_upper = file_type.upper()
+    storage_path = form647_storage_path(ek, detail["api_target"], ft_upper)
+
+    if not storage_path or ".." in storage_path.split("/"):
+        log.error("FORM647 storage path invalid ek=%s ft=%s path=%r", ek, file_type, storage_path)
+        raise HTTPException(status_code=500, detail="STORAGE_REF_INVALID")
+
+    try:
+        signed = sb.storage.from_(_FORM647_BUCKET).create_signed_url(storage_path, expires_in=30)
+        signed_url = signed.get("signedURL") or signed.get("signedUrl") or ""
+        if not signed_url:
+            raise ValueError("empty signed URL")
+    except Exception as exc:
+        log.error("FORM647 signed URL failed ek=%s ft=%s: %s", ek, file_type, exc)
+        raise HTTPException(status_code=500, detail="DOWNLOAD_UNAVAILABLE")
+
+    try:
+        r = httpx.get(signed_url, follow_redirects=True, timeout=60)
+        r.raise_for_status()
+    except Exception as exc:
+        log.error("FORM647 file fetch failed ek=%s ft=%s: %s", ek, file_type, exc)
+        raise HTTPException(status_code=502, detail="FILE_FETCH_FAILED")
+
+    if len(r.content) > _MAX_DOWNLOAD_BYTES:
+        raise HTTPException(status_code=422, detail="FILE_TOO_LARGE")
+
+    ft_lower = file_type.lower()
+    filename = _form647_safe_filename(detail["frozen_name"], _FORM647_EXT[ft_lower])
+    encoded = quote(filename.encode("utf-8"), safe="._-")
+    return Response(
+        content=r.content,
+        media_type=_FORM647_MIME[ft_lower],
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded}",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +400,10 @@ def get_reference_form(slug: str, sb: Client = Depends(get_supabase)):
     Gates: PUBLISHED, content hash approved, all active sources CLEARED.
     Never exposes storage paths, approval IDs, or internal file_ref.
     """
+    m = _FORM647_EK_RE.match(slug)
+    if m:
+        return _get_form647_response(slug, int(m.group(1)))
+
     view_row = _load_view_row(sb, slug)
     form_id = str(view_row["id"])
 
@@ -431,6 +548,10 @@ def download_reference_form_file(
     20 MB limit; server proxy from reference-forms bucket; no-store.
     Storage path (file_ref) never returned to caller.
     """
+    m = _FORM647_EK_RE.match(slug)
+    if m and file_id in _FORM647_FILE_TYPES:
+        return _download_form647_file(slug, int(m.group(1)), file_id, sb)
+
     view_row = _load_view_row(sb, slug)
     form_id = str(view_row["id"])
     _check_sources_cleared(sb, form_id)

@@ -106,3 +106,53 @@ def is_form647_service_gate_open(snapshot: dict) -> bool:
         snapshot.get("service_released") is True
         and snapshot.get("service_sot_gate") in _GATE_OPEN_VALUES
     )
+
+
+# Storage 경로 계산에 사용하는 고정 Run ID (form647-remediation-002)
+_RUN_ID = "form647-remediation-002-714df47a637e3e73"
+
+
+def get_form647_detail(ek: int) -> dict | None:
+    """Gate 통과 시 공개 표시용 상세 정보를 반환한다.
+
+    LEG 연결 불가·미발견·Gate 미통과 시 None.
+    반환: ek, frozen_name, api_target, file_types (["HWP"] 또는 ["HWP","PDF"])
+    """
+    leg = _build_leg_client()
+    if leg is None:
+        return None
+    try:
+        res = (
+            leg.schema("form647_review")
+            .from_("form_snapshots")
+            .select("ek, service_sot_gate, service_released, frozen_name, api_target")
+            .eq("ek", ek)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log.warning("form647 detail lookup failed ek=%s: %s", ek, exc)
+        return None
+    if not res.data:
+        return None
+    snap = res.data[0]
+    if not is_form647_service_gate_open(snap):
+        return None
+    # licbyl(법령별) 497종은 HWP+PDF 쌍 보유, admbyl(행정규칙별) 150종은 HWP 단독
+    file_types = ["HWP", "PDF"] if snap["api_target"] == "licbyl" else ["HWP"]
+    return {
+        "ek": snap["ek"],
+        "frozen_name": snap["frozen_name"],
+        "api_target": snap["api_target"],
+        "file_types": file_types,
+    }
+
+
+def form647_storage_path(ek: int, api_target: str, file_type: str) -> str:
+    """ek·api_target·file_type에서 form-originals Storage 경로를 도출한다.
+
+    file_type: "HWP" 또는 "PDF"
+    """
+    stem = f"{ek}_{api_target}"   # e.g. 15267319_licbyl
+    ext = "hwp" if file_type == "HWP" else "pdf"
+    return f"form647/{_RUN_ID}/{ext}/{stem}.{ext}"
