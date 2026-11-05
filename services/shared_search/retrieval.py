@@ -425,3 +425,15 @@ class SharedRetrievalEngine:
         )
         return retrieve(plan, self._reader,
                         fuzzy_trigger_threshold=fuzzy_trigger_threshold)
+
+    def search_with_plan(
+        self,
+        plan: SearchQueryPlan,
+    ) -> SearchResponse:
+        """Execute a search using a pre-built query plan (SEARCH-01).
+
+        Allows callers to build one plan and reuse it across multiple
+        domain searches by replacing only the object_types field via
+        dataclasses.replace(plan, object_types=[...]).
+        """
+        return retrieve(plan, self._reader)
