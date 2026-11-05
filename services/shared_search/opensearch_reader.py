@@ -41,6 +41,22 @@ logger = logging.getLogger(__name__)
 TIER_FETCH_SIZE = 200          # max docs fetched per tier per _msearch call
 FUZZY_TRIGGER_THRESHOLD = 0    # trigger FUZZY only when all other tiers total ≤ this
 
+# SEARCH-03: _source filter — only fields consumed by SearchResult / to_dict().
+# Keeps response payloads small; unmapped fields (subjects, search_text, etc.)
+# are not surfaced in API responses and are therefore excluded here.
+_RESULT_SOURCE_FIELDS: list[str] = [
+    "canonical_id",
+    "source_id",
+    "source_key",
+    "object_type",
+    "title",
+    "summary",
+    "public_url",
+    "saas_url",
+    "source_updated_at",
+    "subjects",
+]
+
 
 # ---------------------------------------------------------------------------
 # Visibility filter (§27) — applied to every tier
@@ -336,6 +352,12 @@ class OpenSearchSearchReader:
                 for tier, qbody in requests
             ]
 
+        # Inject _source filter to minimise response payload (SEARCH-03)
+        requests = [
+            (tier, {**qbody, "_source": _RESULT_SOURCE_FIELDS})
+            for tier, qbody in requests
+        ]
+
         # Flatten to _msearch body (alternating header + body lines)
         msearch_body: list[dict] = []
         for _tier, qbody in requests:
@@ -376,6 +398,7 @@ class OpenSearchSearchReader:
         qbody = _q_fuzzy(normalized_query, visibility, object_types)
         if within_query and within_query.strip():
             qbody = _inject_within(qbody, within_query)
+        qbody = {**qbody, "_source": _RESULT_SOURCE_FIELDS}  # SEARCH-03
         resp = self._client.search(index=self._index, body=qbody)
         return [_hit_to_doc(h) for h in resp.get("hits", {}).get("hits", [])]
 
