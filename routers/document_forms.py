@@ -97,7 +97,10 @@ def get_source_file(
     provision_policy = get_provision_policy(doc_id)
     if provision_policy is not None:
         rg = provision_policy.get("route_group")
-        if rg in ("F_SCOPE_OUT", "A_INTERNAL"):
+        if rg == "F_SCOPE_OUT" or (
+            rg == "A_INTERNAL"
+            and not provision_policy.get("source_download_exception", False)
+        ):
             raise HTTPException(status_code=404, detail="서식 파일 다운로드를 지원하지 않는 문서입니다.")
         # Gate 2b: B_OFFICIAL → CONDITIONAL_APPROVED만 허용 (HOLD·미확정 차단)
         # DOC-FAC-024, DOC-FAC-029, DOC-OSH-065는 파일 보유이지만 official_status=HOLD.
