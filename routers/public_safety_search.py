@@ -12,6 +12,7 @@ CHEM PUBLIC exposure follows KOSHA_MSDS_PUBLIC_MODE env var (§28).
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 from typing import Optional
@@ -222,6 +223,43 @@ def _search_public_section(
     }
 
 
+def _search_public_section_with_plan(
+    engine: object,
+    plan: object,
+    section_type: str,
+    section_size: int,
+) -> dict:
+    """Execute one domain search using a pre-built plan and return a section payload.
+
+    SEARCH-01: callers build one shared plan and replace only object_types per domain,
+    avoiding repeated build_query_plan() calls (dictionary lookup + normalisation).
+    section_size+1 is already set in the shared plan's page_size.
+    """
+    try:
+        resp = engine.search_with_plan(plan)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OpenSearchUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "SHARED_SEARCH_UNAVAILABLE", "message": str(exc)},
+        ) from exc
+
+    raw = resp.items
+    has_more = len(raw) > section_size
+    items = [r.to_dict() for r in raw[:section_size]]
+    object_type = plan.object_types[0] if plan.object_types else ""
+    return {
+        "type":        section_type,
+        "object_type": object_type,
+        "status":      "ok" if items else "empty",
+        "items":       items,
+        "page":        1,
+        "page_size":   section_size,
+        "has_more":    has_more,
+    }
+
+
 @router.get("/sections")
 async def public_search_sections(
     q: str = Query(..., min_length=1, description="검색어"),
@@ -268,9 +306,21 @@ async def public_search_sections(
 
     from services.shared_search.opensearch_reader import OpenSearchSearchReader
     from services.shared_search.retrieval import SharedRetrievalEngine
+    from services.shared_search.query import build_query_plan
 
     reader = OpenSearchSearchReader(client)
     engine = SharedRetrievalEngine(reader)
+
+    # SEARCH-01: build one shared plan — dictionary lookup + normalisation runs once.
+    # Each domain search replaces only object_types via dataclasses.replace().
+    shared_plan = build_query_plan(
+        q,
+        object_types=[],
+        visibility_scopes=["PUBLIC"],
+        page=1,
+        page_size=section_size + 1,
+        within_query=within_query,
+    )
 
     sections = []
     for section_type, object_type in _SECTION_TYPES:
@@ -285,8 +335,9 @@ async def public_search_sections(
                 "has_more":    False,
             })
             continue
+        section_plan = dataclasses.replace(shared_plan, object_types=[object_type])
         sections.append(
-            _search_public_section(engine, q, object_type, section_type, section_size, within_query)
+            _search_public_section_with_plan(engine, section_plan, section_type, section_size)
         )
 
     return {
