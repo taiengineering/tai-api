@@ -76,6 +76,9 @@ _PUBLIC: Tuple[Tuple[str, str], ...] = (
     ("GET", "/help/doc/"),
     ("GET", "/faqs"),
     ("POST", "/contacts"),
+    # WO-TAI-WWW-CONTACT-UX-002-R3/R4: 공개 문의+첨부 단일 요청.
+    # 재시도 경로(/contacts/{uuid}/attachments)는 _CONTACT_RETRY_PATH_RE 로 is_public 에서 처리.
+    ("POST", "/contacts/with-attachments"),
     # WP-A (WO-SAFE-COMPANY-ACCESS-001): 회사 사용자 초대 토큰 계약 (미로그인 신규 가입자).
     # GET  /user-invites/{token}/info   — 토큰 유효성 표시용
     # POST /user-invites/{token}/accept — 신규 가입자는 토큰만 있음 (로그인 전).
@@ -106,6 +109,9 @@ _RESOURCE_PREFIX = {
 }
 
 _PARAM_RE = re.compile(r"\{[^/]+\}")
+
+# /contacts/{inquiry_id}/attachments — template path, is_public 에서 직접 매칭
+_CONTACT_RETRY_PATH_RE = re.compile(r"^/contacts/[0-9a-f-]{36}/attachments$")
 
 # 근로자 앱(PWA) prefix — 인증은 유지, role_menu 게이트만 제외.
 # /tbm 은 exact-or-child (/tbm-templates 와 구분). /worker 는 /worker-check·/worker-registry 와 구분.
@@ -185,6 +191,9 @@ def is_public(method: str, path: str) -> bool:
                 return True
         elif p == ep:
             return True
+    # /contacts/{inquiry_id}/attachments — 재시도 (HMAC 토큰 엔드포인트 자체 검증)
+    if m == "POST" and _CONTACT_RETRY_PATH_RE.match(p):
+        return True
     return False
 
 

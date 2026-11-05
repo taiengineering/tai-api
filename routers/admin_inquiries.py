@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
+from services.company_scope import _require_admin
 from services.support_taxonomy import project_labels, is_valid_type, is_valid_axis, taxonomy_snapshot
 from services.time import now_kst, serialize_external_utc
 
@@ -185,6 +186,7 @@ def admin_list_inquiries(
     if sort_key not in SORT_KEYS:
         raise HTTPException(status_code=400, detail="지원하지 않는 sort_key 입니다.")
     supabase = get_supabase()
+    _require_admin(_admin, supabase)   # role_code=001(ALL scope) 아니면 403
     offset = (page - 1) * size
     desc = sort_dir == "desc"
 
@@ -308,6 +310,56 @@ def admin_create_inquiry(
         raise HTTPException(status_code=500, detail="등록 후 데이터를 확인할 수 없습니다.")
     # 목록과 동일한 label projection 재사용(프론트 캐시 upsert 시 표시 일관성).
     return {"status": "success", "data": project_labels(res.data[0])}
+
+
+_ATTACH_BUCKET = "company-docs"
+_ATTACH_SIGNED_URL_EXPIRES = 3600
+
+
+def _attachments_signed_url(storage, storage_path: str) -> str:
+    signed = storage.from_(_ATTACH_BUCKET).create_signed_url(storage_path, _ATTACH_SIGNED_URL_EXPIRES)
+    if isinstance(signed, dict):
+        return signed.get("signedURL") or signed.get("signedUrl") or signed.get("signed_url") or ""
+    return str(signed or "")
+
+
+@router.get("/{inquiry_id}/attachments")
+def admin_get_inquiry_attachments(
+    inquiry_id: UUID,
+    _admin: dict = Depends(get_current_user),
+):
+    """문의 첨부파일 목록 + 1시간 서명 URL — 최고관리자(role ALL) 전용"""
+    supabase = get_supabase()
+    _require_admin(_admin, supabase)  # role_code → scope ALL 아니면 403
+    res = (
+        supabase.table("attachments")
+        .select("id, file_name, file_size, file_ext, mime_type, file_url, created_at")
+        .eq("table_name", "inquiries")
+        .eq("record_id", str(inquiry_id))
+        .eq("file_category", "contact_attachment")
+        .order("created_at")
+        .execute()
+    )
+    items = []
+    for row in (res.data or []):
+        url = row.get("file_url", "")
+        signed_url = None
+        if url.startswith("storage://company-docs/"):
+            path = url[len("storage://company-docs/"):]
+            try:
+                signed_url = _attachments_signed_url(supabase.storage, path)
+            except Exception:
+                signed_url = None
+        items.append({
+            "id": row.get("id"),
+            "file_name": row.get("file_name"),
+            "file_size": row.get("file_size"),
+            "file_ext": row.get("file_ext"),
+            "mime_type": row.get("mime_type"),
+            "signed_url": signed_url,
+            "created_at": row.get("created_at"),
+        })
+    return {"status": "success", "data": {"items": items}}
 
 
 @router.patch("/{inquiry_id}")
