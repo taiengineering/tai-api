@@ -1140,26 +1140,28 @@ def _make_form647_search_adapter(
     """FORM647 647종 → 기존 REFERENCE_FORM 검색 연결.
 
     legal_client (LEG Supabase) 를 재사용. 없으면 fail-closed (0건 반환).
-    Gate BLOCKED 상태에서는 form_snapshots 조회가 성공하지만 모든 행의
-    service_sot_gate='BLOCKED' → _normalize()가 None 반환 → 0건 인덱싱.
+    Gate 흐름: service_gate.is_approved=true 집합 선조회 → form_snapshots 필터링.
     DB 조회 오류는 호출자(인덱서)에게 전파한다 — 조용히 0건으로 처리하지 않는다.
-    Gate 해제는 별도 LEG 거버넌스 승인 + DB 마이그레이션 필요.
+    G2: form_snapshots SELECT 에 run_id 포함 — service_gate (run_id, ek) 연결.
+    G3: object_reindex_payload() → None 반환 → sync_object() → delete_document().
     """
     if leg_client is None:
         return Form647SearchAdapter(fetch_current=lambda: iter([]))
 
-    _SELECT = "ek, service_sot_gate, frozen_name, api_target, created_at"
-    _PAGE = 200   # form_snapshots 페이지 크기 (647건 → 최대 4회 조회)
+    _PAGE = 200
+    _SNAP_SELECT = "run_id, ek, frozen_name, api_target, created_at"
 
     def _iter_current():
+        # 1단계: service_gate 에서 승인된 (run_id, ek) 집합 수집
+        # 예외를 잡지 않는다 — DB 오류는 인덱서에게 전파해 갱신 중단.
+        approved: set[tuple] = set()
         offset = 0
         while True:
-            # 예외를 잡지 않는다 — DB 오류는 인덱서에게 전파해 갱신 중단.
-            # Gate BLOCKED 정상 케이스: DB는 행을 반환하지만 _normalize()가 None → 0건.
             res = (
                 leg_client.schema("form647_review")
-                .from_("form_snapshots")
-                .select(_SELECT)
+                .from_("service_gate")
+                .select("run_id, ek")
+                .eq("is_approved", True)
                 .order("ek")
                 .range(offset, offset + _PAGE - 1)
                 .execute()
@@ -1167,12 +1169,67 @@ def _make_form647_search_adapter(
             rows = list(getattr(res, "data", None) or [])
             if not rows:
                 break
-            yield from rows
+            for r in rows:
+                approved.add((r["run_id"], r["ek"]))
             if len(rows) < _PAGE:
                 break
             offset += _PAGE
 
-    return Form647SearchAdapter(fetch_current=_iter_current)
+        if not approved:
+            return  # Gate BLOCKED 또는 아직 승인 없음 → 0건
+
+        # 2단계: form_snapshots 전체 조회 → approved 집합으로 필터
+        offset = 0
+        while True:
+            res = (
+                leg_client.schema("form647_review")
+                .from_("form_snapshots")
+                .select(_SNAP_SELECT)
+                .order("ek")
+                .range(offset, offset + _PAGE - 1)
+                .execute()
+            )
+            rows = list(getattr(res, "data", None) or [])
+            if not rows:
+                break
+            for row in rows:
+                if (row.get("run_id"), row.get("ek")) in approved:
+                    yield {**row, "is_approved": True}
+            if len(rows) < _PAGE:
+                break
+            offset += _PAGE
+
+    def _fetch_by_id(canonical_id: str) -> Optional[dict]:
+        """단건 재인덱스용 — form_snapshots + service_gate 두 쿼리 조합."""
+        if not canonical_id.startswith("f647-"):
+            return None
+        ek = canonical_id[5:]
+        snap_res = (
+            leg_client.schema("form647_review")
+            .from_("form_snapshots")
+            .select(_SNAP_SELECT)
+            .eq("ek", ek)
+            .limit(1)
+            .execute()
+        )
+        rows = list(getattr(snap_res, "data", None) or [])
+        if not rows:
+            return None
+        snap = rows[0]
+        gate_res = (
+            leg_client.schema("form647_review")
+            .from_("service_gate")
+            .select("is_approved")
+            .eq("run_id", snap["run_id"])
+            .eq("ek", snap["ek"])
+            .limit(1)
+            .execute()
+        )
+        gate_rows = list(getattr(gate_res, "data", None) or [])
+        is_approved = bool(gate_rows and gate_rows[0].get("is_approved") is True)
+        return {**snap, "is_approved": is_approved}
+
+    return Form647SearchAdapter(fetch_current=_iter_current, fetch_by_id=_fetch_by_id)
 
 
 def build_production_adapters(
