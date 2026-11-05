@@ -19,6 +19,8 @@ from fastapi import APIRouter, File, Form, HTTPException, Header, Query, UploadF
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
+from services.inbox_notify_svc import build_attachment_blocks
+from services.slack_dispatcher import send_slack
 from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger("site_public")
@@ -325,6 +327,7 @@ async def _upload_attachments(supabase, validated: list, inquiry_id: str) -> tup
                     "file_size": len(raw),
                     "file_ext": ext,
                     "mime_type": mime,
+                    "_is_new": False,  # dedup — 실제 신규 저장 아님
                 })
                 continue
         except Exception:
@@ -372,6 +375,7 @@ async def _upload_attachments(supabase, validated: list, inquiry_id: str) -> tup
             "file_size": len(raw),
             "file_ext": ext,
             "mime_type": mime,
+            "_is_new": True,
         })
 
     return results, None
@@ -488,7 +492,25 @@ async def submit_contact_with_attachments(
             if err:
                 attach_status = "failed"
 
-    # ④ 재시도용 업로드 토큰 생성 (inquiry_id 있을 때만)
+    # ④ 첨부파일 저장 완료 Slack 보완 알림 (DB 트리거 초기 알림 타이밍 보정)
+    # DB 트리거(INQUIRY_CREATED)는 INSERT 직후 발송 — 파일 정보 미포함.
+    # 파일 저장 성공 후 INQUIRY_ATTACHMENT_ADDED 이벤트로 보정.
+    # 운영자가 2건 수신하는 방식은 단일 메시지 업데이트(chat.update)의
+    # DB 변경(slack_ts 컬럼) 필요로 Owner 결정 대기 중.
+    new_attach = [r for r in attach_results if r.get("_is_new")]
+    if new_attach and attach_status == "ok":
+        try:
+            file_names = [r.get("file_name", "?") for r in new_attach]
+            await send_slack(
+                "INQUIRY_ATTACHMENT_ADDED",
+                "INFO",
+                f"첨부파일 저장 완료 · {name.strip()}",
+                blocks=build_attachment_blocks(name.strip(), email.strip(), file_names),
+            )
+        except Exception:
+            pass  # 알림 실패는 비즈니스 실패 아님
+
+    # ⑤ 재시도용 업로드 토큰 생성 (inquiry_id 있을 때만)
     upload_token = None
     if inquiry_id:
         try:
@@ -524,10 +546,10 @@ async def retry_contact_attachments(
 
     supabase = get_supabase()
 
-    # inquiry 존재 확인
+    # inquiry 존재 확인 (name/email: 첨부 완료 알림에 사용)
     check = (
         supabase.table("inquiries")
-        .select("id, created_at")
+        .select("id, created_at, name, email")
         .eq("id", parsed_id)
         .limit(1)
         .execute()
@@ -598,6 +620,23 @@ async def retry_contact_attachments(
     results, err = await _upload_attachments(supabase, validated, parsed_id)
     if err:
         raise HTTPException(status_code=500, detail="파일 저장에 실패했습니다.")
+
+    # 첨부 완료 Slack 보완 알림 (재시도 경로 — 실제 신규 저장 파일만)
+    new_results = [r for r in results if r.get("_is_new")]
+    if new_results:
+        try:
+            inq = check.data[0] if check.data else {}
+            file_names = [r.get("file_name", "?") for r in new_results]
+            await send_slack(
+                "INQUIRY_ATTACHMENT_ADDED",
+                "INFO",
+                f"첨부파일 저장 완료 · {inq.get('name', '')}",
+                blocks=build_attachment_blocks(
+                    inq.get("name", ""), inq.get("email", ""), file_names
+                ),
+            )
+        except Exception:
+            pass  # 알림 실패는 비즈니스 실패 아님
 
     return {"status": "success", "data": {"attachments": results}}
 

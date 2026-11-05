@@ -817,3 +817,162 @@ class TestAdminAttachmentsSignedRef:
     def test_non_storage_ref_skipped(self):
         url = "https://example.com/file.pdf"
         assert not url.startswith("storage://company-docs/")
+
+
+# ── INQUIRY_ATTACHMENT_ADDED Slack 알림 경로 ─────────────────────────
+
+class TestAttachmentSlackNotification:
+    """WO-TAI-WWW-CONTACT-ATTACHMENT-VISIBILITY-001-R1
+    첨부 완료 알림: 경로별 send_slack 호출 여부 + 실패 비전파 검증.
+    """
+
+    def test_with_attachments_calls_slack_on_success(self, client):
+        """파일 있는 with-attachments → send_slack INQUIRY_ATTACHMENT_ADDED 호출"""
+        uid = str(uuid.uuid4())
+        with patch("routers.site_public.get_supabase", return_value=_mock_sb_new_inquiry(uid)), \
+             patch("routers.site_public.send_slack") as mock_slack:
+            mock_slack.return_value = True
+            resp = client.post(
+                "/contacts/with-attachments",
+                data={"name": "홍길동", "email": "test@test.com", "content": "문의합니다"},
+                files=[("files", ("img.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 20, "image/png"))],
+            )
+        assert resp.status_code == 200
+        called_types = [c.args[0] for c in mock_slack.call_args_list]
+        assert "INQUIRY_ATTACHMENT_ADDED" in called_types
+
+    def test_with_attachments_no_slack_when_no_files(self, client):
+        """파일 없는 with-attachments → INQUIRY_ATTACHMENT_ADDED 미발송"""
+        uid = str(uuid.uuid4())
+        with patch("routers.site_public.get_supabase", return_value=_mock_sb_new_inquiry(uid)), \
+             patch("routers.site_public.send_slack") as mock_slack:
+            mock_slack.return_value = True
+            resp = client.post(
+                "/contacts/with-attachments",
+                data={"name": "홍길동", "email": "test@test.com", "content": "문의합니다"},
+            )
+        assert resp.status_code == 200
+        called_types = [c.args[0] for c in mock_slack.call_args_list]
+        assert "INQUIRY_ATTACHMENT_ADDED" not in called_types
+
+    def test_with_attachments_slack_failure_does_not_affect_response(self, client):
+        """send_slack 예외 발생 → 문의 접수는 200 정상 반환"""
+        uid = str(uuid.uuid4())
+        with patch("routers.site_public.get_supabase", return_value=_mock_sb_new_inquiry(uid)), \
+             patch("routers.site_public.send_slack", side_effect=RuntimeError("slack down")):
+            resp = client.post(
+                "/contacts/with-attachments",
+                data={"name": "홍길동", "email": "test@test.com", "content": "문의합니다"},
+                files=[("files", ("img.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 20, "image/png"))],
+            )
+        assert resp.status_code == 200
+
+    def test_retry_calls_slack_on_success(self, client):
+        """retry 경로 파일 저장 성공 → send_slack INQUIRY_ATTACHMENT_ADDED 호출"""
+        uid = str(uuid.uuid4())
+        token, sb = _make_token_and_mock(uid, timedelta(minutes=5))
+        with patch("routers.site_public.get_supabase", return_value=sb), \
+             patch("routers.site_public.send_slack") as mock_slack:
+            mock_slack.return_value = True
+            resp = client.post(
+                f"/contacts/{uid}/attachments",
+                headers={"X-Upload-Token": token},
+                files=[("files", ("doc.pdf", b"%PDF-1.4 content", "application/pdf"))],
+            )
+        assert resp.status_code == 200
+        called_types = [c.args[0] for c in mock_slack.call_args_list]
+        assert "INQUIRY_ATTACHMENT_ADDED" in called_types
+
+    def test_retry_slack_failure_returns_200(self, client):
+        """retry send_slack 예외 → 여전히 200 반환"""
+        uid = str(uuid.uuid4())
+        token, sb = _make_token_and_mock(uid, timedelta(minutes=5))
+        with patch("routers.site_public.get_supabase", return_value=sb), \
+             patch("routers.site_public.send_slack", side_effect=RuntimeError("slack down")):
+            resp = client.post(
+                f"/contacts/{uid}/attachments",
+                headers={"X-Upload-Token": token},
+                files=[("files", ("doc.pdf", b"%PDF-1.4 content", "application/pdf"))],
+            )
+        assert resp.status_code == 200
+
+    def test_attachment_blocks_structure(self):
+        """build_attachment_blocks 반환 구조 검증"""
+        from services.inbox_notify_svc import build_attachment_blocks, ADMIN_INQUIRY_URL
+        blocks = build_attachment_blocks("홍길동", "test@test.com", ["파일1.png", "파일2.pdf"])
+        assert len(blocks) == 3
+        assert "첨부파일 저장 완료" in blocks[0]["text"]["text"]
+        assert "2건" in blocks[0]["text"]["text"]
+        assert "파일1.png" in blocks[1]["text"]["text"]
+        assert "파일2.pdf" in blocks[1]["text"]["text"]
+        btn_url = blocks[2]["elements"][0]["url"]
+        assert btn_url == ADMIN_INQUIRY_URL
+        assert "/admin-inquiries" in btn_url
+
+    def test_slack_url_changed_to_admin_inquiries(self):
+        """Slack dispatcher URL이 /inquiry-list 에서 /admin-inquiries 로 변경됐는지 확인"""
+        from services.slack_dispatcher import EVENT_TYPE_ADMIN_PATH
+        assert EVENT_TYPE_ADMIN_PATH["INQUIRY_CREATED"] == "/admin-inquiries"
+        assert EVENT_TYPE_ADMIN_PATH["TAI_WISH_CREATED"] == "/admin-inquiries"
+        assert EVENT_TYPE_ADMIN_PATH["INQUIRY_ATTACHMENT_ADDED"] == "/admin-inquiries"
+        assert "inquiry-list" not in EVENT_TYPE_ADMIN_PATH.get("INQUIRY_CREATED", "")
+
+    def test_inquiry_attachment_added_routes_to_inquiry_channel(self):
+        """INQUIRY_ATTACHMENT_ADDED 이벤트가 inquiry 채널로 라우팅됨"""
+        from services.slack_dispatcher import EVENT_TYPE_CHANNEL, CHANNEL_INQUIRY
+        assert EVENT_TYPE_CHANNEL.get("INQUIRY_ATTACHMENT_ADDED") == CHANNEL_INQUIRY
+
+    def test_no_slack_when_all_files_are_duplicates(self, client):
+        """R2: 전체 dedup(신규 없음) → INQUIRY_ATTACHMENT_ADDED 미발송"""
+        uid = str(uuid.uuid4())
+        token, sb = _make_token_and_mock(uid, timedelta(minutes=5))
+        dedup_result = [
+            {"id": str(uuid.uuid4()), "file_name": "dup.pdf", "file_size": 16,
+             "file_ext": "pdf", "mime_type": "application/pdf", "_is_new": False}
+        ]
+        with patch("routers.site_public.get_supabase", return_value=sb), \
+             patch("routers.site_public._upload_attachments", return_value=(dedup_result, None)), \
+             patch("routers.site_public.send_slack") as mock_slack:
+            mock_slack.return_value = True
+            resp = client.post(
+                f"/contacts/{uid}/attachments",
+                headers={"X-Upload-Token": token},
+                files=[("files", ("dup.pdf", b"%PDF-1.4 content", "application/pdf"))],
+            )
+        assert resp.status_code == 200
+        called_types = [c.args[0] for c in mock_slack.call_args_list]
+        assert "INQUIRY_ATTACHMENT_ADDED" not in called_types
+
+    def test_mixed_retry_notifies_only_new_files(self, client):
+        """R2: 신규 2개 + dedup 1개 → 신규 2개 파일명만 알림에 포함"""
+        uid = str(uuid.uuid4())
+        token, sb = _make_token_and_mock(uid, timedelta(minutes=5))
+        mixed_result = [
+            {"id": str(uuid.uuid4()), "file_name": "new1.pdf", "file_size": 10,
+             "file_ext": "pdf", "mime_type": "application/pdf", "_is_new": True},
+            {"id": str(uuid.uuid4()), "file_name": "new2.png", "file_size": 20,
+             "file_ext": "png", "mime_type": "image/png", "_is_new": True},
+            {"id": str(uuid.uuid4()), "file_name": "dup.pdf", "file_size": 16,
+             "file_ext": "pdf", "mime_type": "application/pdf", "_is_new": False},
+        ]
+        with patch("routers.site_public.get_supabase", return_value=sb), \
+             patch("routers.site_public._upload_attachments", return_value=(mixed_result, None)), \
+             patch("routers.site_public.send_slack") as mock_slack:
+            mock_slack.return_value = True
+            resp = client.post(
+                f"/contacts/{uid}/attachments",
+                headers={"X-Upload-Token": token},
+                files=[("files", ("new1.pdf", b"%PDF-1.4 content", "application/pdf"))],
+            )
+        assert resp.status_code == 200
+        called_types = [c.args[0] for c in mock_slack.call_args_list]
+        assert "INQUIRY_ATTACHMENT_ADDED" in called_types
+        # build_attachment_blocks 에 전달된 file_names 확인
+        slack_call = next(c for c in mock_slack.call_args_list
+                          if c.args[0] == "INQUIRY_ATTACHMENT_ADDED")
+        blocks = slack_call.kwargs.get("blocks") or (slack_call.args[3] if len(slack_call.args) > 3 else None)
+        assert blocks is not None
+        file_list_text = blocks[1]["text"]["text"]
+        assert "new1.pdf" in file_list_text
+        assert "new2.png" in file_list_text
+        assert "dup.pdf" not in file_list_text
