@@ -18,6 +18,12 @@ D02  find_form647_snapshot() select 에 service_released 없음
 D03  Gate BLOCKED (service_sot_gate='BLOCKED') → get_form647_detail() returns None
 D04  Gate OPEN (service_sot_gate='APPROVED') → get_form647_detail() returns detail
 D05  is_form647_service_gate_open(): service_released 무관, service_sot_gate 만 확인
+
+production_bindings 경로 테스트 (R2):
+P01  leg_client=None → _make_form647_search_adapter() → 0건 반환
+P02  DB 오류 → 예외 전파 (조용히 0건으로 처리 안 함)
+P03  페이지네이션 — 200건 초과 행을 여러 페이지로 조회
+P04  Gate BLOCKED 행 → _make_form647_search_adapter() 경유 → 0건
 """
 from __future__ import annotations
 
@@ -31,6 +37,7 @@ from services.document_engine.form647_mapping import (
     is_form647_service_gate_open,
     find_form647_snapshot,
 )
+from services.shared_search.production_bindings import _make_form647_search_adapter
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -217,3 +224,105 @@ def test_d05_is_gate_open_ignores_service_released():
     # service_released 가 있어도 무시됨
     assert is_form647_service_gate_open({**blocked, "service_released": True}) is False
     assert is_form647_service_gate_open({**open_, "service_released": False}) is True
+
+
+# ---------------------------------------------------------------------------
+# P01-P04: production_bindings._make_form647_search_adapter() 경로 테스트 (R2)
+# ---------------------------------------------------------------------------
+
+def _make_paged_leg_client(all_rows: list, page_size: int = 200) -> MagicMock:
+    """페이지네이션을 시뮬레이션하는 LEG 클라이언트 모의.
+
+    .range(start, end) 호출마다 해당 슬라이스를 반환한다.
+    """
+    leg = MagicMock()
+
+    def _build_q():
+        q = MagicMock()
+        q.select.return_value = q
+        q.order.return_value = q
+        q.eq.return_value = q
+        q.limit.return_value = q
+
+        # range 호출 시 슬라이스된 데이터 반환
+        def _range(start, end):
+            res = MagicMock()
+            res.data = all_rows[start : end + 1]
+            q2 = MagicMock()
+            q2.execute.return_value = res
+            return q2
+
+        q.range.side_effect = _range
+        return q
+
+    leg.schema.return_value.from_.return_value = _build_q()
+    return leg
+
+
+def test_p01_no_leg_client_zero_via_bindings():
+    """leg_client=None → _make_form647_search_adapter() 0건 반환, 예외 없음."""
+    adapter = _make_form647_search_adapter(leg_client=None)
+    docs = list(adapter.iter_documents())
+    assert docs == []
+
+
+def test_p02_db_error_propagates_via_bindings():
+    """DB 오류 → 예외가 호출자에게 전파된다 (조용히 0건으로 삼키지 않음)."""
+    leg = MagicMock()
+    q = MagicMock()
+    q.select.return_value = q
+    q.order.return_value = q
+    q.range.return_value = q
+    q.range.return_value.execute.side_effect = Exception("connection refused")
+    leg.schema.return_value.from_.return_value = q
+
+    adapter = _make_form647_search_adapter(leg_client=leg)
+    with pytest.raises(Exception, match="connection refused"):
+        list(adapter.iter_documents())
+
+
+def test_p03_pagination_fetches_all_pages():
+    """200건 초과 행을 여러 페이지로 나눠 모두 수집한다."""
+    # 350개 행: 200 + 150 (2페이지)
+    rows = [
+        {
+            "ek": str(i),
+            "service_sot_gate": "APPROVED",
+            "frozen_name": f"서식 {i}",
+            "api_target": "licbyl",
+            "created_at": "2026-10-14T04:45:19+00:00",
+        }
+        for i in range(350)
+    ]
+    leg = _make_paged_leg_client(rows)
+    adapter = _make_form647_search_adapter(leg_client=leg)
+    docs = list(adapter.iter_documents())
+    assert len(docs) == 350
+    # 두 번째 페이지 range 호출 확인 (offset=200)
+    range_calls = leg.schema.return_value.from_.return_value.range.call_args_list
+    assert len(range_calls) == 2
+    assert range_calls[0] == call(0, 199)
+    assert range_calls[1] == call(200, 399)
+
+
+def test_p04_gate_blocked_zero_via_bindings():
+    """Gate BLOCKED 행만 있을 때 _make_form647_search_adapter() 경유 → 0건."""
+    leg = MagicMock()
+    q = MagicMock()
+    q.select.return_value = q
+    q.order.return_value = q
+
+    def _range(start, end):
+        res = MagicMock()
+        # 첫 페이지만 BLOCKED 행 반환, 이후 빈 페이지
+        res.data = [_SNAP_BLOCKED] if start == 0 else []
+        r = MagicMock()
+        r.execute.return_value = res
+        return r
+
+    q.range.side_effect = _range
+    leg.schema.return_value.from_.return_value = q
+
+    adapter = _make_form647_search_adapter(leg_client=leg)
+    docs = list(adapter.iter_documents())
+    assert docs == []

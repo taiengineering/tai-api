@@ -1140,36 +1140,37 @@ def _make_form647_search_adapter(
     """FORM647 647종 → 기존 REFERENCE_FORM 검색 연결.
 
     legal_client (LEG Supabase) 를 재사용. 없으면 fail-closed (0건 반환).
-    Gate BLOCKED 상태에서는 form_snapshots 조회 결과가 항상 0건이므로
-    실제 인덱스에 아무 문서도 추가되지 않는다.
+    Gate BLOCKED 상태에서는 form_snapshots 조회가 성공하지만 모든 행의
+    service_sot_gate='BLOCKED' → _normalize()가 None 반환 → 0건 인덱싱.
+    DB 조회 오류는 호출자(인덱서)에게 전파한다 — 조용히 0건으로 처리하지 않는다.
     Gate 해제는 별도 LEG 거버넌스 승인 + DB 마이그레이션 필요.
     """
     if leg_client is None:
         return Form647SearchAdapter(fetch_current=lambda: iter([]))
 
     _SELECT = "ek, service_sot_gate, frozen_name, api_target, created_at"
+    _PAGE = 200   # form_snapshots 페이지 크기 (647건 → 최대 4회 조회)
 
     def _iter_current():
         offset = 0
         while True:
-            try:
-                res = (
-                    leg_client.schema("form647_review")
-                    .from_("form_snapshots")
-                    .select(_SELECT)
-                    .order("ek")
-                    .range(offset, offset + _CHUNK - 1)
-                    .execute()
-                )
-                rows = list(getattr(res, "data", None) or [])
-            except Exception:
-                return   # fail-closed
+            # 예외를 잡지 않는다 — DB 오류는 인덱서에게 전파해 갱신 중단.
+            # Gate BLOCKED 정상 케이스: DB는 행을 반환하지만 _normalize()가 None → 0건.
+            res = (
+                leg_client.schema("form647_review")
+                .from_("form_snapshots")
+                .select(_SELECT)
+                .order("ek")
+                .range(offset, offset + _PAGE - 1)
+                .execute()
+            )
+            rows = list(getattr(res, "data", None) or [])
             if not rows:
                 break
             yield from rows
-            if len(rows) < _CHUNK:
+            if len(rows) < _PAGE:
                 break
-            offset += _CHUNK
+            offset += _PAGE
 
     return Form647SearchAdapter(fetch_current=_iter_current)
 
