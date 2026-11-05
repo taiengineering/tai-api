@@ -181,14 +181,62 @@ def _parse_inquiry_uuid(value: str) -> str:
         raise HTTPException(status_code=400, detail="유효하지 않은 문의 ID입니다.")
 
 
-def _safe_idempotency_uuid(value) -> Optional[str]:
-    """클라이언트 idempotency_key — UUID 형식만 허용, 나머지는 None."""
-    if not value:
+def _get_idem_derive_key() -> Optional[bytes]:
+    """문의 ID 파생용 HMAC 키 — 환경변수 미설정 시 None."""
+    base = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_KEY")
+    if not base:
+        return None
+    return hmac.new(base.encode(), b"contact-idem-v1", hashlib.sha256).digest()
+
+
+def _derive_inquiry_id(client_key: Optional[str]) -> Optional[str]:
+    """클라이언트 UUID → HMAC 파생 inquiry_id.
+    client_key와 반환값은 서버 비밀키 없이 상호 도출 불가.
+    UUID 형식 불일치 또는 환경변수 미설정 시 None.
+    """
+    if not client_key:
         return None
     try:
-        return str(uuid.UUID(str(value).strip()))
+        uuid.UUID(str(client_key).strip())
     except (ValueError, AttributeError, TypeError):
         return None
+    key = _get_idem_derive_key()
+    if not key:
+        return None
+    h = hmac.new(key, str(client_key).strip().encode(), hashlib.sha256).digest()
+    return str(uuid.UUID(bytes=h[:16]))
+
+
+def _build_existing_response(supabase, inquiry_id: str, created_str: str) -> dict:
+    """기존 문의 재전송 응답 — 개인정보 제외, 첨부 현황 포함."""
+    try:
+        attach_rows = (
+            supabase.table("attachments")
+            .select("id")
+            .eq("record_id", inquiry_id)
+            .eq("table_name", "inquiries")
+            .execute()
+        )
+        attachments_count = len(attach_rows.data) if attach_rows and attach_rows.data else 0
+    except Exception:
+        attachments_count = 0
+    attachments_status = "none" if attachments_count == 0 else "has_attachments"
+
+    upload_token = None
+    if inquiry_id:
+        try:
+            created_at = datetime.fromisoformat((created_str or "").replace("Z", "+00:00"))
+            upload_token = _generate_upload_token(inquiry_id, created_at)
+        except Exception:
+            pass
+
+    return {
+        "status": "existing",
+        "inquiry_id": inquiry_id,
+        "upload_token": upload_token,
+        "attachments_status": attachments_status,
+        "attachments_count": attachments_count,
+    }
 
 
 def _has_dangerous_header(raw: bytes) -> bool:
@@ -257,6 +305,31 @@ async def _upload_attachments(supabase, validated: list, inquiry_id: str) -> tup
     month_prefix = now_kst().strftime("%Y-%m")
 
     for raw, fname, ext, mime in validated:
+        # 간이 중복 방지 — (record_id, file_name, file_size) 존재 시 재업로드 생략.
+        # 한계: 동일 이름·크기 ≠ 동일 내용. 기존 파일 덮어쓰지 않음.
+        try:
+            dup = (
+                supabase.table("attachments")
+                .select("id")
+                .eq("record_id", inquiry_id)
+                .eq("table_name", "inquiries")
+                .eq("file_name", fname)
+                .eq("file_size", len(raw))
+                .limit(1)
+                .execute()
+            )
+            if dup.data:
+                results.append({
+                    "id": dup.data[0].get("id"),
+                    "file_name": fname,
+                    "file_size": len(raw),
+                    "file_ext": ext,
+                    "mime_type": mime,
+                })
+                continue
+        except Exception:
+            pass  # dedup 조회 실패 시 → 일반 업로드 진행
+
         storage_path = f"contact-attachments/{month_prefix}/{inquiry_id}/{uuid.uuid4()}.{ext}"
         try:
             supabase.storage.from_(CONTACT_BUCKET).upload(
@@ -342,35 +415,24 @@ async def submit_contact_with_attachments(
 
     supabase = get_supabase()
 
-    # R4: 중복 방지 — 같은 idempotency_key로 재제출 시 기존 문의 반환
-    parsed_idem_key = _safe_idempotency_uuid(idempotency_key)
-    if parsed_idem_key:
+    # 중복 방지 — client_key → HMAC 파생 inquiry_id (contact-idem-v1 R2)
+    # client_key와 inquiry_id는 서버 비밀키 없이 상호 도출 불가
+    derived_id = _derive_inquiry_id(idempotency_key)
+    if derived_id:
         idem_check = (
             supabase.table("inquiries")
-            .select("*")
-            .eq("id", parsed_idem_key)
+            .select("id, created_at")
+            .eq("id", derived_id)
             .limit(1)
             .execute()
         )
         if idem_check.data:
-            saved = idem_check.data[0]
-            inquiry_id = str(saved.get("id", ""))
-            upload_token = None
-            if inquiry_id:
-                try:
-                    created_at = datetime.fromisoformat(
-                        (saved.get("created_at") or "").replace("Z", "+00:00")
-                    )
-                    upload_token = _generate_upload_token(inquiry_id, created_at)
-                except Exception:
-                    pass
-            return {
-                "status": "success",
-                "data": saved,
-                "upload_token": upload_token,
-                "attachments_status": "ok",
-                "attachments": [],
-            }
+            existing = idem_check.data[0]
+            return _build_existing_response(
+                supabase,
+                str(existing["id"]),
+                existing.get("created_at", ""),
+            )
 
     # ② 문의 생성
     row = {
@@ -384,11 +446,27 @@ async def submit_contact_with_attachments(
         "created_at": _now(),
         "updated_at": _now(),
     }
-    if parsed_idem_key:
-        row["id"] = parsed_idem_key  # 클라이언트 UUID → DB PRIMARY KEY 중복 방지
+    if derived_id:
+        row["id"] = derived_id  # HMAC 파생 ID → DB PRIMARY KEY
     try:
         res = supabase.table("inquiries").insert(row).execute()
-    except Exception:
+    except Exception as e:
+        # 동시 요청 충돌(unique 위반) → SELECT 재조회
+        if derived_id and any(k in str(e).lower() for k in ("unique", "duplicate", "23505")):
+            conflict_res = (
+                supabase.table("inquiries")
+                .select("id, created_at")
+                .eq("id", derived_id)
+                .limit(1)
+                .execute()
+            )
+            if conflict_res.data:
+                existing = conflict_res.data[0]
+                return _build_existing_response(
+                    supabase,
+                    str(existing["id"]),
+                    existing.get("created_at", ""),
+                )
         raise HTTPException(status_code=500, detail="저장 실패")
 
     saved = res.data[0] if res.data else row

@@ -40,9 +40,10 @@ def _mock_sb_found_with_time(inquiry_id: str, created_str: str):
                     )
                 )
             )
-        else:  # attachments
+        else:  # attachments (dedup check + _build_existing_response count)
             sel = MagicMock()
             sel.eq.return_value = sel
+            sel.limit.return_value = sel
             sel.execute.return_value = MagicMock(count=0, data=[])
             m.select.return_value = sel
             ins_row = {
@@ -106,10 +107,22 @@ def _mock_sb_new_inquiry(inquiry_id: str):
     def table_side(name):
         m = MagicMock()
         if name == "inquiries":
+            # idempotency SELECT → 없음 (신규 문의)
+            sel = MagicMock()
+            sel.eq.return_value = sel
+            sel.limit.return_value = sel
+            sel.execute.return_value = MagicMock(data=[])
+            m.select.return_value = sel
             m.insert.return_value = MagicMock(
                 execute=MagicMock(return_value=MagicMock(data=[ins_inquiry]))
             )
         else:  # attachments
+            # dedup SELECT → 없음
+            sel = MagicMock()
+            sel.eq.return_value = sel
+            sel.limit.return_value = sel
+            sel.execute.return_value = MagicMock(data=[])
+            m.select.return_value = sel
             m.insert.return_value = MagicMock(
                 execute=MagicMock(return_value=MagicMock(data=[ins_attach]))
             )
@@ -551,29 +564,126 @@ class TestPublicRouteRegistration:
         assert "logger.error" in src
 
 
-class TestIdempotency:
-    """R4: 중복 방지 — 클라이언트 UUID idempotency_key"""
+class TestDeriveInquiryId:
+    """contact-idem-v1 R2: HMAC 파생 ID 순수함수 계약"""
 
-    def test_existing_inquiry_returned(self, client):
-        """동일 idempotency_key → 기존 문의 반환 (중복 생성 없음)"""
-        uid = str(uuid.uuid4())
+    def test_derived_id_differs_from_client_key(self):
+        """HMAC 파생 ID ≠ client_key — 외부 노출된 inquiry_id로 역도출 불가"""
+        from routers.site_public import _derive_inquiry_id
+        client_key = str(uuid.uuid4())
+        derived = _derive_inquiry_id(client_key)
+        assert derived is not None
+        assert derived != client_key
+
+    def test_derived_id_deterministic(self):
+        """동일 입력 → 동일 출력"""
+        from routers.site_public import _derive_inquiry_id
+        client_key = str(uuid.uuid4())
+        assert _derive_inquiry_id(client_key) == _derive_inquiry_id(client_key)
+
+    def test_derived_id_is_valid_uuid(self):
+        from routers.site_public import _derive_inquiry_id
+        client_key = str(uuid.uuid4())
+        derived = _derive_inquiry_id(client_key)
+        assert derived is not None
+        uuid.UUID(derived)  # raises ValueError if not valid UUID
+
+    def test_non_uuid_client_key_returns_none(self):
+        from routers.site_public import _derive_inquiry_id
+        assert _derive_inquiry_id("not-a-uuid") is None
+        assert _derive_inquiry_id("") is None
+        assert _derive_inquiry_id(None) is None
+
+    def test_different_inputs_give_different_ids(self):
+        from routers.site_public import _derive_inquiry_id
+        k1, k2 = str(uuid.uuid4()), str(uuid.uuid4())
+        assert _derive_inquiry_id(k1) != _derive_inquiry_id(k2)
+
+
+class TestIdempotency:
+    """contact-idem-v1 R2: HMAC 파생 ID 기반 중복 방지"""
+
+    def test_existing_inquiry_returns_existing_status(self, client):
+        """동일 client_key → 기존 문의 발견 → status=existing 반환"""
+        from routers.site_public import _derive_inquiry_id
+        client_key = str(uuid.uuid4())
+        derived_id = _derive_inquiry_id(client_key)
         created_str = datetime.now(timezone.utc).isoformat()
-        sb = _mock_sb_found_with_time(uid, created_str)
+        sb = _mock_sb_found_with_time(derived_id, created_str)
         with patch("routers.site_public.get_supabase", return_value=sb):
             resp = client.post(
                 "/contacts/with-attachments",
                 data={
                     "name": "홍길동", "email": "test@test.com", "content": "문의합니다",
-                    "idempotency_key": uid,
+                    "idempotency_key": client_key,
                 },
             )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["status"] == "success"
-        assert body["data"]["id"] == uid
+        assert body["status"] == "existing"
+        assert body["inquiry_id"] == derived_id
+
+    def test_existing_response_no_personal_data(self, client):
+        """기존 문의 반환 시 이름·이메일·내용 미포함 — 개인정보 보호"""
+        from routers.site_public import _derive_inquiry_id
+        client_key = str(uuid.uuid4())
+        derived_id = _derive_inquiry_id(client_key)
+        created_str = datetime.now(timezone.utc).isoformat()
+        sb = _mock_sb_found_with_time(derived_id, created_str)
+        with patch("routers.site_public.get_supabase", return_value=sb):
+            resp = client.post(
+                "/contacts/with-attachments",
+                data={
+                    "name": "홍길동", "email": "test@test.com", "content": "문의합니다",
+                    "idempotency_key": client_key,
+                },
+            )
+        body = resp.json()
+        assert "data" not in body or body.get("data") is None
+        assert "name" not in body
+        assert "email" not in body
+        assert "content" not in body
+
+    def test_existing_response_includes_attachments_count(self, client):
+        """기존 문의 반환 시 inquiry_id·attachments_count 포함"""
+        from routers.site_public import _derive_inquiry_id
+        client_key = str(uuid.uuid4())
+        derived_id = _derive_inquiry_id(client_key)
+        created_str = datetime.now(timezone.utc).isoformat()
+        sb = _mock_sb_found_with_time(derived_id, created_str)
+        with patch("routers.site_public.get_supabase", return_value=sb):
+            resp = client.post(
+                "/contacts/with-attachments",
+                data={
+                    "name": "홍길동", "email": "test@test.com", "content": "문의합니다",
+                    "idempotency_key": client_key,
+                },
+            )
+        body = resp.json()
+        assert "inquiry_id" in body
+        assert "attachments_count" in body
+        assert isinstance(body["attachments_count"], int)
+
+    def test_existing_response_includes_upload_token(self, client):
+        """기존 문의 반환 시 upload_token 재발급 — 파일 재시도 가능"""
+        from routers.site_public import _derive_inquiry_id
+        client_key = str(uuid.uuid4())
+        derived_id = _derive_inquiry_id(client_key)
+        created_str = datetime.now(timezone.utc).isoformat()
+        sb = _mock_sb_found_with_time(derived_id, created_str)
+        with patch("routers.site_public.get_supabase", return_value=sb):
+            resp = client.post(
+                "/contacts/with-attachments",
+                data={
+                    "name": "홍길동", "email": "test@test.com", "content": "문의합니다",
+                    "idempotency_key": client_key,
+                },
+            )
+        body = resp.json()
+        assert body.get("upload_token") is not None
 
     def test_invalid_uuid_idempotency_key_ignored(self, client):
-        """잘못된 형식의 idempotency_key는 무시됨 — 정상 흐름 유지"""
+        """잘못된 형식의 idempotency_key → 파생 불가 → 정상 신규 문의 접수"""
         sb = _mock_sb_new_inquiry(str(uuid.uuid4()))
         with patch("routers.site_public.get_supabase", return_value=sb):
             resp = client.post(
@@ -584,23 +694,30 @@ class TestIdempotency:
                 },
             )
         assert resp.status_code == 200
+        assert resp.json()["status"] == "success"
 
-    def test_idempotent_returns_upload_token(self, client):
-        """기존 문의 반환 시 upload_token 재생성 (파일 재시도 가능)"""
-        uid = str(uuid.uuid4())
-        created_str = datetime.now(timezone.utc).isoformat()
-        sb = _mock_sb_found_with_time(uid, created_str)
+    def test_external_inquiry_id_cannot_retrieve_existing(self, client):
+        """알려진 inquiry_id를 idempotency_key로 보내도 그 문의에 접근 불가.
+        파생 ID가 다르므로 SELECT miss → 신규 문의 생성.
+        """
+        from routers.site_public import _derive_inquiry_id
+        known_id = str(uuid.uuid4())
+        derived = _derive_inquiry_id(known_id)
+        assert derived != known_id  # 보안 전제
+
+        # Mock: known_id SELECT → 데이터 있음, derived SELECT → 없음
+        sb = _mock_sb_new_inquiry(str(uuid.uuid4()))
         with patch("routers.site_public.get_supabase", return_value=sb):
             resp = client.post(
                 "/contacts/with-attachments",
                 data={
                     "name": "홍길동", "email": "test@test.com", "content": "문의합니다",
-                    "idempotency_key": uid,
+                    "idempotency_key": known_id,
                 },
             )
+        # 신규 문의 생성 (기존 문의 반환 아님)
         assert resp.status_code == 200
-        body = resp.json()
-        assert body.get("upload_token") is not None
+        assert resp.json()["status"] == "success"
 
 
 class TestSigningKeyWithFiles:
