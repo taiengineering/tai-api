@@ -87,17 +87,18 @@ ENGINE_EVENTS = {
 
 # WO-SLACK-EVENT-HUB-001: event_type → 채널 매핑 (severity 무관, 최우선).
 EVENT_TYPE_CHANNEL = {
-    "INQUIRY_CREATED":         CHANNEL_INQUIRY,
-    "TAI_WISH_CREATED":        CHANNEL_INQUIRY,
-    "APPROVAL_CREATED":        CHANNEL_APPROVAL,
-    "QUOTE_MANUAL_REQUESTED":  CHANNEL_APPROVAL,
-    "FREE_DIAGNOSIS_COMPLETED": CHANNEL_FREE_DIAGNOSIS,
-    "QA_FAIL_DETECTED":        CHANNEL_QA,
-    "QA_BLOCKED_DETECTED":     CHANNEL_QA,
-    "QA_FLAKY_DETECTED":       CHANNEL_QA,
-    "QA_RECOVERED":            CHANNEL_QA,
-    "QA_RUN_ERROR":            CHANNEL_QA,
-    "QA_RUN_COMPLETED":        CHANNEL_QA,
+    "INQUIRY_CREATED":           CHANNEL_INQUIRY,
+    "INQUIRY_ATTACHMENT_ADDED":  CHANNEL_INQUIRY,
+    "TAI_WISH_CREATED":          CHANNEL_INQUIRY,
+    "APPROVAL_CREATED":          CHANNEL_APPROVAL,
+    "QUOTE_MANUAL_REQUESTED":    CHANNEL_APPROVAL,
+    "FREE_DIAGNOSIS_COMPLETED":  CHANNEL_FREE_DIAGNOSIS,
+    "QA_FAIL_DETECTED":          CHANNEL_QA,
+    "QA_BLOCKED_DETECTED":       CHANNEL_QA,
+    "QA_FLAKY_DETECTED":         CHANNEL_QA,
+    "QA_RECOVERED":              CHANNEL_QA,
+    "QA_RUN_ERROR":              CHANNEL_QA,
+    "QA_RUN_COMPLETED":          CHANNEL_QA,
 }
 
 # WO-SLACK-EVENT-HUB-001 PR-③: event_type → admin 링크 (전부 LIST · 딥링크 미지원 확인됨).
@@ -117,8 +118,9 @@ QA_ADMIN_BUTTON_EVENTS = {
     "QA_RUN_COMPLETED",
 }
 EVENT_TYPE_ADMIN_PATH = {
-    "INQUIRY_CREATED":          "/inquiry-list",
-    "TAI_WISH_CREATED":         "/inquiry-list",
+    "INQUIRY_CREATED":           "/admin-inquiries",
+    "INQUIRY_ATTACHMENT_ADDED":  "/admin-inquiries",
+    "TAI_WISH_CREATED":          "/admin-inquiries",
     "QUOTE_MANUAL_REQUESTED":   "/quote-list",
     "FREE_DIAGNOSIS_COMPLETED": "/anon-diagnosis-list",
     # APPROVAL_CREATED — source deferred, path 미할당

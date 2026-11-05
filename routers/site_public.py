@@ -19,6 +19,8 @@ from fastapi import APIRouter, File, Form, HTTPException, Header, Query, UploadF
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
+from services.inbox_notify_svc import build_attachment_blocks
+from services.slack_dispatcher import send_slack
 from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger("site_public")
@@ -388,6 +390,8 @@ async def submit_contact_with_attachments(
     source: str = Form(default="marketing"),
     page_url: Optional[str] = Form(default=None),
     idempotency_key: Optional[str] = Form(default=None),  # R4: 클라이언트 중복 방지 키
+    company: Optional[str] = Form(default=None),
+    phone: Optional[str] = Form(default=None),
     files: Optional[List[UploadFile]] = File(default=None),
 ):
     """공개 문의 접수 + 파일 첨부 단일 요청 — 문의 ID가 외부에 먼저 노출되지 않음"""
@@ -441,6 +445,8 @@ async def submit_contact_with_attachments(
         "content": content.strip(),
         "source": (source or "marketing").strip(),
         "page_url": (page_url or "").strip() or None,
+        "company": (company or "").strip() or None,
+        "phone": (phone or "").strip() or None,
         "inquiry_type": "INQUIRY",
         "is_member": False,
         "created_at": _now(),
@@ -484,7 +490,21 @@ async def submit_contact_with_attachments(
             if err:
                 attach_status = "failed"
 
-    # ④ 재시도용 업로드 토큰 생성 (inquiry_id 있을 때만)
+    # ④ 첨부파일 저장 완료 Slack 보완 알림 (DB 트리거 초기 알림과 별개 — 타이밍 보정)
+    # DB 트리거는 INSERT 직후 발송되므로 파일 정보가 없다. 저장 성공 후 별도 알림으로 보정.
+    if attach_results and attach_status == "ok":
+        try:
+            file_names = [r.get("file_name", "?") for r in attach_results]
+            await send_slack(
+                "INQUIRY_ATTACHMENT_ADDED",
+                "INFO",
+                f"첨부파일 저장 완료 · {name.strip()}",
+                blocks=build_attachment_blocks(name.strip(), email.strip(), file_names),
+            )
+        except Exception:
+            pass  # 알림 실패는 비즈니스 실패 아님
+
+    # ⑤ 재시도용 업로드 토큰 생성 (inquiry_id 있을 때만)
     upload_token = None
     if inquiry_id:
         try:
