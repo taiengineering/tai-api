@@ -327,6 +327,7 @@ async def _upload_attachments(supabase, validated: list, inquiry_id: str) -> tup
                     "file_size": len(raw),
                     "file_ext": ext,
                     "mime_type": mime,
+                    "_is_new": False,  # dedup — 실제 신규 저장 아님
                 })
                 continue
         except Exception:
@@ -374,6 +375,7 @@ async def _upload_attachments(supabase, validated: list, inquiry_id: str) -> tup
             "file_size": len(raw),
             "file_ext": ext,
             "mime_type": mime,
+            "_is_new": True,
         })
 
     return results, None
@@ -491,9 +493,10 @@ async def submit_contact_with_attachments(
     # 파일 저장 성공 후 INQUIRY_ATTACHMENT_ADDED 이벤트로 보정.
     # 운영자가 2건 수신하는 방식은 단일 메시지 업데이트(chat.update)의
     # DB 변경(slack_ts 컬럼) 필요로 Owner 결정 대기 중.
-    if attach_results and attach_status == "ok":
+    new_attach = [r for r in attach_results if r.get("_is_new")]
+    if new_attach and attach_status == "ok":
         try:
-            file_names = [r.get("file_name", "?") for r in attach_results]
+            file_names = [r.get("file_name", "?") for r in new_attach]
             await send_slack(
                 "INQUIRY_ATTACHMENT_ADDED",
                 "INFO",
@@ -614,11 +617,12 @@ async def retry_contact_attachments(
     if err:
         raise HTTPException(status_code=500, detail="파일 저장에 실패했습니다.")
 
-    # 첨부 완료 Slack 보완 알림 (재시도 경로 — DB에 실제 저장된 파일만)
-    if results:
+    # 첨부 완료 Slack 보완 알림 (재시도 경로 — 실제 신규 저장 파일만)
+    new_results = [r for r in results if r.get("_is_new")]
+    if new_results:
         try:
             inq = check.data[0] if check.data else {}
-            file_names = [r.get("file_name", "?") for r in results]
+            file_names = [r.get("file_name", "?") for r in new_results]
             await send_slack(
                 "INQUIRY_ATTACHMENT_ADDED",
                 "INFO",
