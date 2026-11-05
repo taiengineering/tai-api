@@ -531,6 +531,11 @@ class TestPublicRouteRegistration:
         uid = str(uuid.uuid4())
         assert is_public("POST", f"/contacts/{uid}/attachments")
 
+    def test_contacts_prefix_not_public(self):
+        """R4: /contacts/ 전체 접두 경로 공개 아님 — 재시도 경로만 허용"""
+        from services.permission_guard import is_public
+        assert not is_public("POST", "/contacts/some-arbitrary-path")
+
     def test_cleanup_storage_logs_on_failure(self):
         """R3: Storage 정리 실패 시 조용히 무시하지 않음 (logger.error 호출)"""
         import inspect
@@ -544,6 +549,85 @@ class TestPublicRouteRegistration:
         from routers import site_public
         src = inspect.getsource(site_public._cleanup_db_rows)
         assert "logger.error" in src
+
+
+class TestIdempotency:
+    """R4: 중복 방지 — 클라이언트 UUID idempotency_key"""
+
+    def test_existing_inquiry_returned(self, client):
+        """동일 idempotency_key → 기존 문의 반환 (중복 생성 없음)"""
+        uid = str(uuid.uuid4())
+        created_str = datetime.now(timezone.utc).isoformat()
+        sb = _mock_sb_found_with_time(uid, created_str)
+        with patch("routers.site_public.get_supabase", return_value=sb):
+            resp = client.post(
+                "/contacts/with-attachments",
+                data={
+                    "name": "홍길동", "email": "test@test.com", "content": "문의합니다",
+                    "idempotency_key": uid,
+                },
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "success"
+        assert body["data"]["id"] == uid
+
+    def test_invalid_uuid_idempotency_key_ignored(self, client):
+        """잘못된 형식의 idempotency_key는 무시됨 — 정상 흐름 유지"""
+        sb = _mock_sb_new_inquiry(str(uuid.uuid4()))
+        with patch("routers.site_public.get_supabase", return_value=sb):
+            resp = client.post(
+                "/contacts/with-attachments",
+                data={
+                    "name": "홍길동", "email": "test@test.com", "content": "문의합니다",
+                    "idempotency_key": "not-a-uuid",
+                },
+            )
+        assert resp.status_code == 200
+
+    def test_idempotent_returns_upload_token(self, client):
+        """기존 문의 반환 시 upload_token 재생성 (파일 재시도 가능)"""
+        uid = str(uuid.uuid4())
+        created_str = datetime.now(timezone.utc).isoformat()
+        sb = _mock_sb_found_with_time(uid, created_str)
+        with patch("routers.site_public.get_supabase", return_value=sb):
+            resp = client.post(
+                "/contacts/with-attachments",
+                data={
+                    "name": "홍길동", "email": "test@test.com", "content": "문의합니다",
+                    "idempotency_key": uid,
+                },
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body.get("upload_token") is not None
+
+
+class TestSigningKeyWithFiles:
+    """R4: 파일 있을 때 서명키 선확인"""
+
+    def test_503_files_with_no_signing_key(self, client, monkeypatch):
+        """서명키 없을 때 파일 첨부 → 문의 저장 전 503 선차단"""
+        monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+        monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+        resp = client.post(
+            "/contacts/with-attachments",
+            data={"name": "홍길동", "email": "test@test.com", "content": "문의합니다"},
+            files=[("files", ("doc.pdf", b"%PDF-1.4 content", "application/pdf"))],
+        )
+        assert resp.status_code == 503
+
+    def test_200_no_files_without_signing_key(self, client, monkeypatch):
+        """서명키 없어도 파일 없는 문의는 접수 가능"""
+        sb = _mock_sb_new_inquiry(str(uuid.uuid4()))
+        monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+        monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+        with patch("routers.site_public.get_supabase", return_value=sb):
+            resp = client.post(
+                "/contacts/with-attachments",
+                data={"name": "홍길동", "email": "test@test.com", "content": "문의합니다"},
+            )
+        assert resp.status_code == 200
 
 
 class TestAdminAttachmentsSignedRef:

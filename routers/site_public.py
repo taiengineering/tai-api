@@ -181,6 +181,16 @@ def _parse_inquiry_uuid(value: str) -> str:
         raise HTTPException(status_code=400, detail="유효하지 않은 문의 ID입니다.")
 
 
+def _safe_idempotency_uuid(value) -> Optional[str]:
+    """클라이언트 idempotency_key — UUID 형식만 허용, 나머지는 None."""
+    if not value:
+        return None
+    try:
+        return str(uuid.UUID(str(value).strip()))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 def _has_dangerous_header(raw: bytes) -> bool:
     for h in _DANGEROUS_HEADERS:
         if raw[: len(h)] == h:
@@ -304,6 +314,7 @@ async def submit_contact_with_attachments(
     content: str = Form(..., min_length=1),
     source: str = Form(default="marketing"),
     page_url: Optional[str] = Form(default=None),
+    idempotency_key: Optional[str] = Form(default=None),  # R4: 클라이언트 중복 방지 키
     files: Optional[List[UploadFile]] = File(default=None),
 ):
     """공개 문의 접수 + 파일 첨부 단일 요청 — 문의 ID가 외부에 먼저 노출되지 않음"""
@@ -319,7 +330,47 @@ async def submit_contact_with_attachments(
         for f in file_list:
             validated.append(await _read_and_validate(f))
 
+        # R4: 파일 있을 때 서명키 미리 확인 — 없으면 첨부 후 재시도 불능 → 503 선차단
+        if validated:
+            try:
+                _get_upload_signing_key()
+            except RuntimeError:
+                raise HTTPException(
+                    status_code=503,
+                    detail="첨부 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+                )
+
     supabase = get_supabase()
+
+    # R4: 중복 방지 — 같은 idempotency_key로 재제출 시 기존 문의 반환
+    parsed_idem_key = _safe_idempotency_uuid(idempotency_key)
+    if parsed_idem_key:
+        idem_check = (
+            supabase.table("inquiries")
+            .select("*")
+            .eq("id", parsed_idem_key)
+            .limit(1)
+            .execute()
+        )
+        if idem_check.data:
+            saved = idem_check.data[0]
+            inquiry_id = str(saved.get("id", ""))
+            upload_token = None
+            if inquiry_id:
+                try:
+                    created_at = datetime.fromisoformat(
+                        (saved.get("created_at") or "").replace("Z", "+00:00")
+                    )
+                    upload_token = _generate_upload_token(inquiry_id, created_at)
+                except Exception:
+                    pass
+            return {
+                "status": "success",
+                "data": saved,
+                "upload_token": upload_token,
+                "attachments_status": "ok",
+                "attachments": [],
+            }
 
     # ② 문의 생성
     row = {
@@ -333,6 +384,8 @@ async def submit_contact_with_attachments(
         "created_at": _now(),
         "updated_at": _now(),
     }
+    if parsed_idem_key:
+        row["id"] = parsed_idem_key  # 클라이언트 UUID → DB PRIMARY KEY 중복 방지
     try:
         res = supabase.table("inquiries").insert(row).execute()
     except Exception:
