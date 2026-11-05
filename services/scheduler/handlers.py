@@ -332,6 +332,13 @@ def _run_bizinfo_daily_sync(p):
     }
 
 
+def _run_slack_relay_recovery(p):
+    import asyncio
+    from services.slack_relay_svc import run_relay_recovery_once
+    processed = asyncio.run(run_relay_recovery_once())
+    return {"processed": processed}
+
+
 def _run_mkt_ga4_collect(p):
     result = _mkt_http("/api/mkt/ga4/collect", timeout=p.get("timeout_seconds", 120))
     if result["http_status"] >= 400:
@@ -479,6 +486,7 @@ def register_direct_handlers() -> dict[str, Handler]:
         "direct://leg_law_refresh":                 _run_leg_law_refresh,
         "direct://mkt_ga4_collect":                 _run_mkt_ga4_collect,
         "direct://bizinfo_daily_safety_sync":       _run_bizinfo_daily_sync,
+        "direct://slack_relay_recovery":            _run_slack_relay_recovery,
     })
     return DIRECT_HANDLERS
 
