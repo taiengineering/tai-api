@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
+from services.company_scope import _require_admin
 from services.support_taxonomy import project_labels, is_valid_type, is_valid_axis, taxonomy_snapshot
 from services.time import now_kst, serialize_external_utc
 
@@ -326,8 +327,9 @@ def admin_get_inquiry_attachments(
     inquiry_id: UUID,
     _admin: dict = Depends(get_current_user),
 ):
-    """문의 첨부파일 목록 + 1시간 서명 URL"""
+    """문의 첨부파일 목록 + 1시간 서명 URL — 최고관리자(role ALL) 전용"""
     supabase = get_supabase()
+    _require_admin(_admin, supabase)  # role_code → scope ALL 아니면 403
     res = (
         supabase.table("attachments")
         .select("id, file_name, file_size, file_ext, mime_type, file_url, created_at")
