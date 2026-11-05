@@ -1721,5 +1721,58 @@ class TestOpenSearchSourceFilter(unittest.TestCase):
         assert body["_source"] == _RESULT_SOURCE_FIELDS
 
 
+# --------------------------------------------------------------------------
+# §B-SEARCH01-CALL: build_query_plan() called exactly once per /sections request
+# --------------------------------------------------------------------------
+
+class TestQueryPlanCalledOnce(unittest.TestCase):
+    """SEARCH-01: verify build_query_plan() is called exactly once per /sections call."""
+
+    def test_build_query_plan_called_once_for_sections(self):
+        """build_query_plan() must be called once regardless of active domain count.
+
+        Patches services.shared_search.query.build_query_plan (the canonical
+        location) since the route imports it lazily at request time.
+        """
+        import unittest.mock as mock
+        from fastapi import FastAPI
+        from starlette.testclient import TestClient
+        import services.shared_search.query as query_mod
+        import services.shared_search.opensearch_client as os_client_mod
+        import services.shared_search.opensearch_reader as reader_mod
+        import routers.public_safety_search as pss_mod
+
+        call_count = []
+        original_bqp = query_mod.build_query_plan
+
+        def counting_bqp(*args, **kwargs):
+            call_count.append(1)
+            return original_bqp(*args, **kwargs)
+
+        class _FakeReader:
+            def run_msearch(self, **kwargs):
+                return {}
+
+            def run_fuzzy(self, *args, **kwargs):
+                return []
+
+        app = FastAPI()
+        app.include_router(pss_mod.router)
+
+        with (
+            mock.patch.object(query_mod, "build_query_plan", side_effect=counting_bqp),
+            mock.patch.object(pss_mod, "get_client", return_value=object()),
+            mock.patch.object(reader_mod, "OpenSearchSearchReader",
+                              return_value=_FakeReader()),
+        ):
+            with TestClient(app) as client:
+                r = client.get("/public/safety-search/sections?q=지게차")
+
+        assert r.status_code == 200
+        assert len(call_count) == 1, (
+            f"build_query_plan() called {len(call_count)} times; expected exactly 1"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
