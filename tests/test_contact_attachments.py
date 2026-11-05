@@ -907,15 +907,15 @@ class TestAttachmentSlackNotification:
         assert "파일2.pdf" in blocks[1]["text"]["text"]
         btn_url = blocks[2]["elements"][0]["url"]
         assert btn_url == ADMIN_INQUIRY_URL
-        assert "/admin-inquiries" in btn_url
+        assert "/inquiry-list" in btn_url
 
-    def test_slack_url_changed_to_admin_inquiries(self):
-        """Slack dispatcher URL이 /inquiry-list 에서 /admin-inquiries 로 변경됐는지 확인"""
+    def test_slack_url_points_to_inquiry_list(self):
+        """Slack dispatcher URL이 운영 관리자 화면 /inquiry-list를 가리키는지 확인"""
         from services.slack_dispatcher import EVENT_TYPE_ADMIN_PATH
-        assert EVENT_TYPE_ADMIN_PATH["INQUIRY_CREATED"] == "/admin-inquiries"
-        assert EVENT_TYPE_ADMIN_PATH["TAI_WISH_CREATED"] == "/admin-inquiries"
-        assert EVENT_TYPE_ADMIN_PATH["INQUIRY_ATTACHMENT_ADDED"] == "/admin-inquiries"
-        assert "inquiry-list" not in EVENT_TYPE_ADMIN_PATH.get("INQUIRY_CREATED", "")
+        assert EVENT_TYPE_ADMIN_PATH["INQUIRY_CREATED"] == "/inquiry-list"
+        assert EVENT_TYPE_ADMIN_PATH["TAI_WISH_CREATED"] == "/inquiry-list"
+        assert EVENT_TYPE_ADMIN_PATH["INQUIRY_ATTACHMENT_ADDED"] == "/inquiry-list"
+        assert "admin-inquiries" not in EVENT_TYPE_ADMIN_PATH.get("INQUIRY_CREATED", "")
 
     def test_inquiry_attachment_added_routes_to_inquiry_channel(self):
         """INQUIRY_ATTACHMENT_ADDED 이벤트가 inquiry 채널로 라우팅됨"""

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # WO-SLACK-EVENT-HUB-001 PR-③: Vue3 admin 라우트로 통일.
 # dispatcher.EVENT_TYPE_ADMIN_PATH 의 INQUIRY_CREATED/TAI_WISH_CREATED 매핑값과 일치.
 ADMIN_BASE_URL = "https://admin.taieng.co.kr"
-ADMIN_INQUIRY_URL = f"{ADMIN_BASE_URL}/admin-inquiries"
+ADMIN_INQUIRY_URL = f"{ADMIN_BASE_URL}/inquiry-list"
 
 # 소스 라벨
 SOURCE_LABEL = {
