@@ -24,6 +24,13 @@ P01  leg_client=None → _make_form647_search_adapter() → 0건 반환
 P02  DB 오류 → 예외 전파 (service_gate 조회 오류, 조용히 0건으로 처리 안 함)
 P03  페이지네이션 — service_gate + form_snapshots 각각 200건 초과 행을 여러 페이지로 조회
 P04  service_gate 승인 행 없음 → _make_form647_search_adapter() 경유 → 0건
+
+철회·재인덱스 경로 테스트 (R4, G3):
+R01  object_reindex_payload() — 승인 행 → 페이로드 반환 (삭제 없음)
+R02  object_reindex_payload() — 철회(is_approved=False) → None 반환 (G3 delete 경로)
+R03  object_reindex_payload() — f647- 접두사 없는 canonical_id → None (경계 차단)
+R04  production_bindings 경유 — 철회 상태 form → object_reindex_payload = None
+R05  production_bindings 경유 — 존재하지 않는 form → object_reindex_payload = None
 """
 from __future__ import annotations
 
@@ -390,3 +397,111 @@ def test_p04_no_approved_zero_via_bindings():
     assert docs == []
     # form_snapshots 는 조회하지 않아야 함 (조기 반환)
     assert leg._form_q.range.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# R01-R05: 철회·재인덱스 경로 테스트 (R4, G3)
+# ---------------------------------------------------------------------------
+
+def _make_fetch_by_id_leg_client(snap_rows: list, gate_rows: list) -> MagicMock:
+    """fetch_by_id 경로 전용 모의 — form_snapshots / service_gate 단건 조회 라우팅."""
+    leg = MagicMock()
+
+    def _build_q(rows: list) -> MagicMock:
+        q = MagicMock()
+        q.select.return_value = q
+        q.eq.return_value = q
+        q.limit.return_value = q
+        res = MagicMock()
+        res.data = rows
+        q.execute.return_value = res
+        return q
+
+    schema_mock = MagicMock()
+
+    def _from_(table_name: str) -> MagicMock:
+        if table_name == "service_gate":
+            return _build_q(gate_rows)
+        return _build_q(snap_rows)
+
+    schema_mock.from_.side_effect = _from_
+    leg.schema.return_value = schema_mock
+    return leg
+
+
+def test_r01_reindex_payload_approved_returns_payload():
+    """G3: object_reindex_payload() — 승인 상태 → 정상 페이로드 반환."""
+    snap_row = {
+        "run_id": _RUN_ID,
+        "ek": _EK,
+        "frozen_name": "도급인의 안전·보건에 관한 정보 제공",
+        "api_target": "licbyl",
+        "created_at": "2026-10-14T04:45:19+00:00",
+    }
+    gate_row = {"is_approved": True}
+    leg = _make_fetch_by_id_leg_client(snap_rows=[snap_row], gate_rows=[gate_row])
+    adapter = _make_form647_search_adapter(leg_client=leg)
+
+    payload = adapter.object_reindex_payload(f"f647-{_EK}")
+
+    assert payload is not None
+    assert payload["canonical_id"] == f"f647-{_EK}"
+    assert payload["publication_status"] == "PUBLISHED"
+    assert payload["object_type"] == "REFERENCE_FORM"
+
+
+def test_r02_reindex_payload_revoked_returns_none():
+    """G3: object_reindex_payload() — 철회(is_approved=False) → None → delete_document 경로."""
+    snap_row = {
+        "run_id": _RUN_ID,
+        "ek": _EK,
+        "frozen_name": "도급인의 안전·보건에 관한 정보 제공",
+        "api_target": "licbyl",
+        "created_at": "2026-10-14T04:45:19+00:00",
+    }
+    gate_row = {"is_approved": False}
+    leg = _make_fetch_by_id_leg_client(snap_rows=[snap_row], gate_rows=[gate_row])
+    adapter = _make_form647_search_adapter(leg_client=leg)
+
+    payload = adapter.object_reindex_payload(f"f647-{_EK}")
+
+    assert payload is None
+
+
+def test_r03_reindex_payload_wrong_prefix_returns_none():
+    """G3 경계: f647- 접두사 없는 canonical_id → None (다른 도메인 ID 차단)."""
+    leg = _make_fetch_by_id_leg_client(snap_rows=[], gate_rows=[])
+    adapter = _make_form647_search_adapter(leg_client=leg)
+
+    assert adapter.object_reindex_payload("some-uuid-without-prefix") is None
+    assert adapter.object_reindex_payload("") is None
+    assert adapter.object_reindex_payload("TAI_REFERENCE_FORM-123") is None
+
+
+def test_r04_reindex_payload_revoked_via_bindings():
+    """production_bindings 경유 — service_gate.is_approved=False → object_reindex_payload = None."""
+    snap_row = {
+        "run_id": _RUN_ID,
+        "ek": _EK,
+        "frozen_name": "도급인의 안전·보건에 관한 정보 제공",
+        "api_target": "licbyl",
+        "created_at": "2026-10-14T04:45:19+00:00",
+    }
+    gate_row = {"is_approved": False}
+    leg = _make_fetch_by_id_leg_client(snap_rows=[snap_row], gate_rows=[gate_row])
+    adapter = _make_form647_search_adapter(leg_client=leg)
+
+    payload = adapter.object_reindex_payload(f"f647-{_EK}")
+
+    assert payload is None, "철회된 서식은 None → delete_document 경로로 처리되어야 함"
+
+
+def test_r05_reindex_payload_not_found_via_bindings():
+    """production_bindings 경유 — form_snapshots에 없는 ek → object_reindex_payload = None."""
+    # snap_rows 비어 있음 → _fetch_by_id 에서 None 반환
+    leg = _make_fetch_by_id_leg_client(snap_rows=[], gate_rows=[])
+    adapter = _make_form647_search_adapter(leg_client=leg)
+
+    payload = adapter.object_reindex_payload("f647-99999999")
+
+    assert payload is None, "존재하지 않는 서식은 None → delete_document 경로로 처리되어야 함"
