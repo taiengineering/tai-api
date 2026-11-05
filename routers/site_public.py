@@ -1,13 +1,17 @@
 """
 공개 웹용 — 문의 접수(POST /contacts),
 단일 요청 문의+첨부(POST /contacts/with-attachments),
-첨부 재시도(POST /contacts/{id}/attachments, 60분 창),
+첨부 재시도(POST /contacts/{id}/attachments, 60분 창 + 소유자 토큰),
 FAQ 목록(GET /faqs)
 관리자 FAQ: prefix /admin/site-faqs
 """
+import base64
+import hashlib
+import hmac
+import logging
+import os
 import re
 import uuid
-import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
@@ -136,6 +140,36 @@ _MAGIC: dict = {
 }
 
 
+def _get_upload_signing_key() -> bytes:
+    """SUPABASE_SERVICE_ROLE_KEY 에서 첨부 전용 서명키 파생 (새 비밀 불필요)."""
+    base = (
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        or os.getenv("SUPABASE_SERVICE_KEY")
+        or "dev-only-not-secure"
+    )
+    return hmac.new(base.encode(), b"contact-upload-v1", hashlib.sha256).digest()
+
+
+def _generate_upload_token(inquiry_id: str, created_at: datetime) -> str:
+    """문의 ID + 생성 시각(시간 단위)을 HMAC 서명한 일회성 업로드 토큰."""
+    epoch_hour = int(created_at.timestamp()) // 3600
+    msg = f"{inquiry_id}:{epoch_hour}".encode()
+    h = hmac.new(_get_upload_signing_key(), msg, hashlib.sha256)
+    return base64.urlsafe_b64encode(h.digest()).rstrip(b"=").decode()
+
+
+def _verify_upload_token(token: str, inquiry_id: str, created_at_str: str) -> bool:
+    """재시도 토큰 검증 — 실패 시 False."""
+    if not token:
+        return False
+    try:
+        created_at = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+        expected = _generate_upload_token(inquiry_id, created_at)
+        return hmac.compare_digest(token.encode(), expected.encode())
+    except Exception:
+        return False
+
+
 def _contact_stable_ref(storage_path: str) -> str:
     return f"storage://{CONTACT_BUCKET}/{storage_path}"
 
@@ -168,7 +202,8 @@ def _file_magic_ok(raw: bytes, ext: str) -> bool:
 
 async def _read_and_validate(f: UploadFile) -> tuple:
     """(raw, fname, ext, mime) 반환. 검증 실패 시 HTTPException."""
-    raw = await f.read()
+    # 한도+1 바이트만 읽어 대용량 파일이 메모리를 소진하지 않도록 제한
+    raw = await f.read(CONTACT_ATTACH_MAX_BYTES + 1)
     if not raw:
         raise HTTPException(status_code=400, detail="빈 파일입니다.")
     if len(raw) > CONTACT_ATTACH_MAX_BYTES:
@@ -191,13 +226,23 @@ def _cleanup_storage(supabase, paths: list) -> None:
             pass
 
 
+def _cleanup_db_rows(supabase, ids: list) -> None:
+    """attachments 테이블 행 정리 (best-effort, 오류 무시)"""
+    for row_id in ids or []:
+        try:
+            supabase.table("attachments").delete().eq("id", str(row_id)).execute()
+        except Exception:
+            pass
+
+
 async def _upload_attachments(supabase, validated: list, inquiry_id: str) -> tuple:
     """
     검증 완료 파일을 Storage + attachments 테이블에 저장.
     Returns (results, None) 성공, ([], 오류메시지) 실패.
-    실패 시 업로드된 Storage 파일 모두 정리.
+    실패 시 업로드된 Storage 파일과 삽입된 DB 행 모두 정리 (불일치 방지).
     """
     uploaded_paths: list = []
+    inserted_db_ids: list = []   # R2: Storage+DB 불일치 방지용 추적
     results = []
     month_prefix = now_kst().strftime("%Y-%m")
 
@@ -208,9 +253,10 @@ async def _upload_attachments(supabase, validated: list, inquiry_id: str) -> tup
                 path=storage_path, file=raw, file_options={"content-type": mime}
             )
             uploaded_paths.append(storage_path)
-        except Exception as e:
+        except Exception:
             logger.error("[ContactAttach] Storage 업로드 실패")
             _cleanup_storage(supabase, uploaded_paths)
+            _cleanup_db_rows(supabase, inserted_db_ids)
             return [], "파일 저장에 실패했습니다"
 
         row = {
@@ -226,14 +272,19 @@ async def _upload_attachments(supabase, validated: list, inquiry_id: str) -> tup
         }
         try:
             ins = supabase.table("attachments").insert(row).execute()
-        except Exception as e:
+        except Exception:
             logger.error("[ContactAttach] DB 저장 실패")
             _cleanup_storage(supabase, uploaded_paths)
+            _cleanup_db_rows(supabase, inserted_db_ids)
             return [], "파일 저장에 실패했습니다"
 
-        saved_row = ins.data[0] if ins.data else row
+        saved_row = ins.data[0] if ins.data else {}
+        db_id = saved_row.get("id") if saved_row else None
+        if db_id:
+            inserted_db_ids.append(str(db_id))
+
         results.append({
-            "id": saved_row.get("id"),
+            "id": db_id,
             "file_name": fname,
             "file_size": len(raw),
             "file_ext": ext,
@@ -293,14 +344,29 @@ async def submit_contact_with_attachments(
     # ③ 파일 업로드 (문의 생성 성공 후)
     attach_status = "ok"
     attach_results = []
-    if validated and inquiry_id:
-        attach_results, err = await _upload_attachments(supabase, validated, inquiry_id)
-        if err:
+    if validated:
+        if not inquiry_id:
+            # R2: 파일이 있는데 inquiry_id 없으면 성공으로 처리 금지
             attach_status = "failed"
+        else:
+            attach_results, err = await _upload_attachments(supabase, validated, inquiry_id)
+            if err:
+                attach_status = "failed"
+
+    # ④ 재시도용 업로드 토큰 생성 (inquiry_id 있을 때만)
+    upload_token = None
+    if inquiry_id:
+        try:
+            created_at_str = saved.get("created_at", "")
+            created_at = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+            upload_token = _generate_upload_token(inquiry_id, created_at)
+        except Exception:
+            pass
 
     return {
         "status": "success",
         "data": saved,
+        "upload_token": upload_token,
         "attachments_status": attach_status,
         "attachments": attach_results,
     }
@@ -312,12 +378,18 @@ async def submit_contact_with_attachments(
 async def retry_contact_attachments(
     inquiry_id: str,
     files: List[UploadFile] = File(...),
+    x_upload_token: Optional[str] = Header(None, alias="X-Upload-Token"),
 ):
-    """공개 문의 파일 첨부 재시도 — 접수 후 60분 이내, 최대 5개"""
+    """공개 문의 파일 첨부 재시도 — 소유자 토큰 + 접수 후 60분 이내, 최대 5개"""
     parsed_id = _parse_inquiry_uuid(inquiry_id)
+
+    # R2: 토큰 없으면 즉시 거부 (401)
+    if not x_upload_token:
+        raise HTTPException(status_code=401, detail="첨부 재시도 권한이 없습니다.")
+
     supabase = get_supabase()
 
-    # inquiry 존재 + 60분 시간 창 확인
+    # inquiry 존재 확인
     check = (
         supabase.table("inquiries")
         .select("id, created_at")
@@ -329,6 +401,12 @@ async def retry_contact_attachments(
         raise HTTPException(status_code=404, detail="문의를 찾을 수 없습니다.")
 
     created_str = (check.data[0] or {}).get("created_at", "")
+
+    # R2: 토큰 검증 (문의 소유자 확인 — 타인의 UUID로는 불가)
+    if not _verify_upload_token(x_upload_token, parsed_id, created_str):
+        raise HTTPException(status_code=403, detail="유효하지 않은 첨부 권한입니다.")
+
+    # R2: 60분 창 확인 — 파싱 실패 시 허용하지 않고 차단
     try:
         created_at = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
         if datetime.now(timezone.utc) - created_at > _ATTACH_WINDOW:
@@ -339,7 +417,8 @@ async def retry_contact_attachments(
     except HTTPException:
         raise
     except Exception:
-        pass  # 타임스탬프 파싱 실패 시 허용(방어적)
+        # R2: 타임스탬프 파싱 실패 시 차단 (R1에서는 pass였음)
+        raise HTTPException(status_code=403, detail="첨부 시간 검증에 실패했습니다.")
 
     if not files:
         raise HTTPException(status_code=400, detail="파일이 없습니다.")

@@ -1,7 +1,7 @@
 """
-WO-TAI-WWW-CONTACT-UX-002-R1: 공개 문의 파일 첨부 엔드포인트 계약 검증
+WO-TAI-WWW-CONTACT-UX-002-R2: 공개 문의 파일 첨부 엔드포인트 계약 검증
 POST /contacts/with-attachments  — 단일 요청 (보안 주경로)
-POST /contacts/{id}/attachments  — 첨부 재시도 (60분 창)
+POST /contacts/{id}/attachments  — 첨부 재시도 (소유자 토큰 + 60분 창)
 GET  /admin/inquiries/{id}/attachments — 관리자 조회 + role 검증
 """
 import io
@@ -15,30 +15,10 @@ from fastapi.testclient import TestClient
 
 # ── 모킹 헬퍼 ──────────────────────────────────────────────────────
 
-def _mock_sb_found(inquiry_id: str, created_offset: timedelta = timedelta(minutes=5)):
-    """문의 존재, 최근 생성 (기본 5분 전)"""
+def _mock_sb_found_with_time(inquiry_id: str, created_str: str):
+    """문의 존재, 명시적 created_at 문자열 사용"""
     sb = MagicMock()
-    created_at = (datetime.now(timezone.utc) - created_offset).isoformat()
 
-    # table mock — 체이닝 허용
-    table_mock = MagicMock()
-    sb.table.return_value = table_mock
-
-    # inquiries.select chain
-    select_chain = MagicMock()
-    table_mock.select.return_value = select_chain
-    select_chain.eq.return_value = select_chain
-    select_chain.limit.return_value = select_chain
-    select_chain.execute.return_value = MagicMock(
-        data=[{"id": inquiry_id, "created_at": created_at}]
-    )
-
-    # attachments count
-    count_chain = MagicMock()
-    count_chain.eq.return_value = count_chain
-    count_chain.execute.return_value = MagicMock(count=0, data=[])
-
-    # select for count (second call pattern)
     def table_side_effect(name):
         m = MagicMock()
         if name == "inquiries":
@@ -46,13 +26,13 @@ def _mock_sb_found(inquiry_id: str, created_offset: timedelta = timedelta(minute
             sel.eq.return_value = sel
             sel.limit.return_value = sel
             sel.execute.return_value = MagicMock(
-                data=[{"id": inquiry_id, "created_at": created_at}]
+                data=[{"id": inquiry_id, "created_at": created_str}]
             )
             m.select.return_value = sel
             m.insert.return_value = MagicMock(
                 execute=MagicMock(
                     return_value=MagicMock(
-                        data=[{"id": inquiry_id, "created_at": created_at}]
+                        data=[{"id": inquiry_id, "created_at": created_str}]
                     )
                 )
             )
@@ -71,12 +51,29 @@ def _mock_sb_found(inquiry_id: str, created_offset: timedelta = timedelta(minute
             m.insert.return_value = MagicMock(
                 execute=MagicMock(return_value=MagicMock(data=[ins_row]))
             )
+            m.delete.return_value = MagicMock(eq=MagicMock(return_value=MagicMock(execute=MagicMock())))
         return m
 
     sb.table.side_effect = table_side_effect
     sb.storage.from_.return_value.upload.return_value = {}
     sb.storage.from_.return_value.remove.return_value = {}
     return sb
+
+
+def _mock_sb_found(inquiry_id: str, created_offset: timedelta = timedelta(minutes=5)):
+    """문의 존재, 최근 생성 (기본 5분 전)"""
+    created_str = (datetime.now(timezone.utc) - created_offset).isoformat()
+    return _mock_sb_found_with_time(inquiry_id, created_str)
+
+
+def _make_token_and_mock(uid: str, offset: timedelta = timedelta(minutes=10)):
+    """유효한 업로드 토큰 + 해당 created_at 을 사용하는 mock supabase 반환."""
+    from routers.site_public import _generate_upload_token
+    created_at = datetime.now(timezone.utc) - offset
+    created_str = created_at.isoformat()
+    token = _generate_upload_token(uid, created_at)
+    sb = _mock_sb_found_with_time(uid, created_str)
+    return token, sb
 
 
 def _mock_sb_not_found():
@@ -112,6 +109,7 @@ def _mock_sb_new_inquiry(inquiry_id: str):
             m.insert.return_value = MagicMock(
                 execute=MagicMock(return_value=MagicMock(data=[ins_attach]))
             )
+            m.delete.return_value = MagicMock(eq=MagicMock(return_value=MagicMock(execute=MagicMock())))
         return m
 
     sb.table.side_effect = table_side
@@ -214,6 +212,61 @@ class TestFileMagic:
         assert not _file_magic_ok(b"hello\x00world", "txt")
 
 
+# ── R2: 업로드 토큰 계약 ────────────────────────────────────────────
+
+class TestUploadToken:
+    def test_generate_returns_non_empty_string(self):
+        from routers.site_public import _generate_upload_token
+        uid = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        token = _generate_upload_token(uid, created_at)
+        assert isinstance(token, str) and len(token) > 10
+
+    def test_verify_valid_token_returns_true(self):
+        from routers.site_public import _generate_upload_token, _verify_upload_token
+        uid = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        created_str = created_at.isoformat()
+        token = _generate_upload_token(uid, created_at)
+        assert _verify_upload_token(token, uid, created_str)
+
+    def test_verify_wrong_token_returns_false(self):
+        from routers.site_public import _verify_upload_token
+        uid = str(uuid.uuid4())
+        created_str = datetime.now(timezone.utc).isoformat()
+        assert not _verify_upload_token("wrongtoken", uid, created_str)
+
+    def test_verify_empty_token_returns_false(self):
+        from routers.site_public import _verify_upload_token
+        uid = str(uuid.uuid4())
+        created_str = datetime.now(timezone.utc).isoformat()
+        assert not _verify_upload_token("", uid, created_str)
+
+    def test_verify_different_inquiry_id_returns_false(self):
+        from routers.site_public import _generate_upload_token, _verify_upload_token
+        uid1 = str(uuid.uuid4())
+        uid2 = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        created_str = created_at.isoformat()
+        token = _generate_upload_token(uid1, created_at)
+        assert not _verify_upload_token(token, uid2, created_str)
+
+    def test_verify_bad_created_str_returns_false(self):
+        from routers.site_public import _generate_upload_token, _verify_upload_token
+        uid = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        token = _generate_upload_token(uid, created_at)
+        assert not _verify_upload_token(token, uid, "not-a-timestamp")
+
+    def test_no_timestamp_parse_passthrough_in_retry_source(self):
+        """R2: retry 엔드포인트에 'except Exception:\\n        pass' 없어야 함"""
+        import inspect
+        from routers import site_public
+        src = inspect.getsource(site_public.retry_contact_attachments)
+        # R1: pass (방어적 허용) → R2: raise HTTPException
+        assert "except Exception:\n        pass" not in src
+
+
 # ── TestClient fixture ──────────────────────────────────────────────
 
 @pytest.fixture
@@ -247,6 +300,19 @@ class TestWithAttachmentsEndpoint:
             )
         assert resp.status_code == 200
         assert resp.json()["attachments_status"] == "ok"
+
+    def test_200_returns_upload_token(self, client):
+        """R2: 성공 응답에 upload_token 포함"""
+        uid = str(uuid.uuid4())
+        with patch("routers.site_public.get_supabase", return_value=_mock_sb_new_inquiry(uid)):
+            resp = client.post(
+                "/contacts/with-attachments",
+                data={"name": "홍길동", "email": "test@test.com", "content": "문의합니다"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "upload_token" in body
+        assert body["upload_token"] is not None and len(body["upload_token"]) > 10
 
     def test_400_disallowed_ext(self, client):
         uid = str(uuid.uuid4())
@@ -291,26 +357,81 @@ class TestWithAttachmentsEndpoint:
             )
         assert resp.status_code == 200
 
+    def test_failed_attachments_status_when_no_id_with_files(self, client):
+        """R2: 파일 있고 inquiry_id 없으면 attachments_status=failed — 성공 처리 금지"""
+        sb = MagicMock()
+        # inquiry insert 반환에 id 없음
+        sb.table.return_value.insert.return_value.execute.return_value.data = [{"status": "ok"}]
+        with patch("routers.site_public.get_supabase", return_value=sb):
+            resp = client.post(
+                "/contacts/with-attachments",
+                data={"name": "홍길동", "email": "test@test.com", "content": "문의합니다"},
+                files=[("files", ("doc.pdf", b"%PDF-1.4 content", "application/pdf"))],
+            )
+        assert resp.status_code == 200
+        assert resp.json()["attachments_status"] == "failed"
 
-# ── POST /contacts/{id}/attachments (재시도 창) ────────────────────
+
+# ── POST /contacts/{id}/attachments (재시도 창 + 소유자 토큰) ──────
+
+class TestRetryEndpointSecurity:
+    """R2 소유자 토큰 검증"""
+
+    def test_401_no_token(self, client):
+        uid = str(uuid.uuid4())
+        sb = _mock_sb_found(uid)
+        with patch("routers.site_public.get_supabase", return_value=sb):
+            resp = client.post(
+                f"/contacts/{uid}/attachments",
+                files=[("files", ("doc.pdf", b"%PDF-content", "application/pdf"))],
+            )
+        assert resp.status_code == 401
+
+    def test_403_invalid_token(self, client):
+        uid = str(uuid.uuid4())
+        sb = _mock_sb_found(uid, created_offset=timedelta(minutes=10))
+        with patch("routers.site_public.get_supabase", return_value=sb):
+            resp = client.post(
+                f"/contacts/{uid}/attachments",
+                headers={"X-Upload-Token": "invalid-token-value"},
+                files=[("files", ("doc.pdf", b"%PDF-content", "application/pdf"))],
+            )
+        assert resp.status_code == 403
+
+    def test_403_token_for_different_inquiry(self, client):
+        """타인의 문의 ID를 사용한 토큰으로는 접근 불가"""
+        uid_real = str(uuid.uuid4())
+        uid_other = str(uuid.uuid4())
+        token, _ = _make_token_and_mock(uid_other, timedelta(minutes=10))
+        sb = _mock_sb_found(uid_real, created_offset=timedelta(minutes=10))
+        with patch("routers.site_public.get_supabase", return_value=sb):
+            resp = client.post(
+                f"/contacts/{uid_real}/attachments",
+                headers={"X-Upload-Token": token},
+                files=[("files", ("doc.pdf", b"%PDF-content", "application/pdf"))],
+            )
+        assert resp.status_code == 403
+
 
 class TestRetryEndpointTimeWindow:
     def test_403_expired_window(self, client):
         uid = str(uuid.uuid4())
-        sb = _mock_sb_found(uid, created_offset=timedelta(hours=2))
+        token, sb = _make_token_and_mock(uid, timedelta(hours=2))
         with patch("routers.site_public.get_supabase", return_value=sb):
             resp = client.post(
                 f"/contacts/{uid}/attachments",
+                headers={"X-Upload-Token": token},
                 files=[("files", ("doc.pdf", b"%PDF-content", "application/pdf"))],
             )
         assert resp.status_code == 403
 
     def test_200_within_window(self, client):
         uid = str(uuid.uuid4())
-        sb = _mock_sb_found(uid, created_offset=timedelta(minutes=10))
+        token, sb = _make_token_and_mock(uid, timedelta(minutes=10))
         with patch("routers.site_public.get_supabase", return_value=sb):
             resp = client.post(
                 f"/contacts/{uid}/attachments",
+                headers={"X-Upload-Token": token},
                 files=[("files", ("doc.pdf", b"%PDF-content", "application/pdf"))],
             )
         assert resp.status_code == 200
@@ -320,6 +441,7 @@ class TestRetryEndpointTimeWindow:
         with patch("routers.site_public.get_supabase", return_value=_mock_sb_not_found()):
             resp = client.post(
                 f"/contacts/{uid}/attachments",
+                headers={"X-Upload-Token": "some-token"},
                 files=[("files", ("doc.pdf", b"%PDF-content", "application/pdf"))],
             )
         assert resp.status_code == 404
@@ -333,10 +455,11 @@ class TestRetryEndpointTimeWindow:
 
     def test_400_magic_mismatch_on_retry(self, client):
         uid = str(uuid.uuid4())
-        sb = _mock_sb_found(uid)
+        token, sb = _make_token_and_mock(uid, timedelta(minutes=5))
         with patch("routers.site_public.get_supabase", return_value=sb):
             resp = client.post(
                 f"/contacts/{uid}/attachments",
+                headers={"X-Upload-Token": token},
                 files=[("files", ("fake.pdf", b"MZ\x90\x00", "application/pdf"))],
             )
         assert resp.status_code == 400
