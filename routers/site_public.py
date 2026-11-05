@@ -141,12 +141,12 @@ _MAGIC: dict = {
 
 
 def _get_upload_signing_key() -> bytes:
-    """SUPABASE_SERVICE_ROLE_KEY 에서 첨부 전용 서명키 파생 (새 비밀 불필요)."""
-    base = (
-        os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-        or os.getenv("SUPABASE_SERVICE_KEY")
-        or "dev-only-not-secure"
-    )
+    """SUPABASE_SERVICE_ROLE_KEY 에서 첨부 전용 서명키 파생 (새 비밀 불필요).
+    환경변수 미설정 시 RuntimeError — 토큰 발급·검증 불가(fail-closed).
+    """
+    base = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_KEY")
+    if not base:
+        raise RuntimeError("SUPABASE_SERVICE_ROLE_KEY 미설정 — 첨부 토큰 발급 불가")
     return hmac.new(base.encode(), b"contact-upload-v1", hashlib.sha256).digest()
 
 
@@ -218,21 +218,21 @@ async def _read_and_validate(f: UploadFile) -> tuple:
 
 
 def _cleanup_storage(supabase, paths: list) -> None:
-    """Storage 파일 정리 (best-effort, 오류 무시)"""
+    """Storage 파일 정리 (best-effort). 실패 시 로그 기록."""
     for path in paths or []:
         try:
             supabase.storage.from_(CONTACT_BUCKET).remove([path])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("[ContactAttach] Storage 정리 실패 path=%s err=%s", path, e)
 
 
 def _cleanup_db_rows(supabase, ids: list) -> None:
-    """attachments 테이블 행 정리 (best-effort, 오류 무시)"""
+    """attachments 테이블 행 정리 (best-effort). 실패 시 로그 기록."""
     for row_id in ids or []:
         try:
             supabase.table("attachments").delete().eq("id", str(row_id)).execute()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("[ContactAttach] DB행 정리 실패 id=%s err=%s", row_id, e)
 
 
 async def _upload_attachments(supabase, validated: list, inquiry_id: str) -> tuple:

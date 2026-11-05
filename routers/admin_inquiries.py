@@ -186,6 +186,7 @@ def admin_list_inquiries(
     if sort_key not in SORT_KEYS:
         raise HTTPException(status_code=400, detail="지원하지 않는 sort_key 입니다.")
     supabase = get_supabase()
+    _require_admin(_admin, supabase)   # role_code=001(ALL scope) 아니면 403
     offset = (page - 1) * size
     desc = sort_dir == "desc"
 

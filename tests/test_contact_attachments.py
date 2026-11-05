@@ -1,16 +1,20 @@
 """
-WO-TAI-WWW-CONTACT-UX-002-R2: 공개 문의 파일 첨부 엔드포인트 계약 검증
+WO-TAI-WWW-CONTACT-UX-002-R2/R3: 공개 문의 파일 첨부 엔드포인트 계약 검증
 POST /contacts/with-attachments  — 단일 요청 (보안 주경로)
 POST /contacts/{id}/attachments  — 첨부 재시도 (소유자 토큰 + 60분 창)
 GET  /admin/inquiries/{id}/attachments — 관리자 조회 + role 검증
 """
 import io
+import os
 import uuid
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+# R3: 서명키 fail-closed 테스트를 위해 먼저 설정 (없으면 토큰 발급 차단)
+os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-signing-key-for-unit-tests-only")
 
 
 # ── 모킹 헬퍼 ──────────────────────────────────────────────────────
@@ -267,6 +271,33 @@ class TestUploadToken:
         assert "except Exception:\n        pass" not in src
 
 
+# ── R3: 서명키 fail-closed 계약 ─────────────────────────────────────
+
+class TestSigningKeyFailClosed:
+    def test_missing_env_raises_runtime_error(self, monkeypatch):
+        """R3: 서명키 환경변수 미설정 시 RuntimeError — 토큰 발급 차단"""
+        monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+        monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+        from routers.site_public import _get_upload_signing_key
+        with pytest.raises(RuntimeError, match="미설정"):
+            _get_upload_signing_key()
+
+    def test_missing_env_verify_returns_false(self, monkeypatch):
+        """R3: 서명키 없을 때 토큰 검증도 False — 재시도 차단(fail-closed)"""
+        monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+        monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+        from routers.site_public import _verify_upload_token
+        result = _verify_upload_token("any-token", str(uuid.uuid4()), datetime.now(timezone.utc).isoformat())
+        assert result is False
+
+    def test_no_fallback_literal_in_source(self):
+        """R3: 소스에 하드코딩 기본값 없어야 함"""
+        import inspect
+        from routers import site_public
+        src = inspect.getsource(site_public._get_upload_signing_key)
+        assert "dev-only-not-secure" not in src
+
+
 # ── TestClient fixture ──────────────────────────────────────────────
 
 @pytest.fixture
@@ -479,6 +510,40 @@ class TestAdminAttachmentsRoleGuard:
         from routers.admin_inquiries import admin_get_inquiry_attachments
         src = inspect.getsource(admin_get_inquiry_attachments)
         assert "_require_admin" in src
+
+    def test_admin_list_inquiries_has_require_admin(self):
+        """R3: GET /admin/inquiries 목록도 서버에서 역할 검증"""
+        import inspect
+        from routers.admin_inquiries import admin_list_inquiries
+        src = inspect.getsource(admin_list_inquiries)
+        assert "_require_admin" in src
+
+
+class TestPublicRouteRegistration:
+    """R3: 공개 경로 등록 계약"""
+
+    def test_contacts_with_attachments_is_public(self):
+        from services.permission_guard import is_public
+        assert is_public("POST", "/contacts/with-attachments")
+
+    def test_contacts_retry_is_public(self):
+        from services.permission_guard import is_public
+        uid = str(uuid.uuid4())
+        assert is_public("POST", f"/contacts/{uid}/attachments")
+
+    def test_cleanup_storage_logs_on_failure(self):
+        """R3: Storage 정리 실패 시 조용히 무시하지 않음 (logger.error 호출)"""
+        import inspect
+        from routers import site_public
+        src = inspect.getsource(site_public._cleanup_storage)
+        assert "logger.error" in src
+
+    def test_cleanup_db_rows_logs_on_failure(self):
+        """R3: DB행 정리 실패 시 조용히 무시하지 않음 (logger.error 호출)"""
+        import inspect
+        from routers import site_public
+        src = inspect.getsource(site_public._cleanup_db_rows)
+        assert "logger.error" in src
 
 
 class TestAdminAttachmentsSignedRef:

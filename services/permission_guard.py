@@ -76,6 +76,10 @@ _PUBLIC: Tuple[Tuple[str, str], ...] = (
     ("GET", "/help/doc/"),
     ("GET", "/faqs"),
     ("POST", "/contacts"),
+    # WO-TAI-WWW-CONTACT-UX-002-R3: 공개 문의+첨부 단일 요청 / 첨부 재시도.
+    # 재시도 경로(/contacts/{id}/attachments)는 엔드포인트 자체에서 HMAC 토큰 검증.
+    ("POST", "/contacts/with-attachments"),
+    ("POST", "/contacts/"),
     # WP-A (WO-SAFE-COMPANY-ACCESS-001): 회사 사용자 초대 토큰 계약 (미로그인 신규 가입자).
     # GET  /user-invites/{token}/info   — 토큰 유효성 표시용
     # POST /user-invites/{token}/accept — 신규 가입자는 토큰만 있음 (로그인 전).
