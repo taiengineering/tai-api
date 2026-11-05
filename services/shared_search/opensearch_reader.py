@@ -460,8 +460,11 @@ class OpenSearchSearchReader:
             if i >= len(domain_object_types):
                 break
             if r.get("error"):
-                logger.warning("fuzzy_multi domain=%d error: %s", i, r["error"])
-                continue
+                # R1-02: propagate fuzzy sub-search errors — do not silently return empty.
+                # Preserves run_fuzzy() error contract: callers see failure, not missing results.
+                raise RuntimeError(
+                    f"fuzzy_multi sub-search failed for domain {i}: {r['error']}"
+                )
             result[i] = [_hit_to_doc(h) for h in r.get("hits", {}).get("hits", [])]
 
         return result

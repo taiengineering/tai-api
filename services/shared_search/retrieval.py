@@ -469,12 +469,18 @@ def retrieve_multi(
     seen_per_domain: list[dict[tuple[str, str], SearchResult]] = [
         {} for _ in domain_object_types
     ]
+    # R1-01: track which tiers produced results per domain (mirrors retrieve() logic)
+    active_tiers_per_domain: list[list[str]] = [[] for _ in domain_object_types]
+
     for di, tier_results in enumerate(tier_results_per_domain):
         seen = seen_per_domain[di]
+        active_tiers = active_tiers_per_domain[di]
         for tier_name in TIER_PRECEDENCE:
             docs = tier_results.get(tier_name)
             if not docs:
                 continue
+            if tier_name not in active_tiers:
+                active_tiers.append(tier_name)
             tier_idx = TIER_PRECEDENCE.index(tier_name)
             sorted_docs = sorted(docs, key=lambda d: _doc_sort_key(d, tier_idx))
             for doc in sorted_docs:
@@ -518,6 +524,7 @@ def retrieve_multi(
         tier_idx = TIER_PRECEDENCE.index(TIER_FUZZY_FALLBACK)
         for j, di in enumerate(fuzzy_indices):
             seen = seen_per_domain[di]
+            added = False
             for doc in (fuzzy_results[j] or []):
                 key = (doc.get("object_type", ""), doc.get("canonical_id", ""))
                 if key not in seen:
@@ -527,9 +534,12 @@ def retrieve_multi(
                         tier_idx=tier_idx,
                         matched_on=shared_plan.normalized_query,
                     )
+                    added = True
+            if added:
+                active_tiers_per_domain[di].append(TIER_FUZZY_FALLBACK)
 
     responses: list[SearchResponse] = []
-    for seen in seen_per_domain:
+    for di, seen in enumerate(seen_per_domain):
         all_results = sorted(
             seen.values(),
             key=lambda r: (
@@ -550,7 +560,7 @@ def retrieve_multi(
             page_size=shared_plan.page_size,
             total=total,
             items=page_results,
-            active_tiers=[],
+            active_tiers=active_tiers_per_domain[di],
             status="ok" if total > 0 else "empty",
         ))
 

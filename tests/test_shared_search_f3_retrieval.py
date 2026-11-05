@@ -2000,5 +2000,198 @@ class TestOpenSearchBatchMsearch(unittest.TestCase):
         assert client.msearch.call_count == 1
 
 
+# --------------------------------------------------------------------------
+# §B-SEARCH02-PARITY: retrieve_multi() == N × retrieve() (R1-03)
+# --------------------------------------------------------------------------
+
+class TestRetrieveMultiParity(unittest.TestCase):
+    """R1-03: retrieve_multi() produces identical results to N sequential retrieve() calls."""
+
+    def _docs(self):
+        return [
+            _pub_doc(object_type="GUIDE",   canonical_id="g-1",
+                     title="안전 가이드", search_text="안전 가이드"),
+            _pub_doc(object_type="GUIDE",   canonical_id="g-2",
+                     title="지게차 안전", source_key="지게차",
+                     search_text="지게차 안전"),
+            _pub_doc(object_type="LEGAL",   canonical_id="l-1",
+                     title="안전 법령", search_text="안전 법령"),
+            _pub_doc(object_type="LEGAL",   canonical_id="l-2",
+                     title="지게차 법규", search_text="지게차 법규"),
+            _pub_doc(object_type="KNOWLEDGE", canonical_id="k-1",
+                     title="충돌 방지", search_text="충돌 방지 지식"),
+        ]
+
+    def _seq(self, plan, domain_ots, reader):
+        import dataclasses as _dc
+        return [retrieve(_dc.replace(plan, object_types=ot), reader) for ot in domain_ots]
+
+    def test_parity_total_and_id_order(self):
+        from services.shared_search.retrieval import retrieve_multi
+        docs = self._docs()
+        reader = MemorySearchReader(docs)
+        plan = build_query_plan("안전", object_types=[], visibility_scopes=["PUBLIC"],
+                                page=1, page_size=10)
+        domain_ots = [["GUIDE"], ["LEGAL"], ["KNOWLEDGE"]]
+
+        seq   = self._seq(plan, domain_ots, reader)
+        batch = retrieve_multi(plan, domain_ots, reader)
+
+        for di, (s, b) in enumerate(zip(seq, batch)):
+            self.assertEqual(s.total, b.total,
+                             f"domain {di}: total {s.total} != {b.total}")
+            self.assertEqual([r.canonical_id for r in s.items],
+                             [r.canonical_id for r in b.items],
+                             f"domain {di}: id/order mismatch")
+
+    def test_parity_match_types(self):
+        from services.shared_search.retrieval import retrieve_multi
+        docs = self._docs()
+        reader = MemorySearchReader(docs)
+        plan = build_query_plan("지게차", object_types=[], visibility_scopes=["PUBLIC"],
+                                page=1, page_size=10)
+        domain_ots = [["GUIDE"], ["LEGAL"]]
+
+        seq   = self._seq(plan, domain_ots, reader)
+        batch = retrieve_multi(plan, domain_ots, reader)
+
+        for di, (s, b) in enumerate(zip(seq, batch)):
+            self.assertEqual([r.match_type for r in s.items],
+                             [r.match_type for r in b.items],
+                             f"domain {di}: match_type mismatch")
+
+    def test_parity_active_tiers(self):
+        from services.shared_search.retrieval import retrieve_multi
+        docs = self._docs()
+        reader = MemorySearchReader(docs)
+        plan = build_query_plan("지게차", object_types=[], visibility_scopes=["PUBLIC"],
+                                page=1, page_size=10)
+        domain_ots = [["GUIDE"], ["LEGAL"]]
+
+        seq   = self._seq(plan, domain_ots, reader)
+        batch = retrieve_multi(plan, domain_ots, reader)
+
+        for di, (s, b) in enumerate(zip(seq, batch)):
+            self.assertEqual(sorted(s.active_tiers), sorted(b.active_tiers),
+                             f"domain {di}: active_tiers mismatch "
+                             f"{s.active_tiers} vs {b.active_tiers}")
+
+    def test_parity_fuzzy_trigger_and_active_tiers(self):
+        """FUZZY_FALLBACK fires for same domains and active_tiers matches."""
+        from services.shared_search.retrieval import retrieve_multi
+        docs = [_pub_doc(object_type="GUIDE", canonical_id="g-1", title="지게차 안전")]
+        reader = MemorySearchReader(docs)
+        # "지게" triggers FUZZY for GUIDE (no BM25/title exact match)
+        plan = build_query_plan("지게", object_types=[], visibility_scopes=["PUBLIC"],
+                                page=1, page_size=10)
+        domain_ots = [["GUIDE"]]
+
+        seq   = self._seq(plan, domain_ots, reader)
+        batch = retrieve_multi(plan, domain_ots, reader)
+
+        self.assertEqual(seq[0].total, batch[0].total)
+        self.assertEqual(seq[0].items[0].match_type,
+                         batch[0].items[0].match_type)
+        self.assertEqual(sorted(seq[0].active_tiers),
+                         sorted(batch[0].active_tiers))
+        self.assertIn("FUZZY_FALLBACK", batch[0].active_tiers)
+
+    def test_parity_within_query(self):
+        from services.shared_search.retrieval import retrieve_multi
+        docs = [
+            _pub_doc(object_type="GUIDE", canonical_id="g-match",
+                     title="지게차 충돌", search_text="지게차 충돌 사고"),
+            _pub_doc(object_type="GUIDE", canonical_id="g-nomatch",
+                     title="지게차 안전", search_text="지게차 안전 가이드"),
+        ]
+        reader = MemorySearchReader(docs)
+        plan = build_query_plan("지게차", object_types=[], visibility_scopes=["PUBLIC"],
+                                page=1, page_size=10, within_query="충돌")
+        domain_ots = [["GUIDE"]]
+
+        seq   = self._seq(plan, domain_ots, reader)
+        batch = retrieve_multi(plan, domain_ots, reader)
+
+        self.assertEqual([r.canonical_id for r in seq[0].items],
+                         [r.canonical_id for r in batch[0].items])
+
+
+# --------------------------------------------------------------------------
+# §B-SEARCH02-HTTP: OpenSearch HTTP call count per /sections request (R1-04)
+# --------------------------------------------------------------------------
+
+class TestSectionsHttpCallCount(unittest.TestCase):
+    """R1-04: /sections makes ≤2 client.msearch() HTTP calls per request."""
+
+    def test_normal_path_one_msearch_call(self):
+        """When all domains have results, only 1 msearch call fires (no FUZZY)."""
+        import unittest.mock as mock
+        from fastapi import FastAPI
+        from starlette.testclient import TestClient
+        import services.shared_search.opensearch_reader as reader_mod
+        import routers.public_safety_search as pss_mod
+
+        mock_client = mock.MagicMock()
+
+        # Every domain gets one hit → FUZZY never fires
+        def _one_hit_per_response(body):
+            n = len(body) // 2
+            hit = {"_source": {
+                "object_type": "GUIDE", "canonical_id": "g-1",
+                "title": "안전", "source_id": "T",
+                "source_key": None, "summary": None,
+                "public_url": "/g/1", "saas_url": None,
+                "source_updated_at": "2026-01-01T00:00:00+00:00",
+                "subjects": [],
+            }, "_score": 1.0}
+            return {"responses": [{"hits": {"hits": [hit]}} for _ in range(n)]}
+
+        mock_client.msearch.side_effect = _one_hit_per_response
+
+        app = FastAPI()
+        app.include_router(pss_mod.router)
+
+        with (
+            mock.patch.object(pss_mod, "get_client", return_value=mock_client),
+            mock.patch.object(reader_mod, "OpenSearchSearchReader",
+                              return_value=reader_mod.OpenSearchSearchReader(mock_client)),
+        ):
+            with TestClient(app) as client:
+                r = client.get("/public/safety-search/sections?q=안전")
+
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(mock_client.msearch.call_count, 1,
+                         f"expected exactly 1 msearch call, got {mock_client.msearch.call_count}")
+
+    def test_fuzzy_path_at_most_two_msearch_calls(self):
+        """When all domains have no T0-T8 results, FUZZY fires as a second batch call (≤2 total)."""
+        import unittest.mock as mock
+        from fastapi import FastAPI
+        from starlette.testclient import TestClient
+        import services.shared_search.opensearch_reader as reader_mod
+        import routers.public_safety_search as pss_mod
+
+        mock_client = mock.MagicMock()
+        # All domains return empty → triggers FUZZY batch
+        mock_client.msearch.return_value = {"responses": []}
+
+        app = FastAPI()
+        app.include_router(pss_mod.router)
+
+        with (
+            mock.patch.object(pss_mod, "get_client", return_value=mock_client),
+            mock.patch.object(reader_mod, "OpenSearchSearchReader",
+                              return_value=reader_mod.OpenSearchSearchReader(mock_client)),
+        ):
+            with TestClient(app) as client:
+                r = client.get("/public/safety-search/sections?q=안전")
+
+        self.assertEqual(r.status_code, 200)
+        calls = mock_client.msearch.call_count
+        self.assertGreaterEqual(calls, 1, "at least 1 msearch call expected")
+        self.assertLessEqual(calls, 2,
+                             f"expected ≤2 HTTP msearch calls, got {calls}")
+
+
 if __name__ == "__main__":
     unittest.main()
