@@ -118,9 +118,9 @@ QA_ADMIN_BUTTON_EVENTS = {
     "QA_RUN_COMPLETED",
 }
 EVENT_TYPE_ADMIN_PATH = {
-    "INQUIRY_CREATED":           "/admin-inquiries",
-    "INQUIRY_ATTACHMENT_ADDED":  "/admin-inquiries",
-    "TAI_WISH_CREATED":          "/admin-inquiries",
+    "INQUIRY_CREATED":           "/inquiry-list",
+    "INQUIRY_ATTACHMENT_ADDED":  "/inquiry-list",
+    "TAI_WISH_CREATED":          "/inquiry-list",
     "QUOTE_MANUAL_REQUESTED":   "/quote-list",
     "FREE_DIAGNOSIS_COMPLETED": "/anon-diagnosis-list",
     # APPROVAL_CREATED — source deferred, path 미할당
