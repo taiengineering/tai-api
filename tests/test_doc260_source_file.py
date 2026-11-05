@@ -567,5 +567,83 @@ class TestSourceFileAvailability(unittest.TestCase):
         self.assertFalse(items[1]["source_file_available"])
 
 
+class TestBundleAPolicyChanges(unittest.TestCase):
+    """WO-DOC260-U83-BUNDLE-A-GATE-A — BLD-015/SERA-009 정책 변경 검증.
+
+    BA-01 ~ BA-10: A_INTERNAL 재분류, 다운로드 예외, G1_DUAL_PATH, web_edit_allowed.
+    """
+
+    def setUp(self):
+        from services.document_engine.r2_route_policy import (
+            get_provision_policy, policy_count,
+            _SOURCE_DOWNLOAD_EXCEPTION_IDS, _SUBMISSION_CATEGORY,
+        )
+        self.get_policy = get_provision_policy
+        self.policy_count = policy_count
+        self.exception_ids = _SOURCE_DOWNLOAD_EXCEPTION_IDS
+        self.submission_cat = _SUBMISSION_CATEGORY
+
+    def test_BA01_bld015_is_a_internal(self):
+        """BA-01: BLD-015 route_group=A_INTERNAL, investment_decision=KEEP."""
+        p = self.get_policy("DOC-BLD-015")
+        self.assertEqual(p["route_group"], "A_INTERNAL")
+        self.assertEqual(p["investment_decision"], "KEEP")
+
+    def test_BA02_sera009_is_a_internal(self):
+        """BA-02: SERA-009 route_group=A_INTERNAL, investment_decision=KEEP."""
+        p = self.get_policy("DOC-SERA-009")
+        self.assertEqual(p["route_group"], "A_INTERNAL")
+        self.assertEqual(p["investment_decision"], "KEEP")
+
+    def test_BA03_policy_count(self):
+        """BA-03: 전체 260종 정책 수량 — A_INTERNAL=111, U_UNRESOLVED=81."""
+        c = self.policy_count()
+        self.assertEqual(c["A_INTERNAL"], 111)
+        self.assertEqual(c["U_UNRESOLVED"], 81)
+        self.assertEqual(c["B_OFFICIAL"], 16)
+        self.assertEqual(c["E_EXTERNAL"], 9)
+        self.assertEqual(c["F_SCOPE_OUT"], 43)
+
+    def test_BA04_bld015_download_exception_true(self):
+        """BA-04: BLD-015 source_download_exception=True (HWP 다운로드 보존)."""
+        p = self.get_policy("DOC-BLD-015")
+        self.assertTrue(p["source_download_exception"])
+
+    def test_BA05_sera009_download_exception_false(self):
+        """BA-05: SERA-009 source_download_exception=False (다운로드 예외 미적용)."""
+        p = self.get_policy("DOC-SERA-009")
+        self.assertFalse(p["source_download_exception"])
+
+    def test_BA06_original_six_exceptions_preserved(self):
+        """BA-06: 기존 다운로드 예외 6종 보존."""
+        original_six = {
+            "DOC-BLD-011", "DOC-CON-047", "DOC-CON-048",
+            "DOC-CON-049", "DOC-CON-050", "DOC-CON-051",
+        }
+        self.assertTrue(original_six.issubset(self.exception_ids))
+
+    def test_BA07_total_exceptions_seven(self):
+        """BA-07: SOURCE_DOWNLOAD_EXCEPTION_IDS 총 7종 (기존 6 + BLD-015)."""
+        self.assertEqual(len(self.exception_ids), 7)
+        self.assertIn("DOC-BLD-015", self.exception_ids)
+
+    def test_BA08_g1_dual_path_ten(self):
+        """BA-08: G1_DUAL_PATH 항목 10종 — BLD-015/SERA-009 제거 후."""
+        g1_entries = [k for k, v in self.submission_cat.items() if v == "G1_DUAL_PATH"]
+        self.assertEqual(len(g1_entries), 10)
+        self.assertNotIn("DOC-BLD-015", g1_entries)
+        self.assertNotIn("DOC-SERA-009", g1_entries)
+
+    def test_BA09_web_edit_allowed_true(self):
+        """BA-09: 두 서식 모두 web_edit_allowed=True."""
+        self.assertTrue(self.get_policy("DOC-BLD-015")["web_edit_allowed"])
+        self.assertTrue(self.get_policy("DOC-SERA-009")["web_edit_allowed"])
+
+    def test_BA10_submission_category_none(self):
+        """BA-10: A_INTERNAL 전환 후 submission_category=None (계약 보존)."""
+        self.assertIsNone(self.get_policy("DOC-BLD-015")["submission_category"])
+        self.assertIsNone(self.get_policy("DOC-SERA-009")["submission_category"])
+
+
 if __name__ == "__main__":
     unittest.main()

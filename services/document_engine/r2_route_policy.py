@@ -14,6 +14,7 @@ from typing import Optional
 # (route_group, investment_decision)
 # Source: WO_DOC260_R2_CLASSIFICATION_MATRIX.csv — 260 entries, all unique doc_ids
 # WO-DOC260-WEB46-C-G2: 46종 U_UNRESOLVED/HOLD → A_INTERNAL/KEEP (2026-11-05)
+# WO-DOC260-U83-BUNDLE-A-GATE-A: BLD-015, SERA-009 A_INTERNAL/KEEP (2026-11-06)
 _POLICY: dict[str, tuple[str, str]] = {
     'DOC-BLD-001': ("U_UNRESOLVED", "HOLD"),
     'DOC-BLD-002': ("A_INTERNAL", "KEEP"),
@@ -29,7 +30,7 @@ _POLICY: dict[str, tuple[str, str]] = {
     'DOC-BLD-012': ("F_SCOPE_OUT", "STOP"),
     'DOC-BLD-013': ("U_UNRESOLVED", "HOLD"),
     'DOC-BLD-014': ("A_INTERNAL", "KEEP"),
-    'DOC-BLD-015': ("U_UNRESOLVED", "HOLD"),
+    'DOC-BLD-015': ("A_INTERNAL", "KEEP"),
     'DOC-BLD-016': ("A_INTERNAL", "KEEP"),
     'DOC-BLD-017': ("F_SCOPE_OUT", "STOP"),
     'DOC-BLD-018': ("F_SCOPE_OUT", "STOP"),
@@ -271,7 +272,7 @@ _POLICY: dict[str, tuple[str, str]] = {
     'DOC-SERA-006': ("A_INTERNAL", "KEEP"),
     'DOC-SERA-007': ("A_INTERNAL", "KEEP"),
     'DOC-SERA-008': ("A_INTERNAL", "KEEP"),
-    'DOC-SERA-009': ("U_UNRESOLVED", "HOLD"),
+    'DOC-SERA-009': ("A_INTERNAL", "KEEP"),
     'DOC-SERA-010': ("A_INTERNAL", "KEEP"),
     'DOC-SERA-011': ("U_UNRESOLVED", "HOLD"),
     'DOC-SERA-012': ("A_INTERNAL", "KEEP"),
@@ -350,8 +351,8 @@ _SUBMISSION_CATEGORY: dict[str, str] = {
     'DOC-CHEM-006': 'G3_AGENCY_CHANNEL',    # 화학사고 즉시신고서 (지방환경관서, 팝빌)
     'DOC-CON-LAW-010': 'G3_AGENCY_CHANNEL', # 정기안전점검 결과보고서 (발주청/안전원, 이메일)
     'DOC-OSH-018': 'G3_AGENCY_CHANNEL',     # 사고보고서 (고용노동부, 팝빌)
-    # G1_DUAL_PATH: TAI 작성·저장 + 외부 제출 별도 (이중경로 확인, 12종)
-    'DOC-BLD-015': 'G1_DUAL_PATH',
+    # G1_DUAL_PATH: TAI 작성·저장 + 외부 제출 별도 (이중경로 확인, 10종)
+    # BLD-015, SERA-009 → A_INTERNAL 재분류 (WO-DOC260-U83-BUNDLE-A-GATE-A)
     'DOC-CON-034': 'G1_DUAL_PATH',
     'DOC-SERA-011': 'G1_DUAL_PATH',
     'DOC-CON-001': 'G1_DUAL_PATH',
@@ -362,15 +363,16 @@ _SUBMISSION_CATEGORY: dict[str, str] = {
     'DOC-FAC-011': 'G1_DUAL_PATH',
     'DOC-FAC-015': 'G1_DUAL_PATH',
     'DOC-FAC-018': 'G1_DUAL_PATH',
-    'DOC-SERA-009': 'G1_DUAL_PATH',
 }
 
 # WO-DOC260-WEB46-C-G2: A_INTERNAL로 전환된 46종 중 HWP 원본 다운로드 병행 제공 예외 (6종).
-# 이 6종은 Storage form-originals/doc_forms/ 에 HWP 파일을 보유하므로
+# WO-DOC260-U83-BUNDLE-A-GATE-A: BLD-015 HWP 다운로드 보존 추가 (7종).
+# 이 집합의 문서는 Storage form-originals/doc_forms/ 에 HWP 파일을 보유하므로
 # A_INTERNAL 전환 후에도 기존 다운로드 엔드포인트를 허용한다.
 # 이 집합 외 모든 A_INTERNAL 문서의 다운로드는 차단한다.
 _SOURCE_DOWNLOAD_EXCEPTION_IDS: frozenset[str] = frozenset({
     "DOC-BLD-011",
+    "DOC-BLD-015",
     "DOC-CON-047",
     "DOC-CON-048",
     "DOC-CON-049",
