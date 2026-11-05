@@ -559,27 +559,38 @@ async def retry_contact_attachments(
             detail=f"파일은 최대 {CONTACT_ATTACH_MAX_FILES}개까지 첨부할 수 있습니다.",
         )
 
-    # 기존 첨부 수 확인 (한도 초과 방지)
-    existing = (
+    # 기존 첨부 목록 조회 — dedup 판단 겸용 (name+size 기준)
+    existing_rows = (
         supabase.table("attachments")
-        .select("id", count="exact")
+        .select("id, file_name, file_size")
         .eq("table_name", "inquiries")
         .eq("record_id", parsed_id)
         .execute()
     )
-    already = existing.count or 0
-    if already + len(files) > CONTACT_ATTACH_MAX_FILES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"첨부 파일 한도({CONTACT_ATTACH_MAX_FILES}개)를 초과합니다.",
-        )
+    already_stored = {
+        (r.get("file_name"), r.get("file_size"))
+        for r in (existing_rows.data or [])
+    }
+    already_count = len(existing_rows.data or [])
 
     # 파일 검증
     validated = []
     for f in files:
         validated.append(await _read_and_validate(f))
 
-    # 업로드
+    # 중복 제외 실제 신규 수로 한도 확인
+    # (부분 저장 후 재시도 시 이미 저장된 파일을 제외해 거짓 거부 방지)
+    net_new = sum(
+        1 for raw, fname, ext, mime in validated
+        if (fname, len(raw)) not in already_stored
+    )
+    if already_count + net_new > CONTACT_ATTACH_MAX_FILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"첨부 파일 한도({CONTACT_ATTACH_MAX_FILES}개)를 초과합니다.",
+        )
+
+    # 업로드 (_upload_attachments 내부에서 dedup 재확인)
     results, err = await _upload_attachments(supabase, validated, parsed_id)
     if err:
         raise HTTPException(status_code=500, detail="파일 저장에 실패했습니다.")

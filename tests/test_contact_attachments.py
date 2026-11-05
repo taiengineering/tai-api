@@ -747,6 +747,65 @@ class TestSigningKeyWithFiles:
         assert resp.status_code == 200
 
 
+class TestRetryPartialStoredCount:
+    """CLOSE-GATE: 부분 저장 후 재시도 — 중복 제외 실제 신규 수로 한도 계산"""
+
+    def test_partial_stored_retry_not_rejected_by_count(self, client):
+        """5개 중 1개 저장 후 5개 재시도 — a.pdf 중복 제외 net_new=4, 1+4=5 ≤ 5 → 허용"""
+        uid = str(uuid.uuid4())
+        pdf = b"%PDF-1.4 content"
+        created_at_dt = datetime.now(timezone.utc) - timedelta(minutes=10)
+        created_str = created_at_dt.isoformat()
+
+        from routers.site_public import _generate_upload_token
+        token = _generate_upload_token(uid, created_at_dt)
+
+        sb = MagicMock()
+
+        def table_side(name):
+            m = MagicMock()
+            if name == "inquiries":
+                sel = MagicMock()
+                sel.eq.return_value = sel
+                sel.limit.return_value = sel
+                sel.execute.return_value = MagicMock(data=[{"id": uid, "created_at": created_str}])
+                m.select.return_value = sel
+            else:  # attachments
+                sel = MagicMock()
+                sel.eq.return_value = sel
+                sel.limit.return_value = sel
+                # 기존 1개: a.pdf 저장됨
+                sel.execute.return_value = MagicMock(
+                    count=1,
+                    data=[{"id": str(uuid.uuid4()), "file_name": "a.pdf", "file_size": len(pdf)}],
+                )
+                m.select.return_value = sel
+                m.insert.return_value = MagicMock(
+                    execute=MagicMock(return_value=MagicMock(data=[{"id": str(uuid.uuid4())}]))
+                )
+                m.delete.return_value = MagicMock(eq=MagicMock(return_value=MagicMock(execute=MagicMock())))
+            return m
+
+        sb.table.side_effect = table_side
+        sb.storage.from_.return_value.upload.return_value = {}
+        sb.storage.from_.return_value.remove.return_value = {}
+
+        files = [
+            ("files", ("a.pdf", pdf, "application/pdf")),  # 이미 저장됨 — 중복
+            ("files", ("b.pdf", pdf, "application/pdf")),
+            ("files", ("c.pdf", pdf, "application/pdf")),
+            ("files", ("d.pdf", pdf, "application/pdf")),
+            ("files", ("e.pdf", pdf, "application/pdf")),
+        ]
+        with patch("routers.site_public.get_supabase", return_value=sb):
+            resp = client.post(
+                f"/contacts/{uid}/attachments",
+                headers={"X-Upload-Token": token},
+                files=files,
+            )
+        assert resp.status_code == 200, f"부분 저장 재시도 거부됨: {resp.text}"
+
+
 class TestAdminAttachmentsSignedRef:
     def test_prefix_extraction(self):
         url = "storage://company-docs/contact-attachments/2026-11/abc/def.pdf"
