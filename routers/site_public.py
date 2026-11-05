@@ -388,6 +388,8 @@ async def submit_contact_with_attachments(
     source: str = Form(default="marketing"),
     page_url: Optional[str] = Form(default=None),
     idempotency_key: Optional[str] = Form(default=None),  # R4: 클라이언트 중복 방지 키
+    company: Optional[str] = Form(default=None),
+    phone: Optional[str] = Form(default=None),
     files: Optional[List[UploadFile]] = File(default=None),
 ):
     """공개 문의 접수 + 파일 첨부 단일 요청 — 문의 ID가 외부에 먼저 노출되지 않음"""
@@ -441,6 +443,8 @@ async def submit_contact_with_attachments(
         "content": content.strip(),
         "source": (source or "marketing").strip(),
         "page_url": (page_url or "").strip() or None,
+        "company": (company or "").strip() or None,
+        "phone": (phone or "").strip() or None,
         "inquiry_type": "INQUIRY",
         "is_member": False,
         "created_at": _now(),
