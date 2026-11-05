@@ -12,7 +12,6 @@ CHEM PUBLIC exposure follows KOSHA_MSDS_PUBLIC_MODE env var (§28).
 """
 from __future__ import annotations
 
-import dataclasses
 import os
 import re
 from typing import Optional
@@ -312,7 +311,6 @@ async def public_search_sections(
     engine = SharedRetrievalEngine(reader)
 
     # SEARCH-01: build one shared plan — dictionary lookup + normalisation runs once.
-    # Each domain search replaces only object_types via dataclasses.replace().
     shared_plan = build_query_plan(
         q,
         object_types=[],
@@ -322,10 +320,13 @@ async def public_search_sections(
         within_query=within_query,
     )
 
-    sections = []
-    for section_type, object_type in _SECTION_TYPES:
+    # Collect active domain indices (CHEM guard applied here).
+    sections: list[Optional[dict]] = [None] * len(_SECTION_TYPES)
+    active_indices: list[int] = []
+
+    for i, (section_type, object_type) in enumerate(_SECTION_TYPES):
         if object_type == "CHEM" and not chem_public:
-            sections.append({
+            sections[i] = {
                 "type":        section_type,
                 "object_type": object_type,
                 "status":      "empty",
@@ -333,12 +334,37 @@ async def public_search_sections(
                 "page":        1,
                 "page_size":   section_size,
                 "has_more":    False,
-            })
-            continue
-        section_plan = dataclasses.replace(shared_plan, object_types=[object_type])
-        sections.append(
-            _search_public_section_with_plan(engine, section_plan, section_type, section_size)
-        )
+            }
+        else:
+            active_indices.append(i)
+
+    # SEARCH-02: single batch call for all active domains.
+    active_ots = [[_SECTION_TYPES[i][1]] for i in active_indices]
+    try:
+        responses = engine.search_sections(shared_plan, active_ots)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OpenSearchUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "SHARED_SEARCH_UNAVAILABLE", "message": str(exc)},
+        ) from exc
+
+    for j, i in enumerate(active_indices):
+        section_type, object_type = _SECTION_TYPES[i]
+        resp = responses[j]
+        raw = resp.items
+        has_more = len(raw) > section_size
+        items = [r.to_dict() for r in raw[:section_size]]
+        sections[i] = {
+            "type":        section_type,
+            "object_type": object_type,
+            "status":      "ok" if items else "empty",
+            "items":       items,
+            "page":        1,
+            "page_size":   section_size,
+            "has_more":    has_more,
+        }
 
     return {
         "query":        q,

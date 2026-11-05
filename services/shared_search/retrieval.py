@@ -230,6 +230,48 @@ class MemorySearchReader:
             if q_lower in (d.get("title") or "").lower()
         ]
 
+    def run_msearch_multi(
+        self,
+        *,
+        normalized_query: str,
+        identifier_candidates: list[Any],
+        subject_candidates: list[Any],
+        domain_object_types: list[list[str]],
+        visibility: list[str],
+        within_query: Optional[str] = None,
+    ) -> list[dict[str, list[dict]]]:
+        """SEARCH-02 in-process: delegates to run_msearch per domain."""
+        return [
+            self.run_msearch(
+                normalized_query=normalized_query,
+                identifier_candidates=identifier_candidates,
+                subject_candidates=subject_candidates,
+                object_types=ot,
+                visibility=visibility,
+                within_query=within_query,
+            )
+            for ot in domain_object_types
+        ]
+
+    def run_fuzzy_multi(
+        self,
+        normalized_query: str,
+        *,
+        domain_object_types: list[list[str]],
+        visibility: list[str],
+        within_query: Optional[str] = None,
+    ) -> list[list[dict]]:
+        """SEARCH-02 in-process: delegates to run_fuzzy per domain."""
+        return [
+            self.run_fuzzy(
+                normalized_query,
+                object_types=ot,
+                visibility=visibility,
+                within_query=within_query,
+            )
+            for ot in domain_object_types
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Retrieve function — combines query plan + reader
@@ -390,6 +432,132 @@ def retrieve(
 
 
 # ---------------------------------------------------------------------------
+# retrieve_multi — batch multi-domain retrieval (SEARCH-02)
+# ---------------------------------------------------------------------------
+
+def retrieve_multi(
+    shared_plan: SearchQueryPlan,
+    domain_object_types: list[list[str]],
+    reader: Any,
+    *,
+    fuzzy_trigger_threshold: int = 0,
+) -> list[SearchResponse]:
+    """Execute multi-domain batch retrieval (SEARCH-02).
+
+    shared_plan provides query understanding; domain_object_types[i] supplies
+    the object_types filter for domain i. Returns one SearchResponse per domain.
+    One _msearch round-trip covers T0-T8 for all active domains; a second
+    optional round-trip covers FUZZY for domains with zero T0-T8 results.
+    """
+    if not domain_object_types:
+        return []
+
+    vis = shared_plan.visibility_scopes
+    sk_to_cand: dict[str, SubjectCandidate] = {
+        c.subject_key: c for c in shared_plan.subject_candidates
+    }
+
+    tier_results_per_domain = reader.run_msearch_multi(
+        normalized_query=shared_plan.normalized_query,
+        identifier_candidates=shared_plan.identifier_candidates,
+        subject_candidates=shared_plan.subject_candidates,
+        domain_object_types=domain_object_types,
+        visibility=vis,
+        within_query=shared_plan.within_query,
+    )
+
+    seen_per_domain: list[dict[tuple[str, str], SearchResult]] = [
+        {} for _ in domain_object_types
+    ]
+    for di, tier_results in enumerate(tier_results_per_domain):
+        seen = seen_per_domain[di]
+        for tier_name in TIER_PRECEDENCE:
+            docs = tier_results.get(tier_name)
+            if not docs:
+                continue
+            tier_idx = TIER_PRECEDENCE.index(tier_name)
+            sorted_docs = sorted(docs, key=lambda d: _doc_sort_key(d, tier_idx))
+            for doc in sorted_docs:
+                key = (doc.get("object_type", ""), doc.get("canonical_id", ""))
+                if key not in seen:
+                    cand = None
+                    if tier_name in (TIER_DICTIONARY_EXACT, TIER_DICTIONARY_EXPANSION):
+                        subjects = doc.get("subjects") or []
+                        if isinstance(subjects, str):
+                            try:
+                                subjects = json.loads(subjects)
+                            except Exception:
+                                subjects = []
+                        for s in subjects:
+                            if isinstance(s, dict):
+                                cand = sk_to_cand.get(s.get("subject_key", ""))
+                                if cand:
+                                    break
+                    seen[key] = _make_result(
+                        doc,
+                        tier_name=tier_name,
+                        tier_idx=tier_idx,
+                        matched_on=shared_plan.normalized_query,
+                        subject_candidate=cand,
+                    )
+
+    # FUZZY: second batched round-trip only for domains with zero T0-T8 results
+    fuzzy_indices = [
+        di for di, seen in enumerate(seen_per_domain)
+        if len(seen) <= fuzzy_trigger_threshold
+        and TIER_FUZZY_FALLBACK in shared_plan.active_tiers
+    ]
+    if fuzzy_indices:
+        fuzzy_domain_ots = [domain_object_types[di] for di in fuzzy_indices]
+        fuzzy_results = reader.run_fuzzy_multi(
+            shared_plan.normalized_query,
+            domain_object_types=fuzzy_domain_ots,
+            visibility=vis,
+            within_query=shared_plan.within_query,
+        )
+        tier_idx = TIER_PRECEDENCE.index(TIER_FUZZY_FALLBACK)
+        for j, di in enumerate(fuzzy_indices):
+            seen = seen_per_domain[di]
+            for doc in (fuzzy_results[j] or []):
+                key = (doc.get("object_type", ""), doc.get("canonical_id", ""))
+                if key not in seen:
+                    seen[key] = _make_result(
+                        doc,
+                        tier_name=TIER_FUZZY_FALLBACK,
+                        tier_idx=tier_idx,
+                        matched_on=shared_plan.normalized_query,
+                    )
+
+    responses: list[SearchResponse] = []
+    for seen in seen_per_domain:
+        all_results = sorted(
+            seen.values(),
+            key=lambda r: (
+                r.rank_tier,
+                -(r.opensearch_score or 0),
+                -(len(r.source_updated_at or "")),
+                (r.source_updated_at or "")[::-1],
+                r.object_type,
+                r.canonical_id,
+            ),
+        )
+        total = len(all_results)
+        offset = (shared_plan.page - 1) * shared_plan.page_size
+        page_results = all_results[offset: offset + shared_plan.page_size]
+        responses.append(SearchResponse(
+            query=shared_plan.raw_query,
+            page=shared_plan.page,
+            page_size=shared_plan.page_size,
+            total=total,
+            items=page_results,
+            active_tiers=[],
+            status="ok" if total > 0 else "empty",
+        ))
+
+    return responses
+
+
+# ---------------------------------------------------------------------------
 # SharedRetrievalEngine — convenience wrapper
 # ---------------------------------------------------------------------------
 
@@ -437,3 +605,23 @@ class SharedRetrievalEngine:
         dataclasses.replace(plan, object_types=[...]).
         """
         return retrieve(plan, self._reader)
+
+    def search_sections(
+        self,
+        shared_plan: SearchQueryPlan,
+        domain_object_types: list[list[str]],
+        *,
+        fuzzy_trigger_threshold: int = 0,
+    ) -> list[SearchResponse]:
+        """SEARCH-02: multi-domain batch retrieval for /sections endpoint.
+
+        shared_plan provides query understanding (normalized_query, subject_candidates, etc.).
+        domain_object_types[i] is the object_types filter for domain i.
+        Returns one SearchResponse per domain in the same order.
+        """
+        return retrieve_multi(
+            shared_plan,
+            domain_object_types,
+            self._reader,
+            fuzzy_trigger_threshold=fuzzy_trigger_threshold,
+        )

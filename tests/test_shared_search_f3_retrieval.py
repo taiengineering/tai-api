@@ -1756,6 +1756,14 @@ class TestQueryPlanCalledOnce(unittest.TestCase):
             def run_fuzzy(self, *args, **kwargs):
                 return []
 
+            def run_msearch_multi(self, **kwargs):
+                n = len(kwargs.get("domain_object_types", []))
+                return [{} for _ in range(n)]
+
+            def run_fuzzy_multi(self, *args, **kwargs):
+                n = len(kwargs.get("domain_object_types", []))
+                return [[] for _ in range(n)]
+
         app = FastAPI()
         app.include_router(pss_mod.router)
 
@@ -1772,6 +1780,224 @@ class TestQueryPlanCalledOnce(unittest.TestCase):
         assert len(call_count) == 1, (
             f"build_query_plan() called {len(call_count)} times; expected exactly 1"
         )
+
+
+# --------------------------------------------------------------------------
+# §B-SEARCH02: retrieve_multi() — batch multi-domain retrieval
+# --------------------------------------------------------------------------
+
+class TestRetrieveMulti(unittest.TestCase):
+    """SEARCH-02: retrieve_multi() returns one SearchResponse per domain."""
+
+    def _docs(self):
+        return [
+            _pub_doc(object_type="GUIDE",   canonical_id="g-1",
+                     title="안전 가이드", search_text="안전 가이드"),
+            _pub_doc(object_type="LEGAL",   canonical_id="l-1",
+                     title="안전 법령", search_text="안전 법령"),
+            _pub_doc(object_type="KNOWLEDGE", canonical_id="k-1",
+                     title="안전 지식", search_text="안전 지식"),
+        ]
+
+    def test_returns_one_response_per_domain(self):
+        from services.shared_search.retrieval import retrieve_multi
+        reader = MemorySearchReader(self._docs())
+        plan = build_query_plan("안전", object_types=[], visibility_scopes=["PUBLIC"],
+                                page=1, page_size=10)
+        domain_ots = [["GUIDE"], ["LEGAL"], ["KNOWLEDGE"]]
+        responses = retrieve_multi(plan, domain_ots, reader)
+        assert len(responses) == 3
+
+    def test_each_response_contains_only_its_domain(self):
+        from services.shared_search.retrieval import retrieve_multi
+        reader = MemorySearchReader(self._docs())
+        plan = build_query_plan("안전", object_types=[], visibility_scopes=["PUBLIC"],
+                                page=1, page_size=10)
+        domain_ots = [["GUIDE"], ["LEGAL"], ["KNOWLEDGE"]]
+        responses = retrieve_multi(plan, domain_ots, reader)
+        assert all(r.object_type == "GUIDE"     for r in responses[0].items)
+        assert all(r.object_type == "LEGAL"     for r in responses[1].items)
+        assert all(r.object_type == "KNOWLEDGE" for r in responses[2].items)
+
+    def test_empty_domain_ots_returns_empty_list(self):
+        from services.shared_search.retrieval import retrieve_multi
+        reader = MemorySearchReader(self._docs())
+        plan = build_query_plan("안전", visibility_scopes=["PUBLIC"])
+        assert retrieve_multi(plan, [], reader) == []
+
+    def test_within_query_applied_per_domain(self):
+        from services.shared_search.retrieval import retrieve_multi
+        docs = [
+            _pub_doc(object_type="GUIDE", canonical_id="g-match",
+                     title="지게차 충돌", search_text="지게차 충돌 사고"),
+            _pub_doc(object_type="GUIDE", canonical_id="g-nomatch",
+                     title="지게차 안전", search_text="지게차 안전 가이드"),
+            _pub_doc(object_type="LEGAL", canonical_id="l-match",
+                     title="충돌 규정", search_text="지게차 충돌 관련 법령"),
+        ]
+        reader = MemorySearchReader(docs)
+        plan = build_query_plan("지게차", object_types=[], visibility_scopes=["PUBLIC"],
+                                page=1, page_size=10, within_query="충돌")
+        responses = retrieve_multi(plan, [["GUIDE"], ["LEGAL"]], reader)
+        guide_cids = {r.canonical_id for r in responses[0].items}
+        assert "g-match"   in guide_cids
+        assert "g-nomatch" not in guide_cids
+        assert any(r.canonical_id == "l-match" for r in responses[1].items)
+
+    def test_fuzzy_fires_for_zero_result_domain(self):
+        from services.shared_search.retrieval import retrieve_multi
+        docs = [
+            _pub_doc(object_type="GUIDE", canonical_id="g-1",
+                     title="지게차 충돌"),
+        ]
+        reader = MemorySearchReader(docs)
+        # "지게" does not match title/BM25 exactly; FUZZY fires for GUIDE domain
+        plan = build_query_plan("지게", object_types=[], visibility_scopes=["PUBLIC"],
+                                page=1, page_size=10)
+        responses = retrieve_multi(plan, [["GUIDE"]], reader)
+        assert responses[0].total == 1
+        assert responses[0].items[0].match_type == "FUZZY_FALLBACK"
+
+    def test_search_sections_method_delegates(self):
+        """SharedRetrievalEngine.search_sections() wraps retrieve_multi."""
+        docs = self._docs()
+        engine = SharedRetrievalEngine(MemorySearchReader(docs))
+        plan = build_query_plan("안전", object_types=[], visibility_scopes=["PUBLIC"],
+                                page=1, page_size=10)
+        responses = engine.search_sections(plan, [["GUIDE"], ["LEGAL"]])
+        assert len(responses) == 2
+        assert responses[0].items[0].object_type == "GUIDE"
+        assert responses[1].items[0].object_type == "LEGAL"
+
+
+# --------------------------------------------------------------------------
+# §B-SEARCH02-BATCH: OpenSearchSearchReader batch msearch verification
+# --------------------------------------------------------------------------
+
+class TestOpenSearchBatchMsearch(unittest.TestCase):
+    """SEARCH-02: run_msearch_multi() fires ONE _msearch call for N domains."""
+
+    def test_run_msearch_multi_single_http_call(self):
+        """N domains → exactly 1 client.msearch() call."""
+        from unittest.mock import MagicMock
+        from services.shared_search.opensearch_reader import OpenSearchSearchReader
+
+        client = MagicMock()
+        client.msearch.return_value = {"responses": []}
+
+        reader = OpenSearchSearchReader(client=client)
+        reader.run_msearch_multi(
+            normalized_query="안전",
+            identifier_candidates=[],
+            subject_candidates=[],
+            domain_object_types=[["GUIDE"], ["LEGAL"], ["KNOWLEDGE"]],
+            visibility=["PUBLIC"],
+        )
+
+        assert client.msearch.call_count == 1, (
+            f"expected 1 msearch call, got {client.msearch.call_count}"
+        )
+
+    def test_run_msearch_multi_body_contains_all_domains(self):
+        """Each domain contributes its tier queries to the single _msearch body."""
+        from unittest.mock import MagicMock
+        from services.shared_search.opensearch_reader import OpenSearchSearchReader
+
+        captured = {}
+
+        def mock_msearch(body):
+            captured["body"] = body
+            n = len(body) // 2
+            return {"responses": [{"hits": {"hits": []}} for _ in range(n)]}
+
+        client = MagicMock()
+        client.msearch.side_effect = mock_msearch
+
+        reader = OpenSearchSearchReader(client=client)
+        # 2 domains, no identifier candidates: each gets TITLE+ALIAS+BM25 = 3 entries minimum
+        reader.run_msearch_multi(
+            normalized_query="안전 가이드",
+            identifier_candidates=[],
+            subject_candidates=[],
+            domain_object_types=[["GUIDE"], ["LEGAL"]],
+            visibility=["PUBLIC"],
+        )
+
+        body = captured["body"]
+        # alternating header/query pairs → number of queries = len(body) // 2
+        n_queries = len(body) // 2
+        # 3 tiers minimum per domain × 2 domains = at least 6
+        assert n_queries >= 6, f"expected >= 6 queries for 2 domains, got {n_queries}"
+
+        # Every query body must carry _source filter
+        query_bodies = [body[i] for i in range(1, len(body), 2)]
+        for qb in query_bodies:
+            assert "_source" in qb, f"_source missing from batched query: {qb}"
+
+    def test_run_msearch_multi_routes_results_by_domain(self):
+        """Hits are attributed to the correct domain."""
+        from unittest.mock import MagicMock
+        from services.shared_search.opensearch_reader import OpenSearchSearchReader
+
+        # With "안전" query (no identifier_candidates), tiers per domain = 3
+        # (TITLE_EXACT, ALIAS_EXACT, BM25_NORI) since multi-word query omits SUBJECT/CONTEXT
+        # We'll make the GUIDE domain (domain 0) return a hit in its last tier (BM25_NORI)
+        # and LEGAL domain (domain 1) return nothing.
+        # actual query has space → no SUBJECT/CONTEXT tier
+        tiers_per_domain = 3  # TITLE_EXACT + ALIAS_EXACT + BM25_NORI
+
+        def mock_msearch(body):
+            n = len(body) // 2
+            responses = [{"hits": {"hits": []}} for _ in range(n)]
+            # domain 0: 3 entries (indices 0,1,2). Last one (BM25_NORI, index 2) gets a hit.
+            guide_bm25_idx = tiers_per_domain - 1  # index 2
+            responses[guide_bm25_idx] = {
+                "hits": {"hits": [{"_source": {
+                    "object_type": "GUIDE", "canonical_id": "g-1",
+                    "title": "안전", "source_id": "T",
+                    "source_key": None, "summary": None,
+                    "public_url": "/guide/g-1", "saas_url": None,
+                    "source_updated_at": "2026-01-01T00:00:00+00:00",
+                    "subjects": [],
+                }, "_score": 1.0}]}
+            }
+            return {"responses": responses}
+
+        client = MagicMock()
+        client.msearch.side_effect = mock_msearch
+        reader = OpenSearchSearchReader(client=client)
+
+        results = reader.run_msearch_multi(
+            normalized_query="안전 가이드",
+            identifier_candidates=[],
+            subject_candidates=[],
+            domain_object_types=[["GUIDE"], ["LEGAL"]],
+            visibility=["PUBLIC"],
+        )
+
+        # Domain 0 (GUIDE) should have results; domain 1 (LEGAL) should be empty
+        assert len(results) == 2
+        guide_hits = sum(len(v) for v in results[0].values())
+        legal_hits = sum(len(v) for v in results[1].values())
+        assert guide_hits > 0, "domain 0 (GUIDE) should have hits"
+        assert legal_hits == 0, "domain 1 (LEGAL) should have no hits"
+
+    def test_run_fuzzy_multi_single_http_call(self):
+        """run_fuzzy_multi fires ONE _msearch call regardless of domain count."""
+        from unittest.mock import MagicMock
+        from services.shared_search.opensearch_reader import OpenSearchSearchReader
+
+        client = MagicMock()
+        client.msearch.return_value = {"responses": []}
+
+        reader = OpenSearchSearchReader(client=client)
+        reader.run_fuzzy_multi(
+            "지게",
+            domain_object_types=[["GUIDE"], ["LEGAL"], ["KNOWLEDGE"]],
+            visibility=["PUBLIC"],
+        )
+
+        assert client.msearch.call_count == 1
 
 
 if __name__ == "__main__":
