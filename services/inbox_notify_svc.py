@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # WO-SLACK-EVENT-HUB-001 PR-③: Vue3 admin 라우트로 통일.
 # dispatcher.EVENT_TYPE_ADMIN_PATH 의 INQUIRY_CREATED/TAI_WISH_CREATED 매핑값과 일치.
 ADMIN_BASE_URL = "https://admin.taieng.co.kr"
-ADMIN_INQUIRY_URL = f"{ADMIN_BASE_URL}/inquiry-list"
+ADMIN_INQUIRY_URL = f"{ADMIN_BASE_URL}/admin-inquiries"
 
 # 소스 라벨
 SOURCE_LABEL = {
@@ -64,7 +64,9 @@ def build_blocks(record: Dict[str, Any]) -> List[Dict[str, Any]]:
     name = record.get("name") or "익명"
     email = record.get("email") or "-"
     phone = record.get("phone") or "-"
-    contact_line = f"보낸이: *{name}* · {email} · {phone}"
+    company = (record.get("company") or "").strip()
+    company_part = f" ({company})" if company else ""
+    contact_line = f"보낸이: *{name}*{company_part} · {email} · {phone}"
 
     return [
         {
@@ -114,3 +116,37 @@ def fallback_title(record: Dict[str, Any]) -> str:
     label = "TAI에 바란다" if is_fb else "도입 문의"
     who = record.get("name") or "익명"
     return f"{label} · {who}"
+
+
+def build_attachment_blocks(name: str, email: str, file_names: List[str]) -> List[Dict[str, Any]]:
+    """파일 저장 완료 Slack 보완 알림용 Block Kit.
+
+    DB 트리거가 INSERT 직후 발송(파일 미포함)하므로, 파일 저장 성공 후
+    별도 이벤트(INQUIRY_ATTACHMENT_ADDED)로 보정. 초기 알림과 타입이 달라 중복 아님.
+    단일 메시지 업데이트(chat.update)는 Slack ts 저장이 필요해 DB 변경 사항으로,
+    현재 Owner 결정 대기 중. 운영자가 2건 수신하는 방식을 유지.
+    """
+    file_list = "\n".join(f"• {n}" for n in file_names) if file_names else "_(파일명 없음)_"
+    who = name or "익명"
+    contact = email or "-"
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"📎 *첨부파일 저장 완료* — {who} · {contact} · {len(file_names)}건",
+            },
+        },
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": file_list},
+        },
+        {
+            "type": "actions",
+            "elements": [{
+                "type": "button",
+                "text": {"type": "plain_text", "text": "어드민에서 보기"},
+                "url": ADMIN_INQUIRY_URL,
+            }],
+        },
+    ]
