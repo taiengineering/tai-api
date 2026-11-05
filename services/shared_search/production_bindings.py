@@ -39,7 +39,7 @@ from typing import Any, Callable, Iterable, Iterator, Optional
 
 from services.shared_search.adapters import (
     ChemAccidentAdapter, ChemAdapter, ChemRegulationAdapter, ChemSafetyAdapter,
-    CsiAccidentAdapter, GuideAdapter, HazardousMaterialAdapter,
+    CsiAccidentAdapter, Form647SearchAdapter, GuideAdapter, HazardousMaterialAdapter,
     KnowledgeAdapter, LegalAdapter, MarketingKnowledgeAdapter,
     PrecedentAdapter, ReferenceFormAdapter, RiskAdapter, SafetyMaterialAdapter,
 )
@@ -1134,6 +1134,46 @@ def _make_marketing_knowledge_adapter(
 # ---------------------------------------------------------------------------
 
 
+def _make_form647_search_adapter(
+    leg_client: Optional[SupabaseClient] = None,
+) -> Form647SearchAdapter:
+    """FORM647 647종 → 기존 REFERENCE_FORM 검색 연결.
+
+    legal_client (LEG Supabase) 를 재사용. 없으면 fail-closed (0건 반환).
+    Gate BLOCKED 상태에서는 form_snapshots 조회 결과가 항상 0건이므로
+    실제 인덱스에 아무 문서도 추가되지 않는다.
+    Gate 해제는 별도 LEG 거버넌스 승인 + DB 마이그레이션 필요.
+    """
+    if leg_client is None:
+        return Form647SearchAdapter(fetch_current=lambda: iter([]))
+
+    _SELECT = "ek, service_sot_gate, frozen_name, api_target, created_at"
+
+    def _iter_current():
+        offset = 0
+        while True:
+            try:
+                res = (
+                    leg_client.schema("form647_review")
+                    .from_("form_snapshots")
+                    .select(_SELECT)
+                    .order("ek")
+                    .range(offset, offset + _CHUNK - 1)
+                    .execute()
+                )
+                rows = list(getattr(res, "data", None) or [])
+            except Exception:
+                return   # fail-closed
+            if not rows:
+                break
+            yield from rows
+            if len(rows) < _CHUNK:
+                break
+            offset += _CHUNK
+
+    return Form647SearchAdapter(fetch_current=_iter_current)
+
+
 def build_production_adapters(
     client: SupabaseClient,
     legal_client: Optional[SupabaseClient] = None,
@@ -1162,6 +1202,7 @@ def build_production_adapters(
         _make_risk_adapter(client),
         _make_chem_regulation_adapter(legal_client=legal_client),
         _make_reference_form_adapter(client),
+        _make_form647_search_adapter(leg_client=legal_client),
         _make_chem_safety_adapter(client),
         _make_hazardous_material_adapter(client),
         _make_chem_accident_adapter(client),

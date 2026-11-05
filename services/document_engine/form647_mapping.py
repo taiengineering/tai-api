@@ -1,17 +1,15 @@
 """FORM647 원장 조회 인프라 — LEG form647_review 스키마 접근 함수 모음.
 
-현재 연결 상태 (R3 SOURCE_IV 보정 결과):
-  document_forms.file_url에 포함된 flSeq와 FORM647 ek는 별도 식별자다.
-  flSeq를 ek로 직접 사용하는 크로스워크가 운영 DB에서 입증되지 않았다.
-  미연결 81종 가운데 flSeq 보유 문서: 1종(DOC-FAC-019)이며,
-  그 flSeq 값도 FORM647 ek와 직접 일치하지 않는다(0건).
-
-이 모듈의 함수는 doc_id → ek 크로스워크가 별도로 확립된 이후에만
-라우터에 연결한다. 현재 router에서 임포트하지 않는다.
+LEG 실제 스키마 계약 (20261014044519 마이그레이션 기준):
+  form_snapshots 컬럼: run_id, ek, frozen_index, api_target, frozen_name,
+                       source_gate, service_sot_gate, frozen_payload, created_at
+  주의: service_released 는 form_snapshots 에 없다. ingest_runs.service_released 에만
+        존재하며 DB CHECK 제약(NOT service_released)으로 항상 false — 쿼리 대상 아님.
 
 서비스 Gate:
-  form_snapshots.service_sot_gate = BLOCKED (전체 647종)
-  Gate 해제는 별도 LEG 거버넌스 승인 필요.
+  form_snapshots.service_sot_gate = 'BLOCKED' (DB CHECK 강제, 전체 647종)
+  Gate 해제는 별도 LEG 거버넌스 승인 + 스키마 마이그레이션 필요.
+  현재 _GATE_OPEN_VALUES 에 해당하는 값이 없으므로 모든 함수는 None 반환.
 """
 from __future__ import annotations
 import logging
@@ -52,7 +50,7 @@ def find_form647_snapshot(ek: int) -> dict | None:
     """ek에 해당하는 FORM647 form_snapshot을 조회한다.
 
     LEG 연결 불가 또는 미발견 시 None.
-    반환 필드: ek, service_sot_gate, service_released
+    반환 필드: ek, service_sot_gate
     """
     leg = _build_leg_client()
     if leg is None:
@@ -61,8 +59,8 @@ def find_form647_snapshot(ek: int) -> dict | None:
         res = (
             leg.schema("form647_review")
             .from_("form_snapshots")
-            .select("ek, service_sot_gate, service_released")
-            .eq("ek", ek)
+            .select("ek, service_sot_gate")
+            .eq("ek", str(ek))
             .limit(1)
             .execute()
         )
@@ -100,12 +98,10 @@ def is_form647_service_gate_open(snapshot: dict) -> bool:
     """서비스 Gate 통과 여부를 확인한다.
 
     현재 647종 전체 BLOCKED — 항상 False.
-    Gate 해제 후 service_released=True + service_sot_gate∈GATE_OPEN_VALUES 시 True.
+    Gate 해제는 LEG 거버넌스 승인 + DB 마이그레이션 후 service_sot_gate 값 변경 필요.
+    service_released 는 form_snapshots 에 없으므로 확인하지 않는다.
     """
-    return (
-        snapshot.get("service_released") is True
-        and snapshot.get("service_sot_gate") in _GATE_OPEN_VALUES
-    )
+    return snapshot.get("service_sot_gate") in _GATE_OPEN_VALUES
 
 
 # Storage 경로 계산에 사용하는 고정 Run ID (form647-remediation-002)
@@ -125,8 +121,8 @@ def get_form647_detail(ek: int) -> dict | None:
         res = (
             leg.schema("form647_review")
             .from_("form_snapshots")
-            .select("ek, service_sot_gate, service_released, frozen_name, api_target")
-            .eq("ek", ek)
+            .select("ek, service_sot_gate, frozen_name, api_target")
+            .eq("ek", str(ek))
             .limit(1)
             .execute()
         )
