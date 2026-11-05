@@ -41,6 +41,22 @@ logger = logging.getLogger(__name__)
 TIER_FETCH_SIZE = 200          # max docs fetched per tier per _msearch call
 FUZZY_TRIGGER_THRESHOLD = 0    # trigger FUZZY only when all other tiers total ≤ this
 
+# SEARCH-03: _source filter — only fields consumed by SearchResult / to_dict().
+# Keeps response payloads small; unmapped fields (subjects, search_text, etc.)
+# are not surfaced in API responses and are therefore excluded here.
+_RESULT_SOURCE_FIELDS: list[str] = [
+    "canonical_id",
+    "source_id",
+    "source_key",
+    "object_type",
+    "title",
+    "summary",
+    "public_url",
+    "saas_url",
+    "source_updated_at",
+    "subjects",
+]
+
 
 # ---------------------------------------------------------------------------
 # Visibility filter (§27) — applied to every tier
@@ -250,6 +266,56 @@ def _q_fuzzy(q: str, vis: list[str], ot: list[str]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Tier request builder — shared by run_msearch and run_msearch_multi
+# ---------------------------------------------------------------------------
+
+def _build_tier_requests(
+    normalized_query: str,
+    identifier_candidates: list[str],
+    subject_candidates: list[Any],
+    object_types: list[str],
+    visibility: list[str],
+    within_query: Optional[str] = None,
+) -> list[tuple[str, dict]]:
+    """Build (tier_name, query_body) pairs for T0-T8. Used by single- and multi-domain calls."""
+    q   = normalized_query
+    ot  = object_types
+    vis = visibility
+    _dict_exact_types = {"EXACT", "NORMALIZED_EXACT", "PUNCTUATION", "EXACT_ALIAS"}
+
+    requests: list[tuple[str, dict]] = []
+
+    for ident in identifier_candidates:
+        requests.append(("SOURCE_KEY_EXACT", _q_source_key_exact(ident, vis, ot)))
+    for ident in identifier_candidates:
+        requests.append(("CANONICAL_ID_EXACT", _q_canonical_id_exact(ident, vis, ot)))
+    for cand in subject_candidates:
+        tier = ("DICTIONARY_EXACT"
+                if cand.match_type in _dict_exact_types
+                else "DICTIONARY_EXPANSION")
+        requests.append((tier, _q_subject_exact(cand.subject_key, vis, ot)))
+
+    requests.append(("TITLE_EXACT", _q_title_exact(q, vis, ot)))
+    requests.append(("ALIAS_EXACT", _q_alias_exact(q, vis, ot)))
+    if q and " " not in q.strip():
+        requests.append(("SUBJECT_EXACT", _q_subject_exact(q.strip(), vis, ot)))
+    if q and " " not in q.strip():
+        requests.append(("CONTEXT_EXACT", _q_context_exact(q.strip(), vis, ot)))
+    requests.append(("BM25_NORI", _q_bm25(q, vis, ot)))
+
+    if within_query and within_query.strip():
+        requests = [
+            (tier, _inject_within(qbody, within_query))
+            for tier, qbody in requests
+        ]
+    requests = [
+        (tier, {**qbody, "_source": _RESULT_SOURCE_FIELDS})
+        for tier, qbody in requests
+    ]
+    return requests
+
+
+# ---------------------------------------------------------------------------
 # OpenSearchSearchReader
 # ---------------------------------------------------------------------------
 
@@ -274,78 +340,26 @@ class OpenSearchSearchReader:
         visibility: list[str],
         within_query: Optional[str] = None,
     ) -> dict[str, list[dict]]:
-        """Fire one _msearch with all eager tiers.
+        """Fire one _msearch with all eager tiers (T0-T8).
 
         ``within_query`` is injected as a filter-context clause on every tier.
-        It narrows the result set but does not contribute to scores.
-
         Returns dict mapping tier_name → list of raw OS hit docs.
         """
-        ot = object_types
-        vis = visibility
-        q   = normalized_query
-
-        # Build the flat _msearch body:
-        # [header, query, header, query, ...]
-        requests: list[tuple[str, dict]] = []  # (tier_name, query_body)
-
-        # T0: source_key exact (per identifier candidate)
-        for ident in identifier_candidates:
-            requests.append(("SOURCE_KEY_EXACT", _q_source_key_exact(ident, vis, ot)))
-
-        # T1: canonical_id exact (per identifier candidate)
-        for ident in identifier_candidates:
-            requests.append(("CANONICAL_ID_EXACT", _q_canonical_id_exact(ident, vis, ot)))
-
-        # T2: DICTIONARY_EXACT subjects (subject_candidates with EXACT match types)
-        # T3: DICTIONARY_EXPANSION subjects (non-EXACT expansion match types)
-        _dict_exact_types = {
-            "EXACT", "NORMALIZED_EXACT", "PUNCTUATION",
-            "EXACT_ALIAS",
-        }
-        for cand in subject_candidates:
-            tier = ("DICTIONARY_EXACT"
-                    if cand.match_type in _dict_exact_types
-                    else "DICTIONARY_EXPANSION")
-            requests.append((tier, _q_subject_exact(cand.subject_key, vis, ot)))
-
-        # T4: title exact
-        requests.append(("TITLE_EXACT", _q_title_exact(q, vis, ot)))
-
-        # T5: alias exact
-        requests.append(("ALIAS_EXACT", _q_alias_exact(q, vis, ot)))
-
-        # T6: subject exact (raw query as subject_key)
-        if q and " " not in q.strip():
-            requests.append(("SUBJECT_EXACT", _q_subject_exact(q.strip(), vis, ot)))
-
-        # T7: context exact
-        if q and " " not in q.strip():
-            requests.append(("CONTEXT_EXACT", _q_context_exact(q.strip(), vis, ot)))
-
-        # T8: BM25 Nori
-        requests.append(("BM25_NORI", _q_bm25(q, vis, ot)))
-
+        requests = _build_tier_requests(
+            normalized_query, identifier_candidates, subject_candidates,
+            object_types, visibility, within_query,
+        )
         if not requests:
             return {}
 
-        # Inject within filter into every tier (filter context = zero score contribution)
-        if within_query and within_query.strip():
-            requests = [
-                (tier, _inject_within(qbody, within_query))
-                for tier, qbody in requests
-            ]
-
-        # Flatten to _msearch body (alternating header + body lines)
         msearch_body: list[dict] = []
-        for _tier, qbody in requests:
+        for _, qbody in requests:
             msearch_body.append({"index": self._index})
             msearch_body.append(qbody)
 
         resp = self._client.msearch(body=msearch_body)
         responses = resp.get("responses", [])
 
-        # Map results back to tier names
         result: dict[str, list[dict]] = {}
         for i, (tier_name, _) in enumerate(requests):
             if i >= len(responses):
@@ -357,10 +371,101 @@ class OpenSearchSearchReader:
             hits = r.get("hits", {}).get("hits", [])
             docs = [_hit_to_doc(h) for h in hits]
             if docs:
-                if tier_name not in result:
-                    result[tier_name] = docs
-                else:
-                    result[tier_name].extend(docs)
+                result.setdefault(tier_name, []).extend(docs)
+
+        return result
+
+    def run_msearch_multi(
+        self,
+        *,
+        normalized_query: str,
+        identifier_candidates: list[str],
+        subject_candidates: list[Any],
+        domain_object_types: list[list[str]],
+        visibility: list[str],
+        within_query: Optional[str] = None,
+    ) -> list[dict[str, list[dict]]]:
+        """SEARCH-02: batch T0-T8 queries for all domains in ONE _msearch round-trip.
+
+        Returns one tier_result dict per entry in domain_object_types (same order).
+        """
+        if not domain_object_types:
+            return []
+
+        # entries: (domain_idx, tier_name) for each _msearch slot
+        entries: list[tuple[int, str]] = []
+        msearch_body: list[dict] = []
+
+        for di, ot in enumerate(domain_object_types):
+            for tier, qbody in _build_tier_requests(
+                normalized_query, identifier_candidates, subject_candidates,
+                ot, visibility, within_query,
+            ):
+                entries.append((di, tier))
+                msearch_body.append({"index": self._index})
+                msearch_body.append(qbody)
+
+        if not entries:
+            return [{} for _ in domain_object_types]
+
+        resp = self._client.msearch(body=msearch_body)
+        responses = resp.get("responses", [])
+
+        per_domain: list[dict[str, list[dict]]] = [{} for _ in domain_object_types]
+        for i, (di, tier_name) in enumerate(entries):
+            if i >= len(responses):
+                break
+            r = responses[i]
+            if r.get("error"):
+                logger.warning("msearch_multi domain=%d tier=%s error: %s",
+                               di, tier_name, r["error"])
+                continue
+            hits = r.get("hits", {}).get("hits", [])
+            docs = [_hit_to_doc(h) for h in hits]
+            if docs:
+                per_domain[di].setdefault(tier_name, []).extend(docs)
+
+        return per_domain
+
+    def run_fuzzy_multi(
+        self,
+        normalized_query: str,
+        *,
+        domain_object_types: list[list[str]],
+        visibility: list[str],
+        within_query: Optional[str] = None,
+    ) -> list[list[dict]]:
+        """SEARCH-02: batch FUZZY queries for multiple domains in ONE _msearch round-trip.
+
+        Only called for domains where T0-T8 yielded zero results.
+        Returns one doc list per entry in domain_object_types (same order).
+        """
+        if not domain_object_types:
+            return []
+
+        msearch_body: list[dict] = []
+        for ot in domain_object_types:
+            qbody = _q_fuzzy(normalized_query, visibility, ot)
+            if within_query and within_query.strip():
+                qbody = _inject_within(qbody, within_query)
+            qbody = {**qbody, "_source": _RESULT_SOURCE_FIELDS}
+            msearch_body.append({"index": self._index})
+            msearch_body.append(qbody)
+
+        resp = self._client.msearch(body=msearch_body)
+        responses = resp.get("responses", [])
+
+        result: list[list[dict]] = [[] for _ in domain_object_types]
+        for i, r in enumerate(responses):
+            if i >= len(domain_object_types):
+                break
+            if r.get("error"):
+                # R1-02: propagate fuzzy sub-search errors — do not silently return empty.
+                # Preserves run_fuzzy() error contract: callers see failure, not missing results.
+                raise RuntimeError(
+                    f"fuzzy_multi sub-search failed for domain {i}: {r['error']}"
+                )
+            result[i] = [_hit_to_doc(h) for h in r.get("hits", {}).get("hits", [])]
 
         return result
 
@@ -376,6 +481,7 @@ class OpenSearchSearchReader:
         qbody = _q_fuzzy(normalized_query, visibility, object_types)
         if within_query and within_query.strip():
             qbody = _inject_within(qbody, within_query)
+        qbody = {**qbody, "_source": _RESULT_SOURCE_FIELDS}  # SEARCH-03
         resp = self._client.search(index=self._index, body=qbody)
         return [_hit_to_doc(h) for h in resp.get("hits", {}).get("hits", [])]
 
