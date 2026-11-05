@@ -22,16 +22,23 @@ from services.shared_search.retrieval import MemorySearchReader
 # Helpers
 # ---------------------------------------------------------------------------
 
-_SECTION_ORDER = ["knowledge", "guide", "law", "accident", "material", "chem", "keco", "precedent"]
+_SECTION_ORDER = [
+    "knowledge", "guide", "reference_form", "law", "accident", "material",
+    "chem", "keco", "precedent", "chem_safety", "hazardous", "chem_accident",
+]
 _SECTION_OBJECT_TYPES = {
-    "guide":     "GUIDE",
-    "material":  "SAFETY_MATERIAL",
-    "accident":  "CSI_ACCIDENT",
-    "chem":      "CHEM",
-    "keco":      "CHEM_REGULATION",
-    "knowledge": "KNOWLEDGE",
-    "precedent": "PRECEDENT",
-    "law":       "LEGAL",
+    "knowledge":      "KNOWLEDGE",
+    "guide":          "GUIDE",
+    "reference_form": "REFERENCE_FORM",
+    "law":            "LEGAL",
+    "accident":       "CSI_ACCIDENT",
+    "material":       "SAFETY_MATERIAL",
+    "chem":           "CHEM",
+    "keco":           "CHEM_REGULATION",
+    "precedent":      "PRECEDENT",
+    "chem_safety":    "CHEM_SAFETY",
+    "hazardous":      "HAZARDOUS_MATERIAL",
+    "chem_accident":  "CHEM_ACCIDENT",
 }
 
 
@@ -95,7 +102,7 @@ def test_s01_seven_sections_correct_order(monkeypatch):
         r = c.get("/public/safety-search/sections?q=지게차")
     assert r.status_code == 200
     sections = r.json()["sections"]
-    assert len(sections) == 8
+    assert len(sections) == 12
     assert [s["type"] for s in sections] == _SECTION_ORDER
 
 
