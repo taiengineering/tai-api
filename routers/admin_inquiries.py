@@ -310,6 +310,55 @@ def admin_create_inquiry(
     return {"status": "success", "data": project_labels(res.data[0])}
 
 
+_ATTACH_BUCKET = "company-docs"
+_ATTACH_SIGNED_URL_EXPIRES = 3600
+
+
+def _attachments_signed_url(storage, storage_path: str) -> str:
+    signed = storage.from_(_ATTACH_BUCKET).create_signed_url(storage_path, _ATTACH_SIGNED_URL_EXPIRES)
+    if isinstance(signed, dict):
+        return signed.get("signedURL") or signed.get("signedUrl") or signed.get("signed_url") or ""
+    return str(signed or "")
+
+
+@router.get("/{inquiry_id}/attachments")
+def admin_get_inquiry_attachments(
+    inquiry_id: UUID,
+    _admin: dict = Depends(get_current_user),
+):
+    """문의 첨부파일 목록 + 1시간 서명 URL"""
+    supabase = get_supabase()
+    res = (
+        supabase.table("attachments")
+        .select("id, file_name, file_size, file_ext, mime_type, file_url, created_at")
+        .eq("table_name", "inquiries")
+        .eq("record_id", str(inquiry_id))
+        .eq("file_category", "contact_attachment")
+        .order("created_at")
+        .execute()
+    )
+    items = []
+    for row in (res.data or []):
+        url = row.get("file_url", "")
+        signed_url = None
+        if url.startswith("storage://company-docs/"):
+            path = url[len("storage://company-docs/"):]
+            try:
+                signed_url = _attachments_signed_url(supabase.storage, path)
+            except Exception:
+                signed_url = None
+        items.append({
+            "id": row.get("id"),
+            "file_name": row.get("file_name"),
+            "file_size": row.get("file_size"),
+            "file_ext": row.get("file_ext"),
+            "mime_type": row.get("mime_type"),
+            "signed_url": signed_url,
+            "created_at": row.get("created_at"),
+        })
+    return {"status": "success", "data": {"items": items}}
+
+
 @router.patch("/{inquiry_id}")
 def admin_patch_inquiry(
     inquiry_id: UUID,

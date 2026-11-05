@@ -1,13 +1,15 @@
 """
-공개 웹용 — 문의 접수(POST /contacts), FAQ 목록(GET /faqs)
+공개 웹용 — 문의 접수(POST /contacts), 파일 첨부(POST /contacts/{id}/attachments),
+FAQ 목록(GET /faqs)
 관리자 FAQ: prefix /admin/site-faqs
 """
 import re
+import uuid
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Header, Query
+from fastapi import APIRouter, File, HTTPException, Header, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
@@ -84,6 +86,120 @@ def submit_public_contact(body: PublicContactBody):
     # → slack_dispatcher(INQUIRY_CREATED). 이곳에서 이중발송 금지.
 
     return {"status": "success", "data": saved}
+
+
+# ── POST /contacts/{inquiry_id}/attachments ───────────────────────
+
+CONTACT_BUCKET = "company-docs"
+CONTACT_ATTACH_MAX_FILES = 5
+CONTACT_ATTACH_MAX_BYTES = 10 * 1024 * 1024  # 10 MB per file
+
+_ALLOWED_EXTS: dict = {
+    "pdf": "application/pdf",
+    "doc": "application/msword",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xls": "application/vnd.ms-excel",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "txt": "text/plain",
+    "zip": "application/zip",
+    "hwp": "application/x-hwp",
+    "hwpx": "application/haansofthwp",
+}
+
+
+def _contact_stable_ref(storage_path: str) -> str:
+    return f"storage://{CONTACT_BUCKET}/{storage_path}"
+
+
+def _parse_inquiry_uuid(value: str) -> str:
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=400, detail="유효하지 않은 문의 ID입니다.")
+
+
+@router.post("/contacts/{inquiry_id}/attachments")
+async def upload_contact_attachments(
+    inquiry_id: str,
+    files: List[UploadFile] = File(...),
+):
+    """공개 문의 파일 첨부 — inquiry_id 하나당 최대 5개, 각 10MB 이하"""
+    parsed_id = _parse_inquiry_uuid(inquiry_id)
+    supabase = get_supabase()
+
+    # inquiry 존재 확인
+    check = supabase.table("inquiries").select("id").eq("id", parsed_id).limit(1).execute()
+    if not check.data:
+        raise HTTPException(status_code=404, detail="문의를 찾을 수 없습니다.")
+
+    if len(files) == 0:
+        raise HTTPException(status_code=400, detail="파일이 없습니다.")
+    if len(files) > CONTACT_ATTACH_MAX_FILES:
+        raise HTTPException(status_code=400, detail=f"파일은 최대 {CONTACT_ATTACH_MAX_FILES}개까지 첨부할 수 있습니다.")
+
+    # 기존 첨부 수 확인
+    existing = supabase.table("attachments").select("id", count="exact").eq("table_name", "inquiries").eq("record_id", parsed_id).execute()
+    already = existing.count or 0
+    if already + len(files) > CONTACT_ATTACH_MAX_FILES:
+        raise HTTPException(status_code=400, detail=f"첨부 파일 한도({CONTACT_ATTACH_MAX_FILES}개)를 초과합니다.")
+
+    now = now_kst()
+    month_prefix = now.strftime("%Y-%m")
+    results = []
+
+    for f in files:
+        raw = await f.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail=f"빈 파일입니다: {f.filename}")
+        if len(raw) > CONTACT_ATTACH_MAX_BYTES:
+            raise HTTPException(status_code=400, detail=f"파일 크기 초과(10MB): {f.filename}")
+
+        fname = (f.filename or "file").strip()
+        ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+        if ext not in _ALLOWED_EXTS:
+            raise HTTPException(status_code=400, detail=f"허용되지 않는 파일 형식입니다: {fname}")
+        mime = _ALLOWED_EXTS[ext]
+
+        storage_path = f"contact-attachments/{month_prefix}/{parsed_id}/{uuid.uuid4()}.{ext}"
+        try:
+            supabase.storage.from_(CONTACT_BUCKET).upload(
+                path=storage_path, file=raw, file_options={"content-type": mime}
+            )
+        except Exception as e:
+            logger.error(f"[ContactAttach] Storage 실패 path={storage_path}: {e}")
+            raise HTTPException(status_code=500, detail="파일 저장에 실패했습니다.")
+
+        stable = _contact_stable_ref(storage_path)
+        row = {
+            "table_name": "inquiries",
+            "record_id": parsed_id,
+            "file_category": "contact_attachment",
+            "file_url": stable,
+            "file_name": fname,
+            "file_size": len(raw),
+            "file_ext": ext,
+            "mime_type": mime,
+            "is_photo": ext in ("png", "jpg", "jpeg"),
+        }
+        try:
+            ins = supabase.table("attachments").insert(row).execute()
+        except Exception as e:
+            logger.error(f"[ContactAttach] DB 저장 실패 ref={stable}: {e}")
+            raise HTTPException(status_code=500, detail="파일 저장에 실패했습니다.")
+
+        saved_row = ins.data[0] if ins.data else row
+        results.append({
+            "id": saved_row.get("id"),
+            "file_name": fname,
+            "file_size": len(raw),
+            "file_ext": ext,
+            "mime_type": mime,
+        })
+
+    return {"status": "success", "data": {"attachments": results}}
 
 
 # ── GET /faqs ─────────────────────────────────────────────────────
