@@ -53,6 +53,7 @@ from services.shared_search.query import (
     TIER_ALIAS_EXACT,
     build_query_plan,
 )
+from services.shared_search.opensearch_client import OpenSearchUnavailable
 from services.shared_search.result import SearchResponse, SearchResult
 
 
@@ -515,12 +516,15 @@ def retrieve_multi(
     ]
     if fuzzy_indices:
         fuzzy_domain_ots = [domain_object_types[di] for di in fuzzy_indices]
-        fuzzy_results = reader.run_fuzzy_multi(
-            shared_plan.normalized_query,
-            domain_object_types=fuzzy_domain_ots,
-            visibility=vis,
-            within_query=shared_plan.within_query,
-        )
+        try:
+            fuzzy_results = reader.run_fuzzy_multi(
+                shared_plan.normalized_query,
+                domain_object_types=fuzzy_domain_ots,
+                visibility=vis,
+                within_query=shared_plan.within_query,
+            )
+        except RuntimeError as exc:
+            raise OpenSearchUnavailable(str(exc)) from exc
         tier_idx = TIER_PRECEDENCE.index(TIER_FUZZY_FALLBACK)
         for j, di in enumerate(fuzzy_indices):
             seen = seen_per_domain[di]

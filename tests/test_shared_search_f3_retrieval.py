@@ -2193,5 +2193,54 @@ class TestSectionsHttpCallCount(unittest.TestCase):
                              f"expected ≤2 HTTP msearch calls, got {calls}")
 
 
+class TestFuzzyMultiErrorPropagation(unittest.TestCase):
+    """R2: run_fuzzy_multi() sub-search errors propagate as OpenSearchUnavailable (not silently empty)."""
+
+    def _make_plan(self, q: str = "test") -> "SearchQueryPlan":
+        from services.shared_search.query import build_query_plan
+        return build_query_plan(q, object_types=["GUIDE"], visibility_scopes=["PUBLIC"])
+
+    def test_fuzzy_multi_runtime_error_raises_opensearch_unavailable(self):
+        """RuntimeError from run_fuzzy_multi() is converted to OpenSearchUnavailable by retrieve_multi()."""
+        from services.shared_search.retrieval import retrieve_multi
+        from services.shared_search.opensearch_client import OpenSearchUnavailable
+
+        class _ErrorFuzzyReader:
+            def run_msearch_multi(self, **kwargs):
+                return [{}]  # 0 results → triggers fuzzy
+
+            def run_fuzzy_multi(self, *args, **kwargs):
+                raise RuntimeError("fuzzy_multi sub-search failed for domain 0: shard error")
+
+        plan = self._make_plan("안전")
+        with self.assertRaises(OpenSearchUnavailable) as ctx:
+            retrieve_multi(plan, [["GUIDE"]], reader=_ErrorFuzzyReader())
+        self.assertIn("fuzzy_multi sub-search failed", str(ctx.exception))
+
+    def test_fuzzy_multi_success_still_returns_results(self):
+        """Non-error fuzzy path still returns results (regression guard)."""
+        from services.shared_search.retrieval import retrieve_multi
+        import json
+
+        _doc = {
+            "object_type": "GUIDE", "canonical_id": "g-fuzzy",
+            "title": "안전", "source_id": "T", "source_key": None,
+            "summary": None, "public_url": "/g/f", "saas_url": None,
+            "source_updated_at": "2026-01-01T00:00:00+00:00", "subjects": [],
+        }
+
+        class _FuzzyReader:
+            def run_msearch_multi(self, **kwargs):
+                return [{}]  # 0 results → triggers fuzzy
+
+            def run_fuzzy_multi(self, *args, **kwargs):
+                return [[_doc]]
+
+        plan = self._make_plan("안전")
+        responses = retrieve_multi(plan, [["GUIDE"]], reader=_FuzzyReader())
+        self.assertEqual(len(responses), 1)
+        self.assertGreater(responses[0].total, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -334,3 +334,32 @@ def test_s12_kosha_endpoint_unchanged(monkeypatch):
         r = c.get("/public/safety-search/kosha?q=지게차")
     assert r.status_code == 200
     assert r.json()["q"] == "지게차"
+
+
+# ---------------------------------------------------------------------------
+# S13 — fuzzy sub-search error → 503 SHARED_SEARCH_UNAVAILABLE
+# ---------------------------------------------------------------------------
+
+def test_s13_fuzzy_sub_error_returns_503(monkeypatch):
+    """run_fuzzy_multi() sub-search error propagates to /sections as HTTP 503."""
+    from unittest.mock import MagicMock
+    import services.shared_search.opensearch_reader as osr_mod
+
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "full")
+    monkeypatch.setattr(pss_mod, "get_client", lambda: MagicMock())
+
+    class _ErrorFuzzyReader:
+        def run_msearch_multi(self, **kwargs):
+            # all domains return empty → triggers FUZZY
+            n = len(kwargs.get("domain_object_types", []))
+            return [{} for _ in range(n)]
+
+        def run_fuzzy_multi(self, *args, **kwargs):
+            raise RuntimeError("fuzzy_multi sub-search failed for domain 0: shard error")
+
+    monkeypatch.setattr(osr_mod, "OpenSearchSearchReader", lambda _client: _ErrorFuzzyReader())
+
+    with TestClient(_make_app()) as c:
+        r = c.get("/public/safety-search/sections?q=안전")
+    assert r.status_code == 503
+    assert r.json()["detail"]["code"] == "SHARED_SEARCH_UNAVAILABLE"
