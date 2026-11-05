@@ -1526,5 +1526,200 @@ class TestWithinSearch(unittest.TestCase):
         self.assertEqual(captured.get("within_query"), "지게차")
 
 
+# --------------------------------------------------------------------------
+# §B-SEARCH01: search_with_plan() — SEARCH-01 contract tests
+# --------------------------------------------------------------------------
+
+class TestSearchWithPlan(unittest.TestCase):
+    """SEARCH-01: SharedRetrievalEngine.search_with_plan() uses a pre-built plan."""
+
+    def _forklift_doc(self, cid="fork-001"):
+        return _pub_doc(
+            object_type="GUIDE",
+            canonical_id=cid,
+            title="지게차 안전",
+            search_text="지게차 안전 가이드",
+        )
+
+    def test_search_with_plan_returns_response(self):
+        """search_with_plan() returns a SearchResponse for a valid plan."""
+        from services.shared_search.query import build_query_plan
+
+        engine = _engine(self._forklift_doc())
+        plan = build_query_plan(
+            "지게차",
+            object_types=["GUIDE"],
+            visibility_scopes=["PUBLIC"],
+            page=1,
+            page_size=10,
+        )
+        resp = engine.search_with_plan(plan)
+        assert isinstance(resp, SearchResponse)
+
+    def test_search_with_plan_respects_object_types(self):
+        """search_with_plan() with object_types=[GUIDE] excludes LEGAL docs."""
+        from services.shared_search.query import build_query_plan
+
+        docs = [
+            _pub_doc(object_type="GUIDE", canonical_id="g-1",
+                     title="지게차 안전", search_text="지게차 안전"),
+            _pub_doc(object_type="LEGAL", canonical_id="l-1",
+                     title="지게차 안전", search_text="지게차 안전"),
+        ]
+        engine = SharedRetrievalEngine(MemorySearchReader(docs))
+
+        plan = build_query_plan(
+            "지게차 안전",
+            object_types=["GUIDE"],
+            visibility_scopes=["PUBLIC"],
+            page=1,
+            page_size=10,
+        )
+        resp = engine.search_with_plan(plan)
+        types = {r.object_type for r in resp.items}
+        assert types == {"GUIDE"}, f"Expected only GUIDE, got {types}"
+
+    def test_search_with_plan_replace_object_types(self):
+        """dataclasses.replace(plan, object_types=[...]) isolates domain results."""
+        import dataclasses as _dc
+        from services.shared_search.query import build_query_plan
+
+        docs = [
+            _pub_doc(object_type="GUIDE", canonical_id="g-1",
+                     title="안전 가이드", search_text="안전 가이드"),
+            _pub_doc(object_type="LEGAL", canonical_id="l-1",
+                     title="안전 가이드", search_text="안전 가이드"),
+        ]
+        engine = SharedRetrievalEngine(MemorySearchReader(docs))
+
+        shared_plan = build_query_plan(
+            "안전 가이드",
+            object_types=[],
+            visibility_scopes=["PUBLIC"],
+            page=1,
+            page_size=6,
+        )
+
+        guide_plan = _dc.replace(shared_plan, object_types=["GUIDE"])
+        legal_plan = _dc.replace(shared_plan, object_types=["LEGAL"])
+
+        guide_resp = engine.search_with_plan(guide_plan)
+        legal_resp = engine.search_with_plan(legal_plan)
+
+        guide_types = {r.object_type for r in guide_resp.items}
+        legal_types = {r.object_type for r in legal_resp.items}
+        assert guide_types == {"GUIDE"}, f"Expected GUIDE, got {guide_types}"
+        assert legal_types == {"LEGAL"}, f"Expected LEGAL, got {legal_types}"
+
+    def test_search_with_plan_within_query_respected(self):
+        """SEARCH-01: within_query in shared plan filters results correctly."""
+        import dataclasses as _dc
+        from services.shared_search.query import build_query_plan
+
+        docs = [
+            _pub_doc(object_type="GUIDE", canonical_id="g-match",
+                     title="지게차 안전", search_text="지게차 충돌 사고"),
+            _pub_doc(object_type="GUIDE", canonical_id="g-nomatch",
+                     title="지게차 안전", search_text="지게차 안전 점검"),
+        ]
+        engine = SharedRetrievalEngine(MemorySearchReader(docs))
+
+        shared_plan = build_query_plan(
+            "지게차",
+            object_types=[],
+            visibility_scopes=["PUBLIC"],
+            page=1,
+            page_size=10,
+            within_query="충돌",
+        )
+        plan = _dc.replace(shared_plan, object_types=["GUIDE"])
+        resp = engine.search_with_plan(plan)
+        cids = {r.canonical_id for r in resp.items}
+        assert "g-match" in cids
+        assert "g-nomatch" not in cids, "g-nomatch should be excluded by within_query"
+
+
+# --------------------------------------------------------------------------
+# §B-SEARCH03: OpenSearchSearchReader _source filter — SEARCH-03 contract tests
+# --------------------------------------------------------------------------
+
+class TestOpenSearchSourceFilter(unittest.TestCase):
+    """SEARCH-03: _RESULT_SOURCE_FIELDS constant presence and injection."""
+
+    def test_result_source_fields_constant_exists(self):
+        """_RESULT_SOURCE_FIELDS is defined and contains required keys."""
+        from services.shared_search.opensearch_reader import _RESULT_SOURCE_FIELDS
+        required = {"canonical_id", "source_id", "object_type", "title"}
+        missing = required - set(_RESULT_SOURCE_FIELDS)
+        assert not missing, f"Required fields missing: {missing}"
+
+    def test_run_msearch_injects_source_filter(self):
+        """run_msearch body contains _source for every query entry."""
+        from unittest.mock import MagicMock
+        from services.shared_search.opensearch_reader import (
+            OpenSearchSearchReader,
+            _RESULT_SOURCE_FIELDS,
+        )
+
+        captured_body = []
+
+        def mock_msearch(body):
+            captured_body.extend(body)
+            # Return empty responses matching the number of queries
+            # Every other item is a query body (alternating header/body)
+            n_queries = len(body) // 2
+            return {"responses": [{"hits": {"hits": []}} for _ in range(n_queries)]}
+
+        client = MagicMock()
+        client.msearch.side_effect = mock_msearch
+
+        reader = OpenSearchSearchReader(client=client)
+        reader.run_msearch(
+            normalized_query="지게차",
+            identifier_candidates=["지게차"],
+            subject_candidates=[],
+            object_types=["GUIDE"],
+            visibility=["PUBLIC"],
+        )
+
+        # Every query body (odd-indexed items) must have _source
+        query_bodies = [captured_body[i] for i in range(1, len(captured_body), 2)]
+        assert query_bodies, "No query bodies captured"
+        for qb in query_bodies:
+            assert "_source" in qb, f"_source missing from query body: {qb}"
+            assert qb["_source"] == _RESULT_SOURCE_FIELDS, (
+                f"_source mismatch: {qb['_source']}"
+            )
+
+    def test_run_fuzzy_injects_source_filter(self):
+        """run_fuzzy body contains _source."""
+        from unittest.mock import MagicMock
+        from services.shared_search.opensearch_reader import (
+            OpenSearchSearchReader,
+            _RESULT_SOURCE_FIELDS,
+        )
+
+        captured_calls = []
+
+        def mock_search(index, body):
+            captured_calls.append(body)
+            return {"hits": {"hits": []}}
+
+        client = MagicMock()
+        client.search.side_effect = mock_search
+
+        reader = OpenSearchSearchReader(client=client)
+        reader.run_fuzzy(
+            "지게차",
+            object_types=["GUIDE"],
+            visibility=["PUBLIC"],
+        )
+
+        assert captured_calls, "search() not called"
+        body = captured_calls[0]
+        assert "_source" in body, "_source not injected in run_fuzzy"
+        assert body["_source"] == _RESULT_SOURCE_FIELDS
+
+
 if __name__ == "__main__":
     unittest.main()
