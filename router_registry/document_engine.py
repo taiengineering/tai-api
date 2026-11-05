@@ -15,4 +15,5 @@ ROUTERS = [
     {"module": "routers.diagram_proxy"},
     {"module": "routers.compliance_report"},      # P2-3 증빙 이행 리포트 (/compliance-report)
     {"module": "routers.document_generate"},      # WO-3 범용 생성 (/documents/{doc_type})
+    {"module": "routers.official_forms_download"},  # FORM647 공식서식 원본 다운로드 (/official-forms)
 ]
