@@ -285,8 +285,11 @@ def register_one(sb, draft: dict, dry_run: bool) -> str:
             # content 미등록: 이 실행에서 생성한 reference_forms 행 정리 (고아 방지)
             try:
                 sb.table("reference_forms").delete().eq("id", form_id).execute()
-            except Exception:
-                pass
+            except Exception as cleanup_exc:
+                log.warning(
+                    "[ORPHAN] reference_forms 고아 행 삭제 실패 (form_id=%s): %s",
+                    form_id, cleanup_exc,
+                )
         # after_content=True 인 경우: 재실행 시 RESUME 경로가 처리
         return f"ERROR:{exc}"
 
