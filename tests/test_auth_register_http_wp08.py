@@ -116,7 +116,7 @@ def test_register_success_response_structure_and_no_session_token(monkeypatch, c
     assert resp.status_code == 200
     body = resp.json()
 
-    # 필수 응답 필드
+    # 필수 응답 필드 존재 및 값 일치
     assert body["status"] == "success"
     assert body["message"] == "회원가입이 완료되었습니다."
     data = body["data"]
@@ -124,6 +124,10 @@ def test_register_success_response_structure_and_no_session_token(monkeypatch, c
     assert "phone" in data,      "data.phone 누락"
     assert "name" in data,       "data.name 누락"
     assert "company_id" in data, "data.company_id 누락"
+    assert data["user_id"]    == "user-wp08-001"
+    assert data["phone"]      == "01012345678"
+    assert data["name"]       == "홍길동"
+    assert data["company_id"] is None
 
     # 세션 토큰 미발급 — register 는 로그인이 아님
     assert "access_token"  not in body,            "루트에 access_token 미포함이어야 함"
