@@ -567,5 +567,64 @@ class TestSourceFileAvailability(unittest.TestCase):
         self.assertFalse(items[1]["source_file_available"])
 
 
+class TestSera009SplitPolicyChanges(unittest.TestCase):
+    """WO-DOC260-U83-SERA009-SPLIT — SERA-009 단독 A_INTERNAL 재분류 검증."""
+
+    def setUp(self):
+        from services.document_engine.r2_route_policy import (
+            get_provision_policy, policy_count,
+            _SOURCE_DOWNLOAD_EXCEPTION_IDS, _SUBMISSION_CATEGORY,
+        )
+        self.get_policy = get_provision_policy
+        self.policy_count = policy_count
+        self.exception_ids = _SOURCE_DOWNLOAD_EXCEPTION_IDS
+        self.submission_cat = _SUBMISSION_CATEGORY
+
+    def test_SS01_sera009_is_a_internal(self):
+        p = self.get_policy('DOC-SERA-009')
+        self.assertEqual(p['route_group'], 'A_INTERNAL')
+
+    def test_SS02_sera009_web_edit_allowed(self):
+        p = self.get_policy('DOC-SERA-009')
+        self.assertTrue(p['web_edit_allowed'])
+
+    def test_SS03_sera009_submission_category_none(self):
+        p = self.get_policy('DOC-SERA-009')
+        self.assertIsNone(p['submission_category'])
+
+    def test_SS04_sera009_download_exception_false(self):
+        p = self.get_policy('DOC-SERA-009')
+        self.assertFalse(p['source_download_exception'])
+
+    def test_SS05_bld015_unchanged_u_unresolved(self):
+        """BLD-015는 이번 변경 대상 아님 — U_UNRESOLVED 유지."""
+        p = self.get_policy('DOC-BLD-015')
+        self.assertEqual(p['route_group'], 'U_UNRESOLVED')
+
+    def test_SS06_bld015_submission_category_g1_preserved(self):
+        """BLD-015의 G1_DUAL_PATH는 그대로 유지."""
+        self.assertEqual(self.submission_cat.get('DOC-BLD-015'), 'G1_DUAL_PATH')
+
+    def test_SS07_policy_count(self):
+        """SERA-009만 전환: A_INTERNAL=110, U_UNRESOLVED=82."""
+        counts = self.policy_count()
+        self.assertEqual(counts['A_INTERNAL'], 110)
+        self.assertEqual(counts['U_UNRESOLVED'], 82)
+
+    def test_SS08_g1_dual_path_eleven(self):
+        """SERA-009 제거 후 G1_DUAL_PATH = 11종."""
+        g1 = [k for k, v in self.submission_cat.items() if v == 'G1_DUAL_PATH']
+        self.assertEqual(len(g1), 11)
+
+    def test_SS09_sera009_not_in_g1(self):
+        self.assertNotEqual(self.submission_cat.get('DOC-SERA-009'), 'G1_DUAL_PATH')
+
+    def test_SS10_exceptions_unchanged_six(self):
+        """다운로드 예외는 기존 6종 그대로."""
+        self.assertEqual(len(self.exception_ids), 6)
+        self.assertNotIn('DOC-SERA-009', self.exception_ids)
+        self.assertNotIn('DOC-BLD-015', self.exception_ids)
+
+
 if __name__ == "__main__":
     unittest.main()
