@@ -1234,7 +1234,7 @@ def public_reference_forms_sitemap(
     client = _ref_form_sitemap_dep()
     result: list[dict] = []
     cursor = after_id
-    CHUNK = limit
+    CHUNK = min(limit, 100)  # cap per-batch rights check to avoid Supabase query overload
 
     while len(result) < limit:
         query = (
