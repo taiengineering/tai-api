@@ -278,11 +278,18 @@ _POLICY: dict[str, tuple[str, str]] = {
 }
 
 # B_OFFICIAL 16종 official_status
-# CONDITIONAL_APPROVED (13종): Owner Decision #4 A안 조건부 승인 — M6 파일 등록 대기
-# HOLD (3종): Owner 결정 대기
+# CONDITIONAL_APPROVED (5종): Batch01 원본 동일성 PASS 확인 — 다운로드 허용
+# HOLD (5종): 제공 보류
+#   FAC-024, FAC-029, OSH-065: Owner 결정 대기
+#   CHEM-017: 원본 동일성 미확정 (Batch01 PLAUSIBLE) — 확인 완료 전 제공 보류
+#   FAC-019: 원본 미확보 (Batch01 UNRESOLVED) — 파일 없으므로 자연 차단됨, 명시적 HOLD 불필요
+#       └→ policy는 CONDITIONAL_APPROVED 유지, storage에 파일 없어 Gate 5에서 404 처리됨
+# MISMATCH (6종): Batch01 검증 결과 등록 파일이 다른 서식 — 올바른 파일 확보 전 제공 차단
+#   FAC-031~035: flSeq=158967451 → 에너지이용합리화법 별지 제19호서식(설치검사증) — 의도한 서식 아님
+#   CHEM-015: flSeq 불일치 확인됨 (Batch01 Task B 결과)
 _OFFICIAL_STATUS: dict[str, str] = {
-    'DOC-CHEM-015': "CONDITIONAL_APPROVED",
-    'DOC-CHEM-017': "CONDITIONAL_APPROVED",
+    'DOC-CHEM-015': "MISMATCH",
+    'DOC-CHEM-017': "HOLD",
     'DOC-FAC-019': "CONDITIONAL_APPROVED",
     'DOC-FAC-020': "CONDITIONAL_APPROVED",
     'DOC-FAC-022': "CONDITIONAL_APPROVED",
@@ -291,11 +298,11 @@ _OFFICIAL_STATUS: dict[str, str] = {
     'DOC-FAC-026': "CONDITIONAL_APPROVED",
     'DOC-FAC-027': "CONDITIONAL_APPROVED",
     'DOC-FAC-029': "HOLD",
-    'DOC-FAC-031': "CONDITIONAL_APPROVED",
-    'DOC-FAC-032': "CONDITIONAL_APPROVED",
-    'DOC-FAC-033': "CONDITIONAL_APPROVED",
-    'DOC-FAC-034': "CONDITIONAL_APPROVED",
-    'DOC-FAC-035': "CONDITIONAL_APPROVED",
+    'DOC-FAC-031': "MISMATCH",
+    'DOC-FAC-032': "MISMATCH",
+    'DOC-FAC-033': "MISMATCH",
+    'DOC-FAC-034': "MISMATCH",
+    'DOC-FAC-035': "MISMATCH",
     'DOC-OSH-065': "HOLD",
 }
 
