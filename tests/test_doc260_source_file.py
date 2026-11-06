@@ -491,6 +491,36 @@ class TestSourceFileEndpoint(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 404)
 
+    # T12b: B_OFFICIAL + MISMATCH → Gate 2b 차단 → 404
+    def test_T12b_b_official_mismatch_returns_404(self):
+        """T12b — B_OFFICIAL + official_status=MISMATCH → 404 (Gate 2b — Batch01 불일치 파일 차단)."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers.document_forms import router
+        from routers.auth import get_current_user
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: _MOCK_USER
+
+        with patch("routers.document_forms.get_verified_path", return_value=_TEST_STORAGE_PATH), \
+             patch("routers.document_forms.get_provision_policy",
+                   return_value={"route_group": "B_OFFICIAL", "investment_decision": "STOP",
+                                 "official_status": "MISMATCH"}):
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get(f"/document-forms/{_TEST_DOC_ID}/source-file")
+
+        self.assertEqual(resp.status_code, 404)
+
+    # T12c: DOC-CHEM-017 policy 단위 검증 — PLAUSIBLE → HOLD 변경 반영
+    def test_T12c_chem017_policy_returns_hold(self):
+        """T12c — DOC-CHEM-017 official_status=HOLD (Batch01 PLAUSIBLE 미확정 → 고객 제공 보류)."""
+        from services.document_engine.r2_route_policy import get_provision_policy
+        p = get_provision_policy("DOC-CHEM-017")
+        self.assertIsNotNone(p)
+        self.assertEqual(p["route_group"], "B_OFFICIAL")
+        self.assertEqual(p["official_status"], "HOLD")
+
     # T09: 기존 목록 엔드포인트 회귀
     def test_T09_list_endpoint_regression(self):
         """T09 — GET /document-forms 목록 엔드포인트 정상 동작 (회귀)."""
