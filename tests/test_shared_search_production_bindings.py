@@ -137,6 +137,11 @@ class FakeSupabase:
         # tables dict is reused (msds_ref tables live in same fake space).
         return self
 
+    def from_(self, name: str):
+        # form647 adapters call .schema("form647_review").from_("service_gate").
+        # Delegate to the same _Query as table() so missing tables → empty rows.
+        return _Query(tables=self.tables, table_name=name)
+
     def rpc(self, name, params):
         return _RPC(name, params, self.rpc_handlers.get(name, lambda p: []))
 
@@ -181,7 +186,7 @@ def test_registry_builds_all_eight_adapters():
     assert names == [
         "GUIDE", "SAFETY_MATERIAL", "CSI_ACCIDENT", "CHEM",
         "KNOWLEDGE", "PRECEDENT", "LEGAL", "RISK", "CHEM_REGULATION",
-        "REFERENCE_FORM",
+        "REFERENCE_FORM", "FORM647",
         "CHEM_SAFETY", "HAZARDOUS_MATERIAL", "CHEM_ACCIDENT",
     ]
 
