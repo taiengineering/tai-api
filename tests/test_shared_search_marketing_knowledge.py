@@ -744,3 +744,59 @@ def test_mk30_rebuild_mkt_client_with_env(monkeypatch):
         result = _rebuild._build_mkt_supabase_client()
 
     assert result is fake_client
+
+
+# ---------------------------------------------------------------------------
+# MK-31: missing X-Internal-Secret → 403  (P1-API-MKT-API-001 인증 경계)
+# ---------------------------------------------------------------------------
+
+def test_mk31_missing_secret_403(monkeypatch):
+    """POST without X-Internal-Secret header → 403 Forbidden."""
+    monkeypatch.setenv("INTERNAL_API_SECRET", "test-secret-mk31")
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers.internal_search_marketing_sync import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    r = client.post(
+        "/internal/shared-search/marketing-knowledge/sync",
+        json={"content_id": str(uuid.uuid4())},
+        # 헤더 없음
+    )
+    assert r.status_code == 403, f"expected 403, got {r.status_code}: {r.text}"
+
+
+# ---------------------------------------------------------------------------
+# MK-32: empty content_id → 422  (P1-API-MKT-API-001 입력 검증 경계)
+# ---------------------------------------------------------------------------
+
+def test_mk32_empty_content_id_422(monkeypatch):
+    """POST with blank content_id → 422 (content_id is required)."""
+    monkeypatch.setenv("INTERNAL_API_SECRET", "test-secret-mk32")
+
+    fake_sb = MagicMock()
+    fake_rpc = MagicMock()
+    fake_sb.rpc.return_value = fake_rpc
+    fake_rpc.execute.return_value = MagicMock(data=None)
+
+    with patch("db.supabase_client.get_supabase", return_value=fake_sb):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers.internal_search_marketing_sync import router
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app, raise_server_exceptions=False)
+        headers = {"X-Internal-Secret": "test-secret-mk32"}
+
+        r = client.post(
+            "/internal/shared-search/marketing-knowledge/sync",
+            json={"content_id": ""},
+            headers=headers,
+        )
+        assert r.status_code == 422, f"expected 422, got {r.status_code}: {r.text}"
+        assert "content_id" in r.json().get("detail", "").lower()
