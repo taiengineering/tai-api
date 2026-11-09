@@ -495,3 +495,35 @@ def test_ID4_normal_transition_actor_server_bound():
         assert captured.get("actor_id") == _USER_COMPANY_A["id"], (
             f"actor_id should be {_USER_COMPANY_A['id']!r}, got {captured.get('actor_id')!r}"
         )
+
+
+# ═══════════════════════════════════════════════════════
+# LD-tests: List and Detail route coverage (B21-R1)
+# ═══════════════════════════════════════════════════════
+
+def test_LD1_list_documents_authenticated_200():
+    """LD1: authenticated COMPANY user → GET /documents returns 200 with scoped result."""
+    with _build_client(_USER_COMPANY_A, doc_row=None) as client:
+        resp = client.get("/document-engine/documents")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        assert body.get("status") == "success"
+        assert "data" in body
+
+
+def test_LD2_get_document_own_company_200():
+    """LD2: authenticated user reads own company doc → 200."""
+    with _build_client(_USER_COMPANY_A, doc_row=_DOC_COMPANY_A) as client:
+        resp = client.get(f"/document-engine/documents/{DOC_ID}")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        assert body.get("status") == "success"
+
+
+def test_LD3_get_document_cross_company_404():
+    """LD3: COMPANY_B user reads COMPANY_A doc → _check_doc_scope raises 404.
+    _ensure_own_company stub enforces company_id mismatch — not bypassed.
+    """
+    with _build_client(_USER_COMPANY_B, doc_row=_DOC_COMPANY_A) as client:
+        resp = client.get(f"/document-engine/documents/{DOC_ID}")
+        assert resp.status_code == 404, f"Expected 404 for cross-company GET, got {resp.status_code}"
