@@ -108,20 +108,25 @@ class TestEduCompanySettings:
         self.client = TestClient(app)
 
     def test_TC_EDU_001_get_company_settings_200(self):
-        """TC-EDU-001: GET /education/company-settings → 200, 마스터 목록 + 세팅 병합."""
+        """TC-EDU-001: GET /education/company-settings → 200, 마스터 2건 + 커스텀 URL 병합."""
         resp = self.client.get("/education/company-settings", params={"company_id": "co1"})
         assert resp.status_code == 200, f"EDU-001 GET status={resp.status_code}: {resp.text[:200]}"
         body = resp.json()
         assert body.get("success") is True, f"EDU-001 success 필드 없음: {body}"
         data = body.get("data", [])
         assert isinstance(data, list), "EDU-001 data는 list여야 함"
-        assert len(data) >= 1, "EDU-001 마스터 목록 비어 있음"
+        assert len(data) == 2, f"EDU-001 마스터 2건 반환 필요, 실제={len(data)}"
+        # education_id=1 항목: 커스텀 URL 세팅이 병합되어야 함
+        item_edu1 = next((d for d in data if d.get("education_id") == "1"), None)
+        assert item_edu1 is not None, "EDU-001 education_id=1 항목 없음"
+        assert item_edu1.get("has_custom") is True, "EDU-001 education_id=1에 커스텀 URL 없음"
+        assert item_edu1.get("effective_url") == "https://tai.example/edu/001", \
+            f"EDU-001 effective_url 불일치: {item_edu1.get('effective_url')}"
 
     def test_TC_EDU_002_put_company_setting_200(self):
-        """TC-EDU-002: PUT /education/company-settings/1 → 200, 세팅 저장."""
-        payload = {"custom_url": "https://tai.example/edu/001-updated",
-                   "custom_url_label": "TAI 맞춤 교육",
-                   "is_active": True}
+        """TC-EDU-002: PUT /education/company-settings/1 → 200, 저장된 custom_url 반환."""
+        new_url = "https://tai.example/edu/001-updated"
+        payload = {"custom_url": new_url, "custom_url_label": "TAI 맞춤 교육", "is_active": True}
         resp = self.client.put(
             "/education/company-settings/1",
             params={"company_id": "co1"},
@@ -130,6 +135,9 @@ class TestEduCompanySettings:
         assert resp.status_code == 200, f"EDU-002 PUT status={resp.status_code}: {resp.text[:200]}"
         body = resp.json()
         assert body.get("success") is True, f"EDU-002 success 필드 없음: {body}"
+        saved = body.get("data", {})
+        assert saved.get("custom_url") == new_url, \
+            f"EDU-002 저장된 custom_url 불일치: {saved.get('custom_url')}"
 
 
 # ── TC-CON-001: P2-SAAS-CON-FNC-001 ─────────────────────────────────────────
@@ -173,7 +181,7 @@ class TestConstructionDiagnose:
             yield
 
     def test_TC_CON_001_diagnose_200(self):
-        """TC-CON-001: POST /sites/{id}/diagnose → 200, applicable_rules 반환."""
+        """TC-CON-001: POST /sites/{id}/diagnose → 200, 진단 결과(applicable_rules·diagnosis_id) 반환."""
         with patch("routers.construction_sites_router.get_supabase",
                    return_value=self.sb), \
              patch("routers.construction_sites_router.run_diagnose_site",
@@ -185,7 +193,12 @@ class TestConstructionDiagnose:
         data = body.get("data", {})
         assert data.get("site_id") == SITE_ID, "CON-001 site_id 불일치"
         assert data.get("factory_id") == "factory-001", "CON-001 factory_id 없음"
-        assert data.get("applicable_rules") == 3, "CON-001 applicable_rules 수 불일치"
+        assert data.get("applicable_rules") == 3, \
+            f"CON-001 applicable_rules 수 불일치: {data.get('applicable_rules')}"
+        assert data.get("diagnosis_id") == "diag-001", \
+            f"CON-001 diagnosis_id 없음: {data.get('diagnosis_id')}"
+        assert data.get("by_obligation_type") == {"A": 2, "B": 1}, \
+            f"CON-001 by_obligation_type 불일치: {data.get('by_obligation_type')}"
 
 
 # ── TC-RISK-001: P2-SAAS-RISK-FNC-001 ───────────────────────────────────────
@@ -246,7 +259,7 @@ class TestRiskAssessmentComplete:
             yield
 
     def test_TC_RISK_001_complete_200(self):
-        """TC-RISK-001: POST /risk-assessments/{id}/complete → 200, COMPLETED 반환."""
+        """TC-RISK-001: POST /risk-assessments/{id}/complete → 200, COMPLETED + 보존만료일 반환."""
         # fixture patch 활성화 중 — 추가 patch 불필요
         resp = self.client.post(f"/risk-assessments/{RA_ID}/complete")
         assert resp.status_code == 200, f"RISK-001 status={resp.status_code}: {resp.text[:200]}"
@@ -254,4 +267,9 @@ class TestRiskAssessmentComplete:
         assert body.get("status") == "success", f"RISK-001 status 필드: {body}"
         assert body.get("message") == "완료 처리되었습니다.", f"RISK-001 message 없음"
         data = body.get("data", {})
-        assert data.get("status_code") == "COMPLETED", f"RISK-001 COMPLETED 미반환: {data}"
+        assert data.get("status_code") == "COMPLETED", \
+            f"RISK-001 COMPLETED 미반환: {data}"
+        assert data.get("retention_years") == 3, \
+            f"RISK-001 retention_years 없음: {data.get('retention_years')}"
+        assert data.get("retention_until") == "2029-11-09", \
+            f"RISK-001 retention_until 없음: {data.get('retention_until')}"
