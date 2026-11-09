@@ -10,6 +10,8 @@ import sys
 import types
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict
+
 # ── repo-relative 경로 (특정 환경 비종속) ────────────────────────────
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -35,10 +37,8 @@ def _fake_confirm(doc_id, *, actor_id, comment, current_user):
     return {"id": doc_id, "status": "APPROVED_BY_HUMAN"}
 
 
-class _Model:
-    def __init__(self, **kw):
-        for k, v in kw.items():
-            setattr(self, k, v)
+class _Model(BaseModel):
+    model_config = ConfigDict(extra="allow")
 
 
 # ── sys.modules 격리: stub 설치 → 대상 라우터 import → 즉시 전역 원복 ──────────
@@ -81,6 +81,7 @@ try:
     _svc.change_status = _change_status
     _svc._approval = lambda *a, **k: None
     _svc._audit = lambda *a, **k: None
+    _svc.DocumentScopeMismatchError = type("DocumentScopeMismatchError", (ValueError,), {})
     sys.modules["services.document_engine_svc"] = _svc
 
     # 대상 라우터 재 import (stub 적용 상태). 캐시본 있으면 제거 후 fresh import.
@@ -89,6 +90,8 @@ try:
     from fastapi import HTTPException
 
     api.confirm_document_atomic = _fake_confirm  # 지역 module object 만 수정
+    api.get_supabase = lambda: object()          # DB 연결 stub (scope 검사용)
+    api._check_doc_scope = lambda *a, **k: None  # scope 사전검사 항상 PASS
 
 finally:
     # 전역 import 상태 원복 — 이후 테스트가 stub 을 재사용하지 못하게 한다.
