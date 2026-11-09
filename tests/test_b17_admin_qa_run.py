@@ -162,12 +162,19 @@ def test_T3_POST_admin_dispatch_ok_201():
     """T3: role_data_scope=ALL 실 _require_admin 통과.
     실제 svc.create_run(mock DB) → trigger_type=MANUAL, requested_by 확인.
     dispatch_qa_run 성공 → run_status=RUNNING, dispatch=OK.
+    dispatch 인수 검증: run_id=_RUN_ID, scenario_ids=[_SCEN_ID], allow_conditional=True.
     """
     sb, qruns_m, _ = _make_sb_admin_run()
     app = _make_app(caller=_ADMIN_USER)
 
+    dispatch_calls: list = []
+
     async def _ok_dispatch(run_id, scenario_ids, **kw):
-        pass
+        dispatch_calls.append({
+            "run_id": run_id,
+            "scenario_ids": scenario_ids,
+            "allow_conditional": kw.get("allow_conditional"),
+        })
 
     with patch.object(aq_mod, "get_supabase", return_value=sb), \
          patch("services.github_dispatch_svc.dispatch_qa_run", new=_ok_dispatch):
@@ -191,6 +198,13 @@ def test_T3_POST_admin_dispatch_ok_201():
     inserted = insert_call[0][0]
     assert inserted["trigger_type"] == "MANUAL", f"trigger_type 오류: {inserted}"
     assert inserted["requested_by"] == "admin-b17", f"requested_by 오류: {inserted}"
+
+    # dispatch 인수 검증: 1회 호출, run_id·scenario_ids·allow_conditional 정확도 확인
+    assert len(dispatch_calls) == 1, f"dispatch 호출 횟수 오류: {len(dispatch_calls)}"
+    dc = dispatch_calls[0]
+    assert dc["run_id"] == _RUN_ID, f"run_id 오류: {dc['run_id']}"
+    assert dc["scenario_ids"] == [_SCEN_ID], f"scenario_ids 오류: {dc['scenario_ids']}"
+    assert dc["allow_conditional"] is True, f"allow_conditional 오류: {dc['allow_conditional']}"
 
     app.dependency_overrides.clear()
 
