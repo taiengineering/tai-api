@@ -495,3 +495,136 @@ def test_ID4_normal_transition_actor_server_bound():
         assert captured.get("actor_id") == _USER_COMPANY_A["id"], (
             f"actor_id should be {_USER_COMPANY_A['id']!r}, got {captured.get('actor_id')!r}"
         )
+
+
+# ═══════════════════════════════════════════════════════
+# LD-tests: List and Detail route coverage (B21-R1)
+# ═══════════════════════════════════════════════════════
+
+def test_LD1_list_documents_authenticated_200():
+    """LD1: authenticated COMPANY user → GET /documents returns 200 with scoped result.
+    R2-03: verifies svc.list_documents receives the caller's company_id from scoped_filter.
+    """
+    with _build_client(_USER_COMPANY_A, doc_row=None) as client:
+        import routers.document_engine_api as _rmod
+        resp = client.get("/document-engine/documents")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        assert body.get("status") == "success"
+        assert "data" in body
+        # Verify scoped_filter correctly passed caller's company_id to svc.list_documents
+        # svc.list_documents(eff_factory_id, eff_company_id, status, page, page_size)
+        list_mock = _rmod.svc.list_documents
+        assert list_mock.called, "svc.list_documents was not called"
+        call_positional = list_mock.call_args[0]
+        assert call_positional[1] == COMPANY_A, (
+            f"Expected eff_company_id={COMPANY_A!r}, got {call_positional[1]!r}"
+        )
+
+
+def test_LD2_get_document_own_company_200():
+    """LD2: authenticated user reads own company doc → 200."""
+    with _build_client(_USER_COMPANY_A, doc_row=_DOC_COMPANY_A) as client:
+        resp = client.get(f"/document-engine/documents/{DOC_ID}")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        assert body.get("status") == "success"
+
+
+def test_LD3_get_document_cross_company_404():
+    """LD3: COMPANY_B user reads COMPANY_A doc → _check_doc_scope raises 404.
+    _ensure_own_company stub enforces company_id mismatch — not bypassed.
+    """
+    with _build_client(_USER_COMPANY_B, doc_row=_DOC_COMPANY_A) as client:
+        resp = client.get(f"/document-engine/documents/{DOC_ID}")
+        assert resp.status_code == 404, f"Expected 404 for cross-company GET, got {resp.status_code}"
+
+
+# ═══════════════════════════════════════════════════════
+# LD4+LD5: Real _ensure_own_company (B21-R2)
+# No stub — services.company_scope._ensure_own_company runs actual logic.
+# Supabase mock serves role_data_scope (scope_type) + runtime_document_data (doc row).
+# ═══════════════════════════════════════════════════════
+
+@contextmanager
+def _build_real_scope_client(current_user, doc_row, role_scope_type="COMPANY"):
+    """TestClient where _ensure_own_company runs REAL (not patched).
+    Supabase mock handles role_data_scope and runtime_document_data queries.
+    """
+
+    class _Single:
+        def __init__(self, data):
+            self.data = data
+
+        def execute(self):
+            return self
+
+    class _Q:
+        def __init__(self, table_name, doc, scope_type):
+            self._table = table_name
+            self._doc = doc
+            self._scope_type = scope_type
+
+        def select(self, *a, **kw):
+            return self
+
+        def eq(self, *a, **kw):
+            return self
+
+        def limit(self, *a):
+            return self
+
+        def single(self):
+            return _Single(self._doc)
+
+        def execute(self):
+            if self._table == "role_data_scope":
+                return type("R", (), {"data": [{"scope_type": self._scope_type}]})()
+            return type("R", (), {"data": []})()
+
+    class _SB:
+        def __init__(self, doc, scope_type):
+            self._doc = doc
+            self._scope_type = scope_type
+
+        def table(self, name):
+            return _Q(name, self._doc, self._scope_type)
+
+    fake_sb = _SB(doc_row, role_scope_type)
+    sys.modules.pop("routers.document_engine_api", None)
+
+    with patch("db.supabase_client.get_supabase", return_value=fake_sb), \
+         patch("services.document_engine_svc.get_supabase", return_value=fake_sb):
+        from routers.document_engine_api import router as doc_router
+        from routers.auth import get_current_user
+
+        app = FastAPI()
+        app.include_router(doc_router)
+        app.dependency_overrides[get_current_user] = lambda: current_user
+
+        import routers.document_engine_api as _rmod
+        with patch.object(_rmod.svc, "get_document", return_value=doc_row or {}), \
+             patch("routers.document_engine_api.get_supabase", return_value=fake_sb):
+            yield TestClient(app, raise_server_exceptions=False)
+
+
+def test_LD4_real_ensure_own_company_same_company_200():
+    """LD4: REAL _ensure_own_company — COMPANY tier, same company → 200.
+    No stub on _ensure_own_company; role_data_scope mock returns scope_type=COMPANY.
+    """
+    with _build_real_scope_client(_USER_COMPANY_A, _DOC_COMPANY_A, "COMPANY") as client:
+        resp = client.get(f"/document-engine/documents/{DOC_ID}")
+        assert resp.status_code == 200, (
+            f"Expected 200 (same company, real _ensure_own_company): {resp.text}"
+        )
+
+
+def test_LD5_real_ensure_own_company_cross_company_404():
+    """LD5: REAL _ensure_own_company — COMPANY tier, cross-company → 404.
+    No stub on _ensure_own_company; resource belongs to COMPANY_A, user is COMPANY_B.
+    """
+    with _build_real_scope_client(_USER_COMPANY_B, _DOC_COMPANY_A, "COMPANY") as client:
+        resp = client.get(f"/document-engine/documents/{DOC_ID}")
+        assert resp.status_code == 404, (
+            f"Expected 404 (cross-company, real _ensure_own_company): {resp.text}"
+        )
