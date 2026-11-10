@@ -24,6 +24,14 @@ RS-21: SHA256 일치 + 유효 설정 → PASS  (R1-01)
 RS-22: 활성 규칙 target 비-dict → config_invalid  (R1-02)
 RS-23: grouping_config mode 없음 → config_invalid  (R1-02)
 RS-24: EXPLICIT_KEY 모드 key_field 없음 → config_invalid  (R1-02)
+RS-25: mode 허용 범위 아님(UNKNOWN_MODE) → config_invalid  (R2-01)
+RS-26: MULTI_SHEET_JOIN join_key 없음 → config_invalid  (R2-01)
+RS-27: SINGLE_DOC_APPROVED approved_for 불일치 → config_invalid  (R2-01)
+RS-28: field_roles 비배열 → config_invalid  (R2-01)
+RS-29: 활성 규칙 source 없음 → config_invalid  (R2-02)
+RS-30: 활성 규칙 transform.type 없음 → config_invalid  (R2-02)
+RS-31: 활성 규칙 null_handling.required 비-bool → config_invalid  (R2-02)
+RS-32: target_field_ids에 숫자 포함 → config_invalid  (R2-03)
 
 Production DB write = 0 (파일 I/O + 환경변수 조작만).
 """
@@ -499,5 +507,167 @@ def test_RS24_explicit_key_no_key_field(monkeypatch):
             load_rule_config()
         assert exc.value.code == "config_invalid"
         assert "key_field" in exc.value.detail
+    finally:
+        os.unlink(path)
+
+
+# ── RS-25: mode 허용 범위 아님 (R2-01) ───────────────────────────────────────
+
+def test_RS25_mode_not_allowed(monkeypatch):
+    cfg = _valid_config()
+    cfg["grouping_config"] = {**cfg["grouping_config"], "mode": "UNKNOWN_MODE"}
+    path = _write_config(cfg)
+    sha256 = _sha256_file(path)
+    monkeypatch.setenv("DOC_RULE_CONFIG_PATH", path)
+    monkeypatch.setenv("DOC_RULE_APPROVED_SHA256", sha256)
+    try:
+        with pytest.raises(DocRuleSupplyError) as exc:
+            load_rule_config()
+        assert exc.value.code == "config_invalid"
+        assert "mode" in exc.value.detail
+    finally:
+        os.unlink(path)
+
+
+# ── RS-26: MULTI_SHEET_JOIN join_key 없음 (R2-01) ────────────────────────────
+
+def test_RS26_multi_sheet_join_missing_join_key(monkeypatch):
+    cfg = _valid_config()
+    cfg["grouping_config"] = {
+        "contract_id": "CT-TEST-V1",
+        "mode": "MULTI_SHEET_JOIN",
+        # join_key 의도적 누락
+        "header_sheet_name": "header",
+        "line_sheet_name": "line",
+        "field_roles": [],
+    }
+    path = _write_config(cfg)
+    sha256 = _sha256_file(path)
+    monkeypatch.setenv("DOC_RULE_CONFIG_PATH", path)
+    monkeypatch.setenv("DOC_RULE_APPROVED_SHA256", sha256)
+    try:
+        with pytest.raises(DocRuleSupplyError) as exc:
+            load_rule_config()
+        assert exc.value.code == "config_invalid"
+        assert "join_key" in exc.value.detail
+    finally:
+        os.unlink(path)
+
+
+# ── RS-27: SINGLE_DOC_APPROVED approved_for 불일치 (R2-01) ───────────────────
+
+def test_RS27_single_doc_approved_for_mismatch(monkeypatch):
+    cfg = _valid_config()
+    cfg["grouping_config"] = {
+        "contract_id": "CT-TEST-V1",
+        "mode": "SINGLE_DOC_APPROVED",
+        "approved_for": "CT-OTHER-V1",  # 불일치
+        "field_roles": [],
+    }
+    path = _write_config(cfg)
+    sha256 = _sha256_file(path)
+    monkeypatch.setenv("DOC_RULE_CONFIG_PATH", path)
+    monkeypatch.setenv("DOC_RULE_APPROVED_SHA256", sha256)
+    try:
+        with pytest.raises(DocRuleSupplyError) as exc:
+            load_rule_config()
+        assert exc.value.code == "config_invalid"
+        assert "approved_for" in exc.value.detail
+    finally:
+        os.unlink(path)
+
+
+# ── RS-28: field_roles 비배열 (R2-01) ────────────────────────────────────────
+
+def test_RS28_field_roles_not_array(monkeypatch):
+    cfg = _valid_config()
+    cfg["grouping_config"] = {**cfg["grouping_config"], "field_roles": "not-a-list"}
+    path = _write_config(cfg)
+    sha256 = _sha256_file(path)
+    monkeypatch.setenv("DOC_RULE_CONFIG_PATH", path)
+    monkeypatch.setenv("DOC_RULE_APPROVED_SHA256", sha256)
+    try:
+        with pytest.raises(DocRuleSupplyError) as exc:
+            load_rule_config()
+        assert exc.value.code == "config_invalid"
+        assert "field_roles" in exc.value.detail
+    finally:
+        os.unlink(path)
+
+
+# ── RS-29: 활성 규칙 source 없음 (R2-02) ─────────────────────────────────────
+
+def test_RS29_rule_source_missing(monkeypatch):
+    cfg = _valid_config()
+    rule = _valid_rule()
+    del rule["source"]
+    cfg["rules"] = [rule]
+    path = _write_config(cfg)
+    sha256 = _sha256_file(path)
+    monkeypatch.setenv("DOC_RULE_CONFIG_PATH", path)
+    monkeypatch.setenv("DOC_RULE_APPROVED_SHA256", sha256)
+    try:
+        with pytest.raises(DocRuleSupplyError) as exc:
+            load_rule_config()
+        assert exc.value.code == "config_invalid"
+        assert "source" in exc.value.detail
+    finally:
+        os.unlink(path)
+
+
+# ── RS-30: 활성 규칙 transform.type 없음 (R2-02) ─────────────────────────────
+
+def test_RS30_rule_transform_type_missing(monkeypatch):
+    cfg = _valid_config()
+    rule = _valid_rule()
+    rule["transform"] = {}  # type 없음
+    cfg["rules"] = [rule]
+    path = _write_config(cfg)
+    sha256 = _sha256_file(path)
+    monkeypatch.setenv("DOC_RULE_CONFIG_PATH", path)
+    monkeypatch.setenv("DOC_RULE_APPROVED_SHA256", sha256)
+    try:
+        with pytest.raises(DocRuleSupplyError) as exc:
+            load_rule_config()
+        assert exc.value.code == "config_invalid"
+        assert "transform.type" in exc.value.detail
+    finally:
+        os.unlink(path)
+
+
+# ── RS-31: 활성 규칙 null_handling.required 비-bool (R2-02) ──────────────────
+
+def test_RS31_null_handling_required_not_bool(monkeypatch):
+    cfg = _valid_config()
+    rule = _valid_rule()
+    rule["null_handling"] = {**rule["null_handling"], "required": "yes"}  # str, not bool
+    cfg["rules"] = [rule]
+    path = _write_config(cfg)
+    sha256 = _sha256_file(path)
+    monkeypatch.setenv("DOC_RULE_CONFIG_PATH", path)
+    monkeypatch.setenv("DOC_RULE_APPROVED_SHA256", sha256)
+    try:
+        with pytest.raises(DocRuleSupplyError) as exc:
+            load_rule_config()
+        assert exc.value.code == "config_invalid"
+        assert "required" in exc.value.detail
+    finally:
+        os.unlink(path)
+
+
+# ── RS-32: target_field_ids에 숫자 포함 (R2-03) ───────────────────────────────
+
+def test_RS32_target_field_ids_contains_non_string(monkeypatch):
+    cfg = _valid_config()
+    cfg["target_field_ids"] = ["name", 42]  # 숫자 포함
+    path = _write_config(cfg)
+    sha256 = _sha256_file(path)
+    monkeypatch.setenv("DOC_RULE_CONFIG_PATH", path)
+    monkeypatch.setenv("DOC_RULE_APPROVED_SHA256", sha256)
+    try:
+        with pytest.raises(DocRuleSupplyError) as exc:
+            load_rule_config()
+        assert exc.value.code == "config_invalid"
+        assert "target_field_ids" in exc.value.detail
     finally:
         os.unlink(path)

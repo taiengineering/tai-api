@@ -23,6 +23,11 @@ DOC_RULE_APPROVED_SHA256:
   JSON 파일 내부에서 자기 승인하는 방식 금지.
   이 값이 없거나 파일 SHA256과 불일치하면 로드 차단.
 
+GroupingConfig 허용 모드 (MAP-02 assembly.ts 기준):
+  EXPLICIT_KEY:       key_field 필수
+  SINGLE_DOC_APPROVED: approved_for에 현재 계약 ID 필수
+  MULTI_SHEET_JOIN:   join_key, header_sheet_name, line_sheet_name 필수
+
 JSON 설정 파일 형식:
   {
     "owner_approved": true,
@@ -30,7 +35,7 @@ JSON 설정 파일 형식:
     "approved_rule_version": "v1.0.0",
     "contract_id": "CT-XXX-V1",
     "contract_registered": true,
-    "target_field_ids": ["field_a", "field_b"],
+    "target_field_ids": ["field_a"],
     "grouping_config": {
       "contract_id": "CT-XXX-V1",
       "mode": "EXPLICIT_KEY",
@@ -64,8 +69,15 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-_ENV_CONFIG_PATH    = "DOC_RULE_CONFIG_PATH"
+_ENV_CONFIG_PATH     = "DOC_RULE_CONFIG_PATH"
 _ENV_APPROVED_SHA256 = "DOC_RULE_APPROVED_SHA256"
+
+# MAP-02 assembly.ts 기준 허용 모드 목록
+_ALLOWED_GROUPING_MODES = frozenset({
+    "EXPLICIT_KEY",
+    "SINGLE_DOC_APPROVED",
+    "MULTI_SHEET_JOIN",
+})
 
 
 # ── 오류 계층 ──────────────────────────────────────────────────────────────────
@@ -88,7 +100,7 @@ class DocRuleConfig:
     Attributes:
         contract_id:           대상 계약 ID (federation-contracts 등록 완료 필수)
         approved_rule_version: Owner 승인 버전 태그
-        target_field_ids:      매핑 대상 필드 ID 목록
+        target_field_ids:      매핑 대상 필드 ID 목록 (비어 있지 않은 문자열만)
         grouping_config:       GroupingConfig-compatible dict (MAP-02 형식)
         rules:                 MappingRule-compatible dict 목록 (status='active' 한정)
     """
@@ -99,10 +111,138 @@ class DocRuleConfig:
     rules: list[dict[str, Any]]
 
 
+# ── 내부 헬퍼 ─────────────────────────────────────────────────────────────────
+
+def _validate_grouping_config(gc: dict[str, Any], contract_id: str) -> None:
+    """MAP-02 GroupingConfig 필수 구조 검증."""
+    gc_contract = str(gc.get("contract_id") or "").strip()
+    if gc_contract != contract_id:
+        raise DocRuleSupplyError(
+            "config_invalid",
+            f"grouping_config.contract_id({gc_contract!r}) ≠ contract_id({contract_id!r})",
+        )
+
+    gc_mode = str(gc.get("mode") or "").strip()
+    if not gc_mode:
+        raise DocRuleSupplyError("config_invalid", "grouping_config.mode 없음")
+    if gc_mode not in _ALLOWED_GROUPING_MODES:
+        raise DocRuleSupplyError(
+            "config_invalid",
+            f"grouping_config.mode({gc_mode!r}) 허용 범위 아님 — {sorted(_ALLOWED_GROUPING_MODES)} 중 하나 필요",
+        )
+
+    # field_roles: 배열 필수, 항목별 field·role 확인
+    field_roles = gc.get("field_roles")
+    if not isinstance(field_roles, list):
+        raise DocRuleSupplyError("config_invalid", "grouping_config.field_roles가 배열이 아님")
+    for i, fr in enumerate(field_roles):
+        if not isinstance(fr, dict):
+            raise DocRuleSupplyError(
+                "config_invalid",
+                f"grouping_config.field_roles[{i}]가 사전형이 아님",
+            )
+        if not str(fr.get("field") or "").strip():
+            raise DocRuleSupplyError(
+                "config_invalid",
+                f"grouping_config.field_roles[{i}].field 없음",
+            )
+        if str(fr.get("role") or "").strip() not in ("header", "line"):
+            raise DocRuleSupplyError(
+                "config_invalid",
+                f"grouping_config.field_roles[{i}].role가 header/line이 아님",
+            )
+
+    # 모드별 필수 항목
+    if gc_mode == "EXPLICIT_KEY":
+        if not str(gc.get("key_field") or "").strip():
+            raise DocRuleSupplyError(
+                "config_invalid",
+                "grouping_config.key_field 없음 (EXPLICIT_KEY 모드 필수)",
+            )
+    elif gc_mode == "MULTI_SHEET_JOIN":
+        for req in ("join_key", "header_sheet_name", "line_sheet_name"):
+            if not str(gc.get(req) or "").strip():
+                raise DocRuleSupplyError(
+                    "config_invalid",
+                    f"grouping_config.{req} 없음 (MULTI_SHEET_JOIN 모드 필수)",
+                )
+    elif gc_mode == "SINGLE_DOC_APPROVED":
+        approved_for = str(gc.get("approved_for") or "").strip()
+        if approved_for != contract_id:
+            raise DocRuleSupplyError(
+                "config_invalid",
+                f"grouping_config.approved_for({approved_for!r}) ≠ contract_id({contract_id!r}) "
+                "(SINGLE_DOC_APPROVED 모드 필수)",
+            )
+
+
+def _validate_mapping_rule(
+    rule: dict[str, Any],
+    contract_id: str,
+    approved_rule_version: str,
+) -> None:
+    """MAP-02 MappingRule 필수 구조 검증 (rule.ts 기준)."""
+    rid = rule.get("rule_id", "?")
+
+    # D-R5: 버전 일치
+    rv = str(rule.get("rule_version") or "").strip()
+    if rv != approved_rule_version:
+        raise DocRuleSupplyError(
+            "config_invalid",
+            f"규칙 {rid!r}의 rule_version({rv!r}) ≠ approved_rule_version({approved_rule_version!r})",
+        )
+
+    # source 필수 구조
+    src = rule.get("source")
+    if not isinstance(src, dict):
+        raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 source가 사전형이 아님")
+    if not str(src.get("field_path") or "").strip():
+        raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 source.field_path 없음")
+    if not str(src.get("field_type") or "").strip():
+        raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 source.field_type 없음")
+
+    # target 필수 구조 + D-R5 계약 일치
+    tgt = rule.get("target")
+    if not isinstance(tgt, dict):
+        raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 target이 사전형이 아님")
+    tgt_contract = str(tgt.get("contract_id") or "").strip()
+    if tgt_contract != contract_id:
+        raise DocRuleSupplyError(
+            "config_invalid",
+            f"규칙 {rid!r}의 target.contract_id({tgt_contract!r}) ≠ contract_id({contract_id!r})",
+        )
+    if not str(tgt.get("field_path") or "").strip():
+        raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 target.field_path 없음")
+    if not str(tgt.get("field_type") or "").strip():
+        raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 target.field_type 없음")
+
+    # transform 필수 구조
+    tfm = rule.get("transform")
+    if not isinstance(tfm, dict):
+        raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 transform이 사전형이 아님")
+    if not str(tfm.get("type") or "").strip():
+        raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 transform.type 없음")
+
+    # null_handling 필수 구조
+    nh = rule.get("null_handling")
+    if not isinstance(nh, dict):
+        raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 null_handling이 사전형이 아님")
+    if not str(nh.get("source_missing_strategy") or "").strip():
+        raise DocRuleSupplyError(
+            "config_invalid",
+            f"규칙 {rid!r}의 null_handling.source_missing_strategy 없음",
+        )
+    if not isinstance(nh.get("required"), bool):
+        raise DocRuleSupplyError(
+            "config_invalid",
+            f"규칙 {rid!r}의 null_handling.required가 bool이 아님",
+        )
+
+
 # ── 내부 검증 ─────────────────────────────────────────────────────────────────
 
 def _validate(cfg: dict[str, Any]) -> DocRuleConfig:
-    # D-R5: owner_approved=true 필수 — status='active'만으로 Owner 승인 불인정
+    # D-R5: owner_approved=true 필수
     if cfg.get("owner_approved") is not True:
         raise DocRuleSupplyError(
             "unapproved_config",
@@ -120,7 +260,7 @@ def _validate(cfg: dict[str, Any]) -> DocRuleConfig:
     if not contract_id:
         raise DocRuleSupplyError("config_invalid", "contract_id 누락")
 
-    # D-R5: 승인 버전 필수 — 버전 없는 규칙 활성화 차단
+    # D-R5: 승인 버전 필수
     approved_rule_version = str(cfg.get("approved_rule_version") or "").strip()
     if not approved_rule_version:
         raise DocRuleSupplyError(
@@ -128,24 +268,19 @@ def _validate(cfg: dict[str, Any]) -> DocRuleConfig:
             "approved_rule_version 없음 — 승인 버전 없이 운영 규칙 사용 차단",
         )
 
+    # R2-03: target_field_ids — 비어 있지 않은 문자열만 허용 (숫자·null 자동 변환 금지)
     tfi = cfg.get("target_field_ids")
     if not isinstance(tfi, list) or len(tfi) == 0:
         raise DocRuleSupplyError("config_invalid", "target_field_ids 없음 또는 빈 배열")
+    if not all(isinstance(f, str) and f.strip() for f in tfi):
+        raise DocRuleSupplyError(
+            "config_invalid",
+            "target_field_ids 항목은 비어 있지 않은 문자열이어야 함",
+        )
 
     gc = cfg.get("grouping_config")
     if not isinstance(gc, dict):
         raise DocRuleSupplyError("config_invalid", "grouping_config 없음 또는 형식 오류")
-
-    # MAP-02 GroupingConfig 필수 항목: mode 존재, EXPLICIT_KEY 모드 → key_field 필수
-    gc_mode = str(gc.get("mode") or "").strip()
-    if not gc_mode:
-        raise DocRuleSupplyError("config_invalid", "grouping_config.mode 없음")
-    if gc_mode == "EXPLICIT_KEY":
-        if not str(gc.get("key_field") or "").strip():
-            raise DocRuleSupplyError(
-                "config_invalid",
-                "grouping_config.key_field 없음 (EXPLICIT_KEY 모드 필수)",
-            )
 
     raw_rules = cfg.get("rules")
     if not isinstance(raw_rules, list) or len(raw_rules) == 0:
@@ -158,43 +293,17 @@ def _validate(cfg: dict[str, Any]) -> DocRuleConfig:
             "active 상태 규칙 없음 — 운영 규칙 사용 차단",
         )
 
-    # D-R5: grouping_config.contract_id 교차 검증
-    gc_contract = str(gc.get("contract_id") or "").strip()
-    if gc_contract != contract_id:
-        raise DocRuleSupplyError(
-            "config_invalid",
-            f"grouping_config.contract_id({gc_contract!r}) ≠ contract_id({contract_id!r})",
-        )
+    # R2-01: GroupingConfig 형식 검증 (MAP-02 assembly.ts 기준)
+    _validate_grouping_config(gc, contract_id)
 
-    # D-R5: 각 active 규칙의 버전·계약·target 형식 교차 검증
+    # D-R5 + R2-02: 각 active 규칙 버전·계약·필수 구조 검증
     for rule in active_rules:
-        rid = rule.get("rule_id", "?")
-
-        rv = str(rule.get("rule_version") or "").strip()
-        if rv != approved_rule_version:
-            raise DocRuleSupplyError(
-                "config_invalid",
-                f"규칙 {rid!r}의 rule_version({rv!r}) ≠ approved_rule_version({approved_rule_version!r})",
-            )
-
-        tgt = rule.get("target")
-        if not isinstance(tgt, dict):
-            raise DocRuleSupplyError(
-                "config_invalid",
-                f"규칙 {rid!r}의 target이 사전형이 아님",
-            )
-
-        tgt_contract = str(tgt.get("contract_id") or "").strip()
-        if tgt_contract != contract_id:
-            raise DocRuleSupplyError(
-                "config_invalid",
-                f"규칙 {rid!r}의 target.contract_id({tgt_contract!r}) ≠ contract_id({contract_id!r})",
-            )
+        _validate_mapping_rule(rule, contract_id, approved_rule_version)
 
     return DocRuleConfig(
         contract_id=contract_id,
         approved_rule_version=approved_rule_version,
-        target_field_ids=[str(f) for f in tfi if str(f).strip()],
+        target_field_ids=list(tfi),
         grouping_config=gc,
         rules=active_rules,
     )
