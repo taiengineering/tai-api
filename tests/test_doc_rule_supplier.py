@@ -26,12 +26,17 @@ RS-23: grouping_config mode 없음 → config_invalid  (R1-02)
 RS-24: EXPLICIT_KEY 모드 key_field 없음 → config_invalid  (R1-02)
 RS-25: mode 허용 범위 아님(UNKNOWN_MODE) → config_invalid  (R2-01)
 RS-26: MULTI_SHEET_JOIN join_key 없음 → config_invalid  (R2-01)
-RS-27: SINGLE_DOC_APPROVED approved_for 불일치 → config_invalid  (R2-01)
+RS-27: SINGLE_DOC_APPROVED approved_for 비배열(문자열) → config_invalid  (R2-01/R3-C02)
 RS-28: field_roles 비배열 → config_invalid  (R2-01)
 RS-29: 활성 규칙 source 없음 → config_invalid  (R2-02)
 RS-30: 활성 규칙 transform.type 없음 → config_invalid  (R2-02)
 RS-31: 활성 규칙 null_handling.required 비-bool → config_invalid  (R2-02)
 RS-32: target_field_ids에 숫자 포함 → config_invalid  (R2-03)
+RS-33: field_roles[*].target_field_path 없음 → config_invalid  (R3-C01)
+RS-34: SINGLE_DOC_APPROVED approved_for 배열에 contract_id 없음 → config_invalid  (R3-C02)
+RS-35: 활성 규칙 rule_id 없음 → config_invalid  (R3-C03)
+RS-36: transform.type 허용 범위 아님 → config_invalid  (R3-C04)
+RS-37: source_missing_strategy 허용 범위 아님 → config_invalid  (R3-C04)
 
 Production DB write = 0 (파일 I/O + 환경변수 조작만).
 """
@@ -554,7 +559,7 @@ def test_RS26_multi_sheet_join_missing_join_key(monkeypatch):
         os.unlink(path)
 
 
-# ── RS-27: SINGLE_DOC_APPROVED approved_for 불일치 (R2-01) ───────────────────
+# ── RS-27: SINGLE_DOC_APPROVED approved_for 비배열 (R2-01/R3-C02) ────────────
 
 def test_RS27_single_doc_approved_for_mismatch(monkeypatch):
     cfg = _valid_config()
@@ -669,5 +674,109 @@ def test_RS32_target_field_ids_contains_non_string(monkeypatch):
             load_rule_config()
         assert exc.value.code == "config_invalid"
         assert "target_field_ids" in exc.value.detail
+    finally:
+        os.unlink(path)
+
+
+# ── RS-33: field_roles[*].target_field_path 없음 (R3-C01) ────────────────────
+
+def test_RS33_field_role_target_field_path_missing(monkeypatch):
+    cfg = _valid_config()
+    cfg["grouping_config"] = {
+        **cfg["grouping_config"],
+        "field_roles": [{"role": "header"}],  # target_field_path 누락
+    }
+    path = _write_config(cfg)
+    sha256 = _sha256_file(path)
+    monkeypatch.setenv("DOC_RULE_CONFIG_PATH", path)
+    monkeypatch.setenv("DOC_RULE_APPROVED_SHA256", sha256)
+    try:
+        with pytest.raises(DocRuleSupplyError) as exc:
+            load_rule_config()
+        assert exc.value.code == "config_invalid"
+        assert "target_field_path" in exc.value.detail
+    finally:
+        os.unlink(path)
+
+
+# ── RS-34: SINGLE_DOC_APPROVED approved_for 배열에 contract_id 없음 (R3-C02) ──
+
+def test_RS34_single_doc_approved_for_contract_not_in_list(monkeypatch):
+    cfg = _valid_config()
+    cfg["grouping_config"] = {
+        "contract_id": "CT-TEST-V1",
+        "mode": "SINGLE_DOC_APPROVED",
+        "approved_for": ["CT-OTHER-V1", "CT-ANOTHER-V1"],  # CT-TEST-V1 없음
+        "field_roles": [],
+    }
+    path = _write_config(cfg)
+    sha256 = _sha256_file(path)
+    monkeypatch.setenv("DOC_RULE_CONFIG_PATH", path)
+    monkeypatch.setenv("DOC_RULE_APPROVED_SHA256", sha256)
+    try:
+        with pytest.raises(DocRuleSupplyError) as exc:
+            load_rule_config()
+        assert exc.value.code == "config_invalid"
+        assert "approved_for" in exc.value.detail
+    finally:
+        os.unlink(path)
+
+
+# ── RS-35: 활성 규칙 rule_id 없음 (R3-C03) ───────────────────────────────────
+
+def test_RS35_rule_id_missing(monkeypatch):
+    cfg = _valid_config()
+    rule = _valid_rule()
+    del rule["rule_id"]
+    cfg["rules"] = [rule]
+    path = _write_config(cfg)
+    sha256 = _sha256_file(path)
+    monkeypatch.setenv("DOC_RULE_CONFIG_PATH", path)
+    monkeypatch.setenv("DOC_RULE_APPROVED_SHA256", sha256)
+    try:
+        with pytest.raises(DocRuleSupplyError) as exc:
+            load_rule_config()
+        assert exc.value.code == "config_invalid"
+        assert "rule_id" in exc.value.detail
+    finally:
+        os.unlink(path)
+
+
+# ── RS-36: transform.type 허용 범위 아님 (R3-C04) ────────────────────────────
+
+def test_RS36_transform_type_not_allowed(monkeypatch):
+    cfg = _valid_config()
+    rule = _valid_rule()
+    rule["transform"] = {"type": "custom_script"}  # 허용 범위 아님
+    cfg["rules"] = [rule]
+    path = _write_config(cfg)
+    sha256 = _sha256_file(path)
+    monkeypatch.setenv("DOC_RULE_CONFIG_PATH", path)
+    monkeypatch.setenv("DOC_RULE_APPROVED_SHA256", sha256)
+    try:
+        with pytest.raises(DocRuleSupplyError) as exc:
+            load_rule_config()
+        assert exc.value.code == "config_invalid"
+        assert "transform.type" in exc.value.detail
+    finally:
+        os.unlink(path)
+
+
+# ── RS-37: source_missing_strategy 허용 범위 아님 (R3-C04) ───────────────────
+
+def test_RS37_source_missing_strategy_not_allowed(monkeypatch):
+    cfg = _valid_config()
+    rule = _valid_rule()
+    rule["null_handling"] = {**rule["null_handling"], "source_missing_strategy": "ignore"}
+    cfg["rules"] = [rule]
+    path = _write_config(cfg)
+    sha256 = _sha256_file(path)
+    monkeypatch.setenv("DOC_RULE_CONFIG_PATH", path)
+    monkeypatch.setenv("DOC_RULE_APPROVED_SHA256", sha256)
+    try:
+        with pytest.raises(DocRuleSupplyError) as exc:
+            load_rule_config()
+        assert exc.value.code == "config_invalid"
+        assert "source_missing_strategy" in exc.value.detail
     finally:
         os.unlink(path)

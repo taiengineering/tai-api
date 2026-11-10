@@ -24,9 +24,15 @@ DOC_RULE_APPROVED_SHA256:
   이 값이 없거나 파일 SHA256과 불일치하면 로드 차단.
 
 GroupingConfig 허용 모드 (MAP-02 assembly.ts 기준):
-  EXPLICIT_KEY:       key_field 필수
-  SINGLE_DOC_APPROVED: approved_for에 현재 계약 ID 필수
-  MULTI_SHEET_JOIN:   join_key, header_sheet_name, line_sheet_name 필수
+  EXPLICIT_KEY:        key_field 필수
+  SINGLE_DOC_APPROVED: approved_for(string[])에 contract_id 포함 필수
+                        — approved_for에 있다고 Owner 승인이 완료됐다고 간주하지 않음
+                        (MAP-02 조립기는 이 모드를 PENDING_GROUPING으로 처리 가능)
+  MULTI_SHEET_JOIN:    join_key, header_sheet_name, line_sheet_name 필수
+
+MappingRule 허용값 (MAP-02 rule.ts 기준):
+  transform.type: direct_copy | format | lookup | conditional
+  null_handling.source_missing_strategy: skip | error | default
 
 JSON 설정 파일 형식:
   {
@@ -40,7 +46,9 @@ JSON 설정 파일 형식:
       "contract_id": "CT-XXX-V1",
       "mode": "EXPLICIT_KEY",
       "key_field": "field_a",
-      "field_roles": []
+      "field_roles": [
+        {"target_field_path": "field_a", "role": "header"}
+      ]
     },
     "rules": [
       {
@@ -72,11 +80,21 @@ log = logging.getLogger(__name__)
 _ENV_CONFIG_PATH     = "DOC_RULE_CONFIG_PATH"
 _ENV_APPROVED_SHA256 = "DOC_RULE_APPROVED_SHA256"
 
-# MAP-02 assembly.ts 기준 허용 모드 목록
+# MAP-02 assembly.ts GroupingMode 허용 목록
 _ALLOWED_GROUPING_MODES = frozenset({
     "EXPLICIT_KEY",
     "SINGLE_DOC_APPROVED",
     "MULTI_SHEET_JOIN",
+})
+
+# MAP-02 rule.ts TransformType 허용 목록
+_ALLOWED_TRANSFORM_TYPES = frozenset({
+    "direct_copy", "format", "lookup", "conditional",
+})
+
+# MAP-02 rule.ts SourceMissingStrategy 허용 목록
+_ALLOWED_SOURCE_MISSING_STRATEGIES = frozenset({
+    "skip", "error", "default",
 })
 
 
@@ -101,7 +119,7 @@ class DocRuleConfig:
         contract_id:           대상 계약 ID (federation-contracts 등록 완료 필수)
         approved_rule_version: Owner 승인 버전 태그
         target_field_ids:      매핑 대상 필드 ID 목록 (비어 있지 않은 문자열만)
-        grouping_config:       GroupingConfig-compatible dict (MAP-02 형식)
+        grouping_config:       GroupingConfig-compatible dict (MAP-02 assembly.ts 형식)
         rules:                 MappingRule-compatible dict 목록 (status='active' 한정)
     """
     contract_id: str
@@ -114,7 +132,7 @@ class DocRuleConfig:
 # ── 내부 헬퍼 ─────────────────────────────────────────────────────────────────
 
 def _validate_grouping_config(gc: dict[str, Any], contract_id: str) -> None:
-    """MAP-02 GroupingConfig 필수 구조 검증."""
+    """MAP-02 GroupingConfig 필수 구조 검증 (assembly.ts 기준)."""
     gc_contract = str(gc.get("contract_id") or "").strip()
     if gc_contract != contract_id:
         raise DocRuleSupplyError(
@@ -131,7 +149,7 @@ def _validate_grouping_config(gc: dict[str, Any], contract_id: str) -> None:
             f"grouping_config.mode({gc_mode!r}) 허용 범위 아님 — {sorted(_ALLOWED_GROUPING_MODES)} 중 하나 필요",
         )
 
-    # field_roles: 배열 필수, 항목별 field·role 확인
+    # field_roles: 배열 필수, 항목별 target_field_path·role 확인 (FieldRole 타입 기준)
     field_roles = gc.get("field_roles")
     if not isinstance(field_roles, list):
         raise DocRuleSupplyError("config_invalid", "grouping_config.field_roles가 배열이 아님")
@@ -141,10 +159,10 @@ def _validate_grouping_config(gc: dict[str, Any], contract_id: str) -> None:
                 "config_invalid",
                 f"grouping_config.field_roles[{i}]가 사전형이 아님",
             )
-        if not str(fr.get("field") or "").strip():
+        if not str(fr.get("target_field_path") or "").strip():
             raise DocRuleSupplyError(
                 "config_invalid",
-                f"grouping_config.field_roles[{i}].field 없음",
+                f"grouping_config.field_roles[{i}].target_field_path 없음",
             )
         if str(fr.get("role") or "").strip() not in ("header", "line"):
             raise DocRuleSupplyError(
@@ -167,12 +185,18 @@ def _validate_grouping_config(gc: dict[str, Any], contract_id: str) -> None:
                     f"grouping_config.{req} 없음 (MULTI_SHEET_JOIN 모드 필수)",
                 )
     elif gc_mode == "SINGLE_DOC_APPROVED":
-        approved_for = str(gc.get("approved_for") or "").strip()
-        if approved_for != contract_id:
+        # approved_for: string[] — contract_id가 목록에 포함돼야 함
+        # 주의: 목록 포함이 Owner 운영 승인을 의미하지 않음 (MAP-02 조립기 책임)
+        approved_for = gc.get("approved_for")
+        if not isinstance(approved_for, list):
             raise DocRuleSupplyError(
                 "config_invalid",
-                f"grouping_config.approved_for({approved_for!r}) ≠ contract_id({contract_id!r}) "
-                "(SINGLE_DOC_APPROVED 모드 필수)",
+                "grouping_config.approved_for가 배열이 아님 (SINGLE_DOC_APPROVED 모드 필수)",
+            )
+        if contract_id not in approved_for:
+            raise DocRuleSupplyError(
+                "config_invalid",
+                f"grouping_config.approved_for에 contract_id({contract_id!r}) 없음",
             )
 
 
@@ -182,7 +206,14 @@ def _validate_mapping_rule(
     approved_rule_version: str,
 ) -> None:
     """MAP-02 MappingRule 필수 구조 검증 (rule.ts 기준)."""
-    rid = rule.get("rule_id", "?")
+    # C-03: rule_id 비공백 문자열 필수
+    raw_rid = rule.get("rule_id")
+    if not isinstance(raw_rid, str) or not raw_rid.strip():
+        raise DocRuleSupplyError(
+            "config_invalid",
+            "활성 규칙의 rule_id가 없거나 비공백 문자열이 아님",
+        )
+    rid = raw_rid.strip()
 
     # D-R5: 버전 일치
     rv = str(rule.get("rule_version") or "").strip()
@@ -192,7 +223,7 @@ def _validate_mapping_rule(
             f"규칙 {rid!r}의 rule_version({rv!r}) ≠ approved_rule_version({approved_rule_version!r})",
         )
 
-    # source 필수 구조
+    # source 필수 구조 (FieldSourceRef 기준)
     src = rule.get("source")
     if not isinstance(src, dict):
         raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 source가 사전형이 아님")
@@ -201,7 +232,7 @@ def _validate_mapping_rule(
     if not str(src.get("field_type") or "").strip():
         raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 source.field_type 없음")
 
-    # target 필수 구조 + D-R5 계약 일치
+    # target 필수 구조 (FieldTargetRef 기준) + D-R5 계약 일치
     tgt = rule.get("target")
     if not isinstance(tgt, dict):
         raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 target이 사전형이 아님")
@@ -216,21 +247,35 @@ def _validate_mapping_rule(
     if not str(tgt.get("field_type") or "").strip():
         raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 target.field_type 없음")
 
-    # transform 필수 구조
+    # transform 필수 구조 (TransformConfig 기준)
     tfm = rule.get("transform")
     if not isinstance(tfm, dict):
         raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 transform이 사전형이 아님")
-    if not str(tfm.get("type") or "").strip():
+    tfm_type = str(tfm.get("type") or "").strip()
+    if not tfm_type:
         raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 transform.type 없음")
+    if tfm_type not in _ALLOWED_TRANSFORM_TYPES:
+        raise DocRuleSupplyError(
+            "config_invalid",
+            f"규칙 {rid!r}의 transform.type({tfm_type!r}) 허용 범위 아님 — "
+            f"{sorted(_ALLOWED_TRANSFORM_TYPES)} 중 하나 필요",
+        )
 
-    # null_handling 필수 구조
+    # null_handling 필수 구조 (NullHandling 기준)
     nh = rule.get("null_handling")
     if not isinstance(nh, dict):
         raise DocRuleSupplyError("config_invalid", f"규칙 {rid!r}의 null_handling이 사전형이 아님")
-    if not str(nh.get("source_missing_strategy") or "").strip():
+    sms = str(nh.get("source_missing_strategy") or "").strip()
+    if not sms:
         raise DocRuleSupplyError(
             "config_invalid",
             f"규칙 {rid!r}의 null_handling.source_missing_strategy 없음",
+        )
+    if sms not in _ALLOWED_SOURCE_MISSING_STRATEGIES:
+        raise DocRuleSupplyError(
+            "config_invalid",
+            f"규칙 {rid!r}의 null_handling.source_missing_strategy({sms!r}) 허용 범위 아님 — "
+            f"{sorted(_ALLOWED_SOURCE_MISSING_STRATEGIES)} 중 하나 필요",
         )
     if not isinstance(nh.get("required"), bool):
         raise DocRuleSupplyError(
@@ -293,10 +338,10 @@ def _validate(cfg: dict[str, Any]) -> DocRuleConfig:
             "active 상태 규칙 없음 — 운영 규칙 사용 차단",
         )
 
-    # R2-01: GroupingConfig 형식 검증 (MAP-02 assembly.ts 기준)
+    # R2-01 + R3-C01/C02: GroupingConfig 형식 검증 (MAP-02 assembly.ts 기준)
     _validate_grouping_config(gc, contract_id)
 
-    # D-R5 + R2-02: 각 active 규칙 버전·계약·필수 구조 검증
+    # D-R5 + R2-02 + R3-C03/C04: 각 active 규칙 필수 구조 검증
     for rule in active_rules:
         _validate_mapping_rule(rule, contract_id, approved_rule_version)
 
