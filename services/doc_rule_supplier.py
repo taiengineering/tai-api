@@ -9,6 +9,7 @@ WO: WO-DOC-G7-B1-APPROVED-CONNECTION-IMPLEMENTATION-001
   config_not_found:         JSON 파일 없음
   config_invalid:           JSON 파싱 오류 또는 필수 필드 형식 오류
   unapproved_config:        owner_approved ≠ true
+  unapproved_digest:        DOC_RULE_APPROVED_SHA256 미설정 또는 파일 SHA256 불일치
   unverified_contract:      contract_registered ≠ true
   missing_approval_version: approved_rule_version 없음 또는 빈 문자열
   no_active_rules:          rules 없음, 빈 배열, 또는 active 규칙 0건
@@ -16,6 +17,11 @@ WO: WO-DOC-G7-B1-APPROVED-CONNECTION-IMPLEMENTATION-001
 현재 운영 활성 계약:
   APPROVED_RULE_SET=NONE — 활성화된 운영 규칙 없음 (D-R2 계약 등록 대기)
   미승인 계약 사용 차단, 테스트 규칙 자동 활성화 차단.
+
+DOC_RULE_APPROVED_SHA256:
+  Owner가 특정 규칙 JSON 파일 버전을 승인한 뒤 배포 단계에서만 설정.
+  JSON 파일 내부에서 자기 승인하는 방식 금지.
+  이 값이 없거나 파일 SHA256과 불일치하면 로드 차단.
 
 JSON 설정 파일 형식:
   {
@@ -49,6 +55,7 @@ MAP-02의 JsonFileRuleRepository·fetchRuleSnapshot 기능을 대체하지 않�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -57,7 +64,8 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-_ENV_CONFIG_PATH = "DOC_RULE_CONFIG_PATH"
+_ENV_CONFIG_PATH    = "DOC_RULE_CONFIG_PATH"
+_ENV_APPROVED_SHA256 = "DOC_RULE_APPROVED_SHA256"
 
 
 # ── 오류 계층 ──────────────────────────────────────────────────────────────────
@@ -128,6 +136,17 @@ def _validate(cfg: dict[str, Any]) -> DocRuleConfig:
     if not isinstance(gc, dict):
         raise DocRuleSupplyError("config_invalid", "grouping_config 없음 또는 형식 오류")
 
+    # MAP-02 GroupingConfig 필수 항목: mode 존재, EXPLICIT_KEY 모드 → key_field 필수
+    gc_mode = str(gc.get("mode") or "").strip()
+    if not gc_mode:
+        raise DocRuleSupplyError("config_invalid", "grouping_config.mode 없음")
+    if gc_mode == "EXPLICIT_KEY":
+        if not str(gc.get("key_field") or "").strip():
+            raise DocRuleSupplyError(
+                "config_invalid",
+                "grouping_config.key_field 없음 (EXPLICIT_KEY 모드 필수)",
+            )
+
     raw_rules = cfg.get("rules")
     if not isinstance(raw_rules, list) or len(raw_rules) == 0:
         raise DocRuleSupplyError("no_active_rules", "rules 없음 또는 빈 배열")
@@ -139,7 +158,7 @@ def _validate(cfg: dict[str, Any]) -> DocRuleConfig:
             "active 상태 규칙 없음 — 운영 규칙 사용 차단",
         )
 
-    # D-R5: 각 active 규칙의 버전·계약이 승인 범위와 일치하는지 교차 검증
+    # D-R5: grouping_config.contract_id 교차 검증
     gc_contract = str(gc.get("contract_id") or "").strip()
     if gc_contract != contract_id:
         raise DocRuleSupplyError(
@@ -147,18 +166,26 @@ def _validate(cfg: dict[str, Any]) -> DocRuleConfig:
             f"grouping_config.contract_id({gc_contract!r}) ≠ contract_id({contract_id!r})",
         )
 
+    # D-R5: 각 active 규칙의 버전·계약·target 형식 교차 검증
     for rule in active_rules:
+        rid = rule.get("rule_id", "?")
+
         rv = str(rule.get("rule_version") or "").strip()
         if rv != approved_rule_version:
-            rid = rule.get("rule_id", "?")
             raise DocRuleSupplyError(
                 "config_invalid",
                 f"규칙 {rid!r}의 rule_version({rv!r}) ≠ approved_rule_version({approved_rule_version!r})",
             )
-        tgt = rule.get("target") or {}
+
+        tgt = rule.get("target")
+        if not isinstance(tgt, dict):
+            raise DocRuleSupplyError(
+                "config_invalid",
+                f"규칙 {rid!r}의 target이 사전형이 아님",
+            )
+
         tgt_contract = str(tgt.get("contract_id") or "").strip()
         if tgt_contract != contract_id:
-            rid = rule.get("rule_id", "?")
             raise DocRuleSupplyError(
                 "config_invalid",
                 f"규칙 {rid!r}의 target.contract_id({tgt_contract!r}) ≠ contract_id({contract_id!r})",
@@ -179,7 +206,7 @@ def load_rule_config() -> DocRuleConfig:
     """DOC_RULE_CONFIG_PATH에서 Owner 승인 운영 규칙 설정을 로드한다.
 
     Returns:
-        DocRuleConfig — Owner 승인·계약 등록·active 규칙이 모두 충족된 경우에만 반환
+        DocRuleConfig — Owner 승인·파일 무결성·계약 등록·active 규칙이 모두 충족된 경우에만 반환
 
     Raises:
         DocRuleSupplyError: 차단 조건 중 하나라도 미충족 시
@@ -191,14 +218,33 @@ def load_rule_config() -> DocRuleConfig:
             f"{_ENV_CONFIG_PATH} 미설정 — 운영 규칙 공급 불가",
         )
 
+    # D-R5: 파일 로드 전 승인 식별값 존재 확인 (JSON 내부 자기 승인 방지)
+    approved_sha256 = os.environ.get(_ENV_APPROVED_SHA256, "").strip().lower()
+    if not approved_sha256:
+        raise DocRuleSupplyError(
+            "unapproved_digest",
+            f"{_ENV_APPROVED_SHA256} 미설정 — 승인 식별값 없이 규칙 로드 차단",
+        )
+
     try:
-        with open(config_path, encoding="utf-8") as f:
-            raw = json.load(f)
+        with open(config_path, "rb") as f:
+            raw_bytes = f.read()
     except FileNotFoundError:
         raise DocRuleSupplyError(
             "config_not_found",
             f"규칙 설정 파일 없음: {config_path}",
         )
+
+    # D-R5: 파일 SHA256과 승인 식별값 비교
+    actual_sha256 = hashlib.sha256(raw_bytes).hexdigest().lower()
+    if actual_sha256 != approved_sha256:
+        raise DocRuleSupplyError(
+            "unapproved_digest",
+            "규칙 파일 SHA256 불일치 — 승인 외 파일 로드 차단",
+        )
+
+    try:
+        raw = json.loads(raw_bytes.decode("utf-8"))
     except json.JSONDecodeError as exc:
         raise DocRuleSupplyError(
             "config_invalid",
