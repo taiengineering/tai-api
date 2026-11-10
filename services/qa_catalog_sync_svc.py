@@ -39,6 +39,7 @@ _MUTABLE_FIELDS = frozenset({
     'name', 'description', 'expected_summary',
     'site_code', 'priority', 'runner_type',
     'service_code', 'area_code', 'qa_type',
+    'enabled',
 })
 
 
