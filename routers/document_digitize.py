@@ -103,8 +103,14 @@ async def digitize_document(
         "file_hash": result.file_hash,
         "file_size_bytes": result.file_size_bytes,
         "storage_ref": result.storage_ref,
+        # extraction_storage_ref: DOC doc-extractions 버킷 경로.
+        # None = 저장 실패 또는 중복 응답.
+        # 참조 존재가 MAP-02용 JSON 확보를 보장하지 않음 — 현재 운영 추출은 Markdown.
+        "extraction_storage_ref": result.extraction_storage_ref,
     }
     if result.storage_warning:
         # DOC 내부 저장 오류 원문 미노출 — 일반 안내로 치환
         response["storage_warning"] = "원본 파일 저장이 완료되지 않았습니다. 관리자 확인이 필요합니다."
+    if result.extraction_storage_warning:
+        response["extraction_storage_warning"] = "추출 결과 저장이 완료되지 않았습니다. 관리자 확인이 필요합니다."
     return response

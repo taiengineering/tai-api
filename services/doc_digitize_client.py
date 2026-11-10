@@ -4,6 +4,20 @@ TAI → DOC 단방향 변환 요청 전용.
 환경변수 미설정 시 즉시 raise (fail-closed).
 타임아웃 후 자동 재전송 금지 — DOC 처리가 완료됐을 수 있음.
 DOC 내부 오류 메시지·인증정보는 호출 측에 노출하지 않음.
+
+── Gate 2 A안 역조회 계약 (D-R4 승인, 2026-11-10) ──────────────────────────
+신규 업로드(Route A):
+  POST /digitize → doc_log_id + extraction_storage_ref 수신 (이 파일 담당)
+  extraction_storage_ref = None 가능 (DOC 저장 실패 시)
+
+과거·중복 문서 역조회(Gate 2 A안):
+  doc_log_id 기반으로 기존 추출 결과에 접근
+  전제: 회사별 접근 검증 (tenant_id 일치 필수)
+  전제: extraction_storage_ref 영속 저장 경로 확보
+  현재 상태: DOC에 조회 엔드포인트 없음, inspection_doc_log에 컬럼 없음
+  → 별도 구현 승인 후 실행 (이 파일 범위 아님)
+
+중복 응답: doc_log_id만 반환 — extraction_storage_ref 없음 (기존 doc_log_id로 역조회 필요)
 """
 from __future__ import annotations
 
@@ -34,6 +48,11 @@ class DocDigitizeResult:
     file_size_bytes: Optional[int] = None
     storage_ref: Optional[str] = None
     storage_warning: Optional[str] = None
+    # extraction_storage_ref: DOC doc-extractions 버킷 경로.
+    # 현재 운영 추출 경로는 Markdown(.md) — MAP-02용 DocExtractionEnvelope JSON이 아님.
+    # 참조 존재가 구조화 매핑 가능 상태를 보장하지 않는다.
+    extraction_storage_ref: Optional[str] = None
+    extraction_storage_warning: Optional[str] = None
 
 
 # ── 오류 계층 ──────────────────────────────────────────────────────────────────
@@ -102,6 +121,8 @@ def _parse_200_body(body: dict) -> DocDigitizeResult:
         file_size_bytes=body.get("file_size_bytes"),
         storage_ref=body.get("storage_ref"),
         storage_warning=body.get("storage_warning"),
+        extraction_storage_ref=body.get("extraction_storage_ref"),
+        extraction_storage_warning=body.get("extraction_storage_warning"),
     )
 
 
