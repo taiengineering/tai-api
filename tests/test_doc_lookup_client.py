@@ -12,6 +12,11 @@ DL-09: 타임아웃 → connection_timeout 오류
 DL-10: 네트워크 오류 → connection_error 오류
 DL-11: status 필드 없는 200 응답 → unexpected_response 오류
 DL-12: 기존 doc_digitize_client 미변경 — DocDigitizeResult import 성공
+DL-13: FOUND이지만 extraction_storage_ref=null → unexpected_response (R1)
+DL-14: FOUND이지만 extraction_format=null → unexpected_response (R1)
+DL-15: FOUND이지만 extraction_format='txt' → unexpected_response (R1)
+DL-16: 정의되지 않은 상태값 → unexpected_response (R1)
+DL-17: 비-FOUND 상태에 extraction_storage_ref 포함 → ref 미전달 (R1)
 
 Production DB write = 0 (_parse_lookup_body 직접 호출 또는 mock httpx 사용).
 """
@@ -202,3 +207,60 @@ def test_DL12_digitize_client_import_unaffected():
     result = DocDigitizeResult(doc_log_id="log-x", duplicate=False)
     assert result.doc_log_id == "log-x"
     assert result.duplicate is False
+
+
+# ── DL-13 (R1): FOUND이지만 extraction_storage_ref=null ──────────────────────
+
+def test_DL13_found_missing_ref():
+    body = {"status": "FOUND", "extraction_storage_ref": None, "extraction_format": "md"}
+    with pytest.raises(DocLookupError) as exc_info:
+        _parse_lookup_body(body, "log-001")
+    assert exc_info.value.code == "unexpected_response"
+
+
+# ── DL-14 (R1): FOUND이지만 extraction_format=null ───────────────────────────
+
+def test_DL14_found_missing_format():
+    body = {
+        "status": "FOUND",
+        "extraction_storage_ref": "doc-extractions/co-001/2026/11/log-001.md",
+        "extraction_format": None,
+    }
+    with pytest.raises(DocLookupError) as exc_info:
+        _parse_lookup_body(body, "log-001")
+    assert exc_info.value.code == "unexpected_response"
+
+
+# ── DL-15 (R1): FOUND이지만 extraction_format='txt' ──────────────────────────
+
+def test_DL15_found_invalid_format():
+    body = {
+        "status": "FOUND",
+        "extraction_storage_ref": "doc-extractions/co-001/2026/11/log-001.txt",
+        "extraction_format": "txt",
+    }
+    with pytest.raises(DocLookupError) as exc_info:
+        _parse_lookup_body(body, "log-001")
+    assert exc_info.value.code == "unexpected_response"
+
+
+# ── DL-16 (R1): 정의되지 않은 상태값 ─────────────────────────────────────────
+
+def test_DL16_unknown_status():
+    body = {"status": "SOME_UNKNOWN_STATUS"}
+    with pytest.raises(DocLookupError) as exc_info:
+        _parse_lookup_body(body, "log-001")
+    assert exc_info.value.code == "unexpected_response"
+
+
+# ── DL-17 (R1): 비-FOUND 상태에 ref 포함 → ref 미전달 ───────────────────────
+
+def test_DL17_non_found_ref_not_forwarded():
+    body = {
+        "status": "EXTRACTION_REF_MISSING",
+        "extraction_storage_ref": "doc-extractions/co-001/2026/11/log-001.md",
+    }
+    result = _parse_lookup_body(body, "log-001")
+    assert result.status == "EXTRACTION_REF_MISSING"
+    assert result.extraction_storage_ref is None
+    assert result.extraction_format is None

@@ -70,19 +70,56 @@ def _get_lookup_config() -> tuple[str, str]:
     return url, key
 
 
+_VALID_STATUSES: frozenset[str] = frozenset({
+    "FOUND",
+    "NOT_FOUND",
+    "TENANT_MISMATCH",
+    "SOURCE_SYSTEM_MISMATCH",
+    "EXTRACTION_REF_MISSING",
+    "EXTRACTION_NOT_AVAILABLE",
+    "LOOKUP_BACKEND_UNAVAILABLE",
+})
+_VALID_FORMATS: frozenset[str] = frozenset({"md", "json"})
+
+
 def _parse_lookup_body(body: dict, doc_log_id: str) -> DocLookupResult:
-    """HTTP 200 조회 응답 → DocLookupResult 변환."""
+    """HTTP 200 조회 응답 → DocLookupResult 변환.
+
+    - 정의된 7개 상태값만 허용.
+    - FOUND: extraction_storage_ref(비공백) + extraction_format(md|json) 필수.
+    - 비-FOUND: extraction_storage_ref 전달 금지.
+    """
     if not isinstance(body, dict):
         raise DocLookupError("unexpected_response", "DOC 역조회 응답이 JSON 객체가 아님")
+
     status = body.get("status")
     if not isinstance(status, str) or not status.strip():
         raise DocLookupError("unexpected_response", "DOC 역조회 응답 status 필드 누락")
-    return DocLookupResult(
-        doc_log_id=doc_log_id,
-        status=status,
-        extraction_storage_ref=body.get("extraction_storage_ref"),
-        extraction_format=body.get("extraction_format"),
-    )
+    if status not in _VALID_STATUSES:
+        raise DocLookupError("unexpected_response", f"DOC 역조회 응답 알 수 없는 상태: {status}")
+
+    if status == "FOUND":
+        ref = body.get("extraction_storage_ref")
+        if not isinstance(ref, str) or not ref.strip():
+            raise DocLookupError(
+                "unexpected_response",
+                "DOC FOUND 응답에 extraction_storage_ref 없거나 비어 있음",
+            )
+        fmt = body.get("extraction_format")
+        if fmt not in _VALID_FORMATS:
+            raise DocLookupError(
+                "unexpected_response",
+                f"DOC FOUND 응답 extraction_format 유효하지 않음: {fmt}",
+            )
+        return DocLookupResult(
+            doc_log_id=doc_log_id,
+            status=status,
+            extraction_storage_ref=ref,
+            extraction_format=fmt,
+        )
+
+    # 비-FOUND 상태 — 참조값 전달 금지
+    return DocLookupResult(doc_log_id=doc_log_id, status=status)
 
 
 # ── 공개 API ──────────────────────────────────────────────────────────────────
