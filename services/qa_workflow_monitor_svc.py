@@ -239,10 +239,12 @@ async def _list_workflow_runs(
     window_start: datetime,
     window_end: datetime,
 ) -> Optional[List[Dict[str, Any]]]:
-    """schedule 이벤트 Run 목록 조회 (window 내 생성).
+    """workflow_dispatch 이벤트 Run 목록 조회 (window 내 생성).
+
+    TAI Scheduler는 workflow_dispatch로 발화하므로 schedule 필터는 실행을 오판한다.
 
     반환:
-      List[dict] — 해당 window 내 schedule Run 목록 (비어있을 수 있음)
+      List[dict] — 해당 window 내 workflow_dispatch Run 목록 (비어있을 수 있음)
       None       — API 오류
     """
     url = (
@@ -250,7 +252,7 @@ async def _list_workflow_runs(
         f"/actions/workflows/{cfg['workflow']}/runs"
     )
     params = {
-        "event":        "schedule",
+        "event":        "workflow_dispatch",
         "created":      f"{window_start.strftime('%Y-%m-%dT%H:%M:%SZ')}.."
                         f"{window_end.strftime('%Y-%m-%dT%H:%M:%SZ')}",
         "per_page":     10,
