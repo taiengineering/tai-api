@@ -22,7 +22,7 @@ endpoints:
   DELETE /worker-registry/{id}            비활성화 (soft delete)
   POST   /worker-registry/{id}/invite     앱 초대 문자 발송
 """
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -32,6 +32,8 @@ import os
 import re
 import logging
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _scope, _is_admin
 from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
@@ -568,15 +570,30 @@ def get_workers(
 # ============================================================
 
 @router.patch("/{worker_id}")
-def update_worker(worker_id: str, body: WorkerUpdate):
+def update_worker(worker_id: str, body: WorkerUpdate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
-    chk = supabase.table("worker_registry").select("id").eq(
+    chk = supabase.table("worker_registry").select("id, company_id").eq(
         "id", worker_id
     ).limit(1).execute()
     if not chk.data:
         raise HTTPException(status_code=404, detail="작업자를 찾을 수 없습니다.")
 
+    is_admin = _is_admin(_scope(supabase, current.get("role_code")))
+    if not is_admin:
+        user_cid = current.get("company_id")
+        worker_cid = chk.data[0].get("company_id")
+        if not user_cid or not worker_cid or user_cid != worker_cid:
+            raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
+
     update_data = {k: v for k, v in body.dict().items() if v is not None}
+
+    if "factory_id" in update_data and not is_admin:
+        fac_chk = supabase.table("factories").select("company_id").eq(
+            "id", update_data["factory_id"]
+        ).limit(1).execute()
+        if not fac_chk.data or fac_chk.data[0].get("company_id") != current.get("company_id"):
+            raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
+
     if "phone" in update_data:
         update_data["phone"] = _normalize_phone(update_data["phone"])
     update_data["updated_at"] = _now_iso()
@@ -592,13 +609,20 @@ def update_worker(worker_id: str, body: WorkerUpdate):
 # ============================================================
 
 @router.delete("/{worker_id}")
-def delete_worker(worker_id: str):
+def delete_worker(worker_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
-    chk = supabase.table("worker_registry").select("id").eq(
+    chk = supabase.table("worker_registry").select("id, company_id").eq(
         "id", worker_id
     ).limit(1).execute()
     if not chk.data:
         raise HTTPException(status_code=404, detail="작업자를 찾을 수 없습니다.")
+
+    if not _is_admin(_scope(supabase, current.get("role_code"))):
+        user_cid = current.get("company_id")
+        worker_cid = chk.data[0].get("company_id")
+        if not user_cid or not worker_cid or user_cid != worker_cid:
+            raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
+
     supabase.table("worker_registry").update({
         "is_active":   False,
         "status_code": "INACTIVE",
