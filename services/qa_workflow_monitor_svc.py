@@ -629,7 +629,6 @@ async def monitor_twice_daily(
         "run_created_at":      run.get("created_at"),
         "run_html_url":        run.get("html_url"),
         "elapsed_minutes":     round(elapsed_minutes, 1),
-        "actor_verified":      False,
     }
     if jobs is not None:
         evidence["job_count"]    = len(jobs)
