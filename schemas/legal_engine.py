@@ -203,6 +203,10 @@ class SafeConstructionConsumerInput(BaseModel):
     is_relationship_contractor: Optional[StrictBool] = None
     is_civil_construction: Optional[StrictBool] = None
     expected_app3_revision: Optional[Annotated[StrictInt, Field(ge=1)]] = None
+    # WO-E2E2000-C02-D-ETA-B-IMPLEMENT-001: 채석작업 독립 입력 (D-η B안).
+    # has_excavation(굴착작업) 과 별도 사실축. alias/파생/자동전환 금지.
+    # None=미제공(UNKNOWN). False=채석작업 미수행 명시값(누락으로 처리 금지).
+    has_quarrying_work: Optional[StrictBool] = None
 
     @field_validator("work_height_m", "truck_loading_height_m", "manual_handling_weight_kg")
     @classmethod
