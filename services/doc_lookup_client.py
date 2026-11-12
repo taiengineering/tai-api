@@ -43,6 +43,13 @@ class DocLookupResult:
     extraction_format: Optional[str] = None
 
 
+@dataclass
+class DocLookupContentResult:
+    doc_log_id: str
+    status: str   # FOUND | NOT_FOUND | EXTRACTION_REF_MISSING | EXTRACTION_NOT_AVAILABLE | …
+    content: Optional[str] = None  # Markdown 텍스트 — status=FOUND 시에만 존재
+
+
 # ── 오류 계층 ──────────────────────────────────────────────────────────────────
 
 class DocLookupError(Exception):
@@ -190,3 +197,80 @@ async def lookup_extraction(
         )
 
     return _parse_lookup_body(body, doc_log_id)
+
+
+async def lookup_extraction_content(
+    *,
+    doc_log_id: str,
+    company_id: str,
+    timeout: float = 30.0,
+) -> DocLookupContentResult:
+    """DOC 추출 결과 콘텐츠 조회 — doc_log_id 기반 Markdown 텍스트 반환.
+
+    Args:
+        doc_log_id:  DOC에서 발급한 문서 처리 ID
+        company_id:  TAI 서버에서 검증한 회사 ID (DOC tenant_id)
+        timeout:     응답 대기 최대 초
+
+    Returns:
+        DocLookupContentResult — status=FOUND 시 content(Markdown) 포함
+
+    Raises:
+        DocLookupError(code='endpoint_not_active'):  DOC_LOOKUP_URL 미설정
+        DocLookupError(code='config_missing'):       TAI_SERVICE_KEY 미설정
+        DocLookupError(code='auth_failed'):          DOC 서비스 키 불일치
+        DocLookupError(code='connection_timeout'):   타임아웃
+        DocLookupError(code='connection_error'):     네트워크 오류
+        DocLookupError(code='backend_error'):        DOC 5xx
+        DocLookupError(code='unexpected_response'):  응답 파싱 실패
+    """
+    base_url, service_key = _get_lookup_config()
+    url = base_url.rstrip("/") + f"/lookup/{doc_log_id}/content"
+
+    headers = {
+        "X-Source-System": _SOURCE,
+        "X-Service-Key":   service_key,
+        "X-Tenant-Id":     company_id,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(url, headers=headers)
+    except httpx.TimeoutException as exc:
+        raise DocLookupError("connection_timeout", "DOC 콘텐츠 조회 응답 시간 초과") from exc
+    except httpx.RequestError as exc:
+        raise DocLookupError(
+            "connection_error",
+            f"DOC 콘텐츠 조회 연결 실패: {type(exc).__name__}",
+        ) from exc
+
+    if resp.status_code == 403:
+        log.error("[doc_lookup/content] 서비스 키 불일치 — HTTP 403 (DOC_LOOKUP_URL=%s)", base_url)
+        raise DocLookupError("auth_failed", "DOC 콘텐츠 조회 인증 실패 — TAI_SERVICE_KEY 확인 필요")
+
+    if resp.status_code >= 500:
+        log.error("[doc_lookup/content] DOC 서버 오류 HTTP %s", resp.status_code)
+        raise DocLookupError("backend_error", f"DOC 콘텐츠 조회 서버 오류 (HTTP {resp.status_code})")
+
+    try:
+        body = resp.json()
+    except Exception:
+        raise DocLookupError("unexpected_response", "DOC 콘텐츠 조회 응답 파싱 실패")
+
+    if resp.status_code != 200:
+        raise DocLookupError("unexpected_response", f"DOC 콘텐츠 조회 HTTP {resp.status_code}")
+
+    if not isinstance(body, dict):
+        raise DocLookupError("unexpected_response", "DOC 콘텐츠 조회 응답이 JSON 객체가 아님")
+
+    status = body.get("status")
+    if not isinstance(status, str) or status not in _VALID_STATUSES:
+        raise DocLookupError("unexpected_response", f"DOC 콘텐츠 조회 응답 상태 유효하지 않음: {status}")
+
+    if status == "FOUND":
+        content = body.get("content")
+        if not isinstance(content, str):
+            raise DocLookupError("unexpected_response", "DOC FOUND 콘텐츠 응답에 content 필드 없음")
+        return DocLookupContentResult(doc_log_id=doc_log_id, status=status, content=content)
+
+    return DocLookupContentResult(doc_log_id=doc_log_id, status=status)

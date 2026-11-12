@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
@@ -24,6 +24,7 @@ from services.doc_digitize_client import (
     DocDigitizeError,
     digitize,
 )
+from services.doc_lookup_client import DocLookupError, lookup_extraction_content
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/digitize", tags=["문서 디지털화"])
@@ -123,3 +124,52 @@ async def digitize_document(
         # DOC 내부 저장 오류 원문 미노출 — 일반 안내로 치환
         response["storage_warning"] = "원본 파일 저장이 완료되지 않았습니다. 관리자 확인이 필요합니다."
     return response
+
+
+@router.get("/{doc_log_id}/result")
+async def get_digitize_result(
+    doc_log_id: str,
+    company_id: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
+):
+    """디지털화된 문서의 추출 결과(Markdown)를 반환합니다.
+
+    - role_code=001 전용
+    - company_id: 조회 대상 회사 (미전달 시 로그인 계정 company_id 사용)
+      * 업로드 시 선택한 회사와 동일한 company_id를 전달해야 조회 가능
+    - extraction_format=md 인 경우에만 콘텐츠 반환
+    """
+    _require_admin(current_user)
+    company_id = _resolve_company_id(current_user, company_id)
+    _verify_company_exists(company_id)
+
+    try:
+        result = await lookup_extraction_content(
+            doc_log_id=doc_log_id,
+            company_id=company_id,
+        )
+    except DocLookupError as exc:
+        log.error("[digitize/result] DOC 조회 오류 code=%s", exc.code)
+        if exc.code == "endpoint_not_active":
+            raise HTTPException(503, "결과 조회 서비스가 아직 준비되지 않았습니다") from exc
+        if exc.code in ("auth_failed", "config_missing"):
+            raise HTTPException(503, "결과 조회 서비스 설정 오류입니다") from exc
+        if exc.code in ("connection_timeout", "connection_error"):
+            raise HTTPException(502, "결과 조회 서비스에 연결할 수 없습니다") from exc
+        raise HTTPException(502, "결과 조회 중 오류가 발생했습니다") from exc
+
+    if result.status == "NOT_FOUND":
+        raise HTTPException(404, "문서를 찾을 수 없습니다")
+    if result.status in ("EXTRACTION_REF_MISSING", "EXTRACTION_NOT_AVAILABLE"):
+        raise HTTPException(404, "추출 결과가 아직 준비되지 않았습니다")
+    if result.status == "LOOKUP_BACKEND_UNAVAILABLE":
+        raise HTTPException(503, "결과 조회 서비스를 사용할 수 없습니다")
+    if result.status != "FOUND" or result.content is None:
+        raise HTTPException(404, "추출 결과를 찾을 수 없습니다")
+
+    return {
+        "ok": True,
+        "doc_log_id": doc_log_id,
+        "content": result.content,
+        "extraction_format": "md",
+    }
