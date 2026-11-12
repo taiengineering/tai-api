@@ -210,12 +210,19 @@ _S02_OVERRIDE_FIELDS = (
     "recontracts_received_construction_work",
     "same_site_contracted_construction_work_count",
 )
+# WO-E2E2000-C02-D-ETA-B-IMPLEMENT-001: 채석작업 독립 입력 (D-η B안).
+# RUNTIME_INPUT_FIELDS(frozen audit 20) 에 추가하지 않음 — 그 목록은 canonical 27 연동 감사 고정.
+# 별도 override group 으로 allowlist 연장. alias/파생 금지.
+_C02_QUARRYING_OVERRIDE_FIELDS = (
+    "has_quarrying_work",
+)
 SAFE_CST_OVERRIDE_FIELDS = (
     tuple(RUNTIME_INPUT_FIELDS)
     + SEM003_DIVING_OVERRIDE_FIELDS
     + HIGH_PRESSURE_COMMON_OVERRIDE_FIELDS
     + _APP3_OVERRIDE_FIELDS
     + _S02_OVERRIDE_FIELDS
+    + _C02_QUARRYING_OVERRIDE_FIELDS
 )
 
 

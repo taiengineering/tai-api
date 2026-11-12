@@ -190,6 +190,9 @@ _LEG_INPUT_FIELDS = (
     "performs_centrifuge_or_crusher_maintenance_cleaning_or_inspection",
     # PR-W1-E FC-011: 굴착작업 시 굴착기계등 실제 사용. has_excavation alias 금지.
     "excavation_machinery_in_use",
+    # WO-E2E2000-C02-D-ETA-B-IMPLEMENT-001: 채석작업 독립 사실 (D-η B안).
+    # has_excavation(굴착) 과 별개 축. alias/파생 금지. PSR mapped_field 변경은 별도 Owner 승인.
+    "has_quarrying_work",
     # A5 FC-024: 석면 1% 이상 함유 폐기물 처리 + 석면분진 발생 우려 작업.
     "has_asbestos_waste_dust_processing_work",
     "has_press",
