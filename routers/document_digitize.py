@@ -12,8 +12,9 @@ POST /digitize — TAI 관리자가 파일을 DOC에 보내 변환 결과 ID를 
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
@@ -28,6 +29,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/digitize", tags=["문서 디지털화"])
 
 _MAX_BYTES = 50 * 1024 * 1024  # 50 MiB (DOC 현재 기본 제한)
+_ALLOWED_MODES: frozenset[str] = frozenset({"digital", "scan", "unsure"})
 
 
 def _require_admin(current_user: dict) -> None:
@@ -56,6 +58,7 @@ def _verify_company_exists(company_id: str) -> None:
 @router.post("")
 async def digitize_document(
     file: UploadFile = File(...),
+    document_input_mode: Optional[str] = Form(None),
     current_user: dict = Depends(get_current_user),
 ):
     """파일을 DOC에 전송해 디지털화 처리 결과 ID를 반환합니다.
@@ -63,10 +66,14 @@ async def digitize_document(
     - 중복 파일: duplicate=true, doc_log_id만 반환
     - 신규 파일: primitive_id·v2_status 등 포함
     - DOC 오류 메시지는 TAI 로그에만 기록 (사용자 미노출)
+    - document_input_mode: 파일 입력 방식 힌트 (digital|scan|unsure, 선택)
     """
     _require_admin(current_user)
     company_id = _require_company_id(current_user)
     _verify_company_exists(company_id)
+
+    if document_input_mode is not None and document_input_mode not in _ALLOWED_MODES:
+        raise HTTPException(422, "document_input_mode 허용 값: digital, scan, unsure")
 
     # 50 MiB + 1 센티넬로 초과 감지
     file_bytes = await file.read(_MAX_BYTES + 1)
@@ -80,6 +87,7 @@ async def digitize_document(
             file_bytes=file_bytes,
             original_filename=original_filename,
             company_id=company_id,
+            document_input_mode=document_input_mode,
         )
     except DocConfigError as exc:
         log.error("[digitize] 설정 오류: %s", exc.reason)
@@ -91,6 +99,8 @@ async def digitize_document(
         log.error("[digitize] DOC 처리 실패 stage=%s http=%s", exc.stage, exc.http_status)
         if exc.http_status == 422:
             raise HTTPException(422, f"문서 검증 실패 (stage: {exc.stage})")
+        if exc.http_status == 503:
+            raise HTTPException(503, "문서 디지털화 서비스를 사용할 수 없습니다") from exc
         raise HTTPException(502, "문서 디지털화 처리 중 오류가 발생했습니다") from exc
 
     response: dict = {
