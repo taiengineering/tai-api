@@ -111,15 +111,17 @@ async def digitize(
     file_bytes: bytes,
     original_filename: str,
     company_id: str,
+    document_input_mode: Optional[str] = None,
     timeout: float = 60.0,
 ) -> DocDigitizeResult:
     """DOC POST /digitize 호출 → DocDigitizeResult 반환.
 
     Args:
-        file_bytes:        파일 원본 바이트
-        original_filename: 원본 파일명 (확장자 포함)
-        company_id:        TAI 서버에서 검증한 회사 ID (DOC tenant_id)
-        timeout:           응답 대기 최대 초 — 초과 시 DocConnectionError, 재전송 금지
+        file_bytes:            파일 원본 바이트
+        original_filename:     원본 파일명 (확장자 포함)
+        company_id:            TAI 서버에서 검증한 회사 ID (DOC tenant_id)
+        document_input_mode:   파일 입력 방식 힌트 (digital|scan|unsure) — None이면 미전송
+        timeout:               응답 대기 최대 초 — 초과 시 DocConnectionError, 재전송 금지
 
     Returns:
         DocDigitizeResult — duplicate=True이면 doc_log_id 외 필드는 None
@@ -138,13 +140,16 @@ async def digitize(
         "X-Tenant-Id":     company_id,
     }
 
+    post_kwargs: dict = {
+        "headers": headers,
+        "files":   {"file": (original_filename, file_bytes)},
+    }
+    if document_input_mode is not None:
+        post_kwargs["data"] = {"document_input_mode": document_input_mode}
+
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                url,
-                headers=headers,
-                files={"file": (original_filename, file_bytes)},
-            )
+            resp = await client.post(url, **post_kwargs)
     except httpx.TimeoutException as exc:
         raise DocConnectionError("DOC 응답 시간 초과") from exc
     except httpx.RequestError as exc:
