@@ -37,10 +37,13 @@ def _require_admin(current_user: dict) -> None:
         raise HTTPException(403, "문서 디지털화는 관리자(role_code=001) 전용입니다")
 
 
-def _require_company_id(current_user: dict) -> str:
+def _resolve_company_id(current_user: dict, form_company_id: Optional[str]) -> str:
+    """company_id 결정: role_code=001이면 form 값 허용, 그 외 토큰 값만 사용."""
+    if form_company_id and form_company_id.strip():
+        return form_company_id.strip()
     cid = (current_user.get("company_id") or "").strip()
     if not cid:
-        raise HTTPException(403, "company_id가 없는 계정은 디지털화를 실행할 수 없습니다")
+        raise HTTPException(403, "대상 회사를 선택해 주세요")
     return cid
 
 
@@ -59,6 +62,7 @@ def _verify_company_exists(company_id: str) -> None:
 async def digitize_document(
     file: UploadFile = File(...),
     document_input_mode: Optional[str] = Form(None),
+    company_id: Optional[str] = Form(None),
     current_user: dict = Depends(get_current_user),
 ):
     """파일을 DOC에 전송해 디지털화 처리 결과 ID를 반환합니다.
@@ -67,9 +71,10 @@ async def digitize_document(
     - 신규 파일: primitive_id·v2_status 등 포함
     - DOC 오류 메시지는 TAI 로그에만 기록 (사용자 미노출)
     - document_input_mode: 파일 입력 방식 힌트 (digital|scan|unsure, 선택)
+    - company_id: role_code=001 전용 — 대상 회사 지정 (미입력 시 토큰 company_id 사용)
     """
     _require_admin(current_user)
-    company_id = _require_company_id(current_user)
+    company_id = _resolve_company_id(current_user, company_id)
     _verify_company_exists(company_id)
 
     if document_input_mode is not None and document_input_mode not in _ALLOWED_MODES:
