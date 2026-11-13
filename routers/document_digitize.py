@@ -1,12 +1,13 @@
 """routers/document_digitize.py — 명시적 문서 디지털화 API.
 
-POST /digitize — TAI 관리자가 파일을 DOC에 보내 변환 결과 ID를 받는 단방향 진입점.
+POST /digitize — TAI 사용자가 파일을 DOC에 보내 변환 결과 ID를 받는 단방향 진입점.
 
-권한 계약 (초기 제한, G6-I2 TAI Consumer Connection):
-  - role_code == "001" 전용 (일반 직원 개방 시 별도 Owner 승인 필요)
-  - 서버에서 확인한 company_id만 사용 (클라이언트 제공 금지)
-  - companies 테이블 실존 확인 필수
-  - factory_id 제공 시 resolve_document_site_context()로 사업장 소속·권한 검증 (Gate C)
+권한 계약 (Gate D — 사업장 사용자 개방):
+  - role_code=001 (관리자): factory_id 선택. 미제공 시 사업장 귀속 없는 admin 경로.
+  - 비관리자 (COMPANY/FACTORY/TEAM scope): factory_id 필수. 미제공·공백 → 403.
+  - ASSIGNED scope: 차단 (문서 권한 계약 미확정).
+  - 비관리자 company_id: 토큰 값만 사용 (form 입력 무시).
+  - factory_id 제공 시 resolve_document_site_context()로 사업장 소속·권한 검증.
 
 기존 upload_file_field() 미변경 — 파일 첨부와 문서 디지털화는 별개 기능.
 """
@@ -35,14 +36,9 @@ _MAX_BYTES = 50 * 1024 * 1024  # 50 MiB (DOC 현재 기본 제한)
 _ALLOWED_MODES: frozenset[str] = frozenset({"digital", "scan", "unsure"})
 
 
-def _require_admin(current_user: dict) -> None:
-    if current_user.get("role_code") != "001":
-        raise HTTPException(403, "문서 디지털화는 관리자(role_code=001) 전용입니다")
-
-
 def _resolve_company_id(current_user: dict, form_company_id: Optional[str]) -> str:
     """company_id 결정: role_code=001이면 form 값 허용, 그 외 토큰 값만 사용."""
-    if form_company_id and form_company_id.strip():
+    if current_user.get("role_code") == "001" and form_company_id and form_company_id.strip():
         return form_company_id.strip()
     cid = (current_user.get("company_id") or "").strip()
     if not cid:
@@ -76,16 +72,21 @@ async def digitize_document(
     - DOC 오류 메시지는 TAI 로그에만 기록 (사용자 미노출)
     - document_input_mode: 파일 입력 방식 힌트 (digital|scan|unsure, 선택)
     - company_id: role_code=001 전용 — 대상 회사 지정 (미입력 시 토큰 company_id 사용)
-    - factory_id: 대상 사업장 ID — 제공 시 사업장 소속·권한 검증 후 DOC에 전달 (Gate C)
+    - factory_id: 비관리자는 필수. 사업장 소속·권한 검증 후 DOC에 전달.
     """
-    _require_admin(current_user)
+    is_admin = current_user.get("role_code") == "001"
+
+    # Gate D: 비관리자는 factory_id 필수 (L1 차단 — 빈 값으로 admin 경로 우회 금지)
+    if not is_admin and not (factory_id and factory_id.strip()):
+        raise HTTPException(403, "사업장 사용자는 factory_id를 반드시 입력해야 합니다")
+
     company_id = _resolve_company_id(current_user, company_id)
     _verify_company_exists(company_id)
 
     if document_input_mode is not None and document_input_mode not in _ALLOWED_MODES:
         raise HTTPException(422, "document_input_mode 허용 값: digital, scan, unsure")
 
-    # Gate C: factory_id 제공 시 사업장 소속·권한 검증
+    # 사업장 소속·권한 검증 (factory_id 존재 시)
     verified_factory_id: Optional[str] = None
     if factory_id and factory_id.strip():
         sb = get_supabase()
@@ -152,17 +153,21 @@ async def get_digitize_result(
 ):
     """디지털화된 문서의 추출 결과(Markdown)를 반환합니다.
 
-    - role_code=001 전용
-    - company_id: 조회 대상 회사 (미전달 시 로그인 계정 company_id 사용)
-      * 업로드 시 선택한 회사와 동일한 company_id를 전달해야 조회 가능
-    - factory_id: 업로드 시 지정한 사업장 ID — 제공 시 사업장 귀속 검증 후 DOC에 전달 (Gate C)
+    - 비관리자: factory_id 필수 (업로드 시 지정한 사업장 ID)
+    - company_id: 조회 대상 회사 (미전달 시 로그인 계정 company_id 사용, 비관리자는 토큰 값만)
+    - factory_id: 사업장 소속·권한 검증 후 DOC에 전달
     - extraction_format=md 인 경우에만 콘텐츠 반환
     """
-    _require_admin(current_user)
+    is_admin = current_user.get("role_code") == "001"
+
+    # Gate D: 비관리자는 factory_id 필수
+    if not is_admin and not (factory_id and factory_id.strip()):
+        raise HTTPException(403, "사업장 사용자는 factory_id를 반드시 입력해야 합니다")
+
     company_id = _resolve_company_id(current_user, company_id)
     _verify_company_exists(company_id)
 
-    # Gate C: factory_id 제공 시 사업장 소속·권한 검증
+    # 사업장 소속·권한 검증 (factory_id 존재 시)
     verified_factory_id: Optional[str] = None
     if factory_id and factory_id.strip():
         sb = get_supabase()

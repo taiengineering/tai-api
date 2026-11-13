@@ -193,17 +193,17 @@ def test_DSC_08_unknown_scope_blocked():
 # ── DSC-09 ────────────────────────────────────────────────────────────────────
 
 def test_DSC_09_existing_admin_upload_route_unchanged():
-    """기존 총어드민 업로드 경로 불변 확인.
+    """관리자(role_code=001) 업로드 경로 불변 확인.
 
-    document_digitize.py의 핵심 함수·라우트가 여전히 존재하고,
-    새 모듈 import가 기존 함수에 영향을 주지 않음을 확인한다.
-    실제 HTTP 요청 회귀 검증은 아님.
+    Gate D 이후 _require_admin() 제거됨 — 대신 is_admin 인라인 판별 사용.
+    핵심 함수·라우트·guard 연결이 유지됨을 확인한다.
+    실제 HTTP 요청 회귀 검증은 아님 (GD-07 커버).
     """
     import routers.document_digitize as dd
 
-    assert callable(getattr(dd, "_require_admin", None)), "_require_admin 삭제됨"
     assert callable(getattr(dd, "_resolve_company_id", None)), "_resolve_company_id 삭제됨"
     assert callable(getattr(dd, "digitize_document", None)), "digitize_document 삭제됨"
+    assert callable(getattr(dd, "get_digitize_result", None)), "get_digitize_result 삭제됨"
 
     from services.doc_site_context import resolve_document_site_context as guard
     assert callable(guard)
