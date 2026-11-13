@@ -982,9 +982,10 @@ def register(req: RegisterRequest):
 
     # WO-MEMTAI-00S §C.1/C.3/C.4: 서버가 역할과 회사 소속을 결정한다.
     # - 신규 회사 생성 성공 → _ROLE_COMPANY_ADMIN("002")
-    # - 회사 미소속 또는 회사 생성 실패 → _ROLE_NO_COMPANY("014")
+    # - 회사 미소속 → _ROLE_NO_COMPANY("014")
     # - 기존 회사 사업자번호 일치 → 위 auth.sign_up 이전에 이미 409 반환됨
     company_id = None
+    new_company_id = None  # R1-02: 이번 요청에서 신규 생성된 회사 ID만 추적
     server_role = _ROLE_NO_COMPANY
     if req.company_name:
         try:
@@ -999,11 +1000,24 @@ def register(req: RegisterRequest):
             cr = supabase.table("companies").insert(cd).execute()
             if cr.data:
                 company_id = cr.data[0]["id"]
+                new_company_id = company_id  # R1-02: 신규 회사 ID 추적
                 server_role = _ROLE_COMPANY_ADMIN  # §C.3: 회사 생성 성공 후에만 관리자 역할 부여
             else:
-                log.warning("[register] 회사 INSERT 응답 비어 있음 — 회사 미소속(_ROLE_NO_COMPANY)으로 가입")
+                # R1-01: §C.3 — 회사 생성 요청 가입에서 INSERT 무응답은 가입 실패
+                try:
+                    supabase.auth.admin.delete_user(auth_id)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail="회사 생성 실패: 응답 없음")
+        except HTTPException:
+            raise
         except Exception as _ce:
-            log.warning(f"[register] 회사 생성 실패: {_ce} — 회사 미소속(_ROLE_NO_COMPANY)으로 가입")
+            # R1-01: §C.3 — 회사 생성 예외도 가입 실패; 신규 auth 계정 보상 삭제
+            try:
+                supabase.auth.admin.delete_user(auth_id)
+            except Exception:
+                pass
+            raise HTTPException(status_code=500, detail=f"회사 생성 실패: {str(_ce)}")
 
     user_code = "USR-" + now_kst().strftime("%Y%m%d") + "-" + ''.join(random.choices(string.digits, k=4))
     try:
@@ -1023,12 +1037,29 @@ def register(req: RegisterRequest):
             "created_at": _now_iso(), "updated_at": _now_iso(),
         }).execute()
     except Exception as e:
-        # public.users INSERT 실패 시 방금 생성한 auth.users만 보상 삭제 (신규 auth_id 한정)
+        # R1-02: users INSERT 실패 — auth 계정 + 신규 생성 회사 보상 삭제
         try:
             supabase.auth.admin.delete_user(auth_id)
         except Exception:
             pass
+        if new_company_id:
+            try:
+                supabase.table("companies").delete().eq("id", new_company_id).execute()
+            except Exception:
+                log.warning(f"[register] 신규 회사 보상 삭제 실패 company_id={new_company_id}")
         raise HTTPException(status_code=500, detail=f"사용자 저장 실패: {str(e)}")
+    if not ur.data:
+        # R1-02: INSERT 결과 비어 있는 경우도 실패 처리
+        try:
+            supabase.auth.admin.delete_user(auth_id)
+        except Exception:
+            pass
+        if new_company_id:
+            try:
+                supabase.table("companies").delete().eq("id", new_company_id).execute()
+            except Exception:
+                log.warning(f"[register] 신규 회사 보상 삭제 실패 company_id={new_company_id}")
+        raise HTTPException(status_code=500, detail="사용자 저장 실패: 응답 없음")
     new_user_id = ur.data[0]["id"]
     # ── 이력 승계(D3): 동일 CI 무료진단/인증 이력을 계정에 연결 ──
     try:

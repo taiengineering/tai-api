@@ -3,8 +3,8 @@
 T01: role_code=001/031/032/033 주입 → 고권한 저장 0건; 서버가 role 결정
 T02: 기존 회사 사업자번호 → 409, auth.sign_up 호출 0건, company_id 자동부여 0건
 T03: 신규 회사 생성 성공 → server_role=_ROLE_COMPANY_ADMIN("002"), company_id 부여
-T04: 신규 회사 생성 실패 → server_role=_ROLE_NO_COMPANY("014"), company_id=None;
-     users INSERT 실패 시 auth 보상 삭제
+T04: 신규 회사 생성 실패 → 가입 중단·HTTPException 500, auth 보상 삭제 (R1-01);
+     users INSERT 실패 시 auth + 신규 회사 보상 삭제 (R1-02)
 T05: 중복 phone/email/CI → 기존 차단 로직 유지 (회귀 없음)
 T06: company_name 없음 → server_role=_ROLE_NO_COMPANY("014"), company_id=None
 T07: _PRIVILEGED_ROLES 상수 검사
@@ -64,7 +64,9 @@ def _make_supabase(
     ci_dup: bool = False,
     company_dup: bool = False,
     company_insert_ok: bool = True,
+    company_insert_raises: bool = False,
     user_insert_raises: bool = False,
+    user_insert_empty: bool = False,
     captured_user_insert: dict | None = None,
     auth_id: str = "auth-new-001",
 ):
@@ -123,7 +125,9 @@ def _make_supabase(
         if user_insert_raises:
             raise Exception("DB_INSERT_FAIL")
         m = MagicMock()
-        m.execute.return_value = MagicMock(data=[{"id": "user-new-001", **data}])
+        m.execute.return_value = MagicMock(
+            data=[] if user_insert_empty else [{"id": "user-new-001", **data}]
+        )
         return m
 
     users_t.insert.side_effect = _users_insert
@@ -148,7 +152,11 @@ def _make_supabase(
         data=[{"id": "co-existing-001"}] if company_dup else []
     )
     # insert(신규 회사)
-    if company_insert_ok:
+    if company_insert_raises:
+        companies_t.insert.return_value = MagicMock(
+            execute=MagicMock(side_effect=Exception("DB_COMPANY_FAIL"))
+        )
+    elif company_insert_ok:
         companies_t.insert.return_value = MagicMock(
             execute=MagicMock(return_value=MagicMock(data=[{"id": "co-new-001"}]))
         )
@@ -281,26 +289,23 @@ def test_T03_new_company_success_assigns_company_admin():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T04a: 신규 회사 생성 실패 → _ROLE_NO_COMPANY, company_id=None
+# T04a: 신규 회사 생성 실패(빈 응답) → 가입 중단·HTTPException, auth 보상 삭제
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_T04a_company_creation_fail_assigns_no_company_role():
-    """회사 생성 결과가 빈 응답이면 role_code=_ROLE_NO_COMPANY, company_id=None으로 가입된다."""
-    captured = {}
-
+def test_T04a_company_creation_fail_empty_response_aborts_registration():
+    """회사 INSERT 빈 응답 → 가입 실패(HTTPException 500), 미소속 계정 미생성. §C.3 R1-01"""
     with patch("routers.auth.get_supabase") as mock_sb:
-        mock_sb.return_value = _make_supabase(
+        sb = _make_supabase(
             company_dup=False,
             company_insert_ok=False,
-            captured_user_insert=captured,
         )
-        result = register(_req(company_name="신규회사", business_number="1111111111"))
+        mock_sb.return_value = sb
 
-    assert result["status"] == "success"
-    assert captured.get("role_code") == _ROLE_NO_COMPANY, \
-        f"회사 생성 실패 시 role={_ROLE_NO_COMPANY!r} 기대, got {captured.get('role_code')!r}"
-    assert captured.get("company_id") is None, \
-        f"company_id=None 기대, got {captured.get('company_id')!r}"
+        with pytest.raises(HTTPException) as exc:
+            register(_req(company_name="신규회사", business_number="1111111111"))
+
+    assert exc.value.status_code == 500
+    sb.auth.admin.delete_user.assert_called_once()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -326,6 +331,75 @@ def test_T04b_users_insert_fail_triggers_compensation_delete():
     assert exc.value.status_code == 500
     assert target_auth_id in deleted, f"보상 삭제 미실행; deleted={deleted}"
     assert len(deleted) == 1, f"delete_user 1회 기대, got {len(deleted)}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T04c: 회사 INSERT 예외 → HTTPException, auth 보상 삭제
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_T04c_company_creation_exception_aborts_and_compensates():
+    """회사 INSERT가 예외를 던지면 가입 실패, auth 보상 삭제. §C.3 §C.5 R1-01"""
+    target_auth_id = "auth-co-fail-001"
+    deleted = []
+
+    with patch("routers.auth.get_supabase") as mock_sb:
+        sb = _make_supabase(
+            company_dup=False,
+            company_insert_raises=True,
+            auth_id=target_auth_id,
+        )
+        sb.auth.admin.delete_user.side_effect = lambda uid: deleted.append(uid)
+        mock_sb.return_value = sb
+
+        with pytest.raises(HTTPException) as exc:
+            register(_req(company_name="신규회사", business_number="2222222222"))
+
+    assert exc.value.status_code == 500
+    assert target_auth_id in deleted, f"auth 보상 삭제 미실행; deleted={deleted}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T04d: users INSERT 빈 응답 → HTTPException
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_T04d_users_insert_empty_response_aborts():
+    """public.users INSERT 결과 비어 있으면 HTTPException 500, auth 보상 삭제. §C.5 R1-02"""
+    with patch("routers.auth.get_supabase") as mock_sb:
+        sb = _make_supabase(user_insert_empty=True)
+        mock_sb.return_value = sb
+
+        with pytest.raises(HTTPException) as exc:
+            register(_req())
+
+    assert exc.value.status_code == 500
+    sb.auth.admin.delete_user.assert_called_once()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T04e: users INSERT 실패 + 신규 회사 생성됨 → auth + 회사 모두 보상 삭제
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_T04e_users_insert_fail_with_new_company_compensates_both():
+    """users INSERT 실패 시 auth 계정과 신규 생성 회사 모두 보상 삭제. §C.5 R1-02"""
+    target_auth_id = "auth-co-user-fail-001"
+    deleted_auth = []
+
+    with patch("routers.auth.get_supabase") as mock_sb:
+        sb = _make_supabase(
+            company_insert_ok=True,
+            user_insert_raises=True,
+            auth_id=target_auth_id,
+        )
+        sb.auth.admin.delete_user.side_effect = lambda uid: deleted_auth.append(uid)
+        companies_t = sb.table.side_effect("companies")
+        mock_sb.return_value = sb
+
+        with pytest.raises(HTTPException) as exc:
+            register(_req(company_name="신규회사", business_number="3333333333"))
+
+    assert exc.value.status_code == 500
+    assert target_auth_id in deleted_auth, f"auth 보상 삭제 미실행: {deleted_auth}"
+    companies_t.delete.assert_called_once()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
