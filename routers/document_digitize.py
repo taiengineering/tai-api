@@ -6,6 +6,7 @@ POST /digitize — TAI 관리자가 파일을 DOC에 보내 변환 결과 ID를 
   - role_code == "001" 전용 (일반 직원 개방 시 별도 Owner 승인 필요)
   - 서버에서 확인한 company_id만 사용 (클라이언트 제공 금지)
   - companies 테이블 실존 확인 필수
+  - factory_id 제공 시 resolve_document_site_context()로 사업장 소속·권한 검증 (Gate C)
 
 기존 upload_file_field() 미변경 — 파일 첨부와 문서 디지털화는 별개 기능.
 """
@@ -25,6 +26,7 @@ from services.doc_digitize_client import (
     digitize,
 )
 from services.doc_lookup_client import DocLookupError, lookup_extraction_content
+from services.doc_site_context import resolve_document_site_context
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/digitize", tags=["문서 디지털화"])
@@ -64,6 +66,7 @@ async def digitize_document(
     file: UploadFile = File(...),
     document_input_mode: Optional[str] = Form(None),
     company_id: Optional[str] = Form(None),
+    factory_id: Optional[str] = Form(None),
     current_user: dict = Depends(get_current_user),
 ):
     """파일을 DOC에 전송해 디지털화 처리 결과 ID를 반환합니다.
@@ -73,6 +76,7 @@ async def digitize_document(
     - DOC 오류 메시지는 TAI 로그에만 기록 (사용자 미노출)
     - document_input_mode: 파일 입력 방식 힌트 (digital|scan|unsure, 선택)
     - company_id: role_code=001 전용 — 대상 회사 지정 (미입력 시 토큰 company_id 사용)
+    - factory_id: 대상 사업장 ID — 제공 시 사업장 소속·권한 검증 후 DOC에 전달 (Gate C)
     """
     _require_admin(current_user)
     company_id = _resolve_company_id(current_user, company_id)
@@ -80,6 +84,18 @@ async def digitize_document(
 
     if document_input_mode is not None and document_input_mode not in _ALLOWED_MODES:
         raise HTTPException(422, "document_input_mode 허용 값: digital, scan, unsure")
+
+    # Gate C: factory_id 제공 시 사업장 소속·권한 검증
+    verified_factory_id: Optional[str] = None
+    if factory_id and factory_id.strip():
+        sb = get_supabase()
+        ctx = resolve_document_site_context(
+            current_user=current_user,
+            company_id=company_id,
+            factory_id=factory_id.strip(),
+            supabase=sb,
+        )
+        verified_factory_id = ctx.factory_id
 
     # 50 MiB + 1 센티넬로 초과 감지
     file_bytes = await file.read(_MAX_BYTES + 1)
@@ -94,6 +110,7 @@ async def digitize_document(
             original_filename=original_filename,
             company_id=company_id,
             document_input_mode=document_input_mode,
+            factory_id=verified_factory_id,
         )
     except DocConfigError as exc:
         log.error("[digitize] 설정 오류: %s", exc.reason)
@@ -130,6 +147,7 @@ async def digitize_document(
 async def get_digitize_result(
     doc_log_id: str,
     company_id: Optional[str] = Query(None),
+    factory_id: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
 ):
     """디지털화된 문서의 추출 결과(Markdown)를 반환합니다.
@@ -137,16 +155,30 @@ async def get_digitize_result(
     - role_code=001 전용
     - company_id: 조회 대상 회사 (미전달 시 로그인 계정 company_id 사용)
       * 업로드 시 선택한 회사와 동일한 company_id를 전달해야 조회 가능
+    - factory_id: 업로드 시 지정한 사업장 ID — 제공 시 사업장 귀속 검증 후 DOC에 전달 (Gate C)
     - extraction_format=md 인 경우에만 콘텐츠 반환
     """
     _require_admin(current_user)
     company_id = _resolve_company_id(current_user, company_id)
     _verify_company_exists(company_id)
 
+    # Gate C: factory_id 제공 시 사업장 소속·권한 검증
+    verified_factory_id: Optional[str] = None
+    if factory_id and factory_id.strip():
+        sb = get_supabase()
+        ctx = resolve_document_site_context(
+            current_user=current_user,
+            company_id=company_id,
+            factory_id=factory_id.strip(),
+            supabase=sb,
+        )
+        verified_factory_id = ctx.factory_id
+
     try:
         result = await lookup_extraction_content(
             doc_log_id=doc_log_id,
             company_id=company_id,
+            factory_id=verified_factory_id,
         )
     except DocLookupError as exc:
         log.error("[digitize/result] DOC 조회 오류 code=%s", exc.code)
