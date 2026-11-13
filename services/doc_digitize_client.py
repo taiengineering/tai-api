@@ -112,6 +112,7 @@ async def digitize(
     original_filename: str,
     company_id: str,
     document_input_mode: Optional[str] = None,
+    factory_id: Optional[str] = None,
     timeout: float = 60.0,
 ) -> DocDigitizeResult:
     """DOC POST /digitize 호출 → DocDigitizeResult 반환.
@@ -121,6 +122,7 @@ async def digitize(
         original_filename:     원본 파일명 (확장자 포함)
         company_id:            TAI 서버에서 검증한 회사 ID (DOC tenant_id)
         document_input_mode:   파일 입력 방식 힌트 (digital|scan|unsure) — None이면 미전송
+        factory_id:            TAI에서 검증한 사업장 ID — 비-None 시 X-Factory-Id 헤더 포함
         timeout:               응답 대기 최대 초 — 초과 시 DocConnectionError, 재전송 금지
 
     Returns:
@@ -139,6 +141,8 @@ async def digitize(
         "X-Service-Key":   service_key,
         "X-Tenant-Id":     company_id,
     }
+    if factory_id is not None:
+        headers["X-Factory-Id"] = factory_id
 
     post_kwargs: dict = {
         "headers": headers,

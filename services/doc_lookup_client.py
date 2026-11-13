@@ -135,6 +135,7 @@ async def lookup_extraction(
     *,
     doc_log_id: str,
     company_id: str,
+    factory_id: Optional[str] = None,
     timeout: float = 30.0,
 ) -> DocLookupResult:
     """DOC 추출 결과 역조회 — doc_log_id 기반.
@@ -142,6 +143,7 @@ async def lookup_extraction(
     Args:
         doc_log_id:  DOC에서 발급한 문서 처리 ID
         company_id:  TAI 서버에서 검증한 회사 ID (DOC tenant_id)
+        factory_id:  TAI에서 검증한 사업장 ID — 비-None 시 X-Factory-Id 헤더 포함
         timeout:     응답 대기 최대 초 — 초과 시 DocLookupError, 재전송 금지
 
     Returns:
@@ -164,6 +166,8 @@ async def lookup_extraction(
         "X-Service-Key":   service_key,
         "X-Tenant-Id":     company_id,
     }
+    if factory_id is not None:
+        headers["X-Factory-Id"] = factory_id
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -203,6 +207,7 @@ async def lookup_extraction_content(
     *,
     doc_log_id: str,
     company_id: str,
+    factory_id: Optional[str] = None,
     timeout: float = 30.0,
 ) -> DocLookupContentResult:
     """DOC 추출 결과 콘텐츠 조회 — doc_log_id 기반 Markdown 텍스트 반환.
@@ -210,6 +215,7 @@ async def lookup_extraction_content(
     Args:
         doc_log_id:  DOC에서 발급한 문서 처리 ID
         company_id:  TAI 서버에서 검증한 회사 ID (DOC tenant_id)
+        factory_id:  TAI에서 검증한 사업장 ID — 비-None 시 X-Factory-Id 헤더 포함
         timeout:     응답 대기 최대 초
 
     Returns:
@@ -232,6 +238,8 @@ async def lookup_extraction_content(
         "X-Service-Key":   service_key,
         "X-Tenant-Id":     company_id,
     }
+    if factory_id is not None:
+        headers["X-Factory-Id"] = factory_id
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
