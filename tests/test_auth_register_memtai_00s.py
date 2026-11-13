@@ -62,11 +62,16 @@ def _make_supabase(
     phone_dup: bool = False,
     email_dup: bool = False,
     ci_dup: bool = False,
-    company_dup: bool = False,
+    company_dup: bool = False,              # 두 형식 모두 중복(하위 호환)
+    company_dup_digits: bool = False,       # 숫자 형식만 중복 (R2-01)
+    company_dup_hyphen: bool = False,       # 하이픈 형식만 중복 (R2-01)
+    company_dup_query_raises: bool = False, # BN 중복 조회 예외 (R2-01)
     company_insert_ok: bool = True,
     company_insert_raises: bool = False,
     user_insert_raises: bool = False,
     user_insert_empty: bool = False,
+    user_exists_after_fail: bool = False,   # 존재 확인 시 기존 사용자 발견 (R2-02)
+    user_exists_check_raises: bool = False, # 존재 확인 조회 예외 (R2-02)
     captured_user_insert: dict | None = None,
     auth_id: str = "auth-new-001",
 ):
@@ -95,11 +100,19 @@ def _make_supabase(
         eq=MagicMock(return_value=MagicMock(execute=MagicMock(return_value=_empty())))
     )
 
-    # select execute 순서: 1=phone, 2=email, 3=CI
+    # select execute 순서: 0=phone, 1=email, 2=CI, 3=auth_id 존재확인(R2-02 실패경로)
+    if user_exists_check_raises:
+        _exists_entry = "RAISE"
+    elif user_exists_after_fail:
+        _exists_entry = MagicMock(data=[{"id": "user-new-001"}])
+    else:
+        _exists_entry = MagicMock(data=[])
+
     _select_seq = [
         MagicMock(data=[{"id": "x"}] if phone_dup else []),
         MagicMock(data=[{"id": "x"}] if email_dup else []),
         MagicMock(data=[{"id": "x"}] if ci_dup else []),
+        _exists_entry,
     ]
     _select_idx = [0]
 
@@ -107,18 +120,15 @@ def _make_supabase(
         idx = _select_idx[0]
         _select_idx[0] += 1
         if idx < len(_select_seq):
-            return _select_seq[idx]
+            item = _select_seq[idx]
+            if item == "RAISE":
+                raise Exception("DB_CHECK_FAIL")
+            return item
         return _empty()
 
     users_t.execute.side_effect = _users_execute
 
     # users insert
-    _inserted_user = {
-        "id": "user-new-001", "auth_id": auth_id,
-        "email": "new@example.com", "phone": "01011112222",
-        "name": "홍길동", "status_code": "ACTIVE", "is_active": True,
-    }
-
     def _users_insert(data):
         if captured_user_insert is not None:
             captured_user_insert.update(data)
@@ -147,10 +157,27 @@ def _make_supabase(
     companies_t.select.return_value = companies_t
     companies_t.eq.return_value = companies_t
     companies_t.limit.return_value = companies_t
-    # select(bn dup check)
-    companies_t.execute.return_value = MagicMock(
-        data=[{"id": "co-existing-001"}] if company_dup else []
-    )
+
+    # select execute 순서: 0=digits 중복조회, 1=하이픈 중복조회 (R2-01)
+    _co_dup_d = company_dup or company_dup_digits
+    _co_dup_h = company_dup or company_dup_hyphen
+    _co_select_seq = [
+        MagicMock(data=[{"id": "co-existing-001"}] if _co_dup_d else []),
+        MagicMock(data=[{"id": "co-existing-001"}] if _co_dup_h else []),
+    ]
+    _co_select_idx = [0]
+
+    def _co_execute():
+        if company_dup_query_raises:
+            raise Exception("DB_CO_QUERY_FAIL")
+        idx = _co_select_idx[0]
+        _co_select_idx[0] += 1
+        if idx < len(_co_select_seq):
+            return _co_select_seq[idx]
+        return _empty()
+
+    companies_t.execute.side_effect = _co_execute
+
     # insert(신규 회사)
     if company_insert_raises:
         companies_t.insert.return_value = MagicMock(
@@ -462,3 +489,141 @@ def test_T07_privileged_roles_constant():
         f"{_ROLE_COMPANY_ADMIN!r}는 가입 가능 역할이므로 _PRIVILEGED_ROLES에 없어야 함"
     assert _ROLE_NO_COMPANY not in _PRIVILEGED_ROLES, \
         f"{_ROLE_NO_COMPANY!r}는 가입 가능 역할이므로 _PRIVILEGED_ROLES에 없어야 함"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R2-T01: 하이픈 사업자번호 → 10자리 숫자로 정규화 저장
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_R2_T01_hyphenated_business_number_normalized_to_digits():
+    """하이픈 포함 사업자번호가 10자리 숫자로 정규화되어 회사 레코드에 저장된다. R2-01"""
+    with patch("routers.auth.get_supabase") as mock_sb:
+        sb = _make_supabase(company_insert_ok=True)
+        companies_t = sb.table.side_effect("companies")
+        mock_sb.return_value = sb
+        result = register(_req(company_name="신규회사", business_number="123-45-67890"))
+
+    assert result["status"] == "success"
+    insert_data = companies_t.insert.call_args[0][0]
+    assert insert_data.get("business_number") == "1234567890", \
+        f"BN 정규화 실패: {insert_data.get('business_number')!r}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R2-T02: 기존 회사의 BN 표기 형식 차이에 무관하게 중복 차단
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_R2_T02a_existing_hyphen_bn_blocks_digits_registration():
+    """기존 회사에 하이픈 형식 BN이 있으면 숫자 형식 가입도 409. R2-01"""
+    with patch("routers.auth.get_supabase") as mock_sb:
+        mock_sb.return_value = _make_supabase(company_dup_hyphen=True)
+        with pytest.raises(HTTPException) as exc:
+            register(_req(company_name="신규회사", business_number="1234567890"))
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail.get("code") == "COMPANY_ALREADY_EXISTS"
+
+
+def test_R2_T02b_existing_digits_bn_blocks_hyphen_registration():
+    """기존 회사에 숫자 형식 BN이 있으면 하이픈 형식 가입도 409. R2-01"""
+    with patch("routers.auth.get_supabase") as mock_sb:
+        mock_sb.return_value = _make_supabase(company_dup_digits=True)
+        with pytest.raises(HTTPException) as exc:
+            register(_req(company_name="신규회사", business_number="123-45-67890"))
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail.get("code") == "COMPANY_ALREADY_EXISTS"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R2-T03: 사업자번호 형식 오류·조회 실패 → 가입 차단
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_R2_T03a_invalid_business_number_format_rejected():
+    """사업자번호 숫자 10자리 미만 → 400, auth.sign_up 미호출. R2-01"""
+    with patch("routers.auth.get_supabase") as mock_sb:
+        sb = _make_supabase()
+        mock_sb.return_value = sb
+        with pytest.raises(HTTPException) as exc:
+            register(_req(company_name="신규회사", business_number="12345"))
+
+    assert exc.value.status_code == 400
+    sb.auth.sign_up.assert_not_called()
+
+
+def test_R2_T03b_bn_query_failure_blocks_registration():
+    """사업자번호 중복 조회 오류 → 가입 차단(500), auth.sign_up 미호출. R2-01"""
+    with patch("routers.auth.get_supabase") as mock_sb:
+        sb = _make_supabase(company_dup_query_raises=True)
+        mock_sb.return_value = sb
+        with pytest.raises(HTTPException) as exc:
+            register(_req(company_name="신규회사", business_number="1234567890"))
+
+    assert exc.value.status_code == 500
+    sb.auth.sign_up.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R2-T04: users INSERT 예외 + 미생성 확인 → auth + 신규 회사 보상 삭제
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_R2_T04_user_save_fail_not_created_triggers_cleanup():
+    """users INSERT 예외, 미생성 확인 → auth + 신규 회사 보상 삭제. R2-02"""
+    target_auth_id = "auth-r2t04-001"
+    deleted_auth = []
+
+    with patch("routers.auth.get_supabase") as mock_sb:
+        sb = _make_supabase(
+            company_insert_ok=True,
+            user_insert_raises=True,
+            user_exists_after_fail=False,
+            auth_id=target_auth_id,
+        )
+        sb.auth.admin.delete_user.side_effect = lambda uid: deleted_auth.append(uid)
+        companies_t = sb.table.side_effect("companies")
+        mock_sb.return_value = sb
+
+        with pytest.raises(HTTPException) as exc:
+            register(_req(company_name="신규회사", business_number="4444444444"))
+
+    assert exc.value.status_code == 500
+    assert target_auth_id in deleted_auth, f"auth 보상 삭제 미실행: {deleted_auth}"
+    companies_t.delete.assert_called_once()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R2-T05: users INSERT 빈 응답 + 실제 존재 확인 → 삭제 없이 성공
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_R2_T05_user_insert_empty_but_exists_succeeds_no_delete():
+    """users INSERT 결과 없음, 실제 생성 확인 → 성공 반환, auth 삭제 없음. R2-02"""
+    with patch("routers.auth.get_supabase") as mock_sb:
+        sb = _make_supabase(
+            user_insert_empty=True,
+            user_exists_after_fail=True,
+        )
+        mock_sb.return_value = sb
+        result = register(_req())
+
+    assert result["status"] == "success"
+    assert result["data"]["user_id"] == "user-new-001"
+    sb.auth.admin.delete_user.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R2-T06: users INSERT 실패 + 존재 확인 불가 → 임의 삭제 없음, 500
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_R2_T06_user_save_check_uncertain_no_delete():
+    """users INSERT 실패, 존재 확인 불가 → 임의 삭제 없음, 500 반환. R2-02"""
+    with patch("routers.auth.get_supabase") as mock_sb:
+        sb = _make_supabase(
+            user_insert_raises=True,
+            user_exists_check_raises=True,
+        )
+        mock_sb.return_value = sb
+        with pytest.raises(HTTPException) as exc:
+            register(_req())
+
+    assert exc.value.status_code == 500
+    sb.auth.admin.delete_user.assert_not_called()

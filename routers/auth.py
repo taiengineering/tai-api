@@ -945,14 +945,20 @@ def register(req: RegisterRequest):
     _ci_dup = supabase.table("users").select("id").eq("identity_ci", ci_hash).limit(1).execute()
     if _ci_dup.data:
         raise HTTPException(status_code=400, detail="이미 가입된 사용자입니다. (본인인증 중복)")
-    # WO-MEMTAI-00S §C.2: 기존 회사 자동 소속 차단.
+    # R2-01: 사업자번호 정규화 — 회사 생성 블록에서도 재사용
+    bn_digits = re.sub(r'[^0-9]', '', req.business_number) if req.business_number else None
+
+    # WO-MEMTAI-00S §C.2 / R2-01: 기존 회사 자동 소속 차단.
     # auth.users 생성 이전에 사업자번호 중복을 확인해 기존 회사에 무단 소속되는 경로를 원천 차단한다.
     # 기존 회사 합류는 별도 초대/승인 경로(company_user_invites)를 통해야 한다.
-    if req.company_name and req.business_number:
-        _bn_pre = re.sub(r'[^0-9]', '', req.business_number)
-        if _bn_pre:
-            _bn_pre_dup = supabase.table("companies").select("id").eq("business_number", _bn_pre).limit(1).execute()
-            if _bn_pre_dup.data:
+    if req.company_name and bn_digits:
+        if len(bn_digits) != 10:
+            raise HTTPException(status_code=400, detail="사업자등록번호는 숫자 10자리여야 합니다.")
+        _bn_hyphen = f"{bn_digits[:3]}-{bn_digits[3:5]}-{bn_digits[5:]}"
+        try:
+            _dup_d = supabase.table("companies").select("id").eq("business_number", bn_digits).limit(1).execute()
+            _dup_h = supabase.table("companies").select("id").eq("business_number", _bn_hyphen).limit(1).execute()
+            if _dup_d.data or _dup_h.data:
                 raise HTTPException(
                     status_code=409,
                     detail={
@@ -960,6 +966,11 @@ def register(req: RegisterRequest):
                         "message": "이미 등록된 사업자등록번호입니다. 해당 회사 관리자를 통해 초대 가입을 진행해 주세요.",
                     },
                 )
+        except HTTPException:
+            raise
+        except Exception as _bn_err:
+            # R2-01: 중복 조회 실패 시 잘못된 회사 생성 방지
+            raise HTTPException(status_code=500, detail=f"사업자등록번호 확인 실패: {str(_bn_err)}")
 
     # WO-MEMTAI-00S §C.1: 클라이언트 제공 role_code를 auth 메타데이터에 포함하지 않는다.
     # 역할은 서버가 가입 결과에 따라 결정한다.
@@ -993,7 +1004,7 @@ def register(req: RegisterRequest):
                   "company_code": f"COM-{now_kst().strftime('%Y%m%d%H%M%S')}",
                   "status_code": "TRIAL", "is_active": True,
                   "created_at": _now_iso(), "updated_at": _now_iso()}
-            if req.business_number: cd["business_number"] = re.sub(r'[^0-9]', '', req.business_number)
+            if bn_digits: cd["business_number"] = bn_digits  # R2-01: 정규화된 10자리 저장
             if req.representative_name: cd["representative_name"] = req.representative_name
             if req.ksic_code: cd["ksic_code"] = req.ksic_code
             if req.contact_phone: cd["contact_phone"] = req.contact_phone
@@ -1020,6 +1031,7 @@ def register(req: RegisterRequest):
             raise HTTPException(status_code=500, detail=f"회사 생성 실패: {str(_ce)}")
 
     user_code = "USR-" + now_kst().strftime("%Y%m%d") + "-" + ''.join(random.choices(string.digits, k=4))
+    _ur_exc = None
     try:
         ur = supabase.table("users").insert({
             "auth_id": auth_id, "email": req.email, "phone": phone_normalized,
@@ -1036,31 +1048,40 @@ def register(req: RegisterRequest):
             "identity_birth": _ia.get("user_birthday"), "identity_ci": ci_hash,
             "created_at": _now_iso(), "updated_at": _now_iso(),
         }).execute()
-    except Exception as e:
-        # R1-02: users INSERT 실패 — auth 계정 + 신규 생성 회사 보상 삭제
+        new_user_id = ur.data[0]["id"] if ur.data else None
+    except Exception as _ue:
+        ur = None
+        new_user_id = None
+        _ur_exc = _ue
+    if new_user_id is None:
+        # R2-02: 즉시 삭제 금지 — auth_id로 실제 생성 여부 먼저 확인
+        _check_ok, _existing_user = False, None
         try:
-            supabase.auth.admin.delete_user(auth_id)
-        except Exception:
-            pass
-        if new_company_id:
+            _chk = supabase.table("users").select("id").eq("auth_id", auth_id).limit(1).execute()
+            _existing_user = _chk.data[0] if _chk.data else None
+            _check_ok = True
+        except Exception as _chk_err:
+            log.warning(f"[register] 사용자 존재 확인 실패 auth_id={auth_id}: {_chk_err}")
+        if not _check_ok:
+            # 확인 불가 — 임의 삭제 금지, 오류만 반환
+            log.warning(f"[register] 사용자 저장 상태 확인 불가 auth_id={auth_id}")
+            raise HTTPException(status_code=500, detail="사용자 저장 상태 확인 불가 — 수동 복구 필요")
+        if _existing_user:
+            # 이미 생성됨 — 삭제 금지, 기존 레코드로 성공 처리
+            new_user_id = _existing_user["id"]
+        else:
+            # 미생성 확인 — auth + 신규 생성 회사 보상 삭제
             try:
-                supabase.table("companies").delete().eq("id", new_company_id).execute()
+                supabase.auth.admin.delete_user(auth_id)
             except Exception:
-                log.warning(f"[register] 신규 회사 보상 삭제 실패 company_id={new_company_id}")
-        raise HTTPException(status_code=500, detail=f"사용자 저장 실패: {str(e)}")
-    if not ur.data:
-        # R1-02: INSERT 결과 비어 있는 경우도 실패 처리
-        try:
-            supabase.auth.admin.delete_user(auth_id)
-        except Exception:
-            pass
-        if new_company_id:
-            try:
-                supabase.table("companies").delete().eq("id", new_company_id).execute()
-            except Exception:
-                log.warning(f"[register] 신규 회사 보상 삭제 실패 company_id={new_company_id}")
-        raise HTTPException(status_code=500, detail="사용자 저장 실패: 응답 없음")
-    new_user_id = ur.data[0]["id"]
+                pass
+            if new_company_id:
+                try:
+                    supabase.table("companies").delete().eq("id", new_company_id).execute()
+                except Exception:
+                    log.warning(f"[register] 신규 회사 보상 삭제 실패 company_id={new_company_id}")
+            _detail = f"사용자 저장 실패: {str(_ur_exc)}" if _ur_exc else "사용자 저장 실패: 응답 없음"
+            raise HTTPException(status_code=500, detail=_detail)
     # ── 이력 승계(D3): 동일 CI 무료진단/인증 이력을 계정에 연결 ──
     try:
         supabase.table("diagnosis_auth_log").update(
@@ -1072,7 +1093,7 @@ def register(req: RegisterRequest):
     except Exception as _e:
         log.warning(f"[register] 본인인증 이력 승계 실패 user_id={new_user_id}: {_e}")
     return {"status": "success", "message": "회원가입이 완료되었습니다.",
-            "data": {"user_id": ur.data[0]["id"], "phone": phone_normalized, "name": req.name, "company_id": company_id}}
+            "data": {"user_id": new_user_id, "phone": phone_normalized, "name": req.name, "company_id": company_id}}
 
 
 # ── 소셜 유저 동기화 (B2) ────────────────────────────────────────
