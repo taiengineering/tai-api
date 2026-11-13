@@ -5,6 +5,12 @@
 Repository 직접 접근 없음. DATABASE_URL 사용 금지. LEG_RUNTIME_URL만 사용.
 Shadow(run_shadow_compare)는 예외를 전파하지 않는다.
 WO-PIPE-004 소비자 경로(build_facility/evaluate_rtm)는 실패를 예외로 올려 호출자가 처리한다(TAI fallback 금지).
+
+WP-10B: LEG_RUNTIME_TIMEOUT 기본값을 5.0s→30.0s로 상향.
+  - 관측된 5건(CST-0411/0428/0445/0460/0461)의 read timeout은 5.0s 초과
+    LEG /rtm/evaluate P95 응답 시간이 5s를 초과하는 경우가 있음.
+  - CONSTRUCTION 전용 LEG_RTM_CONSTRUCTION_TIMEOUT(기본 30.0s)은 별도 유지.
+  - 기본값 변경만. retry/policy 변경은 Owner 경계(OWNER_BOUNDARY).
 """
 from __future__ import annotations
 
@@ -18,7 +24,9 @@ import httpx
 log = logging.getLogger("clients.leg_runtime")
 
 LEG_RUNTIME_URL = os.getenv("LEG_RUNTIME_URL", "").rstrip("/")
-LEG_RUNTIME_TIMEOUT = float(os.getenv("LEG_RUNTIME_TIMEOUT", "5.0"))
+# WP-10B: 5.0s → 30.0s. LEG /rtm/evaluate P95가 5s를 초과하는 케이스 관측(CST-0411 등).
+# env override(LEG_RUNTIME_TIMEOUT) 가능.
+LEG_RUNTIME_TIMEOUT = float(os.getenv("LEG_RUNTIME_TIMEOUT", "30.0"))
 
 # Input Contract에 있는 필드만 전달한다. 신규 필드 생성 금지.
 # DiagnoseStep1Body 속성명 -> LEG Input Contract field_code
@@ -64,6 +72,12 @@ def evaluate(compiler_output: Dict[str, Any], max_results: Optional[int] = 0,
             json={"compiler_output": compiler_output, "max_results": max_results},
             timeout=timeout or LEG_RUNTIME_TIMEOUT,
         )
+    except httpx.ConnectTimeout as e:
+        raise LegRuntimeError("connect timeout: {}".format(e))
+    except httpx.ReadTimeout as e:
+        raise LegRuntimeError("read timeout: {}".format(e))
+    except httpx.TimeoutException as e:
+        raise LegRuntimeError("request timeout: {}".format(e))
     except Exception as e:
         raise LegRuntimeError("request failed: {}".format(e))
     if resp.status_code != 200:
@@ -608,6 +622,12 @@ def evaluate_rtm(
             json=payload,
             timeout=timeout or LEG_RUNTIME_TIMEOUT,
         )
+    except httpx.ConnectTimeout as e:
+        raise LegRuntimeError("connect timeout: {}".format(e))
+    except httpx.ReadTimeout as e:
+        raise LegRuntimeError("read timeout: {}".format(e))
+    except httpx.TimeoutException as e:
+        raise LegRuntimeError("request timeout: {}".format(e))
     except Exception as e:
         raise LegRuntimeError("request failed: {}".format(e))
     try:
@@ -635,6 +655,12 @@ def fetch_source_texts(atom_ids: Any, *, timeout: Optional[float] = None) -> Dic
             json={"atom_ids": list(atom_ids)},
             timeout=timeout or LEG_RUNTIME_TIMEOUT,
         )
+    except httpx.ConnectTimeout as e:
+        raise LegRuntimeError("connect timeout: {}".format(e))
+    except httpx.ReadTimeout as e:
+        raise LegRuntimeError("read timeout: {}".format(e))
+    except httpx.TimeoutException as e:
+        raise LegRuntimeError("request timeout: {}".format(e))
     except Exception as e:
         raise LegRuntimeError("request failed: {}".format(e))
     if resp.status_code != 200:
@@ -661,6 +687,12 @@ def fetch_evidence_rows(law_names, article_nos, *, timeout: Optional[float] = No
             json={"law_names": list(law_names), "article_nos": list(article_nos)},
             timeout=timeout or LEG_RUNTIME_TIMEOUT,
         )
+    except httpx.ConnectTimeout as e:
+        raise LegRuntimeError("connect timeout: {}".format(e))
+    except httpx.ReadTimeout as e:
+        raise LegRuntimeError("read timeout: {}".format(e))
+    except httpx.TimeoutException as e:
+        raise LegRuntimeError("request timeout: {}".format(e))
     except Exception as e:
         raise LegRuntimeError("request failed: {}".format(e))
     if resp.status_code != 200:
