@@ -48,6 +48,13 @@ WORKER_EMAIL_DOMAIN = os.getenv("WORKER_EMAIL_DOMAIN", "worker.taieng.co.kr")
 DEFAULT_SECTOR = "INDUSTRIAL"
 _NAVER_PROVIDER_ID = "custom:naver-oauth2"
 
+# WO-MEMTAI-00S: 가입 경로 서버 결정 역할 상수
+# 클라이언트는 역할을 지정할 수 없다. 서버가 가입 유형에 따라 아래 중 하나를 부여한다.
+_ROLE_COMPANY_ADMIN = "002"   # 신규 회사 생성 성공 시 부여하는 회사 관리자
+_ROLE_NO_COMPANY    = "014"   # 회사 미소속 가입 기본값 (근로자/TEAM); 호환성 미검증 OWNER_POLICY_PENDING
+# 가입 요청으로 절대 부여할 수 없는 고권한 목록
+_PRIVILEGED_ROLES = frozenset({"001", "031", "032", "033"})
+
 # send-otp 응답에 인증번호를 실을지 여부. 기본은 비노출이다.
 # 노출하면 누구나 남의 번호로 OTP 를 받아볼 수 있어 전화번호 인증이 무력해진다.
 # 개발·테스트 환경에서만 OTP_DEV_ECHO=1 로 켠다.
@@ -938,13 +945,44 @@ def register(req: RegisterRequest):
     _ci_dup = supabase.table("users").select("id").eq("identity_ci", ci_hash).limit(1).execute()
     if _ci_dup.data:
         raise HTTPException(status_code=400, detail="이미 가입된 사용자입니다. (본인인증 중복)")
+    # R2-01: 사업자번호 정규화 — 회사 생성 블록에서도 재사용
+    bn_digits = re.sub(r'[^0-9]', '', req.business_number) if req.business_number else None
+
+    # WO-MEMTAI-00S §C.2 / R2-01: 기존 회사 자동 소속 차단.
+    # auth.users 생성 이전에 사업자번호 중복을 확인해 기존 회사에 무단 소속되는 경로를 원천 차단한다.
+    # 기존 회사 합류는 별도 초대/승인 경로(company_user_invites)를 통해야 한다.
+    if req.company_name and req.business_number:
+        # R2-FINAL: 제출된 business_number에서 숫자 추출이 10자리가 아니면 차단
+        if not bn_digits or len(bn_digits) != 10:
+            raise HTTPException(status_code=400, detail="사업자등록번호는 숫자 10자리여야 합니다.")
+        _bn_hyphen = f"{bn_digits[:3]}-{bn_digits[3:5]}-{bn_digits[5:]}"
+        try:
+            _dup_d = supabase.table("companies").select("id").eq("business_number", bn_digits).limit(1).execute()
+            _dup_h = supabase.table("companies").select("id").eq("business_number", _bn_hyphen).limit(1).execute()
+            if _dup_d.data or _dup_h.data:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "COMPANY_ALREADY_EXISTS",
+                        "message": "이미 등록된 사업자등록번호입니다. 해당 회사 관리자를 통해 초대 가입을 진행해 주세요.",
+                    },
+                )
+        except HTTPException:
+            raise
+        except Exception as _bn_err:
+            # R2-01: 중복 조회 실패 시 잘못된 회사 생성 방지
+            raise HTTPException(status_code=500, detail=f"사업자등록번호 확인 실패: {str(_bn_err)}")
+
+    # WO-MEMTAI-00S §C.1: 클라이언트 제공 role_code를 auth 메타데이터에 포함하지 않는다.
+    # 역할은 서버가 가입 결과에 따라 결정한다.
     try:
         auth_res = supabase.auth.sign_up(
             {
                 "email": req.email,
                 "password": req.password,
                 "options": {
-                    "data": {"name": req.name, "phone": phone_normalized, "role_code": req.role_code}
+                    "data": {"name": req.name, "phone": phone_normalized}
+                    # role_code 미포함: 서버가 가입 유형에 따라 결정 (WO-MEMTAI-00S §C.1)
                 },
             }
         )
@@ -953,32 +991,53 @@ def register(req: RegisterRequest):
     if not auth_res.user:
         raise HTTPException(status_code=400, detail="회원가입 실패")
     auth_id = str(auth_res.user.id)
+
+    # WO-MEMTAI-00S §C.1/C.3/C.4: 서버가 역할과 회사 소속을 결정한다.
+    # - 신규 회사 생성 성공 → _ROLE_COMPANY_ADMIN("002")
+    # - 회사 미소속 → _ROLE_NO_COMPANY("014")
+    # - 기존 회사 사업자번호 일치 → 위 auth.sign_up 이전에 이미 409 반환됨
     company_id = None
+    new_company_id = None  # R1-02: 이번 요청에서 신규 생성된 회사 ID만 추적
+    server_role = _ROLE_NO_COMPANY
     if req.company_name:
-        if req.business_number:
-            bn_clean = re.sub(r'[^0-9]', '', req.business_number)
-            bn_dup = supabase.table("companies").select("id").eq("business_number", bn_clean).limit(1).execute()
-            if bn_dup.data:
-                company_id = bn_dup.data[0]["id"]
-        if not company_id:
+        try:
+            cd = {"name": req.company_name, "company_type_code": req.company_type_code or "002",
+                  "company_code": f"COM-{now_kst().strftime('%Y%m%d%H%M%S')}",
+                  "status_code": "TRIAL", "is_active": True,
+                  "created_at": _now_iso(), "updated_at": _now_iso()}
+            if bn_digits: cd["business_number"] = bn_digits  # R2-01: 정규화된 10자리 저장
+            if req.representative_name: cd["representative_name"] = req.representative_name
+            if req.ksic_code: cd["ksic_code"] = req.ksic_code
+            if req.contact_phone: cd["contact_phone"] = req.contact_phone
+            cr = supabase.table("companies").insert(cd).execute()
+            if cr.data:
+                company_id = cr.data[0]["id"]
+                new_company_id = company_id  # R1-02: 신규 회사 ID 추적
+                server_role = _ROLE_COMPANY_ADMIN  # §C.3: 회사 생성 성공 후에만 관리자 역할 부여
+            else:
+                # R1-01: §C.3 — 회사 생성 요청 가입에서 INSERT 무응답은 가입 실패
+                try:
+                    supabase.auth.admin.delete_user(auth_id)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail="회사 생성 실패: 응답 없음")
+        except HTTPException:
+            raise
+        except Exception as _ce:
+            # R1-01: §C.3 — 회사 생성 예외도 가입 실패; 신규 auth 계정 보상 삭제
             try:
-                cd = {"name": req.company_name, "company_type_code": req.company_type_code or "002",
-                      "company_code": f"COM-{now_kst().strftime('%Y%m%d%H%M%S')}",
-                      "status_code": "TRIAL", "is_active": True,
-                      "created_at": _now_iso(), "updated_at": _now_iso()}
-                if req.business_number: cd["business_number"] = re.sub(r'[^0-9]', '', req.business_number)
-                if req.representative_name: cd["representative_name"] = req.representative_name
-                if req.ksic_code: cd["ksic_code"] = req.ksic_code
-                if req.contact_phone: cd["contact_phone"] = req.contact_phone
-                cr = supabase.table("companies").insert(cd).execute()
-                company_id = cr.data[0]["id"] if cr.data else None
+                supabase.auth.admin.delete_user(auth_id)
             except Exception:
                 pass
+            raise HTTPException(status_code=500, detail=f"회사 생성 실패: {str(_ce)}")
+
     user_code = "USR-" + now_kst().strftime("%Y%m%d") + "-" + ''.join(random.choices(string.digits, k=4))
+    _ur_exc = None
     try:
         ur = supabase.table("users").insert({
             "auth_id": auth_id, "email": req.email, "phone": phone_normalized,
-            "name": req.name, "username": phone_normalized, "role_code": req.role_code,
+            "name": req.name, "username": phone_normalized,
+            "role_code": server_role,  # WO-MEMTAI-00S §C.1: req.role_code 미사용, 서버 결정값
             "company_id": company_id, "user_code": user_code, "status_code": "ACTIVE",
             # v3.8.1: sector 를 명시한다. 컬럼 기본값이 CHECK 제약과 어긋나 있던 이력이 있다.
             "sector": DEFAULT_SECTOR,
@@ -990,14 +1049,40 @@ def register(req: RegisterRequest):
             "identity_birth": _ia.get("user_birthday"), "identity_ci": ci_hash,
             "created_at": _now_iso(), "updated_at": _now_iso(),
         }).execute()
-    except Exception as e:
-        # public.users INSERT 실패 시 방금 생성한 auth.users만 보상 삭제 (신규 auth_id 한정)
+        new_user_id = ur.data[0]["id"] if ur.data else None
+    except Exception as _ue:
+        ur = None
+        new_user_id = None
+        _ur_exc = _ue
+    if new_user_id is None:
+        # R2-02: 즉시 삭제 금지 — auth_id로 실제 생성 여부 먼저 확인
+        _check_ok, _existing_user = False, None
         try:
-            supabase.auth.admin.delete_user(auth_id)
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail=f"사용자 저장 실패: {str(e)}")
-    new_user_id = ur.data[0]["id"]
+            _chk = supabase.table("users").select("id").eq("auth_id", auth_id).limit(1).execute()
+            _existing_user = _chk.data[0] if _chk.data else None
+            _check_ok = True
+        except Exception as _chk_err:
+            log.warning(f"[register] 사용자 존재 확인 실패 auth_id={auth_id}: {_chk_err}")
+        if not _check_ok:
+            # 확인 불가 — 임의 삭제 금지, 오류만 반환
+            log.warning(f"[register] 사용자 저장 상태 확인 불가 auth_id={auth_id}")
+            raise HTTPException(status_code=500, detail="사용자 저장 상태 확인 불가 — 수동 복구 필요")
+        if _existing_user:
+            # 이미 생성됨 — 삭제 금지, 기존 레코드로 성공 처리
+            new_user_id = _existing_user["id"]
+        else:
+            # 미생성 확인 — auth + 신규 생성 회사 보상 삭제
+            try:
+                supabase.auth.admin.delete_user(auth_id)
+            except Exception:
+                pass
+            if new_company_id:
+                try:
+                    supabase.table("companies").delete().eq("id", new_company_id).execute()
+                except Exception:
+                    log.warning(f"[register] 신규 회사 보상 삭제 실패 company_id={new_company_id}")
+            _detail = f"사용자 저장 실패: {str(_ur_exc)}" if _ur_exc else "사용자 저장 실패: 응답 없음"
+            raise HTTPException(status_code=500, detail=_detail)
     # ── 이력 승계(D3): 동일 CI 무료진단/인증 이력을 계정에 연결 ──
     try:
         supabase.table("diagnosis_auth_log").update(
@@ -1009,7 +1094,7 @@ def register(req: RegisterRequest):
     except Exception as _e:
         log.warning(f"[register] 본인인증 이력 승계 실패 user_id={new_user_id}: {_e}")
     return {"status": "success", "message": "회원가입이 완료되었습니다.",
-            "data": {"user_id": ur.data[0]["id"], "phone": phone_normalized, "name": req.name, "company_id": company_id}}
+            "data": {"user_id": new_user_id, "phone": phone_normalized, "name": req.name, "company_id": company_id}}
 
 
 # ── 소셜 유저 동기화 (B2) ────────────────────────────────────────
