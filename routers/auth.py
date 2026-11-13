@@ -951,8 +951,9 @@ def register(req: RegisterRequest):
     # WO-MEMTAI-00S §C.2 / R2-01: 기존 회사 자동 소속 차단.
     # auth.users 생성 이전에 사업자번호 중복을 확인해 기존 회사에 무단 소속되는 경로를 원천 차단한다.
     # 기존 회사 합류는 별도 초대/승인 경로(company_user_invites)를 통해야 한다.
-    if req.company_name and bn_digits:
-        if len(bn_digits) != 10:
+    if req.company_name and req.business_number:
+        # R2-FINAL: 제출된 business_number에서 숫자 추출이 10자리가 아니면 차단
+        if not bn_digits or len(bn_digits) != 10:
             raise HTTPException(status_code=400, detail="사업자등록번호는 숫자 10자리여야 합니다.")
         _bn_hyphen = f"{bn_digits[:3]}-{bn_digits[3:5]}-{bn_digits[5:]}"
         try:

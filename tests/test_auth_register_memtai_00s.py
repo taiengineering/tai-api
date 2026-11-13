@@ -627,3 +627,20 @@ def test_R2_T06_user_save_check_uncertain_no_delete():
 
     assert exc.value.status_code == 500
     sb.auth.admin.delete_user.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R2-FINAL: 숫자 없는 사업자번호 입력 → 차단 (검증 우회 불가)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("bad_bn", ["abc", "---", "  ", "ABC-DEF-GHIJ"])
+def test_R2_FINAL_non_numeric_business_number_rejected(bad_bn):
+    """숫자가 없는 사업자번호 → 400, 회사 미생성, auth.sign_up 미호출. R2-FINAL"""
+    with patch("routers.auth.get_supabase") as mock_sb:
+        sb = _make_supabase()
+        mock_sb.return_value = sb
+        with pytest.raises(HTTPException) as exc:
+            register(_req(company_name="신규회사", business_number=bad_bn))
+
+    assert exc.value.status_code == 400
+    sb.auth.sign_up.assert_not_called()
